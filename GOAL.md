@@ -69,3 +69,10 @@ Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a s
   **1,223 offset constants across 112 modules**, generated not hand-written. 11 tests green,
   including ground-truth anchors that pin the extractor against the independent
   decompiled-C derivation.
+- **Stage 3 begun.** `don-pe`: PE32 reader + image mapper, the architecture-independent
+  half of the oracle harness. Parses headers, maps sections at their virtual addresses,
+  and applies base relocations (**315,865** HIGHLOW fixups on the real image, canary-
+  verified). 5 tests green including a relocation round-trip (relocate away, relocate
+  back, assert byte-identical) — the strongest cheap check that the fixup arithmetic is
+  right. Deliberately not `LoadLibrary`: that would run the entry point as DllMain and
+  drag in loader import/TLS/CFG processing we need to stay out of.
