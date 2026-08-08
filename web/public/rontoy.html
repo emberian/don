@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>rontoy — live economy coach</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #080a0e; --panel: #11151b; --panel2: #0c1015; --raised: #171d25;
+    --line: #252e38; --line2: #35414d; --ink: #eef3f4; --dim: #8d9aa5;
+    --blue: #64b5f6; --cyan: #55d6d0; --good: #77dfa8; --warn: #ffbd69;
+    --bad: #ff776d; --violet: #b89cff; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --shadow: 0 22px 70px rgba(0, 0, 0, .34);
+  }
+  * { box-sizing: border-box; }
+  html { min-height: 100%; background: var(--bg); }
+  body { margin: 0; min-height: 100vh; color: var(--ink); background:
+    radial-gradient(circle at 12% -10%, rgba(70, 155, 167, .16), transparent 31rem),
+    radial-gradient(circle at 100% 18%, rgba(67, 97, 160, .11), transparent 35rem), var(--bg);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button { color: inherit; font: inherit; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .shell { width: min(1540px, 100%); min-height: 100vh; margin: 0 auto; padding: 0 22px 28px; }
+
+  header { min-height: 70px; display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: max-content; }
+  .mark { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #397777;
+    border-radius: 10px; color: var(--cyan); background: linear-gradient(145deg, #142329, #101820);
+    box-shadow: inset 0 0 24px rgba(85, 214, 208, .08); font: 800 18px/1 var(--mono); }
+  h1 { margin: 0; font-size: 16px; letter-spacing: .015em; }
+  .brand-copy { color: var(--dim); margin-left: 5px; font-weight: 450; }
+  .session { min-width: 0; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session strong { color: #cfd7dc; font-weight: 600; }
+  .header-spacer { flex: 1; }
+  .status-cluster { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 4px 9px;
+    border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 21, 27, .82);
+    color: var(--dim); font: 10.5px var(--mono); white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); box-shadow: 0 0 0 3px rgba(141,154,165,.08); }
+  .pill.live { color: var(--good); border-color: #285644; }
+  .pill.live .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(119,223,168,.1), 0 0 12px rgba(119,223,168,.35); }
+  .pill.wait { color: var(--warn); border-color: #5a482a; }
+  .pill.wait .dot { background: var(--warn); }
+  .pill.bad { color: var(--bad); border-color: #5c302f; }
+  .pill.bad .dot { background: var(--bad); }
+  .reconnect { border: 1px solid var(--line2); border-radius: 7px; padding: 5px 9px; background: var(--raised);
+    color: #cdd7dc; cursor: pointer; font: 10.5px var(--mono); }
+  .reconnect:hover, .reconnect:focus-visible { border-color: var(--cyan); outline: none; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(330px, .72fr); gap: 14px; padding-top: 16px; }
+  .left, .right { display: grid; align-content: start; gap: 14px; min-width: 0; }
+  .card { min-width: 0; border: 1px solid var(--line); border-radius: 13px; background:
+    linear-gradient(155deg, rgba(23, 29, 37, .94), rgba(14, 18, 24, .96)); box-shadow: var(--shadow); }
+  .card-head { display: flex; align-items: baseline; gap: 8px; padding: 13px 15px 10px; }
+  .card-head h2 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .115em; color: #b4bec5; }
+  .card-head .meta { margin-left: auto; color: var(--dim); font: 10px var(--mono); }
+
+  .advice { position: relative; overflow: hidden; min-height: 202px; border-color: #31545a; background:
+    radial-gradient(circle at 83% 0, rgba(85, 214, 208, .12), transparent 23rem),
+    linear-gradient(145deg, #142026, #10151b 62%); }
+  .advice::after { content: ""; position: absolute; inset: auto -80px -130px auto; width: 330px; height: 240px;
+    border: 1px solid rgba(85, 214, 208, .08); border-radius: 50%; transform: rotate(-12deg); pointer-events: none; }
+  .advice.detached { border-color: #633532; filter: saturate(.62); }
+  .advice-top { display: flex; gap: 14px; align-items: center; padding: 16px 17px 7px; }
+  .priority { border: 1px solid #5b4b29; border-radius: 999px; padding: 4px 8px; color: var(--warn);
+    background: rgba(255,189,105,.06); font: 10px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+  .priority.good { border-color: #285644; color: var(--good); background: rgba(119,223,168,.05); }
+  .priority.bad { border-color: #633532; color: var(--bad); background: rgba(255,119,109,.06); }
+  .advice h2 { position: relative; margin: 0; padding: 2px 17px 0; max-width: 990px; font-size: clamp(22px, 3vw, 36px);
+    line-height: 1.13; letter-spacing: -.025em; font-weight: 680; }
+  .advice-detail { position: relative; max-width: 850px; margin: 10px 17px 14px; color: #aebac1; font-size: 13.5px; }
+  .actions { position: relative; display: flex; flex-wrap: wrap; gap: 7px; padding: 0 17px 17px; }
+  .action { padding: 6px 9px; border: 1px solid #30404a; border-radius: 7px; background: #111a20; color: #c9d5da; font: 11px var(--mono); }
+  .confidence { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 140px; color: var(--dim); font: 10px var(--mono); }
+  .confidence-track { width: 72px; height: 4px; background: #253039; border-radius: 3px; overflow: hidden; }
+  .confidence-fill { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--cyan); transition: width .35s ease; }
+
+  .resources { display: grid; grid-template-columns: repeat(6, minmax(92px, 1fr)); border-top: 1px solid var(--line); }
+  .resource { padding: 13px 14px 14px; min-width: 0; border-right: 1px solid var(--line); }
+  .resource:last-child { border-right: 0; }
+  .res-name { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+  .res-value { margin-top: 4px; font: 20px/1.2 var(--mono); color: #f1f5f5; overflow: hidden; text-overflow: ellipsis; }
+  .res-rate { margin-top: 3px; font: 10.5px var(--mono); color: var(--good); }
+  .res-rate.negative { color: var(--bad); }
+  .res-confidence { margin-top: 7px; height: 2px; border-radius: 2px; background: #263039; overflow: hidden; }
+  .res-confidence i { display: block; height: 100%; background: #527c84; }
+
+  .economy-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(265px, .7fr); }
+  .workers { border-right: 1px solid var(--line); min-width: 0; }
+  .allocation { display: flex; height: 10px; margin: 0 15px 12px; border-radius: 6px; overflow: hidden; background: #232b33; }
+  .allocation i { min-width: 0; height: 100%; transition: width .3s ease; }
+  .worker-list { padding: 0 15px 14px; }
+  .worker-row { display: grid; grid-template-columns: minmax(90px, 1fr) 44px 56px 68px; gap: 8px; align-items: center;
+    min-height: 28px; border-top: 1px solid rgba(37,46,56,.72); font: 10.5px var(--mono); }
+  .worker-row:first-child { border-top: 0; }
+  .worker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .worker-label::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 2px; background: var(--swatch); }
+  .worker-count { color: #e4ebed; text-align: right; }
+  .worker-target { color: var(--dim); text-align: right; }
+  .worker-move { color: var(--good); text-align: right; }
+  .worker-move.down { color: var(--warn); }
+  .worker-move.hold { color: var(--dim); }
+  .pop-wrap { padding: 0 15px 16px; }
+  .pop-big { display: flex; align-items: baseline; gap: 6px; }
+  .pop-used { font: 32px/1 var(--mono); }
+  .pop-cap { color: var(--dim); font: 14px var(--mono); }
+  .pop-trend { margin-left: auto; color: var(--good); font: 10.5px var(--mono); }
+  .pop-bar { height: 9px; margin-top: 12px; overflow: hidden; border-radius: 6px; background: #242c34; }
+  .pop-fill { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, #4a9d9c, var(--cyan)); transition: width .3s ease; }
+  .pop-fill.warn { background: linear-gradient(90deg, #ca8845, var(--warn)); }
+  .pop-caption { display: flex; margin-top: 8px; justify-content: space-between; color: var(--dim); font: 10px var(--mono); }
+
+  .queues { padding: 0 15px 15px; }
+  .queue { display: grid; grid-template-columns: minmax(104px,.72fr) minmax(155px,1fr) 60px; gap: 10px;
+    align-items: center; padding: 10px 0; border-top: 1px solid rgba(37,46,56,.78); }
+  .queue:first-child { border-top: 0; }
+  .queue-building { min-width: 0; }
+  .queue-building strong, .queue-building span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .queue-building strong { font-size: 11px; }
+  .queue-building span { margin-top: 2px; color: var(--dim); font: 9.5px var(--mono); }
+  .queue-item { min-width: 0; }
+  .queue-name { display: flex; min-width: 0; gap: 8px; font: 10.5px var(--mono); }
+  .queue-name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .queued { margin-left: auto; color: var(--dim); white-space: nowrap; }
+  .progress { height: 5px; margin-top: 7px; border-radius: 3px; overflow: hidden; background: #253039; }
+  .progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--blue); transition: width .3s ease; }
+  .progress i.blocked { background: var(--bad); }
+  .queue-eta { text-align: right; color: #cbd5da; font: 10.5px var(--mono); }
+
+  .timeline { max-height: 434px; overflow: auto; padding: 0 15px 14px; scrollbar-color: #35414d transparent; }
+  .event { position: relative; display: grid; grid-template-columns: 54px 1fr; gap: 10px; min-height: 48px; padding: 8px 0; border-top: 1px solid rgba(37,46,56,.76); }
+  .event:first-child { border-top: 0; }
+  .event::before { content: ""; position: absolute; top: 15px; left: 50px; width: 5px; height: 5px; border-radius: 50%; background: var(--event); }
+  .event-time { color: var(--dim); font: 9.5px var(--mono); }
+  .event-copy { padding-left: 6px; color: #c9d3d8; font-size: 11px; overflow-wrap: anywhere; }
+  .event-kind { display: block; margin-bottom: 2px; color: var(--event); font: 9px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+
+  .quality { display: grid; grid-template-columns: repeat(5, minmax(104px, 1fr)); border-top: 1px solid var(--line); }
+  .quality-cell { padding: 11px 13px 13px; border-right: 1px solid var(--line); }
+  .quality-cell:last-child { border-right: 0; }
+  .quality-label { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; }
+  .quality-value { margin-top: 4px; color: #d9e1e4; font: 11px var(--mono); overflow-wrap: anywhere; }
+  .protocol-note { padding: 11px 14px 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 10.5px; }
+  .protocol-note code { color: #aabdc5; font-family: var(--mono); }
+
+  footer { display: flex; gap: 12px; align-items: center; padding: 15px 2px 0; color: #707e88; font: 10px var(--mono); }
+  footer span:last-child { margin-left: auto; }
+
+  @media (max-width: 1100px) {
+    .resources { grid-template-columns: repeat(3, 1fr); }
+    .resource:nth-child(3) { border-right: 0; }
+    .resource:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
+    main { grid-template-columns: 1fr; }
+    .right { grid-template-columns: 1.15fr .85fr; }
+    .timeline { max-height: 360px; }
+  }
+  @media (max-width: 720px) {
+    .shell { padding: 0 12px 20px; }
+    header { align-items: flex-start; padding: 13px 0; flex-wrap: wrap; }
+    .session { order: 3; width: 100%; }
+    .header-spacer { display: none; }
+    .status-cluster { margin-left: auto; }
+    .confidence { width: 100%; margin-left: 0; }
+    .resources { grid-template-columns: repeat(2, 1fr); }
+    .resource:nth-child(2n) { border-right: 0; }
+    .resource:nth-child(3) { border-right: 1px solid var(--line); }
+    .resource:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+    .economy-grid, .right { grid-template-columns: 1fr; }
+    .workers { border-right: 0; border-bottom: 1px solid var(--line); }
+    .queue { grid-template-columns: minmax(90px,.62fr) minmax(140px,1fr); }
+    .queue-eta { grid-column: 2; text-align: left; }
+    .quality { grid-template-columns: 1fr; }
+    .quality-cell { border-right: 0; border-bottom: 1px solid var(--line); }
+    .quality-cell:last-child { border-bottom: 0; }
+    footer { align-items: flex-start; flex-direction: column; }
+    footer span:last-child { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><div class="mark">r</div><h1>rontoy <span class="brand-copy">live economy coach</span></h1></div>
+    <div class="session"><strong id="playerName">waiting for player</strong> · <span id="gamePhase">no match attached</span></div>
+    <div class="header-spacer"></div>
+    <div class="status-cluster">
+      <span id="sourceBadge" class="pill wait"><i class="dot"></i><span id="sourceText">starting…</span></span>
+      <span id="freshBadge" class="pill wait"><i class="dot"></i><span id="freshText">no snapshot</span></span>
+      <button id="reconnect" class="reconnect" type="button">reconnect</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="left">
+      <section class="card advice" aria-labelledby="adviceHeadline">
+        <div class="advice-top">
+          <span id="advicePriority" class="priority">observing</span>
+          <div class="confidence"><span id="adviceConfidence">— confidence</span><i class="confidence-track"><i id="adviceConfidenceBar" class="confidence-fill"></i></i></div>
+        </div>
+        <h2 id="adviceHeadline">Building an economic picture…</h2>
+        <p id="adviceDetail" class="advice-detail">rontoy will prioritize the next decision once the first complete snapshot arrives.</p>
+        <div id="adviceActions" class="actions" aria-label="suggested actions"></div>
+      </section>
+
+      <section class="card" aria-labelledby="resourcesTitle">
+        <div class="card-head"><h2 id="resourcesTitle">Resources</h2><span id="incomeWindow" class="meta">rate / 60 s</span></div>
+        <div id="resources" class="resources"></div>
+      </section>
+
+      <section class="card economy-grid">
+        <div class="workers">
+          <div class="card-head"><h2>Worker allocation</h2><span id="workerSummary" class="meta">—</span></div>
+          <div id="allocation" class="allocation" aria-label="worker allocation"></div>
+          <div id="workerList" class="worker-list"></div>
+        </div>
+        <div>
+          <div class="card-head"><h2>Population</h2><span id="capStatus" class="meta">—</span></div>
+          <div class="pop-wrap">
+            <div class="pop-big"><span id="popUsed" class="pop-used">—</span><span id="popCap" class="pop-cap">/ —</span><span id="popTrend" class="pop-trend">—</span></div>
+            <div class="pop-bar"><i id="popBar" class="pop-fill"></i></div>
+            <div class="pop-caption"><span id="popFree">— free</span><span id="popForecast">forecast unavailable</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="queuesTitle">
+        <div class="card-head"><h2 id="queuesTitle">Production queues</h2><span id="queueSummary" class="meta">—</span></div>
+        <div id="queues" class="queues"></div>
+      </section>
+    </div>
+
+    <aside class="right">
+      <section class="card" aria-labelledby="timelineTitle">
+        <div class="card-head"><h2 id="timelineTitle">Economic timeline</h2><span id="gameClock" class="meta">00:00</span></div>
+        <div id="timeline" class="timeline" aria-live="polite"></div>
+      </section>
+
+      <section class="card" aria-labelledby="qualityTitle">
+        <div class="card-head"><h2 id="qualityTitle">Signal quality</h2><span id="sequence" class="meta">snapshot —</span></div>
+        <div class="quality">
+          <div class="quality-cell"><div class="quality-label">overall confidence</div><div id="overallConfidence" class="quality-value">—</div></div>
+          <div class="quality-cell"><div class="quality-label">frame / coherence</div><div id="frameCoherence" class="quality-value">—</div></div>
+          <div class="quality-cell"><div class="quality-label">rate-cache age</div><div id="rateCacheAge" class="quality-value">—</div></div>
+          <div class="quality-cell"><div class="quality-label">snapshot age</div><div id="snapshotAge" class="quality-value">—</div></div>
+          <div class="quality-cell"><div class="quality-label">transport</div><div id="transportState" class="quality-value">—</div></div>
+        </div>
+        <div class="protocol-note">Accepts newline-independent JSON snapshots with <code>schema: "rontoy.snapshot"</code> and <code>version: 1</code>. Use <code>?ws=ws://host:port/path</code> to attach a stream; without it this page runs a labeled deterministic demo.</div>
+      </section>
+    </aside>
+  </main>
+
+  <footer><span id="footerSource">source: starting</span><span id="footerErrors">0 rejected snapshots</span><span>advice is observational · keep your hands on the game</span></footer>
+</div>
+<script type="module" src="./js/rontoy.js"></script>
+</body>
+</html>
