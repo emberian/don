@@ -1,0 +1,9794 @@
+[
+ {
+  "func": "FUN_0045d390",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0045d4cd"
+ },
+ {
+  "func": "FUN_0045d390",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0045d3e6"
+ },
+ {
+  "func": "FUN_0045d390",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045d45b"
+ },
+ {
+  "func": "FUN_0045df40",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0045e07d"
+ },
+ {
+  "func": "FUN_0045df40",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0045df96"
+ },
+ {
+  "func": "FUN_0045df40",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045e00b"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "buildings",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0045e6f9"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "facing",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0045eb36"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "list[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "0045ed37"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "off_y[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0045ee28"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "angles[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "0045ef83"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "army",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045e423"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "form",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045ea52"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "stamp",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0045e93e"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "o_dist",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0045e5d3"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "o_angle",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "0045e666"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "disband",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "0045e785"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "order_num",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "0045e818"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "priority",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0045e8ab"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "role",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045e9d1"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "think_frame",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0045eac4"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "new_speed",
+  "field_off": 60,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "0045ebaa"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "speed",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0045ec17"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "form_num",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0045ec89"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "curr_x[scan]",
+  "field_off": 512,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0045ee99"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "curr_y[scan]",
+  "field_off": 1024,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0045ef0e"
+ },
+ {
+  "func": "FUN_0045e1d0",
+  "name": "off_x[scan]",
+  "field_off": 4294966784,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0045edb3"
+ },
+ {
+  "func": "FUN_0045f020",
+  "name": "herd",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0045f358"
+ },
+ {
+  "func": "FUN_0045f020",
+  "name": "herd_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0045f3ed"
+ },
+ {
+  "func": "FUN_0045f020",
+  "name": "good_o",
+  "field_off": 20,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0045f2cf"
+ },
+ {
+  "func": "FUN_0045f470",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0045f5b3"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "army",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0045f6f6"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "num_groups",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0045f7e4"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "list[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004601ba"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "status",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0045f875"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "role",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045f996"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "num_units",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "0045fa29"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "num_captains",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0045fabc"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "num_standard",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0045fb4f"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "num_decoys",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0045fbe2"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "city",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045fc6c"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "navy",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0045fcfa"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "human_frame",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0045fd8d"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "hurry",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0045fe20"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "target_o",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0045feb3"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "target_who",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0045ff46"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "angle",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "004600c3"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "rally_dist",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "00460133"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "muster_x",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "00460244"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "muster_y",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "004602b1"
+ },
+ {
+  "func": "FUN_0045f660",
+  "name": "muster_angle",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00460323"
+ },
+ {
+  "func": "FUN_00460390",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004604cd"
+ },
+ {
+  "func": "FUN_00460390",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004603e6"
+ },
+ {
+  "func": "FUN_00460390",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0046045b"
+ },
+ {
+  "func": "FUN_00460550",
+  "name": "wonder",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "004605d9"
+ },
+ {
+  "func": "FUN_00460550",
+  "name": "wonder_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "0046080f"
+ },
+ {
+  "func": "FUN_00460550",
+  "name": "stamp",
+  "field_off": 4,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "004606c0"
+ },
+ {
+  "func": "FUN_00460550",
+  "name": "timer",
+  "field_off": 8,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0046072d"
+ },
+ {
+  "func": "FUN_00460880",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004609bd"
+ },
+ {
+  "func": "FUN_00460880",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004608d6"
+ },
+ {
+  "func": "FUN_00460880",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0046094b"
+ },
+ {
+  "func": "FUN_00460a40",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00460b7d"
+ },
+ {
+  "func": "FUN_00460a40",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00460a96"
+ },
+ {
+  "func": "FUN_00460a40",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00460b0b"
+ },
+ {
+  "func": "FUN_0046e260",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0046e39d"
+ },
+ {
+  "func": "FUN_0046e260",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0046e2b6"
+ },
+ {
+  "func": "FUN_0046e260",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0046e32b"
+ },
+ {
+  "func": "FUN_0046fb70",
+  "name": "to_x",
+  "field_off": 0,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0046fbed"
+ },
+ {
+  "func": "FUN_0046fb70",
+  "name": "to_y",
+  "field_off": 4,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0046fc59"
+ },
+ {
+  "func": "FUN_0046fb70",
+  "name": "tolerance",
+  "field_off": 8,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0046fccb"
+ },
+ {
+  "func": "FUN_0046fb70",
+  "name": "flags",
+  "field_off": 12,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0046fd3d"
+ },
+ {
+  "func": "FUN_0046fda0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0046ff14"
+ },
+ {
+  "func": "FUN_0046fda0",
+  "name": "size",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0046fe30"
+ },
+ {
+  "func": "FUN_0046fda0",
+  "name": "length",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0046fea2"
+ },
+ {
+  "func": "FUN_00470a60",
+  "name": "metric",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "00470bda"
+ },
+ {
+  "func": "FUN_00470a60",
+  "name": "length",
+  "field_off": 16,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00470aa9"
+ },
+ {
+  "func": "FUN_004713b0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004714f3"
+ },
+ {
+  "func": "FUN_004713b0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00471567"
+ },
+ {
+  "func": "FUN_004713b0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00471481"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue_size",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0047178d"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].type",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00471817"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].cost[0]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00471904"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].cost[1]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "0047197c"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].cost[2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "004719f4"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].good[0]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00471a87"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].good[1]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00471b20"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].good[2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00471ba7"
+ },
+ {
+  "func": "FUN_00471710",
+  "name": "queue[scan].job_counter",
+  "field_off": 1,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "0047188f"
+ },
+ {
+  "func": "FUN_004732f0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00473433"
+ },
+ {
+  "func": "FUN_004732f0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004734a7"
+ },
+ {
+  "func": "FUN_004732f0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0047334c"
+ },
+ {
+  "func": "FUN_004732f0",
+  "name": "list[scan]",
+  "field_off": 4,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00473525"
+ },
+ {
+  "func": "FUN_004732f0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004733c1"
+ },
+ {
+  "func": "FUN_00475770",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004758ad"
+ },
+ {
+  "func": "FUN_00475770",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004757c6"
+ },
+ {
+  "func": "FUN_00475770",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0047583b"
+ },
+ {
+  "func": "FUN_00475930",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00475a6d"
+ },
+ {
+  "func": "FUN_00475930",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00475986"
+ },
+ {
+  "func": "FUN_00475930",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004759fb"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "build_mark[who]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "00475da9"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "obj_ctr[who]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "00475e8c"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "wall_mark[who]",
+  "field_off": 40,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "00475e1a"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "good_mark",
+  "field_off": 340,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "00475c36"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "rare_mark",
+  "field_off": 344,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "00475ca6"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "ammo_index",
+  "field_off": 504,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "00475b83"
+ },
+ {
+  "func": "FUN_00475af0",
+  "name": "unit_mark[who]",
+  "field_off": 4294967256,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "00475d37"
+ },
+ {
+  "func": "FUN_004767e0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00476923"
+ },
+ {
+  "func": "FUN_004767e0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00476997"
+ },
+ {
+  "func": "FUN_004767e0",
+  "name": "list[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00476a15"
+ },
+ {
+  "func": "FUN_004767e0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0047683c"
+ },
+ {
+  "func": "FUN_004767e0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004768b1"
+ },
+ {
+  "func": "FUN_00478b70",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00478cb3"
+ },
+ {
+  "func": "FUN_00478b70",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00478d27"
+ },
+ {
+  "func": "FUN_00478b70",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00478bcc"
+ },
+ {
+  "func": "FUN_00478b70",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00478c41"
+ },
+ {
+  "func": "FUN_0047c830",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0047c973"
+ },
+ {
+  "func": "FUN_0047c830",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0047c9e7"
+ },
+ {
+  "func": "FUN_0047c830",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0047c88c"
+ },
+ {
+  "func": "FUN_0047c830",
+  "name": "list[scan]",
+  "field_off": 4,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "0047ca65"
+ },
+ {
+  "func": "FUN_0047c830",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0047c901"
+ },
+ {
+  "func": "FUN_0047d0d0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0047d210"
+ },
+ {
+  "func": "FUN_0047d0d0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0047d284"
+ },
+ {
+  "func": "FUN_0047d0d0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0047d129"
+ },
+ {
+  "func": "FUN_0047d0d0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0047d19e"
+ },
+ {
+  "func": "FUN_0047d630",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0047d770"
+ },
+ {
+  "func": "FUN_0047d630",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0047d7e4"
+ },
+ {
+  "func": "FUN_0047d630",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0047d689"
+ },
+ {
+  "func": "FUN_0047d630",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0047d6fe"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "mandatory",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0047f612"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "defensive",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0047f686"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "in_range",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0047f6fa"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "ever_in_range",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "0047f76e"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "new_ord",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0047f7e2"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "def_x",
+  "field_off": 4294967276,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0047f856"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "def_y",
+  "field_off": 4294967280,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0047f8e3"
+ },
+ {
+  "func": "FUN_0047fa40",
+  "name": "whose",
+  "field_off": 4294967272,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0047fb4c"
+ },
+ {
+  "func": "FUN_0047fa40",
+  "name": "cruising_alt",
+  "field_off": 4294967276,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "0047fbbe"
+ },
+ {
+  "func": "FUN_0047fa40",
+  "name": "sharp_turn",
+  "field_off": 4294967280,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "0047fc2c"
+ },
+ {
+  "func": "FUN_0047fa40",
+  "name": "returning",
+  "field_off": 4294967288,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0047fd0b"
+ },
+ {
+  "func": "FUN_004804a0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004805ea"
+ },
+ {
+  "func": "FUN_004804a0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00480661"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "x_spacing[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "00481689"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "space[scan][scan2]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "004817ea"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "category[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "004818fc"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "form",
+  "field_off": 40,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "00481444"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "density",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00481b79"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "y_spacing[scan]",
+  "field_off": 72,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "004816fa"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "to_x[scan]",
+  "field_off": 512,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "0048196d"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "to_y[scan]",
+  "field_off": 1024,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "004819e2"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "off_x[scan]",
+  "field_off": 1536,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "00481a57"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "off_y[scan]",
+  "field_off": 2048,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "00481ad8"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "per[scan]",
+  "field_off": 3228,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0048176c"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "wedge",
+  "field_off": 3348,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00481bfd"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "total",
+  "field_off": 3352,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00481c6d"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "guarding",
+  "field_off": 3356,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "00481dcc"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "reverse",
+  "field_off": 3720,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00481ce2"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "across",
+  "field_off": 3724,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00481d57"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "cat_id[scan]",
+  "field_off": 4294966784,
+  "field_reg": "EBX",
+  "tag": null,
+  "ref_ea": "00481887"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "num_category[scan]",
+  "field_off": 4294967224,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "00481617"
+ },
+ {
+  "func": "FUN_004832b0",
+  "name": "uid2",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "00483507"
+ },
+ {
+  "func": "FUN_004832b0",
+  "name": "whose",
+  "field_off": 4294967276,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "004833b1"
+ },
+ {
+  "func": "FUN_004832b0",
+  "name": "started",
+  "field_off": 4294967280,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00483423"
+ },
+ {
+  "func": "FUN_004832b0",
+  "name": "loaded",
+  "field_off": 4294967284,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00483495"
+ },
+ {
+  "func": "FUN_00483f50",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00484093"
+ },
+ {
+  "func": "FUN_00483f50",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00484107"
+ },
+ {
+  "func": "FUN_00483f50",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "00483fac"
+ },
+ {
+  "func": "FUN_00483f50",
+  "name": "list[scan]",
+  "field_off": 4,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00484185"
+ },
+ {
+  "func": "FUN_00483f50",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "00484021"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "type",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00484a59"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "started",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00484acb"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "frames",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00484b3d"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "data1",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00484baf"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "data2",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00484c1c"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "data3",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00484c85"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "data4",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00484d0d"
+ },
+ {
+  "func": "FUN_004849d0",
+  "name": "whom",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00484e33"
+ },
+ {
+  "func": "FUN_00485140",
+  "name": "temporary",
+  "field_off": 4294967280,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "004851bd"
+ },
+ {
+  "func": "FUN_00485140",
+  "name": "oxxx",
+  "field_off": 4294967284,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0048522f"
+ },
+ {
+  "func": "FUN_00485140",
+  "name": "whosoever",
+  "field_off": 4294967288,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "004852a1"
+ },
+ {
+  "func": "FUN_00485640",
+  "name": "whose",
+  "field_off": 4294967276,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00485748"
+ },
+ {
+  "func": "FUN_00485640",
+  "name": "form_id",
+  "field_off": 4294967284,
+  "field_reg": "ESI",
+  "tag": 7,
+  "ref_ea": "0048589e"
+ },
+ {
+  "func": "FUN_00485640",
+  "name": "group_angle",
+  "field_off": 4294967288,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "004857ba"
+ },
+ {
+  "func": "FUN_004865a0",
+  "name": "guard_x",
+  "field_off": 4294967276,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00486712"
+ },
+ {
+  "func": "FUN_004865a0",
+  "name": "guard_y",
+  "field_off": 4294967280,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "0048677f"
+ },
+ {
+  "func": "FUN_004865a0",
+  "name": "idle",
+  "field_off": 4294967284,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004867f1"
+ },
+ {
+  "func": "FUN_004865a0",
+  "name": "retry",
+  "field_off": 4294967288,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00486863"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "goto_build",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "004870fd"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "non_flat_gather",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 15,
+  "ref_ea": "00487171"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "dist_mod",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "00487200"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "been_there",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00487290"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "build_type",
+  "field_off": 4294967280,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "00487022"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "wait",
+  "field_off": 4294967284,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00487094"
+ },
+ {
+  "func": "FUN_00487aa0",
+  "name": "att_x",
+  "field_off": 4294967276,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00487b2e"
+ },
+ {
+  "func": "FUN_00487aa0",
+  "name": "att_y",
+  "field_off": 4294967280,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00487b9b"
+ },
+ {
+  "func": "FUN_00487aa0",
+  "name": "accuracy",
+  "field_off": 4294967284,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "00487c0d"
+ },
+ {
+  "func": "FUN_00487aa0",
+  "name": "attack_unit",
+  "field_off": 4294967288,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "00487c7f"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "off_x",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00488865"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "off_y",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004888f5"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "angle",
+  "field_off": 4294967224,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00487fe1"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest",
+  "field_off": 4294967228,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "00488053"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "tolerance",
+  "field_off": 4294967232,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "004880c1"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "pause",
+  "field_off": 4294967236,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0048812a"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "retry",
+  "field_off": 4294967240,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "004881b2"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "attempts",
+  "field_off": 4294967244,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "00488245"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "timer",
+  "field_off": 4294967248,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "004882cf"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "facing",
+  "field_off": 4294967252,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488362"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest_x",
+  "field_off": 4294967256,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004883f0"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest_y",
+  "field_off": 4294967260,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048847e"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "last_x",
+  "field_off": 4294967264,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048850c"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "last_y",
+  "field_off": 4294967268,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048859a"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "coll_x",
+  "field_off": 4294967272,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488628"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "coll_y",
+  "field_off": 4294967276,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004886b6"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "orig_x",
+  "field_off": 4294967280,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488744"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "orig_y",
+  "field_off": 4294967284,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004887d2"
+ },
+ {
+  "func": "FUN_00489390",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004894d3"
+ },
+ {
+  "func": "FUN_00489390",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00489547"
+ },
+ {
+  "func": "FUN_00489390",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004893ec"
+ },
+ {
+  "func": "FUN_00489390",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00489461"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "race",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0048989d"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "city_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00489911"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "city",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "00489985"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "scouted",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "00489e81"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "in_port",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "00489f11"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "peasant_dist",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "00489fa6"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "trade_val",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048a03b"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "free",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0048a0d0"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "busy",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0048a165"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "gatherers",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048a1fa"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "ocean",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0048a28f"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "land",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0048a324"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "filled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0048a3b9"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "bordering",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048a44e"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "ocean_filled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "0048a4de"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "dock_tile",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048a573"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "was_capital_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 17,
+  "ref_ea": "0048a5f6"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "space[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "0048a668"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "ter[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048a6ea"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "attack_stamp",
+  "field_off": 20,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "004899f9"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "raid_stamp",
+  "field_off": 24,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "00489a66"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "reduce_stamp",
+  "field_off": 28,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "00489af3"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "capture_stamp",
+  "field_off": 32,
+  "field_reg": "EBX",
+  "tag": 13,
+  "ref_ea": "00489b82"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "assimilation_timer",
+  "field_off": 36,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "00489c15"
+ },
+ {
+  "func": "FUN_004895c0",
+  "name": "capture_strength",
+  "field_off": 40,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "00489ca8"
+ },
+ {
+  "func": "FUN_0048aea0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048afe0"
+ },
+ {
+  "func": "FUN_0048aea0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0048b054"
+ },
+ {
+  "func": "FUN_0048aea0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0048aef9"
+ },
+ {
+  "func": "FUN_0048aea0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0048af6e"
+ },
+ {
+  "func": "FUN_0048bb70",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048bcb3"
+ },
+ {
+  "func": "FUN_0048bb70",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0048bd27"
+ },
+ {
+  "func": "FUN_0048bb70",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0048bbcc"
+ },
+ {
+  "func": "FUN_0048bb70",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0048bc41"
+ },
+ {
+  "func": "FUN_0048be40",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048bf83"
+ },
+ {
+  "func": "FUN_0048be40",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0048bff7"
+ },
+ {
+  "func": "FUN_0048be40",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0048be9c"
+ },
+ {
+  "func": "FUN_0048be40",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0048bf11"
+ },
+ {
+  "func": "FUN_0048c450",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0048c58d"
+ },
+ {
+  "func": "FUN_0048c450",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0048c4a6"
+ },
+ {
+  "func": "FUN_0048c450",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0048c51b"
+ },
+ {
+  "func": "FUN_0048c610",
+  "name": "cara",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0048c698"
+ },
+ {
+  "func": "FUN_0048c610",
+  "name": "caravan_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "0048c780"
+ },
+ {
+  "func": "FUN_0048c610",
+  "name": "making_road",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0048c868"
+ },
+ {
+  "func": "FUN_0048c610",
+  "name": "reset_road",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0048c8da"
+ },
+ {
+  "func": "FUN_00490ce0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "00490e23"
+ },
+ {
+  "func": "FUN_00490ce0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00490e97"
+ },
+ {
+  "func": "FUN_00490ce0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "00490d3c"
+ },
+ {
+  "func": "FUN_00490ce0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "00490db1"
+ },
+ {
+  "func": "FUN_00497e50",
+  "name": "metric",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00497fca"
+ },
+ {
+  "func": "FUN_00497e50",
+  "name": "length",
+  "field_off": 16,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00497e9a"
+ },
+ {
+  "func": "FUN_00498340",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004983e2"
+ },
+ {
+  "func": "FUN_00498340",
+  "name": "index",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0049844d"
+ },
+ {
+  "func": "FUN_00498340",
+  "name": "(int) rgb",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "004984a8"
+ },
+ {
+  "func": "FUN_00498340",
+  "name": "w_555",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0049852c"
+ },
+ {
+  "func": "FUN_00498340",
+  "name": "w_565",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0049859b"
+ },
+ {
+  "func": "FUN_0049a260",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0049a3a3"
+ },
+ {
+  "func": "FUN_0049a260",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0049a417"
+ },
+ {
+  "func": "FUN_0049a260",
+  "name": "list[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "0049a495"
+ },
+ {
+  "func": "FUN_0049a260",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0049a2bc"
+ },
+ {
+  "func": "FUN_0049a260",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0049a331"
+ },
+ {
+  "func": "FUN_0049b920",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0049ba80"
+ },
+ {
+  "func": "FUN_0049b920",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0049baf4"
+ },
+ {
+  "func": "FUN_0049b920",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "0049b9a0"
+ },
+ {
+  "func": "FUN_0049b920",
+  "name": "list[scan]",
+  "field_off": 4,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0049bb7a"
+ },
+ {
+  "func": "FUN_0049b920",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0049ba0e"
+ },
+ {
+  "func": "FUN_004a48c0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004a4a00"
+ },
+ {
+  "func": "FUN_004a48c0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004a4a74"
+ },
+ {
+  "func": "FUN_004a48c0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "004a4919"
+ },
+ {
+  "func": "FUN_004a48c0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004a498e"
+ },
+ {
+  "func": "FUN_004a81a0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004a82e0"
+ },
+ {
+  "func": "FUN_004a81a0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004a8354"
+ },
+ {
+  "func": "FUN_004a81a0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "004a81f9"
+ },
+ {
+  "func": "FUN_004a81a0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004a826e"
+ },
+ {
+  "func": "FUN_004a8fb0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004a90f0"
+ },
+ {
+  "func": "FUN_004a8fb0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004a9164"
+ },
+ {
+  "func": "FUN_004a8fb0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "004a9009"
+ },
+ {
+  "func": "FUN_004a8fb0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004a907e"
+ },
+ {
+  "func": "FUN_004a92f0",
+  "name": "status[scan][scan2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "004a94d8"
+ },
+ {
+  "func": "FUN_004a92f0",
+  "name": "valid",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004a964f"
+ },
+ {
+  "func": "FUN_004a92f0",
+  "name": "farm_type",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004a96c5"
+ },
+ {
+  "func": "FUN_004aa7e0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004aa91d"
+ },
+ {
+  "func": "FUN_004aa7e0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004aa836"
+ },
+ {
+  "func": "FUN_004aa7e0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004aa8ab"
+ },
+ {
+  "func": "FUN_004aab90",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004aacd0"
+ },
+ {
+  "func": "FUN_004aab90",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004aad44"
+ },
+ {
+  "func": "FUN_004aab90",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "004aabe9"
+ },
+ {
+  "func": "FUN_004aab90",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004aac5e"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_type",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "004ab03f"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_seen",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "004ab0ad"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_x",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004ab1c0"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_y",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004ab22d"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_who",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "004ab29f"
+ },
+ {
+  "func": "FUN_004aaff0",
+  "name": "ambience_o",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004ab327"
+ },
+ {
+  "func": "FUN_004b2fc0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b3103"
+ },
+ {
+  "func": "FUN_004b2fc0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "004b3177"
+ },
+ {
+  "func": "FUN_004b2fc0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b301c"
+ },
+ {
+  "func": "FUN_004b2fc0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b3091"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "dbg_collisions",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "004b3347"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "anti_unit",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "004b3494"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "offx",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b3506"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "offy",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b358e"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "army",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b361c"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "worker",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b36af"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "no_danger",
+  "field_off": 60,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "004b3742"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "limit",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "004b37d1"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "saving",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b385f"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "avoid_land",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004b38f2"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "avoid_sea",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "004b3985"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "scouting",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "004b3a18"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "can_transport",
+  "field_off": 88,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "004b3aab"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "dbg_view_failures",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "004b3b3e"
+ },
+ {
+  "func": "FUN_004b3280",
+  "name": "show_debug",
+  "field_off": 132,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004b32cf"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "land",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "004b3bfd"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "num_make[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "004b3ce9"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "special[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "004b3d75"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "rare[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "004b402d"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "special_sum",
+  "field_off": 60,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "004b3df3"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "river_mask",
+  "field_off": 64,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "004b3e68"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "river_bed",
+  "field_off": 68,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "004b3eda"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "river_cost",
+  "field_off": 72,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "004b3f47"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "num_rare",
+  "field_off": 76,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "004b3fb9"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "move_rate",
+  "field_off": 256,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "004b409e"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "combat_bonus",
+  "field_off": 260,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "004b4110"
+ },
+ {
+  "func": "FUN_004b3bb0",
+  "name": "make[scan]",
+  "field_off": 4294967280,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "004b3c77"
+ },
+ {
+  "func": "FUN_004b44b0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b45ed"
+ },
+ {
+  "func": "FUN_004b44b0",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b4506"
+ },
+ {
+  "func": "FUN_004b44b0",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b457b"
+ },
+ {
+  "func": "FUN_004b4700",
+  "name": "dock",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "004b4789"
+ },
+ {
+  "func": "FUN_004b4700",
+  "name": "gull_o",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "004b48e0"
+ },
+ {
+  "func": "FUN_004b4700",
+  "name": "dock_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "004b49c3"
+ },
+ {
+  "func": "FUN_004b4a40",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b4b7d"
+ },
+ {
+  "func": "FUN_004b4a40",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b4a96"
+ },
+ {
+  "func": "FUN_004b4a40",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b4b0b"
+ },
+ {
+  "func": "FUN_004b4f60",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b509d"
+ },
+ {
+  "func": "FUN_004b4f60",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b4fb6"
+ },
+ {
+  "func": "FUN_004b4f60",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004b502b"
+ },
+ {
+  "func": "FUN_004b5360",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b549b"
+ },
+ {
+  "func": "FUN_004b5360",
+  "name": "length",
+  "field_off": 4294967284,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004b53c0"
+ },
+ {
+  "func": "FUN_004b5360",
+  "name": "size",
+  "field_off": 4294967288,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "004b5429"
+ },
+ {
+  "func": "FUN_004c85b0",
+  "name": "type",
+  "field_off": 0,
+  "field_reg": "EDX",
+  "tag": 4,
+  "ref_ea": "004c86b9"
+ },
+ {
+  "func": "FUN_004c85b0",
+  "name": "metric",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004c872a"
+ },
+ {
+  "func": "FUN_004c85b0",
+  "name": "length",
+  "field_off": 16,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004c85fa"
+ },
+ {
+  "func": "FUN_004cc1d0",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004cc313"
+ },
+ {
+  "func": "FUN_004cc880",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004cc9bd"
+ },
+ {
+  "func": "FUN_004cc880",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004cc8d6"
+ },
+ {
+  "func": "FUN_004cc880",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004cc94b"
+ },
+ {
+  "func": "FUN_004cd000",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004cd13d"
+ },
+ {
+  "func": "FUN_004cd000",
+  "name": "length",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "004cd056"
+ },
+ {
+  "func": "FUN_004cd000",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "004cd0cb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_formation_spacing",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "005701e0"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_upgrade_terr[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "00571c0d"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "temple_upgrade_terr[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 25,
+  "ref_ea": "00571cbc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "temple_upgrade_hp[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "00571d6c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "temple_upgrade_range[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 26,
+  "ref_ea": "00571e1c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_upgrade_los[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "00571ecc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_upgrade_range[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "00571f7c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tower_fort_range[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "0057202c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tower_fort_los[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "005720dc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "attrition_upgrade[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "0057218c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "attrition_improved[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "0057223c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "civic_upgrade_terr[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "005722ec"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spy_upgrade_hp[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "0057239c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_level_territory_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": null,
+  "ref_ea": "005724d7"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "starting_goods[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "00573a3c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "basic_gather[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "00573aec"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_gather[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "00573b9c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "scholar_rate[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "00573d6c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fishermen_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "00573fdc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "granary_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 19,
+  "ref_ea": "0057408c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "lumbermill_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "0057413c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "smelter_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 19,
+  "ref_ea": "005741ec"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_taxes[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "0057429c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "merchants_bonus[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "0057434c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_heal_rate[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "005743fc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "iroquois_heal_rate[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "005744ac"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "aircraft_heal_rate[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "0057455c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "pop_cap[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 13,
+  "ref_ea": "00575e4c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "commerce_cap[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "0057630d"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "korean_citizens[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "005763bc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "supply_hp_upgrade[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "0057646c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "iroquois_spear_speed[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 26,
+  "ref_ea": "0057651c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_move_speed",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00570253"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_turn_speed",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "005702c2"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_pack_turn_bonus",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00570336"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_block_radius",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "005703aa"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_guy_spacing",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00570421"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_respond_range",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "005704b3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_defensive_respond_range",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 28,
+  "ref_ea": "00570548"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_guard_respond_range",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "005705dd"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_build_respond_range",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "0057066d"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_gather_respond_range",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "00570702"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "aircraft_respond_range",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00570797"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "bomber_respond_range",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "0057082c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "ship_defensive_respond_range",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 28,
+  "ref_ea": "005708c1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "target_radius",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00570956"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "military_transport_bonus",
+  "field_off": 60,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "005709e6"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "range_inaccuracy",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00570a7b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "height_increment",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00570b0c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "height_bonus",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00570ba1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "flank_bonus",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00570c36"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "cavalry_flank_bonus",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00570ccb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "vehicle_flank_bonus",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00570d60"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "rocky_modifier",
+  "field_off": 88,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00570df5"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "overkill_frames",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00570e8a"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "overkill_damage",
+  "field_off": 96,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00570f1f"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "entrenchment_modifier",
+  "field_off": 100,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00570fb0"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "river_modifier",
+  "field_off": 104,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00571045"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "recapture_city_modifier",
+  "field_off": 108,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "005710da"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "one_age_down",
+  "field_off": 112,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0057116f"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "two_ages_down",
+  "field_off": 116,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00571204"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "three_ages_down",
+  "field_off": 120,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00571299"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "four_ages_down",
+  "field_off": 124,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "0057132e"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "five_ages_down",
+  "field_off": 128,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "005713c3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_train_distance",
+  "field_off": 132,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "0057145b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_train_max_distance",
+  "field_off": 136,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "005714f3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "boat_train_distance",
+  "field_off": 140,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "0057158b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "boat_train_max_distance",
+  "field_off": 144,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "00571623"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "boat_garrison_max_distance",
+  "field_off": 148,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "005716bb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_board_distance",
+  "field_off": 152,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00571753"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_disembark_distance",
+  "field_off": 156,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "005717eb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "air_unit_mana_recharge",
+  "field_off": 160,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00571883"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "max_aircraft_per_carrier",
+  "field_off": 164,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "00571916"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "max_aircraft_per_airbase",
+  "field_off": 168,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "005719a9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "dock_radius",
+  "field_off": 172,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00571a41"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "mine_radius",
+  "field_off": 176,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00571ad4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "woodcutter_radius",
+  "field_off": 180,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00571b6c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "capital_territory_bonus",
+  "field_off": 252,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "00572432"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_territory_multiplier",
+  "field_off": 268,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "00572617"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_territory_multiplier",
+  "field_off": 272,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "005726af"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_base",
+  "field_off": 276,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00572747"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_limit_base",
+  "field_off": 280,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "005727da"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_limit_civic",
+  "field_off": 284,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00572872"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_limit_city",
+  "field_off": 288,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00572905"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_den",
+  "field_off": 292,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "0057299d"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "territory_num",
+  "field_off": 296,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00572a30"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_center_radius",
+  "field_off": 300,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00572ac8"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_center_pop_radius",
+  "field_off": 304,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00572b60"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_capture_radius",
+  "field_off": 308,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00572bf8"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_spacing",
+  "field_off": 312,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00572c90"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "relax_city_spacing",
+  "field_off": 316,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00572d23"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "first_city_near_coast",
+  "field_off": 320,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00572dbb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_spacing",
+  "field_off": 324,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00572e53"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "fort_to_enemy_city_spacing",
+  "field_off": 328,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "00572eeb"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_buildings",
+  "field_off": 332,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00572f83"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "metro_buildings",
+  "field_off": 336,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "0057301b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "building_hp_upgrade",
+  "field_off": 340,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "005730b3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "siege_attrition",
+  "field_off": 488,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "0057314b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "militia_attrition",
+  "field_off": 492,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "005731e3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "attrition_aged_up",
+  "field_off": 496,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "0057327b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "troops_upgrade_los",
+  "field_off": 500,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00573313"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spy_upgrade_los",
+  "field_off": 504,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "005733ab"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spy_bribe_upgrade_range",
+  "field_off": 508,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "00573443"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spy_informer_upgrade_range",
+  "field_off": 512,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "005734db"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "general_upgrade_los",
+  "field_off": 532,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00573573"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spy_general_cost",
+  "field_off": 536,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "0057360b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "jam_unit_radar_prob",
+  "field_off": 540,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "005736a3"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_rate_base",
+  "field_off": 544,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "0057373b"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_rate_progression",
+  "field_off": 548,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "005737ce"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "accel_train",
+  "field_off": 552,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00573866"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "accel_construct",
+  "field_off": 556,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "005738fe"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "accel_research",
+  "field_off": 560,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00573996"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "gather_rate",
+  "field_off": 636,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00573c34"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "peasant_rate",
+  "field_off": 640,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00573cc9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "oil_rate",
+  "field_off": 668,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "00573e04"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "farms_per_city_base",
+  "field_off": 672,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00573e99"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "farms_per_city_level",
+  "field_off": 676,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00573f31"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "refinery_bonus",
+  "field_off": 760,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "005745f4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "base_tribute",
+  "field_off": 764,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00574689"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "commerce_tribute",
+  "field_off": 768,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00574721"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "city_plunder_per_level",
+  "field_off": 772,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "005747b9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "capital_plunder",
+  "field_off": 776,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00574851"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "capital_plunder_assassin",
+  "field_off": 780,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "005748e9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "village_taxes",
+  "field_off": 804,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00574981"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "building_taxes",
+  "field_off": 808,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00574a19"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "market_taxes",
+  "field_off": 812,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00574ab1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "temple_taxes",
+  "field_off": 816,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00574b49"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "village_literacy",
+  "field_off": 840,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00574be1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "university_literacy",
+  "field_off": 844,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00574c79"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "library_literacy",
+  "field_off": 848,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00574d11"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_cost_factor",
+  "field_off": 852,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00574da9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "build_cost_factor",
+  "field_off": 856,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00574e41"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_cost_factor",
+  "field_off": 860,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00574ed9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "spell_cost_factor",
+  "field_off": 864,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00574f71"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_science_discount",
+  "field_off": 868,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00575009"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_science_speedup",
+  "field_off": 872,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "005750a1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_age_behind_discount",
+  "field_off": 876,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "00575134"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_age_behind_knowledge_discount",
+  "field_off": 880,
+  "field_reg": "EDI",
+  "tag": 34,
+  "ref_ea": "005751cc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_color_behind_discount",
+  "field_off": 884,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "00575264"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tech_color_behind_knowledge_discount",
+  "field_off": 888,
+  "field_reg": "EDI",
+  "tag": 36,
+  "ref_ea": "005752fc"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "build_support_factor",
+  "field_off": 892,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00575394"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "disband_city_rate",
+  "field_off": 896,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "0057542c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "disband_senate_rate",
+  "field_off": 900,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "005754c4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "military_upgrade_discount",
+  "field_off": 904,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "0057555c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "military_unit_discount",
+  "field_off": 908,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "005755f4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_refit_max_cost",
+  "field_off": 912,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "0057568c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_scholar_ramp_max",
+  "field_off": 916,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00575724"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_worker_ramp_max",
+  "field_off": 920,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "005757b7"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_other_civilian_ramp_max",
+  "field_off": 924,
+  "field_reg": "EDI",
+  "tag": 28,
+  "ref_ea": "0057584f"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "unit_military_ramp_max",
+  "field_off": 928,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "005758e7"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "research_premium",
+  "field_off": 932,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "0057597f"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "research_tick_premium",
+  "field_off": 936,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00575a17"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "ramp_final",
+  "field_off": 940,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "00575aaf"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "plunder",
+  "field_off": 944,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00575b47"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "caravan_plunder",
+  "field_off": 948,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00575bdf"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "general_plunder",
+  "field_off": 952,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00575c72"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "capital_build_time",
+  "field_off": 956,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00575d0a"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "min_pop_limit",
+  "field_off": 960,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00575da2"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "military_pop",
+  "field_off": 996,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "00575ee4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "village_pop",
+  "field_off": 1000,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00575f79"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "granary_pop",
+  "field_off": 1004,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0057600c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "max_pop_limit",
+  "field_off": 1008,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "005760a4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "commando_min_damage",
+  "field_off": 1012,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "0057613c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "special_min_damage",
+  "field_off": 1016,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "005761d4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "elite_min_damage",
+  "field_off": 1020,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "0057626c"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "lumber_commerce",
+  "field_off": 1056,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "005765b4"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "global_prosperity",
+  "field_off": 1060,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00576649"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "pyramids_commerce",
+  "field_off": 1064,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00576779"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "pyramids_city_limit",
+  "field_off": 1068,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00576811"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "pyramids_food",
+  "field_off": 1072,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "005768a9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "pyramids_city_discount",
+  "field_off": 1076,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00576941"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colossus_wealth",
+  "field_off": 1080,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "005769d9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colossus_pop_cap",
+  "field_off": 1084,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00576a71"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colossus_caravan",
+  "field_off": 1088,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00576b09"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colossus_commerce",
+  "field_off": 1092,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00576ba1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "hanging_gardens_knowledge",
+  "field_off": 1096,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "00576c39"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "hanging_gardens_build_time",
+  "field_off": 1100,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "00576cd1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "hanging_gardens_upgrades",
+  "field_off": 1104,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "00576d69"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "hanging_gardens_industry_discount",
+  "field_off": 1108,
+  "field_reg": "EDI",
+  "tag": 33,
+  "ref_ea": "00576e01"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "terra_cotta_attack",
+  "field_off": 1112,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00576e99"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "terra_cotta_range",
+  "field_off": 1116,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00576f31"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "terra_cotta_cost",
+  "field_off": 1120,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00576fc9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "terra_cotta_free",
+  "field_off": 1124,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00577061"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "terra_cotta_delay",
+  "field_off": 1128,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "005770f9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_territory_bonus",
+  "field_off": 1132,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "00577191"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_attrition",
+  "field_off": 1136,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00577229"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_fort_range",
+  "field_off": 1140,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "005772c1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_fort_borders",
+  "field_off": 1144,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00577359"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_fort_upgrades",
+  "field_off": 1148,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "005773f1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_fort_cost",
+  "field_off": 1152,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00577489"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "colosseum_barracks_cost",
+  "field_off": 1156,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "00577521"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "forbidden_city_gather",
+  "field_off": 1160,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "005775b9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "forbidden_city_base_gather",
+  "field_off": 1164,
+  "field_reg": "EDI",
+  "tag": 26,
+  "ref_ea": "00577651"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_timber",
+  "field_off": 1168,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "005776e9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_timber_commerce",
+  "field_off": 1172,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00577781"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_temple_borders",
+  "field_off": 1176,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00577819"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_temple_range",
+  "field_off": 1180,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "005778b1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_temple_hp",
+  "field_off": 1184,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00577949"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_temple_cost",
+  "field_off": 1188,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "005779e1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "tikal_temple_upgrades",
+  "field_off": 1192,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00577a79"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "porcelain_ships",
+  "field_off": 1196,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "00577b11"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "porcelain_rare",
+  "field_off": 1200,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "00577ba9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "porcelain_market",
+  "field_off": 1204,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00577c41"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "red_fort_heal",
+  "field_off": 1208,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00577cd9"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "red_fort_fortification",
+  "field_off": 1212,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00577d71"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "red_fort_tactics",
+  "field_off": 1216,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00577e09"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "red_fort_air_defense",
+  "field_off": 1220,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00577ea1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "red_fort_fort_hps",
+  "field_off": 1224,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "00577f39"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "diamonds_commerce",
+  "field_off": 2348,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "005766e1"
+ },
+ {
+  "func": "FUN_00570170",
+  "name": "gems_territory_bonus",
+  "field_off": 2352,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "0057257c"
+ },
+ {
+  "func": "FUN_005888b0",
+  "name": "musical_chairs",
+  "field_off": 1732,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "00588d96"
+ },
+ {
+  "func": "FUN_005888b0",
+  "name": "terra_cotta_total",
+  "field_off": 1736,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "00588e0b"
+ },
+ {
+  "func": "FUN_005888b0",
+  "name": "armageddon",
+  "field_off": 1760,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "00588e80"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "(int) version",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 13,
+  "ref_ea": "005d615d"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "(int)seed",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "005d620d"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "checksum_deep",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 13,
+  "ref_ea": "005d627c"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "checksum_window_size",
+  "field_off": 12,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "005d62e8"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "checksum_failure_threshold",
+  "field_off": 16,
+  "field_reg": "EBX",
+  "tag": 26,
+  "ref_ea": "005d6354"
+ },
+ {
+  "func": "FUN_005d6040",
+  "name": "flags",
+  "field_off": 20,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "005d63c3"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "whom",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "005dea89"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "node_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "005df0d4"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_node_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "005df16c"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "(int)variation",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "005dfb1d"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "(int)off_x",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "005dfbb5"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "(int)off_y",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "005dfc4d"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "cur_anim",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "005dfce0"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "stopped",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "005dfd78"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "hold_attack",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "005dfe10"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "queued_attack",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "005dfea8"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "guy_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "005dff40"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "guy_num",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "005dffd3"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "type",
+  "field_off": 8,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "005de73b"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "angle",
+  "field_off": 24,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "005de8ef"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_angle",
+  "field_off": 28,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "005df7aa"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "turret_angles[0]",
+  "field_off": 32,
+  "field_reg": "ESI",
+  "tag": 16,
+  "ref_ea": "005debbe"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "turret_angles[1]",
+  "field_off": 36,
+  "field_reg": "ESI",
+  "tag": 16,
+  "ref_ea": "005dec4c"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "turret_angles[2]",
+  "field_off": 40,
+  "field_reg": "ESI",
+  "tag": 16,
+  "ref_ea": "005decda"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "turret_angles[3]",
+  "field_off": 44,
+  "field_reg": "ESI",
+  "tag": 16,
+  "ref_ea": "005ded68"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_turret_angles[0]",
+  "field_off": 48,
+  "field_reg": "ESI",
+  "tag": 20,
+  "ref_ea": "005dedfb"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_turret_angles[1]",
+  "field_off": 52,
+  "field_reg": "ESI",
+  "tag": 20,
+  "ref_ea": "005dee89"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_turret_angles[2]",
+  "field_off": 56,
+  "field_reg": "ESI",
+  "tag": 20,
+  "ref_ea": "005def17"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_turret_angles[3]",
+  "field_off": 60,
+  "field_reg": "ESI",
+  "tag": 20,
+  "ref_ea": "005defa5"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "*((dword*) &turret_inc)",
+  "field_off": 64,
+  "field_reg": "ESI",
+  "tag": 23,
+  "ref_ea": "005df038"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "*((dword*) &bank)",
+  "field_off": 68,
+  "field_reg": "ESI",
+  "tag": 17,
+  "ref_ea": "005df204"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "*((dword*) &last_bank)",
+  "field_off": 72,
+  "field_reg": "ESI",
+  "tag": 22,
+  "ref_ea": "005df297"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "*((dword*) &pitch)",
+  "field_off": 76,
+  "field_reg": "ESI",
+  "tag": 18,
+  "ref_ea": "005df32a"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "*((dword*) &last_pitch)",
+  "field_off": 80,
+  "field_reg": "ESI",
+  "tag": 23,
+  "ref_ea": "005df3b8"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "track_dx",
+  "field_off": 84,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "005e0101"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "track_dy",
+  "field_off": 88,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "005e018f"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_x",
+  "field_off": 92,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "005df447"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_y",
+  "field_off": 96,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "005df4d5"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "des_angle",
+  "field_off": 100,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "005df568"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_x",
+  "field_off": 104,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "005df5fb"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_y",
+  "field_off": 108,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "005df689"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_z",
+  "field_off": 112,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "005df717"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "cur_time",
+  "field_off": 116,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "005df83d"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "end_time",
+  "field_off": 120,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "005df8cb"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_time",
+  "field_off": 124,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "005df95e"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "last_speed",
+  "field_off": 128,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "005df9f1"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "avg_speed",
+  "field_off": 132,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "005dfa87"
+ },
+ {
+  "func": "FUN_005de6c0",
+  "name": "gpiece",
+  "field_off": 136,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "005e006b"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "mana_burn",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0060b253"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "spell_time",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0060b2ca"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "group",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0060b84e"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "myspeed",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060b8e6"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "myarmor",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060b979"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "attrition",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0060ba11"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "inside_up",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0060baa4"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "hero",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060bb3c"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "supply",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0060bbd4"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "special",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060bc6c"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "gather_down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0060bd04"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "healing",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060bebd"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "collide",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060bf52"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "collide_o",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0060bfea"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "collide_guy",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0060c07d"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "num_queued",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0060c115"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "damage_o",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0060c240"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "cavarch_o",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0060c2d8"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "cavarch_uid",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0060c36b"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "cavarch_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0060c3fe"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "damage_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0060c496"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "form",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060c52e"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "form_mod",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0060c5c6"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "full",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060c65e"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "recharging",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0060c6f6"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "path_recursion",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "0060c78e"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "idle",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060c826"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "stance",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0060c8be"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "safe",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060c956"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "waiting",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0060c9ee"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "collide_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0060ca81"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "inside_up_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "0060cbaf"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "guy_mark",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0060cc47"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "play",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060ccdf"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "o_up",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0060cd77"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "o_down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0060ce0f"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "good_obj",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0060cea2"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "collide_frame",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "0060b0fd"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "damage_frame",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0060b16f"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "angle",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0060b1e1"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "rare",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0060b341"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "air_alt",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "0060b3ce"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "dest_angle",
+  "field_off": 88,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0060b461"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "trench_angle",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "0060b4ef"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "tolerance",
+  "field_off": 96,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "0060b582"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "queue_time",
+  "field_off": 100,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0060c1ad"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "unit_masks",
+  "field_off": 104,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0060bd9c"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "unit_masks2",
+  "field_off": 108,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0060be2a"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "orders_x",
+  "field_off": 112,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0060b611"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "orders_y",
+  "field_off": 116,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0060b69f"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "los_x",
+  "field_off": 120,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0060b732"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "los_y",
+  "field_off": 124,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0060b7c0"
+ },
+ {
+  "func": "FUN_0060b070",
+  "name": "start_dist",
+  "field_off": 304,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0060cb19"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "relative_value[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 20,
+  "ref_ea": "0061d115"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "unit_flags",
+  "field_off": 692,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "0061c4ff"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "unit_flags2",
+  "field_off": 696,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "0061c574"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "mode",
+  "field_off": 700,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0061c5e9"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "moves",
+  "field_off": 704,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0061c65e"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "turn_speed",
+  "field_off": 708,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "0061c6d3"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "role",
+  "field_off": 712,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0061c763"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "carry",
+  "field_off": 724,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0061c7f0"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "carry_size",
+  "field_off": 728,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "0061c886"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "military_level",
+  "field_off": 732,
+  "field_reg": "ESI",
+  "tag": 14,
+  "ref_ea": "0061c91c"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "research_premium_cost",
+  "field_off": 736,
+  "field_reg": "ESI",
+  "tag": 21,
+  "ref_ea": "0061c9b2"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "research_premium_time",
+  "field_off": 740,
+  "field_reg": "ESI",
+  "tag": 21,
+  "ref_ea": "0061ca43"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "job_extra_time",
+  "field_off": 744,
+  "field_reg": "ESI",
+  "tag": 14,
+  "ref_ea": "0061cad9"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "mana",
+  "field_off": 748,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0061cb6f"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "control_cost",
+  "field_off": 752,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "0061cc05"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "progression",
+  "field_off": 756,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "0061cc9b"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "push_size",
+  "field_off": 760,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0061cd31"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "push_circles",
+  "field_off": 764,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "0061cdc2"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "target_size",
+  "field_off": 768,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "0061ce58"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "squad_size",
+  "field_off": 772,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "0061ceee"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "uber_size",
+  "field_off": 776,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0061cf84"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "crew_size",
+  "field_off": 780,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0061d015"
+ },
+ {
+  "func": "FUN_0061c490",
+  "name": "base_form",
+  "field_off": 784,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0061d094"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "city",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0062e893"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "gather_down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0062e907"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "city_down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0062e984"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "recharging",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0062e9f8"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "attack_ox",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "0062ea6c"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "attack_whom",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0062eadb"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "stance",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0062eb6d"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "founder",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0062ebfe"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "max_age",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0062ec8a"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "healing",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0062ed1d"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "queued",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0062edbb"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "infiltrate",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "0062ee53"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "infiltrate2",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "0062eeeb"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "wonder",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0062ef7e"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "fort",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0062f013"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "dock",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0062f0a3"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "oil_well",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0062f138"
+ },
+ {
+  "func": "FUN_0062e810",
+  "name": "orig_type",
+  "field_off": 108,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0062f1cd"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "civ_graph_mask",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "00631ecd"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "town_hits",
+  "field_off": 692,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "0063187f"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "min_city_size",
+  "field_off": 696,
+  "field_reg": "ESI",
+  "tag": 13,
+  "ref_ea": "006318f4"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "misery_rate",
+  "field_off": 700,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "00631969"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "build_flags",
+  "field_off": 704,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "006319d9"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "most_shots",
+  "field_off": 708,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "00631a4e"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "garrison_max",
+  "field_off": 712,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "00631ac3"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "base_arrows",
+  "field_off": 716,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "00631b53"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "wonder_val",
+  "field_off": 720,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "00631be4"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "plunder_value",
+  "field_off": 724,
+  "field_reg": "ESI",
+  "tag": 13,
+  "ref_ea": "00631c7a"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "plunder_good",
+  "field_off": 728,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "00631d10"
+ },
+ {
+  "func": "FUN_00631810",
+  "name": "behind_height",
+  "field_off": 732,
+  "field_reg": "ESI",
+  "tag": 13,
+  "ref_ea": "00631da1"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "ever_seen",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "006428e4"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "ever_seen_completed",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00642974"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "build_masks",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "00642a09"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "helpers",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "00642a9e"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "demolition",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00642b33"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "job_counter",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00642706"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "job_counter_2",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00642773"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "constr_time",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006427e5"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "(int)construct_hits",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00642857"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "gpiece",
+  "field_off": 88,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00642622"
+ },
+ {
+  "func": "FUN_006425a0",
+  "name": "frame_started",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00642694"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "inside_down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "006460c4"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006461a8"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "down_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0064621c"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "hold_frames",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "006463a9"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "infiltrated",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "00646439"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "damage_frac",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "006464c9"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "mylos",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0064655e"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "inside_down_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 15,
+  "ref_ea": "006465f3"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "up_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "00646684"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "launch_frames",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 13,
+  "ref_ea": "00646719"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "visible",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "006467aa"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "near_o",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "0064683f"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "near_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "006468d4"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "healing",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "00646964"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "myhits",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0064631f"
+ },
+ {
+  "func": "FUN_00645fd0",
+  "name": "damage",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00646052"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "support_cost[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "00660ff9"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "obj_masks",
+  "field_off": 484,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0065fc87"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "attack",
+  "field_off": 488,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0065fd07"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "to_hit",
+  "field_off": 492,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0065fd7c"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "attenuate",
+  "field_off": 496,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0065fdec"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "recharge",
+  "field_off": 500,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "0065fe61"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "min_range",
+  "field_off": 504,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0065feec"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "max_range",
+  "field_off": 508,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0065ff7d"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "splash_area",
+  "field_off": 512,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "00660013"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "splash_percent",
+  "field_off": 516,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006600a9"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "ammo_per_att",
+  "field_off": 520,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "0066013f"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "proj_speed",
+  "field_off": 524,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006601d1"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "hits",
+  "field_off": 528,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "00660263"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "armor",
+  "field_off": 532,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "006602f9"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "domain",
+  "field_off": 536,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "0066038f"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "science_los",
+  "field_off": 544,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "006604bb"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "guy_spacing",
+  "field_off": 548,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "00660551"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "x_spacing",
+  "field_off": 552,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "006605e2"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "y_spacing",
+  "field_off": 556,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "0066067d"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "abil",
+  "field_off": 560,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0066070e"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "x_size",
+  "field_off": 564,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "006607a4"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "y_size",
+  "field_off": 568,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "00660835"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "guy_radius",
+  "field_off": 572,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006608cb"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "block_radius",
+  "field_off": 576,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "00660961"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "big_radius",
+  "field_off": 580,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006609f2"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "new_block_radius",
+  "field_off": 584,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "00660a88"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "new_big_radius",
+  "field_off": 588,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "00660b1e"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "fly_high",
+  "field_off": 592,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "00660bb4"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "fly_low",
+  "field_off": 596,
+  "field_reg": "EBX",
+  "tag": 7,
+  "ref_ea": "00660c4a"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "block_points",
+  "field_off": 600,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "00660ce0"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "graft",
+  "field_off": 604,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "00660d76"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "special_upgrade",
+  "field_off": 608,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "00660e0c"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "special_upgrade_cost",
+  "field_off": 612,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "00660e90"
+ },
+ {
+  "func": "FUN_0065fc00",
+  "name": "support[scan]",
+  "field_off": 4294967288,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "00660f87"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "grid_x",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "00663483"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "grid_y",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "006634fb"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "costs[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "00663575"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "preq[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006635fd"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "show[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "0066368a"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "type",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0066323f"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "job_time",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "006632c0"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "res_time",
+  "field_off": 12,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "0066332d"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "tribe_mask",
+  "field_off": 16,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "0066339f"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "from",
+  "field_off": 60,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "006636fb"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "where",
+  "field_off": 64,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "0066376d"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "upgrade",
+  "field_off": 68,
+  "field_reg": "EBX",
+  "tag": 7,
+  "ref_ea": "006637e8"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "jump",
+  "field_off": 72,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "00663855"
+ },
+ {
+  "func": "FUN_006631c0",
+  "name": "modified",
+  "field_off": 88,
+  "field_reg": "EBX",
+  "tag": 8,
+  "ref_ea": "00663939"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "bonus_num [scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "0066f8ca"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "undiscovered_cost_good",
+  "field_off": 692,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "0066f335"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_cost_good",
+  "field_off": 696,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "0066f3aa"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "undiscovered_support_good",
+  "field_off": 700,
+  "field_reg": "EBX",
+  "tag": 25,
+  "ref_ea": "0066f41f"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_support_good",
+  "field_off": 704,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "0066f4af"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_production_good",
+  "field_off": 708,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "0066f545"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "undiscovered_cost_rate",
+  "field_off": 712,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "0066f5db"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_cost_rate",
+  "field_off": 716,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "0066f671"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "undiscovered_support_rate",
+  "field_off": 720,
+  "field_reg": "EBX",
+  "tag": 25,
+  "ref_ea": "0066f6f5"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_support_rate",
+  "field_off": 724,
+  "field_reg": "EBX",
+  "tag": 21,
+  "ref_ea": "0066f76a"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "obsolete_production_rate",
+  "field_off": 728,
+  "field_reg": "EBX",
+  "tag": 24,
+  "ref_ea": "0066f7da"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "largest_gather",
+  "field_off": 748,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "0066f94c"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "block",
+  "field_off": 752,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0066f9c7"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "exclude_ctw",
+  "field_off": 756,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0066fa3c"
+ },
+ {
+  "func": "FUN_0066f2c0",
+  "name": "bonus_type[scan]",
+  "field_off": 4294967288,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "0066f858"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "use[scan]",
+  "field_off": 0,
+  "field_reg": "ESI",
+  "tag": null,
+  "ref_ea": "00675785"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "spell_flags",
+  "field_off": 456,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "006754bc"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "spell_range",
+  "field_off": 460,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "00675528"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "mana",
+  "field_off": 464,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "0067559d"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "duration",
+  "field_off": 468,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "00675612"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "duration_upgrade",
+  "field_off": 472,
+  "field_reg": "ESI",
+  "tag": 16,
+  "ref_ea": "00675687"
+ },
+ {
+  "func": "FUN_00675450",
+  "name": "from2",
+  "field_off": 476,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "006756fc"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "0067a791"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "rolling",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "0067a821"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "accuracy",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "0067aae6"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "gpiece",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0067a8a4"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "cur_time",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "00679c97"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "total_time",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "00679d2a"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "angle",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0067a34d"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "splash_area",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0067a98c"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "index",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0067a9fe"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "graph_index",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0067a91f"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "num_guys",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "0067aa70"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "whom",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00679ee3"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "traj",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0067a3c3"
+ },
+ {
+  "func": "FUN_00679c00",
+  "name": "start_roll_angle",
+  "field_off": 100,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "0067a575"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "common_factor",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "00680887"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "goody_factor",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006808f8"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "flags",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0068096a"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "climate",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006809dc"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "region",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00680a4e"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "size",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00680ac0"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "rank",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00680b48"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "resource",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "00680bdb"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "fertile",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00680c6e"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "site",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00680cfc"
+ },
+ {
+  "func": "FUN_00680820",
+  "name": "goodies",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00680d8f"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006af88c"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "goods",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006af8f6"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "who2",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006afbee"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "region",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "006afc62"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "region2",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "006afcd6"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "land_sub",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "006afdbe"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "light",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006afe4f"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "blocked",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "006afecc"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "solid",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006affaf"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "down",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006b0023"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "down_who",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "006b0097"
+ },
+ {
+  "func": "FUN_006af7e0",
+  "name": "was_seen",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "006b0111"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "wcoord_seen[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "006b724a"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "tdata[scan].mask",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "006b72fb"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "seen[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "006b73b0"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "seen2[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "006b744b"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "seen3[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 11,
+  "ref_ea": "006b74e6"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "danger[who][scan]",
+  "field_off": 4,
+  "field_reg": "EAX",
+  "tag": 17,
+  "ref_ea": "006b75ac"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "size",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "006b6a54"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "fog_xs",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006b6ae7"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "fog_ys",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006b6b75"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "fog_size",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006b6bf6"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "tile_xs",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006b6c71"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "tile_ys",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006b6ce3"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "tile_size",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006b6d55"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "reg_xs",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006b6dc7"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "reg_ys",
+  "field_off": 40,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006b6e39"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "reg_size",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006b6eb8"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "sea_map",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006b6fde"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "player_territory_limit",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "006b6697"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "player_territory_limit_civic",
+  "field_off": 60,
+  "field_reg": "EDI",
+  "tag": 28,
+  "ref_ea": "006b6709"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "player_territory_limit_city",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 27,
+  "ref_ea": "006b677b"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "colonized_territory_limit",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 25,
+  "ref_ea": "006b67ed"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "colonized_territory_limit_civic",
+  "field_off": 72,
+  "field_reg": "EDI",
+  "tag": 31,
+  "ref_ea": "006b685f"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "colonized_territory_limit_city",
+  "field_off": 76,
+  "field_reg": "EDI",
+  "tag": 30,
+  "ref_ea": "006b68e3"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "player_reg",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006b7071"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "resource_reg",
+  "field_off": 84,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006b7104"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "forest_size",
+  "field_off": 88,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006b610d"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "mountain_size",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006b617f"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "rock_size",
+  "field_off": 96,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006b61ec"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "total_metal",
+  "field_off": 100,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006b6263"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "total_oil",
+  "field_off": 104,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006b62d5"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "goodies",
+  "field_off": 108,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006b6347"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "land_resources",
+  "field_off": 112,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006b63d4"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "sea_resources",
+  "field_off": 116,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006b6462"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "land_size",
+  "field_off": 120,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006b7197"
+ },
+ {
+  "func": "FUN_006b6080",
+  "name": "seed",
+  "field_off": 124,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "006b650e"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "rush",
+  "field_off": 0,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "006d7967"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "cities",
+  "field_off": 4,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d79d8"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "upgrades",
+  "field_off": 8,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "006d7a4a"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "arms",
+  "field_off": 12,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "006d7abc"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "army",
+  "field_off": 16,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "006d7b2e"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "army_size",
+  "field_off": 20,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "006d7b9c"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "raid",
+  "field_off": 24,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "006d7c29"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "invade",
+  "field_off": 28,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d7cbc"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "target",
+  "field_off": 32,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d7d4f"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "strategy",
+  "field_off": 36,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "006d7dd9"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "raze",
+  "field_off": 40,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "006d7e6c"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "spells",
+  "field_off": 44,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d7eff"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "forts",
+  "field_off": 48,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "006d7f8d"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "nukes",
+  "field_off": 52,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "006d8020"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "naval",
+  "field_off": 60,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "006d8141"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "market",
+  "field_off": 64,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d81d4"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "scouts",
+  "field_off": 68,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "006d8262"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "civilians",
+  "field_off": 72,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "006d82f5"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "early_army",
+  "field_off": 76,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "006d8388"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "friendly_human",
+  "field_off": 80,
+  "field_reg": "ESI",
+  "tag": 14,
+  "ref_ea": "006d841b"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "alliance_human",
+  "field_off": 84,
+  "field_reg": "ESI",
+  "tag": 14,
+  "ref_ea": "006d84a9"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "friendly_ai",
+  "field_off": 88,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "006d853c"
+ },
+ {
+  "func": "FUN_006d7900",
+  "name": "alliance_ai",
+  "field_off": 92,
+  "field_reg": "ESI",
+  "tag": 11,
+  "ref_ea": "006d85ca"
+ },
+ {
+  "func": "FUN_006d87c0",
+  "name": "agree",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "006d8827"
+ },
+ {
+  "func": "FUN_006d87c0",
+  "name": "offers[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "006d8985"
+ },
+ {
+  "func": "FUN_006d87c0",
+  "name": "attacks[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "006d8a08"
+ },
+ {
+  "func": "FUN_006d87c0",
+  "name": "any_offer",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "006d8898"
+ },
+ {
+  "func": "FUN_006d87c0",
+  "name": "treaty",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "006d890a"
+ },
+ {
+  "func": "FUN_006d94b0",
+  "name": "ages_get()",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "006d971b"
+ },
+ {
+  "func": "FUN_006d94b0",
+  "name": "epochs_get()",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "006d9796"
+ },
+ {
+  "func": "FUN_006d94b0",
+  "name": "discovered_get()",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 16,
+  "ref_ea": "006d9811"
+ },
+ {
+  "func": "FUN_006d94b0",
+  "name": "epoch_get(scan)",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "006d9895"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "leader_flags",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e5193"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "diplos[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "006e56a1"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "escrow_rate[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "006e747e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tech_cat_frame[scan]",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "006e84fa"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "leader_flags2",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e5225"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tribe",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "006e53a4"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "defeated_by",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e5433"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "score",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "006e5554"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tributes[scan]",
+  "field_off": 24,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006e74ef"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "treaties[scan]",
+  "field_off": 32,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006e5733"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "base_rate[scan]",
+  "field_off": 48,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "006e75d3"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "agendas[scan]",
+  "field_off": 64,
+  "field_reg": "EBX",
+  "tag": 13,
+  "ref_ea": "006e57c6"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "good_deeds[scan]",
+  "field_off": 96,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5859"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attack_stamp[scan]",
+  "field_off": 128,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "006e58ec"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "raid_stamp[scan]",
+  "field_off": 160,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5982"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "capital_stamp[scan]",
+  "field_off": 192,
+  "field_reg": "EBX",
+  "tag": 19,
+  "ref_ea": "006e5a18"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "ally_stamp[scan]",
+  "field_off": 224,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5aae"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tribute_stamp[scan]",
+  "field_off": 256,
+  "field_reg": "EBX",
+  "tag": 19,
+  "ref_ea": "006e5b44"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gift_stamp[scan]",
+  "field_off": 288,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5bda"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "hire_stamp[scan]",
+  "field_off": 320,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5c70"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "hire_who[scan]",
+  "field_off": 352,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006e5d06"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "aggression[scan]",
+  "field_off": 412,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e5d9c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "strong[scan]",
+  "field_off": 444,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "006e5e32"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "weak[scan]",
+  "field_off": 476,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006e5ec8"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attrition_stamp",
+  "field_off": 500,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e6499"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attrition_stamp2",
+  "field_off": 504,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "006e650e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "dow[scan]",
+  "field_off": 508,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "006e5f5e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attrition_stamp3",
+  "field_off": 508,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "006e657e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "ctw_hero_stamp",
+  "field_off": 512,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006e65f3"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "ctw_hero_retreat_stamp",
+  "field_off": 516,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "006e6668"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "repair_stamp",
+  "field_off": 520,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e66f8"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "blacken",
+  "field_off": 524,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e678e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "invaders[scan]",
+  "field_off": 540,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006e5ff4"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "broke_alliance[scan]",
+  "field_off": 572,
+  "field_reg": "EBX",
+  "tag": 20,
+  "ref_ea": "006e608a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "made_peace[scan]",
+  "field_off": 604,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e6120"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "last_spoke[scan]",
+  "field_off": 640,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e623a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "counteroffer[scan]",
+  "field_off": 672,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "006e62b8"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tribute_demanded[scan]",
+  "field_off": 704,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "006e632d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "last_taunt[scan]",
+  "field_off": 736,
+  "field_reg": "EBX",
+  "tag": 16,
+  "ref_ea": "006e63a2"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "got_diplo_message",
+  "field_off": 752,
+  "field_reg": "EDI",
+  "tag": 17,
+  "ref_ea": "006e61b6"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "taunt_frame[scan]",
+  "field_off": 768,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "006e6412"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "city_num",
+  "field_off": 1016,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e682b"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "village_num",
+  "field_off": 1020,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e68a0"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "city_mine",
+  "field_off": 1024,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e6915"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "village_mine",
+  "field_off": 1028,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e6985"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "city_mark",
+  "field_off": 1032,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e69fa"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "city_name",
+  "field_off": 1036,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e6a8a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "lost_city_stamp",
+  "field_off": 1040,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e6b20"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "lost_capital_stamp",
+  "field_off": 1044,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "006e6bb6"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "lost_capital_timer",
+  "field_off": 1048,
+  "field_reg": "EDI",
+  "tag": 18,
+  "ref_ea": "006e6c4c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "lost_capital_modifier",
+  "field_off": 1052,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "006e6ce2"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "hero_mark",
+  "field_off": 1056,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e6d7f"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "wonder_mark",
+  "field_off": 1060,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e6df4"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gather_slots[scan]",
+  "field_off": 1060,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "006e7660"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "fort_mark",
+  "field_off": 1064,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e6e69"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "dock_mark",
+  "field_off": 1068,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e6ede"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "oil_well_mark",
+  "field_off": 1072,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e6f53"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "supply_mark",
+  "field_off": 1076,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e6fe3"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "special_mark",
+  "field_off": 1084,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e7074"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "filled_gather_slots[scan]",
+  "field_off": 1084,
+  "field_reg": "EBX",
+  "tag": 25,
+  "ref_ea": "006e76f6"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "popwin_stamp",
+  "field_off": 1088,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e7105"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "popwin_timer",
+  "field_off": 1092,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e7196"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "wonderwin_stamp",
+  "field_off": 1096,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e722c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "wonderwin_timer",
+  "field_off": 1100,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e72bd"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gather_slots_high[scan]",
+  "field_off": 1108,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "006e778c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gather_slots_high[scan]",
+  "field_off": 1108,
+  "field_reg": "EBX",
+  "tag": 23,
+  "ref_ea": "006e7822"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "bonus_cap[scan]",
+  "field_off": 1176,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "006e78b8"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "worst_good",
+  "field_off": 1224,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e79f0"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "best_good",
+  "field_off": 1228,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e7a65"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "shortages",
+  "field_off": 1232,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e7ad5"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "production_step",
+  "field_off": 1928,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e7bbf"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "prod_script_run",
+  "field_off": 1932,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e7c4a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "script_step",
+  "field_off": 1936,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e7ce0"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "wonder_mod",
+  "field_off": 1940,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e7d76"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "ground_mod",
+  "field_off": 1944,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e7e07"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "air_mod",
+  "field_off": 1948,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e7e9d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "sea_mod",
+  "field_off": 1952,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e7f33"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "infra_mod",
+  "field_off": 1956,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e7fc9"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "defense_mod",
+  "field_off": 1960,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e805f"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gather_stamp",
+  "field_off": 1964,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e80f5"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "support_stamp",
+  "field_off": 1968,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e818b"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "nuke_stamp",
+  "field_off": 1972,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e821c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "flock_stamp",
+  "field_off": 1976,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e82b2"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "nukes_used",
+  "field_off": 1980,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e8343"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "missiles_used",
+  "field_off": 1984,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e83d9"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "tech_frame",
+  "field_off": 1988,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e846a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "victory_type",
+  "field_off": 2008,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e858c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "defeat_type",
+  "field_off": 2012,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e8607"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "(int) site_mark",
+  "field_off": 2016,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e867c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "pop_cap",
+  "field_off": 2020,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e86f1"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "pop_issues",
+  "field_off": 2024,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e8766"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "misery",
+  "field_off": 2028,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e87f6"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "units_killed",
+  "field_off": 2060,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006e89a2"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "units_lost",
+  "field_off": 2064,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e8a38"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "buildings_razed",
+  "field_off": 2072,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e8ace"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "buildings_lost",
+  "field_off": 2076,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006e8b64"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "cities_captured",
+  "field_off": 2084,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006e8bf5"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "cities_lost",
+  "field_off": 2088,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e8c8b"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "senates_built",
+  "field_off": 2140,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e7353"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "bonus_cap[NUM_COMMON]",
+  "field_off": 2352,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "006e793e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "active",
+  "field_off": 2364,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e8d28"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "control",
+  "field_off": 2368,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e8d9d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "combat",
+  "field_off": 2372,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e8e0d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "non_siege",
+  "field_off": 2376,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e8ef7"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "sea_combat",
+  "field_off": 2380,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e8f87"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "siege",
+  "field_off": 2384,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "006e8e82"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "defense",
+  "field_off": 2388,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e901d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attack",
+  "field_off": 2392,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e90b3"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "naval",
+  "field_off": 2400,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "006e91df"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "transports",
+  "field_off": 2412,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e9270"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "peasants",
+  "field_off": 2424,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e9306"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "scholars",
+  "field_off": 2428,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e9397"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "caras",
+  "field_off": 2432,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "006e942d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "merchants",
+  "field_off": 2436,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e94c3"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "scouts",
+  "field_off": 2440,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e9559"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "fighters",
+  "field_off": 2444,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e95ea"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "bombers",
+  "field_off": 2448,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "006e9680"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "cruise",
+  "field_off": 2452,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e9716"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "nuke",
+  "field_off": 2456,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "006e97ac"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "best_pop",
+  "field_off": 2460,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e9842"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "best_attack",
+  "field_off": 2464,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e98d8"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "best_armor",
+  "field_off": 2468,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "006e996e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "best_move",
+  "field_off": 2472,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e9a04"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "wars",
+  "field_off": 2476,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "006e9a95"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "allies",
+  "field_off": 2480,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "006e9b2b"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "active_wars",
+  "field_off": 2484,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e9bc1"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "active_wars_with",
+  "field_off": 2488,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "006e9c57"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "free_peasants",
+  "field_off": 2492,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006e9ced"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "xport_peasants",
+  "field_off": 2496,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006e9d83"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gatherers",
+  "field_off": 2500,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006e9e19"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "home_reg",
+  "field_off": 2504,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e9eaf"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "attacked",
+  "field_off": 2508,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006e9f45"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "full_cities",
+  "field_off": 2512,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "006e9fdb"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "explored",
+  "field_off": 2516,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006ea071"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "territory",
+  "field_off": 2520,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006ea107"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "territory_high",
+  "field_off": 2524,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006ea22e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "effective_pop",
+  "field_off": 2528,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006ea19d"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "other_team_terr",
+  "field_off": 2532,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006ea2c4"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "min_other_team_terr",
+  "field_off": 2536,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "006ea35a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "my_team_terr",
+  "field_off": 2540,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006ea3f0"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "scholar_militia",
+  "field_off": 2544,
+  "field_reg": "EDI",
+  "tag": 15,
+  "ref_ea": "006ea486"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "retargets",
+  "field_off": 2548,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006ea51c"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "barracks_units",
+  "field_off": 2552,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006ea5b2"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "stable_units",
+  "field_off": 2556,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "006ea643"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "factory_units",
+  "field_off": 2560,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006ea6d9"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "gov_hero_frame",
+  "field_off": 2632,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006e7b4a"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "econ[scan]",
+  "field_off": 4294967248,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006e7561"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "chat_status[scan]",
+  "field_off": 4294967264,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "006e560e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "escrow[scan]",
+  "field_off": 4294967272,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "006e740c"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006ee791"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "tribe",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "006ee7fc"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "team",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006ee8e4"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "handicap",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "006ee958"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "play",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006ee9c3"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "pauses",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "006eea52"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "diff",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "006eeade"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_used_zoom_control",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "006eec06"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_frames_zoomed_in",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "006eec98"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_frames_zoomed_out",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "006eed26"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_clicks",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006eedb9"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_hotkeys",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006eee4c"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_minimap_clicks",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "006eeedf"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_mainmap_clicks",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "006eef6d"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_cheated",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 14,
+  "ref_ea": "006ef000"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_control_groups_formed",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 28,
+  "ref_ea": "006ef093"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "synced_control_groups_activated",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 31,
+  "ref_ea": "006ef126"
+ },
+ {
+  "func": "FUN_006ee720",
+  "name": "pop_cap_frame",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006eeb73"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "graft[i]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006f1115"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "tribe",
+  "field_off": 84,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "006f0dc5"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "barbarian",
+  "field_off": 88,
+  "field_reg": "EBX",
+  "tag": 9,
+  "ref_ea": "006f0e3a"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "people",
+  "field_off": 92,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "006f0eac"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "backup_build_continent",
+  "field_off": 96,
+  "field_reg": "EBX",
+  "tag": 22,
+  "ref_ea": "006f0f1e"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "build_continent",
+  "field_off": 100,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "006f0f90"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "unit_continent",
+  "field_off": 104,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "006f101d"
+ },
+ {
+  "func": "FUN_006f0d70",
+  "name": "text_substitute",
+  "field_off": 108,
+  "field_reg": "EBX",
+  "tag": 15,
+  "ref_ea": "006f1099"
+ },
+ {
+  "func": "FUN_006f1480",
+  "name": "peasants_wait",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006f15b7"
+ },
+ {
+  "func": "FUN_006f1480",
+  "name": "buildings",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006f1628"
+ },
+ {
+  "func": "FUN_006f1480",
+  "name": "peasants",
+  "field_off": 4294967292,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006f1545"
+ },
+ {
+  "func": "FUN_006f16a0",
+  "name": "peasants",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006f175f"
+ },
+ {
+  "func": "FUN_006f16a0",
+  "name": "peasants_wait",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 13,
+  "ref_ea": "006f17d1"
+ },
+ {
+  "func": "FUN_006f16a0",
+  "name": "buildings",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "006f1843"
+ },
+ {
+  "func": "FUN_00714ae0",
+  "name": "valid",
+  "field_off": 2520,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00714c84"
+ },
+ {
+  "func": "FUN_00730070",
+  "name": "type",
+  "field_off": 0,
+  "field_reg": "EDX",
+  "tag": 4,
+  "ref_ea": "00730178"
+ },
+ {
+  "func": "FUN_00730070",
+  "name": "metric",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "007301e9"
+ },
+ {
+  "func": "FUN_00730070",
+  "name": "length",
+  "field_off": 16,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "007300b9"
+ },
+ {
+  "func": "FUN_00732460",
+  "name": "repaths[who]",
+  "field_off": 0,
+  "field_reg": "ESI",
+  "tag": 12,
+  "ref_ea": "007324b5"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "frame",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "007e8d7a"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "ping",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "007e8dea"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "ping_radius",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "007e8e5a"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "ping_stamp",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "007e8eca"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "ping_times",
+  "field_off": 28,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "007e8f52"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "doober",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "007e8fe5"
+ },
+ {
+  "func": "FUN_007e8c40",
+  "name": "loc_used",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "007e9078"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "line",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "008bd254"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "cost",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "008bd2bc"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "good",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "008bd329"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "discount",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "008bd39b"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "enough",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "008bd40d"
+ },
+ {
+  "func": "FUN_008bd1f0",
+  "name": "text_width",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "008bd47b"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "display_mode",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "008c134a"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "help_box_width",
+  "field_off": 516,
+  "field_reg": "ESI",
+  "tag": 14,
+  "ref_ea": "008c1103"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "help_type",
+  "field_off": 520,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "008c1178"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "help_lines",
+  "field_off": 524,
+  "field_reg": "ESI",
+  "tag": 10,
+  "ref_ea": "008c11ed"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "last_line",
+  "field_off": 528,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "008c125d"
+ },
+ {
+  "func": "FUN_008c1070",
+  "name": "gameover_time",
+  "field_off": 532,
+  "field_reg": "ESI",
+  "tag": 13,
+  "ref_ea": "008c12d2"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "valid",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "008d5664"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "node_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "008d601e"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "unit_crew",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "008d60bc"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "first_frame",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "008d56d5"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "cur_anim",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "008d5747"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "gpiece",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "008d5897"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "ammo_gpiece",
+  "field_off": 36,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "008d5b67"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "new_angle",
+  "field_off": 44,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "008d5cb6"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "turret_angles[0]",
+  "field_off": 48,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "008d5d49"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "turret_angles[1]",
+  "field_off": 52,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "008d5dd7"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "turret_angles[2]",
+  "field_off": 56,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "008d5e65"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "turret_angles[3]",
+  "field_off": 60,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "008d5ef3"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "cur_frame",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "008d5acf"
+ },
+ {
+  "func": "FUN_008d55e0",
+  "name": "skel_gpiece",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "008d5f8b"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "degree",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 6,
+  "ref_ea": "009133f4"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "depth",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 5,
+  "ref_ea": "00913468"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "type",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "0091337f"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "flags",
+  "field_off": 68,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "009134d7"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "last_knot",
+  "field_off": 80,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "009136a0"
+ },
+ {
+  "func": "FUN_00913330",
+  "name": "search_scan",
+  "field_off": 92,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "009137ef"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "start_time",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "009199d5"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "end_time",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "00919a49"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "emit_subject",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 12,
+  "ref_ea": "00919ad8"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "time",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "00919b6d"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "node_num",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 8,
+  "ref_ea": "00919bfd"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "type",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "00919c8e"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "axis",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "00919db1"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "event_type",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "009198f6"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "animation",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "00919884"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "color",
+  "field_off": 16,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0091980f"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "subject",
+  "field_off": 20,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00919968"
+ },
+ {
+  "func": "FUN_009197c0",
+  "name": "sound",
+  "field_off": 24,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "00919d23"
+ },
+ {
+  "func": "FUN_0092f030",
+  "name": "current_version",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 15,
+  "ref_ea": "0092f19d"
+ },
+ {
+  "func": "FUN_00940bd0",
+  "name": "package_stamps[play]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00940cd5"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "stamp",
+  "field_off": 0,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "0094b828"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "size",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 4,
+  "ref_ea": "0094b9ea"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "data[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "0094ba75"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "play",
+  "field_off": 4,
+  "field_reg": "EBX",
+  "tag": 4,
+  "ref_ea": "0094b899"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "valid",
+  "field_off": 8,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "0094b90b"
+ },
+ {
+  "func": "FUN_0094b7c0",
+  "name": "group",
+  "field_off": 12,
+  "field_reg": "EBX",
+  "tag": 5,
+  "ref_ea": "0094b97d"
+ },
+ {
+  "func": "FUN_00952620",
+  "name": "front",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "0095269d"
+ },
+ {
+  "func": "FUN_00952620",
+  "name": "front_local",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "00952780"
+ },
+ {
+  "func": "FUN_00952620",
+  "name": "length",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "0095270e"
+ },
+ {
+  "func": "FUN_00952620",
+  "name": "length_local",
+  "field_off": 12,
+  "field_reg": "EDI",
+  "tag": 12,
+  "ref_ea": "009527f2"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_ping_times[play]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00957619"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "turn_flags",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00957863"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_diff_times[play]",
+  "field_off": 32,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "0095768e"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_forced_loads[play]",
+  "field_off": 64,
+  "field_reg": "EDI",
+  "tag": 23,
+  "ref_ea": "00957772"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_package_sizes[play]",
+  "field_off": 4294967168,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "009574ac"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_wait_times[play]",
+  "field_off": 4294967200,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00957519"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_lag_times[play]",
+  "field_off": 4294967232,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00957700"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_average_frame_times[play]",
+  "field_off": 4294967264,
+  "field_reg": "EDI",
+  "tag": 30,
+  "ref_ea": "0095759d"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "camera_init_x[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "00998475"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "camera_init_y[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "009984f5"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "camera_init_zoom[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 22,
+  "ref_ea": "00998575"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "find_counters[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 19,
+  "ref_ea": "009985f5"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "last_razed[scan]",
+  "field_off": 0,
+  "field_reg": "EDI",
+  "tag": 16,
+  "ref_ea": "00998675"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "city_lost_to[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "009986f7"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "units_killed[scan][scan2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 25,
+  "ref_ea": "00998795"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "builds_destroyed[scan][scan2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 29,
+  "ref_ea": "00998835"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "reinforcements_arrived[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "009988c5"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "war_blocked[scan][scan2]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 24,
+  "ref_ea": "00998947"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "ally_mask[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "009989d5"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "diplomacy_setting[scan]",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00998a55"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "plunder",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 7,
+  "ref_ea": "00998ad2"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "building_unit_bonus",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "00998b5b"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "building_resource_bonus",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": null,
+  "ref_ea": "00998bee"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "buildings_free",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "00998c86"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "buildings_gather",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 16,
+  "ref_ea": "00998d0c"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "units_free",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00998d8c"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "techs_free",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 10,
+  "ref_ea": "00998dfe"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "speed_control_disabled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 22,
+  "ref_ea": "00998e75"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "pause_disabled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 14,
+  "ref_ea": "00998ee7"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "mouse_selection_disabled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 24,
+  "ref_ea": "00998f70"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "hotkey_selection_disabled",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 25,
+  "ref_ea": "00999008"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "display_bubble_text",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 19,
+  "ref_ea": "009990a0"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "highlight_visible",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 17,
+  "ref_ea": "00999138"
+ },
+ {
+  "func": "FUN_00997f70",
+  "name": "highlight_active",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 16,
+  "ref_ea": "009991d0"
+ },
+ {
+  "func": "FUN_009c5cf0",
+  "name": "offset",
+  "field_off": 192,
+  "field_reg": "EBX",
+  "tag": 6,
+  "ref_ea": "009c5ddb"
+ },
+ {
+  "func": "FUN_009c5cf0",
+  "name": "return_type",
+  "field_off": 196,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "009c5e50"
+ },
+ {
+  "func": "FUN_009c5cf0",
+  "name": "script_type",
+  "field_off": 200,
+  "field_reg": "EBX",
+  "tag": 11,
+  "ref_ea": "009c5ec0"
+ },
+ {
+  "func": "FUN_009d81f0",
+  "name": "ref_count",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "009d8368"
+ },
+ {
+  "func": "FUN_009d81f0",
+  "name": "data_type",
+  "field_off": 4,
+  "field_reg": "EDI",
+  "tag": 9,
+  "ref_ea": "009d8289"
+ },
+ {
+  "func": "FUN_009d81f0",
+  "name": "scope",
+  "field_off": 8,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "009d82fb"
+ }
+]

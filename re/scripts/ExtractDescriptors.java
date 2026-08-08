@@ -33,6 +33,12 @@ public class ExtractDescriptors extends GhidraScript {
     static final int WINDOW = 64;       // max instructions from name store to the CALL
     static final int MIN_STRINGS = 3;   // auto-discovery threshold
 
+    // [measured] Every binding site pushes this same constant immediately AFTER pushing
+    // the bound field, e.g.  `push dword ptr [edi+4]` ; `push 0xeb437c` ; `push ecx`.
+    // Anchoring on it is far more robust than tracking which register aliases `this`,
+    // and unlike a `disp > 0` heuristic it does not silently drop field offset 0.
+    static final long FIELD_LANDMARK = 0xeb437cL;
+
     private String wideStringAt(Instruction ins) {
         for (Reference r : ins.getReferencesFrom()) {
             Data d = currentProgram.getListing().getDataAt(r.getToAddress());
@@ -71,6 +77,8 @@ public class ExtractDescriptors extends GhidraScript {
     private static class Rec {
         String name, refEa, callEa = null;
         Long tag = null;
+        Long fieldOff = null;        // from the landmark anchor -- authoritative
+        String fieldReg = null;
         List<Long> offs = new ArrayList<>();
         List<String> offRegs = new ArrayList<>();
         List<Long> otherImms = new ArrayList<>();
@@ -112,6 +120,7 @@ public class ExtractDescriptors extends GhidraScript {
                 for (Instruction ins : listing.getInstructions(f.getBody(), true)) body.add(ins);
 
                 Map<String, Long> regConst = new HashMap<>();
+                String prevPushReg = null; long prevPushDisp = 0L;
                 Set<String> thisRegs = new HashSet<>(Collections.singletonList("ECX"));
                 Rec cur = null;
 
@@ -122,7 +131,7 @@ public class ExtractDescriptors extends GhidraScript {
                     String name = wideStringAt(ins);
                     if (name != null) {
                         if (cur != null) { emit(out, f, cur); total++;
-                            if (cur.tag != null) withTag++; if (!cur.offs.isEmpty()) withOff++; }
+                            if (cur.tag != null) withTag++; if (cur.fieldOff != null) withOff++; }
                         cur = new Rec();
                         cur.name = name;
                         cur.refEa = ins.getAddress().toString();
@@ -131,11 +140,34 @@ public class ExtractDescriptors extends GhidraScript {
 
                     if (cur != null && i - cur.startIdx > WINDOW) {
                         emit(out, f, cur); total++;
-                        if (cur.tag != null) withTag++; if (!cur.offs.isEmpty()) withOff++;
+                        if (cur.tag != null) withTag++; if (cur.fieldOff != null) withOff++;
                         cur = null;
                     }
 
                     if (cur != null && name == null) {
+                        // Landmark anchor: `push <field>` immediately precedes `push 0xeb437c`.
+                        if (mn.equals("PUSH")) {
+                            Object[] o0 = ins.getOpObjects(0);
+                            if (o0.length == 1 && o0[0] instanceof Scalar
+                                    && ((Scalar) o0[0]).getUnsignedValue() == FIELD_LANDMARK) {
+                                if (prevPushReg != null) {
+                                    cur.fieldOff = prevPushDisp;
+                                    cur.fieldReg = prevPushReg;
+                                }
+                            } else {
+                                Register pr = null; Scalar ps = null;
+                                for (Object o : o0) {
+                                    if (o instanceof Register) { if (pr == null) pr = (Register) o; }
+                                    else if (o instanceof Scalar) ps = (Scalar) o;
+                                }
+                                if (pr != null) {   // memory operand [reg] or [reg+disp]
+                                    prevPushReg = base(pr);
+                                    prevPushDisp = (ps == null) ? 0L : ps.getUnsignedValue();
+                                } else {
+                                    prevPushReg = null; prevPushDisp = 0L;
+                                }
+                            }
+                        }
                         for (int op = 0; op < ins.getNumOperands(); op++) {
                             Register br = null; Scalar sc = null; Register lone = null;
                             Object[] objs = ins.getOpObjects(op);
@@ -163,7 +195,7 @@ public class ExtractDescriptors extends GhidraScript {
                         if (mn.equals("CALL")) {
                             cur.callEa = ins.getAddress().toString();
                             emit(out, f, cur); total++;
-                            if (cur.tag != null) withTag++; if (!cur.offs.isEmpty()) withOff++;
+                            if (cur.tag != null) withTag++; if (cur.fieldOff != null) withOff++;
                             cur = null;
                         }
                     }
@@ -190,7 +222,7 @@ public class ExtractDescriptors extends GhidraScript {
                     }
                 }
                 if (cur != null) { emit(out, f, cur); total++;
-                    if (cur.tag != null) withTag++; if (!cur.offs.isEmpty()) withOff++; }
+                    if (cur.tag != null) withTag++; if (cur.fieldOff != null) withOff++; }
             }
         }
         println("RECORDS: " + total + "  with_tag: " + withTag + "  with_offset: " + withOff
@@ -205,6 +237,8 @@ public class ExtractDescriptors extends GhidraScript {
           .append(",\"ref_ea\":\"").append(r.refEa).append("\"")
           .append(",\"call_ea\":").append(r.callEa == null ? "null" : "\"" + r.callEa + "\"")
           .append(",\"tag\":").append(r.tag == null ? "null" : r.tag)
+          .append(",\"field_off\":").append(r.fieldOff == null ? "null" : r.fieldOff)
+          .append(",\"field_reg\":").append(r.fieldReg == null ? "null" : "\"" + r.fieldReg + "\"")
           .append(",\"offsets\":").append(r.offs)
           .append(",\"off_regs\":[");
         for (int i = 0; i < r.offRegs.size(); i++) {
