@@ -1,12 +1,13 @@
 {
   "generated_by": "crates/don-replay/src/bin/don-replay.rs validate",
-  "what": "Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 16 DataWalk checksum channels are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes.",
+  "what": "Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes.",
   "checksum_source": "CheckSums::check_all 0x00936560; packet builder 0x00940770; adler32 0x00a46830 (Tier B, 500k differential calls, 0 mismatches)",
   "walk_source": "schema/state-schema.json -> crates/don-replay/src/walk_gen.rs (generated)",
   "totals": {
     "files": 61, "files_with_checksums": 21, "turns": 585152,
     "checksum_packets": 488557, "checksum_total_consistent": 488557, "checksum_adler_shaped": 488557,
-    "crossplay_comparisons": 265619, "crossplay_identical": 265619,
+    "crossplay_by_group": { "comparisons": 265619, "identical": 265619 },
+    "crossplay_by_stamp": { "comparisons": 265931, "identical": 265910, "disagreements_comparing_different_turns": 21 },
     "commands": { "sim": 2468461, "lockstep": 1285514, "presentation": 1301278 },
     "per_channel": {
       "units": { "compares": 222938, "matches": 0, "trivial": 0, "best_survived_turns": 0, "crossplay_disagreements": 0, "mutable": true },
@@ -98,7 +99,7 @@
       "packages": 8, "packages_decoded": 8,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 16, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -128,7 +129,7 @@
       "packages": 66, "packages_decoded": 66,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 128, "typed": 1, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -158,7 +159,7 @@
       "packages": 78, "packages_decoded": 78,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 152, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -188,7 +189,7 @@
       "packages": 54766, "packages_decoded": 54766,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 109402, "typed": 622, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -218,7 +219,7 @@
       "packages": 40712, "packages_decoded": 40712,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 84879, "typed": 241, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -248,7 +249,7 @@
       "packages": 567, "packages_decoded": 567,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 868, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -278,7 +279,7 @@
       "packages": 337, "packages_decoded": 337,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 630, "typed": 1, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -308,7 +309,7 @@
       "packages": 10218, "packages_decoded": 10218,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 18930, "typed": 48, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -338,7 +339,7 @@
       "packages": 5469, "packages_decoded": 5469,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 10492, "typed": 21, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -368,7 +369,7 @@
       "packages": 5471, "packages_decoded": 5471,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 11538, "typed": 47, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -398,7 +399,7 @@
       "packages": 22064, "packages_decoded": 22064,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 46640, "typed": 306, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -428,7 +429,7 @@
       "packages": 29894, "packages_decoded": 29894,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 62345, "typed": 445, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -458,7 +459,7 @@
       "packages": 36140, "packages_decoded": 36140,
       "checksum_packets": 36138, "checksum_total_consistent": 36138, "checksum_adler_shaped": 36138,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 18069, "identical": 18069 },
+      "crossplay": { "by_group": { "comparisons": 18069, "identical": 18069 }, "by_stamp": { "comparisons": 18112, "identical": 18105, "disagreements_comparing_different_turns": 7 } },
       "orders": { "sim": 68381, "typed": 371, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x049423a5", "got": "0x00000001", "compares": 18069, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -488,7 +489,7 @@
       "packages": 38048, "packages_decoded": 38048,
       "checksum_packets": 38044, "checksum_total_consistent": 38044, "checksum_adler_shaped": 38044,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 28533, "identical": 28533 },
+      "crossplay": { "by_group": { "comparisons": 28533, "identical": 28533 }, "by_stamp": { "comparisons": 28543, "identical": 28539, "disagreements_comparing_different_turns": 4 } },
       "orders": { "sim": 72230, "typed": 288, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xd5770d2e", "got": "0x00000001", "compares": 9511, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -518,7 +519,7 @@
       "packages": 49280, "packages_decoded": 49280,
       "checksum_packets": 49276, "checksum_total_consistent": 49276, "checksum_adler_shaped": 49276,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 36548, "identical": 36548 },
+      "crossplay": { "by_group": { "comparisons": 36548, "identical": 36548 }, "by_stamp": { "comparisons": 36548, "identical": 36548, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 91616, "typed": 501, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xbf5613a3", "got": "0x00000001", "compares": 12728, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -548,7 +549,7 @@
       "packages": 19580, "packages_decoded": 19580,
       "checksum_packets": 19578, "checksum_total_consistent": 19578, "checksum_adler_shaped": 19578,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 9789, "identical": 9789 },
+      "crossplay": { "by_group": { "comparisons": 9789, "identical": 9789 }, "by_stamp": { "comparisons": 9789, "identical": 9789, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 36737, "typed": 209, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x66e9da2b", "got": "0x00000001", "compares": 9789, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -578,7 +579,7 @@
       "packages": 18196, "packages_decoded": 18196,
       "checksum_packets": 18194, "checksum_total_consistent": 18194, "checksum_adler_shaped": 18194,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 9097, "identical": 9097 },
+      "crossplay": { "by_group": { "comparisons": 9097, "identical": 9097 }, "by_stamp": { "comparisons": 9097, "identical": 9097, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 34631, "typed": 246, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x829a1979", "got": "0x00000001", "compares": 9097, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -608,7 +609,7 @@
       "packages": 280, "packages_decoded": 280,
       "checksum_packets": 278, "checksum_total_consistent": 278, "checksum_adler_shaped": 278,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 107, "identical": 107 },
+      "crossplay": { "by_group": { "comparisons": 107, "identical": 107 }, "by_stamp": { "comparisons": 107, "identical": 107, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 498, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x84792bbe", "got": "0x00000001", "compares": 171, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -638,7 +639,7 @@
       "packages": 2425, "packages_decoded": 2425,
       "checksum_packets": 2423, "checksum_total_consistent": 2423, "checksum_adler_shaped": 2423,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 1178, "identical": 1178 },
+      "crossplay": { "by_group": { "comparisons": 1178, "identical": 1178 }, "by_stamp": { "comparisons": 1178, "identical": 1178, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 4446, "typed": 46, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x024b417c", "got": "0x00000001", "compares": 1245, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -668,7 +669,7 @@
       "packages": 16030, "packages_decoded": 16030,
       "checksum_packets": 16028, "checksum_total_consistent": 16028, "checksum_adler_shaped": 16028,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 8014, "identical": 8014 },
+      "crossplay": { "by_group": { "comparisons": 8014, "identical": 8014 }, "by_stamp": { "comparisons": 8014, "identical": 8014, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 29661, "typed": 172, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x130b62e1", "got": "0x00000001", "compares": 8014, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -698,7 +699,7 @@
       "packages": 2223, "packages_decoded": 2223,
       "checksum_packets": 2221, "checksum_total_consistent": 2221, "checksum_adler_shaped": 2221,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 1110, "identical": 1110 },
+      "crossplay": { "by_group": { "comparisons": 1110, "identical": 1110 }, "by_stamp": { "comparisons": 1110, "identical": 1110, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 4454, "typed": 52, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x65b10efd", "got": "0x00000001", "compares": 1111, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -728,7 +729,7 @@
       "packages": 50886, "packages_decoded": 50886,
       "checksum_packets": 50884, "checksum_total_consistent": 50884, "checksum_adler_shaped": 50884,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 25442, "identical": 25442 },
+      "crossplay": { "by_group": { "comparisons": 25442, "identical": 25442 }, "by_stamp": { "comparisons": 25442, "identical": 25442, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 71745, "typed": 317, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xfe7f03de", "got": "0x00000001", "compares": 25442, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -758,7 +759,7 @@
       "packages": 33692, "packages_decoded": 33692,
       "checksum_packets": 33690, "checksum_total_consistent": 33690, "checksum_adler_shaped": 33690,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 16845, "identical": 16845 },
+      "crossplay": { "by_group": { "comparisons": 16845, "identical": 16845 }, "by_stamp": { "comparisons": 16845, "identical": 16845, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 54829, "typed": 279, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xa21dae90", "got": "0x00000001", "compares": 16845, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -788,7 +789,7 @@
       "packages": 130, "packages_decoded": 130,
       "checksum_packets": 128, "checksum_total_consistent": 128, "checksum_adler_shaped": 128,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 50, "identical": 50 },
+      "crossplay": { "by_group": { "comparisons": 50, "identical": 50 }, "by_stamp": { "comparisons": 50, "identical": 50, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 231, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x45e9096b", "got": "0x00000001", "compares": 78, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -818,7 +819,7 @@
       "packages": 33440, "packages_decoded": 33440,
       "checksum_packets": 33438, "checksum_total_consistent": 33438, "checksum_adler_shaped": 33438,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 16719, "identical": 16719 },
+      "crossplay": { "by_group": { "comparisons": 16719, "identical": 16719 }, "by_stamp": { "comparisons": 16719, "identical": 16719, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 54003, "typed": 315, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x2dd60c5e", "got": "0x00000001", "compares": 16719, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -848,7 +849,7 @@
       "packages": 22664, "packages_decoded": 22664,
       "checksum_packets": 22662, "checksum_total_consistent": 22662, "checksum_adler_shaped": 22662,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 11331, "identical": 11331 },
+      "crossplay": { "by_group": { "comparisons": 11331, "identical": 11331 }, "by_stamp": { "comparisons": 11331, "identical": 11331, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 37388, "typed": 351, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xf7d6bfc0", "got": "0x00000001", "compares": 11331, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -878,7 +879,7 @@
       "packages": 35168, "packages_decoded": 35168,
       "checksum_packets": 35166, "checksum_total_consistent": 35166, "checksum_adler_shaped": 35166,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 17583, "identical": 17583 },
+      "crossplay": { "by_group": { "comparisons": 17583, "identical": 17583 }, "by_stamp": { "comparisons": 17583, "identical": 17583, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 57724, "typed": 542, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xb91cf8b0", "got": "0x00000001", "compares": 17583, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -908,7 +909,7 @@
       "packages": 24014, "packages_decoded": 24014,
       "checksum_packets": 24012, "checksum_total_consistent": 24012, "checksum_adler_shaped": 24012,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 12006, "identical": 12006 },
+      "crossplay": { "by_group": { "comparisons": 12006, "identical": 12006 }, "by_stamp": { "comparisons": 12253, "identical": 12249, "disagreements_comparing_different_turns": 4 } },
       "orders": { "sim": 42692, "typed": 347, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x5f2eefdf", "got": "0x00000001", "compares": 12006, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -938,7 +939,7 @@
       "packages": 29694, "packages_decoded": 29694,
       "checksum_packets": 29692, "checksum_total_consistent": 29692, "checksum_adler_shaped": 29692,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 14846, "identical": 14846 },
+      "crossplay": { "by_group": { "comparisons": 14846, "identical": 14846 }, "by_stamp": { "comparisons": 14846, "identical": 14846, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 50848, "typed": 404, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x5cf8b2bf", "got": "0x00000001", "compares": 14846, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -968,7 +969,7 @@
       "packages": 75, "packages_decoded": 75,
       "checksum_packets": 73, "checksum_total_consistent": 73, "checksum_adler_shaped": 73,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 36, "identical": 36 },
+      "crossplay": { "by_group": { "comparisons": 36, "identical": 36 }, "by_stamp": { "comparisons": 36, "identical": 36, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 137, "typed": 1, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x1b3f900c", "got": "0x00000001", "compares": 37, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -998,7 +999,7 @@
       "packages": 23906, "packages_decoded": 23906,
       "checksum_packets": 23904, "checksum_total_consistent": 23904, "checksum_adler_shaped": 23904,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 11952, "identical": 11952 },
+      "crossplay": { "by_group": { "comparisons": 11952, "identical": 11952 }, "by_stamp": { "comparisons": 11952, "identical": 11952, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 42010, "typed": 297, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xee95f219", "got": "0x00000001", "compares": 11952, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1028,7 +1029,7 @@
       "packages": 30086, "packages_decoded": 30086,
       "checksum_packets": 30084, "checksum_total_consistent": 30084, "checksum_adler_shaped": 30084,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 15042, "identical": 15042 },
+      "crossplay": { "by_group": { "comparisons": 15042, "identical": 15042 }, "by_stamp": { "comparisons": 15054, "identical": 15048, "disagreements_comparing_different_turns": 6 } },
       "orders": { "sim": 53284, "typed": 338, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0x777668fc", "got": "0x00000001", "compares": 15042, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1058,7 +1059,7 @@
       "packages": 22646, "packages_decoded": 22646,
       "checksum_packets": 22644, "checksum_total_consistent": 22644, "checksum_adler_shaped": 22644,
       "rules_channel_constant": "0x12ba3104",
-      "crossplay": { "comparisons": 11322, "identical": 11322 },
+      "crossplay": { "by_group": { "comparisons": 11322, "identical": 11322 }, "by_stamp": { "comparisons": 11322, "identical": 11322, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 42251, "typed": 261, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": 2, "expected": "0xa204dc4c", "got": "0x00000001", "compares": 11322, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1088,7 +1089,7 @@
       "packages": 52414, "packages_decoded": 52414,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 108548, "typed": 722, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1118,7 +1119,7 @@
       "packages": 68276, "packages_decoded": 68276,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 143100, "typed": 846, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1148,7 +1149,7 @@
       "packages": 7987, "packages_decoded": 7986,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 16695, "typed": 213, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1178,7 +1179,7 @@
       "packages": 12, "packages_decoded": 12,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 24, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1208,7 +1209,7 @@
       "packages": 90101, "packages_decoded": 90101,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 172277, "typed": 1565, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1238,7 +1239,7 @@
       "packages": 44643, "packages_decoded": 44643,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 90735, "typed": 422, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1268,7 +1269,7 @@
       "packages": 6070, "packages_decoded": 6070,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 11684, "typed": 57, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1298,7 +1299,7 @@
       "packages": 35380, "packages_decoded": 35380,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 74877, "typed": 458, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1328,7 +1329,7 @@
       "packages": 28120, "packages_decoded": 28120,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 61615, "typed": 391, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1358,7 +1359,7 @@
       "packages": 20288, "packages_decoded": 20288,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 41998, "typed": 211, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1388,7 +1389,7 @@
       "packages": 6350, "packages_decoded": 6350,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 11316, "typed": 4, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1418,7 +1419,7 @@
       "packages": 59388, "packages_decoded": 59388,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 116697, "typed": 1057, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1448,7 +1449,7 @@
       "packages": 101, "packages_decoded": 101,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 179, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1478,7 +1479,7 @@
       "packages": 165, "packages_decoded": 165,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 291, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1508,7 +1509,7 @@
       "packages": 605, "packages_decoded": 605,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 1061, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1538,7 +1539,7 @@
       "packages": 19043, "packages_decoded": 19042,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 34860, "typed": 243, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1568,7 +1569,7 @@
       "packages": 3468, "packages_decoded": 3468,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 6398, "typed": 27, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1598,7 +1599,7 @@
       "packages": 4112, "packages_decoded": 4112,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 7701, "typed": 13, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1628,7 +1629,7 @@
       "packages": 29246, "packages_decoded": 29246,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 57047, "typed": 610, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1658,7 +1659,7 @@
       "packages": 9014, "packages_decoded": 9014,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 19477, "typed": 92, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1688,7 +1689,7 @@
       "packages": 7242, "packages_decoded": 7242,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 14031, "typed": 62, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1718,7 +1719,7 @@
       "packages": 140, "packages_decoded": 140,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 256, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1748,7 +1749,7 @@
       "packages": 1465, "packages_decoded": 1465,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 2719, "typed": 0, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1778,7 +1779,7 @@
       "packages": 14062, "packages_decoded": 14062,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 25545, "typed": 46, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1808,7 +1809,7 @@
       "packages": 4401, "packages_decoded": 4401,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 8090, "typed": 51, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1838,7 +1839,7 @@
       "packages": 31632, "packages_decoded": 31632,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 66427, "typed": 448, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1868,7 +1869,7 @@
       "packages": 83672, "packages_decoded": 83672,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 177550, "typed": 662, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },
@@ -1898,7 +1899,7 @@
       "packages": 10544, "packages_decoded": 10544,
       "checksum_packets": 0, "checksum_total_consistent": 0, "checksum_adler_shaped": 0,
       "rules_channel_constant": null,
-      "crossplay": { "comparisons": 0, "identical": 0 },
+      "crossplay": { "by_group": { "comparisons": 0, "identical": 0 }, "by_stamp": { "comparisons": 0, "identical": 0, "disagreements_comparing_different_turns": 0 } },
       "orders": { "sim": 1447, "typed": 2, "applied": 0 },
       "channels": {
         "units": { "survived": 0, "first_divergence_turn": null, "expected": "0x00000000", "got": "0x00000000", "compares": 0, "matches": 0, "trivial": 0, "retail_disagreed": 0 },

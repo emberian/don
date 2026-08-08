@@ -1,7 +1,7 @@
 # Descent of Nations — project charter
 
-The durable rules of this project. `GOAL.md` at the repo root holds the *current* thrust
-and done-log; this file holds the things that do not change between sessions. Any agent
+The durable rules of this project. `GOAL.md` at the repo root is the live execution board;
+this file holds the things that do not change between sessions. Any agent
 or lane working on this repo reads this file first.
 
 ## North star
@@ -20,15 +20,17 @@ Three properties, in priority order when they conflict:
 
 ## Methodology law (non-negotiable)
 
-**Ground truth is the binary and the shipped data files. Nothing else.** The community
+**Ground truth is the binary, the shipped data files, and measured live-process behavior.
+Nothing else.** The community
 corpus (RoN Heaven, the Fandom wiki, Vanshilar/MHLoppy) is a **cross-check only** — a
 source of hypotheses and a sanity signal, never the source of a value we implement.
 Where our derivation disagrees with folklore, that is a *finding*, and it gets recorded,
 not silently reconciled.
 
 **TRIPWIRE — say the provenance out loud, before writing the line.** Before implementing
-any constant, formula, or rule, state where it came from: a binary address, or a
-file+line in `ron-data/`. If the honest answer is "the wiki says so" or "it's commonly
+any constant, formula, or rule, state where it came from: a binary address, a measured
+live behavior/capture, or a file+line in `ron-data/`. If the honest answer is "the wiki says
+so" or "it's commonly
 known that" — **STOP**. That is the drift this project dies of: it compiles, the numbers
 look plausible, tests pass against our own assumption, and a month later the whole sim is
 folklore wearing a Rust costume. Catch it at constant #1, not constant #400.
@@ -86,23 +88,27 @@ See `docs/binary-ground-truth.md` for the full derivation of each. Load-bearing 
 - **Rule names are UTF-16LE lowercase** in the binary (`flank_bonus`), not ASCII
   uppercase. Search accordingly.
 - Ghidra project at `re/ghidra` (Ghidra 12.1.2): **47,177 functions, 14,441 strings**.
-- **`FUN_00570170` is the rules.xml constant loader** — it xrefs `flank_bonus`,
-  `cavalry_flank_bonus`, `vehicle_flank_bonus`, `siege_attrition`, `accel_train`.
-  `FUN_0061c490` xrefs `progression`; `FUN_0065fc00` xrefs `recharge`.
-- **620 RTTI classes**, including the `X`/`XData`/`XOut` triple (XData ≈ POD sim state)
-  and the engine's own 27-class Order hierarchy (= the real action space).
-  `BorderSpline` ⇒ borders are splines. `SyncDisplay` ⇒ a lockstep checksum routine
-  exists, and it *defines* which state is sim-critical.
+- **`Constants::init` `0x00569A90` is the rules.xml constant loader.**
+  `Constants::log_data` `0x00570170` is a logger; its field offsets remain useful, but it
+  does not establish parser semantics. The shipped PDB supplies the identities.
+- The `X`/`XData`/`XOut` families usually separate behaviour, POD state, and presentation,
+  but the suffix is a routing heuristic, not a proof: presentation initialization can write
+  sim constants. The engine's Order hierarchy defines the action-space foundation.
+- **Borders are not spline-simulated.** `BorderSpline` draws the presentation ribbon; the
+  simulation uses a per-cell integer-radius territory model. `CheckSums::check_all` and the
+  shared `DataWalk` interface define which state is sim-critical.
 
-A known parser quirk worth savoring: rules.xml values are **prose**, e.g.
-`value="1/16 tile (calibration for unit spacing in formations)"`. The loader parses a
-rational out of English. Our parser must replicate its exact tokenizer semantics —
-including denominator limits, `0` handling, and what it does with the trailing text.
-Nobody has ever documented this; only the binary knows.
+A parser quirk worth savoring: rules.xml values are **prose**, e.g.
+`value="1/16 tile (calibration for unit spacing in formations)"`. The relevant tokenizer is
+`String::fraction(int scale) const` `0x00A1D110`: `_wtoi(numerator) * scale / _wtoi(after
+'/')`, with the field's scale supplied by the loader and denominator zero returning zero.
+That behavior is captured from retail; trailing prose is handled by `_wtoi`, not by a clean
+rational grammar.
 
 ## Staged roadmap
 
-Stages may overlap; later stages must not start on *assumed* outputs of earlier ones.
+Stages may overlap; later stages must not start on *assumed* outputs of earlier ones. This is
+the dependency map, not a status board; current status belongs in `GOAL.md`.
 
 0. **Foundation** — extraction, hashes, Ghidra project, anchor methodology. *(done)*
 1. **Loader recovery** — decompile the rules/unitrules/techrules/buildingrules loaders;
@@ -151,8 +157,8 @@ Paid for in real debugging on other projects; these are not suggestions.
 - **This Mac is arm64 and cannot run 32-bit x86 natively** (Rosetta is x86-64 only). It
   runs Ghidra and software emulation.
 - **hbox** (x86_64 Ubuntu, 24 cores, 123G) is the only machine that can run x86-32
-  natively — and it is **co-tenant with codex's datacake HOL build**. Run builds as
-  `swarm-build <cmd>`; keep waves small; spare its poly/Holmake processes.
+  natively and is a co-tenant. Use `nice -n 15 taskset -c 0-3`, never install packages,
+  and never run an unbounded parallel build.
 - The Parallels VM ("Windows 11") holds the live game as a behavioral oracle. It runs the
   x86 game under Microsoft's ARM64 emulation layer.
 - **`ron-data/` and `ron-bin/` are copyrighted game content.** Never commit them to a

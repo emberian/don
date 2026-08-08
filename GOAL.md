@@ -1,141 +1,155 @@
-# GOAL
+# Descent of Nations — execution board
 
-**Build Descent of Nations**: a deterministic, batch-parallel Rust reimplementation of the
-Rise of Nations: Extended Edition simulation, derived from the binary rather than from
-community documentation, bit-exact wherever we can prove it, and shaped to become an RL
-environment capable of training a SOTA self-play player-AI.
+This is the live project board. The durable rules are in `docs/CHARTER.md`; agent
+orientation is in `README-LLM.md`; the interrupted Claude-session recovery ledger is in
+`docs/RECOVERY.md`.
 
-Constitution: `docs/CHARTER.md`. Ground truth so far: `docs/binary-ground-truth.md`.
-Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a source):
-`docs/prior-art-survey.md`.
+## North star
 
-## Current thrust
+Build a deterministic, batch-parallel Rust reimplementation of *Rise of Nations: Extended
+Edition*, derived from the shipped binary and data, faithful enough for replay-checksum
+agreement, and fast and complete enough to train a state-of-the-art player AI.
 
-**Stage 1→2.** Schema extraction is working (1,224 confirmed bindings). Now growing
-`don-rules` from the shipped data while the remaining binary semantics are recovered.
+## The progress metric
 
-> ⚠ **STALE — corrections [measured, 2026-08-08, `ron-bin/sbl/rise.pdb`].** The game ships
-> its full PDB; see `docs/derivation/PDB-RECONCILIATION.md`. Affecting this file:
-> * `FUN_00570170` is **`Constants::log_data(Log*)`, a logger**, not "the rules.xml loader".
->   The loader is `Constants::init` `0x00569A90`. The done-log entry below and "next move 3"
->   are written on the wrong identification. The *bindings* extracted from it are still
->   sound — a logger reads each field at its true offset in order to print it — but the
->   "112 loader functions" are 112 `log_data` visitors.
-> * The `tag` field (next move 1) is **closed**: it is `strlen(name)`, not a parser code.
->   `docs/binary-ground-truth.md` already carries this correction.
-> * Next move 2 is **closed**: the tokenizer is `String::fraction(int scale) const`
->   `0x00A1D110` = `(_wtoi(s) * scale) / _wtoi(after '/')`; scale is pushed per call site by
->   `Constants::init` and the complete universe is {256 ×24, 192 ×11, 100 ×5}.
-> * The done-log's "`this+offset` holds a **pointer to** the storage" is **refuted**: a
->   logger passes the field's *value*, so `this+offset` **is** the storage. The SoA
->   speculation that followed from it has no support.
+The scoreboard is:
 
-## Next 3 moves
+```sh
+tools/replay-validate.sh
+```
 
-1. Verify the `tag` field's meaning. It matches ground truth in the two validated loaders
-   (8=recharge, 9=crew_size) but the values in `FUN_00570170` (15, 20, 17, 16, 18, 28…)
-   are non-monotonic and unexplained — currently **[unverified]**, do not build on them.
-   Likely encodes the value *parser* to use (tile-fraction vs frames vs percent); test by
-   correlating tags against the unit words in the shipped XML.
-2. Recover the loader's own tokenizer semantics from the binary so `RuleValue` can gain a
-   sound numeric conversion: denominator limit, rounding, and whether the result lands in
-   `f32` or fixed point. Until then `don-rules::value` deliberately refuses to convert.
-3. Identify the remaining loaders by name (map the 112 binding functions to the XML files
-   they load) and grow typed structs from `schema/bindings.json`.
+It compares our fifteen simulation-state checksum channels with the per-turn values in real
+multiplayer recordings. Progress means a channel walks **non-empty state** and survives more
+consecutive turns. Empty-on-both-sides agreement is useful harness coverage, but it is marked
+`trivial` and does not count as mechanic fidelity.
 
-## Done-log
+Baseline measured 2026-08-08:
 
-- Extracted + hash-verified all 45 data XMLs and both binaries out of the Parallels VM.
-- Established PE ground truth: 2024 MSVC-14 rebuild, PE32 i386, unpacked, 620 RTTI classes.
-- Settled the FP question: SSE binary32, not x87 → bit-exactness is achievable; entire risk
-  surface is 8 named CRT transcendental imports.
-- Ghidra project built and analyzed: 47,177 functions, 14,441 strings.
-- Proved the UTF-16-lowercase string-anchor methodology; found the rules.xml loader
-  (`FUN_00570170`) and two unitrules-side loaders.
-- Discovered the descriptor/visitor binding framework (name + type tag + `this+offset` via
-  `vtable+0x1c`) — the schema is mechanically extractable.
-- Decided the stage-3 oracle architecture (native in-process PE mapping; documented
-  skip-list), and adopted `[measured]`/`[reported]` provenance discipline after three
-  claims dissolved on contact.
-- **Stage 1 in progress.** `ExtractDescriptors.java` written and *validated against
-  known-good decompiled C* (recharge→tag 8/off 500, crew_size→tag 9/off 780,
-  base_form→tag 9/off 784, all exact). Whole-binary sweep: 197 candidate loader
-  functions, 750 confirmed bindings (tag+offset). Recovered the rules.xml constant table
-  from `FUN_00570170` — the function the decompiler could not handle — with offsets on a
-  clean 4-byte stride matching rules.xml declaration order.
-- Resolved an open question from `docs/binary-ground-truth.md`: `push dword ptr
-  [ebx+0x1f4]` is a *load*, so `this+offset` holds a **pointer to** the storage, not the
-  storage itself. Consistent with the engine keeping parallel per-attribute arrays
-  (an SoA layout) — that latter part is still **[unverified]**.
-- **Stage 2 begun.** Rust workspace + `don-rules` crate. `value::RuleValue` tokenizes the
-  prose rule-value grammar (rational, percent, number+unit, bare, suffix-unit); 8 tests
-  green including a corpus test over all **690** value-bearing elements of the shipped
-  `rules.xml`. The corpus test was canary-checked to confirm it reads real data rather
-  than skipping. The module deliberately refuses to convert values to numbers: the
-  engine's tokenizer semantics are not yet recovered, and inventing a plausible
-  conversion is the folklore the charter forbids.
-- **Hypothesis refuted (recorded, not buried):** the descriptor type tag does *not* encode
-  the value's unit/parser. Joined 178 rules-loader bindings against the shipped XML unit
-  words; tag 19 spans `%`, `tile`, none and `tiles`, tag 16 spans none, `bonus`,
-  `resources`, `tile`. No correlation. Tag meaning remains **[unverified]** outside the two
-  loaders where it was checked against decompiled C.
-- **Extractor bug found and fixed:** displacements were read unsigned, so `support[scan]`
-  reported offset 4294967288 instead of −8. 58 of 1,224 bindings were affected.
-- `schema/bindings.json` → `crates/don-rules/src/offsets.rs` via `re/scripts/gen_offsets.py`:
-  **1,223 offset constants across 112 modules**, generated not hand-written. 11 tests green,
-  including ground-truth anchors that pin the extractor against the independent
-  decompiled-C derivation.
-- **Stage 3 begun.** `don-pe`: PE32 reader + image mapper, the architecture-independent
-  half of the oracle harness. Parses headers, maps sections at their virtual addresses,
-  and applies base relocations (**315,865** HIGHLOW fixups on the real image, canary-
-  verified). 5 tests green including a relocation round-trip (relocate away, relocate
-  back, assert byte-identical) — the strongest cheap check that the fixup arithmetic is
-  right. Deliberately not `LoadLibrary`: that would run the entry point as DllMain and
-  drag in loader import/TLS/CFG processing we need to stay out of.
-- **Stage 3 COMPLETE — the oracle executes retail code.** `crates/oracle` maps
-  riseofnations.exe into a live i686 process on hbox (315,865 relocations, per-section
-  mprotect), and calls retail functions with fabricated inputs. Differential test against
-  Rust models: `0x00472400` (`movsx eax,[this+0xA]`) and `0x0048F770`
-  (`[this+0x12C] - [this+0x12A]`), **200,000 trials each, 0 mismatches** — Tier B.
-  Built for `i686-unknown-linux-musl`, whose self-contained CRT objects avoid installing
-  32-bit dev packages on a co-tenant machine. Every call runs in a forked child, so
-  probing a function that needs live globals reports a signal instead of killing the run.
-- `re/scripts/FindIslands.java` classifies all functions by reachability:
-  **2,135 ISLAND** (callable with fabricated inputs), 711 DATA_ONLY, 42,748 SELF_CALL,
-  970 WRITES_GLOBAL. 141 ISLANDs carry arithmetic — the differential-testing worklist.
+- 61 replay files; 585,152 turns; 488,557 structurally sound checksum packets.
+- Retail control: 265,619 / 265,619 cross-player tuples agree when joined on turn `group`.
+- Best survival: `walls` 25,442, `deaths` 5,734, `ammo` 3,696 turns.
+- Every match is still trivial: `SimBridge::populate` receives an empty replay world and the
+  harness walks zero bytes. The first real milestone is `trivial < matches` on any channel.
 
-## Where the roadmap actually stands
+The generated record is `schema/replay-validation.json`; design and caveats are in
+`docs/tracks/replay-validation.md`.
 
-Stages 0–3 done. Stage 4+ (sim core, combat/movement/pathfinding/borders, determinism,
-batch scaling, RL surface, player-AI) not begun. **No simulation, no mechanics, no
-benchmarks yet.** The oracle now makes each mechanic *derivable* rather than guessable,
-which is what stages 4–6 depend on.
-- **Stage 4 begun + first speed measurement.** `don-sim`: fixed-capacity SoA world
-  (one allocation, slot recycling, no steady-state allocation) and a batch scheduler.
-  7 tests green, including the load-bearing one: **parallel stepping reproduces serial
-  output at 2/3/8/16 threads**, so thread count can never silently perturb a determinism
-  claim later.
-  `don-bench` upper bound on this laptop (12 threads): **54.6 M unit-steps/s** at
-  256 worlds x 256 units (**14,225x realtime**), 216.7 M unit-steps/s at 64x4096,
-  38,499x realtime at 4096 small worlds.
-  These are a **ceiling for the layout, not a simulation speed** — the systems are
-  PLACEHOLDERS that touch the right state but compute no derived mechanic.
-  Known inefficiency, measured not guessed: stepping scans all `MAX_UNITS` slots
-  regardless of occupancy, which is why small worlds show lower per-unit throughput.
-  A dense live-list or periodic compaction is the fix.
-- **FIRST DERIVED MECHANIC.** `0x00846450` → `hash_into_range(a,b,lo,hi)` =
-  `((a*a*b) mod (|hi-lo|+1)) + lo`, wrapping signed 32-bit, `idiv` truncating toward zero.
-  **Tier B: 500,008 inputs, 0 mismatches** against retail code under the oracle.
-  Recorded in `docs/provenance-ledger.md`. Its *purpose* in the engine is not yet
-  established, so it is named for what it computes, not what it might be.
-  Process lesson worth keeping: the first unit test had hand-computed expectations and one
-  was wrong (-47 vs retail's **-247**). Expectations are now captured via `oracle vectors`.
-  **Capture, do not calculate.**
-- **Derivation scaled from manual to automated.** `oracle sweep` probes every ISLAND under
-  fork isolation and records: faults with fabricated inputs / deterministic across repeats
-  / output varies with controllable state. Early results (463 of 2,135): **298 fault,
-  165 callable**, i.e. roughly a third of ISLANDs are genuinely drivable — the rest need
-  live globals despite having no calls or off-`.text` refs. Many callable ones return
-  values in the mapped-image range, so they are address computations (`lea`-style
-  accessors) rather than formulas. The `varies_with_state: true` subset is the
-  differential-testing worklist.
+## Current snapshot
+
+Measured on the shared worktree on 2026-08-08:
+
+| Gate | State | Evidence |
+|---|---|---|
+| Rust workspace | green | `cargo test --workspace --all-targets`: 809 passed, 0 failed |
+| Retail oracle regression | green, current | 12/12 cases, 16,236,396 trials, 0 fail/skip/crash; 7 Tier-B claims remain outside the suite |
+| Replay harness | green but trivial | full corpus command above; all current matches walk zero bytes |
+| Simulation derivation | broad | 563 functions / 495,573 bytes in a seeded retail potential-reachability closure are cited; the closure and citations are both approximations, not fidelity |
+| Runnable tick wiring | not yet mechanically measured | direct review finds most `systems/*.rs` code isolated behind unit tests; the old “3 call sites” metric was only a textual grep and has been retired |
+| RL surface | working over partial dynamics | `crates/don-env`, `python/don_env`, `docs/tracks/rl-env.md` |
+| Headless networking | our peers work | two processes complete a 40-turn TCP lockstep run; retail internet join is not complete |
+| AI / analytics / web | working prototypes | each has a lane report under `docs/tracks/`; none implies whole-game fidelity |
+| Worktree | recovered, not checkpointed | 58 tracked paths (53 modified + 5 deleted), 46 untracked entries; preserve all until classified |
+
+The coverage denominator and method live in `schema/coverage.json` and
+`docs/mechanics/COVERAGE.md`. “Cited,” “compiled,” “called by a tick,” and “agrees with
+retail” are four different states and must never be collapsed into “implemented.”
+
+## Now — P0 integration tranche
+
+These are ordered. Finish a vertical slice before opening more mechanic breadth.
+
+1. **Make the static `rules` channel non-trivial.** Implement the complete
+   `Game::walk_rules_data` root—Types, both Constants spans, the 493×493 signed-16-bit
+   balance matrix, and 24 Tribe blocks—and require the shipped data to produce
+   `0x12ba3104` with `bytes_walked > 0` and `complete = true`.
+2. **Build honest bridge plumbing.** Generate row scatter/images, iterate objects in retail
+   checksum order, replace rather than append channel contents, and propagate walker
+   completeness. Synthetic bridge tests are infrastructure, not corpus progress while the
+   replay simulation is empty.
+3. **Initialize dynamic replay state from what `.rcx` actually contains.** Parse Game/GameInfo
+   setup, rules, players, seed, and command packages before the first comparison. Replays do
+   not contain a full initial World snapshot; dynamic channels require deterministic map and
+   starting-object reconstruction. Full `.svx` saves are separate fixtures.
+4. **Wire the derived systems into the retail-ordered tick.** `World::step` has the 29-step
+   skeleton and owner rotation, while tens of thousands of lines under `systems/` remain
+   isolated. Connect one end-to-end slice: decoded command -> order -> system -> generated
+   state -> checksum.
+5. **Close RNG stream consumers as their systems become live.** Air's anti-air dud gate is
+   present and compiled; pathfinding's failure epilogue and wildlife/world generation remain
+   known stream obligations. Count skipped draws rather than inventing them.
+
+Acceptance gate for this tranche:
+
+```sh
+cargo test --workspace --all-targets
+tools/oracle-regress.sh
+tools/replay-validate.sh
+```
+
+The replay result must improve in non-trivial matches or expose a narrower, recorded first
+divergence. A merely green Rust suite is not completion.
+
+## Next — P1 runnable game
+
+- Complete or replace the partial `Unit::work` / `do_job` driver, then wire the
+  command-to-order bridge for the high-frequency replay verbs: queue, build, move, attack.
+- Consolidate the world-channel walker and the duplicate adler implementations.
+- Connect leader economy, production, cities, combat, movement, groups/guys, borders/fog,
+  victory, walls, air, naval, and items only as their prerequisites enter the tick.
+- Replace placeholder action effects in `don-env` and `don-ai` with the same command path the
+  replay harness uses; keep `accepted_no_effect` visible until it reaches zero.
+- Turn the partial live attach and replay viewer into repeatable tools with reports and smoke
+  tests; do not treat “file exists” as a landed lane.
+
+## Later — P2 product tracks
+
+- Join a real retail internet game: the PlayFab title id is recovered (`84214`); obtain a
+  Steam auth ticket, load-test the replacement DLL in retail, then attempt matchmaking.
+- Complete the shipped AI baseline: the BHS economic script is only one of twelve production
+  stages and only one of four AI subsystems.
+- Promote analytics from Ancient-age opening studies to full build-order and tactical search.
+- Live browser spectating, replay playback, cluster views, and eventual drop-in play.
+- Benchmark the smallest fidelity relaxation that unlocks the next throughput order of
+  magnitude; keep the bit-exact path as the reference.
+
+## Recovered work that still needs landing
+
+The final Claude coverage wave died at the session limit. Its exact transcript and artifact
+state are recorded in `docs/RECOVERY.md`. Immediate integration facts:
+
+- `air.rs` and `walls.rs` compile in the 809-test umbrella suite.
+- `naval.rs` and `items.rs` exist but remain quarantined outside `systems/mod.rs`: isolated
+  audits found one compile blocker plus one bad roster fixture in naval, and one caller-contract
+  fixture failure plus known visibility/unlink gaps in items.
+- `donscan/src/live.rs` and the replay-viewer edits are partial and lack their lane reports.
+- casters/animals stopped after derivation, before writing code.
+- wonders/nations produced `schema/effects.json`, but its generator is still temp-only and no
+  runtime module or report exists.
+- the real-game join lane produced no report, but its transcript contains the recovered
+  PlayFab title id (`84214`) and a completed `steam_api.dll` transfer in scratch space.
+
+## Wave protocol
+
+Wide waves are welcome when the tasks are independent, but every wave has a landing phase:
+
+1. Assign each lane exclusive code and report paths.
+2. Require a return state: `landed`, `research-only`, `partial`, or `no artifact`.
+3. Harvest files and transcripts before restarting or discarding anything.
+4. Run the umbrella build after shared-struct changes; run the replay gate after sim changes.
+5. Record the new measured snapshot here and the interrupted-lane details in
+   `docs/RECOVERY.md`.
+6. Commit named files only. Never `git add -A`, `git stash`, or erase an unclassified lane.
+
+## Definition of done for a mechanic
+
+A mechanic is done only when all applicable layers exist:
+
+- binary/data provenance and fidelity tier in `docs/provenance-ledger.md`;
+- engine-faithful state, including container capacity/growth where walked;
+- execution from the retail-ordered tick or command path;
+- captured expectations or retail differential tests (never hand-calculated fixtures);
+- replay-channel impact measured, including first divergence and bytes walked;
+- workspace gate green.
+
+Anything less may still be valuable, but its state is “derived,” “ported,” or “isolated,” not
+“implemented end to end.”

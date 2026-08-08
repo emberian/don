@@ -27,7 +27,7 @@ pub fn select_entities(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usi
     let n = w.sim.live_count() as usize;
     // Own entities first, in row order.
     for row in 0..n {
-        if w.sim.owner()[row] == who {
+        if w.sim.owner()[row] == who as i8 {
             out.push(row);
             if out.len() == cfg.max_entities {
                 return;
@@ -52,7 +52,7 @@ pub fn select_entities(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usi
     cx /= out.len() as i64;
     cy /= out.len() as i64;
     let mut others: Vec<(i64, usize)> = (0..n)
-        .filter(|&r| w.sim.owner()[r] != who)
+        .filter(|&r| w.sim.owner()[r] != who as i8)
         .map(|r| {
             let dx = w.sim.pos_x()[r] as i64 - cx;
             let dy = w.sim.pos_y()[r] as i64 - cy;
@@ -164,7 +164,7 @@ pub fn write_entities(
         f[12] = w.order[row] as f32 / 28.0;
         f[13] = w.dest_x[row] as f32 / gwx;
         f[14] = w.dest_y[row] as f32 / ghy;
-        f[15] = if slot < controlled && w.sim.owner()[row] == who { 1.0 } else { 0.0 };
+        f[15] = if slot < controlled && w.sim.owner()[row] == who as i8 { 1.0 } else { 0.0 };
     }
 }
 

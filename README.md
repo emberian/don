@@ -36,5 +36,9 @@ Reverse engineering is mostly done; the simulation is early.
 - …but 34% of actions it accepts still do nothing, because the mechanics behind them
   aren't written yet
 
-Combat, economy, production, cities, borders, fog, projectiles and scoring are ported
-with tests. Movement, pathfinding, terrain and map generation are not.
+Combat, economy, production, cities, borders, fog, projectiles, scoring, movement,
+pathfinding, and terrain all have isolated ports with tests. Most are not yet wired into
+the runnable tick; map generation and major command/order paths remain absent.
+
+Live execution status: [`GOAL.md`](GOAL.md). Interrupted-work recovery ledger:
+[`docs/RECOVERY.md`](docs/RECOVERY.md).

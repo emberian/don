@@ -1,0 +1,9733 @@
+{
+ "schema": "don/coverage",
+ "schema_version": 2,
+ "generator": "tools/coverage-ledger.py",
+ "binary": "riseofnations.exe sha256 30478a44..625079, PE32 i386, base 0x00400000",
+ "method": {
+  "seeded_potential_reachability": "direct call/jmp rel32 closure over .text from Game::do_frame, CommandManager::process_turn, CheckSums::check_all, Objects::process_all, CommandPackage::process, plus every main/game/ X::process|inc_time|work|walk_data|do_* as a virtual entry seed. Indirect calls remain invisible and broad virtual seeds can add false positives: an approximation, NOT a tick call graph or bound.",
+  "cited": "every 0x00xxxxxx literal in crates/**/*.rs resolved to its PDB procedure. DECLARED derivation, an UPPER bound on fidelity.",
+  "external_system_references": "textual grep for `systems::` outside crates/don-sim/src/systems/; diagnostic only, NOT tick reachability or execution evidence.",
+  "source_partition": "manually curated runtime-core allowlist versus other don-sim sources; an inventory, NOT a call graph.",
+  "tier_b_floor": "schema/oracle-regression.json: differentially tested cases."
+ },
+ "headline": {
+  "reachable_funcs": 3612,
+  "reachable_bytes": 2537989,
+  "cited_funcs": 563,
+  "cited_bytes": 495573,
+  "pct_funcs": 15.59,
+  "pct_bytes": 19.53,
+  "external_system_reference_count": 3,
+  "differential_cases": 12,
+  "differential_trials": 16236396,
+  "differential_game_funcs": 6,
+  "differential_game_bytes": 4158
+ },
+ "don_sim_source_partition": {
+  "runtime_core_allowlist": {
+   "lines": 4965,
+   "procs": 32,
+   "files": [
+    "crates/don-sim/src/balance.rs",
+    "crates/don-sim/src/batch.rs",
+    "crates/don-sim/src/lib.rs",
+    "crates/don-sim/src/mechanics.rs",
+    "crates/don-sim/src/objects.rs",
+    "crates/don-sim/src/rng.rs",
+    "crates/don-sim/src/simd.rs",
+    "crates/don-sim/src/world.rs"
+   ],
+   "retail_bytes": 89241
+  },
+  "other": {
+   "lines": 42009,
+   "procs": 530,
+   "files": [
+    "crates/don-sim/src/bin/bench.rs",
+    "crates/don-sim/src/container.rs",
+    "crates/don-sim/src/generated/mod.rs",
+    "crates/don-sim/src/generated/state.rs",
+    "crates/don-sim/src/interleave.rs",
+    "crates/don-sim/src/order.rs",
+    "crates/don-sim/src/schedule.rs",
+    "crates/don-sim/src/systems/air.rs",
+    "crates/don-sim/src/systems/ammo.rs",
+    "crates/don-sim/src/systems/borders_fog.rs",
+    "crates/don-sim/src/systems/combat.rs",
+    "crates/don-sim/src/systems/economy.rs",
+    "crates/don-sim/src/systems/groups_guys.rs",
+    "crates/don-sim/src/systems/items.rs",
+    "crates/don-sim/src/systems/map_terrain.rs",
+    "crates/don-sim/src/systems/mod.rs",
+    "crates/don-sim/src/systems/movement.rs",
+    "crates/don-sim/src/systems/naval.rs",
+    "crates/don-sim/src/systems/production.rs",
+    "crates/don-sim/src/systems/tech_cities.rs",
+    "crates/don-sim/src/systems/victory_score.rs",
+    "crates/don-sim/src/systems/walls.rs",
+    "crates/don-sim/src/trig.rs"
+   ],
+   "retail_bytes": 404785
+  }
+ },
+ "channels": [
+  {
+   "idx": 1,
+   "name": "units",
+   "checker_va": "0x009371D0",
+   "checker": "CheckSums::check_units",
+   "walker": "Unit::walk_data 0x0060CF40",
+   "rust_modules": "movement,groups_guys,combat,air,naval",
+   "status": "partial"
+  },
+  {
+   "idx": 2,
+   "name": "builds",
+   "checker_va": "0x00937290",
+   "checker": "CheckSums::check_builds",
+   "walker": "BuildData::walk_data 0x0062F270",
+   "rust_modules": "production",
+   "status": "partial"
+  },
+  {
+   "idx": 3,
+   "name": "walls",
+   "checker_va": "0x00937360",
+   "checker": "CheckSums::check_walls",
+   "walker": "WallData::walk_data 0x00642510",
+   "rust_modules": "walls,production",
+   "status": "partial"
+  },
+  {
+   "idx": 4,
+   "name": "ammo",
+   "checker_va": "0x009374E0",
+   "checker": "CheckSums::check_ammo",
+   "walker": "AmmoData::walk_data 0x0067AB50",
+   "rust_modules": "ammo,air",
+   "status": "partial"
+  },
+  {
+   "idx": 5,
+   "name": "deaths",
+   "checker_va": "0x00936BB0",
+   "checker": "CheckSums::check_deaths",
+   "walker": "DeathObjData (inline)",
+   "rust_modules": "combat",
+   "status": "partial"
+  },
+  {
+   "idx": 6,
+   "name": "groups",
+   "checker_va": "0x00937530",
+   "checker": "CheckSums::check_groups",
+   "walker": "Group::walk_data 0x00708400",
+   "rust_modules": "groups_guys",
+   "status": "partial"
+  },
+  {
+   "idx": 7,
+   "name": "guys",
+   "checker_va": "0x00937430",
+   "checker": "CheckSums::check_guys",
+   "walker": "GuyData::walk_data 0x005E0210",
+   "rust_modules": "groups_guys",
+   "status": "partial"
+  },
+  {
+   "idx": 8,
+   "name": "leaders",
+   "checker_va": "inline",
+   "checker": "LeaderData::walk_data",
+   "walker": "LeaderData::walk_data 0x006D6750",
+   "rust_modules": "economy,tech_cities,victory_score",
+   "status": "partial"
+  },
+  {
+   "idx": 9,
+   "name": "cities",
+   "checker_va": "0x00937600",
+   "checker": "CheckSums::check_cities",
+   "walker": "City::walk_data 0x00489220",
+   "rust_modules": "tech_cities",
+   "status": "partial"
+  },
+  {
+   "idx": 10,
+   "name": "items",
+   "checker_va": "0x00937790",
+   "checker": "CheckSums::check_items",
+   "walker": "Item::walk_data 0x00677150",
+   "rust_modules": "items",
+   "status": "recovered_uncompiled"
+  },
+  {
+   "idx": 11,
+   "name": "goods",
+   "checker_va": "0x00937710",
+   "checker": "CheckSums::check_goods",
+   "walker": "Good::walk_data 0x0066E5D0",
+   "rust_modules": "economy",
+   "status": "partial"
+  },
+  {
+   "idx": 12,
+   "name": "world",
+   "checker_va": "inline",
+   "checker": "World::walk_data",
+   "walker": "World::walk_data 0x006B5CF0",
+   "rust_modules": "borders_fog,map_terrain",
+   "status": "partial"
+  },
+  {
+   "idx": 13,
+   "name": "rules",
+   "checker_va": "inline",
+   "checker": "Game::walk_rules_data",
+   "walker": "Types + Balance walk_rules_data",
+   "rust_modules": "",
+   "status": "absent"
+  },
+  {
+   "idx": 14,
+   "name": "scenario",
+   "checker_va": "inline",
+   "checker": "ScenarioData::walk_data",
+   "walker": "ScenarioData::walk_data 0x00997AD0",
+   "rust_modules": "",
+   "status": "absent"
+  },
+  {
+   "idx": 15,
+   "name": "script",
+   "checker_va": "inline",
+   "checker": "RunTimeEnv::walk_data",
+   "walker": "RunTimeEnv::walk_data 0x009C41A0",
+   "rust_modules": "",
+   "status": "absent"
+  }
+ ],
+ "do_frame": [
+  {
+   "idx": 0,
+   "name": "AutoSave::restore",
+   "va": "0x005A20C0",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 1,
+   "name": "GameLog::begin_frame",
+   "va": "0x00932A70",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 2,
+   "name": "Random::get (artificial lag)",
+   "va": "0x00A39D70",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 3,
+   "name": "CommandManager::issue_player_speed",
+   "va": "0x00943100",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 4,
+   "name": "RunTimeEnv::run_script",
+   "va": "0x0043D0E0",
+   "status": "absent"
+  },
+  {
+   "idx": 5,
+   "name": "ConquestGame::place_reinforcements",
+   "va": "0x00798880",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 6,
+   "name": "TutorialPromptWin::exec",
+   "va": "0x007C2810",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 7,
+   "name": "SteamLeaderboards::UploadScore",
+   "va": "0x00A36190",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 8,
+   "name": "Leaders::process_all",
+   "va": "0x006ED2A0",
+   "status": "module_exists"
+  },
+  {
+   "idx": 9,
+   "name": "NetDaemon::process_all",
+   "va": "0x00951300",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 10,
+   "name": "AI diplomacy chat",
+   "va": null,
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 11,
+   "name": "Leaders::strategy_all",
+   "va": "0x006ED430",
+   "status": "absent"
+  },
+  {
+   "idx": 12,
+   "name": "GameDaemon::process_all",
+   "va": "0x00732700",
+   "status": "module_exists"
+  },
+  {
+   "idx": 13,
+   "name": "Armies::process_all",
+   "va": "0x006F3B00",
+   "status": "absent"
+  },
+  {
+   "idx": 14,
+   "name": "Objects::process_all",
+   "va": "0x0065DCE0",
+   "status": "implemented"
+  },
+  {
+   "idx": 15,
+   "name": "Objects::inc_time",
+   "va": "0x0065DB70",
+   "status": "module_exists"
+  },
+  {
+   "idx": 16,
+   "name": "GraphicEvents::process",
+   "va": "0x008E50A0",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 17,
+   "name": "Leaders::end_process_all",
+   "va": "0x006ED070",
+   "status": "absent"
+  },
+  {
+   "idx": 18,
+   "name": "Achieve::capture_data",
+   "va": "0x007AF980",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 19,
+   "name": "Leader::process_event_frame",
+   "va": "0x006EC180",
+   "status": "absent"
+  },
+  {
+   "idx": 20,
+   "name": "Game::frame++",
+   "va": "0x005924BF",
+   "status": "implemented"
+  },
+  {
+   "idx": 21,
+   "name": "OrdersMemManager::cycle",
+   "va": "0x00730E20",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 22,
+   "name": "Roads::scan_and_kill_stray_roads",
+   "va": "0x008956A0",
+   "status": "absent"
+  },
+  {
+   "idx": 23,
+   "name": "frame % 15 -> Game::seconds++",
+   "va": "0x005924CF",
+   "status": "implemented"
+  },
+  {
+   "idx": 24,
+   "name": "TurnControl::check_cannon_time",
+   "va": "0x009579E0",
+   "status": "module_exists"
+  },
+  {
+   "idx": 25,
+   "name": "SaveGame / LoadGame",
+   "va": "0x005A8220",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 26,
+   "name": "GameLog::end_frame",
+   "va": "0x009329D0",
+   "status": "out_of_scope"
+  },
+  {
+   "idx": 27,
+   "name": "Game::process_end_game",
+   "va": "0x00591CE0",
+   "status": "module_exists"
+  },
+  {
+   "idx": 28,
+   "name": "Scene::process_capture_sequence",
+   "va": "0x008C13C0",
+   "status": "out_of_scope"
+  }
+ ],
+ "do_job": [
+  {
+   "idx": 0,
+   "order": "NONE",
+   "va": null,
+   "executor": "virtual [unit+0x184] do_idle",
+   "status": "implemented"
+  },
+  {
+   "idx": 1,
+   "order": "MOVE_TO",
+   "va": "0x005F7B30",
+   "executor": "Unit::do_move",
+   "status": "implemented"
+  },
+  {
+   "idx": 2,
+   "order": "ATTACK_TO",
+   "va": "0x005F2320",
+   "executor": "Unit::do_attack_to",
+   "status": "absent"
+  },
+  {
+   "idx": 3,
+   "order": "EXPLORE_TO",
+   "va": "0x005F24A0",
+   "executor": "Unit::do_explore_to",
+   "status": "absent"
+  },
+  {
+   "idx": 4,
+   "order": "FLEE_TO",
+   "va": "0x005F7B30",
+   "executor": "Unit::do_move (SAME ARM)",
+   "status": "implemented"
+  },
+  {
+   "idx": 5,
+   "order": "PATROL",
+   "va": null,
+   "executor": "(default arm, does nothing)",
+   "status": "faithfully_empty"
+  },
+  {
+   "idx": 6,
+   "order": "BUILD_AT",
+   "va": "0x005EEBF0",
+   "executor": "Unit::do_build",
+   "status": "absent"
+  },
+  {
+   "idx": 7,
+   "order": "GATHER",
+   "va": "0x005EF2A0",
+   "executor": "Unit::do_gather",
+   "status": "absent"
+  },
+  {
+   "idx": 8,
+   "order": "BOARD_SHIP",
+   "va": "0x005ED1F0",
+   "executor": "Unit::do_board",
+   "status": "absent"
+  },
+  {
+   "idx": 9,
+   "order": "AWAIT_BOARD",
+   "va": "0x005ED040",
+   "executor": "Unit::do_await_board",
+   "status": "absent"
+  },
+  {
+   "idx": 10,
+   "order": "ATTACK",
+   "va": "0x005F1B80",
+   "executor": "Unit::do_attack",
+   "status": "partial"
+  },
+  {
+   "idx": 11,
+   "order": "FOLLOW",
+   "va": "0x005E65D0",
+   "executor": "Unit::do_follow",
+   "status": "absent"
+  },
+  {
+   "idx": 12,
+   "order": "GUARD",
+   "va": "0x005E5C70",
+   "executor": "Unit::do_guard",
+   "status": "absent"
+  },
+  {
+   "idx": 13,
+   "order": "REPAIR",
+   "va": "0x005EE420",
+   "executor": "Unit::do_repair",
+   "status": "absent"
+  },
+  {
+   "idx": 14,
+   "order": "CAST_SPELL",
+   "va": "0x005EBFE0",
+   "executor": "Unit::do_cast",
+   "status": "absent"
+  },
+  {
+   "idx": 15,
+   "order": "TRADE_ROUTE",
+   "va": "0x005ED270",
+   "executor": "Unit::do_trade",
+   "status": "absent"
+  },
+  {
+   "idx": 16,
+   "order": "STRAFE",
+   "va": "0x005EAB00",
+   "executor": "Unit::do_strafe",
+   "status": "absent"
+  },
+  {
+   "idx": 17,
+   "order": "AIR_PATROL",
+   "va": "0x005EA620",
+   "executor": "Unit::do_air_patrol",
+   "status": "absent"
+  },
+  {
+   "idx": 18,
+   "order": "CHANGE_FORM",
+   "va": "0x005E8670",
+   "executor": "Unit::do_form_change",
+   "status": "absent"
+  },
+  {
+   "idx": 19,
+   "order": "GROUP_MOVE",
+   "va": "0x005E79A0",
+   "executor": "Unit::do_group_move",
+   "status": "absent"
+  },
+  {
+   "idx": 20,
+   "order": "GROUP_ATTACK",
+   "va": "0x005E75A0",
+   "executor": "Unit::do_group_attack",
+   "status": "absent"
+  },
+  {
+   "idx": 21,
+   "order": "GROUP_ATTACK_TO",
+   "va": "0x005E74E0",
+   "executor": "Unit::do_group_attack_to",
+   "status": "absent"
+  },
+  {
+   "idx": 22,
+   "order": "GROUP_PATROL",
+   "va": "0x005F1910",
+   "executor": "Unit::do_patrol",
+   "status": "absent"
+  },
+  {
+   "idx": 23,
+   "order": "ATTACK_GROUND",
+   "va": "0x005F1410",
+   "executor": "Unit::do_attack_ground",
+   "status": "absent"
+  },
+  {
+   "idx": 24,
+   "order": "AIR_ATTACK_GROUND",
+   "va": "0x005EA420",
+   "executor": "Unit::do_air_attack_ground",
+   "status": "absent"
+  },
+  {
+   "idx": 25,
+   "order": "SPECIAL_ANIM",
+   "va": "0x005E5880",
+   "executor": "Unit::do_spec_anim",
+   "status": "absent"
+  },
+  {
+   "idx": 26,
+   "order": "GARRISON",
+   "va": "0x005E6B80",
+   "executor": "Unit::do_garrison",
+   "status": "absent"
+  },
+  {
+   "idx": 27,
+   "order": "THINK",
+   "va": "0x005E5BF0",
+   "executor": "Unit::do_think_order",
+   "status": "absent"
+  }
+ ],
+ "game_files": {
+  "total_files": 603,
+  "total_funcs": 11761,
+  "total_bytes": 5196471,
+  "by_label": {
+   "sim": {
+    "files": 335,
+    "funcs": 7192,
+    "bytes": 2926855,
+    "reach_funcs": 2627,
+    "reach_bytes": 1746457,
+    "cited_funcs": 532,
+    "cited_bytes": 485227
+   },
+   "presentation": {
+    "files": 148,
+    "funcs": 2663,
+    "bytes": 1389046,
+    "reach_funcs": 580,
+    "reach_bytes": 508857,
+    "cited_funcs": 5,
+    "cited_bytes": 2235
+   },
+   "campaign": {
+    "files": 60,
+    "funcs": 974,
+    "bytes": 543262,
+    "reach_funcs": 216,
+    "reach_bytes": 192175,
+    "cited_funcs": 20,
+    "cited_bytes": 5862
+   },
+   "editor": {
+    "files": 26,
+    "funcs": 341,
+    "bytes": 156617,
+    "reach_funcs": 116,
+    "reach_bytes": 59618,
+    "cited_funcs": 3,
+    "cited_bytes": 879
+   },
+   "netcode": {
+    "files": 34,
+    "funcs": 591,
+    "bytes": 180691,
+    "reach_funcs": 73,
+    "reach_bytes": 30882,
+    "cited_funcs": 3,
+    "cited_bytes": 1370
+   }
+  },
+  "files": [
+   {
+    "file": "game/unit.cpp",
+    "label": "sim",
+    "funcs": 273,
+    "bytes": 236417,
+    "walk_data": 1,
+    "reach_funcs": 206,
+    "reach_bytes": 192469,
+    "cited_funcs": 60,
+    "cited_bytes": 93139,
+    "suffix_bytes": {
+     "behaviour": 193381,
+     "sim": 23805,
+     "presentation": 19231
+    }
+   },
+   {
+    "file": "game/leaders.cpp",
+    "label": "sim",
+    "funcs": 331,
+    "bytes": 217595,
+    "walk_data": 7,
+    "reach_funcs": 250,
+    "reach_bytes": 204952,
+    "cited_funcs": 84,
+    "cited_bytes": 89537,
+    "suffix_bytes": {
+     "behaviour": 155932,
+     "sim": 55754,
+     "presentation": 5909
+    }
+   },
+   {
+    "file": "game/graphicpieces.cpp",
+    "label": "presentation",
+    "funcs": 182,
+    "bytes": 171469,
+    "walk_data": 0,
+    "reach_funcs": 67,
+    "reach_bytes": 79361,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 2062,
+     "behaviour": 169407
+    }
+   },
+   {
+    "file": "game/scriptfunctions.cpp",
+    "label": "sim",
+    "funcs": 843,
+    "bytes": 134025,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 5287,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 134025
+    }
+   },
+   {
+    "file": "game/setupwin.cpp",
+    "label": "presentation",
+    "funcs": 122,
+    "bytes": 112152,
+    "walk_data": 0,
+    "reach_funcs": 41,
+    "reach_bytes": 42390,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2781,
+     "presentation": 109371
+    }
+   },
+   {
+    "file": "game/groups.cpp",
+    "label": "sim",
+    "funcs": 153,
+    "bytes": 107049,
+    "walk_data": 2,
+    "reach_funcs": 135,
+    "reach_bytes": 105245,
+    "cited_funcs": 13,
+    "cited_bytes": 5030,
+    "suffix_bytes": {
+     "behaviour": 83354,
+     "sim": 13338,
+     "presentation": 10357
+    }
+   },
+   {
+    "file": "game/map.cpp",
+    "label": "sim",
+    "funcs": 108,
+    "bytes": 95484,
+    "walk_data": 0,
+    "reach_funcs": 14,
+    "reach_bytes": 12885,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 94685,
+     "free": 799
+    }
+   },
+   {
+    "file": "game/constants.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 90256,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 90256,
+    "cited_funcs": 5,
+    "cited_bytes": 90256,
+    "suffix_bytes": {
+     "behaviour": 90256
+    }
+   },
+   {
+    "file": "game/options.cpp",
+    "label": "sim",
+    "funcs": 78,
+    "bytes": 87264,
+    "walk_data": 4,
+    "reach_funcs": 60,
+    "reach_bytes": 52467,
+    "cited_funcs": 4,
+    "cited_bytes": 247,
+    "suffix_bytes": {
+     "behaviour": 86955,
+     "free": 112,
+     "sim": 197
+    }
+   },
+   {
+    "file": "game/game.cpp",
+    "label": "sim",
+    "funcs": 278,
+    "bytes": 84276,
+    "walk_data": 1,
+    "reach_funcs": 56,
+    "reach_bytes": 39945,
+    "cited_funcs": 13,
+    "cited_bytes": 5206,
+    "suffix_bytes": {
+     "free": 4387,
+     "behaviour": 79889
+    }
+   },
+   {
+    "file": "game/terrainout.cpp",
+    "label": "presentation",
+    "funcs": 77,
+    "bytes": 81111,
+    "walk_data": 0,
+    "reach_funcs": 33,
+    "reach_bytes": 51522,
+    "cited_funcs": 1,
+    "cited_bytes": 431,
+    "suffix_bytes": {
+     "free": 88,
+     "presentation": 81023
+    }
+   },
+   {
+    "file": "game/build.cpp",
+    "label": "sim",
+    "funcs": 81,
+    "bytes": 73513,
+    "walk_data": 1,
+    "reach_funcs": 40,
+    "reach_bytes": 31111,
+    "cited_funcs": 12,
+    "cited_bytes": 15058,
+    "suffix_bytes": {
+     "behaviour": 51206,
+     "presentation": 13128,
+     "sim": 9179
+    }
+   },
+   {
+    "file": "game/conquestgame.cpp",
+    "label": "campaign",
+    "funcs": 69,
+    "bytes": 72790,
+    "walk_data": 1,
+    "reach_funcs": 26,
+    "reach_bytes": 35762,
+    "cited_funcs": 2,
+    "cited_bytes": 1140,
+    "suffix_bytes": {
+     "behaviour": 72790
+    }
+   },
+   {
+    "file": "game/consolewin.cpp",
+    "label": "presentation",
+    "funcs": 54,
+    "bytes": 67496,
+    "walk_data": 0,
+    "reach_funcs": 33,
+    "reach_bytes": 56963,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 77,
+     "presentation": 67419
+    }
+   },
+   {
+    "file": "game/conquestwin.cpp",
+    "label": "campaign",
+    "funcs": 98,
+    "bytes": 66455,
+    "walk_data": 0,
+    "reach_funcs": 14,
+    "reach_bytes": 9156,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 66455
+    }
+   },
+   {
+    "file": "game/object.cpp",
+    "label": "sim",
+    "funcs": 77,
+    "bytes": 65204,
+    "walk_data": 1,
+    "reach_funcs": 46,
+    "reach_bytes": 52899,
+    "cited_funcs": 19,
+    "cited_bytes": 32295,
+    "suffix_bytes": {
+     "behaviour": 44228,
+     "presentation": 108,
+     "sim": 20868
+    }
+   },
+   {
+    "file": "game/terrainout2.cpp",
+    "label": "presentation",
+    "funcs": 89,
+    "bytes": 62438,
+    "walk_data": 0,
+    "reach_funcs": 45,
+    "reach_bytes": 43949,
+    "cited_funcs": 1,
+    "cited_bytes": 1028,
+    "suffix_bytes": {
+     "behaviour": 32,
+     "presentation": 62406
+    }
+   },
+   {
+    "file": "game/scene.cpp",
+    "label": "sim",
+    "funcs": 50,
+    "bytes": 61530,
+    "walk_data": 1,
+    "reach_funcs": 15,
+    "reach_bytes": 14358,
+    "cited_funcs": 2,
+    "cited_bytes": 592,
+    "suffix_bytes": {
+     "free": 162,
+     "behaviour": 61368
+    }
+   },
+   {
+    "file": "game/scenariofile.cpp",
+    "label": "campaign",
+    "funcs": 55,
+    "bytes": 55176,
+    "walk_data": 0,
+    "reach_funcs": 49,
+    "reach_bytes": 50319,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 55176
+    }
+   },
+   {
+    "file": "game/console.cpp",
+    "label": "sim",
+    "funcs": 64,
+    "bytes": 54147,
+    "walk_data": 1,
+    "reach_funcs": 23,
+    "reach_bytes": 27239,
+    "cited_funcs": 1,
+    "cited_bytes": 76,
+    "suffix_bytes": {
+     "behaviour": 54147
+    }
+   },
+   {
+    "file": "game/scriptfuncinits.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 53918,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 53918
+    }
+   },
+   {
+    "file": "game/worldmap.cpp",
+    "label": "presentation",
+    "funcs": 71,
+    "bytes": 52492,
+    "walk_data": 0,
+    "reach_funcs": 12,
+    "reach_bytes": 7349,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 541,
+     "behaviour": 51951
+    }
+   },
+   {
+    "file": "game/buildtype.cpp",
+    "label": "sim",
+    "funcs": 71,
+    "bytes": 49211,
+    "walk_data": 0,
+    "reach_funcs": 41,
+    "reach_bytes": 30951,
+    "cited_funcs": 7,
+    "cited_bytes": 15990,
+    "suffix_bytes": {
+     "rules": 12726,
+     "presentation": 10885,
+     "sim": 25600
+    }
+   },
+   {
+    "file": "game/scenarioeditor.cpp",
+    "label": "editor",
+    "funcs": 89,
+    "bytes": 48446,
+    "walk_data": 0,
+    "reach_funcs": 64,
+    "reach_bytes": 38411,
+    "cited_funcs": 3,
+    "cited_bytes": 879,
+    "suffix_bytes": {
+     "behaviour": 48446
+    }
+   },
+   {
+    "file": "game/ifaceselected.cpp",
+    "label": "presentation",
+    "funcs": 34,
+    "bytes": 48322,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 48322
+    }
+   },
+   {
+    "file": "game/playerprofile.cpp",
+    "label": "sim",
+    "funcs": 49,
+    "bytes": 47292,
+    "walk_data": 0,
+    "reach_funcs": 12,
+    "reach_bytes": 17764,
+    "cited_funcs": 1,
+    "cited_bytes": 642,
+    "suffix_bytes": {
+     "free": 1186,
+     "behaviour": 46106
+    }
+   },
+   {
+    "file": "game/objects.cpp",
+    "label": "sim",
+    "funcs": 72,
+    "bytes": 46905,
+    "walk_data": 1,
+    "reach_funcs": 41,
+    "reach_bytes": 28811,
+    "cited_funcs": 14,
+    "cited_bytes": 9418,
+    "suffix_bytes": {
+     "behaviour": 18207,
+     "presentation": 15774,
+     "sim": 12924
+    }
+   },
+   {
+    "file": "game/gamespy.cpp",
+    "label": "netcode",
+    "funcs": 149,
+    "bytes": 46789,
+    "walk_data": 0,
+    "reach_funcs": 25,
+    "reach_bytes": 14392,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 45475,
+     "free": 1314
+    }
+   },
+   {
+    "file": "game/keymap.cpp",
+    "label": "sim",
+    "funcs": 26,
+    "bytes": 40897,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 8755,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 40426,
+     "presentation": 471
+    }
+   },
+   {
+    "file": "game/commandpackage.cpp",
+    "label": "sim",
+    "funcs": 97,
+    "bytes": 38796,
+    "walk_data": 1,
+    "reach_funcs": 91,
+    "reach_bytes": 38226,
+    "cited_funcs": 6,
+    "cited_bytes": 8261,
+    "suffix_bytes": {
+     "behaviour": 38796
+    }
+   },
+   {
+    "file": "game/tileset.cpp",
+    "label": "sim",
+    "funcs": 53,
+    "bytes": 36967,
+    "walk_data": 1,
+    "reach_funcs": 15,
+    "reach_bytes": 31179,
+    "cited_funcs": 1,
+    "cited_bytes": 212,
+    "suffix_bytes": {
+     "behaviour": 29501,
+     "sim": 7466
+    }
+   },
+   {
+    "file": "game/terraingroups.cpp",
+    "label": "presentation",
+    "funcs": 31,
+    "bytes": 36352,
+    "walk_data": 0,
+    "reach_funcs": 18,
+    "reach_bytes": 33117,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 36352
+    }
+   },
+   {
+    "file": "game/achievewin.cpp",
+    "label": "presentation",
+    "funcs": 33,
+    "bytes": 35762,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 6763,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 79,
+     "presentation": 6391,
+     "behaviour": 29292
+    }
+   },
+   {
+    "file": "game/terrain.cpp",
+    "label": "sim",
+    "funcs": 47,
+    "bytes": 35303,
+    "walk_data": 2,
+    "reach_funcs": 22,
+    "reach_bytes": 24086,
+    "cited_funcs": 3,
+    "cited_bytes": 3230,
+    "suffix_bytes": {
+     "sim": 533,
+     "behaviour": 33487,
+     "free": 32,
+     "presentation": 1251
+    }
+   },
+   {
+    "file": "game/ifacemainbase.cpp",
+    "label": "presentation",
+    "funcs": 29,
+    "bytes": 34912,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 2120,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 34912
+    }
+   },
+   {
+    "file": "game/conquestleaders.cpp",
+    "label": "campaign",
+    "funcs": 74,
+    "bytes": 34651,
+    "walk_data": 2,
+    "reach_funcs": 34,
+    "reach_bytes": 17849,
+    "cited_funcs": 2,
+    "cited_bytes": 397,
+    "suffix_bytes": {
+     "behaviour": 34651
+    }
+   },
+   {
+    "file": "game/nuke.cpp",
+    "label": "presentation",
+    "funcs": 130,
+    "bytes": 34543,
+    "walk_data": 0,
+    "reach_funcs": 16,
+    "reach_bytes": 16313,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 3267,
+     "presentation": 22818,
+     "sim": 970,
+     "behaviour": 7488
+    }
+   },
+   {
+    "file": "game/world.cpp",
+    "label": "sim",
+    "funcs": 102,
+    "bytes": 33994,
+    "walk_data": 1,
+    "reach_funcs": 58,
+    "reach_bytes": 29988,
+    "cited_funcs": 38,
+    "cited_bytes": 13866,
+    "suffix_bytes": {
+     "sim": 14215,
+     "behaviour": 19779
+    }
+   },
+   {
+    "file": "game/guy.cpp",
+    "label": "sim",
+    "funcs": 44,
+    "bytes": 32544,
+    "walk_data": 1,
+    "reach_funcs": 23,
+    "reach_bytes": 16704,
+    "cited_funcs": 8,
+    "cited_bytes": 2863,
+    "suffix_bytes": {
+     "behaviour": 14898,
+     "presentation": 9290,
+     "sim": 8356
+    }
+   },
+   {
+    "file": "game/roads.cpp",
+    "label": "presentation",
+    "funcs": 41,
+    "bytes": 31630,
+    "walk_data": 0,
+    "reach_funcs": 25,
+    "reach_bytes": 22948,
+    "cited_funcs": 1,
+    "cited_bytes": 630,
+    "suffix_bytes": {
+     "behaviour": 9454,
+     "presentation": 21521,
+     "free": 655
+    }
+   },
+   {
+    "file": "game/orders.h",
+    "label": "sim",
+    "funcs": 386,
+    "bytes": 31132,
+    "walk_data": 45,
+    "reach_funcs": 79,
+    "reach_bytes": 8455,
+    "cited_funcs": 24,
+    "cited_bytes": 1731,
+    "suffix_bytes": {
+     "presentation": 152,
+     "behaviour": 30912,
+     "free": 68
+    }
+   },
+   {
+    "file": "game/gamespygroup.cpp",
+    "label": "netcode",
+    "funcs": 75,
+    "bytes": 30573,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 877,
+     "behaviour": 28774,
+     "presentation": 922
+    }
+   },
+   {
+    "file": "game/topmenu.cpp",
+    "label": "presentation",
+    "funcs": 62,
+    "bytes": 30218,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 10527,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 311,
+     "behaviour": 9467,
+     "presentation": 20440
+    }
+   },
+   {
+    "file": "game/scripteditorwin.cpp",
+    "label": "editor",
+    "funcs": 68,
+    "bytes": 29276,
+    "walk_data": 0,
+    "reach_funcs": 38,
+    "reach_bytes": 17470,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 29276
+    }
+   },
+   {
+    "file": "game/pathfinder.cpp",
+    "label": "sim",
+    "funcs": 46,
+    "bytes": 28937,
+    "walk_data": 1,
+    "reach_funcs": 28,
+    "reach_bytes": 27337,
+    "cited_funcs": 12,
+    "cited_bytes": 13823,
+    "suffix_bytes": {
+     "behaviour": 26294,
+     "presentation": 1738,
+     "sim": 905
+    }
+   },
+   {
+    "file": "game/conquestnegotiatewin.cpp",
+    "label": "campaign",
+    "funcs": 28,
+    "bytes": 28197,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 6649,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 28197
+    }
+   },
+   {
+    "file": "game/spelltype.cpp",
+    "label": "sim",
+    "funcs": 40,
+    "bytes": 27253,
+    "walk_data": 0,
+    "reach_funcs": 34,
+    "reach_bytes": 23615,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 21763,
+     "sim": 5490
+    }
+   },
+   {
+    "file": "game/wall.cpp",
+    "label": "sim",
+    "funcs": 55,
+    "bytes": 27070,
+    "walk_data": 1,
+    "reach_funcs": 18,
+    "reach_bytes": 11245,
+    "cited_funcs": 8,
+    "cited_bytes": 7883,
+    "suffix_bytes": {
+     "behaviour": 15923,
+     "presentation": 8226,
+     "sim": 2921
+    }
+   },
+   {
+    "file": "game/gamespyquick.cpp",
+    "label": "netcode",
+    "funcs": 66,
+    "bytes": 26882,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 4683,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 26298,
+     "free": 584
+    }
+   },
+   {
+    "file": "game/conquestiface.cpp",
+    "label": "campaign",
+    "funcs": 31,
+    "bytes": 26576,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1078,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 26576
+    }
+   },
+   {
+    "file": "game/type.cpp",
+    "label": "sim",
+    "funcs": 32,
+    "bytes": 25392,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 3719,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 17868,
+     "rules": 7524
+    }
+   },
+   {
+    "file": "game/army.cpp",
+    "label": "sim",
+    "funcs": 37,
+    "bytes": 25276,
+    "walk_data": 1,
+    "reach_funcs": 33,
+    "reach_bytes": 24748,
+    "cited_funcs": 1,
+    "cited_bytes": 70,
+    "suffix_bytes": {
+     "behaviour": 24770,
+     "sim": 506
+    }
+   },
+   {
+    "file": "game/save.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 25239,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 7089,
+    "cited_funcs": 2,
+    "cited_bytes": 5733,
+    "suffix_bytes": {
+     "behaviour": 25239
+    }
+   },
+   {
+    "file": "game/gamereportwin.cpp",
+    "label": "presentation",
+    "funcs": 9,
+    "bytes": 25079,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 37,
+     "presentation": 25042
+    }
+   },
+   {
+    "file": "game/ammo.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 22913,
+    "walk_data": 1,
+    "reach_funcs": 14,
+    "reach_bytes": 15916,
+    "cited_funcs": 8,
+    "cited_bytes": 12476,
+    "suffix_bytes": {
+     "behaviour": 13507,
+     "presentation": 5304,
+     "sim": 4102
+    }
+   },
+   {
+    "file": "game/surf.cpp",
+    "label": "presentation",
+    "funcs": 54,
+    "bytes": 22835,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 14854,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 22835
+    }
+   },
+   {
+    "file": "game/statwin.cpp",
+    "label": "presentation",
+    "funcs": 30,
+    "bytes": 22750,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1047,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 22750
+    }
+   },
+   {
+    "file": "game/conquestcountries.cpp",
+    "label": "campaign",
+    "funcs": 15,
+    "bytes": 22039,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 17067,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 22039
+    }
+   },
+   {
+    "file": "game/mountains.cpp",
+    "label": "sim",
+    "funcs": 33,
+    "bytes": 21940,
+    "walk_data": 1,
+    "reach_funcs": 22,
+    "reach_bytes": 20544,
+    "cited_funcs": 1,
+    "cited_bytes": 117,
+    "suffix_bytes": {
+     "free": 142,
+     "behaviour": 20059,
+     "sim": 1702,
+     "presentation": 37
+    }
+   },
+   {
+    "file": "game/messagewin.cpp",
+    "label": "sim",
+    "funcs": 53,
+    "bytes": 21287,
+    "walk_data": 2,
+    "reach_funcs": 25,
+    "reach_bytes": 5784,
+    "cited_funcs": 2,
+    "cited_bytes": 380,
+    "suffix_bytes": {
+     "behaviour": 2073,
+     "presentation": 19214
+    }
+   },
+   {
+    "file": "game/transformmethods.cpp",
+    "label": "sim",
+    "funcs": 64,
+    "bytes": 21077,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 477,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 20774,
+     "free": 303
+    }
+   },
+   {
+    "file": "game/ifaceeditortypeeditor.cpp",
+    "label": "editor",
+    "funcs": 13,
+    "bytes": 19777,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 19777
+    }
+   },
+   {
+    "file": "game/riversection.cpp",
+    "label": "presentation",
+    "funcs": 31,
+    "bytes": 19042,
+    "walk_data": 0,
+    "reach_funcs": 12,
+    "reach_bytes": 14836,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 96,
+     "behaviour": 5534,
+     "presentation": 13412
+    }
+   },
+   {
+    "file": "game/commandmanager.cpp",
+    "label": "sim",
+    "funcs": 81,
+    "bytes": 18902,
+    "walk_data": 1,
+    "reach_funcs": 42,
+    "reach_bytes": 14381,
+    "cited_funcs": 6,
+    "cited_bytes": 6965,
+    "suffix_bytes": {
+     "behaviour": 18902
+    }
+   },
+   {
+    "file": "game/gamelog.cpp",
+    "label": "sim",
+    "funcs": 71,
+    "bytes": 18336,
+    "walk_data": 0,
+    "reach_funcs": 25,
+    "reach_bytes": 12620,
+    "cited_funcs": 2,
+    "cited_bytes": 260,
+    "suffix_bytes": {
+     "free": 761,
+     "behaviour": 17575
+    }
+   },
+   {
+    "file": "game/conquestsetupwin.cpp",
+    "label": "campaign",
+    "funcs": 25,
+    "bytes": 17809,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3799,
+     "presentation": 14010
+    }
+   },
+   {
+    "file": "game/script/syntaxtree.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 17482,
+    "walk_data": 0,
+    "reach_funcs": 13,
+    "reach_bytes": 17048,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 17428,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/borders.cpp",
+    "label": "presentation",
+    "funcs": 73,
+    "bytes": 17284,
+    "walk_data": 0,
+    "reach_funcs": 40,
+    "reach_bytes": 15078,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 16917,
+     "sim": 290,
+     "presentation": 77
+    }
+   },
+   {
+    "file": "game/ifaceresources.cpp",
+    "label": "presentation",
+    "funcs": 32,
+    "bytes": 16558,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1702,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 16558
+    }
+   },
+   {
+    "file": "game/scripteditbox.cpp",
+    "label": "presentation",
+    "funcs": 48,
+    "bytes": 16484,
+    "walk_data": 0,
+    "reach_funcs": 14,
+    "reach_bytes": 6209,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 16484
+    }
+   },
+   {
+    "file": "game/farms.cpp",
+    "label": "sim",
+    "funcs": 42,
+    "bytes": 15953,
+    "walk_data": 1,
+    "reach_funcs": 13,
+    "reach_bytes": 8443,
+    "cited_funcs": 1,
+    "cited_bytes": 77,
+    "suffix_bytes": {
+     "free": 6153,
+     "sim": 666,
+     "presentation": 4726,
+     "behaviour": 4408
+    }
+   },
+   {
+    "file": "game/terrainwin.cpp",
+    "label": "presentation",
+    "funcs": 18,
+    "bytes": 15856,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 582,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 32,
+     "presentation": 15824
+    }
+   },
+   {
+    "file": "game/cliffs.cpp",
+    "label": "sim",
+    "funcs": 28,
+    "bytes": 15760,
+    "walk_data": 2,
+    "reach_funcs": 18,
+    "reach_bytes": 12261,
+    "cited_funcs": 2,
+    "cited_bytes": 445,
+    "suffix_bytes": {
+     "behaviour": 8833,
+     "sim": 1286,
+     "presentation": 5641
+    }
+   },
+   {
+    "file": "game/city.cpp",
+    "label": "sim",
+    "funcs": 51,
+    "bytes": 15719,
+    "walk_data": 1,
+    "reach_funcs": 39,
+    "reach_bytes": 10870,
+    "cited_funcs": 19,
+    "cited_bytes": 4549,
+    "suffix_bytes": {
+     "behaviour": 11821,
+     "sim": 3898
+    }
+   },
+   {
+    "file": "game/spline.cpp",
+    "label": "sim",
+    "funcs": 32,
+    "bytes": 15696,
+    "walk_data": 1,
+    "reach_funcs": 20,
+    "reach_bytes": 13346,
+    "cited_funcs": 3,
+    "cited_bytes": 1242,
+    "suffix_bytes": {
+     "behaviour": 13013,
+     "presentation": 82,
+     "sim": 2601
+    }
+   },
+   {
+    "file": "game/terrainmap.cpp",
+    "label": "presentation",
+    "funcs": 30,
+    "bytes": 15474,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1862,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 15474
+    }
+   },
+   {
+    "file": "game/ifacediploneg.cpp",
+    "label": "presentation",
+    "funcs": 20,
+    "bytes": 15005,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 67,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 15005
+    }
+   },
+   {
+    "file": "game/conquestmap.cpp",
+    "label": "campaign",
+    "funcs": 15,
+    "bytes": 14738,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 11701,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 14738
+    }
+   },
+   {
+    "file": "game/balance.cpp",
+    "label": "sim",
+    "funcs": 25,
+    "bytes": 14665,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 14206,
+    "cited_funcs": 1,
+    "cited_bytes": 65,
+    "suffix_bytes": {
+     "free": 280,
+     "behaviour": 14385
+    }
+   },
+   {
+    "file": "game/connectiondata.cpp",
+    "label": "sim",
+    "funcs": 31,
+    "bytes": 14631,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 9030,
+    "cited_funcs": 3,
+    "cited_bytes": 4008,
+    "suffix_bytes": {
+     "behaviour": 5278,
+     "sim": 8039,
+     "free": 1314
+    }
+   },
+   {
+    "file": "game/unittype.cpp",
+    "label": "sim",
+    "funcs": 32,
+    "bytes": 14453,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 4280,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 12342,
+     "sim": 1664,
+     "presentation": 447
+    }
+   },
+   {
+    "file": "game/types.cpp",
+    "label": "sim",
+    "funcs": 24,
+    "bytes": 14208,
+    "walk_data": 1,
+    "reach_funcs": 11,
+    "reach_bytes": 12810,
+    "cited_funcs": 1,
+    "cited_bytes": 64,
+    "suffix_bytes": {
+     "behaviour": 14072,
+     "free": 136
+    }
+   },
+   {
+    "file": "game/tutorialwin.cpp",
+    "label": "campaign",
+    "funcs": 21,
+    "bytes": 14030,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 14030
+    }
+   },
+   {
+    "file": "game/unitbalance.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 13658,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 13658,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 13658
+    }
+   },
+   {
+    "file": "game/optionswingraphics.cpp",
+    "label": "sim",
+    "funcs": 22,
+    "bytes": 13655,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 10157,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 13655
+    }
+   },
+   {
+    "file": "game/scenariodata.cpp",
+    "label": "campaign",
+    "funcs": 84,
+    "bytes": 13603,
+    "walk_data": 6,
+    "reach_funcs": 10,
+    "reach_bytes": 9182,
+    "cited_funcs": 6,
+    "cited_bytes": 1597,
+    "suffix_bytes": {
+     "sim": 11363,
+     "behaviour": 2240
+    }
+   },
+   {
+    "file": "game/graphicevent.cpp",
+    "label": "sim",
+    "funcs": 26,
+    "bytes": 13336,
+    "walk_data": 1,
+    "reach_funcs": 14,
+    "reach_bytes": 10929,
+    "cited_funcs": 2,
+    "cited_bytes": 1181,
+    "suffix_bytes": {
+     "free": 56,
+     "behaviour": 11491,
+     "presentation": 1789
+    }
+   },
+   {
+    "file": "game/workshopwin.cpp",
+    "label": "presentation",
+    "funcs": 51,
+    "bytes": 13160,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 1980,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 28,
+     "presentation": 7989,
+     "behaviour": 5143
+    }
+   },
+   {
+    "file": "game/turncontrol.cpp",
+    "label": "sim",
+    "funcs": 33,
+    "bytes": 13117,
+    "walk_data": 1,
+    "reach_funcs": 28,
+    "reach_bytes": 12139,
+    "cited_funcs": 2,
+    "cited_bytes": 309,
+    "suffix_bytes": {
+     "behaviour": 13117
+    }
+   },
+   {
+    "file": "game/treerender.cpp",
+    "label": "presentation",
+    "funcs": 25,
+    "bytes": 13014,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1385,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6474,
+     "sim": 6540
+    }
+   },
+   {
+    "file": "game/loadingwin.cpp",
+    "label": "presentation",
+    "funcs": 13,
+    "bytes": 12891,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1507,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 12891
+    }
+   },
+   {
+    "file": "game/terrainvis.cpp",
+    "label": "presentation",
+    "funcs": 24,
+    "bytes": 12865,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 3081,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 12865
+    }
+   },
+   {
+    "file": "game/conqueststartwin.cpp",
+    "label": "campaign",
+    "funcs": 15,
+    "bytes": 12416,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 4397,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 12416
+    }
+   },
+   {
+    "file": "game/script/scripttype.cpp",
+    "label": "sim",
+    "funcs": 57,
+    "bytes": 12328,
+    "walk_data": 6,
+    "reach_funcs": 25,
+    "reach_bytes": 8983,
+    "cited_funcs": 7,
+    "cited_bytes": 690,
+    "suffix_bytes": {
+     "behaviour": 10188,
+     "rules": 2086,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/setup.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 12256,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 12212,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 12256
+    }
+   },
+   {
+    "file": "game/circle.cpp",
+    "label": "sim",
+    "funcs": 25,
+    "bytes": 12102,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1493,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 8601,
+     "behaviour": 3501
+    }
+   },
+   {
+    "file": "game/conquestnegresults.cpp",
+    "label": "campaign",
+    "funcs": 21,
+    "bytes": 12033,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 12033
+    }
+   },
+   {
+    "file": "game/doober.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 11605,
+    "walk_data": 1,
+    "reach_funcs": 8,
+    "reach_bytes": 2183,
+    "cited_funcs": 1,
+    "cited_bytes": 177,
+    "suffix_bytes": {
+     "behaviour": 11605
+    }
+   },
+   {
+    "file": "game/gameinfo.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 11235,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 5509,
+    "cited_funcs": 1,
+    "cited_bytes": 2808,
+    "suffix_bytes": {
+     "behaviour": 10704,
+     "free": 531
+    }
+   },
+   {
+    "file": "game/particle.cpp",
+    "label": "presentation",
+    "funcs": 30,
+    "bytes": 11225,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 2416,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 11225
+    }
+   },
+   {
+    "file": "game/skilltestwin.cpp",
+    "label": "presentation",
+    "funcs": 15,
+    "bytes": 11189,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 11189
+    }
+   },
+   {
+    "file": "game/ifacebutton.cpp",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 11011,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 11011
+    }
+   },
+   {
+    "file": "game/conquestfinalwin.cpp",
+    "label": "campaign",
+    "funcs": 13,
+    "bytes": 10914,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 10914
+    }
+   },
+   {
+    "file": "game/conquestpieces.cpp",
+    "label": "campaign",
+    "funcs": 23,
+    "bytes": 10780,
+    "walk_data": 2,
+    "reach_funcs": 8,
+    "reach_bytes": 2594,
+    "cited_funcs": 2,
+    "cited_bytes": 996,
+    "suffix_bytes": {
+     "behaviour": 10780
+    }
+   },
+   {
+    "file": "game/basicrendermethods.cpp",
+    "label": "presentation",
+    "funcs": 46,
+    "bytes": 10740,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 5357,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10711,
+     "free": 29
+    }
+   },
+   {
+    "file": "game/objecttype.cpp",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 10625,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 1255,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 9326,
+     "sim": 1299
+    }
+   },
+   {
+    "file": "game/gamespychatbase.cpp",
+    "label": "netcode",
+    "funcs": 31,
+    "bytes": 10595,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 170,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10595
+    }
+   },
+   {
+    "file": "game/ifacedropoptions.cpp",
+    "label": "presentation",
+    "funcs": 14,
+    "bytes": 10525,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10525
+    }
+   },
+   {
+    "file": "game/renderhelper.cpp",
+    "label": "presentation",
+    "funcs": 51,
+    "bytes": 10490,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 3751,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10490
+    }
+   },
+   {
+    "file": "game/underlay.cpp",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 10477,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 4043,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 1430,
+     "behaviour": 9047
+    }
+   },
+   {
+    "file": "game/smoketrails.cpp",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 10416,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 8428,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 704,
+     "behaviour": 9712
+    }
+   },
+   {
+    "file": "game/mouseover.cpp",
+    "label": "sim",
+    "funcs": 21,
+    "bytes": 10407,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 423,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10407
+    }
+   },
+   {
+    "file": "game/ifacelibrary.cpp",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 10393,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10393
+    }
+   },
+   {
+    "file": "game/chataction.cpp",
+    "label": "sim",
+    "funcs": 44,
+    "bytes": 10375,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10375
+    }
+   },
+   {
+    "file": "game/script/lexer.cpp",
+    "label": "sim",
+    "funcs": 39,
+    "bytes": 10371,
+    "walk_data": 0,
+    "reach_funcs": 26,
+    "reach_bytes": 9694,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10111,
+     "free": 260
+    }
+   },
+   {
+    "file": "game/ifaceeditornations.cpp",
+    "label": "editor",
+    "funcs": 14,
+    "bytes": 10284,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 10284
+    }
+   },
+   {
+    "file": "game/loadwin.cpp",
+    "label": "presentation",
+    "funcs": 19,
+    "bytes": 10219,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 4289,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 10219
+    }
+   },
+   {
+    "file": "game/cities.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 10078,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 9470,
+    "cited_funcs": 2,
+    "cited_bytes": 1334,
+    "suffix_bytes": {
+     "behaviour": 10078
+    }
+   },
+   {
+    "file": "game/regions.cpp",
+    "label": "sim",
+    "funcs": 24,
+    "bytes": 10051,
+    "walk_data": 2,
+    "reach_funcs": 19,
+    "reach_bytes": 9180,
+    "cited_funcs": 2,
+    "cited_bytes": 372,
+    "suffix_bytes": {
+     "behaviour": 10051
+    }
+   },
+   {
+    "file": "game/conqueststyles.cpp",
+    "label": "campaign",
+    "funcs": 7,
+    "bytes": 9958,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 5287,
+    "cited_funcs": 1,
+    "cited_bytes": 205,
+    "suffix_bytes": {
+     "behaviour": 9958
+    }
+   },
+   {
+    "file": "game/script/scriptfile.cpp",
+    "label": "sim",
+    "funcs": 48,
+    "bytes": 9896,
+    "walk_data": 2,
+    "reach_funcs": 29,
+    "reach_bytes": 7655,
+    "cited_funcs": 2,
+    "cited_bytes": 348,
+    "suffix_bytes": {
+     "behaviour": 9842,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/deathobj.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 9534,
+    "walk_data": 1,
+    "reach_funcs": 8,
+    "reach_bytes": 6236,
+    "cited_funcs": 3,
+    "cited_bytes": 1008,
+    "suffix_bytes": {
+     "presentation": 3808,
+     "sim": 3007,
+     "behaviour": 2719
+    }
+   },
+   {
+    "file": "game/system.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 9502,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 2377,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 9502
+    }
+   },
+   {
+    "file": "game/publishworkshopwin.cpp",
+    "label": "presentation",
+    "funcs": 30,
+    "bytes": 9325,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 3102,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 88,
+     "behaviour": 197,
+     "presentation": 9040
+    }
+   },
+   {
+    "file": "game/gamedaemon.cpp",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 9125,
+    "walk_data": 1,
+    "reach_funcs": 12,
+    "reach_bytes": 9049,
+    "cited_funcs": 7,
+    "cited_bytes": 6621,
+    "suffix_bytes": {
+     "behaviour": 9125
+    }
+   },
+   {
+    "file": "game/conquestinfowin.cpp",
+    "label": "campaign",
+    "funcs": 15,
+    "bytes": 9095,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 9095
+    }
+   },
+   {
+    "file": "game/forms.cpp",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 8818,
+    "walk_data": 2,
+    "reach_funcs": 9,
+    "reach_bytes": 8133,
+    "cited_funcs": 4,
+    "cited_bytes": 1926,
+    "suffix_bytes": {
+     "behaviour": 8203,
+     "sim": 615
+    }
+   },
+   {
+    "file": "game/terrainborder.cpp",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 8801,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 6822,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8801
+    }
+   },
+   {
+    "file": "game/gameaccess.cpp",
+    "label": "sim",
+    "funcs": 207,
+    "bytes": 8789,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 100,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 8553,
+     "behaviour": 236
+    }
+   },
+   {
+    "file": "game/script/bighugescript.l.cpp",
+    "label": "sim",
+    "funcs": 27,
+    "bytes": 8751,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 7551,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8665,
+     "free": 86
+    }
+   },
+   {
+    "file": "game/riverdoobers.cpp",
+    "label": "sim",
+    "funcs": 22,
+    "bytes": 8725,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 5452,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8725
+    }
+   },
+   {
+    "file": "game/basicrendermethods.h",
+    "label": "presentation",
+    "funcs": 74,
+    "bytes": 8618,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8281,
+     "sim": 337
+    }
+   },
+   {
+    "file": "game/ifaceoptions.cpp",
+    "label": "presentation",
+    "funcs": 12,
+    "bytes": 8617,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8617
+    }
+   },
+   {
+    "file": "game/soundglobal.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 8571,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1369,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 7094,
+     "behaviour": 1477
+    }
+   },
+   {
+    "file": "game/camera.cpp",
+    "label": "sim",
+    "funcs": 32,
+    "bytes": 8520,
+    "walk_data": 1,
+    "reach_funcs": 22,
+    "reach_bytes": 6934,
+    "cited_funcs": 1,
+    "cited_bytes": 84,
+    "suffix_bytes": {
+     "behaviour": 8520
+    }
+   },
+   {
+    "file": "game/river.cpp",
+    "label": "sim",
+    "funcs": 22,
+    "bytes": 8491,
+    "walk_data": 1,
+    "reach_funcs": 11,
+    "reach_bytes": 4822,
+    "cited_funcs": 1,
+    "cited_bytes": 181,
+    "suffix_bytes": {
+     "behaviour": 1867,
+     "presentation": 6624
+    }
+   },
+   {
+    "file": "game/tribes.cpp",
+    "label": "sim",
+    "funcs": 19,
+    "bytes": 8488,
+    "walk_data": 2,
+    "reach_funcs": 8,
+    "reach_bytes": 4104,
+    "cited_funcs": 1,
+    "cited_bytes": 47,
+    "suffix_bytes": {
+     "behaviour": 7896,
+     "free": 592
+    }
+   },
+   {
+    "file": "game/cliff.cpp",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 8415,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 7243,
+    "cited_funcs": 1,
+    "cited_bytes": 26,
+    "suffix_bytes": {
+     "behaviour": 8415
+    }
+   },
+   {
+    "file": "game/gamespypopupbase.cpp",
+    "label": "netcode",
+    "funcs": 18,
+    "bytes": 8367,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8367
+    }
+   },
+   {
+    "file": "game/endgamewin.cpp",
+    "label": "presentation",
+    "funcs": 7,
+    "bytes": 8154,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1978,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 8154
+    }
+   },
+   {
+    "file": "game/conquestnodes.cpp",
+    "label": "campaign",
+    "funcs": 43,
+    "bytes": 8153,
+    "walk_data": 3,
+    "reach_funcs": 11,
+    "reach_bytes": 3947,
+    "cited_funcs": 3,
+    "cited_bytes": 232,
+    "suffix_bytes": {
+     "behaviour": 8153
+    }
+   },
+   {
+    "file": "game/optionswingame.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 8025,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 5840,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 8025
+    }
+   },
+   {
+    "file": "game/roadspieces.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 7975,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 6990,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 7975
+    }
+   },
+   {
+    "file": "game/conquestcardwin.cpp",
+    "label": "campaign",
+    "funcs": 21,
+    "bytes": 7900,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 7900
+    }
+   },
+   {
+    "file": "game/gamemod.cpp",
+    "label": "sim",
+    "funcs": 28,
+    "bytes": 7803,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 5198,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 7803
+    }
+   },
+   {
+    "file": "game/parameterwindow.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 7801,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 3232,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 7801
+    }
+   },
+   {
+    "file": "game/colors.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 7773,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 5198,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 1444,
+     "behaviour": 6329
+    }
+   },
+   {
+    "file": "game/conquestintrowin.cpp",
+    "label": "campaign",
+    "funcs": 14,
+    "bytes": 7726,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 7726
+    }
+   },
+   {
+    "file": "game/orders.cpp",
+    "label": "sim",
+    "funcs": 41,
+    "bytes": 7682,
+    "walk_data": 1,
+    "reach_funcs": 26,
+    "reach_bytes": 5239,
+    "cited_funcs": 1,
+    "cited_bytes": 391,
+    "suffix_bytes": {
+     "free": 3053,
+     "behaviour": 3740,
+     "presentation": 889
+    }
+   },
+   {
+    "file": "game/creditswin.cpp",
+    "label": "presentation",
+    "funcs": 20,
+    "bytes": 7604,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 4759,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 28,
+     "presentation": 6703,
+     "behaviour": 873
+    }
+   },
+   {
+    "file": "game/script/symtype.cpp",
+    "label": "sim",
+    "funcs": 37,
+    "bytes": 7379,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 3143,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 319,
+     "rules": 7006,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/jukebox.cpp",
+    "label": "presentation",
+    "funcs": 21,
+    "bytes": 7351,
+    "walk_data": 0,
+    "reach_funcs": 13,
+    "reach_bytes": 4132,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 7351
+    }
+   },
+   {
+    "file": "game/optionswin.cpp",
+    "label": "presentation",
+    "funcs": 23,
+    "bytes": 7335,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 2592,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 7335
+    }
+   },
+   {
+    "file": "game/publishingworkshopwin.cpp",
+    "label": "presentation",
+    "funcs": 23,
+    "bytes": 7273,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 98,
+     "presentation": 7175
+    }
+   },
+   {
+    "file": "game/script/bighugescript.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 7253,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 7160,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 7253
+    }
+   },
+   {
+    "file": "game/buddychatwin.cpp",
+    "label": "presentation",
+    "funcs": 21,
+    "bytes": 6824,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 6824
+    }
+   },
+   {
+    "file": "game/basicrenderpackets.cpp",
+    "label": "presentation",
+    "funcs": 68,
+    "bytes": 6773,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 1321,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 111,
+     "behaviour": 6662
+    }
+   },
+   {
+    "file": "game/conquestvictorywin.cpp",
+    "label": "campaign",
+    "funcs": 14,
+    "bytes": 6533,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 6533
+    }
+   },
+   {
+    "file": "game/script/scriptfuncset.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 6505,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 4234,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6451,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/ifaceminilibrary.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 6497,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6497
+    }
+   },
+   {
+    "file": "game/triggerfuncbrowser.cpp",
+    "label": "sim",
+    "funcs": 18,
+    "bytes": 6483,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 277,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6483
+    }
+   },
+   {
+    "file": "game/goodtype.cpp",
+    "label": "sim",
+    "funcs": 16,
+    "bytes": 6370,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 462,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 4933,
+     "presentation": 1192,
+     "sim": 245
+    }
+   },
+   {
+    "file": "game/dropcontrol.cpp",
+    "label": "netcode",
+    "funcs": 17,
+    "bytes": 6298,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 5117,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6298
+    }
+   },
+   {
+    "file": "game/ifacediplo.cpp",
+    "label": "presentation",
+    "funcs": 14,
+    "bytes": 6270,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6270
+    }
+   },
+   {
+    "file": "game/hotkeygroups.cpp",
+    "label": "sim",
+    "funcs": 13,
+    "bytes": 6261,
+    "walk_data": 2,
+    "reach_funcs": 8,
+    "reach_bytes": 5222,
+    "cited_funcs": 2,
+    "cited_bytes": 103,
+    "suffix_bytes": {
+     "behaviour": 1678,
+     "presentation": 3998,
+     "sim": 585
+    }
+   },
+   {
+    "file": "game/rendersystem.cpp",
+    "label": "sim",
+    "funcs": 35,
+    "bytes": 6245,
+    "walk_data": 1,
+    "reach_funcs": 12,
+    "reach_bytes": 4839,
+    "cited_funcs": 2,
+    "cited_bytes": 141,
+    "suffix_bytes": {
+     "behaviour": 4749,
+     "sim": 1496
+    }
+   },
+   {
+    "file": "game/conquestnewswin.cpp",
+    "label": "campaign",
+    "funcs": 18,
+    "bytes": 6158,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 6158
+    }
+   },
+   {
+    "file": "game/script/compiler.cpp",
+    "label": "sim",
+    "funcs": 15,
+    "bytes": 6125,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 5056,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6071,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/optionswinhotkeys.cpp",
+    "label": "sim",
+    "funcs": 25,
+    "bytes": 6115,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 2771,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 6115
+    }
+   },
+   {
+    "file": "game/script/runtimeenv.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 5984,
+    "walk_data": 1,
+    "reach_funcs": 15,
+    "reach_bytes": 5866,
+    "cited_funcs": 1,
+    "cited_bytes": 248,
+    "suffix_bytes": {
+     "behaviour": 5930,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/script/symtable.cpp",
+    "label": "sim",
+    "funcs": 25,
+    "bytes": 5934,
+    "walk_data": 0,
+    "reach_funcs": 21,
+    "reach_bytes": 5763,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5880,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/scenariosplashscreen.cpp",
+    "label": "campaign",
+    "funcs": 11,
+    "bytes": 5915,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 5915
+    }
+   },
+   {
+    "file": "game/ifaceeditorscenario.cpp",
+    "label": "editor",
+    "funcs": 15,
+    "bytes": 5912,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 634,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5912
+    }
+   },
+   {
+    "file": "game/script/virtualmachine.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 5846,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 5514,
+    "cited_funcs": 1,
+    "cited_bytes": 753,
+    "suffix_bytes": {
+     "behaviour": 5792,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/players.cpp",
+    "label": "sim",
+    "funcs": 15,
+    "bytes": 5819,
+    "walk_data": 1,
+    "reach_funcs": 12,
+    "reach_bytes": 5394,
+    "cited_funcs": 1,
+    "cited_bytes": 78,
+    "suffix_bytes": {
+     "behaviour": 5819
+    }
+   },
+   {
+    "file": "game/ifaceeditoroptions.cpp",
+    "label": "editor",
+    "funcs": 2,
+    "bytes": 5779,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5779
+    }
+   },
+   {
+    "file": "game/basicrenderpackets.h",
+    "label": "presentation",
+    "funcs": 40,
+    "bytes": 5726,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5726
+    }
+   },
+   {
+    "file": "game/scriptwatchwin.cpp",
+    "label": "presentation",
+    "funcs": 23,
+    "bytes": 5616,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1963,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 5616
+    }
+   },
+   {
+    "file": "game/conquestnews.cpp",
+    "label": "campaign",
+    "funcs": 15,
+    "bytes": 5568,
+    "walk_data": 2,
+    "reach_funcs": 6,
+    "reach_bytes": 1628,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 5568
+    }
+   },
+   {
+    "file": "game/skybox_modsteamworkshop.cpp",
+    "label": "netcode",
+    "funcs": 17,
+    "bytes": 5561,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 427,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 100,
+     "behaviour": 5461
+    }
+   },
+   {
+    "file": "game/gamespy.h",
+    "label": "netcode",
+    "funcs": 22,
+    "bytes": 5405,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 105,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "behaviour": 5387
+    }
+   },
+   {
+    "file": "game/pointerwin.cpp",
+    "label": "presentation",
+    "funcs": 16,
+    "bytes": 5347,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1881,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 5347
+    }
+   },
+   {
+    "file": "game/techtype.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 5327,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 3288,
+    "cited_funcs": 1,
+    "cited_bytes": 534,
+    "suffix_bytes": {
+     "rules": 4956,
+     "sim": 371
+    }
+   },
+   {
+    "file": "game/downloadingworkingshopwin.cpp",
+    "label": "presentation",
+    "funcs": 23,
+    "bytes": 5217,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 681,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 27,
+     "presentation": 5190
+    }
+   },
+   {
+    "file": "game/excepthandler.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 4987,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4987
+    }
+   },
+   {
+    "file": "game/netdaemon.cpp",
+    "label": "netcode",
+    "funcs": 27,
+    "bytes": 4978,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 3495,
+    "cited_funcs": 2,
+    "cited_bytes": 1241,
+    "suffix_bytes": {
+     "behaviour": 4978
+    }
+   },
+   {
+    "file": "game/conquestbonuscard.cpp",
+    "label": "campaign",
+    "funcs": 13,
+    "bytes": 4861,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 2885,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4861
+    }
+   },
+   {
+    "file": "game/conquestwonderwin.cpp",
+    "label": "campaign",
+    "funcs": 13,
+    "bytes": 4817,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4817
+    }
+   },
+   {
+    "file": "game/conquestrewardwin.cpp",
+    "label": "campaign",
+    "funcs": 10,
+    "bytes": 4803,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1746,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4803
+    }
+   },
+   {
+    "file": "game/selectgroups.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 4789,
+    "walk_data": 2,
+    "reach_funcs": 8,
+    "reach_bytes": 804,
+    "cited_funcs": 2,
+    "cited_bytes": 120,
+    "suffix_bytes": {
+     "behaviour": 4789
+    }
+   },
+   {
+    "file": "game/mpdropwin.cpp",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 4762,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1267,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4762
+    }
+   },
+   {
+    "file": "game/conquestgraphicpieces.cpp",
+    "label": "campaign",
+    "funcs": 10,
+    "bytes": 4753,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 3252,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4753
+    }
+   },
+   {
+    "file": "game/ifaceeditorterrain.cpp",
+    "label": "editor",
+    "funcs": 10,
+    "bytes": 4731,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 97,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4731
+    }
+   },
+   {
+    "file": "game/miscaccess.cpp",
+    "label": "sim",
+    "funcs": 100,
+    "bytes": 4709,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 1325,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 3096,
+     "behaviour": 1613
+    }
+   },
+   {
+    "file": "game/checksums.cpp",
+    "label": "sim",
+    "funcs": 56,
+    "bytes": 4692,
+    "walk_data": 0,
+    "reach_funcs": 12,
+    "reach_bytes": 3247,
+    "cited_funcs": 12,
+    "cited_bytes": 3247,
+    "suffix_bytes": {
+     "behaviour": 4692
+    }
+   },
+   {
+    "file": "game/gamespylogin.cpp",
+    "label": "netcode",
+    "funcs": 17,
+    "bytes": 4620,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4620
+    }
+   },
+   {
+    "file": "game/main_win32.cpp",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 4615,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3524,
+     "free": 1091
+    }
+   },
+   {
+    "file": "game/city.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 4604,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 91,
+    "cited_funcs": 1,
+    "cited_bytes": 91,
+    "suffix_bytes": {
+     "behaviour": 91,
+     "sim": 4513
+    }
+   },
+   {
+    "file": "game/rivers.cpp",
+    "label": "sim",
+    "funcs": 19,
+    "bytes": 4581,
+    "walk_data": 1,
+    "reach_funcs": 12,
+    "reach_bytes": 3679,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4541,
+     "behaviour": 40
+    }
+   },
+   {
+    "file": "game/caravan.cpp",
+    "label": "sim",
+    "funcs": 22,
+    "bytes": 4572,
+    "walk_data": 1,
+    "reach_funcs": 8,
+    "reach_bytes": 1871,
+    "cited_funcs": 1,
+    "cited_bytes": 71,
+    "suffix_bytes": {
+     "presentation": 1943,
+     "sim": 151,
+     "behaviour": 2478
+    }
+   },
+   {
+    "file": "game/recordgame.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 4480,
+    "walk_data": 0,
+    "reach_funcs": 10,
+    "reach_bytes": 3141,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4480
+    }
+   },
+   {
+    "file": "game/script/opcodes.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 4475,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 2852,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4421,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/animal.cpp",
+    "label": "sim",
+    "funcs": 15,
+    "bytes": 4449,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 1941,
+    "cited_funcs": 2,
+    "cited_bytes": 442,
+    "suffix_bytes": {
+     "behaviour": 2973,
+     "sim": 1476
+    }
+   },
+   {
+    "file": "game/ifacemain.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 4407,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4407
+    }
+   },
+   {
+    "file": "game/ifaceairgarrison.cpp",
+    "label": "presentation",
+    "funcs": 9,
+    "bytes": 4349,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4349
+    }
+   },
+   {
+    "file": "game/main.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 4323,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 297,
+     "behaviour": 4026
+    }
+   },
+   {
+    "file": "game/steamgroupchatwin.cpp",
+    "label": "netcode",
+    "funcs": 13,
+    "bytes": 4311,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4311
+    }
+   },
+   {
+    "file": "game/ifacediplobase.cpp",
+    "label": "presentation",
+    "funcs": 15,
+    "bytes": 4289,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 191,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4289
+    }
+   },
+   {
+    "file": "game/armies.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 4263,
+    "walk_data": 1,
+    "reach_funcs": 16,
+    "reach_bytes": 3810,
+    "cited_funcs": 2,
+    "cited_bytes": 1133,
+    "suffix_bytes": {
+     "behaviour": 4054,
+     "presentation": 209
+    }
+   },
+   {
+    "file": "game/syncfile.cpp",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 4206,
+    "walk_data": 0,
+    "reach_funcs": 11,
+    "reach_bytes": 3451,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4206
+    }
+   },
+   {
+    "file": "game/keymap.h",
+    "label": "sim",
+    "funcs": 27,
+    "bytes": 4175,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3501,
+     "presentation": 674
+    }
+   },
+   {
+    "file": "game/good.cpp",
+    "label": "sim",
+    "funcs": 15,
+    "bytes": 4168,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 447,
+    "cited_funcs": 1,
+    "cited_bytes": 59,
+    "suffix_bytes": {
+     "behaviour": 1358,
+     "presentation": 2553,
+     "sim": 257
+    }
+   },
+   {
+    "file": "game/splashscreen.cpp",
+    "label": "presentation",
+    "funcs": 22,
+    "bytes": 4162,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 1256,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4162
+    }
+   },
+   {
+    "file": "game/mpstatwin.cpp",
+    "label": "presentation",
+    "funcs": 13,
+    "bytes": 4131,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 166,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4131
+    }
+   },
+   {
+    "file": "game/helpbox.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 4091,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 369,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 4091
+    }
+   },
+   {
+    "file": "game/chataction.h",
+    "label": "sim",
+    "funcs": 30,
+    "bytes": 4086,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3939,
+     "presentation": 147
+    }
+   },
+   {
+    "file": "game/grassclumps.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 4082,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4082
+    }
+   },
+   {
+    "file": "game/ifaceeditormain.cpp",
+    "label": "editor",
+    "funcs": 13,
+    "bytes": 4027,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4027
+    }
+   },
+   {
+    "file": "game/ifacegarrison.cpp",
+    "label": "presentation",
+    "funcs": 9,
+    "bytes": 4007,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 4007
+    }
+   },
+   {
+    "file": "game/achieve.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 3962,
+    "walk_data": 3,
+    "reach_funcs": 15,
+    "reach_bytes": 3594,
+    "cited_funcs": 4,
+    "cited_bytes": 473,
+    "suffix_bytes": {
+     "behaviour": 2437,
+     "sim": 1525
+    }
+   },
+   {
+    "file": "game/objectivesdlg.cpp",
+    "label": "presentation",
+    "funcs": 7,
+    "bytes": 3960,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 2936,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3960
+    }
+   },
+   {
+    "file": "game/popup.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 3810,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1007,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3677,
+     "free": 133
+    }
+   },
+   {
+    "file": "game/soundtype.cpp",
+    "label": "presentation",
+    "funcs": 17,
+    "bytes": 3771,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 2980,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 3130,
+     "free": 533,
+     "behaviour": 108
+    }
+   },
+   {
+    "file": "game/replaywin.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 3771,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 743,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3771
+    }
+   },
+   {
+    "file": "game/buddylistwin.cpp",
+    "label": "presentation",
+    "funcs": 15,
+    "bytes": 3755,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 27,
+     "presentation": 3728
+    }
+   },
+   {
+    "file": "game/transformmethods.h",
+    "label": "sim",
+    "funcs": 27,
+    "bytes": 3720,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3720
+    }
+   },
+   {
+    "file": "game/optionswinplayer.cpp",
+    "label": "sim",
+    "funcs": 18,
+    "bytes": 3695,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 2403,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3695
+    }
+   },
+   {
+    "file": "game/ifaceeditormap.cpp",
+    "label": "editor",
+    "funcs": 12,
+    "bytes": 3690,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3690
+    }
+   },
+   {
+    "file": "game/conquestruleswin.cpp",
+    "label": "campaign",
+    "funcs": 12,
+    "bytes": 3680,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3680
+    }
+   },
+   {
+    "file": "game/groups.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 3661,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 3661,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 3661
+    }
+   },
+   {
+    "file": "game/conquestdiplooffer.cpp",
+    "label": "campaign",
+    "funcs": 6,
+    "bytes": 3638,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 3126,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3638
+    }
+   },
+   {
+    "file": "game/categories.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 3631,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 2784,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3631
+    }
+   },
+   {
+    "file": "game/ifaceeditormodes.cpp",
+    "label": "editor",
+    "funcs": 9,
+    "bytes": 3626,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3626
+    }
+   },
+   {
+    "file": "game/collcheck.cpp",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 3605,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 3605,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3605
+    }
+   },
+   {
+    "file": "game/scriptlogwin.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 3555,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1087,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3555
+    }
+   },
+   {
+    "file": "game/syncdisplay.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 3448,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 658,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3448
+    }
+   },
+   {
+    "file": "game/script/symtype.h",
+    "label": "sim",
+    "funcs": 32,
+    "bytes": 3427,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 314,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 2844,
+     "behaviour": 583
+    }
+   },
+   {
+    "file": "game/ifacetipwin.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 3400,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3400
+    }
+   },
+   {
+    "file": "game/editorgroup.cpp",
+    "label": "editor",
+    "funcs": 19,
+    "bytes": 3399,
+    "walk_data": 0,
+    "reach_funcs": 9,
+    "reach_bytes": 2841,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3399
+    }
+   },
+   {
+    "file": "game/ifaceeditordiplo.cpp",
+    "label": "editor",
+    "funcs": 13,
+    "bytes": 3396,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3396
+    }
+   },
+   {
+    "file": "game/conquestpickcardwin.cpp",
+    "label": "campaign",
+    "funcs": 13,
+    "bytes": 3384,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3384
+    }
+   },
+   {
+    "file": "game/tutorialpromptwin.cpp",
+    "label": "campaign",
+    "funcs": 10,
+    "bytes": 3372,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1890,
+    "cited_funcs": 1,
+    "cited_bytes": 1174,
+    "suffix_bytes": {
+     "presentation": 3372
+    }
+   },
+   {
+    "file": "game/army.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 3368,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 3368,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 3368
+    }
+   },
+   {
+    "file": "game/conquestdiplowin.cpp",
+    "label": "campaign",
+    "funcs": 14,
+    "bytes": 3346,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3346
+    }
+   },
+   {
+    "file": "game/conquestinvadewin.cpp",
+    "label": "campaign",
+    "funcs": 12,
+    "bytes": 3335,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3335
+    }
+   },
+   {
+    "file": "game/shockwave.cpp",
+    "label": "sim",
+    "funcs": 19,
+    "bytes": 3327,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 453,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3327
+    }
+   },
+   {
+    "file": "game/particleemitter.cpp",
+    "label": "sim",
+    "funcs": 18,
+    "bytes": 3325,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 676,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3325
+    }
+   },
+   {
+    "file": "game/conquestspecialcardwin.cpp",
+    "label": "campaign",
+    "funcs": 12,
+    "bytes": 3312,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3312
+    }
+   },
+   {
+    "file": "game/mainmenubase.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 3302,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1184,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3302
+    }
+   },
+   {
+    "file": "game/gamespycreate.cpp",
+    "label": "netcode",
+    "funcs": 9,
+    "bytes": 3288,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3288
+    }
+   },
+   {
+    "file": "game/ifaceeditorterrainmap.cpp",
+    "label": "editor",
+    "funcs": 9,
+    "bytes": 3274,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3274
+    }
+   },
+   {
+    "file": "game/wnd_leaderboard.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 3267,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3267
+    }
+   },
+   {
+    "file": "game/gamespyfilterwin.cpp",
+    "label": "netcode",
+    "funcs": 8,
+    "bytes": 3219,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3219
+    }
+   },
+   {
+    "file": "game/sectionprofilewin.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 3180,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3180
+    }
+   },
+   {
+    "file": "game/techtype.h",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 3094,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 268,
+     "rules": 1834,
+     "presentation": 550,
+     "sim": 442
+    }
+   },
+   {
+    "file": "game/conquestdirectionwin.cpp",
+    "label": "campaign",
+    "funcs": 13,
+    "bytes": 3061,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 3061
+    }
+   },
+   {
+    "file": "game/pathfinder.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 2978,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 2900,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 2900,
+     "presentation": 78
+    }
+   },
+   {
+    "file": "game/light.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 2937,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 714,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2937
+    }
+   },
+   {
+    "file": "game/animnotice.cpp",
+    "label": "presentation",
+    "funcs": 16,
+    "bytes": 2913,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 2569,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2913
+    }
+   },
+   {
+    "file": "game/conquestgame.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 2907,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2907
+    }
+   },
+   {
+    "file": "game/search.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 2903,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 2900,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2903
+    }
+   },
+   {
+    "file": "game/ifacemarket.cpp",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 2892,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2892
+    }
+   },
+   {
+    "file": "game/pingspline.cpp",
+    "label": "sim",
+    "funcs": 13,
+    "bytes": 2887,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 1831,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2887
+    }
+   },
+   {
+    "file": "game/statbridge.cpp",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 2878,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2878
+    }
+   },
+   {
+    "file": "game/netsearchwin.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 2838,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 2838
+    }
+   },
+   {
+    "file": "game/memwin.cpp",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 2832,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 2832
+    }
+   },
+   {
+    "file": "game/item.cpp",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 2826,
+    "walk_data": 1,
+    "reach_funcs": 2,
+    "reach_bytes": 480,
+    "cited_funcs": 1,
+    "cited_bytes": 59,
+    "suffix_bytes": {
+     "behaviour": 709,
+     "presentation": 1819,
+     "sim": 298
+    }
+   },
+   {
+    "file": "game/chatparser.h",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 2748,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2748
+    }
+   },
+   {
+    "file": "game/terrainoil.cpp",
+    "label": "presentation",
+    "funcs": 12,
+    "bytes": 2708,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1802,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2708
+    }
+   },
+   {
+    "file": "game/reinforcearmy.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 2707,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 2707,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2707
+    }
+   },
+   {
+    "file": "game/docks.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 2701,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 2106,
+    "cited_funcs": 1,
+    "cited_bytes": 1006,
+    "suffix_bytes": {
+     "behaviour": 2701
+    }
+   },
+   {
+    "file": "game/forms.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 2680,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 2680,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 2680
+    }
+   },
+   {
+    "file": "game/scriptfunctions.h",
+    "label": "sim",
+    "funcs": 27,
+    "bytes": 2667,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 363,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2667
+    }
+   },
+   {
+    "file": "game/ifaceeditorunit.cpp",
+    "label": "editor",
+    "funcs": 11,
+    "bytes": 2651,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2651
+    }
+   },
+   {
+    "file": "game/optionswin.h",
+    "label": "presentation",
+    "funcs": 14,
+    "bytes": 2650,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 385,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "presentation": 1627,
+     "behaviour": 1005
+    }
+   },
+   {
+    "file": "game/transformmethodssse.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 2632,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 208,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2632
+    }
+   },
+   {
+    "file": "game/aboutbox.cpp",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 2571,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 2571
+    }
+   },
+   {
+    "file": "game/transitions.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 2567,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 2231,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2567
+    }
+   },
+   {
+    "file": "game/gravwindow.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 2563,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1346,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2563
+    }
+   },
+   {
+    "file": "game/caravans.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 2536,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 1723,
+    "cited_funcs": 1,
+    "cited_bytes": 1008,
+    "suffix_bytes": {
+     "behaviour": 2536
+    }
+   },
+   {
+    "file": "game/chatbox.cpp",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 2529,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1662,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 2529
+    }
+   },
+   {
+    "file": "game/ifaceeditornationselect.cpp",
+    "label": "editor",
+    "funcs": 8,
+    "bytes": 2514,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2514
+    }
+   },
+   {
+    "file": "game/syncdir.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 2486,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 335,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2486
+    }
+   },
+   {
+    "file": "game/lands.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 2454,
+    "walk_data": 2,
+    "reach_funcs": 5,
+    "reach_bytes": 1985,
+    "cited_funcs": 2,
+    "cited_bytes": 113,
+    "suffix_bytes": {
+     "free": 153,
+     "sim": 157,
+     "behaviour": 2144
+    }
+   },
+   {
+    "file": "game/ifacecombobox.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 2443,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 2443
+    }
+   },
+   {
+    "file": "game/creditswin.h",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 2430,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1376,
+     "behaviour": 1054
+    }
+   },
+   {
+    "file": "game/vshadertransformmethod.cpp",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 2414,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2294,
+     "free": 120
+    }
+   },
+   {
+    "file": "game/heroes.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 2402,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 1891,
+    "cited_funcs": 1,
+    "cited_bytes": 971,
+    "suffix_bytes": {
+     "sim": 379,
+     "behaviour": 2023
+    }
+   },
+   {
+    "file": "game/leaderoptions.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 2394,
+    "walk_data": 2,
+    "reach_funcs": 6,
+    "reach_bytes": 1459,
+    "cited_funcs": 2,
+    "cited_bytes": 309,
+    "suffix_bytes": {
+     "behaviour": 1517,
+     "sim": 646,
+     "presentation": 231
+    }
+   },
+   {
+    "file": "game/specials.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 2373,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 1528,
+    "cited_funcs": 1,
+    "cited_bytes": 971,
+    "suffix_bytes": {
+     "sim": 334,
+     "behaviour": 2039
+    }
+   },
+   {
+    "file": "game/forts.cpp",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 2359,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 1522,
+    "cited_funcs": 1,
+    "cited_bytes": 952,
+    "suffix_bytes": {
+     "behaviour": 2359
+    }
+   },
+   {
+    "file": "game/wnd_steam_invite.cpp",
+    "label": "netcode",
+    "funcs": 9,
+    "bytes": 2340,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2340
+    }
+   },
+   {
+    "file": "game/globallogger.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 2320,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2320
+    }
+   },
+   {
+    "file": "game/decalrender.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 2320,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2320
+    }
+   },
+   {
+    "file": "game/supplies.cpp",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 2318,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 1827,
+    "cited_funcs": 2,
+    "cited_bytes": 1231,
+    "suffix_bytes": {
+     "behaviour": 2318
+    }
+   },
+   {
+    "file": "game/storm.cpp",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 2307,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 42,
+     "behaviour": 64,
+     "presentation": 2201
+    }
+   },
+   {
+    "file": "game/istatsandachievements.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 2268,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 320,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2260,
+     "free": 8
+    }
+   },
+   {
+    "file": "game/riverdoobertype.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 2267,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 2267,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 2267
+    }
+   },
+   {
+    "file": "game/steamstatsandachievements.cpp",
+    "label": "netcode",
+    "funcs": 13,
+    "bytes": 2264,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 266,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 70,
+     "behaviour": 2194
+    }
+   },
+   {
+    "file": "game/arrowspline.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 2246,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 2142,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2246
+    }
+   },
+   {
+    "file": "game/taunts.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 2213,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 1414,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2213
+    }
+   },
+   {
+    "file": "game/chatspace.cpp",
+    "label": "sim",
+    "funcs": 28,
+    "bytes": 2182,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 122,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1894,
+     "presentation": 288
+    }
+   },
+   {
+    "file": "game/wonders.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 2127,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 1362,
+    "cited_funcs": 1,
+    "cited_bytes": 952,
+    "suffix_bytes": {
+     "behaviour": 2127
+    }
+   },
+   {
+    "file": "game/timesync.cpp",
+    "label": "netcode",
+    "funcs": 12,
+    "bytes": 2113,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 1002,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2113
+    }
+   },
+   {
+    "file": "game/oilwells.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 2063,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 1358,
+    "cited_funcs": 1,
+    "cited_bytes": 952,
+    "suffix_bytes": {
+     "behaviour": 2063
+    }
+   },
+   {
+    "file": "game/script/runtimeenv.h",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 2054,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 261,
+    "cited_funcs": 1,
+    "cited_bytes": 32,
+    "suffix_bytes": {
+     "behaviour": 1980,
+     "presentation": 74
+    }
+   },
+   {
+    "file": "game/gamespyplayerpop.cpp",
+    "label": "netcode",
+    "funcs": 3,
+    "bytes": 2023,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 2023
+    }
+   },
+   {
+    "file": "game/soundfilelookup.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 1984,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 1584,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1984
+    }
+   },
+   {
+    "file": "game/optionswinsound.cpp",
+    "label": "presentation",
+    "funcs": 14,
+    "bytes": 1978,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1397,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1978
+    }
+   },
+   {
+    "file": "game/mseula.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 1959,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 1959
+    }
+   },
+   {
+    "file": "game/version.cpp",
+    "label": "sim",
+    "funcs": 13,
+    "bytes": 1954,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 294,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1954
+    }
+   },
+   {
+    "file": "game/treerender.h",
+    "label": "presentation",
+    "funcs": 17,
+    "bytes": 1943,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1943
+    }
+   },
+   {
+    "file": "game/leaders.h",
+    "label": "sim",
+    "funcs": 29,
+    "bytes": 1931,
+    "walk_data": 0,
+    "reach_funcs": 16,
+    "reach_bytes": 1161,
+    "cited_funcs": 2,
+    "cited_bytes": 65,
+    "suffix_bytes": {
+     "sim": 547,
+     "presentation": 491,
+     "behaviour": 893
+    }
+   },
+   {
+    "file": "game/fractal.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 1924,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1788,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1924
+    }
+   },
+   {
+    "file": "game/subobject.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 1915,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 610,
+    "cited_funcs": 1,
+    "cited_bytes": 216,
+    "suffix_bytes": {
+     "behaviour": 831,
+     "sim": 1079,
+     "presentation": 5
+    }
+   },
+   {
+    "file": "game/conquestsetupwin.h",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 1914,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1914
+    }
+   },
+   {
+    "file": "game/messagewin.h",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 1908,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 86,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 564,
+     "presentation": 1344
+    }
+   },
+   {
+    "file": "game/helpboxwin.cpp",
+    "label": "presentation",
+    "funcs": 15,
+    "bytes": 1902,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1902
+    }
+   },
+   {
+    "file": "game/chatparser.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 1888,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1888
+    }
+   },
+   {
+    "file": "game/conquestcolonies.cpp",
+    "label": "campaign",
+    "funcs": 7,
+    "bytes": 1875,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 1753,
+    "cited_funcs": 1,
+    "cited_bytes": 59,
+    "suffix_bytes": {
+     "behaviour": 1875
+    }
+   },
+   {
+    "file": "game/setupwin.h",
+    "label": "presentation",
+    "funcs": 16,
+    "bytes": 1870,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 27,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 445,
+     "presentation": 1425
+    }
+   },
+   {
+    "file": "game/ifaceminimap.cpp",
+    "label": "presentation",
+    "funcs": 11,
+    "bytes": 1869,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1869
+    }
+   },
+   {
+    "file": "game/steamleaderboardshelper.cpp",
+    "label": "netcode",
+    "funcs": 16,
+    "bytes": 1838,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1838
+    }
+   },
+   {
+    "file": "game/script/scriptsyslib.cpp",
+    "label": "sim",
+    "funcs": 28,
+    "bytes": 1795,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1741,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/buildqueue.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 1775,
+    "walk_data": 1,
+    "reach_funcs": 11,
+    "reach_bytes": 1593,
+    "cited_funcs": 1,
+    "cited_bytes": 117,
+    "suffix_bytes": {
+     "sim": 439,
+     "behaviour": 1336
+    }
+   },
+   {
+    "file": "game/screenarrowspline.cpp",
+    "label": "sim",
+    "funcs": 20,
+    "bytes": 1771,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 927,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1771
+    }
+   },
+   {
+    "file": "game/motd.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 1758,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1758
+    }
+   },
+   {
+    "file": "game/farms.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 1689,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1075,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1234,
+     "presentation": 455
+    }
+   },
+   {
+    "file": "game/conquestsave.cpp",
+    "label": "campaign",
+    "funcs": 8,
+    "bytes": 1650,
+    "walk_data": 1,
+    "reach_funcs": 3,
+    "reach_bytes": 141,
+    "cited_funcs": 1,
+    "cited_bytes": 39,
+    "suffix_bytes": {
+     "behaviour": 1650
+    }
+   },
+   {
+    "file": "game/lands.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 1617,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 1617,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 23,
+     "sim": 1594
+    }
+   },
+   {
+    "file": "game/presetupwin.cpp",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 1601,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 550,
+     "behaviour": 1051
+    }
+   },
+   {
+    "file": "game/mainmenu.cpp",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 1594,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 816,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1594
+    }
+   },
+   {
+    "file": "game/gamespygroup.h",
+    "label": "netcode",
+    "funcs": 4,
+    "bytes": 1585,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1585
+    }
+   },
+   {
+    "file": "game/type.h",
+    "label": "sim",
+    "funcs": 38,
+    "bytes": 1542,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 105,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 1244,
+     "presentation": 253,
+     "rules": 45
+    }
+   },
+   {
+    "file": "game/ifacewindow.cpp",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 1526,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1526
+    }
+   },
+   {
+    "file": "game/save.h",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 1519,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 172,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 279,
+     "behaviour": 1240
+    }
+   },
+   {
+    "file": "game/unbuiltforts.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 1511,
+    "walk_data": 2,
+    "reach_funcs": 7,
+    "reach_bytes": 1110,
+    "cited_funcs": 2,
+    "cited_bytes": 573,
+    "suffix_bytes": {
+     "behaviour": 1511
+    }
+   },
+   {
+    "file": "game/triggerbuilder.cpp",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 1511,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1511
+    }
+   },
+   {
+    "file": "game/object.h",
+    "label": "sim",
+    "funcs": 24,
+    "bytes": 1459,
+    "walk_data": 0,
+    "reach_funcs": 8,
+    "reach_bytes": 218,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 601,
+     "presentation": 247,
+     "behaviour": 611
+    }
+   },
+   {
+    "file": "game/signposts.cpp",
+    "label": "sim",
+    "funcs": 12,
+    "bytes": 1459,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 354,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1459
+    }
+   },
+   {
+    "file": "game/ifaceeditorlibrary.cpp",
+    "label": "editor",
+    "funcs": 1,
+    "bytes": 1452,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1452
+    }
+   },
+   {
+    "file": "game/world.h",
+    "label": "sim",
+    "funcs": 23,
+    "bytes": 1445,
+    "walk_data": 0,
+    "reach_funcs": 20,
+    "reach_bytes": 1169,
+    "cited_funcs": 17,
+    "cited_bytes": 999,
+    "suffix_bytes": {
+     "sim": 918,
+     "presentation": 252,
+     "behaviour": 275
+    }
+   },
+   {
+    "file": "game/conquestwin.h",
+    "label": "campaign",
+    "funcs": 6,
+    "bytes": 1436,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 798,
+     "behaviour": 638
+    }
+   },
+   {
+    "file": "game/objects.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 1434,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 69,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 387,
+     "sim": 1047
+    }
+   },
+   {
+    "file": "game/gamespychatbase.h",
+    "label": "netcode",
+    "funcs": 13,
+    "bytes": 1431,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1431
+    }
+   },
+   {
+    "file": "game/unit.h",
+    "label": "sim",
+    "funcs": 27,
+    "bytes": 1414,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 532,
+    "cited_funcs": 3,
+    "cited_bytes": 293,
+    "suffix_bytes": {
+     "presentation": 370,
+     "sim": 1002,
+     "behaviour": 42
+    }
+   },
+   {
+    "file": "game/unbuiltwonders.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 1397,
+    "walk_data": 2,
+    "reach_funcs": 5,
+    "reach_bytes": 996,
+    "cited_funcs": 2,
+    "cited_bytes": 573,
+    "suffix_bytes": {
+     "behaviour": 1397
+    }
+   },
+   {
+    "file": "game/achievewin.h",
+    "label": "presentation",
+    "funcs": 12,
+    "bytes": 1393,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 547,
+     "behaviour": 846
+    }
+   },
+   {
+    "file": "game/optionswinslider.cpp",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 1375,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1375
+    }
+   },
+   {
+    "file": "game/packagefifo.cpp",
+    "label": "netcode",
+    "funcs": 9,
+    "bytes": 1356,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 1225,
+    "cited_funcs": 1,
+    "cited_bytes": 129,
+    "suffix_bytes": {
+     "behaviour": 1356
+    }
+   },
+   {
+    "file": "game/optionswincontrol.cpp",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 1354,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 753,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1354
+    }
+   },
+   {
+    "file": "game/steamelohelper.cpp",
+    "label": "netcode",
+    "funcs": 10,
+    "bytes": 1327,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1327
+    }
+   },
+   {
+    "file": "game/script/scripttype.h",
+    "label": "sim",
+    "funcs": 26,
+    "bytes": 1324,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1316,
+     "rules": 8
+    }
+   },
+   {
+    "file": "game/minizip/iowin32.c",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 1319,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 1319
+    }
+   },
+   {
+    "file": "game/buildqueue.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 1305,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 1305
+    }
+   },
+   {
+    "file": "game/gamelog.h",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 1274,
+    "walk_data": 0,
+    "reach_funcs": 6,
+    "reach_bytes": 598,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 1257
+    }
+   },
+   {
+    "file": "game/conquestmainmenu.cpp",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 1271,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 1271
+    }
+   },
+   {
+    "file": "game/gamespyquick.h",
+    "label": "netcode",
+    "funcs": 7,
+    "bytes": 1270,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1270
+    }
+   },
+   {
+    "file": "game/cursors.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 1268,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 181,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1268
+    }
+   },
+   {
+    "file": "game/soundref.cpp",
+    "label": "presentation",
+    "funcs": 7,
+    "bytes": 1266,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 888,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1266
+    }
+   },
+   {
+    "file": "game/ifacebuttonpool.cpp",
+    "label": "presentation",
+    "funcs": 9,
+    "bytes": 1248,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 655,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1248
+    }
+   },
+   {
+    "file": "game/hero.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 1234,
+    "walk_data": 1,
+    "reach_funcs": 2,
+    "reach_bytes": 895,
+    "cited_funcs": 1,
+    "cited_bytes": 42,
+    "suffix_bytes": {
+     "behaviour": 381,
+     "sim": 853
+    }
+   },
+   {
+    "file": "game/gamescript.cpp",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 1231,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 882,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1231
+    }
+   },
+   {
+    "file": "game/triggernodes.cpp",
+    "label": "sim",
+    "funcs": 17,
+    "bytes": 1198,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1198
+    }
+   },
+   {
+    "file": "game/game.h",
+    "label": "sim",
+    "funcs": 11,
+    "bytes": 1194,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 67,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1194
+    }
+   },
+   {
+    "file": "game/circle.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 1160,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 1143
+    }
+   },
+   {
+    "file": "game/scriptstructs.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 1159,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1159,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1159
+    }
+   },
+   {
+    "file": "game/itemtype.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 1135,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 794,
+     "sim": 47,
+     "presentation": 294
+    }
+   },
+   {
+    "file": "game/rendersystem.h",
+    "label": "presentation",
+    "funcs": 10,
+    "bytes": 1109,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 1005,
+     "sim": 87
+    }
+   },
+   {
+    "file": "game/herd.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 1091,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1091,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 1091
+    }
+   },
+   {
+    "file": "game/compass.cpp",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 1079,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 1079,
+    "cited_funcs": 2,
+    "cited_bytes": 806,
+    "suffix_bytes": {
+     "free": 1079
+    }
+   },
+   {
+    "file": "game/saytimer.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 1075,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 378,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 1075
+    }
+   },
+   {
+    "file": "game/conqueststyles.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 1063,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 495,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1063
+    }
+   },
+   {
+    "file": "game/statwin.h",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 1048,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 952,
+     "behaviour": 96
+    }
+   },
+   {
+    "file": "game/ifaceeditormain.h",
+    "label": "editor",
+    "funcs": 5,
+    "bytes": 1044,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 1044
+    }
+   },
+   {
+    "file": "game/ordmemmgr.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 1041,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 1041,
+    "cited_funcs": 1,
+    "cited_bytes": 208,
+    "suffix_bytes": {
+     "behaviour": 1041
+    }
+   },
+   {
+    "file": "game/scenariofile.h",
+    "label": "campaign",
+    "funcs": 5,
+    "bytes": 1038,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 36,
+     "behaviour": 1002
+    }
+   },
+   {
+    "file": "game/herds.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 1004,
+    "walk_data": 1,
+    "reach_funcs": 6,
+    "reach_bytes": 681,
+    "cited_funcs": 1,
+    "cited_bytes": 40,
+    "suffix_bytes": {
+     "behaviour": 1004
+    }
+   },
+   {
+    "file": "game/herd.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 943,
+    "walk_data": 1,
+    "reach_funcs": 4,
+    "reach_bytes": 863,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 943
+    }
+   },
+   {
+    "file": "game/syncpoint.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 941,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 928,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 941
+    }
+   },
+   {
+    "file": "game/graphicevent.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 927,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 927,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 927
+    }
+   },
+   {
+    "file": "game/autosave.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 926,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 209,
+    "cited_funcs": 1,
+    "cited_bytes": 209,
+    "suffix_bytes": {
+     "behaviour": 926
+    }
+   },
+   {
+    "file": "game/players.h",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 909,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 89,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 909
+    }
+   },
+   {
+    "file": "game/buildtype.h",
+    "label": "presentation",
+    "funcs": 15,
+    "bytes": 890,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 294,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 543,
+     "sim": 347
+    }
+   },
+   {
+    "file": "game/unbuiltcities.cpp",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 887,
+    "walk_data": 1,
+    "reach_funcs": 5,
+    "reach_bytes": 486,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 887
+    }
+   },
+   {
+    "file": "game/optionswinbase.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 878,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 878
+    }
+   },
+   {
+    "file": "game/ifacemainbase.h",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 847,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 847
+    }
+   },
+   {
+    "file": "game/collblock.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 844,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 658,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 186,
+     "behaviour": 658
+    }
+   },
+   {
+    "file": "game/messagebox.cpp",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 837,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 837
+    }
+   },
+   {
+    "file": "game/loadwin.h",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 833,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 190,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "presentation": 816
+    }
+   },
+   {
+    "file": "game/caravan.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 832,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 832,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 832
+    }
+   },
+   {
+    "file": "game/scenarioeditor.h",
+    "label": "editor",
+    "funcs": 3,
+    "bytes": 829,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 67,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 829
+    }
+   },
+   {
+    "file": "game/dock.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 819,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 819,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 819
+    }
+   },
+   {
+    "file": "game/ifaceeditorriver.cpp",
+    "label": "editor",
+    "funcs": 8,
+    "bytes": 818,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 818
+    }
+   },
+   {
+    "file": "game/wonder.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 815,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 815,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 815
+    }
+   },
+   {
+    "file": "game/gamemath.cpp",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 800,
+    "walk_data": 0,
+    "reach_funcs": 7,
+    "reach_bytes": 732,
+    "cited_funcs": 4,
+    "cited_bytes": 390,
+    "suffix_bytes": {
+     "free": 800
+    }
+   },
+   {
+    "file": "game/caster.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 794,
+    "walk_data": 1,
+    "reach_funcs": 2,
+    "reach_bytes": 502,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 794
+    }
+   },
+   {
+    "file": "game/spline.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 784,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 456,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 534,
+     "presentation": 54,
+     "behaviour": 196
+    }
+   },
+   {
+    "file": "game/helpxml.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 770,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 762,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 770
+    }
+   },
+   {
+    "file": "game/coord.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 748,
+    "walk_data": 2,
+    "reach_funcs": 5,
+    "reach_bytes": 476,
+    "cited_funcs": 3,
+    "cited_bytes": 171,
+    "suffix_bytes": {
+     "sim": 583,
+     "free": 165
+    }
+   },
+   {
+    "file": "game/terraingroups.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 747,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 253,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 747
+    }
+   },
+   {
+    "file": "game/fogmaster.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 743,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 410,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 743
+    }
+   },
+   {
+    "file": "game/script/breakpoints.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 739,
+    "walk_data": 0,
+    "reach_funcs": 4,
+    "reach_bytes": 657,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 685,
+     "free": 54
+    }
+   },
+   {
+    "file": "game/script/scriptfile.h",
+    "label": "sim",
+    "funcs": 9,
+    "bytes": 711,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 281,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 657,
+     "presentation": 54
+    }
+   },
+   {
+    "file": "game/oilwell.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 691,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 691,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 691
+    }
+   },
+   {
+    "file": "game/fort.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 691,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 691,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 691
+    }
+   },
+   {
+    "file": "game/scenariosplashscreen.h",
+    "label": "campaign",
+    "funcs": 7,
+    "bytes": 679,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 668,
+     "behaviour": 11
+    }
+   },
+   {
+    "file": "game/unbuiltcities.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 666,
+    "walk_data": 1,
+    "reach_funcs": 2,
+    "reach_bytes": 666,
+    "cited_funcs": 1,
+    "cited_bytes": 533,
+    "suffix_bytes": {
+     "behaviour": 666
+    }
+   },
+   {
+    "file": "game/script/scriptfuncset.h",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 663,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 663
+    }
+   },
+   {
+    "file": "game/script/lexer.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 654,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 654
+    }
+   },
+   {
+    "file": "game/conquestmouseover.cpp",
+    "label": "campaign",
+    "funcs": 16,
+    "bytes": 649,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 107,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 649
+    }
+   },
+   {
+    "file": "game/dock.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 644,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 72,
+    "cited_funcs": 1,
+    "cited_bytes": 72,
+    "suffix_bytes": {
+     "behaviour": 644
+    }
+   },
+   {
+    "file": "game/hero.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 642,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 642
+    }
+   },
+   {
+    "file": "game/special.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 642,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 642
+    }
+   },
+   {
+    "file": "game/decalrender.h",
+    "label": "presentation",
+    "funcs": 8,
+    "bytes": 636,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 636
+    }
+   },
+   {
+    "file": "game/console.h",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 633,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 317,
+     "presentation": 316
+    }
+   },
+   {
+    "file": "game/renderwindow.cpp",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 620,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 620,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 620
+    }
+   },
+   {
+    "file": "game/build.h",
+    "label": "sim",
+    "funcs": 8,
+    "bytes": 591,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 170,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 531,
+     "presentation": 60
+    }
+   },
+   {
+    "file": "game/script/opcodes.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 588,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 99,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 588
+    }
+   },
+   {
+    "file": "game/optionswinhotkeys.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 583,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 583
+    }
+   },
+   {
+    "file": "game/supply.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 573,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 573,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 573
+    }
+   },
+   {
+    "file": "game/playerprofile.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 571,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 571
+    }
+   },
+   {
+    "file": "game/caster.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 564,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 444,
+     "sim": 120
+    }
+   },
+   {
+    "file": "game/conquestrewardwin.h",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 556,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 556
+    }
+   },
+   {
+    "file": "game/dropcontrol.h",
+    "label": "netcode",
+    "funcs": 2,
+    "bytes": 552,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 552
+    }
+   },
+   {
+    "file": "game/scripttimers.cpp",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 550,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 550
+    }
+   },
+   {
+    "file": "game/deathobj.h",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 546,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 155,
+     "presentation": 391
+    }
+   },
+   {
+    "file": "game/bonustype.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 540,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 540
+    }
+   },
+   {
+    "file": "game/animnotice.h",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 539,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 539
+    }
+   },
+   {
+    "file": "game/wall.h",
+    "label": "sim",
+    "funcs": 15,
+    "bytes": 505,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 101,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 123,
+     "sim": 288,
+     "presentation": 94
+    }
+   },
+   {
+    "file": "game/gamespyignorelist.cpp",
+    "label": "netcode",
+    "funcs": 6,
+    "bytes": 490,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 490
+    }
+   },
+   {
+    "file": "game/armies.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 489,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 489,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 26,
+     "sim": 463
+    }
+   },
+   {
+    "file": "game/chatspace.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 487,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 361,
+     "presentation": 126
+    }
+   },
+   {
+    "file": "game/ifaceeditormap.h",
+    "label": "editor",
+    "funcs": 3,
+    "bytes": 468,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 468
+    }
+   },
+   {
+    "file": "game/gamereportwin.h",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 467,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "presentation": 449
+    }
+   },
+   {
+    "file": "game/syncfile.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 464,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 464
+    }
+   },
+   {
+    "file": "game/objectivesdlg.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 463,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 463
+    }
+   },
+   {
+    "file": "game/ifaceresources.h",
+    "label": "presentation",
+    "funcs": 5,
+    "bytes": 456,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 243,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 456
+    }
+   },
+   {
+    "file": "game/wonder.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 455,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 23,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 400,
+     "sim": 55
+    }
+   },
+   {
+    "file": "game/light.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 450,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 450
+    }
+   },
+   {
+    "file": "game/http.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 448,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 448
+    }
+   },
+   {
+    "file": "game/soundfilelookup.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 447,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 430
+    }
+   },
+   {
+    "file": "game/buddychatwin.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 437,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 437
+    }
+   },
+   {
+    "file": "game/syncdisplay.h",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 433,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 416
+    }
+   },
+   {
+    "file": "game/gamerenderpackets.cpp",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 422,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 303,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 422
+    }
+   },
+   {
+    "file": "game/minizip/ioapi.c",
+    "label": "sim",
+    "funcs": 10,
+    "bytes": 417,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 417
+    }
+   },
+   {
+    "file": "game/gamespypopupbase.h",
+    "label": "netcode",
+    "funcs": 6,
+    "bytes": 415,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 415
+    }
+   },
+   {
+    "file": "game/ifaceeditorunit.h",
+    "label": "editor",
+    "funcs": 2,
+    "bytes": 414,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 414
+    }
+   },
+   {
+    "file": "game/worldmap.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 409,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 409
+    }
+   },
+   {
+    "file": "game/goodtype.h",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 407,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 109,
+    "cited_funcs": 1,
+    "cited_bytes": 109,
+    "suffix_bytes": {
+     "sim": 280,
+     "presentation": 116,
+     "rules": 11
+    }
+   },
+   {
+    "file": "game/graphicpieces.h",
+    "label": "sim",
+    "funcs": 14,
+    "bytes": 404,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 174,
+     "behaviour": 230
+    }
+   },
+   {
+    "file": "game/conquestspecialcardwin.h",
+    "label": "campaign",
+    "funcs": 4,
+    "bytes": 401,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 401
+    }
+   },
+   {
+    "file": "game/conquestnegotiatewin.h",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 400,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 400
+    }
+   },
+   {
+    "file": "game/mpdropwin.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 399,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "presentation": 381
+    }
+   },
+   {
+    "file": "game/special.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 399,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 42,
+    "cited_funcs": 1,
+    "cited_bytes": 42,
+    "suffix_bytes": {
+     "behaviour": 385,
+     "sim": 14
+    }
+   },
+   {
+    "file": "game/workshopwin.h",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 387,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 81,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 338,
+     "presentation": 49
+    }
+   },
+   {
+    "file": "game/splashscreen.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 375,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 375
+    }
+   },
+   {
+    "file": "game/ifacemain.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 369,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 369
+    }
+   },
+   {
+    "file": "game/triggernodes.h",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 367,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 367
+    }
+   },
+   {
+    "file": "game/map.h",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 356,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 110,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 356
+    }
+   },
+   {
+    "file": "game/fort.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 347,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 23,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 347
+    }
+   },
+   {
+    "file": "game/units.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 346,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 167,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 346
+    }
+   },
+   {
+    "file": "game/conquestnegresults.h",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 344,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 344
+    }
+   },
+   {
+    "file": "game/scenariodata.h",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 341,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 341
+    }
+   },
+   {
+    "file": "game/gamemath.h",
+    "label": "presentation",
+    "funcs": 6,
+    "bytes": 340,
+    "walk_data": 0,
+    "reach_funcs": 5,
+    "reach_bytes": 302,
+    "cited_funcs": 2,
+    "cited_bytes": 146,
+    "suffix_bytes": {
+     "free": 183,
+     "sim": 72,
+     "presentation": 85
+    }
+   },
+   {
+    "file": "game/ifaceeditormodes.h",
+    "label": "editor",
+    "funcs": 2,
+    "bytes": 339,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 339
+    }
+   },
+   {
+    "file": "game/optionswingame.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 330,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 330
+    }
+   },
+   {
+    "file": "game/coord.h",
+    "label": "sim",
+    "funcs": 16,
+    "bytes": 328,
+    "walk_data": 0,
+    "reach_funcs": 16,
+    "reach_bytes": 328,
+    "cited_funcs": 7,
+    "cited_bytes": 168,
+    "suffix_bytes": {
+     "behaviour": 328
+    }
+   },
+   {
+    "file": "game/categories.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 328,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 328
+    }
+   },
+   {
+    "file": "game/optionswinbase.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 327,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 327
+    }
+   },
+   {
+    "file": "game/sectionprofilewin.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 315,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "presentation": 197,
+     "behaviour": 101
+    }
+   },
+   {
+    "file": "game/sort.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 307,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 119,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 307
+    }
+   },
+   {
+    "file": "game/conquestcolonies.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 303,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 164,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 303
+    }
+   },
+   {
+    "file": "game/gamespylogin.h",
+    "label": "netcode",
+    "funcs": 1,
+    "bytes": 303,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 303
+    }
+   },
+   {
+    "file": "game/replaywin.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 294,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "presentation": 276
+    }
+   },
+   {
+    "file": "game/vshadertransformmethod.h",
+    "label": "presentation",
+    "funcs": 4,
+    "bytes": 292,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 75,
+     "behaviour": 217
+    }
+   },
+   {
+    "file": "game/particle.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 287,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 287
+    }
+   },
+   {
+    "file": "game/graphicchad.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 282,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 191,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 282
+    }
+   },
+   {
+    "file": "game/scriptlogwin.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 273,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 30,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 232,
+     "behaviour": 41
+    }
+   },
+   {
+    "file": "game/parsebase.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 268,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 268
+    }
+   },
+   {
+    "file": "game/mountains.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 262,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 262
+    }
+   },
+   {
+    "file": "game/conquestdiplowin.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 256,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 256
+    }
+   },
+   {
+    "file": "game/conquestinvadewin.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 256,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 256
+    }
+   },
+   {
+    "file": "game/istatsandachievements.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 253,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 253
+    }
+   },
+   {
+    "file": "game/cities.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 250,
+    "walk_data": 0,
+    "reach_funcs": 3,
+    "reach_bytes": 250,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 53,
+     "sim": 197
+    }
+   },
+   {
+    "file": "game/soundtype.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 250,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 113,
+     "rules": 137
+    }
+   },
+   {
+    "file": "game/optionswinplayer.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 246,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 246
+    }
+   },
+   {
+    "file": "game/optionswincontrol.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 246,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 246
+    }
+   },
+   {
+    "file": "game/optionswingraphics.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 246,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 246
+    }
+   },
+   {
+    "file": "game/optionswinsound.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 246,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 246
+    }
+   },
+   {
+    "file": "game/mpgame.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 245,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 245
+    }
+   },
+   {
+    "file": "game/itemtype.h",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 243,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 116,
+     "sim": 116,
+     "rules": 11
+    }
+   },
+   {
+    "file": "game/patching.cpp",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 241,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 1,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 241
+    }
+   },
+   {
+    "file": "game/ifacediplobase.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 234,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 234
+    }
+   },
+   {
+    "file": "game/objecttype.h",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 233,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 8,
+     "sim": 67,
+     "rules": 158
+    }
+   },
+   {
+    "file": "game/riverdoober.cpp",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 232,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 232
+    }
+   },
+   {
+    "file": "game/mpstatwin.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 231,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "presentation": 214
+    }
+   },
+   {
+    "file": "game/ifaceselected.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 230,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 230
+    }
+   },
+   {
+    "file": "game/oilwell.cpp",
+    "label": "sim",
+    "funcs": 5,
+    "bytes": 223,
+    "walk_data": 1,
+    "reach_funcs": 1,
+    "reach_bytes": 23,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 223
+    }
+   },
+   {
+    "file": "game/packagefifo.h",
+    "label": "netcode",
+    "funcs": 2,
+    "bytes": 219,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 219
+    }
+   },
+   {
+    "file": "game/supply.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 219,
+    "walk_data": 1,
+    "reach_funcs": 2,
+    "reach_bytes": 124,
+    "cited_funcs": 1,
+    "cited_bytes": 23,
+    "suffix_bytes": {
+     "behaviour": 118,
+     "sim": 101
+    }
+   },
+   {
+    "file": "game/gamemain.h",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 215,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 87,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 215
+    }
+   },
+   {
+    "file": "game/ifacediploneg.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 214,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 214
+    }
+   },
+   {
+    "file": "game/shockwave.h",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 209,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 137,
+     "presentation": 72
+    }
+   },
+   {
+    "file": "game/ifaceoptions.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 206,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 206
+    }
+   },
+   {
+    "file": "game/colorpickwindow.cpp",
+    "label": "sim",
+    "funcs": 7,
+    "bytes": 206,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 206
+    }
+   },
+   {
+    "file": "game/gamerenderpackets.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 203,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 203
+    }
+   },
+   {
+    "file": "game/ifacebutton.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 193,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 193
+    }
+   },
+   {
+    "file": "game/loadingwin.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 192,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 192
+    }
+   },
+   {
+    "file": "game/ifaceairgarrison.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 188,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 188
+    }
+   },
+   {
+    "file": "game/syllable.cpp",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 187,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 187,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 187
+    }
+   },
+   {
+    "file": "game/achieve.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 185,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 185
+    }
+   },
+   {
+    "file": "game/ifaceminimap.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 185,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 185
+    }
+   },
+   {
+    "file": "game/connectiondata.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 177,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 177
+    }
+   },
+   {
+    "file": "game/ifacediplo.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 177,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 177
+    }
+   },
+   {
+    "file": "game/conquestvictorywin.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 177,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 177
+    }
+   },
+   {
+    "file": "game/commandpackage.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 172,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 172
+    }
+   },
+   {
+    "file": "game/ifacegarrison.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 171,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 171
+    }
+   },
+   {
+    "file": "game/ifacelibrary.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 171,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 171
+    }
+   },
+   {
+    "file": "game/ifaceminilibrary.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 171,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 171
+    }
+   },
+   {
+    "file": "game/ifaceeditornationselect.h",
+    "label": "editor",
+    "funcs": 2,
+    "bytes": 171,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 171
+    }
+   },
+   {
+    "file": "game/terrain.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 165,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 78,
+     "behaviour": 87
+    }
+   },
+   {
+    "file": "game/commandmanager.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 164,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 164
+    }
+   },
+   {
+    "file": "game/ifaceeditorminimap.cpp",
+    "label": "editor",
+    "funcs": 5,
+    "bytes": 164,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 164
+    }
+   },
+   {
+    "file": "game/good.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 160,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 80,
+     "sim": 80
+    }
+   },
+   {
+    "file": "game/item.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 160,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 80,
+     "sim": 80
+    }
+   },
+   {
+    "file": "game/hotkeygroups.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 158,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 158
+    }
+   },
+   {
+    "file": "game/recordgame.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 152,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 152
+    }
+   },
+   {
+    "file": "game/popup.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 146,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 146
+    }
+   },
+   {
+    "file": "game/watson.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 145,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 145
+    }
+   },
+   {
+    "file": "game/roads.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 143,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 28,
+     "presentation": 115
+    }
+   },
+   {
+    "file": "game/steamelohelper.h",
+    "label": "netcode",
+    "funcs": 2,
+    "bytes": 142,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 142
+    }
+   },
+   {
+    "file": "game/parsebase.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 141,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 141
+    }
+   },
+   {
+    "file": "game/ifacecombobox.h",
+    "label": "presentation",
+    "funcs": 3,
+    "bytes": 138,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 138
+    }
+   },
+   {
+    "file": "game/topmenu.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 136,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 37,
+     "behaviour": 99
+    }
+   },
+   {
+    "file": "game/fogmaster.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18,
+     "behaviour": 115
+    }
+   },
+   {
+    "file": "game/oilwells.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/docks.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/forts.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/wonders.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/specials.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/heroes.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 133,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "sim": 133
+    }
+   },
+   {
+    "file": "game/rivereditor.cpp",
+    "label": "editor",
+    "funcs": 4,
+    "bytes": 133,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 98,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 133
+    }
+   },
+   {
+    "file": "game/options.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 128,
+    "walk_data": 0,
+    "reach_funcs": 2,
+    "reach_bytes": 105,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 128
+    }
+   },
+   {
+    "file": "game/statbridge.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 121,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 121
+    }
+   },
+   {
+    "file": "game/profanityfilterer.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 119,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 119
+    }
+   },
+   {
+    "file": "game/borders.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 117,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 117
+    }
+   },
+   {
+    "file": "game/cliffs.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 115,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 115
+    }
+   },
+   {
+    "file": "game/rivers.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 115,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 115
+    }
+   },
+   {
+    "file": "game/scene.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 115,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 115
+    }
+   },
+   {
+    "file": "game/ifacewindow.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 108,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 3,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 108
+    }
+   },
+   {
+    "file": "game/endgamewin.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 105,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 105
+    }
+   },
+   {
+    "file": "game/checksums.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 105,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 105,
+    "cited_funcs": 1,
+    "cited_bytes": 105,
+    "suffix_bytes": {
+     "behaviour": 105
+    }
+   },
+   {
+    "file": "game/conquestpieces.h",
+    "label": "campaign",
+    "funcs": 2,
+    "bytes": 104,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 104
+    }
+   },
+   {
+    "file": "game/surf.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 95,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17,
+     "behaviour": 78
+    }
+   },
+   {
+    "file": "game/support.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 88,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 88
+    }
+   },
+   {
+    "file": "game/soundglobal.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 85,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 85
+    }
+   },
+   {
+    "file": "game/ordmemmgr.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 82,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 82
+    }
+   },
+   {
+    "file": "game/gamescript.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 80,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 80
+    }
+   },
+   {
+    "file": "game/storm.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 78,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 78
+    }
+   },
+   {
+    "file": "game/nuke.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 78,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 78
+    }
+   },
+   {
+    "file": "game/script/flexlexer.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 78,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 78
+    }
+   },
+   {
+    "file": "game/leaderboardshelper.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 77,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 77
+    }
+   },
+   {
+    "file": "game/taunts.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 76,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 76
+    }
+   },
+   {
+    "file": "game/unittype.h",
+    "label": "sim",
+    "funcs": 6,
+    "bytes": 64,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "rules": 12,
+     "sim": 52
+    }
+   },
+   {
+    "file": "game/keys.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 63,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 63
+    }
+   },
+   {
+    "file": "game/netdaemon.h",
+    "label": "netcode",
+    "funcs": 2,
+    "bytes": 61,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 61
+    }
+   },
+   {
+    "file": "game/animal.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 60,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 60
+    }
+   },
+   {
+    "file": "game/script/bhscript.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 56,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 56
+    }
+   },
+   {
+    "file": "game/helpbox.h",
+    "label": "presentation",
+    "funcs": 2,
+    "bytes": 49,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "presentation": 49
+    }
+   },
+   {
+    "file": "game/elohelper.h",
+    "label": "sim",
+    "funcs": 2,
+    "bytes": 43,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 43
+    }
+   },
+   {
+    "file": "game/collblock.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 43,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 43
+    }
+   },
+   {
+    "file": "game/gameaccess.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 39,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 39,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 39
+    }
+   },
+   {
+    "file": "game/steamleaderboardshelper.h",
+    "label": "netcode",
+    "funcs": 1,
+    "bytes": 38,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 38
+    }
+   },
+   {
+    "file": "game/roadspieces.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 35,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 35
+    }
+   },
+   {
+    "file": "game/subobject.h",
+    "label": "sim",
+    "funcs": 3,
+    "bytes": 30,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 30
+    }
+   },
+   {
+    "file": "game/macros.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 27,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 27,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 27
+    }
+   },
+   {
+    "file": "game/conquestleaders.h",
+    "label": "campaign",
+    "funcs": 1,
+    "bytes": 27,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 27
+    }
+   },
+   {
+    "file": "game/units.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 26,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 26,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 26
+    }
+   },
+   {
+    "file": "game/regions.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 23,
+    "walk_data": 0,
+    "reach_funcs": 1,
+    "reach_bytes": 23,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 23
+    }
+   },
+   {
+    "file": "game/helpxml.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 22,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 22
+    }
+   },
+   {
+    "file": "game/types.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 22,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 22
+    }
+   },
+   {
+    "file": "game/colors.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 22,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 22
+    }
+   },
+   {
+    "file": "game/jukebox.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 18,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18
+    }
+   },
+   {
+    "file": "game/syncdir.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 18,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18
+    }
+   },
+   {
+    "file": "game/pointerwin.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 18,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18
+    }
+   },
+   {
+    "file": "game/conquestintrowin.h",
+    "label": "campaign",
+    "funcs": 1,
+    "bytes": 18,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18
+    }
+   },
+   {
+    "file": "game/signposts.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 18,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 18
+    }
+   },
+   {
+    "file": "game/chatbox.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17
+    }
+   },
+   {
+    "file": "game/gamespyplayerpop.h",
+    "label": "netcode",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17
+    }
+   },
+   {
+    "file": "game/conquestmap.h",
+    "label": "campaign",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17
+    }
+   },
+   {
+    "file": "game/autosave.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17
+    }
+   },
+   {
+    "file": "game/aboutbox.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 17
+    }
+   },
+   {
+    "file": "game/triggerfuncentry.cpp",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 17
+    }
+   },
+   {
+    "file": "game/mp_joincustom.cpp",
+    "label": "sim",
+    "funcs": 4,
+    "bytes": 17,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 17
+    }
+   },
+   {
+    "file": "game/balance.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 12,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 12
+    }
+   },
+   {
+    "file": "game/timesync.h",
+    "label": "netcode",
+    "funcs": 1,
+    "bytes": 12,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 12
+    }
+   },
+   {
+    "file": "game/underlay.h",
+    "label": "sim",
+    "funcs": 1,
+    "bytes": 12,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "free": 12
+    }
+   },
+   {
+    "file": "game/network_event_notifier.cpp",
+    "label": "netcode",
+    "funcs": 2,
+    "bytes": 9,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 9
+    }
+   },
+   {
+    "file": "game/renderwindow.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 7,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 7
+    }
+   },
+   {
+    "file": "game/helpboxwin.h",
+    "label": "presentation",
+    "funcs": 1,
+    "bytes": 5,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5
+    }
+   },
+   {
+    "file": "game/conquestcities.cpp",
+    "label": "campaign",
+    "funcs": 3,
+    "bytes": 5,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 5
+    }
+   },
+   {
+    "file": "game/ifaceeditorchild.cpp",
+    "label": "editor",
+    "funcs": 1,
+    "bytes": 3,
+    "walk_data": 0,
+    "reach_funcs": 0,
+    "reach_bytes": 0,
+    "cited_funcs": 0,
+    "cited_bytes": 0,
+    "suffix_bytes": {
+     "behaviour": 3
+    }
+   }
+  ]
+ },
+ "citations_per_crate": {
+  "don-sim": 2135,
+  "don-rules": 756,
+  "don-replay": 370,
+  "don-ai": 136,
+  "oracle": 64,
+  "don-net": 34,
+  "donscan": 18,
+  "don-env": 10,
+  "netsys-shim": 9,
+  "don-gpu": 2
+ },
+ "external_system_references": [
+  {
+   "file": "crates/don-sim/src/mechanics.rs",
+   "line": 1244,
+   "text": "#[deprecated(note = \"use crate::systems::production::train_time_ramp, which has the enclosing derivation\")]"
+  },
+  {
+   "file": "crates/don-sim/src/mechanics.rs",
+   "line": 1285,
+   "text": "#[deprecated(note = \"use crate::systems::production, which carries the measured class selection\")]"
+  },
+  {
+   "file": "crates/don-sim/src/trig.rs",
+   "line": 128,
+   "text": "pub use crate::systems::groups_guys::{angle_diff, cosx, sinx};"
+  }
+ ],
+ "largest_uncited_reachable": [
+  {
+   "bytes": 43008,
+   "name": "ConsoleWin::run_cmd",
+   "file": "game/consolewin.cpp",
+   "va": "0x7d6a70"
+  },
+  {
+   "bytes": 26650,
+   "name": "LeaderData::log_data",
+   "file": "game/leaders.cpp",
+   "va": "0x6e5110"
+  },
+  {
+   "bytes": 20348,
+   "name": "Leader::diplomacy",
+   "file": "game/leaders.cpp",
+   "va": "0x6bc950"
+  },
+  {
+   "bytes": 19872,
+   "name": "Console::execute_at_cursor",
+   "file": "game/console.cpp",
+   "va": "0x7c6630"
+  },
+  {
+   "bytes": 14119,
+   "name": "Options::exec",
+   "file": "game/options.cpp",
+   "va": "0x7188c0"
+  },
+  {
+   "bytes": 14104,
+   "name": "TileSet::init",
+   "file": "game/tileset.cpp",
+   "va": "0x87b370"
+  },
+  {
+   "bytes": 13641,
+   "name": "TerrainOut::one_time_init",
+   "file": "game/terrainout.cpp",
+   "va": "0x85c150"
+  },
+  {
+   "bytes": 12655,
+   "name": "PlayerProfile::save",
+   "file": "game/playerprofile.cpp",
+   "va": "0x5d1340"
+  },
+  {
+   "bytes": 12225,
+   "name": "SyntaxNode::eval",
+   "file": "game/script/syntaxtree.cpp",
+   "va": "0x9dc710"
+  },
+  {
+   "bytes": 11932,
+   "name": "SetupWin::update_interface",
+   "file": "game/setupwin.cpp",
+   "va": "0x5b44b0"
+  },
+  {
+   "bytes": 9925,
+   "name": "Unit::come_out",
+   "file": "game/unit.cpp",
+   "va": "0x617c10"
+  },
+  {
+   "bytes": 9428,
+   "name": "Scene::init_render_states",
+   "file": "game/scene.cpp",
+   "va": "0x8ba450"
+  },
+  {
+   "bytes": 9421,
+   "name": "Types::init",
+   "file": "game/types.cpp",
+   "va": "0x669cc0"
+  },
+  {
+   "bytes": 9205,
+   "name": "Group::action_move_near",
+   "file": "game/groups.cpp",
+   "va": "0x704990"
+  },
+  {
+   "bytes": 8916,
+   "name": "TerrainGroups::place_all",
+   "file": "game/terraingroups.cpp",
+   "va": "0x6a70d0"
+  },
+  {
+   "bytes": 8524,
+   "name": "Balance::type_damage",
+   "file": "game/balance.cpp",
+   "va": "0x57fb50"
+  },
+  {
+   "bytes": 8044,
+   "name": "ConquestCountries::init_countries",
+   "file": "game/conquestcountries.cpp",
+   "va": "0x75f3a0"
+  },
+  {
+   "bytes": 7998,
+   "name": "Cities::capture_city",
+   "file": "game/cities.cpp",
+   "va": "0x733380"
+  },
+  {
+   "bytes": 7845,
+   "name": "GraphicPieces::init_unit_data",
+   "file": "game/graphicpieces.cpp",
+   "va": "0x8f4290"
+  },
+  {
+   "bytes": 7571,
+   "name": "Army::find_target",
+   "file": "game/army.cpp",
+   "va": "0x6f69b0"
+  },
+  {
+   "bytes": 7406,
+   "name": "Leader::produce_building",
+   "file": "game/leaders.cpp",
+   "va": "0x6e1400"
+  },
+  {
+   "bytes": 7288,
+   "name": "ConquestGame::setup_conquest_game",
+   "file": "game/conquestgame.cpp",
+   "va": "0x7928c0"
+  },
+  {
+   "bytes": 7284,
+   "name": "Options::picked_spot",
+   "file": "game/options.cpp",
+   "va": "0x721c40"
+  },
+  {
+   "bytes": 7202,
+   "name": "TerrainGroup::place_player_group",
+   "file": "game/terraingroups.cpp",
+   "va": "0x6a4190"
+  },
+  {
+   "bytes": 7126,
+   "name": "ConquestCountries::load_country_data",
+   "file": "game/conquestcountries.cpp",
+   "va": "0x75d630"
+  },
+  {
+   "bytes": 7124,
+   "name": "Unit::find_attack_pos",
+   "file": "game/unit.cpp",
+   "va": "0x601280"
+  },
+  {
+   "bytes": 6992,
+   "name": "yyparse",
+   "file": "game/script/bighugescript.cpp",
+   "va": "0x9ba430"
+  },
+  {
+   "bytes": 6938,
+   "name": "Setup::build_game",
+   "file": "game/setup.cpp",
+   "va": "0x5ac190"
+  },
+  {
+   "bytes": 6886,
+   "name": "Terrain::init",
+   "file": "game/terrain.cpp",
+   "va": "0x850f70"
+  },
+  {
+   "bytes": 6660,
+   "name": "ScenarioRead::import",
+   "file": "game/scenariofile.cpp",
+   "va": "0x9b1430"
+  },
+  {
+   "bytes": 6493,
+   "name": "Surf::init_class",
+   "file": "game/surf.cpp",
+   "va": "0x89f050"
+  },
+  {
+   "bytes": 6468,
+   "name": "Lexer::yylex",
+   "file": "game/script/bighugescript.l.cpp",
+   "va": "0x9bc8e0"
+  },
+  {
+   "bytes": 6307,
+   "name": "UnitBalance::next",
+   "file": "game/unitbalance.cpp",
+   "va": "0x9b8ac0"
+  },
+  {
+   "bytes": 6008,
+   "name": "TerrainBorder::build_edge",
+   "file": "game/terrainborder.cpp",
+   "va": "0x8adda0"
+  },
+  {
+   "bytes": 5656,
+   "name": "WorldData::log_data",
+   "file": "game/world.cpp",
+   "va": "0x6b6080"
+  },
+  {
+   "bytes": 5643,
+   "name": "Game::init",
+   "file": "game/game.cpp",
+   "va": "0x58c480"
+  },
+  {
+   "bytes": 5559,
+   "name": "TileSet::load_land_data",
+   "file": "game/tileset.cpp",
+   "va": "0x8767d0"
+  },
+  {
+   "bytes": 5536,
+   "name": "TerrainOut::generate_skirts",
+   "file": "game/terrainout.cpp",
+   "va": "0x8603c0"
+  },
+  {
+   "bytes": 5470,
+   "name": "ConquestGame::init_rules_data",
+   "file": "game/conquestgame.cpp",
+   "va": "0x78d460"
+  },
+  {
+   "bytes": 5425,
+   "name": "GraphicPieces::init_ammo_data",
+   "file": "game/graphicpieces.cpp",
+   "va": "0x8f1490"
+  },
+  {
+   "bytes": 5414,
+   "name": "ScenarioData::log_data",
+   "file": "game/scenariodata.cpp",
+   "va": "0x997f70"
+  },
+  {
+   "bytes": 5384,
+   "name": "Object::do_launch",
+   "file": "game/object.cpp",
+   "va": "0x64f3b0"
+  },
+  {
+   "bytes": 5190,
+   "name": "MountainRange::init",
+   "file": "game/mountains.cpp",
+   "va": "0x8998b0"
+  },
+  {
+   "bytes": 5153,
+   "name": "GraphicPieces::init_unit_events",
+   "file": "game/graphicpieces.cpp",
+   "va": "0x8eabb0"
+  },
+  {
+   "bytes": 5126,
+   "name": "TerrainOut::check_for_tendrils",
+   "file": "game/terrainout.cpp",
+   "va": "0x859eb0"
+  },
+  {
+   "bytes": 5053,
+   "name": "GraphicEvents::init_unit_events",
+   "file": "game/graphicevent.cpp",
+   "va": "0x8e2520"
+  },
+  {
+   "bytes": 4973,
+   "name": "GraphicPieces::init_build_data",
+   "file": "game/graphicpieces.cpp",
+   "va": "0x8f2f20"
+  },
+  {
+   "bytes": 4930,
+   "name": "Options::exec_editor",
+   "file": "game/options.cpp",
+   "va": "0x7174a0"
+  },
+  {
+   "bytes": 4811,
+   "name": "TopMenu::init_logo",
+   "file": "game/topmenu.cpp",
+   "va": "0x5a05b0"
+  },
+  {
+   "bytes": 4766,
+   "name": "Unit::do_non_flat_gather",
+   "file": "game/unit.cpp",
+   "va": "0x5f0170"
+  },
+  {
+   "bytes": 4762,
+   "name": "PathFinder::astar_river",
+   "file": "game/pathfinder.cpp",
+   "va": "0x686690"
+  },
+  {
+   "bytes": 4723,
+   "name": "Guy::set_anim",
+   "file": "game/guy.cpp",
+   "va": "0x5da300"
+  },
+  {
+   "bytes": 4699,
+   "name": "build_box",
+   "file": "game/farms.cpp",
+   "va": "0x8d6140"
+  },
+  {
+   "bytes": 4647,
+   "name": "TerrainGroup::place_region_group",
+   "file": "game/terraingroups.cpp",
+   "va": "0x6a2f60"
+  },
+  {
+   "bytes": 4541,
+   "name": "RiverDoobers::init_class",
+   "file": "game/riverdoobers.cpp",
+   "va": "0x886020"
+  },
+  {
+   "bytes": 4472,
+   "name": "GameLog::say_checksum",
+   "file": "game/gamelog.cpp",
+   "va": "0x930b30"
+  },
+  {
+   "bytes": 4382,
+   "name": "SetupWin::open_save_game",
+   "file": "game/setupwin.cpp",
+   "va": "0x5bd880"
+  },
+  {
+   "bytes": 4382,
+   "name": "Mountains::init",
+   "file": "game/mountains.cpp",
+   "va": "0x89ad70"
+  },
+  {
+   "bytes": 4324,
+   "name": "Game::init_rules_data",
+   "file": "game/game.cpp",
+   "va": "0x58ec60"
+  },
+  {
+   "bytes": 4322,
+   "name": "Build::queue_up",
+   "file": "game/build.cpp",
+   "va": "0x620f40"
+  }
+ ]
+}

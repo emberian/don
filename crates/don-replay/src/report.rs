@@ -35,6 +35,9 @@ pub struct Totals {
     pub crossplay_comparisons: usize,
     pub crossplay_identical: usize,
     pub crossplay_per_channel: [usize; NUM_CHANNELS],
+    pub crossplay_stamp_comparisons: usize,
+    pub crossplay_stamp_identical: usize,
+    pub crossplay_stamp_wrong_turn: usize,
     /// Per channel: total compares, total matches, and the best single-file
     /// consecutive survival.
     pub compares: [u64; NUM_CHANNELS],
@@ -59,6 +62,9 @@ impl Totals {
             crossplay_comparisons: 0,
             crossplay_identical: 0,
             crossplay_per_channel: [0; NUM_CHANNELS],
+            crossplay_stamp_comparisons: 0,
+            crossplay_stamp_identical: 0,
+            crossplay_stamp_wrong_turn: 0,
             compares: [0; NUM_CHANNELS],
             matches: [0; NUM_CHANNELS],
             trivial: [0; NUM_CHANNELS],
@@ -75,6 +81,9 @@ impl Totals {
             t.checksum_shape_ok += r.checksum_shape_ok;
             t.crossplay_comparisons += r.crossplay_comparisons;
             t.crossplay_identical += r.crossplay_identical;
+            t.crossplay_stamp_comparisons += r.crossplay_stamp_comparisons;
+            t.crossplay_stamp_identical += r.crossplay_stamp_identical;
+            t.crossplay_stamp_wrong_turn += r.crossplay_stamp_wrong_turn;
             t.sim_commands += r.sim_commands;
             t.lockstep_commands += r.lockstep_commands;
             t.presentation_commands += r.presentation_commands;
@@ -101,7 +110,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     let mut s = String::new();
     s.push_str("{\n");
     s.push_str(&format!("  \"generated_by\": \"{}\",\n", esc(generated_by)));
-    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 16 DataWalk checksum channels are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes.\",\n");
+    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes.\",\n");
     s.push_str("  \"checksum_source\": \"CheckSums::check_all 0x00936560; packet builder 0x00940770; adler32 0x00a46830 (Tier B, 500k differential calls, 0 mismatches)\",\n");
     s.push_str("  \"walk_source\": \"schema/state-schema.json -> crates/don-replay/src/walk_gen.rs (generated)\",\n");
     s.push_str(&format!(
@@ -113,8 +122,14 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         t.checksum_packets, t.checksum_total_ok, t.checksum_shape_ok
     ));
     s.push_str(&format!(
-        "    \"crossplay_comparisons\": {}, \"crossplay_identical\": {},\n",
+        "    \"crossplay_by_group\": {{ \"comparisons\": {}, \"identical\": {} }},\n",
         t.crossplay_comparisons, t.crossplay_identical
+    ));
+    s.push_str(&format!(
+        "    \"crossplay_by_stamp\": {{ \"comparisons\": {}, \"identical\": {}, \"disagreements_comparing_different_turns\": {} }},\n",
+        t.crossplay_stamp_comparisons,
+        t.crossplay_stamp_identical,
+        t.crossplay_stamp_wrong_turn
     ));
     s.push_str(&format!(
         "    \"commands\": {{ \"sim\": {}, \"lockstep\": {}, \"presentation\": {} }},\n",
@@ -181,8 +196,12 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.rules_constant.map(|v| format!("\"0x{v:08x}\"")).unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
-            "      \"crossplay\": {{ \"comparisons\": {}, \"identical\": {} }},\n",
-            r.crossplay_comparisons, r.crossplay_identical
+            "      \"crossplay\": {{ \"by_group\": {{ \"comparisons\": {}, \"identical\": {} }}, \"by_stamp\": {{ \"comparisons\": {}, \"identical\": {}, \"disagreements_comparing_different_turns\": {} }} }},\n",
+            r.crossplay_comparisons,
+            r.crossplay_identical,
+            r.crossplay_stamp_comparisons,
+            r.crossplay_stamp_identical,
+            r.crossplay_stamp_wrong_turn
         ));
         s.push_str(&format!(
             "      \"orders\": {{ \"sim\": {}, \"typed\": {}, \"applied\": {} }},\n",

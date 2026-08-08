@@ -417,11 +417,11 @@ impl EnvWorld {
     }
 
     #[inline]
-    pub fn relation(&self, a: u8, b: u8) -> u8 {
-        if a == b {
+    pub fn relation(&self, a: u8, b: i8) -> u8 {
+        if b >= 0 && a == b as u8 {
             return 0;
         }
-        let (a, b) = (a as usize, b as usize);
+        let (a, b) = (a as usize, usize::try_from(b).unwrap_or(usize::MAX));
         if a >= g::NUM_PLAYERS || b >= g::NUM_PLAYERS {
             return 3;
         }
@@ -455,7 +455,7 @@ impl EnvWorld {
     fn process_slot(&mut self, slot: u8) {
         let n = self.sim.live_count() as usize;
         for row in 0..n {
-            if self.sim.owner()[row] != slot {
+            if self.sim.owner()[row] != slot as i8 {
                 continue;
             }
             match self.order[row] {

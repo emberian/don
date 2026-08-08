@@ -46,6 +46,13 @@ pub struct VecEnv {
     /// For each (env, agent, slot) the entity row that slot refers to; -1 when empty.
     /// Exposed so a policy can join observation rows back to engine entities.
     entity_rows: Vec<i32>,
+    /// Reference masked sampler output, same shapes as the action inputs. Sampling in
+    /// Rust rather than numpy is not a convenience: the `Type` head is 806 wide, so
+    /// unpacking every mask to bool in numpy costs an order of magnitude more than the
+    /// env step itself and would make any reported steps/s a measurement of numpy.
+    sample_unit: Vec<i32>,
+    sample_player: Vec<i32>,
+    sample_rng: u64,
 
     threads: usize,
     caps_real: bool,
@@ -90,6 +97,9 @@ impl VecEnv {
             dones: vec![0; n],
             truncs: vec![0; n],
             entity_rows: vec![-1; n * a * cfg.max_entities],
+            sample_unit: vec![0; n * a * cfg.max_controlled * g::N_UNIT_HEADS],
+            sample_player: vec![0; n * a * g::N_PLAYER_HEADS],
+            sample_rng: cfg.seed | 1,
             unit_mask_layout: uml,
             player_mask_layout: pml,
             reward_spec: RewardSpec::default(),
@@ -315,6 +325,108 @@ impl VecEnv {
     pub fn truncateds(&self) -> &[u8] { &self.truncs }
     /// `(n_envs, n_agents, max_entities)` i32 — entity row per observation slot, -1 empty.
     pub fn entity_rows(&self) -> &[i32] { &self.entity_rows }
+    pub fn sampled_unit_actions(&self) -> &[i32] { &self.sample_unit }
+    pub fn sampled_player_actions(&self) -> &[i32] { &self.sample_player }
+
+    /// Draw a uniform action from under the current masks, into the sampler buffers.
+    ///
+    /// Reservoir sampling straight over the packed bitsets: whole zero bytes are skipped,
+    /// so the 806-wide `Type` head costs 101 byte loads rather than 806 elements. This is
+    /// the reference behaviour a masked policy must reproduce, and the opponent a scripted
+    /// league slot can use without leaving Rust.
+    pub fn sample_masked(&mut self) {
+        let a = self.cfg.num_agents;
+        let urec = self.unit_mask_layout.record_bytes;
+        let prec = self.player_mask_layout.record_bytes;
+        let n = self.worlds.len();
+        let threads = self.threads.min(n.max(1));
+
+        // Chunk by world, matching how the masks themselves were written, so the sampler
+        // touches the same cache lines the mask writer just left hot.
+        let per_world_recs = a * self.cfg.max_controlled;
+        let uml = &self.unit_mask_layout;
+        let pml = &self.player_mask_layout;
+        let seed = self.sample_rng;
+        let chunk = n.div_ceil(threads.max(1)).max(1);
+        let umasks = &self.unit_masks;
+        let pmasks = &self.player_masks;
+        let mut u_out = self.sample_unit.chunks_mut(chunk * per_world_recs * g::N_UNIT_HEADS);
+        let mut p_out = self.sample_player.chunks_mut(chunk * a * g::N_PLAYER_HEADS);
+        std::thread::scope(|scope| {
+            let mut w0 = 0usize;
+            while w0 < n {
+                let w1 = (w0 + chunk).min(n);
+                let uo = u_out.next().expect("chunk");
+                let po = p_out.next().expect("chunk");
+                let um = &umasks[w0 * per_world_recs * urec..w1 * per_world_recs * urec];
+                let pm = &pmasks[w0 * a * prec..w1 * a * prec];
+                let s = seed ^ ((w0 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+                scope.spawn(move || {
+                    let mut rng = s | 1;
+                    let mut next = move || {
+                        rng ^= rng << 13;
+                        rng ^= rng >> 7;
+                        rng ^= rng << 17;
+                        rng
+                    };
+                    for (i, rec) in um.chunks_exact(urec).enumerate() {
+                        let o = i * g::N_UNIT_HEADS;
+                        for h in 0..g::N_UNIT_HEADS {
+                            uo[o + h] = pick(&rec[uml.offsets[h]..], uml.sizes[h], &mut next);
+                        }
+                    }
+                    for (i, rec) in pm.chunks_exact(prec).enumerate() {
+                        let o = i * g::N_PLAYER_HEADS;
+                        for h in 0..g::N_PLAYER_HEADS {
+                            po[o + h] = pick(&rec[pml.offsets[h]..], pml.sizes[h], &mut next);
+                        }
+                    }
+                });
+                w0 = w1;
+            }
+        });
+        self.sample_rng = self.sample_rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+    }
+}
+
+/// Uniform choice among the set bits of `buf[..n]`: popcount to a total, one draw, then
+/// select the k-th set bit. Two branch-free byte sweeps instead of reservoir sampling's
+/// per-bit division, which is what the 806-wide `Type` head made expensive.
+///
+/// Returns 0 if nothing is set, which cannot happen for a mask this crate wrote
+/// (`mask.rs` invariant 2); bits at or past `n` are never set by any writer here.
+#[inline]
+fn pick(buf: &[u8], n: usize, next: &mut impl FnMut() -> u64) -> i32 {
+    let nb = n.div_ceil(8);
+    let bytes = &buf[..nb];
+    let mut total = 0u32;
+    for b in bytes {
+        total += b.count_ones();
+    }
+    if total <= 1 {
+        // The overwhelmingly common case for the small heads, and it needs no draw.
+        return match total {
+            0 => 0,
+            _ => bytes
+                .iter()
+                .position(|b| *b != 0)
+                .map(|i| (i * 8 + bytes[i].trailing_zeros() as usize) as i32)
+                .unwrap_or(0),
+        };
+    }
+    let mut k = (next() % total as u64) as u32;
+    for (i, &b) in bytes.iter().enumerate() {
+        let c = b.count_ones();
+        if k < c {
+            let mut bb = b;
+            for _ in 0..k {
+                bb &= bb - 1;
+            }
+            return (i * 8 + bb.trailing_zeros() as usize) as i32;
+        }
+        k -= c;
+    }
+    0
 }
 
 struct WorldPart<'a> {
@@ -386,7 +498,8 @@ fn step_one(
     p.dn[0] = u8::from(any_done);
     p.tr[0] = u8::from(truncated);
     if any_done || truncated {
-        let seed = p.w.sim.frame ^ (p.w.step_index as u64).wrapping_mul(0x9E37_79B9);
+        let seed = (p.w.sim.frame as u64)
+            ^ (p.w.step_index as u64).wrapping_mul(0x9E37_79B9);
         p.w.reset(cfg.num_agents, cfg.start_units, seed | 1);
     }
 
@@ -432,7 +545,7 @@ fn controlled_rows(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut Vec<usize>)
     out.clear();
     let n = w.sim.live_count() as usize;
     for row in 0..n {
-        if w.sim.owner()[row] == who {
+        if w.sim.owner()[row] == who as i8 {
             out.push(row);
             if out.len() == cfg.max_controlled {
                 return;

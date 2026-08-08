@@ -120,7 +120,7 @@ pub fn apply_unit(
         return;
     };
     let vi = (a.verb - 1) as usize;
-    if vi >= g::N_UNIT_VERBS || w.sim.owner()[row] != who {
+    if vi >= g::N_UNIT_VERBS || w.sim.owner()[row] != who as i8 {
         st.illegal += 1;
         return;
     }

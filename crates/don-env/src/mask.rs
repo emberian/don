@@ -108,7 +108,7 @@ impl MaskWriter {
 
         for (i, &row) in rows.iter().enumerate().take(cfg.max_controlled) {
             let r = &mut out[i * rec..(i + 1) * rec];
-            if w.sim.owner()[row] != who {
+            if w.sim.owner()[row] != who as i8 {
                 continue;
             }
             let t = w.type_index[row];

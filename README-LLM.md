@@ -196,9 +196,10 @@ come from the oracle. Never write "confirmed by the PDB" about a behavioural cla
 **2024-06-20 MSVC-14 rebuild** of the 2003 code, unpacked, RTTI intact. `patriots.exe` is
 only the MFC launcher.
 
-- **Float**: SSE binary32, not x87 (~23.7 K scalar SSE vs ~560 x87). Entire IEEE hazard
-  surface is eight CRT imports `_libm_sse2_{acos,asin,atan,cos,pow,sin,tan}_precise`; `sqrt`
-  is IEEE-exact and safe. **`ObjectData::get_damage` and the road A\* contain no floating
+- **Float**: SSE binary32, not x87 (~23.7 K scalar SSE vs ~560 x87). The eight precise CRT
+  imports are seven non-IEEE transcendental hazards
+  (`_libm_sse2_{acos,asin,atan,cos,pow,sin,tan}_precise`) plus `_sqrt_precise`, which is
+  IEEE-exact and safe. **`ObjectData::get_damage` and the road A\* contain no floating
   point at all** (not a whole-sim claim — see `docs/derivation/AUDIT.md` §3.2).
 - **RNG**: LCG `s ← s·1664525 + 1013904223` [measured, in `Random::get`]. `float Random::get()`
   `0x00a39cf0`, `int Random::get(int,int)` `0x00a39d70`, `Random::reseed` `0x00a39d30` (an
@@ -262,7 +263,7 @@ only the MFC launcher.
 
 | path | what |
 |---|---|
-| `schema/bindings.json` | 1,224 rule-name → struct-offset bindings across 112 loaders |
+| `schema/bindings.json` | 1,224 rule-name → struct-offset bindings across 112 `log_data` visitors (field offsets are sound; these are not loaders) |
 | `schema/islands.jsonl` | every function classified by reachability (ISLAND 2,135 / DATA_ONLY 711 / SELF_CALL 42,748 / WRITES_GLOBAL 970) |
 | `schema/vtables.json` | **1,777 RTTI vtable addresses → class names.** The key to typed live-heap crawling: every C++ object starts with its vtable pointer |
 | `docs/derivation/rules-constants.json` | 719 constants with offsets, parsers, scales |
@@ -275,21 +276,30 @@ Gitignored as copyrighted game content: `ron-bin/`, `ron-data/`, `re/ghidra/`,
 
 ## Crates
 
-- **`don-rules`** — rule-value tokenizer + generated offsets. *Deliberately refuses* to
-  convert values to numbers until the engine's tokenizer semantics are settled.
+- **`don-rules`** — rule-value tokenizer + generated offsets. `String::fraction` numeric
+  conversion is recovered and covered by captured retail vectors and the shipped corpus.
 - **`don-pe`** — PE32 reader/mapper; applies 315,865 relocations. First half of the oracle.
-- **`don-sim`** — SoA world, batch scheduler, `mechanics.rs` (derived mechanics only;
-  placeholders live in `world.rs` and are marked). Parallel stepping must reproduce serial
-  output bit-for-bit — there is a test, keep it passing.
-- **`don-gpu`** — wgpu flow-field prototype. GPU output asserted bit-identical to CPU.
+- **`don-sim`** — PDB-generated SoA state, retail-ordered tick skeleton, derived mechanics,
+  and many subsystem ports. Most `systems/*.rs` modules are compiled but not yet driven by
+  the tick; read `GOAL.md` before calling a port implemented end to end.
+- **`don-replay`** — `.rcx` command decoder, generated checksum walkers, and the replay
+  validation scoreboard. This is the primary integration gate.
+- **`don-net`** — command wire format, lockstep session, TCP transport, and replacement
+  netcode-shim work. Our peers connect; a retail internet join is not complete.
+- **`don-ai`** — shipped economic-script/runtime work plus a deterministic AI-vs-AI harness.
+- **`don-env`** — PyO3/Gymnasium/PettingZoo-facing batched RL surface over partial dynamics.
+- **`don-gpu`** — wgpu flow fields and batch-order prototypes with CPU/GPU parity tests.
+- **`donscan`** — Windows live-process scanner; excluded from the arm64 workspace build.
 - **`oracle`** — 32-bit only, excluded from the workspace, runs on hbox.
 
 ## Where to look next
 
-`GOAL.md` holds the current thrust and done-log. `docs/provenance-ledger.md` §"Not yet
-derived" is the honest list of what must not be implemented from folklore.
+`GOAL.md` is the live execution board. `docs/RECOVERY.md` maps the interrupted Claude
+session to the files it left behind. `docs/provenance-ledger.md` §"Not yet derived" is the
+honest list of what must not be implemented from folklore.
 
-The highest-leverage unbuilt tools, in order: a **native heap scanner** (use
-`schema/vtables.json` to type every live object), a **function-hook DLL** on
-`FUN_00644130` to log real damage calls with full inputs, and **`WriteProcessMemory`
-control** to turn the live game from an observatory into a programmable laboratory.
+The native heap scanner and damage-hook DLL now exist and have run against retail. The
+highest-leverage work is integration: load real initial replay state, make the generated
+SoA→PDB-image bridge non-empty, wire derived systems into the tick, and move the replay
+scoreboard from trivial matches to bytes-walked matches. The exact order and acceptance gates
+are in `GOAL.md`.
