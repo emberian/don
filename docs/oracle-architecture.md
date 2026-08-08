@@ -131,12 +131,25 @@ bind XML names to fields plausibly drive checksumming too. That upgrades the "sa
 serve load, save and checksum" inference from speculation to *supported* — still not
 verified. **Next action: find the checksum config toggle and the `DataWalk` call sites.**
 
-## The PDB question [measured]
+## The PDB question — **CLOSED, we have it** [measured, 2026-08-08]
 
 - Our build's debug directory: `rise.pdb`, GUID **51D4F219-61C6-4F84-9D5B-C3361B0D291F**,
   age **1**, symsrv key `51D4F21961C64F849D5BC3361B0D291F1`.
 - **The Microsoft symbol server returns 404** for both `rise.pdb` and the compressed
-  `rise.pd_` at that key. Verified by direct request. The PDB for *our* build is not public.
+  `rise.pd_` at that key. Verified by direct request. The PDB for our build is not public
+  *on symsrv* — which is why this section previously concluded we did not have one.
+- **But the game installs it.** `ron-bin/sbl/rise.pdb`, 57,290,752 bytes, GUID and age
+  **identical** to the exe's CodeView record. It shipped in the install's `sbl\` folder the
+  whole time and was missed because an early recon listing was truncated. 37,138 publics,
+  22,752 procedures with names/sizes/signatures, full type information.
+- Extracted to `schema/rise-symbols.tsv`, `schema/rise-procs.tsv`, `schema/pdb-types.json`,
+  `schema/command-structs.txt`.
+
+**This does not change the oracle's job.** The PDB gives names, signatures and layouts; it
+gives no semantics and no values. Every Tier-B result still has to come from executing the
+shipped code. What it does change is *targeting*: we no longer guess which `FUN_` to probe,
+and struct layouts for probe arguments come from the compiler instead of from inference.
+The claim-by-claim audit of pre-PDB derivations is `docs/derivation/PDB-RECONCILIATION.md`.
 
 [StackAndPointer/Rise-of-Nations-Decomp](https://github.com/StackAndPointer/Rise-of-Nations-Decomp)
 is worth understanding precisely, because it is easy to overvalue:
@@ -149,11 +162,10 @@ is worth understanding precisely, because it is easy to overvalue:
   or run".
 
 **PDB type data is categorically different from wiki folklore** — it is compiler-emitted
-metadata about a real binary, and if we obtained a genuine `rise.pdb` it would be ground
-truth of the highest quality, collapsing much of stage 1. That makes this worth chasing.
-Open lead: older EE builds (2014 / 1.10 / 1.20) may have had symbols published at a
-different key; a Steam depot downgrade would give us their GUIDs to test. **Until the
-provenance is established, treat everything in that repo as cross-check material.**
+metadata about a real binary. That reasoning was right and the chase is over: we have the
+genuine `rise.pdb` for our exact build (above), so the StackAndPointer repo is now
+superseded for names and types and remains cross-check material only. The former open lead
+about downgrading to older EE builds for their GUIDs is **closed — no longer needed**.
 
 ## Tier 3 pipeline
 

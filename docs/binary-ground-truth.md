@@ -51,9 +51,29 @@ floating-point story below. The "exes were obfuscated after the first patch" cla
 2.28MB is `.rsrc`). It contains no simulation logic. All game logic is in
 `riseofnations.exe`.
 
-Shipped PDBs exist for SkyBox's support libraries (`sbl\CrossplayNetLib.pdb`,
-`CrossplayProxy.pdb`, `d3dgl.pdb`, `dssl.pdb`, `PartyWin.pdb`) but **not** for the game
-itself. `rise.pdb` is not shipped.
+**CORRECTION [measured, 2026-08-08]: the game ships its own full PDB.** An earlier pass
+here concluded that `sbl\` held PDBs only for SkyBox's support libraries
+(`CrossplayNetLib.pdb`, `CrossplayProxy.pdb`, `d3dgl.pdb`, `dssl.pdb`, `PartyWin.pdb`,
+`PlayFabMultiplayerWin.pdb`) and that `rise.pdb` was not shipped. That conclusion came from
+a recon command that truncated its own directory listing; `sbl\rise.pdb` was there all
+along. It is 57,290,752 bytes and it is the PDB for **this exact binary**:
+
+| | |
+|---|---|
+| EXE CodeView `PdbFileName` | `E:\agent\_work\2\s\main\game\rise.pdb` |
+| EXE CodeView GUID / age | `{51D4F219-61C6-4F84-9D5B-C3361B0D291F}` / 1 |
+| `rise.pdb` GUID / age | `{51D4F219-61C6-4F84-9D5B-C3361B0D291F}` / 1 |
+
+37,138 public symbols, 22,752 procedure records with undecorated names, code sizes and
+full C++ signatures, plus complete type information. Extracted to
+`schema/rise-symbols.tsv` (publics) and `schema/rise-procs.tsv` (procedures, with sizes —
+this is the one that lets you resolve an arbitrary VA to its containing function).
+
+**What this does and does not change.** It gives *names, types, sizes and line info*. It
+does **not** give semantics, and it does not raise any fidelity tier: a symbol is a name,
+not a behaviour, and values still come from the oracle. See
+`docs/derivation/PDB-RECONCILIATION.md` for the claim-by-claim audit of everything this
+project derived before the PDB was found.
 
 ## Floating point — the determinism crux
 
@@ -159,11 +179,25 @@ are plain source, and they exercise the real script API (`num_cities`,
 Ghidra project `re/ghidra` (project `ron`): **47,177 functions, 14,441 defined strings**.
 Rule-name anchors resolve as `unicode` data with clean xrefs — the methodology works:
 
-| anchor | xref'd from |
-|---|---|
-| `flank_bonus`, `cavalry_flank_bonus`, `vehicle_flank_bonus`, `siege_attrition`, `accel_train` | `FUN_00570170` (rules.xml constants loader) |
-| `progression` | `FUN_0061c490` |
-| `recharge` | `FUN_0065fc00` |
+| anchor | xref'd from | **real symbol [measured, rise.pdb]** |
+|---|---|---|
+| `flank_bonus`, `cavalry_flank_bonus`, `vehicle_flank_bonus`, `siege_attrition`, `accel_train` | `FUN_00570170` | `Constants::log_data(Log*) const` |
+| `progression` | `FUN_0061c490` | `UnitType::log_data` |
+| `recharge` | `FUN_0065fc00` | `ObjectType::log_data` |
+
+⚠ **CORRECTION [measured, 2026-08-08, rise.pdb]. These three functions are LOGGERS, not
+loaders.** This section originally called `FUN_00570170` "the rules.xml constants loader".
+It is `Constants::log_data`. The real loader is **`Constants::init` at `0x00569A90`**
+(26,336 bytes, ending exactly where `log_data` begins at `0x00570170`); likewise
+`UnitType::init` at `0x0061AB50`. The mistake was structural, not careless: the rule-name
+UTF-16 literals live in `.rdata` and are referenced **only** from the `log_data` functions
+(one xref for `flank_bonus`, in `Constants::log_data+2764`). `Constants::init` never touches
+them — it fetches each name from the runtime `StringTable` at `[0x00C06378]`
+(`int_str_array`) by fixed offset. Following the name strings therefore leads to the logger
+every time. Full detail and consequences in `docs/derivation/PDB-RECONCILIATION.md` §2.
+
+The good news is that the *binding* this section extracts survives, because `log_data`
+reads each field at its true offset in order to print it. See below.
 
 Decompiling `FUN_0061c490` (456 lines) and `FUN_0065fc00` (698 lines) reveals a uniform
 **descriptor + visitor** pattern. Each named field is bound by building a small
@@ -179,6 +213,14 @@ local_82 = 0x80000;          // flags/precision
 ```
 
 `param_1` is a visitor object; `vtable+0x1c` is its "bind named field" method.
+
+**What the visitor actually is [measured, rise.pdb]:** `param_1` is a `Log*`, and
+`vtable+0x1c` is a `Log` method that records one named value. This is the signature
+`void ObjectType::log_data(Log*) const`. It is *not* the save/checksum interface — that is
+a separate method family, `walk_data(DataWalk*)` / `walk_rules_data(DataWalk*)`, on the
+same classes (`Constants::walk_data` `0x0057F910`, `Balance::walk_rules_data` `0x00582CC0`,
+`Game::walk_data` `0x00589600`, `LeaderData::walk_data` `0x006D6750`, …). Two visitors, two
+interfaces.
 
 **CORRECTION [measured, 2026-08-08]: the field we called a "type tag" is the LENGTH of the
 wide rule name, not a type tag.** `recharge`=8, `crew_size`=9, `attack`=6, `hits`=4,
@@ -196,23 +238,33 @@ the combat-stats loader — its 35 names are `obj_masks`, `attack`, `to_hit`, `a
 `y_spacing`, `abil`, `x_size`, `y_size`, `guy_radius`, `block_radius`, `big_radius`,
 `new_block_radius`, … `FUN_0061c490` binds 23 names.
 
-**Unverified inference, flag before relying on it:** because the binding is a *visitor*
-vtable call rather than direct XML parsing, the same descriptor tables are plausibly
-reused for save-game serialization and possibly the lockstep checksum. If true,
-enumerating the callers of this pattern yields the complete sim-state schema. Not yet
-checked.
+**Inference REFUTED as stated [measured, rise.pdb]:** this section guessed that "the same
+descriptor tables are plausibly reused for save-game serialization and possibly the
+lockstep checksum". They are not the same tables. `log_data(Log*)` and
+`walk_data(DataWalk*)` are distinct virtual interfaces implemented separately on each
+class. The *conclusion* that a single traversal defines the sim-state schema still holds —
+but it is the `DataWalk` family that does it, and the enumeration must be of `walk_data` /
+`walk_rules_data`, not of this pattern.
 
-**Also unverified:** the third argument decompiles as `*(undefined4 *)(this + N)` — a
-*load* from the offset, not the address of the field. That suggests `this+N` holds a
-pointer to the storage rather than being the storage, but it may equally be imperfect
-calling-convention recovery. Resolve before building a parser on top of it.
+**Also resolved [measured, rise.pdb]:** the third argument decompiles as
+`*(undefined4 *)(this + N)` — a *load*, not an address — because a logger passes the
+field's **value**, not a pointer to it. There is no hidden indirection; `this+N` is the
+storage. (Verified in the disassembly of `Constants::log_data+2764`, which loads
+`[edi+0x4C]` and pushes it alongside `L"flank_bonus"`.)
 
-**`FUN_00570170` (the rules.xml loader) exceeds the decompiler's 600s budget** — expected
-if it inlines ~175 descriptor records. Do not fight the decompiler here; extract at the
-instruction level instead (locate each `L"name"` store, then read the type tag and the
-offset operand from the following call site). That extractor works uniformly on every
-loader, including the ones that decompile fine, and it is the mechanical path we want
-anyway.
+**`FUN_00570170` exceeds the decompiler's 600 s budget** — expected for a 63,382-byte
+function. Do not fight the decompiler here; extract at the instruction level instead. Two
+extractors now exist and they answer different questions:
+
+- *name → struct offset*, from `Constants::log_data` and its siblings: locate each
+  `L"name"` store and read the offset operand pushed alongside it. This is where
+  `docs/derivation/rules-constants.json` and `schema/bindings.json` came from, and the PDB
+  vindicates the result even though the function was misidentified.
+- *offset → parser + scale*, from `Constants::init` `0x00569A90`: every rules constant is
+  loaded by one of exactly two calls — `Constants::get_item(const String&)` `0x0057FA60`
+  (plain `_wtoi`, 661 sites) or `Constants::get_fraction(const String&, int scale)`
+  `0x0057F950` (40 sites), with the scale as a `push imm32` immediately before the call.
+  The complete scale universe is **{256 ×24, 192 ×11, 100 ×5}**.
 
 ## Open questions for Ghidra (the worklist)
 

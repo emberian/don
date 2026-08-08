@@ -1,0 +1,853 @@
+group	name	return_type	params	xml_func_index	handler_va	funcset	in_binary
+AI Building Placement	place_building	int_return	who who;build_type build_type;city_name city_name	385	009f5270	ScenarioFuncSet	yes
+AI Building Placement	place_building_upgrade	int_return	who who;build_type build_type;city_name city_name	387	009f5380	ScenarioFuncSet	yes
+AI Building Placement	place_building_upgrade_with_cost	int_return	who who;build_type build_type;city_name city_name	391	009f5680	ScenarioFuncSet	yes
+AI Building Placement	place_building_with_cost	int_return	who who;build_type build_type;city_name city_name	389	009f54a0	ScenarioFuncSet	yes
+AI Building Placement	place_city_with_cost	int_return	who who	393	009f5860	ScenarioFuncSet	yes
+AI Building Placement	place_orphan_building	int_return	who who;build_type build_type;build_o build_o	386	009f52f0	ScenarioFuncSet	yes
+AI Building Placement	place_orphan_building_upgrade	int_return	who who;build_type build_type;build_o build_o	388	009f5400	ScenarioFuncSet	yes
+AI Building Placement	place_orphan_building_upgrade_with_cost	int_return	who who;build_type build_type;build_o build_o	392	009f5700	ScenarioFuncSet	yes
+AI Building Placement	place_orphan_building_with_cost	int_return	who who;build_type build_type;build_o build_o	390	009f5520	ScenarioFuncSet	yes
+Audio	play_sound	int_return	sound sound	32	00a02f50	ScenarioFuncSet	yes
+Audio	play_sound_to	int_return	who who;sound sound	33	009e3c50	ScenarioFuncSet	yes
+Audio	set_music_mood	int_return	mood mood;bool bool_immediately	36	009e3cc0	ScenarioFuncSet	yes
+Audio	set_music_volume	void	percent percent	31	009e3c40	ScenarioFuncSet	yes
+Audio	sound_finished	int_return		35	009e3c80	ScenarioFuncSet	yes
+Audio	stop_sound	void		34	009e3c60	ScenarioFuncSet	yes
+Building Info	building_active	int_return	who who;build_o build_o	302	009f1ea0	ScenarioFuncSet	yes
+Building Info	building_destroyed	int_return	who who;build_o build_o	300	009f1d80	ScenarioFuncSet	yes
+Building Info	building_full	int_return	who who;object_o object_o	308	009f2360	ScenarioFuncSet	yes
+Building Info	building_started	int_return	who who;build_o build_o	303	009f1f20	ScenarioFuncSet	yes
+Building Info	building_type_destroyed	num	who who;build_type build_type	301	009f1df0	ScenarioFuncSet	yes
+Building Info	clear_build_queue	int_return	who who;build_o build_o;bool bool_unpay_cost	312	009f27e0	ScenarioFuncSet	yes
+Building Info	get_rally_x	x	who who;build_o build_o	305	009f20c0	ScenarioFuncSet	yes
+Building Info	get_rally_y	y	who who;build_o build_o	306	009f21a0	ScenarioFuncSet	yes
+Building Info	is_city	int_return	who who;build_o build_o	299	009f1cf0	ScenarioFuncSet	yes
+Building Info	is_civilian_building	int_return	who who;build_o build_o	298	009f1c30	ScenarioFuncSet	yes
+Building Info	is_military_building	int_return	who who;build_o build_o	297	009f1b70	ScenarioFuncSet	yes
+Building Info	is_rally_set	int_return	who who;build_o build_o	304	009f1fa0	ScenarioFuncSet	yes
+Building Info	max_workers_at_building	num	who who;build_o build_o	310	009f2520	ScenarioFuncSet	yes
+Building Info	num_garrisoned_in	num	who who;object_o object_o	307	009f2280	ScenarioFuncSet	yes
+Building Info	num_type_queued	num	who who;build_o build_o;unit_type unit_type	311	009f25e0	ScenarioFuncSet	yes
+Building Info	num_workers_at_building	num	who who;build_o build_o	309	009f2450	ScenarioFuncSet	yes
+Camera	center_camera_on	int_return	who who;object_o object_o	549	009fdc80	ScenarioFuncSet	yes
+Camera	get_camera_x	x		554	009fdfb0	ScenarioFuncSet	yes
+Camera	get_camera_y	y		555	009fdfe0	ScenarioFuncSet	yes
+Camera	get_current_zoom	num		553	009fdf90	ScenarioFuncSet	yes
+Camera	is_camera_panning	int_return		552	009fdf80	ScenarioFuncSet	yes
+Camera	jump_camera	int_return	x x;y y	548	009fdc00	ScenarioFuncSet	yes
+Camera	move_camera	int_return	x x;y y	547	009fdb50	ScenarioFuncSet	yes
+Camera	scrolling_lock	void		531	009fd7f0	ScenarioFuncSet	yes
+Camera	scrolling_lock_manual	void		534	009fd820	ScenarioFuncSet	yes
+Camera	scrolling_lock_minimap	void		532	009fd800	ScenarioFuncSet	yes
+Camera	scrolling_lock_shortcuts	void		533	009fd810	ScenarioFuncSet	yes
+Camera	scrolling_unlock	void		535	009fd830	ScenarioFuncSet	yes
+Camera	scrolling_unlock_manual	void		538	009fd860	ScenarioFuncSet	yes
+Camera	scrolling_unlock_minimap	void		536	009fd840	ScenarioFuncSet	yes
+Camera	scrolling_unlock_shortcuts	void		537	009fd850	ScenarioFuncSet	yes
+Camera	zoom_in	int_return	x x;y y	545	009fd8d0	ScenarioFuncSet	yes
+Camera	zoom_in_on	int_return	who who;object_o object_o	550	009fdd60	ScenarioFuncSet	yes
+Camera	zoom_out	int_return	x x;y y	546	009fda10	ScenarioFuncSet	yes
+Camera	zoom_out_on	int_return	who who;object_o object_o	551	009fde70	ScenarioFuncSet	yes
+Camera	zooming_lock	void		539	009fd870	ScenarioFuncSet	yes
+Camera	zooming_lock_manual	void		540	009fd880	ScenarioFuncSet	yes
+Camera	zooming_lock_shortcuts	void		541	009fd890	ScenarioFuncSet	yes
+Camera	zooming_unlock	void		542	009fd8a0	ScenarioFuncSet	yes
+Camera	zooming_unlock_manual	void		543	009fd8b0	ScenarioFuncSet	yes
+Camera	zooming_unlock_shortcuts	void		544	009fd8c0	ScenarioFuncSet	yes
+Chat	chat	int_return	who who_to;who who_from;message message	37	009e3d80	ScenarioFuncSet	yes
+Chat	chat_all	int_return	who who_from;message message	38	009e3e00	ScenarioFuncSet	yes
+Cities	city_alarm_sounded	int_return	who who;city_name city_name	256	009ef430	ScenarioFuncSet	yes
+Cities	city_assimilate	int_return	who who;city_name city_name	255	009ef3c0	ScenarioFuncSet	yes
+Cities	city_assimilated_by	int_return	who who_defend;who who_attack;city_name city_name	253	009ef250	ScenarioFuncSet	yes
+Cities	city_being_assimilated	int_return	who who;city_name city_name	254	009ef360	ScenarioFuncSet	yes
+Cities	city_captured	int_return	who who;city_name city_name	250	009eee50	ScenarioFuncSet	yes
+Cities	city_captured_by	int_return	who who_defend;who who_attack;city_name city_name	252	009ef040,009ef160	ScenarioFuncSet	yes
+Cities	city_exists	int_return	city_name city_name	257	009ef4e0	ScenarioFuncSet	yes
+Cities	city_id_captured	int_return	who who;build_o build_o	251	009eefb0	ScenarioFuncSet	yes
+Cities	find_city_id	build_o	city_name city_name	258	009ef580	ScenarioFuncSet	yes
+Cities	find_city_name	city_name	who who	261	009efbd0	ScenarioFuncSet	yes
+Cities	find_city_owner	who	city_name city_name	259	009ef790	ScenarioFuncSet	yes
+Cities	find_city_with_num	city_name	who who;city_num city_num	262	009eff00	ScenarioFuncSet	yes
+Cities	get_city_level	num	city_name city_name	260	009ef9a0	ScenarioFuncSet	yes
+Cities	num_city_buildings	num	who who;city_name city_name;build_type build_type;bool bool_count_inactive	263	009f0150	ScenarioFuncSet	yes
+Comparison Checks	at_least_age	int_return	who who;age age	208	009ed310	ScenarioFuncSet	yes
+Comparison Checks	at_least_buildings	int_return	who who;num num	215	009ed710	ScenarioFuncSet	yes
+Comparison Checks	at_least_cities	int_return	who who;num num	210	009ed3b0	ScenarioFuncSet	yes
+Comparison Checks	at_least_civilian_buildings	int_return	who who;num num	217	009ed810	ScenarioFuncSet	yes
+Comparison Checks	at_least_civilian_units	int_return	who who;num num	218	009ed8a0	ScenarioFuncSet	yes
+Comparison Checks	at_least_gather_rate	int_return	who who;num num;res_type res_type	213	009ed4a0	ScenarioFuncSet	yes
+Comparison Checks	at_least_military_buildings	int_return	who who;num num	216	009ed780	ScenarioFuncSet	yes
+Comparison Checks	at_least_military_units	int_return	who who;num num	219	009ed930	ScenarioFuncSet	yes
+Comparison Checks	at_least_points	int_return	who who;num num	212	009ed450	ScenarioFuncSet	yes
+Comparison Checks	at_least_pop	int_return	who who;num num	207	009ed2c0	ScenarioFuncSet	yes
+Comparison Checks	at_least_settlements	int_return	who who;num num	211	009ed400	ScenarioFuncSet	yes
+Comparison Checks	at_least_type	int_return	who who;num num;type type	214	009ed570	ScenarioFuncSet	yes
+Comparison Checks	at_least_unit_category	int_return	who who;num num;unit_cat unit_cat	220	009ed9c0	ScenarioFuncSet	yes
+Comparison Checks	at_least_villages	int_return	who who;num num	209	009ed360	ScenarioFuncSet	yes
+Comparison Checks	less_than_age	int_return	who who;age age	222	009edab0	ScenarioFuncSet	yes
+Comparison Checks	less_than_buildings	int_return	who who;num num	227	009ede10	ScenarioFuncSet	yes
+Comparison Checks	less_than_civilian_buildings	int_return	who who;num num	229	009edf10	ScenarioFuncSet	yes
+Comparison Checks	less_than_civilian_units	int_return	who who;num num	230	009edf90	ScenarioFuncSet	yes
+Comparison Checks	less_than_gather_rate	int_return	who who;num num;res_type res_type	223	009edb00	ScenarioFuncSet	yes
+Comparison Checks	less_than_military_buildings	int_return	who who;num num	228	009ede90	ScenarioFuncSet	yes
+Comparison Checks	less_than_military_units	int_return	who who;num num	231	009ee010	ScenarioFuncSet	yes
+Comparison Checks	less_than_points	int_return	who who;num num	225	009edc20	ScenarioFuncSet	yes
+Comparison Checks	less_than_pop	int_return	who who;num num	221	009eda60	ScenarioFuncSet	yes
+Comparison Checks	less_than_settlements	int_return	who who;num num	224	009edbd0	ScenarioFuncSet	yes
+Comparison Checks	less_than_type	int_return	who who;num num;object_type object_type	226	009edc70	ScenarioFuncSet	yes
+Comparison Checks	less_than_unit_category	int_return	who who;num num;unit_cat unit_cat	232	009ee090	ScenarioFuncSet	yes
+Comparison Checks	time_earlier_than	int_return	seconds seconds	234	009ee160	ScenarioFuncSet	yes
+Comparison Checks	time_later_than	int_return	seconds seconds	233	009ee120	ScenarioFuncSet	yes
+Conquer the World-only functions	clear_ctw_val	void	str str_id	128	009e6430	ScenarioFuncSet	yes
+Conquer the World-only functions	clear_ctw_vals	void		127	009e6410	ScenarioFuncSet	yes
+Conquer the World-only functions	defeat_attacker_and_allies	int_return		116	009e5f60	ScenarioFuncSet	yes
+Conquer the World-only functions	field_battle_disable	int_return		132	009e66e0	ScenarioFuncSet	yes
+Conquer the World-only functions	field_battle_enable	int_return		131	009e66c0	ScenarioFuncSet	yes
+Conquer the World-only functions	get_attack_age	int_return		121	009e61c0	ScenarioFuncSet	yes
+Conquer the World-only functions	get_attack_from	string		118	009e6060	ScenarioFuncSet	yes
+Conquer the World-only functions	get_attack_terr_str	int_return		122	009e61e0	ScenarioFuncSet	yes
+Conquer the World-only functions	get_attack_to	string		119	009e6100	ScenarioFuncSet	yes
+Conquer the World-only functions	get_attack_turn	int_return		120	009e61a0	ScenarioFuncSet	yes
+Conquer the World-only functions	get_conquest_invasion_dir	degree		115	009e5ef0	ScenarioFuncSet	yes
+Conquer the World-only functions	get_country_owner	string	str str_country	130	009e6470	ScenarioFuncSet	yes
+Conquer the World-only functions	get_ctw_int	int_return	str str_id	125	009e6350	ScenarioFuncSet	yes
+Conquer the World-only functions	get_ctw_seed	int_return		129	009e6460	ScenarioFuncSet	yes
+Conquer the World-only functions	get_ctw_str	string	str str_id	126	009e6380	ScenarioFuncSet	yes
+Conquer the World-only functions	get_num_times_played	int_return	str str_cat;str str_title	134	009e6710	ScenarioFuncSet	yes
+Conquer the World-only functions	group_jump_move	int_return	who who;x x;y y;num num_angle	133	004ce010,009fa710,009fb2d0	ScenarioFuncSet	yes
+Conquer the World-only functions	is_conquest_scenario	int_return		117	009e6040	ScenarioFuncSet	yes
+Conquer the World-only functions	set_ctw_int	void	str str_id;num num_val	123	009e6230	ScenarioFuncSet	yes
+Conquer the World-only functions	set_ctw_str	void	str str_id;str str_val	124	009e6280	ScenarioFuncSet	yes
+Craft	set_unit_craft	int_return	who who;unit_o unit_o;percent percent	401	009f68a0	ScenarioFuncSet	yes
+Craft	set_unit_type_max_craft	int_return	unit_type unit_type;num num_craftpoints	402	009f6980	ScenarioFuncSet	yes
+Craft	unit_craft	int_return	who who;unit_o unit_o	400	009f6830	ScenarioFuncSet	yes
+Craft	unit_max_craft	int_return	who who;unit_o unit_o	403	009f6ab0	ScenarioFuncSet	yes
+Create Objects	create_building	int_return	who who_receiver;x x;y y;build_type build_type	382	009f4d30	ScenarioFuncSet	yes
+Create Objects	create_building_near	int_return	who who_receiver;x x;y y;build_type build_type;dist_radius dist_radius	384	00a03160	ScenarioFuncSet	yes
+Create Objects	create_building_upgrade	int_return	who who_receiver;x x;y y;build_type build_type	383	009f4f00	ScenarioFuncSet	yes
+Create Objects	create_unit	int_return	who who_receiver;x x;y y;unit_type unit_type;num num_units	379	009f4c50	ScenarioFuncSet	yes
+Create Objects	create_unit_in_group	int_return	who who_receiver;x x;y y;unit_type unit_type;num num_units	381	009f4c80	ScenarioFuncSet	yes
+Create Objects	create_unit_upgrade	int_return	who who_receiver;x x;y y;unit_type unit_type;num num_units	380	00a030e0	ScenarioFuncSet	yes
+Destroy/Kill Objects	destroy_building	int_return	who who;build_o build_o	408	009f6fc0	ScenarioFuncSet	yes
+Destroy/Kill Objects	destroy_building_type	num	who who;build_type build_type	409	009f7030	ScenarioFuncSet	yes
+Destroy/Kill Objects	kill_unit	int_return	who who;unit_o unit_o	404	009f6b20	ScenarioFuncSet	yes
+Destroy/Kill Objects	kill_unit_anim	int_return	who who;unit_o unit_o;anim anim	405	009f6c70	ScenarioFuncSet	yes
+Destroy/Kill Objects	kill_unit_type	int_return	who who;unit_type unit_type	406	009f6d70	ScenarioFuncSet	yes
+Destroy/Kill Objects	kill_unit_type_anim	int_return	who who;unit_type unit_type;anim anim	407	009f6ea0	ScenarioFuncSet	yes
+Diplomacy	accept_offer	int_return	who who_acceptor;who who_asker	487	009fc410	ScenarioFuncSet	yes
+Diplomacy	add_visibility	int_return	who who;who who_target	495	009fc710	ScenarioFuncSet	yes
+Diplomacy	amount_offered	num	who who_offering;who who_offered;res_type res_type	503	009fcc70	ScenarioFuncSet	yes
+Diplomacy	contact_open	int_return		505	009fcd40	ScenarioFuncSet	yes
+Diplomacy	declare_war	int_return	who who_declarer;who who_declaree	479	009fbe80	ScenarioFuncSet	yes
+Diplomacy	demand_tribute	int_return	who who_asker;who who_askee;res_type res_type;num num	482	009fc110	ScenarioFuncSet	yes
+Diplomacy	diplomacy_block_war	int_return	who who_blocking;who who_blocked	493	009fc630	ScenarioFuncSet	yes
+Diplomacy	diplomacy_enable_war	int_return	who who_enabling;who who_enabled	494	009fc6a0	ScenarioFuncSet	yes
+Diplomacy	diplomacy_open	int_return		504	009fcd30	ScenarioFuncSet	yes
+Diplomacy	diplomacy_set_accept	int_return	who who	491	009fc5b0	ScenarioFuncSet	yes
+Diplomacy	diplomacy_set_auto	int_return	who who	489	009fc530	ScenarioFuncSet	yes
+Diplomacy	diplomacy_set_reject	int_return	who who	492	009fc5f0	ScenarioFuncSet	yes
+Diplomacy	diplomacy_set_wait	int_return	who who	490	009fc570	ScenarioFuncSet	yes
+Diplomacy	have_alliance	int_return	who who;who whom	508	009fcf50	ScenarioFuncSet	yes
+Diplomacy	have_contact	int_return	who who;who whom	506	009fcd60	ScenarioFuncSet	yes
+Diplomacy	have_fought	int_return	who who;who whom	511	009fd0b0	ScenarioFuncSet	yes
+Diplomacy	have_peace	int_return	who who;who whom	509	009fcfc0	ScenarioFuncSet	yes
+Diplomacy	have_trade	int_return	who who;who whom	507	009fcea0	ScenarioFuncSet	yes
+Diplomacy	have_war	int_return	who who;who whom	510	009fd040	ScenarioFuncSet	yes
+Diplomacy	is_offering_alliance	int_return	who who_asker;who who_askee	502	009fcc00	ScenarioFuncSet	yes
+Diplomacy	is_offering_peace	int_return	who who_asker;who who_askee	501	009fcb90	ScenarioFuncSet	yes
+Diplomacy	make_counter_offer	int_return	who who_initial_offer;who who_counter_offer;res_type res_type;num num_amount;message message	497	009fc850	ScenarioFuncSet	yes
+Diplomacy	make_peace	int_return	who who_declarer;who who_declaree	480	009fbf20	ScenarioFuncSet	yes
+Diplomacy	offer_accepted	int_return	who who_who_asker;who who_askee	499	009fcab0	ScenarioFuncSet	yes
+Diplomacy	offer_alliance	int_return	who who_asker;who who_askee	484	009fc270	ScenarioFuncSet	yes
+Diplomacy	offer_made	int_return	who who_who_asker;who who_askee	498	009fca20	ScenarioFuncSet	yes
+Diplomacy	offer_mutual_attack	int_return	who who_asker;who who_askee;who who_target	485	009fc2f0	ScenarioFuncSet	yes
+Diplomacy	offer_peace	int_return	who who_asker;who who_askee	483	009fc1f0	ScenarioFuncSet	yes
+Diplomacy	offer_rejected	int_return	who who_who_asker;who who_askee	500	009fcb20	ScenarioFuncSet	yes
+Diplomacy	offer_tribute	int_return	who who_sender;who who_receiver;res_type res_type;num num	481	009fc030	ScenarioFuncSet	yes
+Diplomacy	reject_offer	int_return	who who_acceptor;who who_asker	488	009fc490	ScenarioFuncSet	yes
+Diplomacy	remove_visibility	int_return	who who;who who_target	496	009fc7b0	ScenarioFuncSet	yes
+Diplomacy	revoke_offer	int_return	who who_asker;who who_askee	486	009fc390	ScenarioFuncSet	yes
+Diplomacy	was_attacked	int_return	who who_defender;who who_attacker;seconds seconds	513	009fd290	ScenarioFuncSet	yes
+Diplomacy	was_capital_attacked	int_return	who who_defender;who who_attacker;seconds seconds	516	009fd640	ScenarioFuncSet	yes
+Diplomacy	was_city_attacked	int_return	who who_defender;city_name city_name;seconds seconds	515	009fd510	ScenarioFuncSet	yes
+Diplomacy	was_city_raided	int_return	who who_defender;city_name city_name;seconds seconds	514	009fd3e0	ScenarioFuncSet	yes
+Diplomacy	was_raided	int_return	who who_defender;who who_attacker;seconds seconds	512	009fd140	ScenarioFuncSet	yes
+File IO (XML)	close_file	int_return		582	00a034e0	ScenarioFuncSet	yes
+File IO (XML)	file_entry_exists	int_return	data_element data_element	593	009fe810	ScenarioFuncSet	yes
+File IO (XML)	file_exists	int_return	filename filename	592	009fe7f0	ScenarioFuncSet	yes
+File IO (XML)	file_get_category	str		595	009fea10	ScenarioFuncSet	yes
+File IO (XML)	file_next_entry	int_return		586	009fe5c0	ScenarioFuncSet	yes
+File IO (XML)	file_read_attrib	str	data_attrib data_attrib;str str_default	585	009fe440	ScenarioFuncSet	yes
+File IO (XML)	file_read_text	str	data_element data_element	584	009fe360	ScenarioFuncSet	yes
+File IO (XML)	file_remove	int_return	data_element data_element	591	009fe720	ScenarioFuncSet	yes
+File IO (XML)	file_set_category	int_return	data_element data_element;bool bool_use_existing	594	009fe8d0	ScenarioFuncSet	yes
+File IO (XML)	file_sort_entries	int_return	data_element data_element;data_attrib data_attrib;bool bool_sort_descending	589	009fe500	ScenarioFuncSet	yes
+File IO (XML)	file_traverse_entries	int_return	data_element data_element	590	009fe6d0	ScenarioFuncSet	yes
+File IO (XML)	file_up_category	int_return		596	009feaa0	ScenarioFuncSet	yes
+File IO (XML)	file_write_attrib	int_return	data_attrib data_attrib;any_value any_value	588	009fe6a0	ScenarioFuncSet	yes
+File IO (XML)	file_write_text	int_return	data_element data_element;any_value any_value	587	009fe5f0	ScenarioFuncSet	yes
+File IO (XML)	get_curr_filename	filename		583	009fe570	ScenarioFuncSet	yes
+File IO (XML)	open_file	int_return	filename filename	581	009fe080	ScenarioFuncSet	yes
+Flags	add_flag	int_return	x x;y y	529	009fd790	ScenarioFuncSet	yes
+Flags	clear_flags	int_return		530	009fd7e0	ScenarioFuncSet	yes
+Game Settings Info	building_costs_disable	int_return		97	009e5750	ScenarioFuncSet	yes
+Game Settings Info	building_costs_enable	int_return		96	009e5720	ScenarioFuncSet	yes
+Game Settings Info	building_resource_bonus_disable	int_return		93	009e5690	ScenarioFuncSet	yes
+Game Settings Info	building_resource_bonus_enable	int_return		92	009e5660	ScenarioFuncSet	yes
+Game Settings Info	building_unit_bonus_disable	int_return		91	009e5630	ScenarioFuncSet	yes
+Game Settings Info	building_unit_bonus_enable	int_return		90	009e5600	ScenarioFuncSet	yes
+Game Settings Info	buildings_gather_disable	int_return		89	009e5580	ScenarioFuncSet	yes
+Game Settings Info	buildings_gather_enable	int_return		88	009e5500	ScenarioFuncSet	yes
+Game Settings Info	change_to_ai	int_return	who who	114	009e5d20	ScenarioFuncSet	yes
+Game Settings Info	change_to_human	int_return	who who	113	009e5c80	ScenarioFuncSet	yes
+Game Settings Info	get_difficulty	num		83	009e5320	ScenarioFuncSet	yes
+Game Settings Info	get_is_no_nation_powers	int_return		70	009e5230	ScenarioFuncSet	yes
+Game Settings Info	get_leader_difficulty	num	who who	85	009e53b0	ScenarioFuncSet	yes
+Game Settings Info	get_leader_name	str	who who	101	009e5850	ScenarioFuncSet	yes
+Game Settings Info	get_player_profile_name	str		100	009e57e0	ScenarioFuncSet	yes
+Game Settings Info	get_rush_rules	num		71	009e5240	ScenarioFuncSet	yes
+Game Settings Info	get_time_limit	num		111	009e5bf0	ScenarioFuncSet	yes
+Game Settings Info	is_paused	int_return		110	009e5be0	ScenarioFuncSet	yes
+Game Settings Info	is_victory_conquest	int_return		73	009e5260	ScenarioFuncSet	yes
+Game Settings Info	is_victory_economic	int_return		74	009e5270	ScenarioFuncSet	yes
+Game Settings Info	is_victory_musical_chairs	int_return		75	009e5280	ScenarioFuncSet	yes
+Game Settings Info	is_victory_score	int_return		76	009e5290	ScenarioFuncSet	yes
+Game Settings Info	is_victory_standard	int_return		72	009e5250	ScenarioFuncSet	yes
+Game Settings Info	is_victory_sudden_death	int_return		77	009e52a0	ScenarioFuncSet	yes
+Game Settings Info	is_victory_tech_race	int_return		78	009e52b0	ScenarioFuncSet	yes
+Game Settings Info	is_victory_territory	int_return		79	009e52c0	ScenarioFuncSet	yes
+Game Settings Info	is_victory_time_limit	int_return		80	009e52d0	ScenarioFuncSet	yes
+Game Settings Info	is_victory_wonder	int_return		81	009e52e0	ScenarioFuncSet	yes
+Game Settings Info	pause_disable	int_return		107	009e5b60	ScenarioFuncSet	yes
+Game Settings Info	pause_enable	int_return		106	009e5b50	ScenarioFuncSet	yes
+Game Settings Info	pause_game	void		108	009e5b70	ScenarioFuncSet	yes
+Game Settings Info	plunder_disable	int_return		87	009e5420	ScenarioFuncSet	yes
+Game Settings Info	plunder_enable	int_return		86	009e53f0	ScenarioFuncSet	yes
+Game Settings Info	set_difficulty	int_return	num num_difficulty	82	009e52f0	ScenarioFuncSet	yes
+Game Settings Info	set_leader_difficulty	int_return	who who;num num_difficulty	84	009e5350	ScenarioFuncSet	yes
+Game Settings Info	set_leader_name	int_return	who who;str str	102	009e5900	ScenarioFuncSet	yes
+Game Settings Info	set_time_limit	int_return	seconds seconds	112	009e5c40	ScenarioFuncSet	yes
+Game Settings Info	speed_control_disable	int_return		105	009e5b40	ScenarioFuncSet	yes
+Game Settings Info	speed_control_enable	int_return		104	009e5b30	ScenarioFuncSet	yes
+Game Settings Info	switch_player_control	int_return	who who	103	009e5960	ScenarioFuncSet	yes
+Game Settings Info	tech_costs_disable	int_return		99	009e57b0	ScenarioFuncSet	yes
+Game Settings Info	tech_costs_enable	int_return		98	009e5780	ScenarioFuncSet	yes
+Game Settings Info	unit_costs_disable	int_return		95	009e56f0	ScenarioFuncSet	yes
+Game Settings Info	unit_costs_enable	int_return		94	009e56c0	ScenarioFuncSet	yes
+Game Settings Info	unpause_game	void		109	009e5ba0	ScenarioFuncSet	yes
+General AI Toggles	disable_all_unit_ai	int_return	who who	563	009ff8e0	ScenarioFuncSet	yes
+General AI Toggles	disable_city_ai	int_return	who who	568	009ffbf0	ScenarioFuncSet	yes
+General AI Toggles	disable_city_defeat	int_return	who who	570	009ffc80	ScenarioFuncSet	yes
+General AI Toggles	disable_combat_ai	int_return	who who	561	009ff860	ScenarioFuncSet	yes
+General AI Toggles	disable_production_ai	int_return	who who	558	009ff7a0	ScenarioFuncSet	yes
+General AI Toggles	disable_unit_ai	int_return	who who;unit_o unit_o	565	009ffa10	ScenarioFuncSet	yes
+General AI Toggles	enable_all_unit_ai	int_return	who who	562	009ff8a0	ScenarioFuncSet	yes
+General AI Toggles	enable_city_ai	int_return	who who	567	009ffba0	ScenarioFuncSet	yes
+General AI Toggles	enable_city_defeat	int_return	who who	569	009ffc40	ScenarioFuncSet	yes
+General AI Toggles	enable_combat_ai	int_return	who who	560	009ff820	ScenarioFuncSet	yes
+General AI Toggles	enable_production_ai	int_return	who who	556	009ff5e0	ScenarioFuncSet	yes
+General AI Toggles	enable_unit_ai	int_return	who who;unit_o unit_o	564	009ff920	ScenarioFuncSet	yes
+General AI Toggles	force_transport_ability	int_return	who who	566	009ffb00	ScenarioFuncSet	yes
+General AI Toggles	load_production_script	int_return	who who;filename filename	559	009ff7e0	ScenarioFuncSet	yes
+General AI Toggles	set_auto_peasant_level	int_return	num num_level	557	009ff620	ScenarioFuncSet	yes
+Groups	group_id	object_o	who who	170	004ce660,009fa090	ScenarioFuncSet	yes
+Groups	involved_id	object_o		167	009ea0e0	ScenarioFuncSet	yes
+Groups	involved_nation	who		168	009ea120	ScenarioFuncSet	yes
+Groups	num_in_group	num	who who	169	004ce6c0,009fa060,009fa8c0	ScenarioFuncSet	yes
+Groups	num_involved	num		166	009ea0d0	ScenarioFuncSet	yes
+Health	damage_object	int_return	who who;object_o object_o;percent percent	396	009f5bd0	ScenarioFuncSet	yes
+Health	heal_object	int_return	who who;object_o object_o;percent percent	397	009f5cb0	ScenarioFuncSet	yes
+Health	object_health	int_return	who who;object_o object_o	394	009f5910	ScenarioFuncSet	yes
+Health	object_max_health	int_return	who who;object_o object_o	399	009f5f60	ScenarioFuncSet	yes
+Health	set_object_health	int_return	who who;object_o object_o;percent percent	395	009f5aa0	ScenarioFuncSet	yes
+Health	set_object_type_max_health	int_return	object_type object_type;num num_hitpoints	398	009f5da0	ScenarioFuncSet	yes
+Keyboard, Events	key_down	int_return	key key	341	009f3950	ScenarioFuncSet	yes
+Keyboard, Events	key_released	int_return	key key	342	009f39a0	ScenarioFuncSet	yes
+Map Info	clear_extra_starting_locs	void		69	009e5220	ScenarioFuncSet	yes
+Map Info	find_extra_starting_loc	int_return	num num_nation_space;num num_land_space;bool bool_only_check_player	66	009e5070	ScenarioFuncSet	yes
+Map Info	get_extra_starting_loc_x	num		67	009e51e0	ScenarioFuncSet	yes
+Map Info	get_extra_starting_loc_y	num		68	009e5200	ScenarioFuncSet	yes
+Map Info	get_map_size	num		56	009e4cb0	ScenarioFuncSet	yes
+Map Info	get_mapstyle	str		57	009e4cc0	ScenarioFuncSet	yes
+Map Info	get_tileset	str		58	009e4d20	ScenarioFuncSet	yes
+Map Info	map_is_buildable	int_return	x x;y y	61	009e4e50	ScenarioFuncSet	yes
+Map Info	map_is_land	int_return	x x;y y	59	009e4d90	ScenarioFuncSet	yes
+Map Info	map_is_passable	int_return	x x;y y	60	009e4de0	ScenarioFuncSet	yes
+Map Info	territory_object	object_o	who who;object_o object_o	65	009e4f50	ScenarioFuncSet	yes
+Map Info	territory_owner	who	x x;y y	64	009e4f00	ScenarioFuncSet	yes
+Map Info	world_x_size	num		62	009e4ee0	ScenarioFuncSet	yes
+Map Info	world_y_size	num		63	009e4ef0	ScenarioFuncSet	yes
+Map Visibility	add_reveal_point	int_return	who who;x x;y y;dist_radius dist_radius	48	009e4750	ScenarioFuncSet	yes
+Map Visibility	clear_reveal_points	int_return	who who	49	009e4810	ScenarioFuncSet	yes
+Map Visibility	set_explored	int_return	who who;x x;y y;dist_radius dist_radius	47	009e44b0,009e46f0	ScenarioFuncSet	yes
+Map Visibility	set_seen	int_return	who who;who whose_build;build_o build_o	50	009e4860	ScenarioFuncSet	yes
+Map Visibility	show_all_map_disable	int_return	who who	52	009e4a90	ScenarioFuncSet	yes
+Map Visibility	show_all_map_enable	int_return	who who	51	009e4a30	ScenarioFuncSet	yes
+Market	buy_good	int_return	who who;res_type res_type	472	009fb790	ScenarioFuncSet	yes
+Market	can_buy_sell	int_return	who who	474	009fb970	ScenarioFuncSet	yes
+Market	find_buy_price	num	who who;res_type res_type	476	009fbab0	ScenarioFuncSet	yes
+Market	find_sell_price	num	who who;res_type res_type	475	009fb9e0	ScenarioFuncSet	yes
+Market	get_base_rate	int_return	who who;res_type res_type	478	009fbc20	ScenarioFuncSet	yes
+Market	give_good	int_return	who who;res_type res_type;num num	469	009fb590	ScenarioFuncSet	yes
+Market	sell_good	int_return	who who;res_type res_type	473	009fb880	ScenarioFuncSet	yes
+Market	set_base_rate	int_return	who who;res_type res_type;num num	477	009fbb80	ScenarioFuncSet	yes
+Market	set_good	int_return	who who;res_type res_type;num num	471	009fb6f0	ScenarioFuncSet	yes
+Market	take_good	int_return	who who;res_type res_type;num num	470	009fb630	ScenarioFuncSet	yes
+Messages	clear_game_msg	void		6	009fed30	ScenarioFuncSet	yes
+Messages	clear_msg	void		3	009fec70	ScenarioFuncSet	yes
+Messages	print_game_msg	void	message message	5	009fecd0	ScenarioFuncSet	yes
+Messages	print_msg	void	message message	0	009feb80	ScenarioFuncSet	yes
+Messages	set_game_msg_color	void	color color	7	009fed40	ScenarioFuncSet	yes
+Messages	set_game_msg_time	void	seconds seconds	8	009fed90	ScenarioFuncSet	yes
+Messages	set_msg_align	void	str str	4	009fecc0	ScenarioFuncSet	yes
+Messages	set_msg_color	void	str str	1	009febe0	ScenarioFuncSet	yes
+Messages	set_msg_time	void	seconds seconds	2	009fec30	ScenarioFuncSet	yes
+Messages, Help	set_feedback_msg	int_return	message message	28	009e3b80	ScenarioFuncSet	yes
+Messages, Help	set_instruction_msg	int_return	message message	27	009e3b00	ScenarioFuncSet	yes
+Messages, Help	use_advanced_menu	void		30	009e3c20	ScenarioFuncSet	yes
+Messages, Help	use_basic_menu	void		29	009e3c00	ScenarioFuncSet	yes
+Messages, Popup Dialogs	popup_choice	int_return	message message_text;message message_accept;message message_reject	10	009fee70,009fef90	ScenarioFuncSet	yes
+Messages, Popup Dialogs	popup_dialog	int_return	message message	9	009fedd0	ScenarioFuncSet	yes
+Messages, Resource Warning	build_placement_warning	int_return		334	009f37c0	ScenarioFuncSet	yes
+Messages, Resource Warning	city_cap_warning	int_return		331	009f3670	ScenarioFuncSet	yes
+Messages, Resource Warning	commerce_cap_warning	int_return	who who	332	009f36b0	ScenarioFuncSet	yes
+Messages, Resource Warning	pop_cap_warning	int_return	who who	330	009f3620	ScenarioFuncSet	yes
+Messages, Resource Warning	researching_warning	int_return		329	009f35e0	ScenarioFuncSet	yes
+Messages, Resource Warning	resource_cap_warning	int_return	who who;res_type res_type	333	009f3720	ScenarioFuncSet	yes
+Messages, Resource Warning	resource_warning	int_return		327	009f3560	ScenarioFuncSet	yes
+Messages, Resource Warning	tech_warning	int_return		328	009f35a0	ScenarioFuncSet	yes
+Mouse Over Objects	get_object_at_mouse	object_o	who who	290	009f1620	ScenarioFuncSet	yes
+Mouse Over Objects	get_object_type_at_mouse	object_o	who who;object_type object_type	291	009f16e0	ScenarioFuncSet	yes
+Mouse Over Objects	get_resource_at_mouse	object_o		296	009f1ac0	ScenarioFuncSet	yes
+Mouse Over Objects	is_mouseover_forest	int_return		292	009f1870	ScenarioFuncSet	yes
+Mouse Over Objects	is_mouseover_mountain	int_return		293	009f1900	ScenarioFuncSet	yes
+Mouse Over Objects	is_mouseover_oil	int_return		294	009f1990	ScenarioFuncSet	yes
+Mouse Over Objects	is_mouseover_river	int_return		295	009f1a30	ScenarioFuncSet	yes
+Mouse, Events	get_mouse_game_x	x		338	009f3880	ScenarioFuncSet	yes
+Mouse, Events	get_mouse_game_y	y		339	009f38a0	ScenarioFuncSet	yes
+Mouse, Events	get_mouse_screen_x	screen_x		336	009f3840	ScenarioFuncSet	yes
+Mouse, Events	get_mouse_screen_y	screen_y		337	009f3860	ScenarioFuncSet	yes
+Mouse, Events	is_game_mouse_near	int_return	x x;y y;dist_radius dist_radius	340	009f38c0	ScenarioFuncSet	yes
+Mouse, Events	mouse_down	int_return		335	009f3800	ScenarioFuncSet	yes
+Nation & Player Stats	age	int_return	who who	138	009e8f50	ScenarioFuncSet	yes
+Nation & Player Stats	gather_rate	num	who who;res_type res_type	143	009e90b0	ScenarioFuncSet	yes
+Nation & Player Stats	get_console_player	who		165	009ea0b0	ScenarioFuncSet	yes
+Nation & Player Stats	get_last_type_built	int_return	who who;object_type object_type	155	009e9910	ScenarioFuncSet	yes
+Nation & Player Stats	get_starting_loc_x	int_return	who who	146	009e9250	ScenarioFuncSet	yes
+Nation & Player Stats	get_starting_loc_y	int_return	who who	147	009e92a0	ScenarioFuncSet	yes
+Nation & Player Stats	get_starting_resources	int_return	who who	145	009e91f0	ScenarioFuncSet	yes
+Nation & Player Stats	get_starting_town_size	int_return	who who	144	009e9170	ScenarioFuncSet	yes
+Nation & Player Stats	get_territory	int_return	who who	140	009e8fe0	ScenarioFuncSet	yes
+Nation & Player Stats	get_wonder_points	int_return	who who	141	009e9030	ScenarioFuncSet	yes
+Nation & Player Stats	is_defeated	int_return	who who	142	009e9070	ScenarioFuncSet	yes
+Nation & Player Stats	max_military_unit_type	str	who who	156	009e9af0	ScenarioFuncSet	yes
+Nation & Player Stats	num_buildings	num	who who	157	009e9bf0	ScenarioFuncSet	yes
+Nation & Player Stats	num_cities	num	who who	148	009e92f0	ScenarioFuncSet	yes
+Nation & Player Stats	num_civilian_buildings	num	who who	159	009e9ce0	ScenarioFuncSet	yes
+Nation & Player Stats	num_civilian_units	num	who who	161	009e9e70	ScenarioFuncSet	yes
+Nation & Player Stats	num_military_buildings	num	who who	158	009e9c60	ScenarioFuncSet	yes
+Nation & Player Stats	num_military_units	num	who who	162	009e9ef0	ScenarioFuncSet	yes
+Nation & Player Stats	num_rare_resources_seen	num	who who	164	009ea010	ScenarioFuncSet	yes
+Nation & Player Stats	num_type	num	who who;object_type object_type	149	009e9320	ScenarioFuncSet	yes
+Nation & Player Stats	num_type_upgrade	num	who who;object_type object_type	150	009e94a0	ScenarioFuncSet	yes
+Nation & Player Stats	num_type_with_queued	num	who who;unit_type unit_type	151	009e9630	ScenarioFuncSet	yes
+Nation & Player Stats	num_unit_category	num	who who;unit_cat unit_cat	163	009e9f70	ScenarioFuncSet	yes
+Nation & Player Stats	num_units	num	who who	160	009e9d60	ScenarioFuncSet	yes
+Nation & Player Stats	num_units_built	num	who who	152	009e9880	ScenarioFuncSet	yes
+Nation & Player Stats	num_units_killed	num	who who	154	009e98e0	ScenarioFuncSet	yes
+Nation & Player Stats	num_units_lost	num	who who	153	009e98b0	ScenarioFuncSet	yes
+Nation & Player Stats	score	int_return	who who	139	009e8fa0	ScenarioFuncSet	yes
+Object Location	any_object_at	int_return	who who;x x;y y	284	009f1140	ScenarioFuncSet	yes
+Object Location	any_object_near	int_return	who who;num num_objects;x x;y y;dist_radius dist_radius	285	009f11b0	ScenarioFuncSet	yes
+Object Location	any_object_near_build	int_return	who who_object;num num_objects;who who_build;build_o build_o;dist_radius dist_radius	286	009f1280	ScenarioFuncSet	yes
+Object Location	is_object_at	int_return	who who;object_o object_o;x x;y y	278	009f0b70	ScenarioFuncSet	yes
+Object Location	object_near	int_return	who who;object_o object_o;x x;y y;dist_radius dist_radius	279	009f0c30	ScenarioFuncSet	yes
+Object Location	object_near_build	int_return	who who_object;object_o object_o;who who_build;build_o build_o;dist_radius dist_radius	280	009f0d10	ScenarioFuncSet	yes
+Object Location	object_position_x	int_return	who who;object_o object_o	287	009f1360	ScenarioFuncSet	yes
+Object Location	object_position_y	int_return	who who;object_o object_o	288	009f1470	ScenarioFuncSet	yes
+Object Location	object_type	string	who who;object_o object_o	289	009f1580	ScenarioFuncSet	yes
+Object Location	object_type_at	int_return	who who;object_type object_type;x x;y y	281	009f0e50	ScenarioFuncSet	yes
+Object Location	object_type_near	int_return	who who;object_type object_type;num num_objects;x x;y y;dist_radius dist_radius	282	009f0f10	ScenarioFuncSet	yes
+Object Location	object_type_near_build	int_return	who who_object;object_type object_type;num num_objects;who who_build;build_o build_o;dist_radius dist_radius	283	009f1010	ScenarioFuncSet	yes
+Object Location	object_visible	int_return	who who;who whose_obj;object_o object_o	277	009f0a60	ScenarioFuncSet	yes
+Objectives (Scenario)	add_goal	int_return	who who;goal_id goal_id;message message	20	009e3670	ScenarioFuncSet	yes
+Objectives (Scenario)	clear_goals	int_return	who who	24	009e3a50	ScenarioFuncSet	yes
+Objectives (Scenario)	complete_goal	int_return	who who;goal_id goal_id	21	009e3780	ScenarioFuncSet	yes
+Objectives (Scenario)	goal_dialog_shown	int_return		25	009e3ad0	ScenarioFuncSet	yes
+Objectives (Scenario)	remove_goal	int_return	who who;goal_id goal_id	23	009e3980	ScenarioFuncSet	yes
+Objectives (Scenario)	reset_goal	int_return	who who;goal_id goal_id	22	009e3880	ScenarioFuncSet	yes
+Objectives (Scenario)	show_goal_dialog	int_return		26	009e3ae0	ScenarioFuncSet	yes
+Objectives (Temporary)	add_objective	int_return	message message;obj_id obj_id;sound sound	11	009e34d0	ScenarioFuncSet	yes
+Objectives (Temporary)	add_objective_text	int_return	message message;obj_id obj_id;sound sound	12	009e3520	ScenarioFuncSet	yes
+Objectives (Temporary)	change_objective_text	int_return	obj_id obj_id;message message	13	009e3570	ScenarioFuncSet	yes
+Objectives (Temporary)	clear_objectives	int_return		19	009e3650	ScenarioFuncSet	yes
+Objectives (Temporary)	objective_complete	int_return	obj_id obj_id	17	009e3610	ScenarioFuncSet	yes
+Objectives (Temporary)	play_objective_sound	int_return	obj_id obj_id	16	009e35f0	ScenarioFuncSet	yes
+Objectives (Temporary)	remove_objective	int_return	obj_id obj_id	18	009e3630	ScenarioFuncSet	yes
+Objectives (Temporary)	set_objective_loc	int_return	obj_id obj_id;x x;y y	15	009e35b0	ScenarioFuncSet	yes
+Objectives (Temporary)	set_objective_sound	int_return	obj_id obj_id;sound sound	14	009e3590	ScenarioFuncSet	yes
+Ping	clear_pings	int_return	who who	46	009e4490	ScenarioFuncSet	yes
+Ping	ping	int_return	who who_to;who who_from;x x;y y	39	009e3e70	ScenarioFuncSet	yes
+Ping	ping_all	int_return	who who_to;x x;y y	40	009e3f30	ScenarioFuncSet	yes
+Ping	ping_constant	int_return	who who_from;x x;y y	45	009e43f0	ScenarioFuncSet	yes
+Ping	ping_group	int_return	who who_from;who whose_unit	43	004cea20,009e4140,009fa9c0	ScenarioFuncSet	yes
+Ping	ping_group_all	int_return	who who_from;who whose_unit	44	004ce920,009e42b0,009faae0	ScenarioFuncSet	yes
+Ping	ping_object	int_return	who who_to;who who_from;who whose_unit;object_o object_o	41	009e3fd0	ScenarioFuncSet	yes
+Ping	ping_object_all	int_return	who who_from;who whose_unit;object_o object_o	42	009e4090	ScenarioFuncSet	yes
+Ping & Screen Arrows	add_arrow_point	int_return	x x1;y y1	576	009ffe00	ScenarioFuncSet	yes
+Ping & Screen Arrows	cancel_arrow	void		572	009ffd20	ScenarioFuncSet	yes
+Ping & Screen Arrows	clear_all_arrows	void		573	009ffd30	ScenarioFuncSet	yes
+Ping & Screen Arrows	draw_arrow_curve	int_return	seconds seconds	577	009ffe90	ScenarioFuncSet	yes
+Ping & Screen Arrows	draw_screen_arrow_line	int_return	x x1;y y1;x x2;y y2;seconds seconds	571	009ffcc0	ScenarioFuncSet	yes
+Ping & Screen Arrows	set_arrow_color	void	color color	578	009fff30	ScenarioFuncSet	yes
+Ping & Screen Arrows	set_arrow_thick	void	real real_num_thick	579	009fff80	ScenarioFuncSet	yes
+Ping & Screen Arrows	start_ping_arrow	int_return	x x1;y y1	575	009ffd70	ScenarioFuncSet	yes
+Ping & Screen Arrows	start_screen_arrow	int_return	x x1;y y1	574	009ffd40	ScenarioFuncSet	yes
+Population	population	num	who who	135	009e8e70	ScenarioFuncSet	yes
+Population	population_cap	int_return	who who	136	009e8eb0	ScenarioFuncSet	yes
+Population	set_population_cap	int_return	who who;num num	137	009e8ef0	ScenarioFuncSet	yes
+Scale	get_unit_scale	real	who who;object_o object_o	180	009eac70	ScenarioFuncSet	yes
+Scale	set_unit_scale	int_return	who who;object_o object_o;real real_scale	179	009eabe0	ScenarioFuncSet	yes
+Screenshot	take_screenshot	int_return	filename filename	580	009fe010	ScenarioFuncSet	yes
+Search Functions	find_all_military	unit_o	who who	192	009eb860	ScenarioFuncSet	yes
+Search Functions	find_all_military_category	unit_o	who who;unit_cat unit_cat	195	009ebcb0	ScenarioFuncSet	yes
+Search Functions	find_all_unit	unit_o	who who;unit_type unit_type	198	009ebfb0	ScenarioFuncSet	yes
+Search Functions	find_build	build_o	who who;build_type build_type	199	009e2970,009ec160	ScenarioFuncSet	yes
+Search Functions	find_build_at_city	build_o	who who;city_name city_name;build_type build_type;bool bool_count_inactive	202	009ec7a0	ScenarioFuncSet	yes
+Search Functions	find_capital	city_name	who who	204	009ecfe0	ScenarioFuncSet	yes
+Search Functions	find_civilian_build	build_o	who who	201	009ec630	ScenarioFuncSet	yes
+Search Functions	find_idle_all_military	unit_o	who who	189	009eb440	ScenarioFuncSet	yes
+Search Functions	find_idle_caravan	unit_o	who who	186	009eaf70	ScenarioFuncSet	yes
+Search Functions	find_idle_citizen	unit_o	who who	185	009ead70	ScenarioFuncSet	yes
+Search Functions	find_idle_inside_military	unit_o	who who	188	009eb2e0	ScenarioFuncSet	yes
+Search Functions	find_idle_military	unit_o	who who	187	009eb150	ScenarioFuncSet	yes
+Search Functions	find_inactive_build	build_o	who who;build_type build_type	203	009ece40	ScenarioFuncSet	yes
+Search Functions	find_inside_military	unit_o	who who	191	009eb720	ScenarioFuncSet	yes
+Search Functions	find_inside_military_category	unit_o	who who;unit_cat unit_cat	194	009ebb20	ScenarioFuncSet	yes
+Search Functions	find_inside_unit	unit_o	who who;unit_type unit_type	197	009ebee0	ScenarioFuncSet	yes
+Search Functions	find_military	unit_o	who who	190	009eb5a0	ScenarioFuncSet	yes
+Search Functions	find_military_build	build_o	who who	200	009ec4c0	ScenarioFuncSet	yes
+Search Functions	find_military_category	unit_o	who who;unit_cat unit_cat	193	009eb990	ScenarioFuncSet	yes
+Search Functions	find_nation	nation_name	who who	205	009ed190	ScenarioFuncSet	yes
+Search Functions	find_unit	unit_o	who who;unit_type unit_type	196	009e2850,009ebe10	ScenarioFuncSet	yes
+Search Functions	set_nation_name	int_return	str str_old_nation_name;str str_new_nation_name	206	009ed230	ScenarioFuncSet	yes
+Selection	any_object_selected	int_return	who who	267	009f0680	ScenarioFuncSet	yes
+Selection	clear_selection	int_return		272	009f0930	ScenarioFuncSet	yes
+Selection	find_selected_id	object_o	who who	271	009f0900	ScenarioFuncSet	yes
+Selection	hotkey_selection_disable	int_return		276	009f0a20	ScenarioFuncSet	yes
+Selection	hotkey_selection_enable	int_return		275	009f09e0	ScenarioFuncSet	yes
+Selection	mouse_selection_disable	int_return		274	009f09a0	ScenarioFuncSet	yes
+Selection	mouse_selection_enable	int_return		273	009f0960	ScenarioFuncSet	yes
+Selection	num_objects_selected	num	who who	268	009f06f0	ScenarioFuncSet	yes
+Selection	object_selected	int_return	who who;object_o object_o	264	009f0270	ScenarioFuncSet	yes
+Selection	object_type_selected	int_return	who who;object_type object_type	266	009f04e0	ScenarioFuncSet	yes
+Selection	resource_selected	int_return		265	009f03a0	ScenarioFuncSet	yes
+Selection	select_group	int_return	who who	270	004ce830,009f0840,009fa910	ScenarioFuncSet	yes
+Selection	select_object	int_return	who who;who who_target;object_o object_o	269	009f0760	ScenarioFuncSet	yes
+Team Change	switch_building_type	int_return	who who_receiver;who who_giver;build_type build_type	378	009f4a00	ScenarioFuncSet	yes
+Team Change	switch_teams	int_return	who who_receiver;who who_giver;object_o object_o	376	009f46b0	ScenarioFuncSet	yes
+Team Change	switch_unit_type	int_return	who who_receiver;who who_giver;unit_type unit_type	377	009f4890	ScenarioFuncSet	yes
+Techs & Ages	can_pay_cost	int_return	who who;type type	249	009eedc0	ScenarioFuncSet	yes
+Techs & Ages	gain_next_age	int_return	who who	236	009ee4a0	ScenarioFuncSet	yes
+Techs & Ages	gain_tech	int_return	who who;tech tech_type	235	009ee1a0	ScenarioFuncSet	yes
+Techs & Ages	gain_upgrade	int_return	who who;type type	247	009eeb90	ScenarioFuncSet	yes
+Techs & Ages	get_current_age	num	who who	241	009ee920	ScenarioFuncSet	yes
+Techs & Ages	get_ending_age	num		243	009ee980	ScenarioFuncSet	yes
+Techs & Ages	get_starting_age	num		242	009ee970	ScenarioFuncSet	yes
+Techs & Ages	get_techs_per_age	num	who who	240	009ee8b0	ScenarioFuncSet	yes
+Techs & Ages	have_tech	int_return	who who;tech tech_type	244	009ee990	ScenarioFuncSet	yes
+Techs & Ages	lose_current_age	int_return	who who	238	009ee6a0	ScenarioFuncSet	yes
+Techs & Ages	lose_tech	int_return	who who;tech tech_type	237	009ee500	ScenarioFuncSet	yes
+Techs & Ages	lose_upgrade	int_return	who who;type type	248	009eed00	ScenarioFuncSet	yes
+Techs & Ages	research_tech_with_cost	int_return	who who;tech tech	239	009ee700	ScenarioFuncSet	yes
+Techs & Ages	researching_tech	int_return	who who;tech tech_type	245	009eea20	ScenarioFuncSet	yes
+Techs & Ages	researching_tech_at	int_return	who who;object_o object_o;tech tech_type	246	009eeae0	ScenarioFuncSet	yes
+Time	real_time_millis	num		184	009ead50	ScenarioFuncSet	yes
+Time	time	minutes		181	009ead00	ScenarioFuncSet	yes
+Time	time_min	minutes		182	009ead20	ScenarioFuncSet	yes
+Time	time_sec	seconds		183	009ead40	ScenarioFuncSet	yes
+Timers	set_timer	int_return	timer_id timer_id;seconds seconds	53	009e4bc0	ScenarioFuncSet	yes
+Timers	stop_timer	int_return	timer_id timer_id	54	009e4c10	ScenarioFuncSet	yes
+Timers	timer_expired	int_return	timer_id timer_id	55	009e4c80	ScenarioFuncSet	yes
+Types Controls	disable_tech	int_return	who who;tech tech	172	009ea2b0	ScenarioFuncSet	yes
+Types Controls	disable_type	int_return	type type	171	009ea130	ScenarioFuncSet	yes
+Types Controls	enable_tech	int_return	who who;tech tech	174	009ea590	ScenarioFuncSet	yes
+Types Controls	enable_type	int_return	type type	173	009ea3e0	ScenarioFuncSet	yes
+Types Controls	find_counter_unit	str	who who;unit_type unit_type	177	009ea930	ScenarioFuncSet	yes
+Types Controls	find_current_upgrade	str	who who;unit_type unit_type	178	009eaae0	ScenarioFuncSet	yes
+Types Controls	set_type_build_time	int_return	type type;seconds seconds_to_build	176	009ea7d0	ScenarioFuncSet	yes
+Types Controls	type_build_time	num	type type	175	009ea760	ScenarioFuncSet	yes
+UI, Highlight	bubble_text_hide	int_return		527	009ff4e0	ScenarioFuncSet	yes
+UI, Highlight	bubble_text_show	int_return		526	009ff4d0	ScenarioFuncSet	yes
+UI, Highlight	clear_highlight	int_return		521	009ff400	ScenarioFuncSet	yes
+UI, Highlight	highlight_build_option	int_return	option option	517	009ff100	ScenarioFuncSet	yes
+UI, Highlight	highlight_option	int_return	option option	520	009ff310	ScenarioFuncSet	yes
+UI, Highlight	highlight_tech	int_return	option option	519	009ff2a0	ScenarioFuncSet	yes
+UI, Highlight	highlight_train_option	int_return	option option	518	009ff210	ScenarioFuncSet	yes
+UI, Highlight	is_right_click_action	int_return		528	009ff5c0	ScenarioFuncSet	yes
+UI, Highlight	ui_hide	int_return		523	009ff470	ScenarioFuncSet	yes
+UI, Highlight	ui_hide_score	int_return		525	009ff4c0	ScenarioFuncSet	yes
+UI, Highlight	ui_show	int_return		522	009ff440	ScenarioFuncSet	yes
+UI, Highlight	ui_show_score	int_return		524	009ff4a0	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_bottom	screen_y	option option	357	009f3d20	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_center_x	screen_x	option option	354	009f3c70	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_center_y	screen_y	option option	355	009f3cb0	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_left	screen_x	option option	358	009f3d50	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_rect	int_return	option option;screen_x screen_x_left;screen_y screen_y_top;screen_x screen_x_right;screen_y screen_y_bottom	360	009f3db0	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_right	screen_x	option option	359	009f3d80	ScenarioFuncSet	yes
+UI, Screen Locations	get_button_top	screen_y	option option	356	009f3cf0	ScenarioFuncSet	yes
+UI, Screen Locations	get_objectives_bottom	screen_y		362	009f3e50	ScenarioFuncSet	yes
+UI, Screen Locations	get_objectives_left	screen_x		363	009f3e90	ScenarioFuncSet	yes
+UI, Screen Locations	get_objectives_right	screen_x		364	009f3ed0	ScenarioFuncSet	yes
+UI, Screen Locations	get_objectives_top	screen_y		361	009f3e10	ScenarioFuncSet	yes
+UI, Screen Locations	get_screen_height	num		366	009f3f30	ScenarioFuncSet	yes
+UI, Screen Locations	get_screen_width	num		365	009f3f10	ScenarioFuncSet	yes
+UI, Stats	build_menu_active	int_return		343	009f3a00	ScenarioFuncSet	yes
+UI, Stats	build_military_menu_active	int_return		344	009f3a30	ScenarioFuncSet	yes
+UI, Stats	build_option_selected	int_return	build_type build_type	346	009f3a90	ScenarioFuncSet	yes
+UI, Stats	build_wonder_menu_active	int_return		345	009f3a60	ScenarioFuncSet	yes
+UI, Stats	is_airstrike_selected	int_return		353	009f3c50	ScenarioFuncSet	yes
+UI, Stats	is_move_selected	int_return		350	009f3be0	ScenarioFuncSet	yes
+UI, Stats	is_on_screen	int_return	x x;y y	349	009f3b50	ScenarioFuncSet	yes
+UI, Stats	is_patrol_selected	int_return		352	009f3c20	ScenarioFuncSet	yes
+UI, Stats	is_rally_selected	int_return		351	009f3c00	ScenarioFuncSet	yes
+UI, Stats	is_zoomed_in	int_return		347	009f3af0	ScenarioFuncSet	yes
+UI, Stats	is_zoomed_out	int_return		348	009f3b20	ScenarioFuncSet	yes
+Unit Info	find_num_idle_unit	int_return	who who;unit_type unit_type	326	009f3390	ScenarioFuncSet	yes
+Unit Info	garrisoned_in	build_o	who who;object_o object_o	320	009f2fb0	ScenarioFuncSet	yes
+Unit Info	home_base	object_o	who who;object_o object_o	325	009f32f0	ScenarioFuncSet	yes
+Unit Info	is_garrisoned	int_return	who who;object_o object_o	319	009f2f20	ScenarioFuncSet	yes
+Unit Info	is_merchant_unpacked	int_return	who who;object_o object_o	318	009f2e90	ScenarioFuncSet	yes
+Unit Info	is_on_transport	int_return	who who;object_o object_o	321	009f3060	ScenarioFuncSet	yes
+Unit Info	max_caravan_routes	num	who who	324	009f32b0	ScenarioFuncSet	yes
+Unit Info	num_caravan_routes	num	who who	323	009f3240	ScenarioFuncSet	yes
+Unit Info	unit_any_killed	num	who who	315	009f2af0	ScenarioFuncSet	yes
+Unit Info	unit_category	unit_cat	who who;object_o object_o	322	009f3190	ScenarioFuncSet	yes
+Unit Info	unit_group_near	int_return	who who;num num_units;x x;y y;dist_radius dist_radius	316	004ce7c0,009f2b50,009fac20	ScenarioFuncSet	yes
+Unit Info	unit_group_near_build	int_return	who who;num num_units;who who_build;build_o build_o;dist_radius dist_radius	317	004ce750,009f2cd0,009fadc0	ScenarioFuncSet	yes
+Unit Info	unit_killed	int_return	who who;unit_o unit_o	313	009f29c0	ScenarioFuncSet	yes
+Unit Info	unit_type_killed	num	who who;unit_type unit_type	314	009f2a40	ScenarioFuncSet	yes
+Unit Orders	add_to_group	int_return	who who;object_o object_o	454	004ce5f0,009fa120,009fa7f0	ScenarioFuncSet	yes
+Unit Orders	air_base_recall_order	int_return	who who;unit_o unit_o	423	009f89e0	ScenarioFuncSet	yes
+Unit Orders	air_unit_return_order	int_return	who who;unit_o unit_o	422	009f88d0	ScenarioFuncSet	yes
+Unit Orders	air_unit_transfer_order	int_return	who who;unit_o unit_o;object_o object_o_target	421	009f8720	ScenarioFuncSet	yes
+Unit Orders	citizen_repair_order	int_return	who who;unit_o unit_o;build_o build_o_target	420	009f85b0	ScenarioFuncSet	yes
+Unit Orders	clear_group	int_return	who who	457	004ce470,009fa350,009fa8e0	ScenarioFuncSet	yes
+Unit Orders	craft_percent	percent	who who;unit_o unit_o	437	009f90c0	ScenarioFuncSet	yes
+Unit Orders	find_target_id	object_o	who who;object_o object_o	452	009f9db0	ScenarioFuncSet	yes
+Unit Orders	find_target_who	who	who who;object_o object_o	451	009f9d00	ScenarioFuncSet	yes
+Unit Orders	general_ambush	int_return	who who;unit_o unit_o	426	009f8b80	ScenarioFuncSet	yes
+Unit Orders	general_decoy	int_return	who who;unit_o unit_o;who who_target;unit_o unit_o_target	425	009f8b00	ScenarioFuncSet	yes
+Unit Orders	general_entrench	int_return	who who;unit_o unit_o	424	009f8ac0	ScenarioFuncSet	yes
+Unit Orders	general_forced_march	int_return	who who;unit_o unit_o	427	009f8bc0	ScenarioFuncSet	yes
+Unit Orders	general_is_ambushing	int_return	who who;unit_o unit_o	430	009f8ce0	ScenarioFuncSet	yes
+Unit Orders	general_is_forced_marching	int_return	who who;unit_o unit_o	431	009f8d50	ScenarioFuncSet	yes
+Unit Orders	get_spell_name	str	who who;unit_o unit_o	450	009f9bc0	ScenarioFuncSet	yes
+Unit Orders	group_attack_order	group_size	who who;who who_attacked;object_o object_o	461	004ce2b0,009fa4b0,009fb400	ScenarioFuncSet	yes
+Unit Orders	group_attack_to_order	group_size	who who;x x;y y	463	004ce1d0,009fa570,009fb140	ScenarioFuncSet	yes
+Unit Orders	group_explore_order	group_size	who who;x x;y y	460	004ce320,009fa450,009fb0b0	ScenarioFuncSet	yes
+Unit Orders	group_guard_order	group_size	who who;who who_guard;object_o object_o_guard	462	004ce240,009fa510,009fb4b0	ScenarioFuncSet	yes
+Unit Orders	group_move_order	group_size	who who;x x;y y	458	004ce400,009fa390,009faf90	ScenarioFuncSet	yes
+Unit Orders	group_patrol_order	group_size	who who;x x;y y	464	004ce160,009fa5d0,009fb1d0	ScenarioFuncSet	yes
+Unit Orders	group_stance_order	group_size	who who;stance stance	465	004ce080,009fa690,009fb560	ScenarioFuncSet	yes
+Unit Orders	group_waypoint_order	group_size	who who;x x;y y	459	004ce390,009fa3f0,009fb020	ScenarioFuncSet	yes
+Unit Orders	has_attack_order	int_return	who who;unit_o unit_o	445	009f96c0	ScenarioFuncSet	yes
+Unit Orders	has_build_order	int_return	who who;unit_o unit_o	442	009f9520	ScenarioFuncSet	yes
+Unit Orders	has_cast_order	int_return	who who;unit_o unit_o	449	009f98d0	ScenarioFuncSet	yes
+Unit Orders	has_follow_order	int_return	who who;unit_o unit_o	447	009f97c0	ScenarioFuncSet	yes
+Unit Orders	has_gather_order	int_return	who who;unit_o unit_o	441	009f9490	ScenarioFuncSet	yes
+Unit Orders	has_move_order	int_return	who who;unit_o unit_o	448	009f9840	ScenarioFuncSet	yes
+Unit Orders	has_patrol_order	int_return	who who;unit_o unit_o	446	009f9740	ScenarioFuncSet	yes
+Unit Orders	has_repair_order	int_return	who who;unit_o unit_o	443	009f95b0	ScenarioFuncSet	yes
+Unit Orders	has_repeat_orders	int_return	who who;object_o object_o	466	009f9970	ScenarioFuncSet	yes
+Unit Orders	has_target_order	int_return	who who;unit_o unit_o	444	009f9640	ScenarioFuncSet	yes
+Unit Orders	is_decoy	int_return	who who;unit_o unit_o	429	009f8c70	ScenarioFuncSet	yes
+Unit Orders	is_entrenched	int_return	who who;unit_o unit_o	428	009f8c00	ScenarioFuncSet	yes
+Unit Orders	is_gathering	int_return	who who;unit_o unit_o	440	009f9420	ScenarioFuncSet	yes
+Unit Orders	is_idle	int_return	who who;unit_o unit_o	439	009f9370	ScenarioFuncSet	yes
+Unit Orders	is_in_group	int_return	who who;object_o object_o	456	004ce4f0,009fa2e0	ScenarioFuncSet	yes
+Unit Orders	is_infiltrated	int_return	who who;object_o object_o	438	009f9180	ScenarioFuncSet	yes
+Unit Orders	remove_from_group	int_return	who who;object_o object_o	455	004ce560,009fa2a0,009fa870	ScenarioFuncSet	yes
+Unit Orders	repeat_orders_disable	int_return	who who;object_o object_o	468	009f9ad0	ScenarioFuncSet	yes
+Unit Orders	repeat_orders_enable	int_return	who who;object_o object_o	467	009f99e0	ScenarioFuncSet	yes
+Unit Orders	special_forces_infiltrate	int_return	who who;unit_o unit_o;who who_target;object_o object_o	434	009f8ec0	ScenarioFuncSet	yes
+Unit Orders	special_forces_sabotage	int_return	who who;unit_o unit_o;who who_target;object_o object_o	435	009f8f40	ScenarioFuncSet	yes
+Unit Orders	special_forces_sniper	int_return	who who;unit_o unit_o;who who_target;object_o object_o	436	009f8fc0	ScenarioFuncSet	yes
+Unit Orders	spy_bribe	int_return	who who;unit_o unit_o;who who_target;unit_o unit_o_target	433	009f8e40	ScenarioFuncSet	yes
+Unit Orders	spy_pilfer	int_return	who who;unit_o unit_o;who who_target;build_o build_o_target	432	009f8dc0	ScenarioFuncSet	yes
+Unit Orders	unit_attack_ground_order	int_return	who who;unit_o unit_o;x x;y y	418	009f7db0	ScenarioFuncSet	yes
+Unit Orders	unit_attack_order	int_return	who who_attacker;unit_o unit_o;who who_attacked;object_o object_o	416	009f79e0	ScenarioFuncSet	yes
+Unit Orders	unit_attack_to_order	int_return	who who;unit_o unit_o;x x;y y	417	009f7c40	ScenarioFuncSet	yes
+Unit Orders	unit_clear_orders	int_return	who who;unit_o unit_o	414	009f77e0	ScenarioFuncSet	yes
+Unit Orders	unit_explore_order	int_return	who who;unit_o unit_o;x x;y y	412	009f74c0	ScenarioFuncSet	yes
+Unit Orders	unit_flee_order	int_return	who who;unit_o unit_o;x x;y y	413	009f7650	ScenarioFuncSet	yes
+Unit Orders	unit_move_order	int_return	who who;unit_o unit_o;x x;y y	410	009f71a0	ScenarioFuncSet	yes
+Unit Orders	unit_patrol_order	int_return	who who;unit_o unit_o;x x;y y	419	009f7fd0	ScenarioFuncSet	yes
+Unit Orders	unit_stance_order	num	who who;object_o object_o;stance stance	453	009f9e50	ScenarioFuncSet	yes
+Unit Orders	unit_stop_effect	int_return	who who;unit_o unit_o	415	009f7930	ScenarioFuncSet	yes
+Unit Orders	unit_waypoint_order	int_return	who who;unit_o unit_o;x x;y y	411	009f7330	ScenarioFuncSet	yes
+Unit Training	toggle_infinite_queue	int_return	who who;build_o build_o;bool bool_on_or_off	375	009f45e0	ScenarioFuncSet	yes
+Unit Training	train_unit	int_return	who who;num num;unit_type unit_type	371	009f4030	ScenarioFuncSet	yes
+Unit Training	train_unit_at	int_return	who who;num num;unit_type unit_type;build_o build_o	372	009f4190	ScenarioFuncSet	yes
+Unit Training	train_unit_at_with_cost	int_return	who who;num num;unit_type unit_type;build_o build_o	374	009f4460	ScenarioFuncSet	yes
+Unit Training	train_unit_with_cost	int_return	who who;num num;unit_type unit_type	373	009f42d0	ScenarioFuncSet	yes
+Victory/Defeat	defeat	int_return	who who	367	009f3f50	ScenarioFuncSet	yes
+Victory/Defeat	set_defeat_message	int_return	message message_defeat	370	009f4010	ScenarioFuncSet	yes
+Victory/Defeat	set_victory_message	int_return	message message_victory	369	009f3ff0	ScenarioFuncSet	yes
+Victory/Defeat	victory	int_return	who who	368	009f3fa0	ScenarioFuncSet	yes
+Triggers	disable_all_triggers	void		603	00a04460	TriggerUtilFuncSet	yes
+Triggers	enable_all_triggers	void		602	00a04440	TriggerUtilFuncSet	yes
+Triggers	is_trigger_enabled	int_return	trigger trigger	604	00a04480	TriggerUtilFuncSet	yes
+Utilities, Debugging	debug_break	int_return		624	-	-	NO
+Utilities, Debugging	debug_print	void	any_value any_value	625	-	-	NO
+Utilities, Math	absl_float	real	real real_num	612	00a043b0	MathUtilFuncSet	yes
+Utilities, Math	absl_int	int_return	num num_value	613	00a043e0	MathUtilFuncSet	yes
+Utilities, Math	acos	real	real real_num	609	00a04330	MathUtilFuncSet	yes
+Utilities, Math	asin	real	real real_num	608	00a042f0	MathUtilFuncSet	yes
+Utilities, Math	atan	real	real real_num	610	00a04360	MathUtilFuncSet	yes
+Utilities, Math	cos	real	real real_num	606	00a04290	MathUtilFuncSet	yes
+Utilities, Math	max_val	real	real real_num1;real real_num2	619	00a04420	MathUtilFuncSet	yes
+Utilities, Math	min_val	real	real real_num1;real real_num2	618	00a04400	MathUtilFuncSet	yes
+Utilities, Math	rand_get_seed	int_return		617	009e1930	MathUtilFuncSet	yes
+Utilities, Math	rand_int	int_return	num num_min;num num_max	614	009e1890	MathUtilFuncSet	yes
+Utilities, Math	rand_real	real		615	009e18b0	MathUtilFuncSet	yes
+Utilities, Math	rand_seed	void	num num_new_seed	616	009e1900	MathUtilFuncSet	yes
+Utilities, Math	sin	real	real real_num	605	00a04260	MathUtilFuncSet	yes
+Utilities, Math	sqrt	real	real real_num	611	00a04390	MathUtilFuncSet	yes
+Utilities, Math	tan	real	real real_num	607	00a042c0	MathUtilFuncSet	yes
+Utilities, String	char_at	int_return	str str;num num_position	621	00a04660	StringUtilFuncSet	yes
+Utilities, String	char_from_int	string	num num	622	00a04690	StringUtilFuncSet	yes
+Utilities, String	length	int_return	str str	620	00a04650	StringUtilFuncSet	yes
+Utilities, String	parse	string	string string;params params	623	00a04720	StringUtilFuncSet	yes
+Utilities, System	call	int_return	script script;params params	597	-	-	NO
+Utilities, System	is_int	int_return	any_value any_value	600	-	-	NO
+Utilities, System	is_real	int_return	any_value any_value	601	-	-	NO
+Utilities, System	is_script_loaded	int_return	script script	598	-	-	NO
+Utilities, System	is_string	int_return	any_value any_value	599	-	-	NO
+(not in scriptfunctions.xml)	active_unit_slot	?	?	-	009e3160	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	active_who	?	?	-	009e33e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	add	?	?	-	00a044a0,00a044e0	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	add_infiltrated	?	?	-	00a01950	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	add_new_func	?	?	-	009d4da0	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	add_unit	?	?	-	009e2220	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	bubble_text	?	?	-	009ff4f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	bubble_text_obj	?	?	-	009ff550	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	build_queue_percent_done	?	?	-	009f2840	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	call_func	?	?	-	009d5500	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	cast_spell	?	?	-	009e2140	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	check_ctw	?	?	-	009e2b80	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	check_xml_valid	?	?	-	009e20d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	citizen_to_militia	?	?	-	00a00010	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	clear	?	?	-	00a04640	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	clear_attrition_free_points	?	?	-	00a02b60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	close	?	?	-	00a03650	ScenarioFuncSet	infra
+(not in scriptfunctions.xml)	create_game_group	?	?	-	009e1dc0,009e1f40	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	create_missile_and_target_build	?	?	-	009f4fd0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	create_missile_and_target_loc	?	?	-	009f5130	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_add_link	?	?	-	009e8090	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_add_objective	?	?	-	00a019e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_add_objective_text	?	?	-	00a01a20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_ai_launch_nukes	?	?	-	00a01b60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_ai_move_army	?	?	-	009e8a00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_ai_no_declare_war	?	?	-	00a02450	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_ai_set_attack	?	?	-	009e8b40	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_bonus_card_list	?	?	-	00a02130	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_build_nuke	?	?	-	00a01e70	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_buy_ally	?	?	-	009e6fe0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_buy_peace	?	?	-	009e6f50	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_buy_vassal	?	?	-	009e7080	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_buy_war	?	?	-	009e6ea0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_center_camera	?	?	-	009e8d80	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_change_objective_text	?	?	-	00a01a60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_clear_ai_no_declare_war	?	?	-	00a024f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_clear_bribes	?	?	-	00a02610	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_clear_objectives	?	?	-	00a01b40	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_clear_offer	?	?	-	009fca00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_colony_list	?	?	-	00a02360	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_custom_end_screen	?	?	-	009e8940	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_deal_accepted	?	?	-	009e7120	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_disable_espionage	?	?	-	00a020f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_disable_gunpowder	?	?	-	00a025d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_disable_nuke_building	?	?	-	00a02050	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_disable_piece_moves	?	?	-	009e8e10	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_enable_espionage	?	?	-	00a02110	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_enable_gunpowder	?	?	-	00a02590	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_enable_nuke_building	?	?	-	00a02070	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_enable_piece_moves	?	?	-	009e8e40	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_game_over	?	?	-	004ce890,009e88d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_active_tribes	?	?	-	009e8530	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_card_value	?	?	-	009e7240	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_colony_tribute	?	?	-	009e8040	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_colony_value	?	?	-	009e73e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_master	?	?	-	009e6a70	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_nation_capital	?	?	-	009e87b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_nuke_cost	?	?	-	00a01f60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_num_allies	?	?	-	009e8880	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_num_campaign_turns	?	?	-	009e8340	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_player_nation	?	?	-	009e8730	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_get_territory_value	?	?	-	009e71f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_give_army	?	?	-	009e7730	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_give_colony	?	?	-	009e7f80	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_give_territory	?	?	-	009e7f00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_hide_supply_depots	?	?	-	009e89e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_is_ally	?	?	-	009e6940	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_is_defeated	?	?	-	009e6b10	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_is_peace	?	?	-	009e69b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_is_vassal	?	?	-	009e6a30	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_is_war	?	?	-	009e68d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_last_battle_victory	?	?	-	009e89a0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_num_adjacent_territories	?	?	-	009e85e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_objective_complete	?	?	-	00a01b00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_play_objective_sound	?	?	-	00a01ae0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_reinforcements_arrived	?	?	-	009e8d20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_reject_bribes	?	?	-	009e8ca0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_remove_all_armies	?	?	-	009e78f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_remove_army	?	?	-	009e7810	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_remove_colony	?	?	-	009e7ff0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_remove_nuke	?	?	-	00a01e20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_remove_objective	?	?	-	00a01b20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_ally	?	?	-	009e6d00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_deal_accepted	?	?	-	009e7170	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_leader_name	?	?	-	009e8cc0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_objective_loc	?	?	-	00a01aa0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_objective_sound	?	?	-	00a01a80	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_peace	?	?	-	009e6c30	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_sub_goals	?	?	-	00a02550	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_vassal	?	?	-	009e6dd0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_set_war	?	?	-	009e6b60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_show_supply_depots	?	?	-	009e89c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_territory_captured	?	?	-	009e8370,009e8430	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_territory_has_army	?	?	-	009e7980	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_territory_link	?	?	-	009e81f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_territory_list	?	?	-	00a02230	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	ctw_territory_sea_link	?	?	-	009e8260	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	default_group	?	?	-	004ce990	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_building_attrition	?	?	-	00a029c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_give_attrition	?	?	-	00a02940	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_strategic_rares	?	?	-	009e79d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_take_attrition	?	?	-	00a028c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_type_by_tribe	?	?	-	00a006a0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	disable_unit_transport	?	?	-	009f30f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_building_attrition	?	?	-	00a02980	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_give_attrition	?	?	-	00a02900	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_strategic_rares	?	?	-	009e7a20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_take_attrition	?	?	-	00a02880	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_type_by_tribe	?	?	-	00a009a0,00a00ca0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_type_by_tribe_with_type_name	?	?	-	00a00d90,00a01090	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	enable_unit_transport	?	?	-	009f3140	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	find	?	?	-	00a04610	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	find_build_at_city_using_type_name	?	?	-	009ecaf0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	find_build_with_type_name	?	?	-	009ec310	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	find_objects	?	?	-	009e2a80	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	find_resource	?	?	-	00a015d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	find_unit_upgrade	?	?	-	009ec080	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_age	?	?	-	009e67d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_bonus_cap	?	?	-	009fbdf0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_city_display_name	?	?	-	009efe00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_city_index	?	?	-	009e2ba0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_city_name	?	?	-	009efd00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_colony_owner	?	?	-	009e65c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_commerce_cap	?	?	-	009fbcc0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_ctw_campaign	?	?	-	009e82d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_defcon_level	?	?	-	00a020e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_err_return	?	?	-	009d41d0	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	get_iface_rect	?	?	-	009e27e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_last_building_built	?	?	-	009e9ab0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_last_razed_building	?	?	-	009f2980	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_last_unit_built	?	?	-	009e9a70	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_nation_income	?	?	-	009e7c50	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_neutral_attrition	?	?	-	00a02a60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_active_nations	?	?	-	009e7480	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_ally	?	?	-	009e67e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_nukes	?	?	-	00a01fa0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_peace	?	?	-	009e6830	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_territories	?	?	-	009e6770	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_tribute	?	?	-	009e7430	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_num_war	?	?	-	009e6880	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_param	?	?	-	009d43e0	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	get_percent_explored	?	?	-	009e4af0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_plunder_scale	?	?	-	009e54a0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_stance	?	?	-	009e2c40	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_territory_income	?	?	-	009e7d20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_territory_owner	?	?	-	004ce8c0,009e64d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_territory_strength	?	?	-	009e7d90	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_territory_turns_held	?	?	-	009e7e50	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_total_nukes	?	?	-	00a01fe0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_turn	?	?	-	009e67c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_type_index	?	?	-	00a03480	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	get_unit_cat	?	?	-	009e3060	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	give_bonus_card	?	?	-	009e7510	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	give_ctw_tribute	?	?	-	009e76e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	give_player_bonus_card	?	?	-	009e74e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	give_player_ctw_tribute	?	?	-	009e7680	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	group_garrison_order	?	?	-	004cdf30,004cdfa0,009fa780,009fb380	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	group_patrol_order_queue	?	?	-	004ce0f0,009fa630,009fb250	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	has_rare_resource	?	?	-	009ea050	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	init	?	?	-	00a03c30	ScenarioFuncSet	infra
+(not in scriptfunctions.xml)	init_funcs	?	?	-	009c6ef0,009c7040,009c7220,009c7290,009c7570	StringUtilFuncSet	infra
+(not in scriptfunctions.xml)	init_set	?	?	-	009d45c0	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	insert	?	?	-	00a045b0	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	is_human	?	?	-	009e5dc0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	is_infiltrated_by	?	?	-	009f91f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	is_seen	?	?	-	009e49b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	make_alliance	?	?	-	009fbf90	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	militia_to_citizen	?	?	-	00a000c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_ai_players	?	?	-	009e5eb0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_city_buildings_using_type_name	?	?	-	009f01e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_decoys	?	?	-	009e9dc0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_good_collected	?	?	-	009e97d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_human_players	?	?	-	009e5e70	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_players	?	?	-	009e5df0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	num_rare_resources	?	?	-	00a004b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	object_ignore_orders	?	?	-	00a01850	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	object_obey_orders	?	?	-	00a018d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	print	?	?	-	00a048d0	StringUtilFuncSet	infra
+(not in scriptfunctions.xml)	print_line	?	?	-	00a04950	StringUtilFuncSet	infra
+(not in scriptfunctions.xml)	rect_valid	?	?	-	009e27c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	remove	?	?	-	00a04540	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	remove_index	?	?	-	00a04580	ArrayUtilFuncSet	infra
+(not in scriptfunctions.xml)	remove_infiltrated	?	?	-	009f9260,009f9300	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	rename_city	?	?	-	009effc0,009f00d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	rename_type	?	?	-	009ea6c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	resource_position_x	?	?	-	00a016b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	resource_position_y	?	?	-	00a01700	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	scout_counter_intel	?	?	-	00a00170	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_age_diff_penalty	?	?	-	00a01520	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_attrition_free_point	?	?	-	00a02aa0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_bonus_cap	?	?	-	009fbd60	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_capital	?	?	-	00a00220	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_contact	?	?	-	009fcde0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_defcon_level	?	?	-	00a02090	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_explored_show_buildings	?	?	-	00a03300	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_neutral_attrition	?	?	-	00a02a00	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_no_attack	?	?	-	009e7a70,009e7aa0,009e7ac0,009e7ae0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_object_type_armor	?	?	-	009f5fb0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_object_type_attack	?	?	-	009f6170	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_object_type_max_range	?	?	-	009f6330	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_object_type_min_range	?	?	-	009f64f0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_player_no_negotiate	?	?	-	009e7c20	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_plunder_scale	?	?	-	009e5450	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_preq	?	?	-	00a01180,00a01230,00a01370	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_rally	?	?	-	009f2020	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_territory_display_name	?	?	-	009e7ea0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_territory_strength	?	?	-	009e7de0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_type_job_time	?	?	-	009ea880	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_type_line_of_sight	?	?	-	00a00550	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	set_unit_type_speed	?	?	-	009f66b0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	show_notice	?	?	-	00a02740	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	sort_element_list	?	?	-	00a02bb0	ScenarioFuncSet	infra
+(not in scriptfunctions.xml)	special_forces_counterintel	?	?	-	009f9040	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	unit_eject_order	?	?	-	009f84e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	unit_garrison_order	?	?	-	004ce730,009f8380	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	unit_ignore_orders	?	?	-	00a01750	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	unit_obey_orders	?	?	-	00a017d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	unit_patrol_order_queue	?	?	-	009f81d0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_build_o	?	?	-	009e3300	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_object_o	?	?	-	009e32a0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_object_slot	?	?	-	009e3240	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_unit_o	?	?	-	009e3360	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_unit_slot	?	?	-	009e31e0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	valid_who	?	?	-	009e33c0	ScenarioFuncSet	yes
+(not in scriptfunctions.xml)	validate_func	?	?	-	0041c170	ScriptFuncSet	infra
+(not in scriptfunctions.xml)	validate_param	?	?	-	009d41c0,009e3410	ScriptFuncSet	infra

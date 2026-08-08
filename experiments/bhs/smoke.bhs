@@ -1,0 +1,49 @@
+// smoke.bhs -- minimal BHS bridge validation.
+//
+// PURPOSE: prove the three things the bridge depends on, before trusting any
+// experiment that runs on top of them:
+//   1. the script is attached and the engine is calling it every frame
+//   2. print_line() reaches OutputDebugStringW (real-time channel)
+//   3. open_file/file_write_attrib/close_file produce a file on disk (batch channel)
+//
+// INVARIANT: the entry function name MUST equal the file base name, and it MUST
+// take zero parameters. Game::do_frame calls run_script(<base name>, 0 args).
+// So this file must be named exactly `smoke.bhs`.
+//
+// Expected result: 5 lines on the debug channel, then one file
+//   C:\Users\ember\Documents\Microsoft Games\Rise of Nations\don_smoke.xml
+// then silence (the script latches itself off).
+
+int smoke()
+{
+  static int frame = 0;
+  static int done  = 0;
+
+  frame = frame + 1;
+
+  if (done > 0) return 1;
+
+  // --- channel 1: OutputDebugStringW, once per frame for the first 5 frames ---
+  print("DON smoke frame=");
+  print(frame);
+  print(" time_sec=");
+  print_line(time_sec());
+
+  if (frame < 5) return 1;
+
+  // --- channel 2: XML file on disk ---
+  // open_file() resolves against PlayerProfile::get_app_directory(), which is
+  // SHGetFolderPathW(CSIDL_PERSONAL) + "\Microsoft Games\Rise of Nations\".
+  // close_file() is the flush -- without it nothing reaches disk.
+  open_file("don_smoke.xml");
+  file_set_category("smoke", 0);
+  file_write_attrib("frame", frame);
+  file_write_attrib("time_sec", time_sec());
+  file_write_text("status", "bridge_ok");
+  close_file();
+
+  print_line("DON smoke wrote don_smoke.xml -- latching off");
+
+  done = 1;
+  return 1;
+}

@@ -529,7 +529,10 @@ multiplayer command decoding as parsed.
 3. **The RNG seed, definitively.** I did *not* close this. What I have: the LCG at
    `FUN_00a39cf0` is `*this = *this * 0x19660d + 0x3c6ef35f`, i.e. exactly the
    `1664525 / 1013904223` of `docs/derivation/rng.md` — **confirmed independently here**
-   [measured]; the sim `Random` object is `0x00eb697c`, and
+   [measured]. ⚠ **Corrected [measured, rise.pdb]:** the sim `Random` object is **not**
+   `0x00eb697c` — that is `internal_random`, the secondary (graphics/water) stream. The
+   simulation object is `game_random` at `0x00e37a8c`, reached via the static reference
+   `GameAccess::game_random` at `[0x00c06184]`. And
    `0x38 check_random` carries a `u32` seed. GameInfo `+0x04` is a per-game 32-bit value
    and is the obvious seed candidate, but I have no specimen pair that isolates it and no
    solo replay contains a `check_random` packet to check the LCG relation against. The

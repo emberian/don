@@ -1,0 +1,11 @@
+[package]
+name = "don-net"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Rise of Nations lockstep command-package wire codec (replay framing + NetMsg framing)"
+
+# No dependencies, by choice. The corpus tests shell out to `gzip -dc` rather
+# than pulling an inflate crate, so a green `cargo test` here never depends on
+# the registry.
+[dependencies]

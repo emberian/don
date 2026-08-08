@@ -41,6 +41,8 @@ struct Args {
     list: bool,
     modules: bool,
     reads: Vec<(u64, usize)>,
+    /// (addr, len, out-path) raw memory dumps, for offline struct analysis.
+    dumps: Vec<(u64, usize, String)>,
     top: usize,
 }
 
@@ -61,6 +63,7 @@ impl Default for Args {
             list: false,
             modules: false,
             reads: Vec::new(),
+            dumps: Vec::new(),
             top: 40,
         }
     }
@@ -86,6 +89,8 @@ USAGE: donscan [options]
   --list               list visible processes and exit
   --modules            dump every loaded PE module in the target and exit
   --read <hex>[:<n>]   hexdump n bytes (default 256) at a target address; repeatable
+  --dump <hex>:<n>:<f> write n RAW bytes at a target address to file f; repeatable.
+                       Unreadable pages come back zeroed and are reported on stderr.
   -h, --help           this
 ";
 
@@ -147,6 +152,18 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|_| format!("bad --read address {v:?}"))?;
                 let len: usize = lstr.parse().map_err(|_| format!("bad --read length {v:?}"))?;
                 a.reads.push((addr, len));
+            }
+            "--dump" => {
+                let v = next(&mut i)?;
+                let parts: Vec<&str> = v.splitn(3, ':').collect();
+                if parts.len() != 3 {
+                    return Err(format!("--dump wants <hex>:<len>:<path>, got {v:?}"));
+                }
+                let astr = parts[0].trim_start_matches("0x").trim_start_matches("0X");
+                let addr = u64::from_str_radix(astr, 16)
+                    .map_err(|_| format!("bad --dump address {v:?}"))?;
+                let len: usize = parts[1].parse().map_err(|_| format!("bad --dump length {v:?}"))?;
+                a.dumps.push((addr, len, parts[2].to_string()));
             }
             "--addrs-for" => a.addrs_for = split(&next(&mut i)?),
             "--only" => a.only = split(&next(&mut i)?),
@@ -322,6 +339,39 @@ fn main() {
         }
         eprintln!("donscan: {} modules", modules.len());
         return;
+    }
+    if !args.dumps.is_empty() {
+        for (addr, len, path) in &args.dumps {
+            let mut buf = vec![0u8; *len];
+            let n = p.read(*addr, &mut buf);
+            if n < *len {
+                // One ReadProcessMemory spanning a region boundary fails wholesale, so
+                // fall back to page-at-a-time: a single unreadable page must not cost the
+                // whole dump. Unread bytes stay zero and are reported, never silently
+                // passed off as real memory.
+                let mut got = 0usize;
+                let mut off = 0usize;
+                while off < *len {
+                    let step = std::cmp::min(0x1000 - ((*addr as usize + off) & 0xfff), *len - off);
+                    let k = p.read(*addr + off as u64, &mut buf[off..off + step]);
+                    if k < step {
+                        for b in buf[off + k..off + step].iter_mut() {
+                            *b = 0;
+                        }
+                    }
+                    got += k;
+                    off += step;
+                }
+                eprintln!("donscan: dump {addr:#x}+{len}: {got} of {len} bytes readable (rest zeroed)");
+            }
+            match std::fs::write(path, &buf) {
+                Ok(()) => println!("dumped {len} bytes at {addr:#x} -> {path}"),
+                Err(e) => eprintln!("donscan: writing {path}: {e}"),
+            }
+        }
+        if args.reads.is_empty() {
+            return;
+        }
     }
     if !args.reads.is_empty() {
         for (addr, len) in &args.reads {

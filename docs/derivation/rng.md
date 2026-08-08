@@ -14,13 +14,31 @@ sense.
 16-bit multiply-shift bound mapping, exposed as a tiny `Random` class whose entire object
 state is one `u32`.** [measured]
 
+Names below are the **real symbols** [measured, `ron-bin/sbl/rise.pdb`]; the names this
+report originally invented are given after each, and the derived *semantics* were right in
+every case.
+
 ```
-Random::next_float()          VA 0x00a39cf0   __thiscall(this = &state) -> f32 in [0,1)
-Random::in_range(lo, hi)      VA 0x00a39d70   __thiscall(this = &state), stdcall args, ret 8
-Random::exchange_seed(s)      VA 0x00a39d30   __thiscall, returns previous state
-Random::Random() / reset()    VA 0x00a39d50 / 0x00a39d60   state = 0
-Random::in_range on global A  VA 0x00a39d40   __fastcall(lo, hi) wrapper over 0x00eb697c
+float Random::get()                VA 0x00a39cf0  __thiscall -> f32 in [0,1)   (we: next_float)
+int   Random::get(int lo,int hi)   VA 0x00a39d70  __thiscall, stack args, ret 8 (we: in_range)
+u32   Random::reseed(u32 s)        VA 0x00a39d30  __thiscall, returns previous  (we: exchange_seed)
+      Random::Random() / ~Random() VA 0x00a39d50 / 0x00a39d60   state = 0
+int   random(int lo, int hi)       VA 0x00a39d40  __cdecl free function; forwards to
+                                                  Random::get(int,int) with ecx = 0x00eb697c
+                                                  (we: "in_range on global A", __fastcall)
 ```
+
+⚠ Two corrections in that last line. It is `__cdecl` (it pushes its stack arguments through),
+not `__fastcall`; and the object it wraps, `0x00eb697c`, is the PDB's **`internal_random`** —
+the *secondary* stream, **not** the simulation stream. The simulation stream is `game_random`
+at `0x00e37a8c`, reached through the static reference `GameAccess::game_random` at
+`[0x00c06184]`, exactly as §4's table below already says.
+
+There are exactly **five** `Random`-family globals in the image, by their dynamic
+initialisers: `game_random` `0x00e37a8c`, `internal_random` `0x00eb697c`,
+`SoundGlobal::random` `0x00e85f0c`, `SoundType::random` `0x00e87d3c`, and
+`TerrainData::random_frac` `0x00c8be38` (a `Fractal`, not a `Random`). A `RandomLogEntry`
+struct and an `ObjectArray<RandomLogEntry>` also exist — the engine can log RNG draws.
 
 `in_range` has **414 call sites in 170 functions** [measured] — it is the workhorse. There
 are **at least seven independent streams**, and the one used by map generation, animals,

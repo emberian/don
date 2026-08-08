@@ -1,0 +1,6 @@
+log=C:\Users\ember\donhook\test2.csv
+stop=C:\Users\ember\donhook\STOP
+diag=C:\Users\ember\donhook\donhook.log
+derive=0
+maxrec=400000
+hook=1000,6,damage

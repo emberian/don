@@ -1,0 +1,403 @@
+// combat_probe.bhs -- one controlled melee engagement, instrumented.
+//
+// GOAL: generate damage ground truth for ObjectData::get_damage (FUN_00644130)
+// from the live retail engine, on inputs we chose, with every confounder we can
+// reach turned off. The binary oracle cannot drive get_damage because it reads a
+// live object graph; this can.
+//
+// INVARIANT: entry function name == file base name, zero parameters. Keep this
+// file named exactly `combat_probe.bhs`. Game::do_frame calls
+// RunTimeEnv::run_script("combat_probe", 0 args) once per simulation frame, so
+// this function IS the per-tick handler and MUST be a state machine over statics.
+//
+// WHAT IT CONTROLS
+//   attacker  nation 1, one "Hoplites"   attack forced to PROBE_ATTACK
+//   defender  nation 2, one "Hoplites"   armor forced to PROBE_ARMOR
+//                                        max health forced to PROBE_MAXHP
+//   Both sides' unit AI is disabled so the defender never retaliates and neither
+//   unit wanders; the only damage events are the attacker hitting the defender.
+//
+// WHY max health is forced to 100:
+//   object_health() returns a PERCENT, not absolute hit points. Its body is
+//   (int)((float)current / (float)max * 100.0)  [measured at 0x009f5910].
+//   With max == 100 the percent equals the absolute hit points exactly, so we get
+//   1-HP resolution instead of 1%-of-max resolution. object_max_health() returns
+//   the absolute max and is printed so the mapping is checkable, not assumed.
+//
+// TWO THINGS THIS RUN MEASURES THAT WE CURRENTLY ONLY GUESS
+//   (a) COORDINATE SCALE. scriptfunctions.xml documents x/y as "game world X
+//       position" and dist_radius as "in tile units" -- those may not be the same
+//       unit, and the engine has a 192-subunits-per-tile world coordinate. So the
+//       script prints the coordinates it REQUESTED and the coordinates
+//       object_position_x/y REPORT. The ratio settles it in one run.
+//   (b) ATTACK SCALE. unitrules.xml lists Hoplites ATTACK=13 while the engine
+//       stores attack x10. It is not known whether set_object_type_attack takes
+//       the rule-file scale or the stored scale. We set a round value and read the
+//       resulting per-hit damage; that measures which.
+//
+// OUTPUT
+//   Real-time: print/print_line -> OutputDebugStringW. Capture with dbwin-reader.ps1
+//   (must run in the interactive session) or Sysinternals DebugView.
+//   Batch: a summary written to
+//   C:\Users\ember\Documents\Microsoft Games\Rise of Nations\don_combat_probe.xml
+//   which a SYSTEM-context `prlctl exec` can read.
+//
+// Lines are prefixed "DONP " so they are trivially greppable out of a noisy
+// debug stream.
+
+// One labels block: the shipped scripts only ever use one per file, so this is
+// the attested form.
+labels {
+  ST_INIT = 0,
+  ST_PLACE,
+  ST_VERIFY,
+  ST_ENGAGE,
+  ST_SAMPLE,
+  ST_REPORT,
+  ST_DONE,
+  // Forced type stats. Round numbers so any scaling is obvious in the output.
+  PROBE_ATTACK = 20,
+  PROBE_ARMOR = 0,
+  PROBE_MAXHP = 100,
+  // Phase pacing. The body runs once per simulation frame.
+  SETTLE_FRAMES = 30,
+  GIVE_UP_FRAMES = 3000,
+}
+
+int combat_probe()
+{
+  static int state   = ST_INIT;
+  static int frame   = 0;
+  static int phase_t = 0;
+
+  static int ax = 0;          // requested attacker x/y
+  static int ay = 0;
+  static int dx = 0;          // requested defender x/y
+  static int dy = 0;
+
+  static int atk_o = -1;      // attacker unit id (nation 1)
+  static int def_o = -1;      // defender unit id (nation 2)
+
+  static int def_max  = -1;   // object_max_health of the defender
+  static int last_pct = -1;   // last observed object_health percent
+  static int first_hit_frame = -1;
+  static int last_hit_frame  = -1;
+  static int hits = 0;
+
+  int i;
+  int ok;
+  int cx;
+  int cy;
+  int pct;
+
+  frame   = frame + 1;
+  phase_t = phase_t + 1;
+
+  if (state == ST_DONE) return 1;
+
+  if (frame > GIVE_UP_FRAMES) {
+    print_line("DONP ABORT frame budget exhausted");
+    state = ST_DONE;
+    return 1;
+  }
+
+  // ------------------------------------------------------------------ ST_INIT
+  // Neutralise everything that could perturb the engagement, then force the
+  // type stats. All of these are type/nation level and take effect immediately.
+  if (state == ST_INIT) {
+    print_line("DONP === combat_probe start ===");
+    print("DONP map_size=");
+    print_line(get_map_size());
+
+    // Stop both AIs from building, training, or ordering anything.
+    disable_production_ai(1);
+    disable_production_ai(2);
+    disable_combat_ai(1);
+    disable_combat_ai(2);
+    disable_all_unit_ai(1);
+    disable_all_unit_ai(2);
+    disable_city_ai(1);
+    disable_city_ai(2);
+    // Losing all cities must not end the run before we have our samples.
+    disable_city_defeat(1);
+    disable_city_defeat(2);
+
+    // Ensure the pair can actually fight.
+    declare_war(1, 2);
+    declare_war(2, 1);
+
+    // Force the combat inputs. Applies to BOTH nations' copies of the type,
+    // so attacker and defender share these numbers -- that is intended: we want
+    // exactly one unknown per run.
+    set_object_type_max_health("Hoplites", PROBE_MAXHP);
+    set_object_type_armor("Hoplites", PROBE_ARMOR);
+    set_object_type_attack("Hoplites", PROBE_ATTACK);
+
+    print("DONP forced attack=");
+    print(PROBE_ATTACK);
+    print(" armor=");
+    print(PROBE_ARMOR);
+    print(" maxhp=");
+    print_line(PROBE_MAXHP);
+
+    state = ST_PLACE;
+    phase_t = 0;
+    return 1;
+  }
+
+  // ----------------------------------------------------------------- ST_PLACE
+  // Anchor on nation 1's capital so we do not depend on map size or layout,
+  // then walk outward for a passable pair of tiles.
+  if (state == ST_PLACE) {
+    cx = -1;
+    cy = -1;
+
+    // Two statements rather than find_city_id(find_capital(1)): the shipped
+    // scripts always bind a city name first, and nested calls as arguments do
+    // not appear anywhere in the shipped corpus. `cap` is deliberately
+    // undeclared -- BHS allows implicit declaration by assignment, which is how
+    // economic.bhs:25 binds its own capital name.
+    cap = find_capital(1);
+    i = find_city_id(cap);
+    if (i > 0) {
+      cx = object_position_x(1, i);
+      cy = object_position_y(1, i);
+      print("DONP capital build_o=");
+      print(i);
+      print(" at ");
+      print(cx);
+      print(",");
+      print_line(cy);
+    }
+
+    if (cx < 0) {
+      // No capital (or find failed). Fall back to an existing unit of ours.
+      i = find_all_military(1);
+      if (i <= 0) i = find_idle_citizen(1);
+      if (i > 0) {
+        cx = object_position_x(1, i);
+        cy = object_position_y(1, i);
+        print("DONP anchor unit_o=");
+        print(i);
+        print(" at ");
+        print(cx);
+        print(",");
+        print_line(cy);
+      }
+    }
+
+    if (cx < 0) {
+      print_line("DONP ABORT no anchor object found for nation 1");
+      state = ST_DONE;
+      return 1;
+    }
+
+    // Search outward along +x for two passable spots a short distance apart.
+    // Step 4 in whatever unit x/y are; if x/y turn out to be sub-tile world
+    // units this loop simply finds a spot further out, which is harmless.
+    ok = 0;
+    for (i = 8; i < 120; i = i + 4) {
+      if (map_is_passable(cx + i, cy) > 0) {
+        if (map_is_passable(cx + i + 4, cy) > 0) {
+          ax = cx + i;
+          ay = cy;
+          dx = cx + i + 4;
+          dy = cy;
+          ok = 1;
+          break;
+        }
+      }
+    }
+
+    if (ok == 0) {
+      print_line("DONP ABORT no passable tile pair found near anchor");
+      state = ST_DONE;
+      return 1;
+    }
+
+    // Make sure both nations can see the arena; attack orders against an unseen
+    // target are a known source of no-ops.
+    add_reveal_point(1, ax, ay, 20);
+    add_reveal_point(2, ax, ay, 20);
+    set_explored(1, ax, ay, 20);
+    set_explored(2, ax, ay, 20);
+
+    print("DONP requested attacker=");
+    print(ax);
+    print(",");
+    print(ay);
+    print("  defender=");
+    print(dx);
+    print(",");
+    print_line(dy);
+
+    // create_unit returns int_return (1 ok / 0 / -1 fail), NOT an object id.
+    // The id has to be recovered with find_unit afterwards, which is why each
+    // nation must own exactly one unit of this type.
+    ok = create_unit(1, ax, ay, "Hoplites", 1);
+    print("DONP create_unit(nation 1) -> ");
+    print_line(ok);
+
+    ok = create_unit(2, dx, dy, "Hoplites", 1);
+    print("DONP create_unit(nation 2) -> ");
+    print_line(ok);
+
+    state = ST_VERIFY;
+    phase_t = 0;
+    return 1;
+  }
+
+  // ---------------------------------------------------------------- ST_VERIFY
+  // Let the units settle, then resolve ids and report requested-vs-actual
+  // positions. That comparison is what calibrates the coordinate unit.
+  if (state == ST_VERIFY) {
+    if (phase_t < SETTLE_FRAMES) return 1;
+
+    atk_o = find_unit(1, "Hoplites");
+    def_o = find_unit(2, "Hoplites");
+
+    print("DONP atk_o=");
+    print(atk_o);
+    print(" def_o=");
+    print_line(def_o);
+
+    if (atk_o <= 0) {
+      print_line("DONP ABORT attacker not found -- create_unit failed or type name wrong");
+      state = ST_DONE;
+      return 1;
+    }
+    if (def_o <= 0) {
+      print_line("DONP ABORT defender not found -- create_unit failed or type name wrong");
+      state = ST_DONE;
+      return 1;
+    }
+
+    print("DONP attacker actual=");
+    print(object_position_x(1, atk_o));
+    print(",");
+    print(object_position_y(1, atk_o));
+    print("  requested=");
+    print(ax);
+    print(",");
+    print_line(ay);
+
+    print("DONP defender actual=");
+    print(object_position_x(2, def_o));
+    print(",");
+    print(object_position_y(2, def_o));
+    print("  requested=");
+    print(dx);
+    print(",");
+    print_line(dy);
+
+    def_max  = object_max_health(2, def_o);
+    last_pct = object_health(2, def_o);
+
+    print("DONP defender max_health=");
+    print(def_max);
+    print(" health_pct=");
+    print_line(last_pct);
+    print_line("DONP NOTE object_health is a PERCENT; hp = pct*max/100");
+
+    // Keep the defender inert: no retaliation, no repositioning.
+    disable_unit_ai(2, def_o);
+    unit_clear_orders(2, def_o);
+    // The attacker needs its orders honoured, but not AI re-targeting.
+    disable_unit_ai(1, atk_o);
+
+    state = ST_ENGAGE;
+    phase_t = 0;
+    return 1;
+  }
+
+  // ---------------------------------------------------------------- ST_ENGAGE
+  if (state == ST_ENGAGE) {
+    ok = unit_attack_order(1, atk_o, 2, def_o);
+    print("DONP unit_attack_order -> ");
+    print_line(ok);
+
+    if (ok < 0) {
+      print_line("DONP ABORT attack order rejected");
+      state = ST_DONE;
+      return 1;
+    }
+
+    print_line("DONP sampling: frame delta_hp hp_pct");
+    state = ST_SAMPLE;
+    phase_t = 0;
+    return 1;
+  }
+
+  // ---------------------------------------------------------------- ST_SAMPLE
+  // One line per health CHANGE, not per frame. Each line is one damage event
+  // (or one batch of events within a frame), timestamped by frame.
+  if (state == ST_SAMPLE) {
+    // object_health() calls ScenarioFuncSet::valid_object_o internally and
+    // returns -1 for an invalid/destroyed object [measured at 0x009f5910], so
+    // this single call is both the sample and the liveness check. Do NOT use
+    // valid_unit_o here: it is a C++ helper, not a registered script function,
+    // and referencing it is a compile error.
+    pct = object_health(2, def_o);
+
+    if (pct < 0) {
+      print_line("DONP defender destroyed (object_health returned -1)");
+      state = ST_REPORT;
+      phase_t = 0;
+      return 1;
+    }
+
+    if (pct != last_pct) {
+      hits = hits + 1;
+      if (first_hit_frame < 0) first_hit_frame = frame;
+      last_hit_frame = frame;
+
+      print("DONP hit ");
+      print(frame);
+      print(" ");
+      print(last_pct - pct);
+      print(" ");
+      print_line(pct);
+
+      last_pct = pct;
+    }
+
+    if (pct <= 0) {
+      state = ST_REPORT;
+      phase_t = 0;
+    }
+    return 1;
+  }
+
+  // ---------------------------------------------------------------- ST_REPORT
+  if (state == ST_REPORT) {
+    print_line("DONP === summary ===");
+    print("DONP hits=");
+    print(hits);
+    print(" first_hit_frame=");
+    print(first_hit_frame);
+    print(" last_hit_frame=");
+    print_line(last_hit_frame);
+
+    open_file("don_combat_probe.xml");
+    file_set_category("run", 0);
+    file_write_attrib("attack", PROBE_ATTACK);
+    file_write_attrib("armor", PROBE_ARMOR);
+    file_write_attrib("maxhp_forced", PROBE_MAXHP);
+    file_write_attrib("maxhp_observed", def_max);
+    file_write_attrib("hits", hits);
+    file_write_attrib("first_hit_frame", first_hit_frame);
+    file_write_attrib("last_hit_frame", last_hit_frame);
+    file_write_attrib("req_atk_x", ax);
+    file_write_attrib("req_atk_y", ay);
+    file_write_attrib("req_def_x", dx);
+    file_write_attrib("req_def_y", dy);
+    file_write_text("unit_type", "Hoplites");
+    close_file();
+
+    print_line("DONP wrote don_combat_probe.xml -- latching off");
+    state = ST_DONE;
+    return 1;
+  }
+
+  return 1;
+}

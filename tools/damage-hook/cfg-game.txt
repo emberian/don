@@ -1,0 +1,8 @@
+log=C:\Users\ember\donhook\damage.csv
+stop=C:\Users\ember\donhook\STOP
+diag=C:\Users\ember\donhook\donhook.log
+derive=1
+maxrec=300000
+hook=244130,6,damage
+hook=2469F0,5,get_attack
+hook=247DB0,6,get_armor

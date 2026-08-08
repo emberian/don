@@ -1,0 +1,7 @@
+# Build outputs of the hook tooling. Reproduce with the zig cc lines in
+# docs/tooling/damage-hook.md; the sources next to this file are the artifact.
+*.dll
+*.exe
+*.pdb
+*.lib
+*.obj

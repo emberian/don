@@ -6,5 +6,8 @@ description = "Binary oracle: map riseofnations.exe and call retail functions fo
 
 [dependencies]
 don-pe = { path = "../don-pe" }
+# The registry's models must be the functions we ship, not copies transcribed into the
+# oracle — a differential test against a copy proves the copy, not the port.
+don-rules = { path = "../don-rules" }
 don-sim = { path = "../don-sim" }
 libc = "0.2"

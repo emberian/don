@@ -1,0 +1,1458 @@
+//! Executing the registry and reporting it honestly.
+//!
+//! # The failure mode this file is built around
+//!
+//! A differential suite that cannot run reports zero mismatches. So does a suite that
+//! passes. The whole point of this harness is that those two are never confused, which
+//! costs three specific design decisions:
+//!
+//! 1. **Every case runs in a forked child.** A case that segfaults is reported CRASHED,
+//!    with the signal, and does not take the suite down or vanish. Environment surgery
+//!    (a fake `%fs` base, IAT patches, writes into `.data`) stays inside the child that
+//!    needed it and cannot silently change what a later case measured.
+//! 2. **A case that cannot run is SKIPPED and is never green.** Missing corpus file, VA
+//!    outside the mapped image, `PROT_EXEC` refused, filtered out by `--only` — all of
+//!    them produce a SKIPPED record and a non-zero exit.
+//! 3. **The harness proves itself first.** `selftest` executes machine code we wrote. If
+//!    it fails, nothing is reported as passing, because a broken mapping mechanism
+//!    produces agreement-shaped output for the wrong reason.
+//!
+//! Exit codes: `0` everything ran and passed, `1` a mismatch or a crash, `2` something was
+//! skipped, `3` the harness could not start.
+
+use crate::damage_env;
+use crate::damage_test;
+use crate::image::{self, Mapped, PAGE};
+use crate::models;
+use crate::registry::{Case, Cols, Dist2, Plan, KNOWN_GAPS, REGISTRY};
+use don_pe::PeImage;
+use std::ffi::c_void;
+use std::io::Write;
+use std::time::Instant;
+
+// ---------------------------------------------------------------------------------
+// Deterministic input stream
+// ---------------------------------------------------------------------------------
+
+/// xorshift64. No external crate, and the seed is reported with every result so a failing
+/// trial can be replayed exactly.
+pub struct Xs(pub u64);
+impl Xs {
+    pub fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+}
+
+// ---------------------------------------------------------------------------------
+// Calling conventions
+// ---------------------------------------------------------------------------------
+
+unsafe fn call_ecx1(f: *const u8, x: u32) -> u32 {
+    let r: u32;
+    std::arch::asm!("call {f}", f = in(reg) f, in("ecx") x, lateout("eax") r, clobber_abi("C"));
+    r
+}
+
+unsafe fn call_thiscall0(f: *const u8, this: *mut u8) -> u32 {
+    let r: u32;
+    std::arch::asm!("call {f}", f = in(reg) f, in("ecx") this, lateout("eax") r, clobber_abi("C"));
+    r
+}
+
+/// `__thiscall` plus one pushed dword — `RString::AsScaled(scale)`, callee cleans (`ret 4`).
+unsafe fn call_thiscall1(f: *const u8, this: *mut u8, arg: i32) -> i32 {
+    let r: i32;
+    std::arch::asm!(
+        "push {s:e}",
+        "call {f}",
+        s = in(reg) arg,
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") r,
+        clobber_abi("C"),
+    );
+    r
+}
+
+/// `Random::next_float` — result in xmm0, state updated through ECX.
+unsafe fn call_next_float(f: *const u8, p: *mut u32) -> (u32, f32) {
+    let out_f: f32;
+    std::arch::asm!(
+        "call {f:e}",
+        f = in(reg) f as u32,
+        in("ecx") p,
+        out("eax") _, out("edx") _,
+        lateout("xmm0") out_f,
+        out("xmm1") _, out("xmm2") _, out("xmm3") _,
+        out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+    );
+    (std::ptr::read_volatile(p), out_f)
+}
+
+/// `Random::in_range(lo, hi)`. Layout of `p`: `[0]` state, `[1]` lo, `[2]` hi.
+unsafe fn call_in_range(f: *const u8, p: *mut u32) -> i32 {
+    let ret: i32;
+    std::arch::asm!(
+        "push dword ptr [{p:e} + 8]",
+        "push dword ptr [{p:e} + 4]",
+        "call {f:e}",
+        f = in(reg) f as u32,
+        p = in(reg) p,
+        in("ecx") p,
+        lateout("eax") ret,
+        out("edx") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+        out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+    );
+    ret
+}
+
+// ---------------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Pass,
+    Fail,
+    Skipped,
+    Crashed,
+    Error,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Pass => "pass",
+            Status::Fail => "fail",
+            Status::Skipped => "skipped",
+            Status::Crashed => "crashed",
+            Status::Error => "error",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+            Status::Skipped => "SKIP",
+            Status::Crashed => "CRASH",
+            Status::Error => "ERROR",
+        }
+    }
+}
+
+pub struct Phase {
+    pub kind: String,
+    pub count: u64,
+    pub description: String,
+}
+
+pub struct Excluded {
+    pub reason: String,
+    pub count: u64,
+}
+
+pub struct CaseResult {
+    pub id: &'static str,
+    pub status: Status,
+    pub trials: u64,
+    pub mismatches: u64,
+    pub phases: Vec<Phase>,
+    pub excluded: Vec<Excluded>,
+    pub detail: String,
+    pub extras: Vec<(String, String)>,
+    pub wall_ms: u128,
+}
+
+impl CaseResult {
+    fn skipped(id: &'static str, why: &str) -> CaseResult {
+        CaseResult {
+            id,
+            status: Status::Skipped,
+            trials: 0,
+            mismatches: 0,
+            phases: Vec::new(),
+            excluded: Vec::new(),
+            detail: why.to_string(),
+            extras: Vec::new(),
+            wall_ms: 0,
+        }
+    }
+}
+
+/// What a case's forked child accumulates. Serialised over a pipe as `key=value` lines,
+/// which keeps the protocol greppable when a child does something surprising.
+#[derive(Default)]
+pub struct Acc {
+    pub trials: u64,
+    pub mismatches: u64,
+    pub phases: Vec<Phase>,
+    pub excluded: Vec<Excluded>,
+    pub detail: String,
+    pub extras: Vec<(String, String)>,
+    /// Set when the case could not run at all.
+    pub skip: Option<String>,
+}
+
+impl Acc {
+    fn phase(&mut self, kind: &str, count: u64, description: &str) {
+        self.phases.push(Phase {
+            kind: kind.into(),
+            count,
+            description: description.into(),
+        });
+    }
+    fn exclude(&mut self, reason: &str, count: u64) {
+        if count > 0 {
+            self.excluded.push(Excluded {
+                reason: reason.into(),
+                count,
+            });
+        }
+    }
+    fn first_detail(&mut self, s: String) {
+        if self.detail.is_empty() {
+            self.detail = s;
+        }
+    }
+}
+
+fn one_line(s: &str) -> String {
+    s.replace(['\n', '\r'], " ")
+}
+
+// ---------------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------------
+
+pub struct Ctx<'a> {
+    pub m: &'a Mapped,
+    pub pe: &'a PeImage,
+    pub scale: f64,
+    pub seed: u64,
+}
+
+impl Ctx<'_> {
+    /// Address of a preferred-base VA in this mapping, or `None` if it is outside the
+    /// image. `None` becomes a SKIP, never a silently-omitted phase.
+    fn at(&self, va: u32) -> Option<*mut u8> {
+        if va < self.pe.image_base {
+            return None;
+        }
+        let rva = va - self.pe.image_base;
+        if rva as usize >= self.pe.size_of_image as usize {
+            return None;
+        }
+        Some(self.m.addr_of_rva(rva))
+    }
+    fn scaled(&self, n: u32) -> u32 {
+        if self.scale == 1.0 {
+            return n;
+        }
+        let v = (n as f64 * self.scale).round();
+        if v < 1.0 {
+            1
+        } else if v > u32::MAX as f64 {
+            u32::MAX
+        } else {
+            v as u32
+        }
+    }
+}
+
+fn scratch_page(bytes: usize) -> Option<*mut u8> {
+    let p = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if p == libc::MAP_FAILED {
+        None
+    } else {
+        Some(p as *mut u8)
+    }
+}
+
+// ---------------------------------------------------------------------------------
+// The executors — one per Plan variant
+// ---------------------------------------------------------------------------------
+
+fn exec(ctx: &Ctx, c: &Case) -> Acc {
+    let mut a = Acc::default();
+    let Some(f) = ctx.at(c.va) else {
+        a.skip = Some(format!(
+            "VA {:#010x} is outside the mapped image (base {:#010x}, size {:#x})",
+            c.va, ctx.pe.image_base, ctx.pe.size_of_image
+        ));
+        return a;
+    };
+    match &c.plan {
+        Plan::Stdcall4 {
+            model,
+            edges,
+            random,
+            random_distribution,
+        } => {
+            let g: extern "stdcall" fn(i32, i32, i32, i32) -> i32 =
+                unsafe { std::mem::transmute(f as *const u8) };
+            for e in edges.iter() {
+                let want = model(e[0], e[1], e[2], e[3]);
+                let got = g(e[0], e[1], e[2], e[3]);
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "edge a={} b={} lo={} hi={} model={} retail={}",
+                        e[0], e[1], e[2], e[3], want, got
+                    ));
+                }
+            }
+            a.phase("edges", edges.len() as u64, "hand-chosen edge tuples");
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed);
+            for _ in 0..n {
+                let (r, q) = (rng.next(), rng.next());
+                let v = crate::registry::draw_hash_into_range(r, q);
+                let want = model(v[0], v[1], v[2], v[3]);
+                let got = g(v[0], v[1], v[2], v[3]);
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "random a={} b={} lo={} hi={} model={} retail={}",
+                        v[0], v[1], v[2], v[3], want, got
+                    ));
+                }
+            }
+            a.phase("random", n as u64, random_distribution);
+        }
+
+        Plan::Ecx1 {
+            model,
+            edges,
+            sweep_start,
+            sweep_stride,
+            sweep_count,
+            sweep_distribution,
+        } => {
+            let f = f as *const u8;
+            for &x in edges.iter() {
+                let want = model(x);
+                let got = unsafe { call_ecx1(f, x) };
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!("edge x={x:#010x} model={want} retail={got}"));
+                }
+            }
+            a.phase("edges", edges.len() as u64, "instruction-sequence boundaries and neighbours");
+            let n = ctx.scaled(*sweep_count);
+            let mut x = *sweep_start;
+            for _ in 0..n {
+                let want = model(x);
+                let got = unsafe { call_ecx1(f, x) };
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!("sweep x={x:#010x} model={want} retail={got}"));
+                }
+                x = x.wrapping_add(*sweep_stride);
+            }
+            a.phase("stride-sweep", n as u64, sweep_distribution);
+        }
+
+        Plan::ThiscallScratch {
+            write_and_model,
+            random,
+            distribution,
+        } => {
+            let Some(obj) = scratch_page(PAGE) else {
+                a.skip = Some("scratch mmap failed".into());
+                return a;
+            };
+            let f = f as *const u8;
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed);
+            for _ in 0..n {
+                let r = rng.next();
+                let want = write_and_model(obj, r);
+                let got = unsafe { call_thiscall0(f, obj) };
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!("input={r:#018x} model={want:#x} retail={got:#x}"));
+                }
+            }
+            a.phase("random", n as u64, distribution);
+            unsafe { libc::munmap(obj as *mut c_void, PAGE) };
+        }
+
+        Plan::Stdcall2Table {
+            table_va,
+            elem_bits,
+            index,
+            grids,
+        } => {
+            if *elem_bits != 16 {
+                a.skip = Some(format!("unsupported element width {elem_bits}"));
+                return a;
+            }
+            let Some(table) = ctx.at(*table_va) else {
+                a.skip = Some(format!("table VA {table_va:#010x} outside the mapped image"));
+                return a;
+            };
+            let table_rva = (*table_va - ctx.pe.image_base) as i64;
+            let image_len = ctx.pe.size_of_image as i64;
+            let g: extern "stdcall" fn(i32, i32) -> i32 =
+                unsafe { std::mem::transmute(f as *const u8) };
+            let mut out_of_image = 0u64;
+            for grid in grids.iter() {
+                let mut n = 0u64;
+                let cols: Vec<i32> = match &grid.cols {
+                    Cols::Range(lo, hi) => (*lo..*hi).collect(),
+                    Cols::List(v) => v.to_vec(),
+                };
+                for row in grid.row_lo..grid.row_hi {
+                    for &col in &cols {
+                        let idx = index(row, col) as i64;
+                        let off = table_rva + idx * 2;
+                        if off < 0 || off + 2 > image_len {
+                            out_of_image += 1;
+                            continue;
+                        }
+                        let want = unsafe {
+                            std::ptr::read_unaligned(
+                                (table as *const u8).offset((idx * 2) as isize) as *const i16,
+                            )
+                        } as i32;
+                        let got = g(row, col);
+                        a.trials += 1;
+                        n += 1;
+                        if want != got {
+                            a.mismatches += 1;
+                            a.first_detail(format!(
+                                "row={row} col={col} model={want} retail={got}"
+                            ));
+                        }
+                    }
+                }
+                a.phase("grid", n, grid.label);
+            }
+            a.exclude("index outside the mapped image", out_of_image);
+        }
+
+        Plan::Damage {
+            seeds,
+            trials_per_seed,
+            distribution,
+        } => {
+            let mut arena = match damage_env::Arena::new() {
+                Ok(x) => x,
+                Err(e) => {
+                    a.skip = Some(format!("cannot build the fabricated world: {e}"));
+                    return a;
+                }
+            };
+            let base = ctx.m.base;
+            let ib = ctx.pe.image_base;
+            let reloc = |va: u32| unsafe { base.add((va - ib) as usize) } as u32;
+            let wr32 = |va: u32, v: u32| unsafe {
+                std::ptr::write_unaligned(base.add((va - ib) as usize) as *mut u32, v)
+            };
+            let wr16 = |va: u32, v: u16| unsafe {
+                std::ptr::write_unaligned(base.add((va - ib) as usize) as *mut u16, v)
+            };
+            damage_env::build(&mut arena, &reloc);
+            damage_test::install_globals(&arena, &wr32);
+            let damage_fn = reloc(damage_env::VA_DAMAGE);
+
+            let per = ctx.scaled(*trials_per_seed);
+            let (mut de, mut coll, mut panics) = (0u64, 0u64, 0u64);
+            let mut coverage = [0u64; 30];
+            for &seed in seeds.iter() {
+                let rep = damage_test::run(&arena, damage_fn, per, seed, &wr32, &wr16);
+                a.trials += rep.trials as u64;
+                a.mismatches += rep.mismatches as u64;
+                de += rep.skipped_de as u64;
+                coll += rep.skipped_collide as u64;
+                panics += rep.unexpected_panics as u64;
+                for (i, c) in rep.coverage.iter().enumerate() {
+                    coverage[i] += *c as u64;
+                }
+                if let Some((s, e, g)) = &rep.first_bad {
+                    a.first_detail(one_line(&format!(
+                        "seed {seed:#x} model={e} retail={g} scenario={s:?}"
+                    )));
+                }
+                if let Some((s, m)) = &rep.first_panic {
+                    a.first_detail(one_line(&format!(
+                        "seed {seed:#x} UNEXPECTED PANIC {m} scenario={s:?}"
+                    )));
+                }
+                a.phase(
+                    "random",
+                    rep.trials as u64,
+                    &format!("seed {seed:#018x}: {distribution}"),
+                );
+            }
+            a.exclude("retail #DE (unchecked idiv)", de);
+            a.exclude("balance write would collide with harness-owned .data", coll);
+            // An unexpected panic is the port faulting where retail would not. Counting it
+            // as an exclusion is exactly how a suite launders a divergence into a pass, so
+            // it lands in the mismatch column instead.
+            if panics > 0 {
+                a.mismatches += panics;
+                a.extras
+                    .push(("unexpected_panics".into(), panics.to_string()));
+            }
+            // Report which guarded steps never ran. "0 mismatches" over a corpus that only
+            // ever executed the spine would be a green suite that tested nothing.
+            let never: Vec<&str> = don_sim::STEP_NAMES
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| coverage[*i] == 0)
+                .map(|(_, n)| *n)
+                .collect();
+            a.extras.push((
+                "steps_never_taken".into(),
+                if never.is_empty() {
+                    String::from("(none)")
+                } else {
+                    never.join(",")
+                },
+            ));
+            let cov: Vec<String> = don_sim::STEP_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| format!("{n}:{}", coverage[i]))
+                .collect();
+            a.extras.push(("step_coverage".into(), cov.join(" ")));
+        }
+
+        Plan::RngNextFloat {
+            edge_seeds,
+            random_seeds,
+            total_steps,
+            distribution,
+        } => {
+            if let Err(e) = image::install_fake_teb() {
+                a.skip = Some(format!("fake TEB: {e}"));
+                return a;
+            }
+            let Some(p) = scratch_page(PAGE) else {
+                a.skip = Some("scratch mmap failed".into());
+                return a;
+            };
+            let p = p as *mut u32;
+            let f = f as *const u8;
+            let mut rng = Xs(ctx.seed);
+            let mut seeds: Vec<u32> = edge_seeds.to_vec();
+            for _ in 0..*random_seeds {
+                seeds.push(rng.next() as u32);
+            }
+            let steps = (ctx.scaled(*total_steps) as usize / seeds.len().max(1)).max(16);
+            let mut bad_state = 0u64;
+            let mut bad_float = 0u64;
+            for s0 in &seeds {
+                let mut model_s = *s0;
+                let mut retail_s = *s0;
+                for _ in 0..steps {
+                    unsafe { std::ptr::write_volatile(p, retail_s) };
+                    let (got_s, got_f) = unsafe { call_next_float(f, p) };
+                    let want_f = models::rng::next_float(&mut model_s);
+                    a.trials += 1;
+                    if got_s != model_s {
+                        bad_state += 1;
+                        a.first_detail(format!(
+                            "state: in={retail_s:#010x} model={model_s:#010x} retail={got_s:#010x}"
+                        ));
+                    }
+                    if got_f.to_bits() != want_f.to_bits() {
+                        bad_float += 1;
+                        a.first_detail(format!(
+                            "float: in={retail_s:#010x} model={:#010x} retail={:#010x}",
+                            want_f.to_bits(),
+                            got_f.to_bits()
+                        ));
+                    }
+                    retail_s = got_s;
+                    model_s = got_s; // resynchronise so one divergence does not cascade
+                }
+            }
+            a.mismatches += bad_state + bad_float;
+            a.extras.push(("state_mismatches".into(), bad_state.to_string()));
+            a.extras.push(("float_mismatches".into(), bad_float.to_string()));
+            a.phase(
+                "chained-walk",
+                a.trials,
+                &format!("{} seeds x {steps} steps: {distribution}", seeds.len()),
+            );
+            unsafe { libc::munmap(p as *mut c_void, PAGE) };
+        }
+
+        Plan::RngInRange {
+            edges,
+            random,
+            wide,
+            distribution,
+        } => {
+            if let Err(e) = image::install_fake_teb() {
+                a.skip = Some(format!("fake TEB: {e}"));
+                return a;
+            }
+            if *wide {
+                // The once-per-session warning at 0x00A39DB7 calls into unconstructed
+                // globals. Force the flag so the arithmetic path runs.
+                let Some(flag) = ctx.at(0x00EE_13A8) else {
+                    a.skip = Some("warning flag VA 0x00EE13A8 outside the mapped image".into());
+                    return a;
+                };
+                unsafe { std::ptr::write_volatile(flag, 1u8) };
+            }
+            let Some(p) = scratch_page(PAGE) else {
+                a.skip = Some("scratch mmap failed".into());
+                return a;
+            };
+            let p = p as *mut u32;
+            let f = f as *const u8;
+            let check = |s0: u32, lo: i32, hi: i32, a: &mut Acc, tag: &str| {
+                unsafe {
+                    std::ptr::write_volatile(p, s0);
+                    std::ptr::write_volatile(p.add(1), lo as u32);
+                    std::ptr::write_volatile(p.add(2), hi as u32);
+                }
+                let got = unsafe { call_in_range(f, p) };
+                let got_s = unsafe { std::ptr::read_volatile(p) };
+                let mut model_s = s0;
+                let want = models::rng::in_range(&mut model_s, lo, hi);
+                a.trials += 1;
+                if got != want || got_s != model_s {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "{tag} state={s0:#010x} lo={lo} hi={hi} model=({want},{model_s:#010x}) \
+                         retail=({got},{got_s:#010x})"
+                    ));
+                }
+            };
+            for &(s0, lo, hi) in edges.iter() {
+                check(s0, lo, hi, &mut a, "edge");
+            }
+            a.phase("edges", edges.len() as u64, "empty/inverted ranges, negatives, the 16-bit boundary");
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed);
+            for _ in 0..n {
+                let r = rng.next();
+                let s0 = r as u32;
+                let (lo, hi) = if *wide {
+                    (((r >> 32) as i32) >> 2, (rng.next() as i32) >> 2)
+                } else {
+                    (
+                        ((r >> 32) as i32) % 0x1_0000,
+                        ((rng.next() >> 11) as i32) % 0x1_0000,
+                    )
+                };
+                check(s0, lo, hi, &mut a, "random");
+            }
+            a.phase("random", n as u64, distribution);
+            unsafe { libc::munmap(p as *mut c_void, PAGE) };
+        }
+
+        Plan::Fastcall2 {
+            model,
+            edges,
+            dists,
+        } => {
+            let f = f as *const u8;
+            let call = |a: i32, b: i32| -> i32 {
+                let r: i32;
+                unsafe {
+                    std::arch::asm!("call {f}", f = in(reg) f,
+                        in("ecx") a, in("edx") b, lateout("eax") r, clobber_abi("C"));
+                }
+                r
+            };
+            for &(a_, b_) in edges.iter() {
+                let want = model(a_, b_);
+                let got = call(a_, b_);
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!("edge a={a_} b={b_} model={want} retail={got}"));
+                }
+            }
+            a.phase("edges", edges.len() as u64, "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination");
+            let mut rng = Xs(ctx.seed);
+            for p in dists.iter() {
+                let n = match p.dist {
+                    Dist2::Full { count } => ctx.scaled(count),
+                    Dist2::Centered { count, .. } => ctx.scaled(count),
+                    Dist2::Straddle { count, .. } => ctx.scaled(count),
+                };
+                for _ in 0..n {
+                    let r = rng.next();
+                    let (x, y) = match p.dist {
+                        Dist2::Full { .. } => (r as i32, (r >> 32) as i32),
+                        Dist2::Centered { half, .. } => {
+                            let m = (half as i64 * 2 + 1) as u64;
+                            (
+                                ((r % m) as i64 - half as i64) as i32,
+                                (((r >> 20) % m) as i64 - half as i64) as i32,
+                            )
+                        }
+                        Dist2::Straddle { center, span, .. } => {
+                            let s = span as u64 + 1;
+                            let x = center.wrapping_add((r % s) as i32);
+                            let y = center.wrapping_add(((r >> 8) % s) as i32);
+                            if r & 0x8000_0000 != 0 {
+                                (-x, y)
+                            } else {
+                                (x, -y)
+                            }
+                        }
+                    };
+                    let want = model(x, y);
+                    let got = call(x, y);
+                    a.trials += 1;
+                    if want != got {
+                        a.mismatches += 1;
+                        a.first_detail(format!("a={x} b={y} model={want} retail={got}"));
+                    }
+                }
+                a.phase("random", n as u64, p.description);
+            }
+        }
+
+        Plan::Adler32 {
+            model,
+            boundary_lens,
+            bufcap,
+            random_cases,
+            distribution,
+        } => {
+            let Some(buf) = scratch_page(*bufcap) else {
+                a.skip = Some("checksum buffer mmap failed".into());
+                return a;
+            };
+            let f = f as *const u8;
+            // `ret`, not `ret 4`: the retail call site does `add esp, 4`, so the caller
+            // cleans. Getting this backwards corrupts the harness stack silently.
+            let call = |init: u32, len: usize| -> u32 {
+                let r: u32;
+                unsafe {
+                    std::arch::asm!(
+                        "push {len:e}",
+                        "call {f}",
+                        "add esp, 4",
+                        f = in(reg) f,
+                        len = in(reg) len as u32,
+                        in("ecx") init,
+                        in("edx") buf,
+                        lateout("eax") r,
+                        clobber_abi("C"),
+                    );
+                }
+                r
+            };
+            let mut rng = Xs(ctx.seed);
+            let total = boundary_lens.len() as u32 + ctx.scaled(*random_cases);
+            for i in 0..total {
+                let len = if (i as usize) < boundary_lens.len() {
+                    boundary_lens[i as usize]
+                } else {
+                    (rng.next() as usize) % (*bufcap + 1)
+                };
+                let init = if i == 0 { 1 } else { rng.next() as u32 };
+                unsafe {
+                    for k in 0..len {
+                        *buf.add(k) = (rng.next() >> 23) as u8;
+                    }
+                }
+                let want = model(init, unsafe { std::slice::from_raw_parts(buf, len) });
+                let got = call(init, len);
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "len={len} init={init:#010x} model={want:#010x} retail={got:#010x}"
+                    ));
+                }
+            }
+            a.phase(
+                "boundary-lengths",
+                boundary_lens.len() as u64,
+                "lengths straddling the 16-byte unrolled block and NMAX = 5552",
+            );
+            a.phase("random", ctx.scaled(*random_cases) as u64, distribution);
+            // The NULL-buffer short-circuit: `lea eax,[edx+1]` = 1.
+            let nullret: u32;
+            unsafe {
+                std::arch::asm!(
+                    "push 0", "call {f}", "add esp, 4",
+                    f = in(reg) f, in("ecx") 12345u32, in("edx") 0u32,
+                    lateout("eax") nullret, clobber_abi("C"));
+            }
+            a.trials += 1;
+            if nullret != 1 {
+                a.mismatches += 1;
+                a.first_detail(format!(
+                    "null-buffer call returned {nullret}, disassembly predicts 1"
+                ));
+            }
+            a.phase("edges", 1, "buf == NULL, which the disassembly says returns 1");
+            unsafe { libc::munmap(buf as *mut c_void, *bufcap) };
+        }
+
+        Plan::AsScaled {
+            scales,
+            edges,
+            corpus_file,
+            generated,
+            distribution,
+        } => {
+            // Patch the two CRT imports the tokenizer calls. Their slots live in a
+            // read-only section, so make exactly those pages writable — mapping the whole
+            // image RW would change the environment every other case measures in.
+            for slot_va in [models::tokenizer::IAT_WTOI, models::tokenizer::IAT_WCSCHR] {
+                let Some(slot) = ctx.at(slot_va) else {
+                    a.skip = Some(format!("IAT slot {slot_va:#010x} outside the mapped image"));
+                    return a;
+                };
+                if let Err(e) = ctx.m.make_page_writable(slot) {
+                    a.skip = Some(format!("cannot make the IAT writable: {e}"));
+                    return a;
+                }
+            }
+            unsafe {
+                let w = ctx.at(models::tokenizer::IAT_WTOI).unwrap() as *mut u32;
+                let c = ctx.at(models::tokenizer::IAT_WCSCHR).unwrap() as *mut u32;
+                std::ptr::write_unaligned(w, models::tokenizer::wtoi as *const () as usize as u32);
+                std::ptr::write_unaligned(c, models::tokenizer::wcschr as *const () as usize as u32);
+            }
+            let Some(obj) = scratch_page(PAGE) else {
+                a.skip = Some("scratch mmap failed".into());
+                return a;
+            };
+            let f = f as *const u8;
+
+            // The port panics exactly where retail's idiv raises #DE. Evaluate the model
+            // first so those inputs are excluded before retail is ever asked, and count
+            // them; handing a #DE to the child would be a SIGFPE, not a measurement.
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let mut de = 0u64;
+            let mut run = |s: &str, scale: i32, a: &mut Acc, tag: &str| {
+                let want = match std::panic::catch_unwind(|| don_rules::as_scaled(s, scale)) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        de += 1;
+                        return;
+                    }
+                };
+                let w = models::tokenizer::to_utf16z(s);
+                let got = unsafe {
+                    std::ptr::write_unaligned(obj as *mut u32, w.as_ptr() as usize as u32);
+                    std::ptr::write_unaligned(obj.add(6) as *mut u16, 0u16);
+                    std::ptr::write_unaligned(obj.add(8) as *mut u16, (w.len() - 1) as u16);
+                    *obj.add(0x0a) = 1;
+                    call_thiscall1(f, obj, scale)
+                };
+                a.trials += 1;
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "{tag} {s:?} scale={scale} model={want} retail={got}"
+                    ));
+                }
+            };
+
+            match std::fs::read_to_string(corpus_file) {
+                Ok(xml) => {
+                    let mut corpus: Vec<String> = Vec::new();
+                    for chunk in xml.split("value=\"").skip(1) {
+                        if let Some(e) = chunk.find('"') {
+                            corpus.push(chunk[..e].to_string());
+                        }
+                    }
+                    for chunk in xml.split("entry").skip(1) {
+                        if let Some(q) = chunk.find("=\"") {
+                            if let Some(e) = chunk[q + 2..].find('"') {
+                                corpus.push(chunk[q + 2..q + 2 + e].to_string());
+                            }
+                        }
+                    }
+                    let mut n = 0u64;
+                    for v in &corpus {
+                        for &s in scales.iter() {
+                            run(v, s, &mut a, "corpus");
+                            n += 1;
+                        }
+                    }
+                    a.phase(
+                        "shipped-corpus",
+                        n,
+                        &format!(
+                            "{} value/entry strings from {corpus_file} x {} scales",
+                            corpus.len(),
+                            scales.len()
+                        ),
+                    );
+                }
+                Err(e) => {
+                    // Exhaustive-over-the-shipped-corpus is the load-bearing half of this
+                    // claim. Running only the generated half and printing PASS would be a
+                    // weaker measurement wearing the same label.
+                    std::panic::set_hook(prev_hook);
+                    a.skip = Some(format!(
+                        "shipped corpus {corpus_file} is missing ({e}); the claim is \
+                         'exhaustive over the shipped corpus', so a partial run is a \
+                         different claim and is not reported as one"
+                    ));
+                    return a;
+                }
+            }
+
+            let mut n = 0u64;
+            for e in edges.iter() {
+                for &s in scales.iter() {
+                    run(e, s, &mut a, "edge");
+                    n += 1;
+                }
+            }
+            a.phase("edges", n, "hand-chosen tokenizer edges x every scale");
+
+            let count = ctx.scaled(*generated);
+            let tails = ["", " tile", " tiles (comment)", " frames", "%", " resources", " x", "/"];
+            let mut rng = Xs(ctx.seed);
+            for _ in 0..count {
+                let r = rng.next();
+                let num = ((r % 4001) as i64 - 2000) as i32;
+                let den = (((r >> 20) % 401) as i64 - 200) as i32;
+                let tail = tails[((r >> 40) % tails.len() as u64) as usize];
+                let s = if (r >> 50) & 1 == 0 {
+                    format!("{num}/{den}{tail}")
+                } else {
+                    format!("{num}{tail}")
+                };
+                let sc = scales[((r >> 55) as usize) % scales.len()];
+                run(&s, sc, &mut a, "generated");
+            }
+            a.phase("generated", count as u64, distribution);
+            std::panic::set_hook(prev_hook);
+            a.exclude("retail #DE (INT_MIN / -1 after the multiply)", de);
+            unsafe { libc::munmap(obj as *mut c_void, PAGE) };
+        }
+    }
+    a
+}
+
+// ---------------------------------------------------------------------------------
+// Fork isolation
+// ---------------------------------------------------------------------------------
+
+/// Run one case in a forked child and bring its record back over a pipe.
+///
+/// The child owns whatever environment surgery its case needs. If it dies, the parent
+/// reports CRASHED with the signal rather than losing the case.
+fn run_isolated(ctx: &Ctx, c: &Case) -> CaseResult {
+    let t0 = Instant::now();
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return CaseResult {
+            wall_ms: t0.elapsed().as_millis(),
+            ..CaseResult::skipped(c.id, "pipe() failed")
+        };
+    }
+    std::io::stdout().flush().ok();
+    std::io::stderr().flush().ok();
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return CaseResult {
+            wall_ms: t0.elapsed().as_millis(),
+            ..CaseResult::skipped(c.id, "fork() failed")
+        };
+    }
+    if pid == 0 {
+        unsafe { libc::close(fds[0]) };
+        let a = exec(ctx, c);
+        let mut out = String::new();
+        match &a.skip {
+            Some(why) => {
+                out.push_str("status=skip\n");
+                out.push_str(&format!("detail={}\n", one_line(why)));
+            }
+            None => {
+                out.push_str(if a.mismatches == 0 {
+                    "status=pass\n"
+                } else {
+                    "status=fail\n"
+                });
+                out.push_str(&format!("trials={}\n", a.trials));
+                out.push_str(&format!("mismatches={}\n", a.mismatches));
+                for p in &a.phases {
+                    out.push_str(&format!(
+                        "phase={}|{}|{}\n",
+                        p.kind,
+                        p.count,
+                        one_line(&p.description)
+                    ));
+                }
+                for e in &a.excluded {
+                    out.push_str(&format!("excluded={}|{}\n", one_line(&e.reason), e.count));
+                }
+                for (k, v) in &a.extras {
+                    out.push_str(&format!("extra={}|{}\n", k, one_line(v)));
+                }
+                if !a.detail.is_empty() {
+                    out.push_str(&format!("detail={}\n", one_line(&a.detail)));
+                }
+            }
+        }
+        let b = out.as_bytes();
+        let mut off = 0usize;
+        while off < b.len() {
+            let n = unsafe {
+                libc::write(fds[1], b[off..].as_ptr() as *const c_void, b.len() - off)
+            };
+            if n <= 0 {
+                break;
+            }
+            off += n as usize;
+        }
+        unsafe { libc::close(fds[1]) };
+        unsafe { libc::_exit(0) };
+    }
+
+    unsafe { libc::close(fds[1]) };
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = unsafe { libc::read(fds[0], chunk.as_mut_ptr() as *mut c_void, chunk.len()) };
+        if n <= 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+    }
+    unsafe { libc::close(fds[0]) };
+    let mut status = 0i32;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    let wall_ms = t0.elapsed().as_millis();
+
+    if libc::WIFSIGNALED(status) {
+        return CaseResult {
+            id: c.id,
+            status: Status::Crashed,
+            trials: 0,
+            mismatches: 0,
+            phases: Vec::new(),
+            excluded: Vec::new(),
+            detail: format!(
+                "child killed by signal {} — the case executed retail code that faulted, so \
+                 it produced no measurement",
+                libc::WTERMSIG(status)
+            ),
+            extras: Vec::new(),
+            wall_ms,
+        };
+    }
+
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let mut r = CaseResult {
+        id: c.id,
+        status: Status::Error,
+        trials: 0,
+        mismatches: 0,
+        phases: Vec::new(),
+        excluded: Vec::new(),
+        detail: String::new(),
+        extras: Vec::new(),
+        wall_ms,
+    };
+    let mut saw_status = false;
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        match k {
+            "status" => {
+                saw_status = true;
+                r.status = match v {
+                    "pass" => Status::Pass,
+                    "fail" => Status::Fail,
+                    "skip" => Status::Skipped,
+                    _ => Status::Error,
+                };
+            }
+            "trials" => r.trials = v.parse().unwrap_or(0),
+            "mismatches" => r.mismatches = v.parse().unwrap_or(0),
+            "detail" => r.detail = v.to_string(),
+            "phase" => {
+                let f: Vec<&str> = v.splitn(3, '|').collect();
+                if f.len() == 3 {
+                    r.phases.push(Phase {
+                        kind: f[0].into(),
+                        count: f[1].parse().unwrap_or(0),
+                        description: f[2].into(),
+                    });
+                }
+            }
+            "excluded" => {
+                if let Some((reason, n)) = v.rsplit_once('|') {
+                    r.excluded.push(Excluded {
+                        reason: reason.into(),
+                        count: n.parse().unwrap_or(0),
+                    });
+                }
+            }
+            "extra" => {
+                if let Some((kk, vv)) = v.split_once('|') {
+                    r.extras.push((kk.into(), vv.into()));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !saw_status {
+        r.status = Status::Error;
+        r.detail = format!(
+            "child exited without reporting a status ({} bytes of output) — treated as a \
+             failure, never as a pass",
+            buf.len()
+        );
+    }
+    r
+}
+
+// ---------------------------------------------------------------------------------
+// The suite
+// ---------------------------------------------------------------------------------
+
+pub struct RunReport {
+    pub results: Vec<CaseResult>,
+    pub selftest: Result<(), String>,
+    pub image_path: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub scale: f64,
+    pub seed: u64,
+    pub only: Option<String>,
+    pub started_unix: u64,
+    pub wall_ms: u128,
+}
+
+impl RunReport {
+    pub fn count(&self, s: Status) -> usize {
+        self.results.iter().filter(|r| r.status == s).count()
+    }
+    pub fn total_trials(&self) -> u64 {
+        self.results.iter().map(|r| r.trials).sum()
+    }
+    /// `0` all ran and passed, `1` mismatch/crash/error, `2` something skipped,
+    /// `3` the harness could not start.
+    pub fn exit_code(&self) -> i32 {
+        if self.selftest.is_err() {
+            return 3;
+        }
+        if self
+            .results
+            .iter()
+            .any(|r| matches!(r.status, Status::Fail | Status::Crashed | Status::Error))
+        {
+            return 1;
+        }
+        if self.results.iter().any(|r| r.status == Status::Skipped) {
+            return 2;
+        }
+        0
+    }
+}
+
+pub fn run_all(
+    m: &Mapped,
+    pe: &PeImage,
+    image_path: &str,
+    image_bytes: &[u8],
+    scale: f64,
+    seed: u64,
+    only: Option<&str>,
+) -> RunReport {
+    let t0 = Instant::now();
+    let started_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    println!("oracle regression suite — {} registered cases", REGISTRY.len());
+    let selftest = image::selftest();
+    match &selftest {
+        Ok(()) => println!(
+            "  selftest      OK (hand-written cdecl add returned 42 through fork isolation)"
+        ),
+        Err(e) => println!("  selftest      FAILED: {e} — no case can be reported as passing"),
+    }
+    let sha = image::sha256_hex(image_bytes);
+    println!("  image         {image_path}  sha256 {sha}  {} bytes", image_bytes.len());
+    println!("  scale {scale}   seed {seed:#018x}");
+    println!();
+
+    let ctx = Ctx {
+        m,
+        pe,
+        scale,
+        seed,
+    };
+    let mut results = Vec::new();
+    for c in REGISTRY.iter() {
+        if let Some(f) = only {
+            if !f.split(',').any(|id| id == c.id) {
+                results.push(CaseResult::skipped(
+                    c.id,
+                    &format!("not selected by --only {f}"),
+                ));
+                continue;
+            }
+        }
+        if selftest.is_err() {
+            results.push(CaseResult::skipped(
+                c.id,
+                "harness selftest failed; refusing to report a result",
+            ));
+            continue;
+        }
+        let r = run_isolated(&ctx, c);
+        print_case(c, &r);
+        results.push(r);
+    }
+
+    RunReport {
+        results,
+        selftest,
+        image_path: image_path.to_string(),
+        image_sha256: sha,
+        image_bytes: image_bytes.len(),
+        scale,
+        seed,
+        only: only.map(|s| s.to_string()),
+        started_unix,
+        wall_ms: t0.elapsed().as_millis(),
+    }
+}
+
+fn print_case(c: &Case, r: &CaseResult) {
+    println!(
+        "  {:<5} {:<26} {:#010x}  {:>10} trials  {:>6} mismatches  {:>6} ms",
+        r.status.label(),
+        c.id,
+        c.va,
+        r.trials,
+        r.mismatches,
+        r.wall_ms
+    );
+    println!("        model  {}", c.model);
+    for p in &r.phases {
+        println!("        phase  {:<16} {:>10}  {}", p.kind, p.count, p.description);
+    }
+    for e in &r.excluded {
+        println!("        excl   {:>10}  {}", e.count, e.reason);
+    }
+    for (k, v) in &r.extras {
+        if k == "step_coverage" {
+            continue;
+        }
+        println!("        {k}: {v}");
+    }
+    if !r.detail.is_empty() {
+        println!("        {}", r.detail);
+    }
+}
+
+pub fn print_summary(rep: &RunReport) {
+    println!();
+    println!("summary");
+    println!(
+        "  {} pass   {} fail   {} skipped   {} crashed   {} error",
+        rep.count(Status::Pass),
+        rep.count(Status::Fail),
+        rep.count(Status::Skipped),
+        rep.count(Status::Crashed),
+        rep.count(Status::Error),
+    );
+    println!("  {} trials in {} ms", rep.total_trials(), rep.wall_ms);
+    if rep.count(Status::Skipped) > 0 {
+        println!(
+            "  SKIPPED cases produced NO evidence. They are not passes, and this run exits \
+             non-zero because of them."
+        );
+    }
+    println!();
+    println!(
+        "  {} Tier-B claims are outside this suite entirely (see known_gaps in the JSON):",
+        KNOWN_GAPS.len()
+    );
+    for g in KNOWN_GAPS.iter() {
+        println!("    - {}", g.claim);
+    }
+    println!();
+    println!(
+        "  Tier B is testing, not verification. Every number above is a sample count over the \
+         stated distribution and says nothing about inputs outside it."
+    );
+}
+
+// ---------------------------------------------------------------------------------
+// JSON
+// ---------------------------------------------------------------------------------
+
+fn esc(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
+    let mut s = String::new();
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    s.push_str("{\n");
+    s.push_str("  \"schema\": \"don/oracle-regression\",\n");
+    s.push_str("  \"schema_version\": 1,\n");
+    s.push_str(&format!("  \"generated_unix\": {},\n", rep.started_unix));
+    s.push_str(&format!("  \"host\": \"{}\",\n", esc(&host)));
+    s.push_str("  \"target\": \"i686-unknown-linux-musl\",\n");
+    s.push_str(&format!(
+        "  \"harness_selftest\": {},\n",
+        match &rep.selftest {
+            Ok(()) => "\"pass\"".to_string(),
+            Err(e) => format!("\"fail: {}\"", esc(e)),
+        }
+    ));
+    s.push_str("  \"image\": {\n");
+    s.push_str(&format!("    \"path\": \"{}\",\n", esc(&rep.image_path)));
+    s.push_str(&format!("    \"sha256\": \"{}\",\n", rep.image_sha256));
+    s.push_str(&format!("    \"bytes\": {}\n", rep.image_bytes));
+    s.push_str("  },\n");
+    s.push_str(&format!("  \"seed\": \"{:#018x}\",\n", rep.seed));
+    s.push_str(&format!("  \"scale\": {},\n", rep.scale));
+    s.push_str(&format!(
+        "  \"only\": {},\n",
+        match &rep.only {
+            Some(f) => format!("\"{}\"", esc(f)),
+            None => "null".into(),
+        }
+    ));
+    s.push_str(&format!("  \"wall_ms\": {},\n", rep.wall_ms));
+    s.push_str(&format!("  \"exit_code\": {},\n", rep.exit_code()));
+    s.push_str("  \"summary\": {\n");
+    s.push_str(&format!("    \"registered\": {},\n", REGISTRY.len()));
+    s.push_str(&format!("    \"pass\": {},\n", rep.count(Status::Pass)));
+    s.push_str(&format!("    \"fail\": {},\n", rep.count(Status::Fail)));
+    s.push_str(&format!("    \"skipped\": {},\n", rep.count(Status::Skipped)));
+    s.push_str(&format!("    \"crashed\": {},\n", rep.count(Status::Crashed)));
+    s.push_str(&format!("    \"error\": {},\n", rep.count(Status::Error)));
+    s.push_str(&format!("    \"total_trials\": {}\n", rep.total_trials()));
+    s.push_str("  },\n");
+
+    s.push_str("  \"cases\": [\n");
+    for (i, c) in REGISTRY.iter().enumerate() {
+        let r = rep
+            .results
+            .iter()
+            .find(|r| r.id == c.id)
+            .expect("every registered case has a result");
+        s.push_str("    {\n");
+        s.push_str(&format!("      \"id\": \"{}\",\n", esc(c.id)));
+        s.push_str(&format!("      \"va\": \"{:#010x}\",\n", c.va));
+        s.push_str(&format!("      \"abi\": \"{}\",\n", esc(c.abi)));
+        s.push_str(&format!("      \"model\": \"{}\",\n", esc(c.model)));
+        s.push_str(&format!("      \"subsystem\": \"{}\",\n", esc(c.subsystem)));
+        s.push_str(&format!("      \"ledger_entry\": \"{}\",\n", esc(c.ledger)));
+        s.push_str(&format!("      \"derivation\": \"{}\",\n", esc(c.derivation)));
+        s.push_str(&format!("      \"reachability\": \"{}\",\n", esc(c.reachability)));
+        s.push_str(&format!("      \"caveat\": \"{}\",\n", esc(c.caveat)));
+        s.push_str("      \"tier\": \"B\",\n");
+        s.push_str(&format!("      \"status\": \"{}\",\n", r.status.as_str()));
+        s.push_str(&format!("      \"trials\": {},\n", r.trials));
+        s.push_str(&format!("      \"mismatches\": {},\n", r.mismatches));
+        s.push_str(&format!("      \"wall_ms\": {},\n", r.wall_ms));
+        s.push_str("      \"phases\": [");
+        for (j, p) in r.phases.iter().enumerate() {
+            if j > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!(
+                "\n        {{\"kind\": \"{}\", \"count\": {}, \"distribution\": \"{}\"}}",
+                esc(&p.kind),
+                p.count,
+                esc(&p.description)
+            ));
+        }
+        s.push_str(if r.phases.is_empty() { "],\n" } else { "\n      ],\n" });
+        s.push_str("      \"excluded\": [");
+        for (j, e) in r.excluded.iter().enumerate() {
+            if j > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!(
+                "\n        {{\"reason\": \"{}\", \"count\": {}}}",
+                esc(&e.reason),
+                e.count
+            ));
+        }
+        s.push_str(if r.excluded.is_empty() { "],\n" } else { "\n      ],\n" });
+        s.push_str("      \"extras\": {");
+        for (j, (k, v)) in r.extras.iter().enumerate() {
+            if j > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!("\n        \"{}\": \"{}\"", esc(k), esc(v)));
+        }
+        s.push_str(if r.extras.is_empty() { "},\n" } else { "\n      },\n" });
+        s.push_str(&format!(
+            "      \"detail\": {}\n",
+            if r.detail.is_empty() {
+                "null".to_string()
+            } else {
+                format!("\"{}\"", esc(&r.detail))
+            }
+        ));
+        s.push_str(if i + 1 == REGISTRY.len() { "    }\n" } else { "    },\n" });
+    }
+    s.push_str("  ],\n");
+
+    s.push_str("  \"known_gaps\": [\n");
+    for (i, g) in KNOWN_GAPS.iter().enumerate() {
+        s.push_str(&format!(
+            "    {{\"claim\": \"{}\", \"why\": \"{}\"}}{}\n",
+            esc(g.claim),
+            esc(g.why),
+            if i + 1 == KNOWN_GAPS.len() { "" } else { "," }
+        ));
+    }
+    s.push_str("  ],\n");
+    s.push_str(
+        "  \"note\": \"Tier B is differential testing, not verification. Each count is a \
+         sample size over the stated distribution. A case with status != 'pass' produced no \
+         evidence and must not be cited as if it had.\"\n",
+    );
+    s.push_str("}\n");
+
+    std::fs::write(path, s)
+}

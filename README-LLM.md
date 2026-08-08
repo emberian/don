@@ -99,6 +99,25 @@ Edit local → `scp` → rebuild → run. It is **excluded from the workspace** 
 build on arm64, so `cargo test` at the repo root never touches it — *a green `cargo test`
 is evidence about the Rust crates only, never about a fidelity claim*.
 
+**Re-run every Tier-B claim, from the Mac, with one command:**
+
+```sh
+tools/oracle-regress.sh              # sync → hbox, build i686, run all 12 cases, fetch JSON
+tools/oracle-regress.sh --status     # age + contents of the last record; runs nothing
+tools/ledger-from-measurements.py    # ledger evidence rows, generated from the measurements
+```
+
+12 registered differential cases, 16.2 M trials, ~59 s. Exit 0 only if every case *ran*
+**and** agreed; 1 mismatch/crash, 2 something skipped, 3 harness failure, 4 hbox
+unreachable. A case that cannot run is SKIPPED and is never green — vacuous green is the
+failure mode the whole harness exists to prevent. Adding a case is data in
+`crates/oracle/src/registry.rs`; last record in `schema/oracle-regression.json`; the design,
+the mutation test that proves it bites, and the honest gap list are in
+`docs/tooling/oracle-regression.md`.
+
+⚠ `oracle difftest` / `oracle combat` are **superseded**: their models are copies typed into
+`main.rs`, so they test the copy, not `don-sim`. Use `regress`.
+
 **The live process.** Read memory with `OpenProcess` + `ReadProcessMemory` via P/Invoke in
 guest PowerShell:
 
@@ -107,8 +126,13 @@ prlctl exec "Windows 11" powershell.exe -EncodedCommand <base64 of UTF-16LE scri
 ```
 
 Then **write results to a guest file and stream that out** — inline base64 return times out.
-Use `certutil -encode` + `type` for binary, exactly as documented in
-`docs/binary-ground-truth.md`.
+
+**For file transfer, use the SHARED FOLDER, not certutil.** Guest `\\Mac\deos` maps to host
+`/Users/ember/dev/breadstuffs`, read-write, and moves 57 MB in seconds. `prlctl exec` runs
+as SYSTEM so the `Z:` drive letter is invisible, but the UNC path works. The
+`certutil -encode` + `type` hop in `docs/binary-ground-truth.md` is the slow fallback; it
+was used all day only because an early check of `\\Mac\Home` failed and absence was wrongly
+concluded from it.
 
 ## Gotchas, each paid for in real debugging
 
@@ -122,12 +146,49 @@ Use `certutil -encode` + `type` for binary, exactly as documented in
 - **Never scan large memory in a PowerShell loop.** It is orders of magnitude too slow. Put
   the loop in compiled C# via `Add-Type`, add a cheap range prefilter before any hash lookup,
   or use a native binary.
+- **NEVER conclude absence from a narrow or truncated listing.** This cost the project a
+  full day, three times over: `head -5` hid `rise.pdb`; `dir /b *.pdb` hid `rise_z.map`;
+  one failed `\\Mac\Home` probe hid the working shared folder. Enumerate fully, then
+  conclude.
+- **Fork isolation without a timeout only handles crashes, not hangs.** A probe that never
+  returns wedges the run forever and looks exactly like a shell timeout.
+- **A differential test whose model is an inline copy tests the copy.** Point every case at
+  the shipped function, and mutation-test the harness to prove it bites.
 - **Do not `git stash`** — the tree is shared with parallel lanes. Lanes must not commit;
   the orchestrator commits. Never `git add -A` while lanes are live.
 - **`schema/islands.jsonl` is not a complete function list** — Ghidra left gaps, and two
   combat-critical functions sit in them.
-- **Ghidra decompiler timeouts are real** — `FUN_00570170` exceeds a 600 s budget. Extract at
-  the instruction level instead.
+- **Ghidra decompiler timeouts are real** — `Constants::log_data` `0x00570170` is 63,382 bytes
+  and exceeds a 600 s budget. Extract at the instruction level instead.
+- **Following a rule-name string leads to the LOGGER, not the loader.** The UTF-16 rule names
+  in `.rdata` are xref'd only from the `*::log_data(Log*)` functions. The real loaders
+  (`Constants::init` `0x00569a90`, `UnitType::init` `0x0061ab50`) fetch names from the runtime
+  `StringTable` at `[0x00C06378]` and touch no literal. This cost a day; see
+  `docs/derivation/PDB-RECONCILIATION.md` §2.
+
+## The shipped PDB — read this before doing any RE
+
+**`ron-bin/sbl/rise.pdb` is the private PDB for our exact binary.** 57 MB, CodeView GUID
+`{51D4F219-61C6-4F84-9D5B-C3361B0D291F}` age 1, identical to the exe's debug directory.
+37,138 publics, 22,752 procedures with real names, code sizes and C++ signatures, plus full
+type info. (Any doc claiming the game ships no PDB is stale — it sat in `sbl\` all along and
+an early recon command truncated the listing that would have shown it.)
+
+```sh
+python3 tools/pdb/lookup.py 644130 a1d110       # VA -> real symbol + signature
+python3 tools/pdb/lookup.py --name 'PathFinder::'   # search names
+cd ron-bin && uv run --quiet --with pefile python ../tools/pdb/callers.py 57fa60
+cd ron-bin && uv run --quiet --with pefile python ../tools/pdb/xref.py --str flank_bonus
+/opt/homebrew/opt/llvm/bin/llvm-pdbutil dump --types ron-bin/sbl/rise.pdb   # struct layouts
+```
+
+Pre-extracted: `schema/rise-symbols.tsv` (publics), `schema/rise-procs.tsv` (procedures with
+sizes — the one that resolves an arbitrary VA), `schema/pdb-types.json`,
+`schema/command-structs.txt`, `re/symtab.json`, `re/docaddrs.tsv`.
+
+**It gives names, types, sizes and line info. It does not give semantics and it raises no
+fidelity tier.** Finding the right function is not the same as understanding it; values still
+come from the oracle. Never write "confirmed by the PDB" about a behavioural claim.
 
 ## Established ground truth (do not re-derive)
 
@@ -137,25 +198,49 @@ only the MFC launcher.
 
 - **Float**: SSE binary32, not x87 (~23.7 K scalar SSE vs ~560 x87). Entire IEEE hazard
   surface is eight CRT imports `_libm_sse2_{acos,asin,atan,cos,pow,sin,tan}_precise`; `sqrt`
-  is IEEE-exact and safe. **The damage pipeline and A\* contain no floating point at all.**
-- **RNG**: LCG `s ← s·1664525 + 1013904223`, `next_float` `0x00a39cf0`, `in_range`
-  `0x00a39d70`, 414 call sites, ≥7 streams. Pathfinder uses a *different* `Random` via
-  pointer global `[0x00C06184]`; script/sim uses fixed object `0x00EB697C`.
-- **RULES**: `[0x00C061E4]` and `[0x00C061F0]` **alias the same object** (live-read).
-- **Damage**: `FUN_00644130`, `__thiscall`, pure integer. Attack stored **×10**; rescale
-  `(D+5)/10`; armor subtracted **mid-chain** at step 22 of 31; floor of 1 **conditional**.
-  The community formula is wrong in structure.
-- **Pathfinding**: pure-integer 8-connected grid A\*, draws RNG once per edge relaxation.
-- **Checksum**: `CheckSum`/`SaveGame`/`LoadGame` are siblings of one `DataWalk` interface, so
-  **sim-critical state ≡ save-game state**. adler-32 at `0x00a46830`, `check_all`
-  `FUN_00936560`, `process_check_sums` `FUN_009459d0`.
-- **Rule tokenizer**: `RString::AsScaled` `0x00a1d110` — `(num * scale) / den`, where `scale`
-  is a *per-field compile-time constant* (192 tiles, 256 for 8.8 fixed point, 100 percent).
-- **Balance table**: base `0x00C06AFC`, 493×493 int16. ⚠ The captured window has unexplained
-  negatives — **bound its real extent before trusting it**.
+  is IEEE-exact and safe. **`ObjectData::get_damage` and the road A\* contain no floating
+  point at all** (not a whole-sim claim — see `docs/derivation/AUDIT.md` §3.2).
+- **RNG**: LCG `s ← s·1664525 + 1013904223` [measured, in `Random::get`]. `float Random::get()`
+  `0x00a39cf0`, `int Random::get(int,int)` `0x00a39d70`, `Random::reseed` `0x00a39d30` (an
+  XOR-swap: installs the new seed, **returns the old one**), free `random(int,int)`
+  `0x00a39d40`. 414 call sites, ≥7 streams.
+  ⚠ **Corrected**: the pathfinder does **not** have its own RNG. `[0x00C06184]` is
+  `GameAccess::game_random`, a static *reference* to the `Random` object `game_random` at
+  `0x00E37A8C` — **the main simulation stream**, shared by the road pathfinder's per-edge
+  draw, map generation and the BHS script API. `0x00EB697C` is `internal_random`, a
+  *different, secondary* stream (`Surf.cpp` water, `Scene`, graphics). A pathfinding
+  divergence therefore **does** desynchronise everything downstream on the main stream.
+- **RULES**: `[0x00C061E4]` and `[0x00C061F0]` **alias the same object** (live-read; the PDB
+  says why — they are `GameAccessConst::constantsc` and `GameAccess::constants`, the
+  const/non-const reference pair to the one `Constants` singleton).
+- **Damage**: `ObjectData::get_damage` `0x00644130`,
+  `int __thiscall (int, int, unsigned long, int, int, int*) const`, pure integer. Attack
+  stored **×10**; rescale `(D+5)/10`; armor subtracted **mid-chain** at step 22 of 31; floor
+  of 1 **conditional**. The community formula is wrong in structure.
+- **Pathfinding**: pure-integer 8-connected grid A\*, draws RNG once per edge relaxation —
+  ⚠ measured on `PathFinder::astar_caravan_road` `0x00685990`, the **caravan/road** search.
+  The general pathfinder is `PathFinder::astar_path` `0x00683770` and is **unread**; there is
+  also `PathFinder::astar_river` `0x00686690`.
+- **Checksum**: `CheckSums::check_all` `0x00936560`, `CommandPackage::process_check_sums`
+  `0x009459d0`, `adler32` `0x00a46830`. `CheckSum`/`SaveGame`/`LoadGame` are siblings of one
+  `DataWalk` interface (`walk_data(DataWalk*)` / `walk_function` / `walk_test`), so
+  **sim-critical state ≡ save-game state**. Note `log_data(Log*)` is a *different* visitor
+  interface and does not carry this property.
+- **Rule tokenizer**: `String::fraction(int scale) const` `0x00a1d110` (we had called it
+  `RString::AsScaled`) — `(_wtoi(s) * scale) / _wtoi(strchr(s,'/')+1)`, denominator 0 → 0,
+  no '/' → denominator 1. `scale` is a per-field compile-time constant pushed by the caller;
+  the **complete** scale universe across the 40 fraction constants is
+  **{256 ×24, 192 ×11, 100 ×5}** [measured, `Constants::init` call sites].
+- **Balance table**: `Balance combat_table` `0x00C12BF0`; the array is
+  `Balance::final_balance_table` at **`0x00C12BF4`**, and the PDB type record says
+  `short[493][493]` — 486,098 bytes, exactly as derived. The old `0x00C06AFC` figure is a
+  **bias-folded base** (`0x00C12BF4 − 0x00C06AFC = 49,400 = 2 × (50 × 493 + 50)`, unit ids
+  start at 50); capturing at it is 49,400 bytes early and is where the "unexplained
+  negatives" came from.
 - **Replays**: `.rcx` is a **plain gzip stream from offset 0** (this refutes the reported
   10-byte-header claim). Payload opens with a UTF-16 version string carrying the build date.
-- **`[0x00846450]` is dead code** — correctly derived, called by nothing, *not* the RNG.
+- **`0x00846450` is `Doober::get_num`** (a *doober* is RoN's dropped-resource pile) and it is
+  **dead code** — correctly derived, zero direct callers in `.text`, *not* the RNG.
 - **The descriptor "type tag" is the name's string length**, not a type tag. That is why the
   unit-encoding hypothesis was refuted.
 

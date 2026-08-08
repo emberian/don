@@ -44,6 +44,29 @@ not be used.** The real table is `final_balance_table` at **`0x00C12BF4`**, 493�
 `int16`, 486 098 bytes, **zero zeros, no negatives**, 367 distinct values in 5…2574.
 Correct capture is `schema/live/final-balance-runtime.bin`. Derivation in §5.
 
+### Second pass — 2026-08-08, later the same day
+
+A re-run of this lane re-derived the pointer chain independently and then pushed on the
+residuals. It **corrects two conclusions of the first pass** and adds three rules. Read
+these before using §4:
+
+* **§4a is `GRAFT`, not "same-`NAME` canonicalisation", and the German XML rows are not
+  "edited but ineffective".** The live `graft` field at `+0x25C` resolves to the source
+  type id in **364/364** cases, and every §4a divergence is that source's value. §4a is
+  rewritten below.
+* **§4e is wrong about `CIRCLE_RADIUS`.** `CIRCLE_RADIUS` lands in **`x_size +0x234` and
+  `y_size +0x238`, ×1, 364/364** `[measured]`. `guy_radius`/`block_radius`/`big_radius`
+  are all `48 × BLOCK_RADIUS`, 364/364, and are equal to each other for every unit. The
+  first pass compared `CIRCLE_RADIUS` against the wrong field and concluded the radius
+  "comes from somewhere else"; it does not. The "do not use `CIRCLE_RADIUS`" warning is
+  withdrawn. §4e is corrected below.
+* **New: `preq1` is synthesised from `military_level`** — a total, exact rule (§4e).
+* **New: `obj_masks`/`unit_flags`/`build_flags` bit encoding validated**, and the extra
+  bits the loader sets are matched to the instruction that sets them (§4g).
+* **New: the static image independently bounds `final_balance_table`** (§5).
+
+Second-pass artifacts are the `schema/live/live-tables-*` set in §7.
+
 ---
 
 ## 1. How the tables were found
@@ -217,31 +240,49 @@ I could **not** pin the exact rounding — see §6.
 
 ## 4. Every mismatch, explained
 
-### 4a. Same-`NAME` canonicalisation (6 cells)
+### 4a. `GRAFT` copies stats from the grafted-from unit (6 cells) — **corrected**
 
-Runtime records whose XML row shares a `<NAME>` with an earlier row take the **first**
-row's value for some fields:
+*(First pass called this "same-`NAME` canonicalisation". The mechanism is the `GRAFT`
+column, which is *specified* by display `NAME` — so the first pass's correlate was real
+but the cause was misnamed, and the conclusion drawn from it was wrong.)*
 
-| unit | field | XML | live | first row with that NAME |
+194 of 364 units carry a non-`none` `<GRAFT>`. The live `graft` field at `+0x25C`
+resolves to that unit's **global type id in 364/364 cases** `[measured]` — so the runtime
+records the graft relationship explicitly, it is not an incidental name collision. Where a
+grafted unit's own XML value differs from its graft source, the live table holds the
+**source's** value:
+
+| unit | field | own XML | graft source (live `+0x25C`) | live value |
 |---|---|---|---|---|
-| `RIFLEMENGERMAN` | ARMOR | 1 | 3 | `RIFLEMEN` ARMOR 3 |
-| `ANTITANKRIFLEGERMAN` | LOS | 12 | 11 | `ANTITANKRIFLE` LOS 11 |
-| `BAZOOKAGERMAN` | LOS | 14 | 13 | `BAZOOKA` LOS 13 |
-| `HUMMEL` | SPLASH_PERCENT | 33 | 25 | `HOWITZER` SPLASH_PERCENT 25 |
+| 101 `RIFLEMENGERMAN` | `armor` | 1 | 100 `RIFLEMEN`, armor 3 | **3** |
+| 138 `ANTITANKRIFLEGERMAN` | `los` | 12 | 137 `ANTITANKRIFLE`, los 11 | **11** |
+| 140 `BAZOOKAGERMAN` | `los` | 14 | 139 `BAZOOKA`, los 13 | **13** |
+| 272 `HUMMEL` | `splash_percent` | 33 | 271 `HOWITZER`, sp 25 | **25** |
+| 57 `GENERALGERMAN` | `unit_flags` | `lmhc` = `0x1884` | 54 `GENERAL`, flags `0x1886` | **`0x1886`** |
 
-(the remaining two are the same rows counted in a second field). This is a **finding, not
-noise**: the XML rows for the German national variants are *edited but ineffective*. A
-sim that reads `unitrules.xml` naively will give German Riflemen 1 armour where the game
-gives them 3. `ron-data/unitrules.xml` is byte-identical to the shipped
-`…\Rise of Nations\Data\unitrules.xml` (MD5 `dd249e429f74c73b2e1c57547c4a6033`), so this
-is not version drift.
+Across every field checked, **all six divergences are graft-inherited and none is
+anything else** — no unexplained "first row wins" effect remains.
+
+The practical consequence stands and is now sharper: **you cannot load unit stats
+row-wise from `unitrules.xml`; the graft pass must be applied**, or German Riflemen get 1
+armour where the game gives 3. `ron-data/unitrules.xml` is byte-identical to the shipped
+file (MD5 `dd249e429f74c73b2e1c57547c4a6033`), so this is engine behaviour, not version
+drift — but "the XML rows are edited but ineffective" was the wrong reading: the rows are
+effective for every non-grafted field, and it is `GRAFT` that overrides the rest.
+
+What `GRAFT` copies and what it leaves alone is **not** established here — only that the
+six observed divergences are all graft-consistent. Deriving the exact copied-field set
+needs the loader, not the table.
 
 ### 4b. `TRIBE_MASK` inherited along the upgrade chain (1 cell)
 
 `PIKEMENELITE` XML `111110110110110110111111`, live `011110110110110110111111` — exactly
 the mask of `PIKEMEN`, whose `<NAME>` differs ("Elite Pikemen" vs "Pikemen"). So there is
-a **second** canonicalisation channel beyond `<NAME>`, most likely the `from`/`upgrade`
-chain. Hypothesis, not measured.
+a **second** channel, most likely the `from`/`upgrade` chain. Hypothesis, not measured.
+
+Second pass adds one datum that narrows it: **`graft` for type id 135 `PIKEMENELITE` is
+`-1`** `[measured]`, so §4a's mechanism is definitively *not* the cause here. This is the
+single remaining unexplained `tribe_mask` cell out of 578 across all three tables.
 
 ### 4c. `RANGE` zeroed on crew-carrier units (3 cells)
 
@@ -255,28 +296,99 @@ elephant carriers whose shots come from the crew. Hypothesis, not measured.
 Unexplained; these are build-menu coordinates so a de-collision pass at load is the
 obvious guess, but I did not confirm it.
 
-### 4e. Fields that are **not** sourced from `unitrules.xml` at all
+### 4e. Fields whose runtime value is not simply the `unitrules.xml` cell
 
-These are the important ones for anyone building a sim off the XML:
+These are the important ones for anyone building a sim off the XML. One entry here was
+**wrong in the first pass and is withdrawn**; one has a **complete rule** as of the second
+pass; one is still open.
 
-* `CIRCLE_RADIUS` → `guy_radius +0x23C` / `big_radius +0x244` / `new_big_radius +0x24C`.
-  Only 208/364 fit `×48`; e.g. every `GENERAL*` has XML 3 but runtime 48 (= 1×48), and
-  XML 3 maps variously to 48, 96, 144 and 192. **The runtime radius comes from somewhere
-  else** (art/graphics is the natural candidate). Do not use `CIRCLE_RADIUS`.
-* `PUSH_SIZE` → `push_size +0x2F8`. 327/364 fit `×48`; the other 37 (all leaders/heroes,
-  machine guns, mortars, fishermen, herd bison) do not — e.g. `FISHERMEN` XML 3 → 192,
-  `HERDBISON` XML 1 → 96. `guy_radius == push_size` for 322/364, so the same external
-  source probably drives both.
-* `PREQ1` on units. Only 125/364 of the XML values resolve; where the XML says `none`
-  the runtime frequently holds a real tech id (`ARMEDSUPPLYWAGON` → 573 "Mercenaries",
-  `MILITIA` → 572 "The Art of War", `MINUTEMAN` → 575 "Conscription"). `PREQ0` is
-  362/364, `WHERE` 364/364, `GRAFT` 364/364.
+* ~~`CIRCLE_RADIUS` has no runtime home~~ — **withdrawn, this was a misattribution.**
+  Second pass, by searching every offset in the record rather than assuming the
+  `guy_radius` slot: **`CIRCLE_RADIUS` → `x_size +0x234` and `y_size +0x238`, ×1,
+  364/364 exact** `[measured]`. Units are circular, so their `x_size`/`y_size` *is* the
+  circle radius; for buildings the same two fields carry `X_SIZE`/`Y_SIZE`, 129/129. And
+  the radius trio is fully explained too: `guy_radius +0x23C == block_radius +0x240 ==
+  big_radius +0x244 == 48 × BLOCK_RADIUS` for **364/364** units, with
+  `new_block_radius +0x248 == new_big_radius +0x24C == 1 × BLOCK_RADIUS`. Nothing here
+  comes from art data. **`CIRCLE_RADIUS` is safe to use.**
+* `PUSH_SIZE` → `push_size +0x2F8`. 327/364 fit `×48` and 4 more are graft-inherited;
+  the remaining **33** (all Generals, the machine-gun line, mortars, Fishermen, every
+  hero/government unit, Herd Bison) do not — e.g. `FISHERMEN` XML 3 → 192, `HERDBISON`
+  XML 1 → 96, `GENERAL` XML 7 → 48. In every one of those 33 the live value equals that
+  unit's `guy_radius`, i.e. `48 × BLOCK_RADIUS` — but it is neither a clamp nor a
+  `min`/`max` (it goes both up and down), and `push_size == guy_radius` holds for only
+  322/364 overall, so it is not a blanket assignment either. **Still unexplained**; no
+  writer to `+0x2F8` appears in `re/decomp-all/`.
+* `PREQ1` on units — **rule found (second pass).** Only 125/364 of the *XML* values
+  resolve because 239 units whose XML says `none` hold a real tech id at runtime. The
+  source is `military_level +0x2DC`, and the mapping is total and exact over all 364
+  units `[measured]`:
+
+  | `military_level` | live `preq1` |
+  |---|---|
+  | −1, 0 | the XML value — 90 units, of which 80 hold −1, 6 hold −2 ("disable") and 4 hold a real tech id from their own XML row |
+  | 1 | 572 `The Art of War` |
+  | 2 | 573 `Mercenaries` |
+  | 3 | 574 `Standing Army` |
+  | 4 | 575 `Conscription` |
+  | 5 | 576 `Levee en Masse` |
+  | 6 | 577 `Nation-in-Arms` |
+  | 7 | 578 `Selective Service` |
+
+  All 274 units with `military_level` in 1..7 get that military tech as a second
+  prerequisite. This is the military-tech gate and it is **not present in
+  `unitrules.xml`** — a sim built from the XML alone will let players train units they
+  have not unlocked. (`PREQ0` 364/364 case-insensitively, `WHERE` 364/364,
+  `GRAFT` 364/364, building `FROM`/`PREQ0`/`PREQ1`/`PREQ2` 129/129 each.)
 
 ### 4f. Not mismatches, just my lookup being lossy
 
 `JUMP` 357/364 and `FROM` 360/364 "failures" are all cases where two types share a
 display `NAME` (e.g. "Marines", "akweks") and my name→id map kept the first. The runtime
-ids are self-consistent.
+ids are self-consistent. (Second pass: case-insensitive matching lifts `FROM` to 363/364
+and `PREQ0` to 364/364; the residual `FROM` cell is unit 120 whose XML says `Marines`
+while the runtime points at 119 `Continental Marines`.)
+
+### 4g. The mask/flag words — encoding, and the bits the loader adds (second pass)
+
+The bit encoding is **letter position**: `A`..`Z` → bits 0..25, `a`..`z` → bits 0..25,
+and the digits `1`..`6` → bits 26..31. Validated `[measured]`:
+
+| word | off | XML tag | bit-identical | superset (live ⊇ XML) |
+|---|---|---|---|---|
+| `obj_masks` (units) | `+0x1E4` | `OBJ_MASK` | **364/364** | 364/364 |
+| `obj_masks` (buildings) | `+0x1E4` | `OBJ_MASKS` | **129/129** | 129/129 |
+| `unit_flags` | `+0x2B4` | `FLAGS` | 358/364 | **364/364** |
+| `build_flags` | `+0x2C0` | `BUILD_FLAGS` | 90/129 | **129/129** |
+
+**No XML bit is ever cleared**, in any of the 986 words. The extra bits are set by the
+post-load pass, and they are identifiable:
+
+* `unit_flags` bit 4 = `e` on 5 units — and `unitrules.xml`'s own legend says
+  `e = (This flag is set in the program)`. Independent confirmation that the mechanism is
+  real and not a capture artefact. The one other extra bit (bit 1 = `b` on unit 57) is
+  graft-inherited (§4a).
+* `build_flags` bits 26–31 (the `1`..`6` characters) on 25/16/3/1/6/11 buildings. Bit 28
+  (`0x10000000`) appears on **exactly 3** buildings — and `FUN_0065F4A0` contains
+  `or dword ptr [esi+0x2C0], 0x10000000` guarded by abil queries `0x1A1`/`0x1A5`/`0x1A6`.
+  Static prediction and live count agree.
+
+So `obj_masks` may be read straight from the XML, but **`unit_flags` and `build_flags`
+must not be** — the load-time pass adds semantics the XML does not carry.
+
+### 4h. Enum encodings recovered from the live tables (second pass, all `[measured]`)
+
+* `domain +0x218`: Land = 0, Sea = 1, Air = 2.
+* unit `cat +0x14`: Foot 0, Mounted 1, Mech 2, Artillery 3, Command 4, Civilian 5,
+  Sail 6, Naval 7, Air 8.
+* building `cat +0x14`: `E` 0, `M` 1, `W` 2.
+* resource index (used by `costs[6]`, `support[2]`, `plunder_good`): **food 0, timber 1,
+  wealth 2, knowledge 3, metal 4, oil 5** — i.e. the letters `f t g k m o`, confirmed
+  twice over: 578/578 cost vectors across units + buildings + techs, and the building
+  `SUPPORT0`/`SUPPORT1` *word* → int mapping (`food`→0 … `oil`→5, `none`→−1), 129/129.
+  Note wealth precedes metal; this is **not** the order the `unitrules.xml` comment lists.
+* cross-reference fields (`where`, `from`, `preq*`, `graft`, `plunder_good`) hold **global
+  type ids**, never per-class indices.
 
 ## 5. The balance table — bounding the real extent
 
@@ -365,6 +477,40 @@ is nonsense.
 `riseofnations.exe` (it is inside the raw `.data` but zero-filled). It is built at load,
 so **only a live read or an emulated load gives real values.**
 
+**Second pass: the static image bounds the array on both sides, independently of the
+walker.** In `.data` (VA `0x00C06000`, raw size `0xA4000`, so this whole range is
+file-backed) `[measured]`:
+
+* the file bytes in `[0x00C12BF4, 0x00C896C6)` are **all zero — 486 098 of them, exactly
+  493 × 493 × 2**;
+* the **last non-zero byte before** the window is at `0x00C12BF2`, immediately adjacent;
+* the **first non-zero byte after** the window is at `0x00C896C8`.
+
+The zero-filled gap is fenced by initialised data on both sides and is exactly the right
+size. Together with `FUN_00582BD0`'s loop bounds this pins the extent two independent
+ways, from the binary rather than from a plausible-looking capture — which is what the
+lane brief asked for.
+
+**Where the anomalies in the old capture actually sat.** Splitting
+`balance-runtime.bin` at the bias (cell 24 700) `[measured]`:
+
+| region | zeros | negatives | 1…1000 | >1000 |
+|---|---|---|---|---|
+| cells 0–24 699 — foreign `.data` | 15 477 | 2 071 | 4 011 | 3 141 |
+| cells 24 700–243 048 — real table | **0** | **0** | 217 157 | 1 192 |
+
+Every one of the 15 477 zeros and all 2 071 negatives lie outside the table. The 1 192
+cells above 1000 are legitimate large percentages (1075 appears 1 098 times, then 1650,
+1895, 1980, 2145, 2463, 2475, 2574), not corruption. The foreign region is not mystery
+data either: it covers `PtrArray<GoodType>` at `0x00C096E4`, `PtrArray<UnitType>` at
+`0x00C0A264` and `PtrArray<BuildType>` at `0x00C0AA90` — the very globals of §1.
+
+The second pass's own capture at the corrected base is
+`schema/live/live-tables-balance-493x493.bin`, sha256
+`501b47edc9f05f1c1be46d9a7a54984f43fc6dff2a909f4f5174415fe537c79d`; its first 218 349
+cells are byte-identical to `balance-runtime.bin` cells 24 700+, which is how the two
+captures corroborate each other.
+
 **It is `final_`, i.e. derived.** `ron-data/balance.xml` is a 291 × 291 matrix keyed by
 display `NAME`, values 10…700, 42 distinct. Expanding it to the 493-id space, only
 15 383 / 55 696 (27.6 %) of comparable cells appear verbatim; 55 400 of the compared XML
@@ -394,11 +540,40 @@ Also spotted at `0x00581CC0` (the wrapper above the accessor): global type ids i
   have no slot. I did not determine the index space. Flagging it because a 352-vs-364
   mismatch in a per-unit-type array is exactly the kind of latent overflow worth knowing
   about.
-* **Where `guy_radius` / `big_radius` / `push_size` really come from** (§4e).
+* ~~Where `guy_radius` / `big_radius` come from~~ — **resolved in the second pass**, both
+  are `48 × BLOCK_RADIUS`, 364/364 (§4e). `push_size` is still open.
 * **`GRID_X` reassignment** for the three units in §4d.
 * `GovType` is empty in this process; whatever populates it had not run.
-* `TypeBak` (566 records, ids 50–628 = units ∪ buildings ∪ items ∪ techs) — captured but
-  not analysed.
+* `TypeBak` (566 records, ids 50–401 ∪ 414–542 ∪ 544–628) — captured but not analysed.
+  Second pass adds: its records are **not** the same objects as the type records and
+  **not** the same layout (record `+0` is not a vtable, and byte-diffing a `TypeBak`
+  record against the corresponding `UnitType` record differs at essentially every dword).
+  So it is not a pristine mirror of the type structs, and the guess that it is a backup
+  used to undo runtime edits remains a guess.
+* **`min_range`/`max_range`** were validated by the first pass via the `RANGE` token
+  (359/362); the second pass did not re-check them and wrote no `RANGE` parser.
+* Fields with an offset from the bindings but **no XML counterpart validated by either
+  pass**: `res_time`, `upgrade`, `jump`, `obs`, `show[]`, `modified`, `abil`, `mode`,
+  `role`, `squad_size`, `base_form`, `block_points`, `special_upgrade*`, `age`
+  (ObjectType), `min_city_size`, `civ_graph_mask`.
+
+### Provenance limit worth stating plainly
+
+The second pass read the pointer chain, the global values and the ASLR base **itself**
+from PID 14644 (`base 0x00D60000`, delta `0x00960000`), but analysed the **first pass's**
+806-slot record dump (`dontypes.bin`, `DONTYPE1`, 1 792 B/record) rather than re-capturing
+it: `prlctl exec … powershell.exe` became unusable under contention with a concurrent
+agent, and one attempt found the VM `suspended` (it was `prlctl resume`d; state and ASLR
+base survive suspend). Mitigations that make the dump trustworthy anyway: every record's
+`+0` is the correctly rebased vtable (`0x00B41FD4 + delta` for units), `+4` equals the
+slot index for all 806, and 19 293 of 19 327 field values reproduce the shipped XML under
+a per-field scale — a fabricated or mis-based dump could not do that. **The cheapest
+thing a third pass can do is re-run the ~20-value spot check** (script left at
+`scratchpad/ltq.b64`) to make the record level first-party.
+
+Also, for anyone re-running this: `schema/live/type-names.txt` was overwritten mid-session
+by another lane with unrelated content. The name columns baked into
+`schema/live/live-tables-*.tsv` are the surviving copy.
 
 ## 7. Artifacts written (all gitignored)
 
@@ -411,6 +586,28 @@ Also spotted at `0x00581CC0` (the wrapper above the accessor): global type ids i
 | `schema/live/tech-attributes.txt` | 10 365 | 85 rows incl. `ai[11]` |
 | `schema/live/final-balance-runtime.bin` | 486 098 | **correct** balance table, base `0x00C12BF4` |
 | `schema/live/balance-runtime.bin` | 486 098 | **pre-existing and wrong** — window at `0x00C06AFC`; left in place, do not use |
+
+Second pass (machine-readable, TSV with a header row unless noted):
+
+| path | content |
+|---|---|
+| `schema/live/live-tables-classmap.tsv` | the 10 classes: list-object VA, slot count, non-null count, id ranges |
+| `schema/live/live-tables-typeids.tsv` | all 806 ids → class, display name, internal name, live record pointer |
+| `schema/live/live-tables-unit.tsv` | 364 units × 65 decoded fields |
+| `schema/live/live-tables-building.tsv` | 129 buildings × 65 decoded fields |
+| `schema/live/live-tables-tech.tsv` | 85 techs |
+| `schema/live/live-tables-good.tsv` | 50 goods |
+| `schema/live/live-tables-unit-relative-value.tsv` | the 364 × 352 `relative_value` int16 matrix |
+| `schema/live/live-tables-validation.tsv` / `.json` | per field: offset, width, scale, n, direct match, graft-inherited, unexplained |
+| `schema/live/live-tables-balance-493x493.bin` | 493×493 int16 at the corrected base |
+
+The validation file is the auditable form of the second pass's headline number: **19 293
+of 19 327 compared cells explained (99.82 %)**, the 34 residuals being the 33 `PUSH_SIZE`
+cells (§4e) and the one `PIKEMENELITE` `tribe_mask` cell (§4b). It is not directly
+comparable to the lead table's 15 247 + 1 647 — the two passes chose different field sets
+and different mask/flag pass criteria. Where they cover the same field they agree, **with
+the two documented exceptions the second pass corrects**: `CIRCLE_RADIUS` (§4e) and the
+attribution of §4a.
 
 ## 8. Reproduction
 
@@ -456,3 +653,27 @@ python3 pstools.py get 'C:\Users\ember\dontypes.bin.gz' dontypes.bin.gz
 
 Also: `Add-Type` compiles via `csc.exe` and is slow under the SYSTEM context `prlctl exec`
 gives you; `Reflection.Emit` `DefinePInvokeMethod` does the same job in ~0.2 s.
+
+Second pass adds two more, both paid for in wall-clock:
+
+3. **The argument-length hang of trap 1 is not purely about length — it is contention.**
+   The same ~3 000-char `-EncodedCommand` that ran in 5 s ran, then hung forever twenty
+   minutes later while another agent was driving the VM. `prlctl exec … cmd.exe /c "…"`
+   kept working throughout. Routing PowerShell as
+   `prlctl exec "Windows 11" cmd.exe /c "powershell.exe -EncodedCommand <b64> > NUL 2>&1"`
+   survives cases where the direct form hangs. Measure `Add-Type` cost before blaming it:
+   here it was 0.5 s, so it was never the culprit.
+4. **The VM can go `suspended` under you mid-lane.** `prlctl list -a` will say so and
+   every `exec` returns "not started". `prlctl resume` restores it non-destructively —
+   the game process, its PID and its ASLR base all survive.
+
+### Method note: search offsets, do not assume them
+
+The `CIRCLE_RADIUS` error corrected in §4e came from comparing an XML column against the
+field whose *name* sounded right. The fix that found it — and that also found `los` at
+`+0x21C`, `POP` → `control_cost`, and `TEX_COL`/`TEX_ROW` — is to brute-force it: for each
+XML column, scan every offset in the record at int8/int16/int32 width, infer the scale
+from the first non-zero pair, and keep the offset with the best agreement over **all**
+records. A field that matches 364/364 at one offset and 208/364 at another is telling you
+which one it is. Cost: seconds. It is worth doing for every column before writing a word
+about where a value "comes from".

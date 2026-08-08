@@ -1,0 +1,21 @@
+# Workspace manifest installed at hbox:~/don-oracle/Cargo.toml by tools/oracle-regress.sh.
+#
+# It exists because the repo's own root manifest *excludes* `crates/oracle` — the oracle
+# is i686-only and cannot build on the arm64 Mac. On hbox the oracle is the point, so it
+# is a member here, together with the three crates whose implementations it tests.
+#
+# Keeping this under version control rather than heredoc'ing it from the script means the
+# environment a measurement was taken in is reviewable alongside the measurement.
+
+[workspace]
+resolver = "2"
+members = ["crates/don-pe", "crates/don-rules", "crates/don-sim", "crates/oracle"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

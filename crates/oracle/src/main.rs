@@ -155,6 +155,125 @@ fn selftest() -> Result<(), String> {
         return Err(format!("selftest returned {got}, expected 42"));
     }
     println!("selftest: OK (hand-written cdecl add returned 42 through fork isolation)");
+    trampoline_selftest()?;
+    Ok(())
+}
+
+/// Prove `oracle_call4` against machine code we wrote ourselves, in all four shapes the
+/// sweep must survive: __cdecl (caller pops), __stdcall (callee pops), __thiscall (ecx),
+/// and an x87 float return. The stdcall case is the one that matters most -- if esp is
+/// not restored from ebp the harness corrupts its own stack on every callee-pops
+/// candidate, and the sweep would report garbage for a large fraction of the image
+/// without ever crashing.
+fn trampoline_selftest() -> Result<(), String> {
+    // Laid out one after another in a single page.
+    //   cdecl_add:   mov eax,[esp+4]; add eax,[esp+8]; ret
+    //   stdcall_mul: mov eax,[esp+4]; imul eax,[esp+8]; ret 8
+    //   thiscall:    mov eax,[ecx+4]; ret
+    //   float:       fld dword ptr [esp+4]; ret
+    let blobs: [&[u8]; 4] = [
+        &[0x8B, 0x44, 0x24, 0x04, 0x03, 0x44, 0x24, 0x08, 0xC3],
+        &[0x8B, 0x44, 0x24, 0x04, 0x0F, 0xAF, 0x44, 0x24, 0x08, 0xC2, 0x08, 0x00],
+        &[0x8B, 0x41, 0x04, 0xC3],
+        &[0xD9, 0x44, 0x24, 0x04, 0xC3],
+    ];
+    let code = unsafe {
+        libc::mmap(std::ptr::null_mut(), PAGE, libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0)
+    };
+    if code == libc::MAP_FAILED {
+        return Err("trampoline selftest mmap failed".into());
+    }
+    let mut at = [0usize; 4];
+    let mut off = 0usize;
+    for (i, b) in blobs.iter().enumerate() {
+        at[i] = code as usize + off;
+        unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), (code as *mut u8).add(off), b.len()) };
+        off += b.len() + 8;
+    }
+    if unsafe { libc::mprotect(code, PAGE, libc::PROT_READ | libc::PROT_EXEC) } != 0 {
+        return Err("trampoline selftest mprotect failed".into());
+    }
+    let arena = unsafe {
+        libc::mmap(std::ptr::null_mut(), ARENA, libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) as *mut u8
+    };
+    if arena as isize == -1 {
+        return Err("trampoline selftest arena mmap failed".into());
+    }
+
+    let want_f32: f32 = -1234.5;
+    let cases: [(usize, [u32; 4], u32); 3] = [
+        (at[0], [40, 2, 0, 0], 42),
+        (at[1], [7, 6, 0, 0], 42),
+        (at[3], [want_f32.to_bits(), 0, 0, 0], 0),
+    ];
+    for (i, (f, args, want)) in cases.iter().enumerate() {
+        match probe_calls(*f as *const u8, arena, Fill::Zero, *args, 3, 300) {
+            ProbeEnd::Ok(v) => {
+                if i < 2 && v[0].eax != *want {
+                    return Err(format!("trampoline case {i}: got {} want {want}", v[0].eax));
+                }
+                if i < 2 && v[0].has_float != 0 {
+                    return Err(format!("trampoline case {i}: spurious float return"));
+                }
+                if i == 2 {
+                    if v[0].has_float == 0 {
+                        return Err("trampoline float case: st(0) return not detected".into());
+                    }
+                    if v[0].fret as f32 != want_f32 {
+                        return Err(format!("trampoline float case: got {} want {want_f32}", v[0].fret));
+                    }
+                }
+                // Three repeats through one child must agree, or the intra-process
+                // determinism signal the sweep reports is meaningless.
+                if v.iter().any(|o| o.eax != v[0].eax) {
+                    return Err(format!("trampoline case {i}: repeats disagreed"));
+                }
+            }
+            _ => return Err(format!("trampoline case {i}: probe did not return")),
+        }
+    }
+    // __thiscall: the arena is zero-filled except for one word we plant at this+4.
+    unsafe { std::ptr::write_bytes(arena, 0, ARENA) };
+    match probe_calls(at[2] as *const u8, arena, Fill::Garbage(0x0102_0304_0506_0708, 0), [0; 4], 1, 300) {
+        ProbeEnd::Ok(v) => {
+            // Fill::Garbage writes u64 slot k = seed*(k+1); this = arena+ARENA_MID, so
+            // the dword at this+4 is the high half of slot ARENA_MID/8.
+            let k = (ARENA_MID / 8) as u64;
+            let want = (0x0102_0304_0506_0708u64.wrapping_mul(k + 1) >> 32) as u32;
+            if v[0].eax != want {
+                return Err(format!("trampoline thiscall: got {:#x} want {want:#x}", v[0].eax));
+            }
+        }
+        _ => return Err("trampoline thiscall: probe did not return".into()),
+    }
+    // The timeout guard itself must work, or the sweep can wedge again.
+    let spin: [u8; 2] = [0xEB, 0xFE]; // jmp $
+    let sp = unsafe {
+        libc::mmap(std::ptr::null_mut(), PAGE, libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0)
+    };
+    unsafe { std::ptr::copy_nonoverlapping(spin.as_ptr(), sp as *mut u8, 2) };
+    unsafe { libc::mprotect(sp, PAGE, libc::PROT_READ | libc::PROT_EXEC) };
+    let t = std::time::Instant::now();
+    let spun = probe_calls(sp as *const u8, arena, Fill::Zero, [0; 4], 1, 300);
+    if !matches!(spun, ProbeEnd::Timeout) {
+        return Err("trampoline: an infinite loop was not classified as a timeout".into());
+    }
+    if t.elapsed().as_secs_f64() > 2.0 {
+        return Err(format!("trampoline: timeout took {:.1}s, guard too slow", t.elapsed().as_secs_f64()));
+    }
+    // And a wild jump must come back as a signal, not take down the harness.
+    if !matches!(probe_calls(4 as *const u8, arena, Fill::Zero, [0; 4], 1, 300), ProbeEnd::Signal(_)) {
+        return Err("trampoline: a call to an unmapped address was not classified as a fault".into());
+    }
+    unsafe {
+        libc::munmap(code, PAGE);
+        libc::munmap(sp, PAGE);
+        libc::munmap(arena as *mut c_void, ARENA);
+    }
+    println!("selftest: OK (trampoline: cdecl, stdcall callee-pops, thiscall, x87 float return, timeout guard, fault guard)");
     Ok(())
 }
 
@@ -174,6 +293,16 @@ unsafe fn call_thiscall(f: *const u8, this: *mut u8) -> u32 {
     ret
 }
 
+/// SUPERSEDED by the `regress` binary and `oracle::registry` -- delete once the sweep work
+/// in this file settles.
+///
+/// The reason it must go, not merely be left alone: its models are **inline copies**. The
+/// `0x00846450` model here is a lambda, not `don_sim::hash_into_range`, so this test can
+/// only tell you that the copy in this file is right. `don-sim` could drift arbitrarily and
+/// this would still print PASS. The registry points every case at the shipped function
+/// instead; `regress --only hash_into_range,accessor_movsx_word_0xa,accessor_diff_0x12c_0x12a`
+/// is the replacement.
+///
 /// Differential test: retail machine code versus a Rust model of the same computation,
 /// over N pseudo-random inputs. This is Tier B evidence (see docs/CHARTER.md) -- testing,
 /// not proof -- so the sample count is reported with the result and never omitted.
@@ -305,6 +434,12 @@ fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
 }
 
 
+/// SUPERSEDED by the `regress` binary and `oracle::registry` -- delete once the sweep work
+/// in this file settles. Same defect as `difftest` above: the flank model is an inline
+/// lambda and the balance model is raw pointer arithmetic, so neither exercises
+/// `don_sim::flank_level` or `don_sim::balance_index`. Replacement:
+/// `regress --only flank_level,balance_accessor`.
+///
 /// Combat-lane differential cases (docs/derivation/combat.md).
 ///
 /// Two retail entry points from the damage pipeline that are callable with fabricated
@@ -457,13 +592,246 @@ fn combat_difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
     ok
 }
 
-/// Characterise a function by probing it under fork isolation.
+/// Result of one retail call, captured at the machine level.
 ///
-/// For each candidate we ask three questions that decide whether it is usable as a
+/// `eax`/`edx` are the integer return pair. 32-bit MSVC returns `float`/`double` in
+/// `st(0)`, not in a register, so the trampoline resets the x87 stack before the call and
+/// checks the TOP field afterwards: a non-zero TOP means the callee left a value there,
+/// which is the machine-level signature of a floating-point return. Knowing which ISLANDs
+/// return floats matters because floats are the whole IEEE hazard surface of this project.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct CallOut {
+    eax: u32,
+    edx: u32,
+    fsw: u16,
+    has_float: u16,
+    _pad: u32,
+    fret: f64,
+}
+
+// A trampoline rather than a transmuted fn pointer, for three reasons that each cost a
+// debugging session if ignored:
+//   * calling convention is UNKNOWN per candidate. __cdecl leaves args on the stack,
+//     __stdcall/__thiscall pop them. Restoring esp from ebp makes the probe correct for
+//     all three instead of corrupting the harness stack on every stdcall candidate.
+//   * ecx must carry `this` for __thiscall while the same four dwords sit on the stack
+//     for __cdecl, so one probe covers both shapes.
+//   * a hostile callee may trash ebx/esi/edi; we save them ourselves.
+core::arch::global_asm!(
+    ".text",
+    ".globl oracle_call4",
+    ".hidden oracle_call4",
+    ".type oracle_call4,@function",
+    "oracle_call4:",
+    "    push ebp",
+    "    mov ebp, esp",
+    "    push ebx",
+    "    push esi",
+    "    push edi",
+    "    fninit",                      // x87 TOP = 0, all registers empty
+    "    mov eax, [ebp+16]",           // args: *const [u32; 4]
+    "    push dword ptr [eax+12]",
+    "    push dword ptr [eax+8]",
+    "    push dword ptr [eax+4]",
+    "    push dword ptr [eax]",
+    "    mov ecx, [ebp+12]",           // this
+    "    call dword ptr [ebp+8]",      // f
+    "    mov esi, [ebp+20]",           // out: *mut CallOut (esp may be anything here)
+    "    mov [esi], eax",
+    "    mov [esi+4], edx",
+    "    fnstsw ax",
+    "    mov [esi+8], ax",
+    "    test ax, 0x3800",             // TOP != 0 -> the callee pushed an x87 value
+    "    jz 2f",
+    "    mov word ptr [esi+10], 1",
+    "    fstp qword ptr [esi+16]",
+    "    jmp 3f",
+    "2:  mov word ptr [esi+10], 0",
+    "3:  lea esp, [ebp-12]",
+    "    pop edi",
+    "    pop esi",
+    "    pop ebx",
+    "    pop ebp",
+    "    ret",
+);
+
+extern "C" {
+    /// Call `f` with `this` in ecx and four dwords on the stack, capturing eax/edx/st(0).
+    fn oracle_call4(f: *const u8, this: u32, args: *const u32, out: *mut CallOut);
+}
+
+/// How a probe ended.
+enum ProbeEnd {
+    /// The child returned `n` call results cleanly.
+    Ok(Vec<CallOut>),
+    /// Killed by a signal (SIGSEGV etc.) -- the function needs state we did not fabricate.
+    Signal(i32),
+    /// Did not terminate inside the budget -- an unbounded loop over the garbage buffer.
+    Timeout,
+    /// Exited without producing output.
+    NoValue,
+}
+
+/// The `this` arena: one contiguous mapping, with `this` pointing at its middle so a
+/// callee reading `[ecx-N]` is still inside mapped memory.
+const ARENA: usize = 1 << 20;
+const ARENA_MID: usize = ARENA / 2;
+
+/// Fill patterns for the arena. Every pattern is reproducible from a seed, so any finding
+/// here can be replayed exactly with `oracle call`.
+#[derive(Clone, Copy, PartialEq)]
+enum Fill {
+    /// Pseudorandom garbage. Pointer fields become wild addresses, so anything that
+    /// dereferences its `this` faults -- which is itself the signal we want.
+    Garbage(u64, u64),
+    /// All zero. Exercises the null-pointer path, which for a large class of member
+    /// functions is a clean early return rather than a fault.
+    Zero,
+}
+
+fn fill_arena(obj: *mut u8, fill: Fill) {
+    unsafe {
+        match fill {
+            Fill::Zero => std::ptr::write_bytes(obj, 0, ARENA),
+            Fill::Garbage(sa, sb) => {
+                for i in 0..ARENA / 8 {
+                    std::ptr::write_unaligned(
+                        (obj as *mut u64).add(i),
+                        sa.wrapping_mul(i as u64 + 1) ^ sb,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Run `reps` identical calls to `f` inside one forked child and report every result.
+///
+/// Two independent guards, because one is not enough: an interval timer for wall-clock
+/// (a function blocked in a syscall), and RLIMIT_CPU as a backstop (a function that
+/// masks or outruns signals). The parent additionally polls with its own deadline and
+/// SIGKILLs, so a child that manages to survive both cannot wedge the sweep the way the
+/// untimed version did -- it burned 9.5 hours of CPU on one function.
+fn probe_calls(
+    f: *const u8,
+    obj: *mut u8,
+    fill: Fill,
+    args: [u32; 4],
+    reps: usize,
+    budget_ms: u32,
+) -> ProbeEnd {
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return ProbeEnd::NoValue;
+    }
+    let nbytes = reps * std::mem::size_of::<CallOut>();
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        return ProbeEnd::NoValue;
+    }
+    if pid == 0 {
+        unsafe {
+            libc::close(fds[0]);
+            // No files, no children: a probed function cannot write to the tree or fork
+            // a grandchild that would hold the pipe open past our own death.
+            let z = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+            libc::setrlimit(libc::RLIMIT_FSIZE, &z);
+            let one = libc::rlimit { rlim_cur: 1, rlim_max: 1 };
+            libc::setrlimit(libc::RLIMIT_NPROC, &one);
+            let cpu = libc::rlimit { rlim_cur: 2, rlim_max: 2 };
+            libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+            let it = libc::itimerval {
+                it_interval: libc::timeval { tv_sec: 0, tv_usec: 0 },
+                it_value: libc::timeval {
+                    tv_sec: (budget_ms / 1000) as libc::time_t,
+                    tv_usec: ((budget_ms % 1000) * 1000) as libc::suseconds_t,
+                },
+            };
+            libc::setitimer(libc::ITIMER_REAL, &it, std::ptr::null_mut());
+
+            let mut outs = vec![CallOut::default(); reps];
+            for o in outs.iter_mut() {
+                fill_arena(obj, fill);
+                oracle_call4(f, obj.add(ARENA_MID) as u32, args.as_ptr(), o);
+            }
+            libc::write(fds[1], outs.as_ptr() as *const c_void, nbytes);
+            libc::_exit(0);
+        }
+    }
+    unsafe { libc::close(fds[1]) };
+
+    // Parent-side deadline, generously past the child's own, so a normal timeout is
+    // reported as the child's SIGALRM rather than as a kill.
+    let mut pfd = libc::pollfd { fd: fds[0], events: libc::POLLIN, revents: 0 };
+    let mut buf = vec![0u8; nbytes];
+    let mut got = 0usize;
+    let mut hard_killed = false;
+    let deadline = budget_ms as i32 * reps as i32 + 1500;
+    loop {
+        let rc = unsafe { libc::poll(&mut pfd, 1, deadline) };
+        if rc <= 0 {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            hard_killed = true;
+            break;
+        }
+        let n = unsafe {
+            libc::read(fds[0], buf.as_mut_ptr().add(got) as *mut c_void, nbytes - got)
+        };
+        if n <= 0 {
+            break;
+        }
+        got += n as usize;
+        if got == nbytes {
+            break;
+        }
+    }
+    unsafe { libc::close(fds[0]) };
+    let mut status = 0i32;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+
+    if got == nbytes && !hard_killed {
+        let outs = (0..reps)
+            .map(|i| unsafe {
+                std::ptr::read_unaligned(
+                    buf.as_ptr().add(i * std::mem::size_of::<CallOut>()) as *const CallOut,
+                )
+            })
+            .collect();
+        return ProbeEnd::Ok(outs);
+    }
+    if hard_killed {
+        return ProbeEnd::Timeout;
+    }
+    if libc::WIFSIGNALED(status) {
+        let sig = libc::WTERMSIG(status);
+        // SIGALRM/SIGXCPU are our own guards firing, not a property of the function.
+        if sig == libc::SIGALRM || sig == libc::SIGXCPU {
+            return ProbeEnd::Timeout;
+        }
+        return ProbeEnd::Signal(sig);
+    }
+    ProbeEnd::NoValue
+}
+
+/// Characterise every ISLAND by probing it under fork isolation.
+///
+/// Each candidate is asked the questions that decide whether it is usable as a
 /// differential-testing target at all:
-///   * does it fault with fabricated inputs (needs live globals -> not usable)
-///   * is it deterministic (same inputs twice -> same output)
-///   * does the output actually depend on the arguments, or on the `this` buffer
+///   * does it fault with fabricated inputs, or loop forever, or return cleanly
+///   * is it deterministic *within* one process (three back-to-back calls) and *across*
+///     processes (a fresh fork with identical inputs) -- these are different questions,
+///     because a function accumulating into a global is stable across forks and unstable
+///     within one
+///   * does the result move when the `this` buffer changes, when the arguments change,
+///     or neither
+///   * does it return an address inside the mapped image (a locator) rather than a
+///     computed value (a formula)
+///   * does it return a float in st(0)
 ///
 /// A function that faults, or that ignores everything we can control, cannot be
 /// differentially tested from fabricated inputs, and saying so up front is cheaper than
@@ -472,74 +840,242 @@ fn sweep(m: &Mapped, pe: &PeImage, list: &str, out_path: &str) {
     use std::io::Write;
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = move || {
-        state ^= state << 13; state ^= state >> 7; state ^= state << 17; state
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
     };
     let obj = unsafe {
-        libc::mmap(std::ptr::null_mut(), PAGE * 4,
+        libc::mmap(
+            std::ptr::null_mut(),
+            ARENA,
             libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) as *mut u8
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        ) as *mut u8
     };
+    if obj as isize == -1 {
+        eprintln!("[oracle] arena mmap failed");
+        return;
+    }
 
     let text = std::fs::read_to_string(list).expect("island list");
     let mut out = std::fs::File::create(out_path).expect("create out");
-    let (mut faulted, mut det, mut arg_dep, mut this_dep, mut total) = (0, 0, 0, 0, 0);
+    let img_lo = m.base as u32;
+    let img_hi = img_lo.wrapping_add(m.len as u32);
+    writeln!(
+        out,
+        "{{\"kind\":\"header\",\"image_base\":{},\"map_lo\":{},\"map_hi\":{},\"preferred_base\":{},\"arena_lo\":{},\"arena_hi\":{},\"this\":{}}}",
+        pe.image_base, img_lo, img_hi, pe.image_base, obj as u32, obj as u32 + ARENA as u32,
+        obj as u32 + ARENA_MID as u32
+    )
+    .ok();
+    out.flush().ok();
+
+    let (mut total, mut faulted, mut timedout, mut callable) = (0u32, 0u32, 0u32, 0u32);
+    let (mut det_intra, mut det_inter, mut nondet) = (0u32, 0u32, 0u32);
+    let (mut v_this, mut v_args, mut v_none) = (0u32, 0u32, 0u32);
+    let (mut in_img, mut floats, mut rescued) = (0u32, 0u32, 0u32);
+    let t0 = std::time::Instant::now();
 
     for line in text.lines() {
         // minimal field pull; avoids a JSON dependency in a 32-bit musl build
-        let Some(ea) = line.split("\"ea\":\"").nth(1).and_then(|s| s.split('"').next()) else { continue };
-        if !line.contains("\"class\":\"ISLAND\"") { continue; }
-        let Ok(va) = u32::from_str_radix(ea, 16) else { continue };
-        if va < pe.image_base { continue; }
-        total += 1;
-
-        let f = m.addr_of_rva(va - pe.image_base);
-        let seed_a = next();
-        let seed_b = next();
-
-        // probe in a child: same inputs twice, then varied args, then varied this
-        let probe = |sa: u64, sb: u64| -> Result<u32, String> {
-            in_child(move || {
-                unsafe {
-                    for i in 0..(PAGE * 4) / 8 {
-                        std::ptr::write_unaligned(
-                            (obj as *mut u64).add(i),
-                            sa.wrapping_mul(i as u64 + 1) ^ sb,
-                        );
-                    }
-                }
-                let g: extern "C" fn(u32, u32, u32, u32) -> u32 = unsafe { std::mem::transmute(f) };
-                let r: u32;
-                unsafe {
-                    std::arch::asm!("call {f}", f = in(reg) f,
-                        in("ecx") obj, lateout("eax") r, clobber_abi("C"));
-                }
-                let _ = g;
-                r
-            })
+        let Some(ea) = line.split("\"ea\":\"").nth(1).and_then(|s| s.split('"').next()) else {
+            continue;
         };
-
-        let r1 = probe(seed_a, seed_b);
-        if let Err(e) = &r1 {
-            writeln!(out, "{{\"ea\":\"{ea}\",\"status\":\"fault\",\"detail\":\"{e}\"}}").ok();
-            faulted += 1;
+        if !line.contains("\"class\":\"ISLAND\"") {
             continue;
         }
-        let r1 = r1.unwrap();
-        let r1b = probe(seed_a, seed_b);
-        let deterministic = matches!(r1b, Ok(v) if v == r1);
-        if deterministic { det += 1; }
-        let r2 = probe(seed_b, seed_a);
-        let varies = matches!(r2, Ok(v) if v != r1);
-        if varies { this_dep += 1; }
-        let _ = &mut arg_dep;
+        let Ok(va) = u32::from_str_radix(ea, 16) else { continue };
+        if va < pe.image_base || va - pe.image_base >= m.len as u32 {
+            continue;
+        }
+        total += 1;
+        let f = m.addr_of_rva(va - pe.image_base);
+
+        let (sa, sb) = (next(), next());
+        let argv_a = [next() as u32, next() as u32, next() as u32, next() as u32];
+        let argv_b = [next() as u32, next() as u32, next() as u32, next() as u32];
+        let fill_a = Fill::Garbage(sa, sb);
+        let fill_b = Fill::Garbage(sb, sa);
+
+        // The zero-fill probe runs for every candidate, faulting or not: it is how we
+        // learn how many ISLANDs are blocked only by implausible pointers rather than by
+        // needing real game state.
+        let zero = probe_calls(f, obj, Fill::Zero, [0; 4], 1, 300);
+        let (zero_ok, r_zero) = match &zero {
+            ProbeEnd::Ok(v) => (true, v[0].eax),
+            _ => (false, 0),
+        };
+
+        // Probe 1: three back-to-back calls in one process -> intra-process determinism.
+        let p1 = probe_calls(f, obj, fill_a, argv_a, 3, 400);
+        let outs = match p1 {
+            ProbeEnd::Ok(v) => v,
+            ProbeEnd::Signal(sig) => {
+                faulted += 1;
+                if zero_ok {
+                    rescued += 1;
+                }
+                writeln!(out, "{{\"kind\":\"fn\",\"ea\":\"{ea}\",\"status\":\"fault\",\"signal\":{sig},\"zero_ok\":{zero_ok},\"r_zero\":{r_zero}}}").ok();
+                out.flush().ok();
+                continue;
+            }
+            ProbeEnd::Timeout => {
+                timedout += 1;
+                if zero_ok {
+                    rescued += 1;
+                }
+                writeln!(out, "{{\"kind\":\"fn\",\"ea\":\"{ea}\",\"status\":\"timeout\",\"zero_ok\":{zero_ok},\"r_zero\":{r_zero}}}").ok();
+                out.flush().ok();
+                continue;
+            }
+            ProbeEnd::NoValue => {
+                faulted += 1;
+                writeln!(out, "{{\"kind\":\"fn\",\"ea\":\"{ea}\",\"status\":\"novalue\",\"zero_ok\":{zero_ok},\"r_zero\":{r_zero}}}").ok();
+                out.flush().ok();
+                continue;
+            }
+        };
+        callable += 1;
+        let r1 = outs[0];
+        let intra = outs.iter().all(|o| o.eax == r1.eax && o.edx == r1.edx);
+        if intra {
+            det_intra += 1;
+        }
+
+        // Probe 2: a fresh process, identical inputs -> inter-process determinism.
+        let inter = matches!(probe_calls(f, obj, fill_a, argv_a, 1, 300),
+            ProbeEnd::Ok(ref v) if v[0].eax == r1.eax && v[0].edx == r1.edx);
+        if inter {
+            det_inter += 1;
+        }
+        if !(intra && inter) {
+            nondet += 1;
+        }
+
+        // Probe 3 / 4: move the `this` buffer alone, then the arguments alone.
+        let vt = matches!(probe_calls(f, obj, fill_b, argv_a, 1, 300),
+            ProbeEnd::Ok(ref v) if v[0].eax != r1.eax || v[0].edx != r1.edx);
+        let va_ = matches!(probe_calls(f, obj, fill_a, argv_b, 1, 300),
+            ProbeEnd::Ok(ref v) if v[0].eax != r1.eax || v[0].edx != r1.edx);
+        if vt {
+            v_this += 1;
+        }
+        if va_ {
+            v_args += 1;
+        }
+        if !vt && !va_ {
+            v_none += 1;
+        }
+
+        let in_image = r1.eax >= img_lo && r1.eax < img_hi;
+        if in_image {
+            in_img += 1;
+        }
+        let is_float = r1.has_float != 0;
+        if is_float {
+            floats += 1;
+        }
+        // Rebase an in-image return to the preferred base so it is comparable with every
+        // static address in the repo.
+        let rebased = if in_image {
+            r1.eax.wrapping_sub(img_lo).wrapping_add(pe.image_base)
+        } else {
+            0
+        };
+        let in_arena = r1.eax >= obj as u32 && r1.eax < obj as u32 + ARENA as u32;
 
         writeln!(out,
-            "{{\"ea\":\"{ea}\",\"status\":\"ok\",\"det\":{deterministic},\"varies_with_state\":{varies},\"r\":{r1}}}"
+            "{{\"kind\":\"fn\",\"ea\":\"{ea}\",\"status\":\"ok\",\"eax\":{},\"edx\":{},\
+             \"det_intra\":{intra},\"det_inter\":{inter},\
+             \"varies_this\":{vt},\"varies_args\":{va_},\
+             \"in_image\":{in_image},\"rebased\":{rebased},\"in_arena\":{in_arena},\
+             \"is_float\":{is_float},\"fret\":{:?},\"zero_ok\":{zero_ok},\"r_zero\":{r_zero}}}",
+            r1.eax, r1.edx,
+            if is_float && r1.fret.is_finite() { r1.fret } else { 0.0 }
         ).ok();
+        out.flush().ok();
+
+        if total % 100 == 0 {
+            eprintln!(
+                "[oracle] {total} probed, {:.0}s elapsed, {callable} callable, {faulted} fault, {timedout} timeout",
+                t0.elapsed().as_secs_f64()
+            );
+        }
     }
-    unsafe { libc::munmap(obj as *mut c_void, PAGE * 4) };
-    println!("sweep: {total} ISLANDs probed | {faulted} faulted | {det} deterministic | {this_dep} vary with input state");
+    unsafe { libc::munmap(obj as *mut c_void, ARENA) };
+    let summary = format!(
+        "{{\"kind\":\"summary\",\"total\":{total},\"callable\":{callable},\"faulted\":{faulted},\
+         \"timedout\":{timedout},\"det_intra\":{det_intra},\"det_inter\":{det_inter},\
+         \"nondeterministic\":{nondet},\"varies_this\":{v_this},\"varies_args\":{v_args},\
+         \"varies_neither\":{v_none},\"returns_in_image\":{in_img},\"returns_float\":{floats},\
+         \"fault_but_zero_ok\":{rescued},\"elapsed_s\":{:.1}}}",
+        t0.elapsed().as_secs_f64()
+    );
+    writeln!(out, "{summary}").ok();
+    out.flush().ok();
+    println!("{summary}");
     println!("wrote {out_path}");
+}
+
+
+/// Re-test cross-process determinism with *matched* probe parameters.
+///
+/// The sweep compares a 3-repetition child against a 1-repetition child. Those two
+/// children do not have identical stacks -- the harness allocates a different result
+/// buffer in each -- so a callee that reads uninitialised stack below its own frame, or
+/// returns a stack address, looks non-deterministic when it is merely uninitialised.
+/// This re-runs the flagged candidates as four *identical* children and reports every
+/// return value, which separates "genuinely non-deterministic" from "reads stack
+/// garbage" and from "returns a stack pointer".
+fn recheck(m: &Mapped, pe: &PeImage, inp: &str, out_path: &str) {
+    use std::io::Write;
+    let text = std::fs::read_to_string(inp).expect("sweep file");
+    let mut out = std::fs::File::create(out_path).expect("create out");
+    let obj = unsafe {
+        libc::mmap(std::ptr::null_mut(), ARENA, libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) as *mut u8
+    };
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        state ^= state << 13; state ^= state >> 7; state ^= state << 17; state
+    };
+    let (mut n, mut agree, mut stackish) = (0u32, 0u32, 0u32);
+    for line in text.lines() {
+        if !line.contains("\"status\":\"ok\"") { continue; }
+        let Some(ea) = line.split("\"ea\":\"").nth(1).and_then(|s| s.split('"').next()) else { continue };
+        let Ok(va) = u32::from_str_radix(ea, 16) else { continue };
+        if va < pe.image_base || va - pe.image_base >= m.len as u32 { continue; }
+        let f = m.addr_of_rva(va - pe.image_base);
+        // One fixed environment, reused for every child: nothing varies but the fork.
+        let (sa, sb) = (next(), next());
+        let argv = [next() as u32, next() as u32, next() as u32, next() as u32];
+        let mut vals = Vec::new();
+        for _ in 0..4 {
+            match probe_calls(f, obj, Fill::Garbage(sa, sb), argv, 1, 300) {
+                ProbeEnd::Ok(v) => vals.push(v[0].eax),
+                _ => { vals.clear(); break; }
+            }
+        }
+        if vals.len() != 4 { continue; }
+        n += 1;
+        let same = vals.iter().all(|v| *v == vals[0]);
+        if same { agree += 1; }
+        // A return that differs only in its low bits, and is near the child stack, is a
+        // stack address rather than a computed value.
+        let spread = vals.iter().max().unwrap() - vals.iter().min().unwrap();
+        let high = vals.iter().all(|v| *v > 0xb000_0000);
+        if !same && high && spread < 0x10_0000 { stackish += 1; }
+        writeln!(out, "{{\"ea\":\"{ea}\",\"matched_agree\":{same},\"vals\":[{},{},{},{}]}}",
+            vals[0], vals[1], vals[2], vals[3]).ok();
+    }
+    unsafe { libc::munmap(obj as *mut c_void, ARENA) };
+    let s = format!("{{\"kind\":\"summary\",\"rechecked\":{n},\"agree_with_matched_probes\":{agree},\
+        \"disagree\":{},\"of_which_look_like_stack_addresses\":{stackish}}}", n - agree);
+    writeln!(out, "{s}").ok();
+    println!("{s}");
 }
 
 fn main() {
@@ -620,6 +1156,11 @@ fn main() {
             let list = args.get(2).map(|s| s.as_str()).unwrap_or("islands.jsonl");
             let outp = args.get(3).map(|s| s.as_str()).unwrap_or("sweep.jsonl");
             sweep(&m, &pe, list, outp);
+        }
+        "recheck" => {
+            let inp = args.get(2).map(|s| s.as_str()).unwrap_or("sweep.jsonl");
+            let outp = args.get(3).map(|s| s.as_str()).unwrap_or("recheck.jsonl");
+            recheck(&m, &pe, inp, outp);
         }
         "combat" => {
             let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(500_000);
