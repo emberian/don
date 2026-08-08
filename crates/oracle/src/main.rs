@@ -175,6 +175,7 @@ unsafe fn call_thiscall(f: *const u8, this: *mut u8) -> u32 {
 /// over N pseudo-random inputs. This is Tier B evidence (see docs/CHARTER.md) -- testing,
 /// not proof -- so the sample count is reported with the result and never omitted.
 fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
+    let mut all_ok_outer = true;
     // A tiny reproducible PRNG; no external crates, and the seed is fixed so a failing
     // case can be replayed exactly.
     let mut state: u64 = 0x2545_F491_4F6C_DD1D;
@@ -224,6 +225,46 @@ fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
         Case { va: 0x0048_F770, label: "[this+0x12C] - [this+0x12A]", model: model_diff_12c_12a },
     ];
 
+    // ---- stdcall, 4 integer args, no memory: ((a*a*b) % (|hi-lo|+1)) + lo ----
+    {
+        let f = m.addr_of_rva(0x0084_6450 - pe.image_base);
+        let g: extern "stdcall" fn(i32, i32, i32, i32) -> i32 = unsafe { std::mem::transmute(f) };
+        let model = |a: i32, b: i32, lo: i32, hi: i32| -> i32 {
+            let divisor = hi.wrapping_sub(lo).wrapping_abs().wrapping_add(1);
+            a.wrapping_mul(a).wrapping_mul(b).wrapping_rem(divisor).wrapping_add(lo)
+        };
+        let mut mism = 0u32;
+        let mut first: Option<(i32, i32, i32, i32, i32, i32)> = None;
+        let mut n = 0u32;
+        // fixed edge cases first, then random
+        let edges: [(i32, i32, i32, i32); 8] = [
+            (0, 0, 0, 0), (1, 1, 0, 1), (-1, -1, -5, 5), (i32::MAX, 1, 0, 10),
+            (i32::MIN, 1, 0, 10), (7, -3, -100, 100), (123456, 789, 0, 0), (5, 5, 10, -10),
+        ];
+        for (a, b, lo, hi) in edges {
+            let expect = model(a, b, lo, hi);
+            let got = g(a, b, lo, hi);
+            n += 1;
+            if got != expect { mism += 1; if first.is_none() { first = Some((a,b,lo,hi,expect,got)); } }
+        }
+        for _ in 0..trials {
+            let r = next(); let q = next();
+            let (a, b) = (r as i32, (r >> 32) as i32);
+            let (lo, hi) = (q as i32 >> 16, (q >> 32) as i32 >> 16);
+            let expect = model(a, b, lo, hi);
+            let got = g(a, b, lo, hi);
+            n += 1;
+            if got != expect { mism += 1; if first.is_none() { first = Some((a,b,lo,hi,expect,got)); } }
+        }
+        if mism == 0 {
+            println!("  PASS  0x00846450  {:<32} {} trials, 0 mismatches", "((a*a*b) % (|hi-lo|+1)) + lo", n);
+        } else {
+            all_ok_outer = false;
+            let (a,b,lo,hi,e,go) = first.unwrap();
+            println!("  FAIL  0x00846450  {}/{} mismatched; first a={a} b={b} lo={lo} hi={hi} expect={e} got={go}", mism, n);
+        }
+    }
+
     let mut all_ok = true;
     for c in &cases {
         let f = m.addr_of_rva(c.va - pe.image_base);
@@ -257,7 +298,7 @@ fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
         }
     }
     unsafe { libc::munmap(obj as *mut c_void, PAGE) };
-    all_ok
+    all_ok && all_ok_outer
 }
 
 fn main() {
@@ -319,6 +360,19 @@ fn main() {
             match in_child(|| f(a0, a1, a2, a3)) {
                 Ok(v) => println!("returned {v} ({v:#010x})"),
                 Err(e) => println!("FAULTED: {e}"),
+            }
+        }
+        "vectors" => {
+            // Print retail outputs for fixed inputs, so test expectations are captured
+            // from the binary rather than hand-computed.
+            let f = m.addr_of_rva(0x0084_6450 - pe.image_base);
+            let g: extern "stdcall" fn(i32, i32, i32, i32) -> i32 = unsafe { std::mem::transmute(f) };
+            let cases: [(i32, i32, i32, i32); 8] = [
+                (0, 0, 0, 0), (1, 1, 0, 1), (-1, -1, -5, 5), (7, -3, -100, 100),
+                (123456, 789, 0, 0), (5, 5, 10, -10), (100, 3, 1, 6), (-9, 4, 0, 100),
+            ];
+            for (a, b, lo, hi) in cases {
+                println!("assert_eq!(hash_into_range({a}, {b}, {lo}, {hi}), {});", g(a, b, lo, hi));
             }
         }
         "difftest" => {

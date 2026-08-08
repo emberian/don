@@ -107,3 +107,11 @@ which is what stages 4–6 depend on.
   Known inefficiency, measured not guessed: stepping scans all `MAX_UNITS` slots
   regardless of occupancy, which is why small worlds show lower per-unit throughput.
   A dense live-list or periodic compaction is the fix.
+- **FIRST DERIVED MECHANIC.** `0x00846450` → `hash_into_range(a,b,lo,hi)` =
+  `((a*a*b) mod (|hi-lo|+1)) + lo`, wrapping signed 32-bit, `idiv` truncating toward zero.
+  **Tier B: 500,008 inputs, 0 mismatches** against retail code under the oracle.
+  Recorded in `docs/provenance-ledger.md`. Its *purpose* in the engine is not yet
+  established, so it is named for what it computes, not what it might be.
+  Process lesson worth keeping: the first unit test had hand-computed expectations and one
+  was wrong (-47 vs retail's **-247**). Expectations are now captured via `oracle vectors`.
+  **Capture, do not calculate.**

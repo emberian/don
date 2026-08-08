@@ -26,7 +26,9 @@
 //! usable ground truth. It has not yet been confirmed against the binary.
 
 pub mod batch;
+pub mod mechanics;
 pub mod world;
 
 pub use batch::Batch;
+pub use mechanics::hash_into_range;
 pub use world::{World, MAX_UNITS, TICK_HZ};
