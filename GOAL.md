@@ -94,3 +94,16 @@ Stages 0–3 done. Stage 4+ (sim core, combat/movement/pathfinding/borders, dete
 batch scaling, RL surface, player-AI) not begun. **No simulation, no mechanics, no
 benchmarks yet.** The oracle now makes each mechanic *derivable* rather than guessable,
 which is what stages 4–6 depend on.
+- **Stage 4 begun + first speed measurement.** `don-sim`: fixed-capacity SoA world
+  (one allocation, slot recycling, no steady-state allocation) and a batch scheduler.
+  7 tests green, including the load-bearing one: **parallel stepping reproduces serial
+  output at 2/3/8/16 threads**, so thread count can never silently perturb a determinism
+  claim later.
+  `don-bench` upper bound on this laptop (12 threads): **54.6 M unit-steps/s** at
+  256 worlds x 256 units (**14,225x realtime**), 216.7 M unit-steps/s at 64x4096,
+  38,499x realtime at 4096 small worlds.
+  These are a **ceiling for the layout, not a simulation speed** — the systems are
+  PLACEHOLDERS that touch the right state but compute no derived mechanic.
+  Known inefficiency, measured not guessed: stepping scans all `MAX_UNITS` slots
+  regardless of occupancy, which is why small worlds show lower per-unit throughput.
+  A dense live-list or periodic compaction is the fix.

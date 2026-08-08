@@ -1,0 +1,12 @@
+[package]
+name = "don-sim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Batch-parallel simulation core: world storage and the fixed-tick scheduler."
+
+[dependencies]
+
+[[bin]]
+name = "don-bench"
+path = "src/bin/bench.rs"
