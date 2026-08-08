@@ -18,10 +18,14 @@ the instruction level, which is the mechanical path we want regardless.
 
 ## Next 3 moves
 
-1. `ExtractDescriptors.java` — instruction-level extractor; validate against the two
-   loaders we already have decompiled C for, then run it on `FUN_00570170`.
-2. Sweep the whole binary for every function using the descriptor pattern → full schema.
-3. `don-rules` crate: typed Rust parsers driven by the recovered schema.
+1. Raise binding recall in `FUN_00570170` — only 45 of ~719 name records resolved an
+   offset there, vs 32/35 and 22/23 in the validated loaders. Find the variant pattern
+   (likely a different `this` access form or a global rather than `this+disp`).
+2. Verify the `tag` field's meaning. It matches ground truth in the two validated loaders
+   (8=recharge, 9=crew_size) but the values in `FUN_00570170` (15, 20, 17, 16, 18, 28…)
+   are non-monotonic and unexplained — currently **[unverified]**, do not build on them.
+3. `don-rules` crate: typed Rust parsers driven by the recovered schema, including the
+   prose-rational tokenizer (`"1/16 tile (calibration…)"`).
 
 ## Done-log
 
@@ -37,3 +41,13 @@ the instruction level, which is the mechanical path we want regardless.
 - Decided the stage-3 oracle architecture (native in-process PE mapping; documented
   skip-list), and adopted `[measured]`/`[reported]` provenance discipline after three
   claims dissolved on contact.
+- **Stage 1 in progress.** `ExtractDescriptors.java` written and *validated against
+  known-good decompiled C* (recharge→tag 8/off 500, crew_size→tag 9/off 780,
+  base_form→tag 9/off 784, all exact). Whole-binary sweep: 197 candidate loader
+  functions, 750 confirmed bindings (tag+offset). Recovered the rules.xml constant table
+  from `FUN_00570170` — the function the decompiler could not handle — with offsets on a
+  clean 4-byte stride matching rules.xml declaration order.
+- Resolved an open question from `docs/binary-ground-truth.md`: `push dword ptr
+  [ebx+0x1f4]` is a *load*, so `this+offset` holds a **pointer to** the storage, not the
+  storage itself. Consistent with the engine keeping parallel per-attribute arrays
+  (an SoA layout) — that latter part is still **[unverified]**.
