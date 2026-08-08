@@ -3,9 +3,10 @@
 //
 // # Three data paths, deliberately kept side by side
 //
-//   `zerocopy` — one world, sim hosted in this worker. The vertex buffer is filled straight
-//                from `World::pos_x`'s own allocation. CPU-side copies before the upload: 0.
-//   `inline`   — many worlds, sim hosted in this worker. One `memcpy` per world into the
+//   `zerocopy` — one world, sim hosted in this worker. The three vertex buffers are filled
+//                straight from that world's own `pos_x`/`pos_y`/`tag` allocations. CPU-side
+//                copies before the upload: 0.
+//   `inline`   — many worlds, sim hosted in this worker. Three `memcpy`s per world into the
 //                cluster mirror (`sim_gather`), then upload. CPU-side copies: 1.
 //   `sab`      — many worlds across N sim workers. Each shard also copies wasm memory into
 //                shared memory. CPU-side copies: 2, and the sim runs on other cores.
@@ -13,11 +14,18 @@
 // They exist together because the interesting question is not "is it fast" but "what does
 // each copy actually cost, and at what scale does moving the sim off this thread start to
 // pay for the extra copy". The bench answers that with numbers rather than intuition.
+//
+// # Why the tag column is uploaded every frame now
+//
+// It carries hit points. In the placeholder simulation the tag held only owner and
+// occupancy, so it changed once per population change and rode a dirty flag; with real
+// combat every hit changes a unit's colour. That is a third full-width upload per frame and
+// it is measured (see the track report) rather than assumed away.
 
-import { WasmSim, ORDER } from './wasm.js';
+import { WasmSim } from './wasm.js';
 import { WebGpuBackend } from './webgpu.js';
 import { WebGl2Backend } from './webgl2.js';
-import { CTRL, CTRL_I32, bankLayout, BANKS } from './proto.js';
+import { CTRL, CTRL_I32, bankLayout } from './proto.js';
 
 let backend = null;
 let canvas = null;
@@ -30,18 +38,20 @@ let pointScale = 1;
 let flags = 0;
 
 let sim = null;               // inline/zerocopy: our own WasmSim
-let simHz = 0, framesPerIter = 1, accum = 0, lastStepT = 0;
+let simHz = 0, framesPerIter = 1, accum = 0;
 
 let sab = null, ctrl = null, sabI32 = null, sabU32 = null;
 let shards = 0, worldsPerShard = 0, stride = 0, mapSpan = 49152;
 let plan = null;
-let worldsTotal = 0, cells = 0;
+let worldsTotal = 0, cells = 0, statsPerWorld = 8;
 
 let running = false;
-let statsTimer = 0;
 let frameCount = 0, lastFpsT = 0, fps = 0;
 let uploadMs = 0, encodeMs = 0, stepMs = 0, gatherMs = 0;
-let statsCpu = null;          // Uint32Array of per-world stats for aggregate view
+/** Per-world stats mirror kept on this thread, so the aggregate ramps can be normalised
+ *  against the cluster's own maxima instead of a magic constant. */
+let statsCpu = null;
+let statsMax = { hits: 1, kills: 1 };
 
 function grid() {
   const aspect = (cssW * dpr) / Math.max(1, cssH * dpr);
@@ -72,28 +82,26 @@ function pointPx(g) {
 // Uploads
 // ---------------------------------------------------------------------------------------
 
-let tagsUploaded = false;
-
 function uploadInline() {
   const t0 = performance.now();
   if (path === 'zerocopy') {
     const live = sim.worldLive(0);
-    // These two views alias `World::pos_x` / `pos_y` directly. Nothing was copied to build
-    // them and nothing is copied to read them; `writeBuffer` reads the simulation itself.
+    // These three views alias the world's own columns. Nothing was copied to build them and
+    // nothing is copied to read them; `writeBuffer` reads the simulation itself.
     backend.writeColumn('x', 0, sim.worldX(0), 0, live);
     backend.writeColumn('y', 0, sim.worldY(0), 0, live);
+    backend.writeColumn('tag', 0, sim.worldTag(0), 0, stride);
   } else {
     backend.writeColumn('x', 0, sim.mirrorX(), 0, cells);
     backend.writeColumn('y', 0, sim.mirrorY(), 0, cells);
+    backend.writeColumn('tag', 0, sim.mirrorTag(), 0, cells);
   }
-  if (!tagsUploaded) { backend.writeColumn('tag', 0, sim.tags(), 0, cells); tagsUploaded = true; }
   uploadMs = performance.now() - t0;
 }
 
 function uploadSab() {
   const t0 = performance.now();
   const lay = bankLayout(worldsPerShard, stride);
-  let anyTag = false;
   for (let s = 0; s < shards; s++) {
     const base = s * CTRL_I32;
     const b = Atomics.load(ctrl, base + CTRL.PUBLISHED);
@@ -104,13 +112,9 @@ function uploadSab() {
     const dst = s * worldsPerShard * stride;
     backend.writeColumn('x', dst, sabI32, (off + lay.xOff) >> 2, lay.cells);
     backend.writeColumn('y', dst, sabI32, (off + lay.yOff) >> 2, lay.cells);
-    if (Atomics.exchange(ctrl, base + CTRL.TAG_DIRTY, 0) || !tagsUploaded) {
-      backend.writeColumn('tag', dst, sabU32, (off + lay.tagOff) >> 2, lay.cells);
-      anyTag = true;
-    }
+    backend.writeColumn('tag', dst, sabU32, (off + lay.tagOff) >> 2, lay.cells);
     Atomics.store(ctrl, base + CTRL.READER_HELD, -1);
   }
-  if (anyTag) tagsUploaded = true;
   uploadMs = performance.now() - t0;
 }
 
@@ -149,6 +153,7 @@ function renderOnce() {
     gridCols: g.cols, gridRows: g.rows, stride, mapSpan,
     panX: cam.x, panY: cam.y, zoom: cam.zoom, pointPx: pointPx(g),
     vw: canvas.width, vh: canvas.height, worlds: worldsTotal, flags,
+    hpScale: statsMax.hits, killScale: statsMax.kills,
   };
   backend.setUniform({ ...base, plate: 1, inset: 0.04 }, 0);
   // Slot 1 is the per-world plate drawn beneath the units. Without it a grid of thousands
@@ -202,6 +207,27 @@ function aggregateShardCtrl() {
   return { live, simFrame, stepMs: step / 1000, gatherMs: gather / 1000, copyMs: copy / 1000, frames };
 }
 
+/** Cluster-wide roll-up of the per-world stats table, for the statistics panel. */
+function clusterSummary() {
+  if (!statsCpu) return null;
+  let live = 0, hits = 0, kills = 0, damage = 0, rounds = 0, decided = 0;
+  let maxH = 1, maxK = 1;
+  const n = Math.min(worldsTotal, (statsCpu.length / statsPerWorld) | 0);
+  for (let w = 0; w < n; w++) {
+    const o = w * statsPerWorld;
+    live += statsCpu[o];
+    hits += statsCpu[o + 1];
+    kills += statsCpu[o + 4];
+    damage += statsCpu[o + 5];
+    rounds += statsCpu[o + 6];
+    if (statsCpu[o + 7] < 2) decided++;
+    if (statsCpu[o + 1] > maxH) maxH = statsCpu[o + 1];
+    if (statsCpu[o + 4] > maxK) maxK = statsCpu[o + 4];
+  }
+  statsMax = { hits: maxH, kills: maxK };
+  return { worlds: n, live, hits, kills, damage, rounds, decided };
+}
+
 function postStats() {
   const g = grid();
   const sh = aggregateShardCtrl();
@@ -219,6 +245,10 @@ function postStats() {
     gpuMs: backend.lastGpuNs / 1e6,
     cols: g.cols, rows: g.rows,
     zoom: cam.zoom,
+    summary: clusterSummary(),
+    kills: sim ? sim.kills : 0,
+    damage: sim ? sim.damage : 0,
+    real: sim ? sim.isReal : null,
   });
 }
 
@@ -302,6 +332,19 @@ async function benchDrawOnly(ms) {
     gpuMs: medianOf(gpu), gpuSamples: gpu.length, setupMs: s2 - s };
 }
 
+/** Simulation only: no uploads, no draws. The honest cost of a real tick in wasm. */
+async function benchSimOnly(ms) {
+  if (!sim) return { kind: 'sim-only', unsupported: 'sab path: ask the shards' };
+  sim.step(20);
+  const s = performance.now();
+  let n = 0;
+  while (performance.now() - s < ms) { sim.step(1); n++; }
+  const el = performance.now() - s;
+  return { kind: 'sim-only', frames: n, ms: el, fps: (n * 1000) / el,
+    stepMs: el / n, unitStepsPerSec: (sim.liveTotal * n * 1000) / el,
+    worldStepsPerSec: (worldsTotal * n * 1000) / el, live: sim.liveTotal };
+}
+
 // ---------------------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------------------
@@ -327,7 +370,8 @@ async function setup(m) {
     ctrl = new Int32Array(sab, 0, shards * CTRL_I32);
     sabI32 = new Int32Array(sab);
     sabU32 = new Uint32Array(sab);
-    mapSpan = m.mapSpan; stride = m.stride;
+    mapSpan = m.mapSpan; stride = m.stride; statsPerWorld = m.statsPerWorld ?? 8;
+    sim?.destroy(); sim = null;
   } else {
     // Drop every trace of a previous `sab` configuration. Leaving `ctrl` populated made
     // `aggregateShardCtrl()` keep answering, so an inline run silently reported the
@@ -335,15 +379,32 @@ async function setup(m) {
     // plausible and were from a different simulation.
     sab = null; ctrl = null; sabI32 = null; sabU32 = null; plan = null; shards = 0; worldsPerShard = 0;
     sim = await WasmSim.load(m.wasmUrl);
-    sim.create(m.worlds, m.unitsPerWorld, m.capacity, m.seed);
+    if (m.gameData) sim.loadGameData(new Uint8Array(m.gameData));
+    sim.create(m.worlds, m.owners, m.perOwner, m.capacity, m.seed);
     stride = sim.stride; mapSpan = sim.mapSpan; worldsTotal = sim.worlds;
+    statsPerWorld = sim.statsPerWorld;
   }
   cells = worldsTotal * stride;
-  tagsUploaded = false;
   stepMs = 0; gatherMs = 0; uploadMs = 0; encodeMs = 0;
+  statsCpu = new Uint32Array(worldsTotal * statsPerWorld);
+  statsMax = { hits: 1, kills: 1 };
   backend.ensureCapacity(cells, worldsTotal);
-  // Stats table for the aggregate view: refreshed at UI rate, not frame rate.
-  if (sim) { sim.gatherStats(); backend.writeColumn('stats', 0, sim.stats(), 0, worldsTotal * 4); }
+  refreshStats();
+}
+
+/** Refresh the per-world statistics that drive the aggregate view and the panel. */
+function refreshStats(payload) {
+  if (sim) {
+    sim.gatherStats();
+    const st = sim.stats();
+    statsCpu.set(st.subarray(0, statsCpu.length));
+    backend.writeColumn('stats', 0, st, 0, worldsTotal * statsPerWorld);
+  } else if (payload && payload.stats) {
+    const off = payload.worldOffset * statsPerWorld;
+    statsCpu.set(payload.stats.subarray(0, Math.min(payload.stats.length, statsCpu.length - off)), off);
+    backend.writeColumn('stats', off, payload.stats, 0, payload.stats.length);
+  }
+  clusterSummary();
 }
 
 self.onmessage = async (e) => {
@@ -361,6 +422,10 @@ self.onmessage = async (e) => {
       case 'setup':
         await setup(m);
         self.postMessage({ type: 'ready', worlds: worldsTotal, stride, cells, mapSpan,
+          statsPerWorld,
+          real: sim ? sim.isReal : null,
+          balanceDistinct: sim ? sim.balanceDistinct : 0,
+          tickMs: sim ? sim.tickMs : 67,
           digest: sim ? sim.digestHex() : null });
         break;
       case 'run': running = true; lastFrameT = 0; lastFpsT = performance.now(); requestAnimationFrame(frame); break;
@@ -372,34 +437,44 @@ self.onmessage = async (e) => {
       case 'camera': cam = m.cam; pointScale = m.pointScale ?? pointScale; break;
       case 'view': viewMode = m.view; flags = m.flags ?? flags; break;
       case 'speed': simHz = m.simHz; framesPerIter = m.framesPerIter ?? framesPerIter; accum = 0; break;
-      case 'refresh-stats':
-        if (sim) { sim.gatherStats(); backend.writeColumn('stats', 0, sim.stats(), 0, worldsTotal * 4); }
-        else if (m.stats) { backend.writeColumn('stats', m.worldOffset * 4, m.stats, 0, m.stats.length); }
-        break;
+      case 'refresh-stats': refreshStats(m); break;
       case 'pick': {
         // Canvas NDC -> (world, subtile x, subtile y). The renderer owns the camera, so it
         // owns the inverse transform; the main thread only forwards the raw pointer.
         const g = grid();
-        let px = m.ndc[0] / cam.zoom + cam.x;
-        let py = m.ndc[1] / cam.zoom + cam.y;
+        const px = m.ndc[0] / cam.zoom + cam.x;
+        const py = m.ndc[1] / cam.zoom + cam.y;
         const gx = (px + 1) * 0.5 * g.cols;
         const gy = (1 - py) * 0.5 * g.rows;
         const wc = Math.floor(gx), wr = Math.floor(gy);
         const world = wr * g.cols + wc;
         if (world < 0 || world >= worldsTotal || wc < 0 || wc >= g.cols) break;
         const sx = Math.round((gx - wc) * mapSpan), sy = Math.round((gy - wr) * mapSpan);
-        self.postMessage({ type: 'picked', world, sx, sy, shard: shards ? Math.floor(world / worldsPerShard) : 0,
+        self.postMessage({ type: 'picked', action: m.action, world, sx, sy,
+          shard: shards ? Math.floor(world / worldsPerShard) : 0,
           worldInShard: shards ? world % worldsPerShard : world });
         break;
       }
-      case 'order':
-        if (sim) sim.order(m.kind ?? ORDER.MOVE_TO, m.world, m.owner, m.sx, m.sy, m.tx, m.ty, m.radius);
+      case 'query': {
+        // Read-only questions about the world, answered where the world lives. Selection is
+        // a *query*; applying it is a `GroupCommand`, which is a command.
+        if (!sim) break;
+        const out = { type: 'query-result', qid: m.qid, world: m.world };
+        if (m.what === 'pick-box') out.ids = sim.pickBox(m.world, m.who, m.x, m.y, m.radius);
+        else if (m.what === 'nearest') out.unit = sim.pickNearest(m.world, m.x, m.y);
+        self.postMessage(out, out.ids ? [out.ids.buffer] : []);
+        break;
+      }
+      case 'command':
+        // Raw engine wire bytes straight through to the shim.
+        if (sim) sim.submit(m.world, m.who, new Uint8Array(m.bytes));
         break;
       case 'bench': {
         const wasRunning = running; running = false;
         await new Promise((r) => setTimeout(r, 30));
         const out = m.kind === 'raf' ? await benchRaf(m.ms)
           : m.kind === 'draw-only' ? await benchDrawOnly(m.ms)
+          : m.kind === 'sim-only' ? await benchSimOnly(m.ms)
           : await benchUncapped(m.ms);
         out.worlds = worldsTotal; out.stride = stride;
         out.instances = path === 'zerocopy' ? sim.worldLive(0) : cells;
@@ -411,6 +486,7 @@ self.onmessage = async (e) => {
         // crossed the units/aggregate threshold partway through would otherwise look like
         // a performance cliff instead of a change of what is being drawn.
         out.zoom = cam.zoom; out.grid = grid(); out.simHz = simHz;
+        out.kills = sim ? sim.kills : 0;
         self.postMessage({ type: 'bench', result: out });
         running = wasRunning;
         if (wasRunning) { lastFrameT = 0; requestAnimationFrame(frame); }
@@ -424,7 +500,9 @@ self.onmessage = async (e) => {
         break;
       }
       case 'digest':
-        self.postMessage({ type: 'digest', digest: sim ? sim.digestHex() : null, frames: sim ? sim.frame : 0 });
+        self.postMessage({ type: 'digest', digest: sim ? sim.digestHex() : null,
+          frames: sim ? sim.frame : 0, kills: sim ? sim.kills : 0,
+          damage: sim ? sim.damage : 0, live: sim ? sim.liveTotal : 0 });
         break;
       case 'teardown':
         running = false; sim?.destroy(); sim = null;

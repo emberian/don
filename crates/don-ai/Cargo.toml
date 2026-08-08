@@ -3,6 +3,13 @@ name = "don-ai"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Transcription of the shipped Rise of Nations production AI: the BHS host ABI, the AI cycle scheduler, and economic.bhs."
+description = "Transcription of the shipped Rise of Nations production AI: the BHS host ABI, the AI cycle scheduler, economic.bhs, and a headless economic game it can play."
 
 [dependencies]
+# The derived economy (`Leader::do_gather` / `Player::UpdateCommerceCaps`) lives
+# in don-sim's `mechanics`. `game.rs` calls it rather than re-deriving it.
+don-sim = { path = "../don-sim" }
+
+[[bin]]
+name = "ai-match"
+path = "src/bin/ai_match.rs"

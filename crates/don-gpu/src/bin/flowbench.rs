@@ -94,7 +94,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let pick = |s: &str| args.iter().any(|a| a == s);
-    let all = !(pick("--a") || pick("--b") || pick("--c") || pick("--d"));
+    let all = !(pick("--a") || pick("--b") || pick("--c") || pick("--d") || pick("--e"));
     if all || pick("--a") {
         section_a(&gpu, threads, quick);
     }
@@ -107,6 +107,117 @@ fn main() {
     if all || pick("--d") {
         section_d(&gpu, threads, quick);
     }
+    if all || pick("--e") {
+        section_e(&gpu, threads, quick);
+    }
+}
+
+/// The convergence flag, measured both ways on the same code.
+///
+/// §4e of `docs/derivation/gpu-architecture.md` found the batch-wide flag makes every field
+/// run for as long as the *slowest* field in the batch, and predicted up to a 23x cost. This
+/// section runs the identical solve with `per_field_convergence` off and on, so the
+/// prediction is either confirmed with a number or it is not.
+fn section_e(gpu: &Option<Gpu>, threads: usize, quick: bool) {
+    println!("== E. batch-wide convergence flag vs per-field flags + active-list compaction ==");
+    let Some(g) = gpu else {
+        println!("(no GPU)\n");
+        return;
+    };
+    println!(
+        "{:<10} {:>7} {:>8} {:>10} {:>10} {:>7} {:>12} {:>12} {:>9} {:>7}",
+        "grid", "fields", "case", "batch ms", "field ms", "gain", "rounds b/f", "fieldrounds", "conv av/mx", "dial Nt"
+    );
+    // (grid, fields, perturbation). `local` reproduces §4e's worst case: a small change
+    // makes most fields converge almost at once while a few run long, which is exactly
+    // when a batch-wide flag hurts most.
+    let cfgs: &[(u32, u32, u32, bool)] = if quick {
+        &[(64, 64, 256, true)]
+    } else {
+        &[
+            (64, 64, 256, true),
+            (64, 64, 4096, true),
+            (128, 128, 1024, true),
+            (256, 256, 256, true),
+            (256, 256, 256, false),
+            (128, 128, 1024, false),
+        ]
+    };
+    for &(w, h, fields, local) in cfgs {
+        let base = FieldBatch::synth_terrain(w, h, fields, 0xC0FFEE);
+        let mut warm = base.clone();
+        solve_batch_serial(&mut warm, CpuKernel::Dial, 0);
+        let mut perturbed = warm.clone();
+        let mut cold = base.clone();
+        for f in 0..fields {
+            if local {
+                for y in 2..6 {
+                    for x in 2..6 {
+                        let i = perturbed.index(f, x, y);
+                        perturbed.cost[i] = 1;
+                        cold.cost[i] = 1;
+                    }
+                }
+            } else {
+                let (gx, gy) = (w * 3 / 4, h * 3 / 4);
+                let i = perturbed.index(f, gx, gy);
+                perturbed.cost[i] = 1;
+                perturbed.dist[i] = 0;
+                cold.cost[i] = 1;
+                cold.dist[i] = 0;
+            }
+        }
+        let (reference, t_dial) = best(2, &cold, |b| solve_batch_parallel(b, CpuKernel::Dial, 0, threads));
+
+        let mut solver = g.solver(w, h, fields);
+        let mut run = |per_field: bool| {
+            let opts = SolveOptions {
+                per_field_convergence: per_field,
+                ..SolveOptions::default()
+            };
+            let mut t = Duration::MAX;
+            let mut best_stats = SolveStats::default();
+            let mut out = perturbed.clone();
+            for _ in 0..2 {
+                out = perturbed.clone();
+                solver.upload(&out);
+                let st = solver.run(opts);
+                solver.download(&mut out);
+                if st.compute < t {
+                    best_stats = st.clone();
+                }
+                t = t.min(st.compute);
+            }
+            assert_eq!(out.dist, reference.dist, "{w}x{h} x{fields} per_field={per_field} missed the fixed point");
+            (t, best_stats)
+        };
+        let (t_batch, s_batch) = run(false);
+        let (t_field, s_field) = run(true);
+        let (av, mx) = s_field.convergence_mean_max();
+        println!(
+            "{:<10} {:>7} {:>8} {:>10.1} {:>10.1} {:>6.2}x {:>12} {:>12} {:>9} {:>7.1}",
+            format!("{w}x{h}"),
+            fields,
+            if local { "local" } else { "wide" },
+            ms(t_batch),
+            ms(t_field),
+            ms(t_batch) / ms(t_field),
+            format!("{}/{}", s_batch.rounds, s_field.rounds),
+            format!(
+                "{:.2}x",
+                s_field.field_rounds_uncompacted as f64 / s_field.field_rounds.max(1) as f64
+            ),
+            format!("{av:.0}/{mx}"),
+            ms(t_dial),
+        );
+    }
+    println!(
+        "\n`case` is the perturbation: `local` = a 4x4 patch freed next to the goal, `wide` = a\n\
+         second goal opened three quarters across. `rounds b/f` is global rounds with the\n\
+         batch-wide flag vs with per-field flags; `fieldrounds` is how much less field-work the\n\
+         compacted run did; `conv av/mx` is the round each field converged at, averaged and\n\
+         maximised — the gap between those two *is* the waste the batch-wide flag was paying.\n"
+    );
 }
 
 /// Warm start: what a real tick does.
@@ -405,6 +516,7 @@ fn section_c(gpu: &Option<Gpu>, quick: bool) {
                     inner_steps: inner,
                     rounds_per_poll: poll,
                     max_rounds: 200_000,
+                    ..SolveOptions::default()
                 };
                 let mut bg = base.clone();
                 let mut t = Duration::MAX;

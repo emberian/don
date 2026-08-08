@@ -48,14 +48,16 @@ export const CTRL = {
   QUIT: 10,
   /** Sim frames the shard should advance per publish. */
   SPEED: 11,
-  /** Non-zero when the tag column changed and must be re-uploaded. */
-  TAG_DIRTY: 12,
+  /** Reserved. Was a tag-column dirty flag back when the tag held only owner and
+   *  occupancy; the tag now carries hit points, so it changes every frame and is published
+   *  in the same triple buffer as the positions. */
+  RESERVED_12: 12,
 };
 
 export const BANKS = 3;
 
 /** Byte size of one bank for a shard covering `worlds` worlds at `stride` rows each.
- *  Two i32 columns (x, y) plus one u32 tag column. */
+ *  Three 4-byte columns: x, y, tag. All three are written every publish. */
 export function bankBytes(worlds, stride) {
   return worlds * stride * 4 * 3;
 }

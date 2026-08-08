@@ -38,6 +38,7 @@
 //! including the ones that did not pay.
 
 pub mod batch;
+pub mod generated;
 pub mod interleave;
 pub mod mechanics;
 pub mod simd;

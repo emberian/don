@@ -17,21 +17,25 @@ struct Params {
     height: u32,
     fields: u32,
     inner_steps: u32,
-    field_offset: u32,   // first field this dispatch covers (z is capped at 65535)
+    slot_offset: u32,    // first *active-list slot* this dispatch covers (z is capped at 65535)
     stride: u32,         // linear kernels only: threads per y-row of the dispatch
     pad0: u32,
     pad1: u32,
-};
-
-struct Flags {
-    changed: atomic<u32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> cost: array<u32>;
 @group(0) @binding(2) var<storage, read> src: array<u32>;
 @group(0) @binding(3) var<storage, read_write> dst: array<u32>;
-@group(0) @binding(4) var<storage, read_write> flags: Flags;
+// One flag per *field*, not one for the batch. A batch-wide flag makes every field in the
+// batch run for as many rounds as the slowest one; measured at up to 23x wasted work
+// (docs/derivation/gpu-architecture.md §4e). Indexing by field is what lets the host drop a
+// converged field out of the dispatch entirely.
+@group(0) @binding(4) var<storage, read_write> flags: array<atomic<u32>>;
+// Active list: dispatch slot -> field index. The host compacts this at each poll, so the
+// dispatch shrinks as fields converge. This is stream compaction on the world dimension,
+// the same primitive Madrona uses for world/entity compaction.
+@group(0) @binding(5) var<storage, read> active_list: array<u32>;
 
 const TILE: u32 = 8u;
 const HALO: u32 = 10u;      // TILE + 2
@@ -52,7 +56,7 @@ fn relax(
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(local_invocation_index) li: u32,
 ) {
-    let field = wg.z + params.field_offset;
+    let field = active_list[wg.z + params.slot_offset];
     let base = field * params.width * params.height;
     let tx = wg.x * TILE;   // tile origin in field coordinates
     let ty = wg.y * TILE;
@@ -123,6 +127,6 @@ fn relax(
     }
     workgroupBarrier();
     if (li == 0u && atomicLoad(&wg_changed) != 0u) {
-        atomicOr(&flags.changed, 1u);
+        atomicOr(&flags[field], 1u);
     }
 }

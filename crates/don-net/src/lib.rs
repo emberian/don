@@ -23,13 +23,27 @@
 
 #![forbid(unsafe_code)]
 
+pub mod internal;
+pub mod lobby;
+pub mod msg;
 pub mod obfuscate;
 pub mod opcodes;
+pub mod session;
+pub mod setup;
 pub mod stream;
+pub mod transport;
 
+pub use internal::InternalPacket;
+pub use msg::{Framed, MsgType, NetMsg};
 pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
+pub use session::{Event, Player, Role, Session, TurnPackage};
+pub use setup::{
+    GameConnectionData, GameConnectionDataFull, PlayerConnectionData, PlayerSlotPod,
+    ScenFilePreviewData,
+};
 pub use stream::{find_stream, StreamLocation};
+pub use transport::{Datagram, Dest, LoopTransport, TcpTransport, Transport};
 
 /// Number of opcodes in the engine's `CommandTypes` enum.
 pub const NUM_COMMAND_TYPES: usize = 82;

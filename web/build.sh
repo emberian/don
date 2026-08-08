@@ -16,9 +16,18 @@ cp "$src" "$dst"
 
 # wasm-opt is a nice-to-have, never a requirement; the module is already tiny because it
 # has no bindgen glue and no panic machinery (`panic = "abort"`, `strip = true`).
+# (This Homebrew binaryen rejects the module — "error validating input" — because the
+# toolchain emits features it predates. The `if` reports what actually happened rather than
+# announcing success unconditionally, which is how an unoptimised module shipped once.)
 if command -v wasm-opt >/dev/null 2>&1; then
-  wasm-opt -O3 --enable-bulk-memory "$dst" -o "$dst.opt" && mv "$dst.opt" "$dst"
-  echo "wasm-opt applied"
+  if wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int \
+       --enable-sign-ext "$dst" -o "$dst.opt" 2>/dev/null; then
+    mv "$dst.opt" "$dst"
+    echo "wasm-opt applied"
+  else
+    rm -f "$dst.opt"
+    echo "wasm-opt declined this module; shipping the rustc output"
+  fi
 fi
 
 printf 'built %s (%s bytes)\n' "$dst" "$(wc -c < "$dst" | tr -d ' ')"

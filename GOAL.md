@@ -14,6 +14,22 @@ Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a s
 **Stage 1→2.** Schema extraction is working (1,224 confirmed bindings). Now growing
 `don-rules` from the shipped data while the remaining binary semantics are recovered.
 
+> ⚠ **STALE — corrections [measured, 2026-08-08, `ron-bin/sbl/rise.pdb`].** The game ships
+> its full PDB; see `docs/derivation/PDB-RECONCILIATION.md`. Affecting this file:
+> * `FUN_00570170` is **`Constants::log_data(Log*)`, a logger**, not "the rules.xml loader".
+>   The loader is `Constants::init` `0x00569A90`. The done-log entry below and "next move 3"
+>   are written on the wrong identification. The *bindings* extracted from it are still
+>   sound — a logger reads each field at its true offset in order to print it — but the
+>   "112 loader functions" are 112 `log_data` visitors.
+> * The `tag` field (next move 1) is **closed**: it is `strlen(name)`, not a parser code.
+>   `docs/binary-ground-truth.md` already carries this correction.
+> * Next move 2 is **closed**: the tokenizer is `String::fraction(int scale) const`
+>   `0x00A1D110` = `(_wtoi(s) * scale) / _wtoi(after '/')`; scale is pushed per call site by
+>   `Constants::init` and the complete universe is {256 ×24, 192 ×11, 100 ×5}.
+> * The done-log's "`this+offset` holds a **pointer to** the storage" is **refuted**: a
+>   logger passes the field's *value*, so `this+offset` **is** the storage. The SoA
+>   speculation that followed from it has no support.
+
 ## Next 3 moves
 
 1. Verify the `tag` field's meaning. It matches ground truth in the two validated loaders

@@ -35,9 +35,19 @@ void main() {
   vec2 g = (cell + inWorld) / vec2(float(uGrid.x), float(uGrid.y));
   vec2 p = vec2(g.x * 2.0 - 1.0, 1.0 - g.y * 2.0);
   p = (p - uPanZoom.xy) * uPanZoom.z;
-  p += (c - vec2(0.5)) * (uPanZoom.w * 2.0) / uMisc.xy;
+  // Same tag unpacking as the WebGPU path: size 24..29, hp 16..23, hue 8..15, selected 30.
+  float sizeClass = float((aTag >> 24u) & 0x3fu);
+  float hp = float((aTag >> 16u) & 0xffu) / 255.0;
+  float hue = float((aTag >> 8u) & 0xffu);
+  uint sel = (aTag >> 30u) & 1u;
+  float px2 = uPanZoom.w * (1.0 + (uPanZoom.w > 2.0 ? sizeClass * 0.22 : 0.0)) * (1.0 + float(sel) * 0.35);
+  p += (c - vec2(0.5)) * (px2 * 2.0) / uMisc.xy;
   gl_Position = vec4(p, 0.5, 1.0);
-  vRgb = TEAM[aTag & 7u];
+  vec3 rgb = TEAM[aTag & 7u];
+  float shear = (fract(hue * 0.0181) - 0.5) * 0.30;
+  rgb = clamp(rgb + vec3(shear, shear * -0.5, shear * 0.35), vec3(0.0), vec3(1.0));
+  rgb = mix(rgb * 0.22, rgb, 0.35 + 0.65 * hp);
+  vRgb = sel == 1u ? mix(rgb, vec3(1.0), 0.55) : rgb;
 }`;
 
 const FS_UNITS = `#version 300 es
@@ -63,8 +73,9 @@ precision highp int;
 uniform uvec4 uGrid;
 uniform vec4  uPanZoom;
 uniform vec4  uMisc;
-uniform vec4  uExtra;   // x = plate brightness, y = plate inset
+uniform vec4  uExtra;   // x = plate brightness, y = plate inset, z = hp scale, w = kill scale
 in uvec4 aStats;
+in uvec4 aStats2;
 out vec3 vRgb;
 vec3 ramp(float t) {
   float x = clamp(t, 0.0, 1.0);
@@ -82,9 +93,13 @@ void main() {
   vec2 p = vec2(g.x * 2.0 - 1.0, 1.0 - g.y * 2.0);
   p = (p - uPanZoom.xy) * uPanZoom.z;
   gl_Position = vec4(p, 0.5, 1.0);
-  float metric = (uint(uMisc.w) & 1u) != 0u
-    ? float(aStats.z & 0xffffu) / 65535.0
-    : float(aStats.x) / max(float(uGrid.z), 1.0);
+  uint m = uint(uMisc.w) & 7u;
+  float metric = float(aStats.x) / max(float(uGrid.z), 1.0);
+  if (m == 1u) metric = float(aStats.z & 0xffffu) / 65535.0;
+  else if (m == 2u) metric = float(aStats.y) / max(uExtra.z, 1.0);
+  else if (m == 3u) metric = float(aStats2.x) / max(uExtra.w, 1.0);
+  else if (m == 4u) metric = float(aStats2.w - 1u) / 3.0;
+  metric = clamp(metric, 0.0, 1.0);
   vRgb = mix(vec3(0.062, 0.070, 0.094), ramp(metric), uExtra.x);
 }`;
 
@@ -169,14 +184,18 @@ export class WebGl2Backend {
       if (this.#bufStats) gl.deleteBuffer(this.#bufStats);
       this.#bufStats = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, this.#bufStats);
-      gl.bufferData(gl.ARRAY_BUFFER, worlds * 16, gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, worlds * 32, gl.DYNAMIC_DRAW);
       this.#worldsCap = worlds;
       gl.bindVertexArray(this.#vaoAgg);
-      const loc = gl.getAttribLocation(this.#agg, 'aStats');
+      // Eight u32 per world, read as two vec4u out of one interleaved instance buffer.
       gl.bindBuffer(gl.ARRAY_BUFFER, this.#bufStats);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribIPointer(loc, 4, gl.UNSIGNED_INT, 0, 0);
-      gl.vertexAttribDivisor(loc, 1);
+      for (const [name, off] of [['aStats', 0], ['aStats2', 16]]) {
+        const loc = gl.getAttribLocation(this.#agg, name);
+        if (loc < 0) continue;
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribIPointer(loc, 4, gl.UNSIGNED_INT, 32, off);
+        gl.vertexAttribDivisor(loc, 1);
+      }
       gl.bindVertexArray(null);
     }
   }
@@ -199,7 +218,7 @@ export class WebGl2Backend {
     gl.uniform4ui(u.uGrid, p.gridCols, p.gridRows, p.stride, p.mapSpan);
     gl.uniform4f(u.uPanZoom, p.panX, p.panY, p.zoom, p.pointPx);
     gl.uniform4f(u.uMisc, p.vw, p.vh, p.worlds, p.flags);
-    if (u.uExtra) gl.uniform4f(u.uExtra, p.plate ?? 1, p.inset ?? 0.04, 0, 0);
+    if (u.uExtra) gl.uniform4f(u.uExtra, p.plate ?? 1, p.inset ?? 0.04, p.hpScale ?? 1, p.killScale ?? 1);
   }
 
   draw(mode, instances, clear = [0.035, 0.04, 0.055, 1]) {

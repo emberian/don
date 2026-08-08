@@ -1,0 +1,22 @@
+[package]
+name = "don-env"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Reinforcement-learning environment surface over the Descent of Nations simulation."
+
+[lib]
+name = "don_env"
+# rlib so the workspace can test it; cdylib so maturin/cargo can produce the Python
+# extension module. `extension-module` is deliberately NOT a default feature: with it on,
+# `cargo test` cannot link because the interpreter symbols are only resolved at load time.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+don-sim = { path = "../don-sim" }
+pyo3 = { version = "0.28", optional = true }
+
+[features]
+default = []
+python = ["dep:pyo3"]
+extension-module = ["python", "pyo3/extension-module"]

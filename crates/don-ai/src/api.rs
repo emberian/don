@@ -202,6 +202,14 @@ pub trait ScriptWorld {
     fn destroy_building(&mut self, who: i32, build_o: i32) -> i32;
     /// `citizen_repair_order(who, unit_o, build_o_target)` @ `0x009F85B0`.
     fn citizen_repair_order(&mut self, who: i32, unit_o: i32, build_o_target: i32) -> i32;
+
+    // ---- unit orders, used by `assign_idle` --------------------------------
+    /// `object_position_x(who, object)`.
+    fn object_position_x(&self, who: i32, object: i32) -> i32;
+    /// `object_position_y(who, object)`.
+    fn object_position_y(&self, who: i32, object: i32) -> i32;
+    /// `unit_move_order(who, unit_o, x, y)`.
+    fn unit_move_order(&mut self, who: i32, unit_o: i32, x: i32, y: i32) -> i32;
 }
 
 /// BHS truthiness, applied to `if (expr)` where `expr` is an int.

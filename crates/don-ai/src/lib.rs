@@ -28,15 +28,32 @@
 //! of this has been differentially tested against the retail process. Nothing
 //! here is verified.
 
+//! ## Since the PDB landed
+//!
+//! `schema/symbols.json` names every compiled AI function, so [`scheduler`]
+//! carries real names (`Leader::plan_strategy`, `Leader::production_ai`,
+//! `Leader::found_cities`, …) instead of addresses, and [`game`] is a headless
+//! economic world the transcription actually plays, driven through
+//! [`orders::Order`] and stepped by `don-sim`'s derived economy. Run a match
+//! with `cargo run -p don-ai --bin ai-match`.
+
 pub mod abi;
 pub mod api;
 pub mod economic;
+pub mod game;
 pub mod library;
+pub mod orders;
 pub mod probe;
+pub mod rules;
+pub mod scheduler;
 
 pub use abi::{AiStage, AiSubsystems, Difficulty, ScriptResult};
 pub use api::ScriptWorld;
 pub use economic::{economic, EconomicStatics};
+pub use game::{Game, ModelParams, PlayerView};
+pub use orders::{Order, OrderResult};
+pub use rules::Rules;
+pub use scheduler::{AiRuntime, AiSet, StageCounters};
 
 #[cfg(test)]
 mod tests {

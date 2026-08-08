@@ -47,7 +47,7 @@ struct U {
   viewport : vec2f,
   worlds   : u32,
   flags    : u32,
-  extra    : vec4f,   // x = plate brightness, y = plate inset
+  extra    : vec4f,   // x = plate brightness, y = plate inset, z = hp scale, w = kill scale
 };
 @group(0) @binding(0) var<uniform> u : U;
 ${TEAM_COLOURS}
@@ -81,27 +81,34 @@ fn vs_units(@builtin(vertex_index) vi : u32,
 
   var p = vec2f(g.x * 2.0 - 1.0, 1.0 - g.y * 2.0);
   p = (p - u.panZoom.xy) * u.panZoom.z;
+
+  // Tag bits, unpacked on the GPU: size class 24..29, hit points 16..23, type hue 8..15,
+  // selected 30, owner 0..3. The whole per-instance appearance is one u32 the simulation
+  // already wrote, so nothing here costs a CPU pass.
+  let sizeClass = f32((tag >> 24u) & 0x3fu);
+  let hp = f32((tag >> 16u) & 0xffu) / 255.0;
+  let hue = f32((tag >> 8u) & 0xffu);
+  let selected = (tag >> 30u) & 1u;
+  // Bigger units draw bigger, but only once a sprite is large enough for the difference to
+  // be visible at all; below that everything is one pixel and scaling just aliases.
+  let px2 = u.panZoom.w * (1.0 + select(0.0, sizeClass * 0.22, u.panZoom.w > 2.0))
+            * (1.0 + f32(selected) * 0.35);
   let c = corner(vi) - vec2f(0.5);
-  p = p + c * (u.panZoom.w * 2.0) / u.viewport;
+  p = p + c * (px2 * 2.0) / u.viewport;
 
   out.pos = vec4f(p, 0.5, 1.0);
   out.uv = corner(vi);
-  out.rgb = TEAM[tag & 7u];
+  var rgb = TEAM[tag & 7u];
+  // Type identity as a small hue shear on the team colour: two different unit types on the
+  // same team are distinguishable without giving up "colour means side", which is the one
+  // thing a spectator must never lose.
+  let shear = (fract(hue * 0.0181) - 0.5) * 0.30;
+  rgb = clamp(rgb + vec3f(shear, shear * -0.5, shear * 0.35), vec3f(0.0), vec3f(1.0));
+  // Hit points darken toward the team colour's shadow rather than toward black, so a hurt
+  // unit still reads as its side.
+  rgb = mix(rgb * 0.22, rgb, 0.35 + 0.65 * hp);
+  out.rgb = select(rgb, mix(rgb, vec3f(1.0), 0.55), selected == 1u);
   return out;
-}
-
-@fragment
-fn fs_units(in : VS) -> @location(0) vec4f {
-  // Round sprites only when a sprite is big enough for the shape to be visible. The branch
-  // is uniform across the draw, so it costs nothing per fragment in practice.
-  if (u.panZoom.w > 2.5) {
-    let d = in.uv - vec2f(0.5);
-    let r = dot(d, d);
-    if (r > 0.25) { discard; }
-    let shade = 1.0 - r * 1.2;
-    return vec4f(in.rgb * shade, 1.0);
-  }
-  return vec4f(in.rgb, 1.0);
 }
 
 // ---- aggregate view: one quad per world, coloured by that world's statistics ----------
@@ -122,7 +129,8 @@ fn ramp(t : f32) -> vec3f {
 @vertex
 fn vs_agg(@builtin(vertex_index) vi : u32,
           @builtin(instance_index) ii : u32,
-          @location(0) st : vec4u) -> AVS {
+          @location(0) st : vec4u,
+          @location(1) st2 : vec4u) -> AVS {
   var out : AVS;
   if (ii >= u.worlds) { out.pos = cull(); out.uv = vec2f(0.0); out.rgb = vec3f(0.0); return out; }
   let cell = vec2f(f32(ii % u.gridCols), f32(ii / u.gridCols));
@@ -133,11 +141,18 @@ fn vs_agg(@builtin(vertex_index) vi : u32,
   p = (p - u.panZoom.xy) * u.panZoom.z;
   out.pos = vec4f(p, 0.5, 1.0);
   out.uv = corner(vi);
-  // st.x = live units, st.y = summed hit points, st.z = digest low bits, st.w = frame.
-  // flags bit 0 picks which scalar drives the ramp.
-  let metric = select(f32(st.x) / f32(max(u.stride, 1u)),
-                      f32(st.z & 0xffffu) / 65535.0,
-                      (u.flags & 1u) != 0u);
+  // st  = live units, summed hit points, digest low bits, frame
+  // st2 = kills, damage dealt, rounds fought, owners still alive
+  // flags bits 0..2 pick which scalar drives the ramp. Five metrics, because no single one
+  // is informative at every cluster size: population is degenerate while every world is
+  // full, and the digest is the only one that shows two worlds *diverging*.
+  let m = u.flags & 7u;
+  var metric = f32(st.x) / f32(max(u.stride, 1u));
+  if (m == 1u) { metric = f32(st.z & 0xffffu) / 65535.0; }
+  else if (m == 2u) { metric = f32(st.y) / f32(max(u.extra.z, 1.0)); }
+  else if (m == 3u) { metric = f32(st2.x) / f32(max(u.extra.w, 1.0)); }
+  else if (m == 4u) { metric = f32(st2.w - 1u) / 3.0; }
+  metric = clamp(metric, 0.0, 1.0);
   // extra.x is how much of the ramp to show. 1.0 is the aggregate view; ~0.3 makes the
   // same quad a dim *plate* under the units, so a grid of thousands of worlds reads as a
   // grid without the tiles out-shouting the units drawn on top. Same pipeline, same
@@ -225,7 +240,12 @@ export class WebGpuBackend {
       layout: pl,
       vertex: {
         module, entryPoint: 'vs_agg',
-        buffers: [{ arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'uint32x4' }] }],
+        // Eight u32 per world in one instance-stepped buffer, read as two vec4u. Adding
+        // metrics costs a wider stride and nothing else: still one draw, still no CPU pass.
+        buffers: [{ arrayStride: 32, stepMode: 'instance', attributes: [
+          { shaderLocation: 0, offset: 0, format: 'uint32x4' },
+          { shaderLocation: 1, offset: 16, format: 'uint32x4' },
+        ] }],
       },
       fragment: { module, entryPoint: 'fs_agg', targets: [{ format: this.#format }] },
       primitive: { topology: 'triangle-strip' },
@@ -257,7 +277,7 @@ export class WebGpuBackend {
     if (worlds > this.#worldsCap) {
       this.#bufStats?.destroy();
       this.#bufStats = this.#device.createBuffer({
-        size: worlds * 16, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        size: worlds * 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
       this.#worldsCap = worlds;
     }
@@ -274,13 +294,13 @@ export class WebGpuBackend {
   }
 
   setUniform({ gridCols, gridRows, stride, mapSpan, panX, panY, zoom, pointPx, vw, vh, worlds, flags,
-               plate = 1, inset = 0.04 }, slot = 0) {
+               plate = 1, inset = 0.04, hpScale = 1, killScale = 1 }, slot = 0) {
     const u32 = new Uint32Array(16);
     const f32 = new Float32Array(u32.buffer);
     u32[0] = gridCols; u32[1] = gridRows; u32[2] = stride; u32[3] = mapSpan;
     f32[4] = panX; f32[5] = panY; f32[6] = zoom; f32[7] = pointPx;
     f32[8] = vw; f32[9] = vh; u32[10] = worlds; u32[11] = flags;
-    f32[12] = plate; f32[13] = inset;
+    f32[12] = plate; f32[13] = inset; f32[14] = hpScale; f32[15] = killScale;
     this.#device.queue.writeBuffer(this.#uni, slot * this.#uniStride, u32.buffer, 0, 64);
   }
 

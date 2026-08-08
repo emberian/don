@@ -234,4 +234,13 @@ impl ScriptWorld for ProbeWorld {
     fn citizen_repair_order(&mut self, who: i32, unit_o: i32, build_o_target: i32) -> i32 {
         self.q(call!("citizen_repair_order", who, unit_o, build_o_target))
     }
+    fn object_position_x(&self, who: i32, object: i32) -> i32 {
+        self.q(call!("object_position_x", who, object))
+    }
+    fn object_position_y(&self, who: i32, object: i32) -> i32 {
+        self.q(call!("object_position_y", who, object))
+    }
+    fn unit_move_order(&mut self, who: i32, unit_o: i32, x: i32, y: i32) -> i32 {
+        self.q(call!("unit_move_order", who, unit_o, x, y))
+    }
 }

@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/don-rules", "crates/don-pe", "crates/don-sim", "crates/don-gpu"]
-# 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
-exclude = ["crates/oracle"]
+members = ["crates/don-rules", "crates/don-pe", "crates/don-sim", "crates/don-gpu", "crates/don-net", "crates/don-ai", "crates/don-env", "crates/don-replay"]
+# oracle: 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
+# donscan: Windows-only (kernel32 FFI); cross-built with cargo-xwin. See crates/donscan/README.md.
+exclude = ["crates/oracle", "crates/donscan"]
 
 [workspace.package]
 edition = "2021"

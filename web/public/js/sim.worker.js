@@ -1,13 +1,15 @@
 // One shard of the cluster, running in its own worker with its own wasm instance.
 //
-// `wasm32-unknown-unknown` has no threads, so `don_sim::Batch::run_parallel` is unusable
-// in the browser. Batch parallelism therefore moves up one level: N workers, N wasm
-// instances, N disjoint slices of the world set. Worlds share nothing in `don-sim`, which
-// is precisely what makes that substitution sound — the shard boundary is the same
-// boundary `run_parallel` chunks on natively.
+// `wasm32-unknown-unknown` has no threads, so batch parallelism moves up one level: N
+// workers, N wasm instances, N disjoint slices of the world set. Worlds share nothing,
+// which is precisely what makes that substitution sound.
 //
 // Each shard publishes into its own triple buffer and never synchronises with any other
 // shard. See `proto.js` for why, and for what that costs.
+//
+// The shard also owns *its* worlds' commands and queries: a click that lands in world 900
+// is answered by whichever worker holds world 900, and the order that follows is submitted
+// there. That is the same routing a networked client needs, done locally.
 
 import { WasmSim } from './wasm.js';
 import { CTRL, CTRL_I32, bankLayout, chooseWriteBank } from './proto.js';
@@ -20,7 +22,6 @@ let shard = 0;
 let bankByteOffsets = [];
 let layout = null;
 let running = false;
-let lastLive = -1;
 let simHz = 0;         // 0 means "as fast as possible"
 let framesPerIter = 1;
 let acc = 0, lastT = 0;
@@ -35,28 +36,19 @@ function publish() {
 
   const b = chooseWriteBank(ctrl, base);
   const off = bankByteOffsets[b];
-  const dstX = new Int32Array(sab, off + layout.xOff, layout.cells);
-  const dstY = new Int32Array(sab, off + layout.yOff, layout.cells);
   // The one cross-thread copy in this mode: wasm linear memory -> shared memory. It exists
   // because a non-shared wasm `Memory` is a plain ArrayBuffer owned by this worker, which
   // no other thread can view. Making it disappear needs a *shared* wasm memory, which needs
   // `+atomics` and a rebuilt `std` — measured and discussed in the track report.
-  dstX.set(sim.mirrorX());
-  dstY.set(sim.mirrorY());
+  new Int32Array(sab, off + layout.xOff, layout.cells).set(sim.mirrorX());
+  new Int32Array(sab, off + layout.yOff, layout.cells).set(sim.mirrorY());
+  // The tag column carries hit points now, so it changes every frame and rides the same
+  // triple buffer as the positions rather than a dirty flag.
+  new Uint32Array(sab, off + layout.tagOff, layout.cells).set(sim.mirrorTag());
   const t3 = performance.now();
 
-  const live = sim.liveTotal;
-  if (live !== lastLive) {
-    // Population changed, so the owner/occupancy column changed. Rare, so write it into
-    // every bank at once rather than tracking per-bank staleness.
-    const tags = sim.tags();
-    for (const o of bankByteOffsets) new Uint32Array(sab, o + layout.tagOff, layout.cells).set(tags);
-    lastLive = live;
-    Atomics.store(ctrl, base + CTRL.TAG_DIRTY, 1);
-  }
-
   Atomics.store(ctrl, base + CTRL.SIM_FRAME, sim.frame | 0);
-  Atomics.store(ctrl, base + CTRL.LIVE, live);
+  Atomics.store(ctrl, base + CTRL.LIVE, sim.liveTotal);
   Atomics.store(ctrl, base + CTRL.STEP_US, Math.round((t1 - t0) * 1000));
   Atomics.store(ctrl, base + CTRL.GATHER_US, Math.round((t2 - t1) * 1000));
   Atomics.store(ctrl, base + CTRL.COPY_US, Math.round((t3 - t2) * 1000));
@@ -85,53 +77,67 @@ chan.port1.onmessage = loop;
 
 self.onmessage = async (e) => {
   const m = e.data;
-  switch (m.cmd) {
-    case 'init': {
-      sim = await WasmSim.load(m.wasmUrl);
-      sim.create(m.worldsPerShard, m.unitsPerWorld, m.capacity, m.seed);
-      sab = m.sab; shard = m.shard; base = shard * CTRL_I32;
-      ctrl = new Int32Array(sab, 0, m.shards * CTRL_I32);
-      layout = bankLayout(m.worldsPerShard, sim.stride);
-      bankByteOffsets = m.bankOffsets;
-      simHz = m.simHz ?? 0;
-      framesPerIter = m.framesPerIter ?? 1;
-      lastT = performance.now();
-      sim.gatherStats();
-      Atomics.store(ctrl, base + CTRL.READY, 1);
-      publish();
-      self.postMessage({ type: 'ready', shard, stride: sim.stride, worlds: sim.worlds, mapSpan: sim.mapSpan, tickHz: sim.tickHz });
-      break;
+  try {
+    switch (m.cmd) {
+      case 'init': {
+        sim = await WasmSim.load(m.wasmUrl);
+        if (m.gameData) sim.loadGameData(new Uint8Array(m.gameData));
+        sim.create(m.worldsPerShard, m.owners, m.perOwner, m.capacity, m.seed);
+        sab = m.sab; shard = m.shard; base = shard * CTRL_I32;
+        ctrl = new Int32Array(sab, 0, m.shards * CTRL_I32);
+        layout = bankLayout(m.worldsPerShard, sim.stride);
+        bankByteOffsets = m.bankOffsets;
+        simHz = m.simHz ?? 0;
+        framesPerIter = m.framesPerIter ?? 1;
+        lastT = performance.now();
+        sim.gatherStats();
+        Atomics.store(ctrl, base + CTRL.READY, 1);
+        publish();
+        self.postMessage({ type: 'ready', shard, stride: sim.stride, worlds: sim.worlds,
+          mapSpan: sim.mapSpan, tickMs: sim.tickMs, real: sim.isReal,
+          statsPerWorld: sim.statsPerWorld, balanceDistinct: sim.balanceDistinct });
+        break;
+      }
+      case 'run': running = true; lastT = performance.now(); loop(); break;
+      case 'pause': running = false; break;
+      case 'speed': simHz = m.simHz; framesPerIter = m.framesPerIter ?? framesPerIter; acc = 0; lastT = performance.now(); break;
+      case 'command': sim.submit(m.world, m.who, new Uint8Array(m.bytes)); break;
+      case 'query': {
+        const out = { type: 'query-result', qid: m.qid, shard, world: m.world };
+        if (m.what === 'pick-box') out.ids = sim.pickBox(m.world, m.who, m.x, m.y, m.radius);
+        else if (m.what === 'nearest') out.unit = sim.pickNearest(m.world, m.x, m.y);
+        self.postMessage(out, out.ids ? [out.ids.buffer] : []);
+        break;
+      }
+      case 'stats': {
+        sim.gatherStats();
+        // A copy, on purpose: the stats table is 32 B per world and is consumed by the
+        // aggregate view at UI rates, not frame rates, so postMessage is the right cost.
+        self.postMessage({ type: 'stats', shard, stats: sim.stats().slice() });
+        break;
+      }
+      case 'digest':
+        self.postMessage({ type: 'digest', shard, digest: sim.digestHex(), frames: sim.frame,
+          live: sim.liveTotal, kills: sim.kills });
+        break;
+      case 'bench-sim': {
+        // Pure simulation throughput inside wasm, no rendering, no copies.
+        const t0 = performance.now();
+        sim.step(m.frames);
+        const t1 = performance.now();
+        const g0 = performance.now();
+        for (let i = 0; i < m.gathers; i++) sim.gather();
+        const g1 = performance.now();
+        self.postMessage({
+          type: 'bench-sim', shard,
+          stepMs: t1 - t0, frames: m.frames,
+          gatherMs: (g1 - g0) / Math.max(1, m.gathers),
+          worlds: sim.worlds, live: sim.liveTotal, kills: sim.kills,
+        });
+        break;
+      }
     }
-    case 'run': running = true; lastT = performance.now(); loop(); break;
-    case 'pause': running = false; break;
-    case 'speed': simHz = m.simHz; framesPerIter = m.framesPerIter ?? framesPerIter; acc = 0; lastT = performance.now(); break;
-    case 'order': sim.order(m.kind, m.world, m.owner, m.sx, m.sy, m.tx, m.ty, m.radius); break;
-    case 'stats': {
-      sim.gatherStats();
-      const st = sim.stats();
-      // A copy, on purpose: the stats table is 16 B per world and is consumed by the
-      // aggregate view at UI rates, not frame rates, so postMessage is the right cost.
-      self.postMessage({ type: 'stats', shard, stats: st.slice() });
-      break;
-    }
-    case 'digest':
-      self.postMessage({ type: 'digest', shard, digest: sim.digestHex(), frames: sim.frame, live: sim.liveTotal });
-      break;
-    case 'bench-sim': {
-      // Pure simulation throughput inside wasm, no rendering, no copies.
-      const t0 = performance.now();
-      sim.step(m.frames);
-      const t1 = performance.now();
-      const g0 = performance.now();
-      for (let i = 0; i < m.gathers; i++) sim.gather();
-      const g1 = performance.now();
-      self.postMessage({
-        type: 'bench-sim', shard,
-        stepMs: t1 - t0, frames: m.frames,
-        gatherMs: (g1 - g0) / Math.max(1, m.gathers),
-        worlds: sim.worlds, live: sim.liveTotal,
-      });
-      break;
-    }
+  } catch (err) {
+    self.postMessage({ type: 'error', shard, where: m.cmd, message: String(err && err.stack || err) });
   }
 };

@@ -206,10 +206,16 @@ only the MFC launcher.
   `0x00a39d40`. 414 call sites, ≥7 streams.
   ⚠ **Corrected**: the pathfinder does **not** have its own RNG. `[0x00C06184]` is
   `GameAccess::game_random`, a static *reference* to the `Random` object `game_random` at
-  `0x00E37A8C` — **the main simulation stream**, shared by the road pathfinder's per-edge
-  draw, map generation and the BHS script API. `0x00EB697C` is `internal_random`, a
-  *different, secondary* stream (`Surf.cpp` water, `Scene`, graphics). A pathfinding
-  divergence therefore **does** desynchronise everything downstream on the main stream.
+  `0x00E37A8C` — **the main simulation stream** (307 sites in 118 functions): map generation,
+  units, animals, AI leaders, the BHS script API, and every RNG-using `PathFinder` routine.
+  `0x00EB697C` is `internal_random`, a *different* stream (92 sites in 31 functions) —
+  mostly `Surf`/`Scene`/`Particle`/`GraphicPieces`, **but its single largest consumer is
+  `Leader::diplomacy` with 18 sites**, so do not assume it is cosmetic; treat "is
+  `internal_random` sim-critical?" as open. Sound draws (`SoundGlobal::random` `0x00E85F0C`,
+  `SoundType::random` `0x00E87D3C`) are cosmetic and correctly do not perturb `game_random`.
+  RNG state rides its **own** lockstep channel, not the checksum:
+  `CommandPackage::process_check_random(CheckRandomCommand*)` `0x00946020` +
+  `CommandPackage::random_seeds` `0x00CC02C8`.
 - **RULES**: `[0x00C061E4]` and `[0x00C061F0]` **alias the same object** (live-read; the PDB
   says why — they are `GameAccessConst::constantsc` and `GameAccess::constants`, the
   const/non-const reference pair to the one `Constants` singleton).
@@ -217,10 +223,16 @@ only the MFC launcher.
   `int __thiscall (int, int, unsigned long, int, int, int*) const`, pure integer. Attack
   stored **×10**; rescale `(D+5)/10`; armor subtracted **mid-chain** at step 22 of 31; floor
   of 1 **conditional**. The community formula is wrong in structure.
-- **Pathfinding**: pure-integer 8-connected grid A\*, draws RNG once per edge relaxation —
-  ⚠ measured on `PathFinder::astar_caravan_road` `0x00685990`, the **caravan/road** search.
-  The general pathfinder is `PathFinder::astar_path` `0x00683770` and is **unread**; there is
-  also `PathFinder::astar_river` `0x00686690`.
+- **Pathfinding**: pure-integer 8-connected grid A\* with an ordered-tree open list.
+  ⚠ **Everything we measured is `PathFinder::astar_caravan_road` `0x00685990`, the caravan/road
+  search.** The general pathfinder is `PathFinder::astar_path` `0x00683770` ←
+  `find_upath`/`find_wpath`/`find_tpath`, with `PathFinder::calc_cost` `0x00684E50`, and it is
+  **unread**; there is also `PathFinder::astar_river` `0x00686690`. What transfers:
+  pure-integer (0 FP instructions in the entire `PathFinder` class — the 20 SSE ops across
+  9,063 instructions are struct moves) and the 8-way rotation tie-break. What does **not**:
+  *"draws RNG once per edge relaxation"* — `calc_cost` makes **zero** RNG calls; the 192-unit
+  fixed step (the general search is parameterised 48/192/768); the 3,200-node budget; and the
+  eight cost constants, which are read only by `calc_road_cost`.
 - **Checksum**: `CheckSums::check_all` `0x00936560`, `CommandPackage::process_check_sums`
   `0x009459d0`, `adler32` `0x00a46830`. `CheckSum`/`SaveGame`/`LoadGame` are siblings of one
   `DataWalk` interface (`walk_data(DataWalk*)` / `walk_function` / `walk_test`), so
@@ -239,8 +251,10 @@ only the MFC launcher.
   negatives" came from.
 - **Replays**: `.rcx` is a **plain gzip stream from offset 0** (this refutes the reported
   10-byte-header claim). Payload opens with a UTF-16 version string carrying the build date.
-- **`0x00846450` is `Doober::get_num`** (a *doober* is RoN's dropped-resource pile) and it is
-  **dead code** — correctly derived, zero direct callers in `.text`, *not* the RNG.
+- **`0x00846450` is `Doober::get_num`** and it is **dead code** — correctly derived, zero
+  direct callers *and* zero address-taken references in `.text`, *not* the RNG. A `Doober` is
+  **terrain clutter/scenery**, not a resource pile (`Doober::draw`, `add_cover_doober`,
+  `BuildType::init_doober_mask`); resource nodes are `Good`/`GoodType`.
 - **The descriptor "type tag" is the name's string length**, not a type tag. That is why the
   unit-encoding hypothesis was refuted.
 

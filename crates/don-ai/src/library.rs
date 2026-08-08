@@ -29,11 +29,24 @@ pub struct LibraryStatics {
     pub wood_check_size: i32,
     /// `woodcutter_check`: `static int wood_camp_placed = 0;`
     pub wood_camp_placed: i32,
+    /// Whether [`city_placement`] runs the modelled trigger pump. **Off is the
+    /// faithful setting**; on is an unverified interpretation that lets the
+    /// build order past step 10. See [`city_placement`].
+    pub model_triggers: bool,
+    /// Per-player trigger state for [`city_placement`], used only when
+    /// `model_triggers` is set. Per-player is itself a guess; see the docs.
+    pub city_trigger: [CityTrigger; 8],
 }
 
 impl Default for LibraryStatics {
     fn default() -> Self {
-        LibraryStatics { min_size: 5, wood_check_size: 5, wood_camp_placed: 0 }
+        LibraryStatics {
+            min_size: 5,
+            wood_check_size: 5,
+            wood_camp_placed: 0,
+            model_triggers: false,
+            city_trigger: [CityTrigger::None; 8],
+        }
     }
 }
 
@@ -400,25 +413,201 @@ fn city_need<W: ScriptWorld>(
 
 /// `int ai assign_idle (int who)` — aibestbuildlibrary.bhs:310.
 ///
-/// NOT TRANSCRIBED. The body walks idle citizens and issues gather orders via
-/// `find_idle_citizen` / `citizen_repair_order` / `unit_move_order`, and its
-/// behaviour depends on the engine's idle-unit ordering, which this lane has
-/// not derived. Returning -1 (the script's own "nothing to do" value) keeps
-/// the caller's control flow intact without inventing behaviour.
-pub fn assign_idle<W: ScriptWorld>(_w: &mut W, _who: i32) -> i32 {
+/// **Now transcribed.** The earlier pass called this "not transcribed" on the
+/// grounds that only the forward declaration at line 4 existed; the body is at
+/// line 310 of the same file. It is line-for-line below.
+///
+/// Shape of the shipped code, preserved verbatim:
+///
+/// * The `for` loop over Woodcutter's Camps `return 4` the moment it finds one
+///   with a free slot — **before assigning anyone**. So on the common path
+///   `assign_idle` does nothing at all except report "a camp has room".
+/// * `build_new_wood_camp` is set inside the loop, so it reflects only the
+///   *last* camp examined.
+/// * `wood_camp` is initialised to 0 and only assigned inside the branches, so
+///   the trailing `if (wood_camp >= 0)` sweep runs with `wood_camp == 0` when
+///   the player has no camps at all — object id 0. This model never issues id
+///   0 (see `game::Building::id`), so that sweep finds nothing, which is the
+///   same outcome as retail's "no such object".
+/// * `static`-free: every local is fresh per call, including `been_here`, whose
+///   `been_here > 1` test can therefore never be true. `SHIPPED BUG`.
+/// * The double semicolon on `return -1;;` is in the shipped source.
+// The shipped body fetches `my_second_city` at the top and again inside the
+// branch that uses it. Both calls are kept because both are host calls the
+// engine really makes.
+#[allow(unused_assignments)]
+pub fn assign_idle<W: ScriptWorld>(w: &mut W, who: i32) -> i32 {
+    let my_capital = w.find_city_with_num(who, 1);
+    let mut my_second_city = w.find_city_with_num(who, 2);
+    let mut wood_camp = 0;
+    let mut build_new_wood_camp = 0;
+    // SHIPPED BUG: `been_here` is a plain local, so `been_here > 1` is dead.
+    let mut been_here = 0;
+
+    let idle = w.find_idle_citizen(who);
+    if idle != 0 {
+        let mut i = w.num_type(who, "Woodcutter's Camp");
+        while i > 0 {
+            wood_camp = w.find_build(who, "Woodcutter's Camp");
+            if w.num_workers_at_building(who, wood_camp) < w.max_workers_at_building(who, wood_camp)
+            {
+                return 4;
+            } else {
+                build_new_wood_camp = 1;
+            }
+            i -= 1;
+        }
+
+        if build_new_wood_camp == 1 {
+            if w.num_cities(who) >= 2 {
+                my_second_city = w.find_city_with_num(who, 2);
+                if w.place_building_with_cost(who, "Woodcutter's Camp", &my_second_city) > 0 {
+                    let _ = w.find_inactive_build(who, "Woodcutter's Camp");
+                    return 2;
+                } else if w.place_building_with_cost(who, "Woodcutter's Camp", &my_capital) > 0 {
+                    let _ = w.find_inactive_build(who, "Woodcutter's Camp");
+                    return 1;
+                } else if w.can_pay_cost(who, "Woodcutter's Camp") > 0 {
+                    been_here += 1;
+                    if been_here > 1 {
+                        return 1;
+                    } else {
+                        return 0;
+                    }
+                }
+            } else if w.place_building_with_cost(who, "Woodcutter's Camp", &my_capital) > 0 {
+                let _ = w.find_inactive_build(who, "Woodcutter's Camp");
+                return 1;
+            } else if w.can_pay_cost(who, "Woodcutter's Camp") > 0 {
+                return 0;
+            }
+        }
+
+        if wood_camp >= 0 {
+            let xpos = w.object_position_x(who, wood_camp);
+            let ypos = w.object_position_y(who, wood_camp);
+            let mut it = w.find_idle_citizen(who);
+            // DEVIATION, marked: the shipped loop has no progress guarantee —
+            // it re-queries `find_idle_citizen` and relies on the move order
+            // eventually consuming every idle citizen. In retail a citizen
+            // ordered to walk somewhere stops being idle immediately; here the
+            // assignment can be refused (a full camp), which would spin
+            // forever. The transcription therefore stops when an order is
+            // refused. Reproducing a hang is not fidelity.
+            while it > -1 {
+                if w.unit_move_order(who, it, xpos, ypos) <= 0 {
+                    break;
+                }
+                it = w.find_idle_citizen(who);
+            }
+        }
+    }
     -1
+}
+
+/// Which trigger of `city_placement` is armed for a player.
+///
+/// `enable_trigger("name")` arms a named coroutine body; the shipped
+/// `city_placement` arms `city_build`, returns `-1` immediately, and expects a
+/// later invocation to run whichever trigger is armed. **The interpreter's
+/// actual trigger scheduling is not derived** — see [`city_placement`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CityTrigger {
+    /// Nothing armed; the next call arms `city_build`.
+    #[default]
+    None,
+    CityBuild,
+    HealthCheck,
+    /// `health_check` returned 1; the pump is finished.
+    Done,
 }
 
 /// `int ai city_placement (int who)` — aibestbuildlibrary.bhs:8.
 ///
-/// NOT TRANSCRIBED as written. The script body immediately `return -1;`s and
-/// arms a `trigger city_build()` / `trigger health_check()` pair via
-/// `enable_trigger`. How a `return 1` inside a trigger reaches the caller of
-/// `city_placement` is **not established** — see the lane report, "what I could
-/// not establish". Modelling it as anything other than "ask the engine" would
-/// be inventing behaviour.
-pub fn city_placement<W: ScriptWorld>(_w: &mut W, _who: i32) -> i32 {
-    -1
+/// # This is the one function the whole opening hangs on
+///
+/// `economic.bhs` step 10 ("Build City #2") advances only on
+/// `city_placement(who) > 0`. The shipped body returns `-1` unconditionally and
+/// arms two `trigger` bodies:
+///
+/// ```text
+/// city_placement(who) {
+///   new_city = 0;  enable_trigger("city_build");
+///   trigger city_build()   { if (have_tech(who,"City State")>0) { place_city_with_cost(who); enable_trigger("health_check"); }
+///                            else { research_tech_with_cost(who,"City State"); enable_trigger("city_build"); } }
+///   trigger health_check() { if (find_inactive_build(who,"Small City")) {
+///                              new_city = find_inactive_build(who,"Small City");
+///                              if (building_started(who,new_city)) return 1;
+///                              else enable_trigger("health_check"); }
+///                            else enable_trigger("city_build"); }
+///   return -1;
+/// }
+/// ```
+///
+/// so the `1` that step 10 waits for can only come out of a trigger body. How
+/// the interpreter delivers it — and on what schedule triggers run — is
+/// **still not derived**.
+///
+/// # Two behaviours, selectable, both marked
+///
+/// * `model_triggers == false` (retail-faithful-as-far-as-we-know): return
+///   `-1` and nothing else. **Measured consequence:** the script parks on step
+///   10 forever, and 300 script-seconds later its own hang watchdog
+///   (`timer_expired` → `SCRIPT_DONE`) retires it. Steps 11..36 are then
+///   unreachable. That is a real, reproducible outcome of not knowing this
+///   mechanism, and it is what the default measures.
+/// * `model_triggers == true` (**DEVIATION, unverified**): treat the pair as a
+///   per-player state machine pumped once per `city_placement` call, in the
+///   order the bodies would run if a trigger fired on the next invocation, and
+///   return `1` when `health_check` would have. This is the reading that makes
+///   the shipped build order *work*, which is weak evidence for it and no more.
+///
+/// A second unverified choice inside the second option: the trigger state is
+/// kept **per player**. BHS `static`s are per script *function*, which is
+/// exactly why `economic.bhs` hand-rolls a per-player array — so a shared
+/// trigger state is equally plausible and would serialise all eight players'
+/// city founding. Flagged, not resolved.
+pub fn city_placement<W: ScriptWorld>(w: &mut W, who: i32, st: &mut LibraryStatics) -> i32 {
+    if !st.model_triggers {
+        return -1;
+    }
+    let slot = ((who - 1).clamp(0, 7)) as usize;
+    match st.city_trigger[slot] {
+        CityTrigger::Done => {
+            st.city_trigger[slot] = CityTrigger::None;
+            -1
+        }
+        CityTrigger::None => {
+            st.city_trigger[slot] = CityTrigger::CityBuild;
+            -1
+        }
+        CityTrigger::CityBuild => {
+            if w.have_tech(who, "City State") > 0 {
+                w.place_city_with_cost(who);
+                st.city_trigger[slot] = CityTrigger::HealthCheck;
+            } else {
+                w.research_tech_with_cost(who, "City State");
+                st.city_trigger[slot] = CityTrigger::CityBuild;
+            }
+            -1
+        }
+        CityTrigger::HealthCheck => {
+            // SHIPPED BUG (reproduced): bare truthiness on a function whose
+            // "not found" value is -1, so this branch is taken when there is
+            // *no* city under construction as well as when there is one.
+            if bhs_true(w.find_inactive_build(who, "Small City")) {
+                let new_city = w.find_inactive_build(who, "Small City");
+                if bhs_true(w.building_started(who, new_city)) {
+                    st.city_trigger[slot] = CityTrigger::Done;
+                    return 1;
+                }
+                st.city_trigger[slot] = CityTrigger::HealthCheck;
+            } else {
+                st.city_trigger[slot] = CityTrigger::CityBuild;
+            }
+            -1
+        }
+    }
 }
 
 /// `int ai woodcutter_check (int who, int max_woodcutters, int needed_workers)`

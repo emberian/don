@@ -468,7 +468,7 @@ pub fn economic<W: ScriptWorld>(
                 // city #2
                 if bhs_true(w.have_tech(who, "City State")) {
                     if w.num_cities(who) < 2 {
-                        if city_placement(w, who) > 0 {
+                        if city_placement(w, who, &mut st.lib) > 0 {
                             if bantu && npow && sea_map < 1 {
                                 *step = 10;
                             } else {
@@ -477,7 +477,7 @@ pub fn economic<W: ScriptWorld>(
                         }
                     } else if bantu && npow && sea_map < 1 {
                         if w.num_cities(who) < 3 {
-                            if city_placement(w, who) > 0 {
+                            if city_placement(w, who, &mut st.lib) > 0 {
                                 *step += 1;
                             }
                         } else {
@@ -845,7 +845,7 @@ pub fn economic<W: ScriptWorld>(
                     let want_more = w.num_cities(who) < 3
                         || (bantu && npow && w.num_cities(who) < 4 && sea_map > 0);
                     if want_more {
-                        if city_placement(w, who) > 0 {
+                        if city_placement(w, who, &mut st.lib) > 0 {
                             if sea_map > 0 {
                                 if bantu
                                     && npow
