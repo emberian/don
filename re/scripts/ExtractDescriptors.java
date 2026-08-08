@@ -162,7 +162,10 @@ public class ExtractDescriptors extends GhidraScript {
                                 }
                                 if (pr != null) {   // memory operand [reg] or [reg+disp]
                                     prevPushReg = base(pr);
-                                    prevPushDisp = (ps == null) ? 0L : ps.getUnsignedValue();
+                                    // Displacements can be negative (base register pointing
+                                    // into the middle of a structure), so sign-extend --
+                                    // getUnsignedValue() reported -8 as 4294967288.
+                                    prevPushDisp = (ps == null) ? 0L : ps.getSignedValue();
                                 } else {
                                     prevPushReg = null; prevPushDisp = 0L;
                                 }

@@ -49,6 +49,14 @@
  },
  {
   "func": "FUN_0045e1d0",
+  "name": "off_x[scan]",
+  "field_off": -512,
+  "field_reg": "EDI",
+  "tag": 11,
+  "ref_ea": "0045edb3"
+ },
+ {
+  "func": "FUN_0045e1d0",
   "name": "buildings",
   "field_off": 0,
   "field_reg": "EAX",
@@ -206,14 +214,6 @@
   "field_reg": "EDI",
   "tag": 12,
   "ref_ea": "0045ef0e"
- },
- {
-  "func": "FUN_0045e1d0",
-  "name": "off_x[scan]",
-  "field_off": 4294966784,
-  "field_reg": "EDI",
-  "tag": 11,
-  "ref_ea": "0045edb3"
  },
  {
   "func": "FUN_0045f020",
@@ -793,6 +793,14 @@
  },
  {
   "func": "FUN_00475af0",
+  "name": "unit_mark[who]",
+  "field_off": -40,
+  "field_reg": "EBX",
+  "tag": 14,
+  "ref_ea": "00475d37"
+ },
+ {
+  "func": "FUN_00475af0",
   "name": "build_mark[who]",
   "field_off": 0,
   "field_reg": "EBX",
@@ -838,14 +846,6 @@
   "field_reg": "EBX",
   "tag": 10,
   "ref_ea": "00475b83"
- },
- {
-  "func": "FUN_00475af0",
-  "name": "unit_mark[who]",
-  "field_off": 4294967256,
-  "field_reg": "EBX",
-  "tag": 14,
-  "ref_ea": "00475d37"
  },
  {
   "func": "FUN_004767e0",
@@ -1025,6 +1025,22 @@
  },
  {
   "func": "FUN_0047f580",
+  "name": "def_x",
+  "field_off": -20,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0047f856"
+ },
+ {
+  "func": "FUN_0047f580",
+  "name": "def_y",
+  "field_off": -16,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0047f8e3"
+ },
+ {
+  "func": "FUN_0047f580",
   "name": "mandatory",
   "field_off": 0,
   "field_reg": "EAX",
@@ -1064,25 +1080,9 @@
   "ref_ea": "0047f7e2"
  },
  {
-  "func": "FUN_0047f580",
-  "name": "def_x",
-  "field_off": 4294967276,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "0047f856"
- },
- {
-  "func": "FUN_0047f580",
-  "name": "def_y",
-  "field_off": 4294967280,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "0047f8e3"
- },
- {
   "func": "FUN_0047fa40",
   "name": "whose",
-  "field_off": 4294967272,
+  "field_off": -24,
   "field_reg": "ESI",
   "tag": 5,
   "ref_ea": "0047fb4c"
@@ -1090,7 +1090,7 @@
  {
   "func": "FUN_0047fa40",
   "name": "cruising_alt",
-  "field_off": 4294967276,
+  "field_off": -20,
   "field_reg": "ESI",
   "tag": 12,
   "ref_ea": "0047fbbe"
@@ -1098,7 +1098,7 @@
  {
   "func": "FUN_0047fa40",
   "name": "sharp_turn",
-  "field_off": 4294967280,
+  "field_off": -16,
   "field_reg": "ESI",
   "tag": 10,
   "ref_ea": "0047fc2c"
@@ -1106,7 +1106,7 @@
  {
   "func": "FUN_0047fa40",
   "name": "returning",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "ESI",
   "tag": 9,
   "ref_ea": "0047fd0b"
@@ -1126,6 +1126,22 @@
   "field_reg": "EAX",
   "tag": 5,
   "ref_ea": "00480661"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "cat_id[scan]",
+  "field_off": -512,
+  "field_reg": "EBX",
+  "tag": null,
+  "ref_ea": "00481887"
+ },
+ {
+  "func": "FUN_004813b0",
+  "name": "num_category[scan]",
+  "field_off": -72,
+  "field_reg": "EBX",
+  "tag": 18,
+  "ref_ea": "00481617"
  },
  {
   "func": "FUN_004813b0",
@@ -1256,20 +1272,28 @@
   "ref_ea": "00481d57"
  },
  {
-  "func": "FUN_004813b0",
-  "name": "cat_id[scan]",
-  "field_off": 4294966784,
-  "field_reg": "EBX",
-  "tag": null,
-  "ref_ea": "00481887"
+  "func": "FUN_004832b0",
+  "name": "whose",
+  "field_off": -20,
+  "field_reg": "EDI",
+  "tag": 5,
+  "ref_ea": "004833b1"
  },
  {
-  "func": "FUN_004813b0",
-  "name": "num_category[scan]",
-  "field_off": 4294967224,
-  "field_reg": "EBX",
-  "tag": 18,
-  "ref_ea": "00481617"
+  "func": "FUN_004832b0",
+  "name": "started",
+  "field_off": -16,
+  "field_reg": "EDI",
+  "tag": 7,
+  "ref_ea": "00483423"
+ },
+ {
+  "func": "FUN_004832b0",
+  "name": "loaded",
+  "field_off": -12,
+  "field_reg": "EDI",
+  "tag": 6,
+  "ref_ea": "00483495"
  },
  {
   "func": "FUN_004832b0",
@@ -1278,30 +1302,6 @@
   "field_reg": "EAX",
   "tag": 4,
   "ref_ea": "00483507"
- },
- {
-  "func": "FUN_004832b0",
-  "name": "whose",
-  "field_off": 4294967276,
-  "field_reg": "EDI",
-  "tag": 5,
-  "ref_ea": "004833b1"
- },
- {
-  "func": "FUN_004832b0",
-  "name": "started",
-  "field_off": 4294967280,
-  "field_reg": "EDI",
-  "tag": 7,
-  "ref_ea": "00483423"
- },
- {
-  "func": "FUN_004832b0",
-  "name": "loaded",
-  "field_off": 4294967284,
-  "field_reg": "EDI",
-  "tag": 6,
-  "ref_ea": "00483495"
  },
  {
   "func": "FUN_00483f50",
@@ -1410,7 +1410,7 @@
  {
   "func": "FUN_00485140",
   "name": "temporary",
-  "field_off": 4294967280,
+  "field_off": -16,
   "field_reg": "EBX",
   "tag": 9,
   "ref_ea": "004851bd"
@@ -1418,7 +1418,7 @@
  {
   "func": "FUN_00485140",
   "name": "oxxx",
-  "field_off": 4294967284,
+  "field_off": -12,
   "field_reg": "EBX",
   "tag": 4,
   "ref_ea": "0048522f"
@@ -1426,7 +1426,7 @@
  {
   "func": "FUN_00485140",
   "name": "whosoever",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "EBX",
   "tag": 9,
   "ref_ea": "004852a1"
@@ -1434,7 +1434,7 @@
  {
   "func": "FUN_00485640",
   "name": "whose",
-  "field_off": 4294967276,
+  "field_off": -20,
   "field_reg": "ESI",
   "tag": 5,
   "ref_ea": "00485748"
@@ -1442,7 +1442,7 @@
  {
   "func": "FUN_00485640",
   "name": "form_id",
-  "field_off": 4294967284,
+  "field_off": -12,
   "field_reg": "ESI",
   "tag": 7,
   "ref_ea": "0048589e"
@@ -1450,7 +1450,7 @@
  {
   "func": "FUN_00485640",
   "name": "group_angle",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "ESI",
   "tag": 11,
   "ref_ea": "004857ba"
@@ -1458,7 +1458,7 @@
  {
   "func": "FUN_004865a0",
   "name": "guard_x",
-  "field_off": 4294967276,
+  "field_off": -20,
   "field_reg": "EDI",
   "tag": 7,
   "ref_ea": "00486712"
@@ -1466,7 +1466,7 @@
  {
   "func": "FUN_004865a0",
   "name": "guard_y",
-  "field_off": 4294967280,
+  "field_off": -16,
   "field_reg": "EDI",
   "tag": 7,
   "ref_ea": "0048677f"
@@ -1474,7 +1474,7 @@
  {
   "func": "FUN_004865a0",
   "name": "idle",
-  "field_off": 4294967284,
+  "field_off": -12,
   "field_reg": "EDI",
   "tag": 4,
   "ref_ea": "004867f1"
@@ -1482,10 +1482,26 @@
  {
   "func": "FUN_004865a0",
   "name": "retry",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "EDI",
   "tag": 5,
   "ref_ea": "00486863"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "build_type",
+  "field_off": -16,
+  "field_reg": "EDI",
+  "tag": 10,
+  "ref_ea": "00487022"
+ },
+ {
+  "func": "FUN_00486eb0",
+  "name": "wait",
+  "field_off": -12,
+  "field_reg": "EDI",
+  "tag": 4,
+  "ref_ea": "00487094"
  },
  {
   "func": "FUN_00486eb0",
@@ -1520,25 +1536,9 @@
   "ref_ea": "00487290"
  },
  {
-  "func": "FUN_00486eb0",
-  "name": "build_type",
-  "field_off": 4294967280,
-  "field_reg": "EDI",
-  "tag": 10,
-  "ref_ea": "00487022"
- },
- {
-  "func": "FUN_00486eb0",
-  "name": "wait",
-  "field_off": 4294967284,
-  "field_reg": "EDI",
-  "tag": 4,
-  "ref_ea": "00487094"
- },
- {
   "func": "FUN_00487aa0",
   "name": "att_x",
-  "field_off": 4294967276,
+  "field_off": -20,
   "field_reg": "ESI",
   "tag": 5,
   "ref_ea": "00487b2e"
@@ -1546,7 +1546,7 @@
  {
   "func": "FUN_00487aa0",
   "name": "att_y",
-  "field_off": 4294967280,
+  "field_off": -16,
   "field_reg": "ESI",
   "tag": 5,
   "ref_ea": "00487b9b"
@@ -1554,7 +1554,7 @@
  {
   "func": "FUN_00487aa0",
   "name": "accuracy",
-  "field_off": 4294967284,
+  "field_off": -12,
   "field_reg": "ESI",
   "tag": 8,
   "ref_ea": "00487c0d"
@@ -1562,10 +1562,138 @@
  {
   "func": "FUN_00487aa0",
   "name": "attack_unit",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "ESI",
   "tag": 11,
   "ref_ea": "00487c7f"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "angle",
+  "field_off": -72,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "00487fe1"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest",
+  "field_off": -68,
+  "field_reg": "ESI",
+  "tag": 4,
+  "ref_ea": "00488053"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "tolerance",
+  "field_off": -64,
+  "field_reg": "ESI",
+  "tag": 9,
+  "ref_ea": "004880c1"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "pause",
+  "field_off": -60,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "0048812a"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "retry",
+  "field_off": -56,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "004881b2"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "attempts",
+  "field_off": -52,
+  "field_reg": "ESI",
+  "tag": 8,
+  "ref_ea": "00488245"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "timer",
+  "field_off": -48,
+  "field_reg": "ESI",
+  "tag": 5,
+  "ref_ea": "004882cf"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "facing",
+  "field_off": -44,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488362"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest_x",
+  "field_off": -40,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004883f0"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "dest_y",
+  "field_off": -36,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048847e"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "last_x",
+  "field_off": -32,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048850c"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "last_y",
+  "field_off": -28,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "0048859a"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "coll_x",
+  "field_off": -24,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488628"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "coll_y",
+  "field_off": -20,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004886b6"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "orig_x",
+  "field_off": -16,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "00488744"
+ },
+ {
+  "func": "FUN_00487e70",
+  "name": "orig_y",
+  "field_off": -12,
+  "field_reg": "ESI",
+  "tag": 6,
+  "ref_ea": "004887d2"
  },
  {
   "func": "FUN_00487e70",
@@ -1582,134 +1710,6 @@
   "field_reg": "EAX",
   "tag": 5,
   "ref_ea": "004888f5"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "angle",
-  "field_off": 4294967224,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "00487fe1"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "dest",
-  "field_off": 4294967228,
-  "field_reg": "ESI",
-  "tag": 4,
-  "ref_ea": "00488053"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "tolerance",
-  "field_off": 4294967232,
-  "field_reg": "ESI",
-  "tag": 9,
-  "ref_ea": "004880c1"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "pause",
-  "field_off": 4294967236,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "0048812a"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "retry",
-  "field_off": 4294967240,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "004881b2"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "attempts",
-  "field_off": 4294967244,
-  "field_reg": "ESI",
-  "tag": 8,
-  "ref_ea": "00488245"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "timer",
-  "field_off": 4294967248,
-  "field_reg": "ESI",
-  "tag": 5,
-  "ref_ea": "004882cf"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "facing",
-  "field_off": 4294967252,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "00488362"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "dest_x",
-  "field_off": 4294967256,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "004883f0"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "dest_y",
-  "field_off": 4294967260,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "0048847e"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "last_x",
-  "field_off": 4294967264,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "0048850c"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "last_y",
-  "field_off": 4294967268,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "0048859a"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "coll_x",
-  "field_off": 4294967272,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "00488628"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "coll_y",
-  "field_off": 4294967276,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "004886b6"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "orig_x",
-  "field_off": 4294967280,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "00488744"
- },
- {
-  "func": "FUN_00487e70",
-  "name": "orig_y",
-  "field_off": 4294967284,
-  "field_reg": "ESI",
-  "tag": 6,
-  "ref_ea": "004887d2"
  },
  {
   "func": "FUN_00489390",
@@ -2641,6 +2641,14 @@
  },
  {
   "func": "FUN_004b3bb0",
+  "name": "make[scan]",
+  "field_off": -16,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "004b3c77"
+ },
+ {
+  "func": "FUN_004b3bb0",
   "name": "land",
   "field_off": 0,
   "field_reg": "EBX",
@@ -2726,14 +2734,6 @@
   "field_reg": "EBX",
   "tag": 12,
   "ref_ea": "004b4110"
- },
- {
-  "func": "FUN_004b3bb0",
-  "name": "make[scan]",
-  "field_off": 4294967280,
-  "field_reg": "EDI",
-  "tag": null,
-  "ref_ea": "004b3c77"
  },
  {
   "func": "FUN_004b44b0",
@@ -2833,16 +2833,8 @@
  },
  {
   "func": "FUN_004b5360",
-  "name": "increment",
-  "field_off": 0,
-  "field_reg": "EAX",
-  "tag": 9,
-  "ref_ea": "004b549b"
- },
- {
-  "func": "FUN_004b5360",
   "name": "length",
-  "field_off": 4294967284,
+  "field_off": -12,
   "field_reg": "EDI",
   "tag": 6,
   "ref_ea": "004b53c0"
@@ -2850,10 +2842,18 @@
  {
   "func": "FUN_004b5360",
   "name": "size",
-  "field_off": 4294967288,
+  "field_off": -8,
   "field_reg": "EDI",
   "tag": null,
   "ref_ea": "004b5429"
+ },
+ {
+  "func": "FUN_004b5360",
+  "name": "increment",
+  "field_off": 0,
+  "field_reg": "EAX",
+  "tag": 9,
+  "ref_ea": "004b549b"
  },
  {
   "func": "FUN_004c85b0",
@@ -6089,6 +6089,14 @@
  },
  {
   "func": "FUN_0065fc00",
+  "name": "support[scan]",
+  "field_off": -8,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "00660f87"
+ },
+ {
+  "func": "FUN_0065fc00",
   "name": "support_cost[scan]",
   "field_off": 0,
   "field_reg": "EDI",
@@ -6352,14 +6360,6 @@
   "ref_ea": "00660e90"
  },
  {
-  "func": "FUN_0065fc00",
-  "name": "support[scan]",
-  "field_off": 4294967288,
-  "field_reg": "EDI",
-  "tag": null,
-  "ref_ea": "00660f87"
- },
- {
   "func": "FUN_006631c0",
   "name": "grid_x",
   "field_off": 0,
@@ -6473,6 +6473,14 @@
  },
  {
   "func": "FUN_0066f2c0",
+  "name": "bonus_type[scan]",
+  "field_off": -8,
+  "field_reg": "EDI",
+  "tag": null,
+  "ref_ea": "0066f858"
+ },
+ {
+  "func": "FUN_0066f2c0",
   "name": "bonus_num [scan]",
   "field_off": 0,
   "field_reg": "EDI",
@@ -6582,14 +6590,6 @@
   "field_reg": "EDI",
   "tag": 11,
   "ref_ea": "0066fa3c"
- },
- {
-  "func": "FUN_0066f2c0",
-  "name": "bonus_type[scan]",
-  "field_off": 4294967288,
-  "field_reg": "EDI",
-  "tag": null,
-  "ref_ea": "0066f858"
  },
  {
   "func": "FUN_00675450",
@@ -7478,6 +7478,30 @@
   "field_reg": "EAX",
   "tag": null,
   "ref_ea": "006d9895"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "econ[scan]",
+  "field_off": -48,
+  "field_reg": "EBX",
+  "tag": 10,
+  "ref_ea": "006e7561"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "chat_status[scan]",
+  "field_off": -32,
+  "field_reg": "EBX",
+  "tag": 17,
+  "ref_ea": "006e560e"
+ },
+ {
+  "func": "FUN_006e5110",
+  "name": "escrow[scan]",
+  "field_off": -24,
+  "field_reg": "EBX",
+  "tag": 12,
+  "ref_ea": "006e740c"
  },
  {
   "func": "FUN_006e5110",
@@ -8648,30 +8672,6 @@
   "ref_ea": "006e7b4a"
  },
  {
-  "func": "FUN_006e5110",
-  "name": "econ[scan]",
-  "field_off": 4294967248,
-  "field_reg": "EBX",
-  "tag": 10,
-  "ref_ea": "006e7561"
- },
- {
-  "func": "FUN_006e5110",
-  "name": "chat_status[scan]",
-  "field_off": 4294967264,
-  "field_reg": "EBX",
-  "tag": 17,
-  "ref_ea": "006e560e"
- },
- {
-  "func": "FUN_006e5110",
-  "name": "escrow[scan]",
-  "field_off": 4294967272,
-  "field_reg": "EBX",
-  "tag": 12,
-  "ref_ea": "006e740c"
- },
- {
   "func": "FUN_006ee720",
   "name": "flags",
   "field_off": 0,
@@ -8881,6 +8881,14 @@
  },
  {
   "func": "FUN_006f1480",
+  "name": "peasants",
+  "field_off": -4,
+  "field_reg": "EDI",
+  "tag": 8,
+  "ref_ea": "006f1545"
+ },
+ {
+  "func": "FUN_006f1480",
   "name": "peasants_wait",
   "field_off": 0,
   "field_reg": "EDI",
@@ -8894,14 +8902,6 @@
   "field_reg": "EDI",
   "tag": 9,
   "ref_ea": "006f1628"
- },
- {
-  "func": "FUN_006f1480",
-  "name": "peasants",
-  "field_off": 4294967292,
-  "field_reg": "EDI",
-  "tag": 8,
-  "ref_ea": "006f1545"
  },
  {
   "func": "FUN_006f16a0",
@@ -9473,6 +9473,38 @@
  },
  {
   "func": "FUN_00956cc0",
+  "name": "last_package_sizes[play]",
+  "field_off": -128,
+  "field_reg": "EDI",
+  "tag": 24,
+  "ref_ea": "009574ac"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_wait_times[play]",
+  "field_off": -96,
+  "field_reg": "EDI",
+  "tag": 21,
+  "ref_ea": "00957519"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_lag_times[play]",
+  "field_off": -64,
+  "field_reg": "EDI",
+  "tag": 20,
+  "ref_ea": "00957700"
+ },
+ {
+  "func": "FUN_00956cc0",
+  "name": "last_average_frame_times[play]",
+  "field_off": -32,
+  "field_reg": "EDI",
+  "tag": 30,
+  "ref_ea": "0095759d"
+ },
+ {
+  "func": "FUN_00956cc0",
   "name": "last_ping_times[play]",
   "field_off": 0,
   "field_reg": "EDI",
@@ -9502,38 +9534,6 @@
   "field_reg": "EDI",
   "tag": 23,
   "ref_ea": "00957772"
- },
- {
-  "func": "FUN_00956cc0",
-  "name": "last_package_sizes[play]",
-  "field_off": 4294967168,
-  "field_reg": "EDI",
-  "tag": 24,
-  "ref_ea": "009574ac"
- },
- {
-  "func": "FUN_00956cc0",
-  "name": "last_wait_times[play]",
-  "field_off": 4294967200,
-  "field_reg": "EDI",
-  "tag": 21,
-  "ref_ea": "00957519"
- },
- {
-  "func": "FUN_00956cc0",
-  "name": "last_lag_times[play]",
-  "field_off": 4294967232,
-  "field_reg": "EDI",
-  "tag": 20,
-  "ref_ea": "00957700"
- },
- {
-  "func": "FUN_00956cc0",
-  "name": "last_average_frame_times[play]",
-  "field_off": 4294967264,
-  "field_reg": "EDI",
-  "tag": 30,
-  "ref_ea": "0095759d"
  },
  {
   "func": "FUN_00997f70",

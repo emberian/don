@@ -58,3 +58,14 @@ Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a s
   than skipping. The module deliberately refuses to convert values to numbers: the
   engine's tokenizer semantics are not yet recovered, and inventing a plausible
   conversion is the folklore the charter forbids.
+- **Hypothesis refuted (recorded, not buried):** the descriptor type tag does *not* encode
+  the value's unit/parser. Joined 178 rules-loader bindings against the shipped XML unit
+  words; tag 19 spans `%`, `tile`, none and `tiles`, tag 16 spans none, `bonus`,
+  `resources`, `tile`. No correlation. Tag meaning remains **[unverified]** outside the two
+  loaders where it was checked against decompiled C.
+- **Extractor bug found and fixed:** displacements were read unsigned, so `support[scan]`
+  reported offset 4294967288 instead of −8. 58 of 1,224 bindings were affected.
+- `schema/bindings.json` → `crates/don-rules/src/offsets.rs` via `re/scripts/gen_offsets.py`:
+  **1,223 offset constants across 112 modules**, generated not hand-written. 11 tests green,
+  including ground-truth anchors that pin the extractor against the independent
+  decompiled-C derivation.
