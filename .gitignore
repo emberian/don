@@ -1,0 +1,13 @@
+# Copyrighted game content — never commit. Reproduce with the extractor documented in
+# docs/binary-ground-truth.md (Provenance section).
+ron-bin/
+ron-data/
+
+# Derived from copyrighted code, and large.
+re/ghidra/
+re/decomp/
+re/logs/
+
+# Build output
+target/
+*.rlib
