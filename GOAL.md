@@ -11,21 +11,21 @@ Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a s
 
 ## Current thrust
 
-**Stage 1 — loader recovery.** Extract the complete (rule name → type tag → struct offset)
-schema mechanically from the descriptor/visitor call sites, for every loader. The
-decompiler times out on `FUN_00570170` (the rules.xml loader), so extraction happens at
-the instruction level, which is the mechanical path we want regardless.
+**Stage 1→2.** Schema extraction is working (1,224 confirmed bindings). Now growing
+`don-rules` from the shipped data while the remaining binary semantics are recovered.
 
 ## Next 3 moves
 
-1. Raise binding recall in `FUN_00570170` — only 45 of ~719 name records resolved an
-   offset there, vs 32/35 and 22/23 in the validated loaders. Find the variant pattern
-   (likely a different `this` access form or a global rather than `this+disp`).
-2. Verify the `tag` field's meaning. It matches ground truth in the two validated loaders
+1. Verify the `tag` field's meaning. It matches ground truth in the two validated loaders
    (8=recharge, 9=crew_size) but the values in `FUN_00570170` (15, 20, 17, 16, 18, 28…)
    are non-monotonic and unexplained — currently **[unverified]**, do not build on them.
-3. `don-rules` crate: typed Rust parsers driven by the recovered schema, including the
-   prose-rational tokenizer (`"1/16 tile (calibration…)"`).
+   Likely encodes the value *parser* to use (tile-fraction vs frames vs percent); test by
+   correlating tags against the unit words in the shipped XML.
+2. Recover the loader's own tokenizer semantics from the binary so `RuleValue` can gain a
+   sound numeric conversion: denominator limit, rounding, and whether the result lands in
+   `f32` or fixed point. Until then `don-rules::value` deliberately refuses to convert.
+3. Identify the remaining loaders by name (map the 112 binding functions to the XML files
+   they load) and grow typed structs from `schema/bindings.json`.
 
 ## Done-log
 
@@ -51,3 +51,10 @@ the instruction level, which is the mechanical path we want regardless.
   [ebx+0x1f4]` is a *load*, so `this+offset` holds a **pointer to** the storage, not the
   storage itself. Consistent with the engine keeping parallel per-attribute arrays
   (an SoA layout) — that latter part is still **[unverified]**.
+- **Stage 2 begun.** Rust workspace + `don-rules` crate. `value::RuleValue` tokenizes the
+  prose rule-value grammar (rational, percent, number+unit, bare, suffix-unit); 8 tests
+  green including a corpus test over all **690** value-bearing elements of the shipped
+  `rules.xml`. The corpus test was canary-checked to confirm it reads real data rather
+  than skipping. The module deliberately refuses to convert values to numbers: the
+  engine's tokenizer semantics are not yet recovered, and inventing a plausible
+  conversion is the folklore the charter forbids.
