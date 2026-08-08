@@ -1,0 +1,9 @@
+[package]
+name = "oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Binary oracle: map riseofnations.exe and call retail functions for differential testing."
+
+[dependencies]
+don-pe = { path = "../don-pe" }
+libc = "0.2"

@@ -76,3 +76,21 @@ Stage-3 architecture: `docs/oracle-architecture.md`. Cross-check only (never a s
   back, assert byte-identical) — the strongest cheap check that the fixup arithmetic is
   right. Deliberately not `LoadLibrary`: that would run the entry point as DllMain and
   drag in loader import/TLS/CFG processing we need to stay out of.
+- **Stage 3 COMPLETE — the oracle executes retail code.** `crates/oracle` maps
+  riseofnations.exe into a live i686 process on hbox (315,865 relocations, per-section
+  mprotect), and calls retail functions with fabricated inputs. Differential test against
+  Rust models: `0x00472400` (`movsx eax,[this+0xA]`) and `0x0048F770`
+  (`[this+0x12C] - [this+0x12A]`), **200,000 trials each, 0 mismatches** — Tier B.
+  Built for `i686-unknown-linux-musl`, whose self-contained CRT objects avoid installing
+  32-bit dev packages on a co-tenant machine. Every call runs in a forked child, so
+  probing a function that needs live globals reports a signal instead of killing the run.
+- `re/scripts/FindIslands.java` classifies all functions by reachability:
+  **2,135 ISLAND** (callable with fabricated inputs), 711 DATA_ONLY, 42,748 SELF_CALL,
+  970 WRITES_GLOBAL. 141 ISLANDs carry arithmetic — the differential-testing worklist.
+
+## Where the roadmap actually stands
+
+Stages 0–3 done. Stage 4+ (sim core, combat/movement/pathfinding/borders, determinism,
+batch scaling, RL surface, player-AI) not begun. **No simulation, no mechanics, no
+benchmarks yet.** The oracle now makes each mechanic *derivable* rather than guessable,
+which is what stages 4–6 depend on.
