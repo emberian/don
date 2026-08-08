@@ -13,9 +13,9 @@
 //! than executors reached from [`crate::world::World::step`]. A green module test is evidence
 //! about its local derivation, not evidence that the retail tick runs it.
 //!
-//! Recovery note: `items.rs` and `naval.rs` also exist in this directory but are intentionally
-//! not declared here yet. Post-cutoff isolated audits found unresolved test/contract problems
-//! and fidelity gaps in both; see `docs/RECOVERY.md` before landing either one.
+//! Recovery note: `items.rs` and `naval.rs` are compiled here after post-cutoff audits fixed
+//! their local contract defects. Both remain Tier-C integration boundaries: declaring them
+//! runs their tests, but does not wire either subsystem into `World::step` or replay state.
 
 /// Added by `mech:air`. Serves no checksum channel of its own — it is the air-domain
 /// slice of the `units` channel plus the `Ammo::init` anti-air gate that the `ammo`
@@ -30,8 +30,16 @@ pub mod borders_fog;
 pub mod combat;
 pub mod economy;
 pub mod groups_guys;
+/// Recovered from an interrupted lane and audited as a Tier-C goody-box registry/checksum
+/// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
+/// remain explicit boundaries; see `docs/mechanics/items.md`.
+pub mod items;
 pub mod map_terrain;
 pub mod movement;
+/// Recovered from an interrupted lane and audited as Tier-C naval primitives and guardrail
+/// proxies. It is intentionally not a retail-complete naval executor; see
+/// `docs/mechanics/naval.md`.
+pub mod naval;
 /// Added by `build:sim-core` when wiring `systems` into `lib.rs`: both modules were
 /// present on disk with no `pub mod` line, which is exactly the silent stranding this
 /// file's header warns about.

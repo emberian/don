@@ -48,11 +48,12 @@ pub mod checksum;
 pub mod harness;
 pub mod replay;
 pub mod report;
+pub mod rules_channel;
 pub mod state;
 pub mod walk;
 pub mod wire;
 
-mod walk_gen;
+pub mod walk_gen;
 mod wire_gen;
 
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
