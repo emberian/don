@@ -16,3 +16,4 @@ target/
 schema/live/*.bin
 schema/live/*.txt
 re/decomp-all/
+ron-data/replays/
