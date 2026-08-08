@@ -23,6 +23,10 @@
 pub mod air;
 pub mod ammo;
 pub mod borders_fog;
+/// Tier-C spell-lifecycle and wildlife/RNG primitives recovered from the interrupted
+/// casters/animals lane. Full casting, object allocation, hunting, tick and checksum
+/// integration remain explicit boundaries; see `docs/mechanics/casters-animals.md`.
+pub mod casters_animals;
 /// Added by `mech:combat`. `std`-only, no crate-root dependencies, so it builds as soon as
 /// `lib.rs` declares `pub mod systems;`. Verified standalone with
 /// `rustc --edition 2021 --test src/systems/combat.rs` — 66 tests, all green, including a
