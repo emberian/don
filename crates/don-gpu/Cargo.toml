@@ -1,0 +1,23 @@
+[package]
+name = "don-gpu"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Batched integer flow-field relaxation: CPU reference kernels and a wgpu compute port."
+
+[dependencies]
+# Default features pull in gles/dx12/webgpu, none of which we want. Metal covers this
+# Mac; Vulkan covers hbox and any Linux trainer box.
+wgpu = { version = "27", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "metal",
+    "vulkan",
+    "wgsl",
+] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+
+[[bin]]
+name = "flowbench"
+path = "src/bin/flowbench.rs"

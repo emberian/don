@@ -302,6 +302,158 @@ fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
 }
 
 
+/// Combat-lane differential cases (docs/derivation/combat.md).
+///
+/// Two retail entry points from the damage pipeline that are callable with fabricated
+/// inputs, so they can carry Tier-B evidence:
+///   * `0x0092CFE0` -- flank-level classifier, ISLAND, single ECX argument. The whole
+///     32-bit input domain is enumerable in chunks; we sample it densely.
+///   * `0x00581CA0` -- balance-table lookup, `__stdcall(attacker_type, defender_type)`,
+///     reads `int16 balance[atk*493 + def]` at VA 0x00C06AFC. Exhaustive over the entire
+///     defined type domain (493x493 = 243,049 pairs).
+fn combat_difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
+    let mut ok = true;
+
+    // ---- flank level: __fastcall-ish, argument in ECX ----
+    {
+        let f = m.addr_of_rva(0x0092_CFE0 - pe.image_base);
+        let call = |x: u32| -> u32 {
+            let r: u32;
+            unsafe {
+                std::arch::asm!("call {f}", f = in(reg) f,
+                    in("ecx") x, lateout("eax") r, clobber_abi("C"));
+            }
+            r
+        };
+        // Model transcribed from the seven instructions at 0x0092CFE0.
+        let model = |x: u32| -> u32 {
+            if x > 0xD555_5555 {
+                0
+            } else if 0x4000_0000u32 < x.wrapping_sub(0x6000_0000) {
+                2
+            } else {
+                1
+            }
+        };
+        let mut n = 0u32;
+        let mut mism = 0u32;
+        let mut first = None;
+        let probe = |x: u32, n: &mut u32, mism: &mut u32, first: &mut Option<(u32, u32, u32)>| {
+            let e = model(x);
+            let g = call(x);
+            *n += 1;
+            if e != g && first.is_none() {
+                *first = Some((x, e, g));
+            }
+            if e != g {
+                *mism += 1;
+            }
+        };
+        // every boundary the instruction sequence can distinguish, plus neighbours
+        for b in [
+            0u32,
+            1,
+            0x3FFF_FFFF,
+            0x4000_0000,
+            0x4000_0001,
+            0x5FFF_FFFF,
+            0x6000_0000,
+            0x6000_0001,
+            0x9FFF_FFFF,
+            0xA000_0000,
+            0xA000_0001,
+            0xD555_5554,
+            0xD555_5555,
+            0xD555_5556,
+            0xFFFF_FFFF,
+            0x8000_0000,
+            0x7FFF_FFFF,
+        ] {
+            probe(b, &mut n, &mut mism, &mut first);
+        }
+        // dense sweep of the whole 32-bit domain on a stride that is coprime with 2^32
+        let stride: u32 = 8191;
+        let mut x: u32 = 0;
+        for _ in 0..trials.max(500_000) {
+            probe(x, &mut n, &mut mism, &mut first);
+            x = x.wrapping_add(stride);
+        }
+        if mism == 0 {
+            println!("  PASS  0x0092cfe0  {:<38} {} trials, 0 mismatches", "flank_level(angle_delta)", n);
+        } else {
+            ok = false;
+            let (x, e, g) = first.unwrap();
+            println!("  FAIL  0x0092cfe0  flank_level: {mism}/{n} mismatched; first x={x:#x} expect={e} got={g}");
+        }
+    }
+
+    // ---- balance table lookup: __stdcall(atk_type, def_type) -> i32 ----
+    {
+        let f = m.addr_of_rva(0x0058_1CA0 - pe.image_base);
+        let g: extern "stdcall" fn(i32, i32) -> i32 = unsafe { std::mem::transmute(f) };
+        const TABLE_VA: u32 = 0x00C0_6AFC;
+        const STRIDE: i32 = 493;
+        let table = m.addr_of_rva(TABLE_VA - pe.image_base);
+        let model = |a: i32, b: i32| -> i32 {
+            let idx = a.wrapping_mul(STRIDE).wrapping_add(b);
+            let p = unsafe { (table as *const i16).offset(idx as isize) };
+            (unsafe { std::ptr::read_unaligned(p) }) as i32
+        };
+        let mut n = 0u32;
+        let mut mism = 0u32;
+        let mut first = None;
+        // exhaustive over the whole defined type domain
+        for a in 0..STRIDE {
+            for b in 0..STRIDE {
+                let e = model(a, b);
+                let got = g(a, b);
+                n += 1;
+                if e != got {
+                    mism += 1;
+                    if first.is_none() {
+                        first = Some((a, b, e, got));
+                    }
+                }
+            }
+        }
+        // plus indices past the type domain, still inside the mapped image, to exercise
+        // the multiply/add without a bounds check
+        for a in 500..1500 {
+            for b in [0, 1, 100, 492] {
+                let e = model(a, b);
+                let got = g(a, b);
+                n += 1;
+                if e != got {
+                    mism += 1;
+                    if first.is_none() {
+                        first = Some((a, b, e, got));
+                    }
+                }
+            }
+        }
+        if mism == 0 {
+            println!("  PASS  0x00581ca0  {:<38} {} trials, 0 mismatches", "balance[atk*493 + def] (int16)", n);
+        } else {
+            ok = false;
+            let (a, b, e, got) = first.unwrap();
+            println!("  FAIL  0x00581ca0  balance: {mism}/{n} mismatched; first a={a} b={b} expect={e} got={got}");
+        }
+
+        // report what the table actually contains, since the file image at this VA looks
+        // like unrelated static data -- see docs/derivation/combat.md
+        let mut hist = std::collections::BTreeMap::new();
+        for a in 0..STRIDE {
+            for b in 0..STRIDE {
+                *hist.entry(g(a, b)).or_insert(0u32) += 1;
+            }
+        }
+        let mut v: Vec<_> = hist.into_iter().collect();
+        v.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+        println!("  balance-table value histogram (top 12 of {} distinct): {:?}", v.len(), &v[..v.len().min(12)]);
+    }
+    ok
+}
+
 /// Characterise a function by probing it under fork isolation.
 ///
 /// For each candidate we ask three questions that decide whether it is usable as a
@@ -465,6 +617,14 @@ fn main() {
             let list = args.get(2).map(|s| s.as_str()).unwrap_or("islands.jsonl");
             let outp = args.get(3).map(|s| s.as_str()).unwrap_or("sweep.jsonl");
             sweep(&m, &pe, list, outp);
+        }
+        "combat" => {
+            let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(500_000);
+            println!("combat differential test: retail machine code vs Rust model");
+            let ok = combat_difftest(&m, &pe, n);
+            if !ok {
+                std::process::exit(1);
+            }
         }
         "difftest" => {
             let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100_000);

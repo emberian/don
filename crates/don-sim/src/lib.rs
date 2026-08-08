@@ -25,10 +25,25 @@
 //! `rules.xml` header, which is game data rather than community documentation, so it is
 //! usable ground truth. It has not yet been confirmed against the binary.
 
+//! # Layout, in one paragraph
+//!
+//! Units are stored dense: live rows are `0..live_count`, with identity carried by a
+//! generational [`Handle`] rather than by a row number, so a tick system is a branch-free
+//! pass over a contiguous prefix. Kernels for those passes live in [`simd`], each with a
+//! scalar reference and a per-target vector path asserted bit-identical to it. Worlds are
+//! independent, so [`Batch`] gets its parallelism from the batch dimension and produces
+//! the same bits at every thread count.
+//!
+//! `docs/derivation/simd-batch.md` records the measurements behind those choices,
+//! including the ones that did not pay.
+
 pub mod batch;
+pub mod interleave;
 pub mod mechanics;
+pub mod simd;
 pub mod world;
 
 pub use batch::Batch;
+pub use interleave::LaneBatch;
 pub use mechanics::hash_into_range;
-pub use world::{World, MAX_UNITS, TICK_HZ};
+pub use world::{Handle, World, MAP_SPAN, MAX_UNITS, TICK_HZ};

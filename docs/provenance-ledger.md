@@ -38,9 +38,11 @@ Confirmed semantics that are easy to assume wrongly:
   Faithful, not a porting bug.
 - `hi` need not exceed `lo`; the divisor uses `|hi - lo|`.
 
-**What it is used for is not established.** The name describes the computation only. It is
-deliberately not called "the RNG" or "the damage roll" — that would be a claim we have not
-earned.
+**CORRECTION [measured, 2026-08-08 derivation wave]: this function is called by nothing.**
+It is dead code, and it is *not* the engine RNG. The real generator is a Numerical-Recipes
+LCG, `s <- s*1664525 + 1013904223`, at `0x00a39cf0` / `0x00a39d70` — constants verified
+independently by capstone. Declining to call `0x00846450` "the RNG" was the right call; the
+derivation itself remains correct, it simply describes an unreachable function.
 
 *Process note:* the first version of the unit test carried hand-computed expectations, and
 one was wrong (`(7,-3,-100,100)` → I wrote -47; retail returns **-247**). Expectations are

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/don-rules", "crates/don-pe", "crates/don-sim"]
+members = ["crates/don-rules", "crates/don-pe", "crates/don-sim", "crates/don-gpu"]
 # 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
 exclude = ["crates/oracle"]
 

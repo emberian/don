@@ -178,9 +178,15 @@ local_82 = 0x80000;          // flags/precision
 //                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field at this+0x1F4
 ```
 
-`param_1` is a visitor object; `vtable+0x1c` is its "bind named field" method. Observed
-type tags so far: `8` (`recharge`), `9` (`crew_size`, `base_form`). Array-valued fields
-are bound in a loop (e.g. base `in_ECX + 0x314`, count `0x160` = 352 elements).
+`param_1` is a visitor object; `vtable+0x1c` is its "bind named field" method.
+
+**CORRECTION [measured, 2026-08-08]: the field we called a "type tag" is the LENGTH of the
+wide rule name, not a type tag.** `recharge`=8, `crew_size`=9, `attack`=6, `hits`=4,
+`armor`=5, `splash_percent`=14, `special_upgrade_cost`=20 — every one of the 34 bindings in
+`FUN_0065fc00` equals `strlen(name)`. It is stored twice (u16 at +4 and in the high half of
+the dword at +6): the classic `{const wchar_t*; size_t}` string-view shape. This is why the
+hypothesis that it encoded the value's unit/parser was refuted — it never encoded a type at
+all. Array-valued fields are bound in a loop (e.g. base `in_ECX + 0x314`, count 352).
 
 **This is the schema, mechanically extractable**: every (rule name, type tag, struct
 offset) triple in the game is recoverable by walking these call sites. `FUN_0065fc00` is
