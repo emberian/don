@@ -71,3 +71,46 @@ now captured from the binary via `oracle vectors`. **Capture, do not calculate.*
 - Rule-value tokenizer semantics: denominator limit, rounding, `f32` vs fixed point.
 - Descriptor type-tag meaning outside two validated loaders. A hypothesis that it selects
   the value parser was tested against the shipped XML unit words and **refuted**.
+
+---
+
+## Live-process validation (2026-08-08)
+
+The RULES object was read out of a **running, match-loaded** `riseofnations.exe`
+(PID 14644, image base `0xD60000` — Windows randomises ASLR per *boot*, not per process,
+so both concurrent instances shared it). `[0x00C061E4]` and `[0x00C061F0]` both held
+`0x01798B88`: **two pointer globals aliasing one RULES object**, which retires the
+cross-lane contradiction the audit raised — neither lane was wrong and there is no second
+rules object.
+
+**828 of 834 extracted constants match live memory byte-for-byte (99%).** [measured]
+This validates `docs/derivation/rules-constants.json`, the loader-derived scale table, and
+the offset extraction, all at once and against ground truth rather than against itself.
+
+The six mismatches are not extraction errors so much as *missing scale annotations*, and
+each corroborates a finding from a different lane:
+
+| field | extracted | live | ratio | explanation |
+|---|---|---|---|---|
+| `scholar_rate` ×5 slots | 5, 7, 10, 15, 20 | 1280, 1792, 2560, 3840, 5120 | **256** | 8.8 fixed point — the scale-256 binder, recorded as unscaled |
+| `caravan_attack_bonus` | 2 | 20 | **10** | attack values are stored ×10, exactly as the combat lane derived |
+
+Raw capture: `schema/live/rules-block-pid14644.txt` (4096 bytes, base64).
+
+Method, which is now the standard one for runtime questions: `OpenProcess` +
+`ReadProcessMemory` via P/Invoke in guest PowerShell, driven by
+`prlctl exec "Windows 11" powershell.exe -EncodedCommand <base64-utf16le>`, writing results
+to a guest file and streaming that out. Inline base64 return times out; the file hop does
+not.
+
+### Streams — pathfinding has its own RNG [measured]
+
+| global | menu | loaded match |
+|---|---|---|
+| `[0x00C06184]` → pathfinder `Random` | `0x01797A8C` (heap, populated) | `0x01797A8C` |
+| `0x00EB697C` script/sim `Random` state | `0x00000000` | `0x085725D3` |
+
+Distinct objects with distinct lifetimes: the pathfinder's is heap-allocated and live at
+the menu, the script/sim one is a fixed `.data` object seeded when a match starts. So a
+pathfinding divergence does **not** automatically desynchronise the scripted/sim stream —
+the pathfinding lane's headline overstated the blast radius, as the audit suspected.
