@@ -4,64 +4,37 @@ An RL env and high-performance batch resimulation of Rise of Nations (2003).
 
 ---
 
-## What that means
+Rise of Nations is a lockstep RTS — every machine runs the same simulation and they only
+trade orders. Which means the engine checksums its own state every turn to catch drift,
+and multiplayer replays *record those checksums*. So a reimplementation isn't a matter of
+opinion: run it against a real recorded match and the game tells you which turn you got
+wrong, and which subsystem.
 
-Rise of Nations is a lockstep RTS: every client runs the same simulation and exchanges
-only orders. That property is why this is possible at all. It also means "did we get it
-right" has an answer that isn't a matter of taste — the engine computes a checksum over
-its own simulation state every turn, and multiplayer recordings carry those checksums.
-We can run our simulation against a real recorded match and find out, turn by turn,
-channel by channel, exactly where we diverge.
+Everything here is derived from the shipped binary and data files rather than from the
+modding community's twenty years of notes. That started as discipline and turned out to
+be necessary — a lot of what everyone knows is wrong:
 
-The goal is an environment fast enough to train in and faithful enough that what an agent
-learns is about *Rise of Nations* rather than about our approximation of it.
+- The damage formula isn't `attack × modifiers − armor`. Armor comes out **mid-chain**,
+  with five more multipliers after it, and the minimum-1 floor is conditional.
+- Borders aren't splines. That class just draws the ribbon; the sim is a per-cell integer
+  radius, hard-capped at 44 tiles for a plain city and 96 fully teched.
+- Squads don't lose soldiers to damage. Nothing in the damage path kills a guy.
+- The AI cheats, by up to **2.29× income** at Toughest vs Tough, on identical towns.
+- `economic.bhs`, shipped in 2003, has an infinite loop: it tests `== 0` where the engine
+  returns `-1`.
+- Four milliseconds matter — the tick is 67 ms, not the 15 Hz the data files imply.
 
-## The one rule
+## State
 
-**Ground truth is the binary, the shipped data, or the live process. Nothing else.**
+Reverse engineering is mostly done; the simulation is early.
 
-Twenty years of community documentation exists and we use none of it as a source. Not
-because it's bad — much of it is careful, and where it's right we now know exactly *how*
-right — but because a plausible number is indistinguishable from a correct one until
-something independent disagrees, and tests written from folklore agree with folklore.
+- 22,750 functions and 19,914 types recovered, with field-level layouts
+- `.rcx` replay format decoded — 1,296,192 of 1,296,194 command packages round-trip
+  byte-exact across 61 recordings
+- Two processes play a lockstep game over TCP with a hand-built replacement netcode DLL
+- RL env runs at ~98,000 steps/s across 1024 environments, ~4,600× real time
+- …but 34% of actions it accepts still do nothing, because the mechanics behind them
+  aren't written yet
 
-The corollaries were all paid for:
-
-- Every claim is marked `[measured]` (verified here) or `[reported]` (read, unchecked).
-- **Capture, don't calculate.** Test expectations come from the binary, never from
-  arithmetic we did ourselves. This rule exists because we broke it and got caught.
-- Decompiled C is a hypothesis. Ghidra silently reorders integer and floating-point
-  operations on this profile — wrong in precisely the dimension that matters here.
-- Differential testing is *testing*. We hold no formal semantics of Rust or x86, so
-  nothing in this project is "verified" in the sense a proof assistant means it.
-
-## Where it actually stands
-
-The reverse engineering is substantially done. The game ships its own full PDB — 22,750
-named functions, 19,914 types, field-level layouts, source filenames — which we found
-late, having spent a day deriving by hand what it would have handed us. That day wasn't
-wasted: it produced an independent derivation, and the agreement rate between the two
-(86.5% of ~869 claims about the right function, 719/721 rule constants exact, 1,659/1,659
-vtables) is a stronger statement about the method than either source alone.
-
-The simulation is early. Mechanics are being ported subsystem by subsystem against the
-engine's own 15 checksum channels, each with tests, most currently at "behaviourally
-faithful, divergence unmeasured." The RL environment runs — around 98,000 env-steps/s at
-1024 environments, a ~4,600× real-time factor — and reports that **34% of applied actions
-currently produce no effect**, which is the honest measure of how much of it is still
-surface.
-
-## The character of the work
-
-The findings we're proudest of are mostly corrections:
-
-- The community damage formula is wrong in *structure*, not just constants.
-- Borders aren't spline-based; that class only draws the ribbon.
-- The pathfinder we first derived was the caravan-road pathfinder.
-- The "3-sub-unit damage division" everyone documents does not exist in this build.
-- Our own differential tests once compared retail against a *copy* of our code rather
-  than our code, and would have passed forever while we drifted.
-
-An adversarial reviewer reads every wave and has, more than once, been wrong about work
-that was right. Nothing here is trustworthy because someone asserted it; things are
-trustworthy in proportion to what would have had to fail for them to be false.
+Combat, economy, production, cities, borders, fog, projectiles and scoring are ported
+with tests. Movement, pathfinding, terrain and map generation are not.
