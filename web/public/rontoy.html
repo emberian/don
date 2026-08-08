@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>rontoy — live economy coach</title>
 <link rel="icon" href="data:,">
 <style>
@@ -243,11 +243,11 @@
         <div class="quality">
           <div class="quality-cell"><div class="quality-label">overall confidence</div><div id="overallConfidence" class="quality-value">—</div></div>
           <div class="quality-cell"><div class="quality-label">frame / coherence</div><div id="frameCoherence" class="quality-value">—</div></div>
-          <div class="quality-cell"><div class="quality-label">rate-cache age</div><div id="rateCacheAge" class="quality-value">—</div></div>
+          <div class="quality-cell"><div class="quality-label">rate-cache age (simulation)</div><div id="rateCacheAge" class="quality-value">—</div></div>
           <div class="quality-cell"><div class="quality-label">snapshot age</div><div id="snapshotAge" class="quality-value">—</div></div>
           <div class="quality-cell"><div class="quality-label">transport</div><div id="transportState" class="quality-value">—</div></div>
         </div>
-        <div class="protocol-note">Accepts newline-independent JSON snapshots with <code>schema: "rontoy.snapshot"</code> and <code>version: 1</code>. Use <code>?ws=ws://host:port/path</code> to attach a stream; without it this page runs a labeled deterministic demo.</div>
+        <div class="protocol-note">Consumes admitted aggregate economy envelopes from the same-origin RoNtoy host at <code>/v1/stream</code>. Use <code>?sse=/v1/stream</code> when host-served; without it this page runs a labeled deterministic demo. Advice requires a complete single-frame capture.</div>
       </section>
     </aside>
   </main>
