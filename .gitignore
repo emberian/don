@@ -11,3 +11,8 @@ re/logs/
 # Build output
 target/
 *.rlib
+
+# Live captures are game data (copyrighted); reproduce with the probes in docs/.
+schema/live/*.bin
+schema/live/*.txt
+re/decomp-all/
