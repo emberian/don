@@ -43,7 +43,11 @@ build timestamp in `docs/binary-ground-truth.md` exactly. So a replay self-ident
 build that produced it, and version-sensitivity of playback (long noted by the community)
 has a concrete mechanism.
 
-`0x28` immediately preceding the string is a plausible length field; not yet confirmed.
+**CORRECTION [measured]: `0x28` is NOT a length field.** It is the character `(` — the
+version string decodes as `"(Version: 00.2024.06.2000)"`. `0x16` and `0x42` are single-byte
+section tags written by `SaveGame::walk_tag` (`FUN_0043d840`), and `0x1a` = 26 is the
+UTF-16 *character count* of the string. My speculation above was wrong; see
+`docs/derivation/replay-io.md`.
 
 ## Corpus available
 
@@ -62,6 +66,32 @@ explicitly as `C:\Users\<name>\...`. Copy out with the certutil base64 hop docum
 
 Replays are the user's own gameplay but derive from the game; `ron-data/replays/` is
 gitignored.
+
+## What it actually is [measured]
+
+A `.rcx` is a **save-game prefix plus a lockstep command stream**: a `SaveGame`-serialised
+header written by the *same* `DataWalk` visitor as save games and the checksum
+(`Game::walk_data` = `FUN_00589600`), then a ~1 MB state blob, then command-package records
+to the last byte.
+
+Records are framed `u32 frame, u32 play, u32 valid, u32 stamp, u16 size, u8 data[size]`
+(18 bytes). Commands are decoded by `CommandPackage::process` = `FUN_0094a700`, an
+**82-opcode switch (0x00–0x51) whose every handler returns the packet's byte length** — the
+function *is* the wire format. Parser: `re/scripts/rcx_parse.py`.
+
+The engine records **uncompressed** to `recordgame.tmp`, then streams it through a gz-mode
+file and renames over the target — which is why the gzip member starts at offset 0.
+
+**Opcode `0x39` `check_sums` is 65 bytes: the sixteen `check_all` channels in order.**
+Multiplayer replays carry them per turn; single-player replays carry none (gated on the
+network-game flag). Two players' 16-tuples matched byte-for-byte across 27,473 turns —
+direct evidence that the engine is deterministic across machines.
+
+**Single-player replays record only the human's commands** (`play == 0` for every record);
+the AI emits nothing, so replaying a solo game requires running the shipped AI
+deterministically.
+
+`GameInfo+0x04` differs in all six specimens and is the **leading seed candidate**.
 
 ## Next
 

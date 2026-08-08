@@ -4,9 +4,11 @@
 //! `docs/CHARTER.md`. Community documentation is never a source.
 
 pub mod offsets;
+pub mod rules;
 pub mod value;
 
-pub use value::{Number, RuleValue};
+pub use rules::{Parser, RuleField, RuleSlot, Rules, FIELDS, RULES_DWORDS, SHIPPED, SLOTS};
+pub use value::{as_int, as_scaled, wtoi, Number, RuleValue};
 
 #[cfg(test)]
 mod ground_truth {

@@ -45,5 +45,17 @@ pub mod world;
 
 pub use batch::Batch;
 pub use interleave::LaneBatch;
-pub use mechanics::hash_into_range;
+pub use mechanics::{
+    balance_index, damage, damage_traced, entrench_dir_level, flank_level, get_armor,
+    get_attack, hash_into_range, CombatRules, DamageInput, DamagePredicates, UnreachedTerms,
+    STEP_NAMES,
+};
+pub use mechanics::{
+    attrition_fires, attrition_interval_scale, attrition_period_frames,
+    attrition_recompute_due, clamp_cost_to_ramp_ceiling, commerce_cap, cost_ramp_ceiling,
+    credit_resource, merge_attrition_period, ramped_rate, rate_after_game_option,
+    resource_period, resource_tick, AttritionInput, AttritionPredicates, CommerceCapGates,
+    EconomyRules, ResourceTick, ResourceTickInput, RES_FOOD, RES_KNOWLEDGE, RES_TIMBER,
+    RES_WEALTH,
+};
 pub use world::{Handle, World, MAP_SPAN, MAX_UNITS, TICK_HZ};

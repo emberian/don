@@ -6,4 +6,5 @@ description = "Binary oracle: map riseofnations.exe and call retail functions fo
 
 [dependencies]
 don-pe = { path = "../don-pe" }
+don-sim = { path = "../don-sim" }
 libc = "0.2"

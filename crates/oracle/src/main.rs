@@ -5,6 +5,9 @@
 //! essential when we do not yet know which functions are reachable with fabricated
 //! inputs (see the ISLAND / SELF-CALL / DATA-ONLY taxonomy in docs/oracle-architecture.md).
 
+mod damage_env;
+mod damage_test;
+
 use don_pe::PeImage;
 use std::ffi::c_void;
 
@@ -624,6 +627,40 @@ fn main() {
             let ok = combat_difftest(&m, &pe, n);
             if !ok {
                 std::process::exit(1);
+            }
+        }
+        "damage" | "damage-vectors" => {
+            // FUN_00644130 is not an ISLAND: it walks two objects, four vtables, the
+            // RULES singleton, the game object, the player array, the map, two object
+            // tables and a city table. damage_env builds all of that; see its header for
+            // what the construction does and does not buy us.
+            let reloc = |va: u32| m.addr_of_rva(va - pe.image_base) as u32;
+            let wr32 = |va: u32, v: u32| unsafe {
+                std::ptr::write_unaligned(m.addr_of_rva(va - pe.image_base) as *mut u32, v)
+            };
+            let wr16 = |va: u32, v: u16| unsafe {
+                std::ptr::write_unaligned(m.addr_of_rva(va - pe.image_base) as *mut u16, v)
+            };
+            let mut arena = damage_env::Arena::new().expect("arena");
+            damage_env::build(&mut arena, &reloc);
+            damage_test::install_globals(&arena, &wr32);
+            let f = reloc(damage_env::VA_DAMAGE);
+
+            if args[1] == "damage-vectors" {
+                damage_test::print_vectors(&arena, f, &wr32, &wr16);
+            } else {
+                let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200_000);
+                let seed: u64 = args
+                    .get(3)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0x2545_F491_4F6C_DD1D);
+                println!("damage differential test: retail FUN_00644130 vs don_sim::damage");
+                println!("  fabricated world at {:#010x}, seed {seed:#x}", arena.addr(0));
+                let rep = damage_test::run(&arena, f, n, seed, &wr32, &wr16);
+                damage_test::print_report(&rep);
+                if rep.mismatches != 0 || rep.unexpected_panics != 0 {
+                    std::process::exit(1);
+                }
             }
         }
         "difftest" => {

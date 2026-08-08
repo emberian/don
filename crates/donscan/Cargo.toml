@@ -1,0 +1,24 @@
+[package]
+name = "donscan"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Native Windows heap scanner: types a live riseofnations.exe heap by vtable pointer."
+
+# Windows-only. Excluded from the root workspace (see ../../Cargo.toml) because it
+# cannot link on arm64-apple-darwin. Built with cargo-xwin, see README.md.
+
+[dependencies]
+# deliberately none: raw kernel32 FFI + a hand-rolled JSON reader/writer, so the
+# cross-build has no C shims and no vendored crates to fight.
+
+[[bin]]
+name = "donscan"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
