@@ -115,3 +115,11 @@ which is what stages 4–6 depend on.
   Process lesson worth keeping: the first unit test had hand-computed expectations and one
   was wrong (-47 vs retail's **-247**). Expectations are now captured via `oracle vectors`.
   **Capture, do not calculate.**
+- **Derivation scaled from manual to automated.** `oracle sweep` probes every ISLAND under
+  fork isolation and records: faults with fabricated inputs / deterministic across repeats
+  / output varies with controllable state. Early results (463 of 2,135): **298 fault,
+  165 callable**, i.e. roughly a third of ISLANDs are genuinely drivable — the rest need
+  live globals despite having no calls or off-`.text` refs. Many callable ones return
+  values in the mapped-image range, so they are address computations (`lea`-style
+  accessors) rather than formulas. The `varies_with_state: true` subset is the
+  differential-testing worklist.

@@ -301,6 +301,92 @@ fn difftest(m: &Mapped, pe: &PeImage, trials: u32) -> bool {
     all_ok && all_ok_outer
 }
 
+
+/// Characterise a function by probing it under fork isolation.
+///
+/// For each candidate we ask three questions that decide whether it is usable as a
+/// differential-testing target at all:
+///   * does it fault with fabricated inputs (needs live globals -> not usable)
+///   * is it deterministic (same inputs twice -> same output)
+///   * does the output actually depend on the arguments, or on the `this` buffer
+///
+/// A function that faults, or that ignores everything we can control, cannot be
+/// differentially tested from fabricated inputs, and saying so up front is cheaper than
+/// discovering it one function at a time.
+fn sweep(m: &Mapped, pe: &PeImage, list: &str, out_path: &str) {
+    use std::io::Write;
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        state ^= state << 13; state ^= state >> 7; state ^= state << 17; state
+    };
+    let obj = unsafe {
+        libc::mmap(std::ptr::null_mut(), PAGE * 4,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) as *mut u8
+    };
+
+    let text = std::fs::read_to_string(list).expect("island list");
+    let mut out = std::fs::File::create(out_path).expect("create out");
+    let (mut faulted, mut det, mut arg_dep, mut this_dep, mut total) = (0, 0, 0, 0, 0);
+
+    for line in text.lines() {
+        // minimal field pull; avoids a JSON dependency in a 32-bit musl build
+        let Some(ea) = line.split("\"ea\":\"").nth(1).and_then(|s| s.split('"').next()) else { continue };
+        if !line.contains("\"class\":\"ISLAND\"") { continue; }
+        let Ok(va) = u32::from_str_radix(ea, 16) else { continue };
+        if va < pe.image_base { continue; }
+        total += 1;
+
+        let f = m.addr_of_rva(va - pe.image_base);
+        let seed_a = next();
+        let seed_b = next();
+
+        // probe in a child: same inputs twice, then varied args, then varied this
+        let probe = |sa: u64, sb: u64| -> Result<u32, String> {
+            in_child(move || {
+                unsafe {
+                    for i in 0..(PAGE * 4) / 8 {
+                        std::ptr::write_unaligned(
+                            (obj as *mut u64).add(i),
+                            sa.wrapping_mul(i as u64 + 1) ^ sb,
+                        );
+                    }
+                }
+                let g: extern "C" fn(u32, u32, u32, u32) -> u32 = unsafe { std::mem::transmute(f) };
+                let r: u32;
+                unsafe {
+                    std::arch::asm!("call {f}", f = in(reg) f,
+                        in("ecx") obj, lateout("eax") r, clobber_abi("C"));
+                }
+                let _ = g;
+                r
+            })
+        };
+
+        let r1 = probe(seed_a, seed_b);
+        if let Err(e) = &r1 {
+            writeln!(out, "{{\"ea\":\"{ea}\",\"status\":\"fault\",\"detail\":\"{e}\"}}").ok();
+            faulted += 1;
+            continue;
+        }
+        let r1 = r1.unwrap();
+        let r1b = probe(seed_a, seed_b);
+        let deterministic = matches!(r1b, Ok(v) if v == r1);
+        if deterministic { det += 1; }
+        let r2 = probe(seed_b, seed_a);
+        let varies = matches!(r2, Ok(v) if v != r1);
+        if varies { this_dep += 1; }
+        let _ = &mut arg_dep;
+
+        writeln!(out,
+            "{{\"ea\":\"{ea}\",\"status\":\"ok\",\"det\":{deterministic},\"varies_with_state\":{varies},\"r\":{r1}}}"
+        ).ok();
+    }
+    unsafe { libc::munmap(obj as *mut c_void, PAGE * 4) };
+    println!("sweep: {total} ISLANDs probed | {faulted} faulted | {det} deterministic | {this_dep} vary with input state");
+    println!("wrote {out_path}");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -374,6 +460,11 @@ fn main() {
             for (a, b, lo, hi) in cases {
                 println!("assert_eq!(hash_into_range({a}, {b}, {lo}, {hi}), {});", g(a, b, lo, hi));
             }
+        }
+        "sweep" => {
+            let list = args.get(2).map(|s| s.as_str()).unwrap_or("islands.jsonl");
+            let outp = args.get(3).map(|s| s.as_str()).unwrap_or("sweep.jsonl");
+            sweep(&m, &pe, list, outp);
         }
         "difftest" => {
             let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100_000);
