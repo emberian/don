@@ -65,7 +65,7 @@ it is the engine telling us how much of a class is sim-critical.
 
 | # | channel | checker | element walker | walked / sizeof | Rust module | status |
 |--:|---|---|---|---:|---|---|
-| 1 | `units` | `check_units` `0x009371D0` | `Unit::walk_data` `0x0060CF40` | 111 / 344 | `movement`, `groups_guys`, `combat`, `air`, recovered `naval` | partial |
+| 1 | `units` | `check_units` `0x009371D0` | `Unit::walk_data` `0x0060CF40` | 111 / 344 | `movement`, `groups_guys`, `combat`, `air`, `naval` | partial |
 | 2 | `builds` | `check_builds` `0x00937290` | `BuildData::walk_data` `0x0062F270` | 28 / 220 | `production` | partial |
 | 3 | `walls` | `check_walls` `0x00937360` | `WallData::walk_data` `0x00642510` | 30 / 112 | `walls`, `production` | partial |
 | 4 | `ammo` | `check_ammo` `0x009374E0` | `AmmoData::walk_data` `0x0067AB50` | 100 / 108 | `ammo`, `air` | partial |
@@ -74,14 +74,14 @@ it is the engine telling us how much of a class is sim-critical.
 | 7 | `guys` | `check_guys` `0x00937430` | `GuyData::walk_data` `0x005E0210` | 155 / 188 | `groups_guys` | partial |
 | 8 | `leaders` | inline in `check_all` | `LeaderData::walk_data` `0x006D6750` | 27182 / 28388 | `economy`, `tech_cities`, `victory_score` | partial |
 | 9 | `cities` | `check_cities` `0x00937600` | `City::walk_data` `0x00489220` | 110 / 192 | `tech_cities` | partial |
-| 10 | `items` | `check_items` `0x00937790` | `Item::walk_data` `0x00677150` | 22 bytes per live item (re-audited) / 44 | recovered `items` | quarantined, uncompiled |
+| 10 | `items` | `check_items` `0x00937790` | `Item::walk_data` `0x00677150` | 22 bytes per live item (re-audited) / 44 | `items` | partial; compiled, no runtime producer |
 | 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 1 / 48 | `economy` (`goods_channel`) | partial |
 | 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | unresolved / 372 | `borders_fog` **and** `map_terrain` | partial, **contested** |
-| 13 | `rules` | inline | `Game::walk_rules_data` `0x00589550` | — | **none** | **absent** |
+| 13 | `rules` | inline | `Game::walk_rules_data` `0x00589550` | 997,846 bytes in the live shipped walk | `rules_channel` | partial; exact walker, incomplete checked-in inputs |
 | 14 | `scenario` | inline | `ScenarioData::walk_data` `0x00997AD0` | — | **none** | **absent** |
 | 15 | `script` | inline | `RunTimeEnv::walk_data` `0x009C41A0` | — | **none** | **absent** |
 
-**Eleven declared partial, one recovered-but-quarantined, three absent, zero complete.** No
+**Thirteen partial, two absent, zero complete.** No
 module reproduces a whole integrated channel, and nothing composes the fifteen into a
 `check_all` equivalent — there is no Rust function that returns a comparable checksum for a
 whole world.
@@ -92,13 +92,13 @@ Three findings that fall out of the table:
   themselves the `world` channel in their module headers, and each carries its own
   `world_checksum` / `checksum` and its own `adler32`. They will not agree. One of them has
   to become the walker and the other its caller before either can be validated.
-* **`adler32` is implemented nine times including quarantined `items`** — in `ammo`,
+* **`adler32` is implemented nine times across compiled modules** — in `ammo`,
   `borders_fog`, `economy`, `groups_guys`, `items`, `movement`, `production`,
   `tech_cities`, and `victory_score`. The checksum primitive is exactly the thing that must
   be singular.
-* **Channels 5 and 10 (`deaths`, `items`) now have claimants but no integrated producer.**
-  `combat.rs` implements `DeathRing`/`check_deaths`; recovered `items.rs` implements a
-  goody-box walker but remains quarantined outside `systems/mod.rs` after its isolated audit.
+* **Channels 5 and 10 (`deaths`, `items`) now have compiled claimants but no integrated producer.**
+  `combat.rs` implements `DeathRing`/`check_deaths`; `items.rs` implements a
+  goody-box walker but remains disconnected from runtime item state and replay setup.
 
 ### 1.1 Correction: `check_all` does not return the sum
 
@@ -347,11 +347,10 @@ The allowlist is `mechanics.rs`, `world.rs`, `simd.rs`, `objects.rs`, `balance.r
 `rng.rs`, `batch.rs`, `lib.rs`. It is an inventory convenience, not proof that every line
 is reached or that other files are not—`world.rs`, for example, calls `trig.rs`.
 
-The other bucket includes **all twelve declared `systems/*.rs` modules** — `air`, `ammo`,
+The other bucket includes **all fourteen declared `systems/*.rs` modules** — `air`, `ammo`,
 `borders_fog`, `combat`, `economy`, `groups_guys`, `map_terrain`, `movement`, `production`,
-`tech_cities`, `victory_score`, `walls` — plus `schedule.rs`, `order.rs`, `interleave.rs`,
-`container.rs`, `generated/state.rs`. (`items.rs` and `naval.rs` also exist as recovered,
-undeclared debris and are therefore outside this generated snapshot.) Grepping for
+`tech_cities`, `victory_score`, `walls`, `items`, `naval` — plus `schedule.rs`, `order.rs`,
+`interleave.rs`, `container.rs`, `generated/state.rs`. Grepping for
 `systems::` outside `crates/don-sim/src/systems/` finds three textual matches: two
 `#[deprecated]` strings and one `pub use`. Those are not tick calls. Direct review confirms
 at least air and walls have no runtime caller, but a real Rust call/path analysis is still
@@ -368,10 +367,9 @@ executes it.
 
 ### 5.1 Build state at audit time
 
-Current recovery gates are `cargo test -p don-sim --lib`: **643 passed, 0 failed**, and
-`cargo test --workspace --all-targets`: **809 passed, 0 failed**. The earlier 565-test figure
-predated air/walls and other concurrent lane work; every Rust-side count here should still be
-regenerated before it is quoted in a later checkpoint.
+The current recovery gates are `cargo test -p don-sim --lib`: **759 passed, 0 failed**, and
+`cargo test --workspace --all-targets`: **931 passed, 0 failed**. This includes 49 focused
+items tests, 65 focused naval tests, six Rules-channel unit tests, and one Rules corpus gate.
 
 Note what a green suite does and does not say. Local tests exercise modules against their own
 derivations, while the runnable `World::step` is only a partial driver and does not establish
@@ -394,9 +392,10 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    The command→order bridge, 23 call sites, and the reason `groups.cpp` is 4.4 % named
    despite 105 KB reachable. Only the `move_to` leg has ever been traced end to end.
 4. **The five runtime-orphan channels — `deaths` (5), `items` (10), `rules` (13),
-   `scenario` (14), `script` (15).** Deaths has an isolated `combat` implementation and
-   items has quarantined recovery code; rules, scenario, and script have no channel producer.
-   None of the five is connected to runtime checksum state.
+   `scenario` (14), `script` (15).** Deaths and items have compiled isolated implementations;
+   rules now has an exact compiled walker with a live match at `0x12ba3104`, but still lacks
+   checked-in builders for all type and Tribe inputs. Scenario and script remain absent. None
+   of the five is connected to runtime checksum state.
 5. **Consolidate channel 12 and the eight `adler32`s.** `borders_fog` and `map_terrain`
    both claim `world` with incompatible implementations. Until one walker wins, neither
    can be validated, and the checksum primitive must be singular by construction.
@@ -438,10 +437,9 @@ Two sentences each, per the standing rule.
   accounting for `calc_cost` in its header. That open question should be closed and
   re-pointed at whether the port is *right*, which is untested.
 * **`crates/don-sim/src/systems/mod.rs` header — "only `ammo` was compiled and tested".**
-  Stale in the other direction: twelve declared modules now compile in the workspace suite;
-  two recovered files (`items`, `naval`) remain undeclared and therefore uncompiled. The
-  header's real warning — that a missing `pub mod` line silently strands a module — is still
-  correct and still worth keeping.
+  Stale in the other direction: fourteen declared modules now compile in the crate suite,
+  including the recovered `items` and `naval` modules. The header's real warning — that a
+  missing `pub mod` line silently strands a module — remains correct and worth keeping.
 
 ---
 

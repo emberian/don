@@ -25,7 +25,7 @@
  },
  "don_sim_source_partition": {
   "runtime_core_allowlist": {
-   "lines": 4965,
+   "lines": 5297,
    "procs": 32,
    "files": [
     "crates/don-sim/src/balance.rs",
@@ -40,7 +40,7 @@
    "retail_bytes": 89241
   },
   "other": {
-   "lines": 42009,
+   "lines": 63287,
    "procs": 530,
    "files": [
     "crates/don-sim/src/bin/bench.rs",
@@ -159,7 +159,7 @@
    "checker": "CheckSums::check_items",
    "walker": "Item::walk_data 0x00677150",
    "rust_modules": "items",
-   "status": "recovered_uncompiled"
+   "status": "partial"
   },
   {
    "idx": 11,
@@ -185,8 +185,8 @@
    "checker_va": "inline",
    "checker": "Game::walk_rules_data",
    "walker": "Types + Balance walk_rules_data",
-   "rust_modules": "",
-   "status": "absent"
+   "rust_modules": "rules_channel",
+   "status": "partial"
   },
   {
    "idx": 14,
@@ -9340,13 +9340,13 @@
   ]
  },
  "citations_per_crate": {
-  "don-sim": 2135,
+  "don-sim": 2143,
   "don-rules": 756,
-  "don-replay": 370,
+  "don-replay": 374,
   "don-ai": 136,
   "oracle": 64,
   "don-net": 34,
-  "donscan": 18,
+  "donscan": 17,
   "don-env": 10,
   "netsys-shim": 9,
   "don-gpu": 2
@@ -9354,12 +9354,12 @@
  "external_system_references": [
   {
    "file": "crates/don-sim/src/mechanics.rs",
-   "line": 1244,
-   "text": "#[deprecated(note = \"use crate::systems::production::train_time_ramp, which has the enclosing derivation\")]"
+   "line": 1285,
+   "text": "note = \"use crate::systems::production::train_time_ramp, which has the enclosing derivation\""
   },
   {
    "file": "crates/don-sim/src/mechanics.rs",
-   "line": 1285,
+   "line": 1327,
    "text": "#[deprecated(note = \"use crate::systems::production, which carries the measured class selection\")]"
   },
   {

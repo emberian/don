@@ -279,10 +279,10 @@ CHANNELS = [
     (7,  "guys",       "0x00937430", "CheckSums::check_guys",      "GuyData::walk_data 0x005E0210",    "groups_guys",          "partial"),
     (8,  "leaders",    "inline",     "LeaderData::walk_data",      "LeaderData::walk_data 0x006D6750", "economy,tech_cities,victory_score", "partial"),
     (9,  "cities",     "0x00937600", "CheckSums::check_cities",    "City::walk_data 0x00489220",       "tech_cities",          "partial"),
-    (10, "items",      "0x00937790", "CheckSums::check_items",     "Item::walk_data 0x00677150",       "items",                "recovered_uncompiled"),
+    (10, "items",      "0x00937790", "CheckSums::check_items",     "Item::walk_data 0x00677150",       "items",                "partial"),
     (11, "goods",      "0x00937710", "CheckSums::check_goods",     "Good::walk_data 0x0066E5D0",       "economy",              "partial"),
     (12, "world",      "inline",     "World::walk_data",           "World::walk_data 0x006B5CF0",      "borders_fog,map_terrain", "partial"),
-    (13, "rules",      "inline",     "Game::walk_rules_data",      "Types + Balance walk_rules_data",  "",                     "absent"),
+    (13, "rules",      "inline",     "Game::walk_rules_data",      "Types + Balance walk_rules_data",  "rules_channel",          "partial"),
     (14, "scenario",   "inline",     "ScenarioData::walk_data",    "ScenarioData::walk_data 0x00997AD0", "",                   "absent"),
     (15, "script",     "inline",     "RunTimeEnv::walk_data",      "RunTimeEnv::walk_data 0x009C41A0", "",                     "absent"),
 ]
