@@ -11,9 +11,17 @@ re/logs/
 # Build output
 target/
 *.rlib
+__pycache__/
+*.py[cod]
 
 # Live captures are game data (copyrighted); reproduce with the probes in docs/.
 schema/live/*.bin
 schema/live/*.txt
+# RoNtoy captures can contain player names, diplomacy/chat state, and other live-session
+# material. Runtime output belongs here; only synthetic/redacted fixtures belong in git.
+var/rontoy/
+*.donfeed
+schema/live/rontoy-*.json
+schema/live/rontoy-*.ndjson
 re/decomp-all/
 ron-data/replays/
