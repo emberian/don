@@ -20,34 +20,45 @@ Artefacts: `/Users/ember/dev/don/web/` (app), `/Users/ember/dev/don/web/results.
 
 ## 0. Headline
 
-**A working WebGPU spectator renders 4,096 independent simulated worlds — 262,144 units —
-at the display's full 120 fps on an Apple M2 Max, with 1.08 ms of GPU time and ~2.8 ms of
-total CPU per frame, while stepping every world one simulation tick per rendered frame.**
-[measured] At the *single-world* scale a spectator actually watches (one world, up to 4,096
-units) the whole per-frame CPU cost is **0.05 ms** and the GPU cost is **0.19 ms**, i.e.
-about 1.5% of a 120 Hz frame budget. The 60 fps bar in the lane brief is not close to
-binding; the display refresh is.
+**A working WebGPU spectator holds this display's full 120 fps while simulating and drawing
+4,096 independent worlds — 262,144 units — one simulation tick per rendered frame, on an
+Apple M2 Max.** [measured] It costs 1.08 ms of GPU time and 3.05 ms of CPU on the render
+thread, or **0.94 ms of render-thread CPU** when the simulation is moved onto four workers.
+At the single-world scale a spectator actually watches (one world, up to `MAX_UNITS` = 4,096
+units) the whole per-frame CPU cost is **0.062 ms** and the GPU cost **0.15 ms** — 0.7% and
+1.8% of a 120 Hz frame. Above the readability threshold the aggregate view draws a
+**1,048,576-unit, 16,384-world** cluster for 0.15 ms of GPU. The 60 fps bar in the lane brief
+is nowhere near binding; the display refresh is.
 
-The design claim underneath that, and the one worth arguing about:
+Separately, and the number that matters for the RL endgame: **1,024 worlds simulate at about
+1,000× real time in a browser tab** (16.1 M world-steps/s across 12 workers) while all of
+them render at refresh rate.
+
+The design claim underneath all of it, and the one worth arguing about:
 
 > **`don-sim`'s SoA columns are already the layout the GPU's vertex stage wants.** Bind
-> `pos_x` as one vertex buffer with `format: 'sint32'` and `stepMode: 'instance'`, `pos_y`
-> as another, and the per-frame CPU work collapses to one `queue.writeBuffer` per column.
-> There is no interleaved per-instance struct anywhere in this system, so there is no
-> repack pass, no `f32` conversion pass, and no per-entity CPU loop at all.
+> `pos_x` as one vertex buffer with `format: 'sint32'` and `stepMode: 'instance'`, `pos_y` as
+> another, and the per-frame CPU work collapses to one `queue.writeBuffer` per column. There
+> is no interleaved per-instance struct anywhere in this system, so there is no repack pass,
+> no `f32` conversion pass, and no per-entity CPU loop at all.
 
-Three honest qualifications, each measured:
+Four qualifications, each measured, each of which changed what I would have said:
 
-1. **The cluster path pays one CPU copy that the single-world path does not**, because
-   `don_sim::Batch` allocates each world's columns separately and an instanced draw over
-   thousands of worlds needs one contiguous range. Measured at §4.3.
-2. **Moving the simulation onto N workers does not raise the frame rate** — the renderer
-   consumes whatever has been published — **it raises simulation throughput**, and that
-   scaling is sublinear and modest at these sizes. Measured at §4.5.
-3. **This machine was at load average 65–145 during every measurement** (it is shared with
-   other lanes and a running Parallels VM). Every CPU-side number below is therefore a
-   *pessimistic* sample with real spread, and the spread is reported rather than averaged
-   away. GPU-timestamp numbers are far less affected.
+1. **The cluster path pays one CPU copy the single-world path does not** — `don_sim::Batch`
+   gives every world its own `Vec` per column, and an instanced draw across thousands of
+   worlds needs one contiguous range. It costs a fifth to a third of the upload it precedes
+   (§4.3), which is *smaller* than I expected and reorders what is worth fixing.
+2. **Moving the sim onto N workers does not raise the frame rate.** The renderer draws
+   whatever has been published, so fps moves 1.08× from 1 to 12 workers. What moves 6.24× is
+   simulation throughput (§4.5). Measuring worker scaling with fps would have concluded that
+   worker parallelism does not work.
+3. **The aggregate view is not a fallback**, it is the correct visualisation below ~18 device
+   pixels per world, and it costs 0.11–0.15 ms of GPU regardless of cluster size because its
+   instance count is the world count (§4.4).
+4. **This machine sat at load average 50–174 throughout** — shared with other lanes and a
+   running Parallels VM. Every CPU-side number is a pessimistic sample with real spread; the
+   spread is reported, not averaged away, and the native reference varies 4× run to run,
+   which is why §4.6 refuses to state a wasm-versus-native ratio.
 
 ---
 
@@ -219,9 +230,18 @@ screenshot is not. Two things fix it:
 - **Automatic switch to the aggregate view below ~18 device pixels per cell.** A world is
   256 tiles across; below that, a cell has under a fourteenth of a pixel per tile and
   individual units cannot be distinguished no matter how they are drawn. At that scale the
-  aggregate view is not a fallback, it is the correct visualisation. Per-world statistics
-  (live count, summed hit points, digest low bits, frame) are gathered in wasm into a
-  16-byte-per-world table and uploaded at UI rate, not frame rate.
+  aggregate view is not a fallback, it is the correct visualisation — and it is also 4–10×
+  cheaper on the GPU (§4.4), because its instance count is the *world* count rather than the
+  unit count. Per-world statistics (live count, summed hit points, digest low bits, frame)
+  are gathered in wasm into a 16-byte-per-world table and uploaded at UI rate, not frame
+  rate.
+- **Two metrics, because one of them is degenerate.** Colouring by population is the obvious
+  choice, and it renders 16,384 identical full worlds as one flat sheet of colour — true,
+  and useless. The alternative is the low bits of each world's `World::digest()`, a **state
+  fingerprint**: two worlds in identical states get identical colours, and a world that
+  diverges visibly changes. That is what a spectator of a *cluster* is actually looking for,
+  and it is what makes a 16,384-cell mosaic worth having on screen. Selector in the panel;
+  the shader picks between them on one uniform bit, so it costs nothing.
 
 ---
 
@@ -245,8 +265,11 @@ Three measurements, because they answer different questions:
 - **GPU timestamp queries** (`timestamp-query`, available on this machine) — the actual GPU
   occupancy of the render pass, and the only number that says how much headroom exists.
 
-Every row runs **3 times** and the report keeps the median and the min/max. The load average
-is recorded with every row. Simulation load is defined as **one simulation tick per rendered
+Every row runs **3 times** and the report keeps the median and the min/max. GPU time is
+itself a median: `lastGpuNs` is whatever query pair resolved most recently, so reading it
+once at the end of a run samples one arbitrary frame — two runs of identical work differed by
+2× that way before this was fixed. It is now sampled every iteration and reduced. The load
+average is recorded with every row. Simulation load is defined as **one simulation tick per rendered
 frame** (`simHz: 0`); note that the engine's real tick rate is 15 Hz against a 120 Hz
 display, so the realistic spectator workload is roughly **8× less simulation per frame** than
 these rows carry.
@@ -254,7 +277,7 @@ these rows carry.
 Machine: Apple M2 Max (38-core GPU, 12 CPU cores, 96 GB), macOS 26.6, Chrome 153.0.7979.3
 dev, WebGPU on Metal 3, `devicePixelRatio` 2, canvas ~2560×1826 device pixels.
 
-**Contamination, stated plainly:** load average was 65–145 throughout, from a running
+**Contamination, stated plainly:** load average was 50–174 throughout, from a running
 Parallels VM, Lean/`lake` builds, `rustc`, and other agents' work. CPU-side timings have
 real spread (the native reference below varies by 4× on the same configuration). This makes
 the CPU numbers *conservative* — the true costs are lower — and it makes any fine-grained
@@ -264,164 +287,192 @@ CPU comparison between two paths unreliable. GPU timestamps and the rAF cap are 
 
 ## 4. Numbers
 
-All rows: WebGPU, Apple M2 Max, canvas 2560×1826 device pixels, one simulation tick per
-rendered frame, median of 3 × 2.5 s. Raw JSON: `web/results.json`. All [measured].
+All rows: WebGPU, Apple M2 Max, canvas 2560x1826 device pixels, **one simulation tick per
+rendered frame**, median of 3 runs x 2.5 s each. Raw JSON: `web/results.json`. Load average
+149 at the start of the run, 77 at the end. Zero page errors or exceptions across the whole
+suite. All [measured].
+
+"Render-thread CPU" is the per-frame cost *on the thread that draws*. On the `sab` path the
+step/gather/copy columns happen on other cores and are shown in italics, because adding them
+to the renderer's budget would be simply wrong.
 
 ### 4.1 One world: frames per second against entity count
 
-The `zerocopy` path — sim in the render worker, vertex buffer filled from `World::pos_x`
-itself, no CPU copy at all.
+`zerocopy` path — sim in the render worker, vertex buffers filled from `World::pos_x` itself,
+**no CPU copy at all**.
 
-| units | rAF fps | uncapped fps | step ms | upload ms | encode ms | **CPU ms/frame** | **GPU ms/frame** |
+| units | rAF fps | uncapped fps | step ms | upload ms | encode ms | render-thread CPU | GPU ms |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 128 | **120.4** | 1030.7 | 0.002 | 0.004 | 0.026 | 0.032 | 0.095 |
-| 512 | **120.4** | 1016.9 | 0.003 | 0.005 | 0.029 | 0.037 | 0.110 |
-| 1,024 | **120.4** | 978.8 | 0.005 | 0.007 | 0.029 | 0.041 | 0.149 |
-| 2,048 | **120.4** | 968.4 | 0.009 | 0.010 | 0.030 | 0.048 | 0.134 |
-| 4,096 | **120.4** | 926.3 | 0.016 | 0.017 | 0.030 | 0.062 | 0.151 |
+| 128 | **120.4** | 1013.6 | 0.001 | 0.004 | 0.026 | **0.031** | 0.108 |
+| 512 | **120.4** | 989.1 | 0.003 | 0.005 | 0.030 | **0.038** | 0.110 |
+| 1,024 | **120.4** | 1004.7 | 0.005 | 0.006 | 0.026 | **0.038** | 0.128 |
+| 2,048 | **120.4** | 957.2 | 0.008 | 0.010 | 0.030 | **0.048** | 0.135 |
+| 4,096 | **120.4** | 894.2 | 0.015 | 0.017 | 0.030 | **0.062** | 0.150 |
 
-`120.4` is this display's refresh rate; the rAF loop is refresh-locked at every size. The
-whole per-frame CPU cost at 4,096 units is **0.062 ms — 0.7% of a 120 Hz frame budget**, and
-the GPU is busy 0.15 ms. `MAX_UNITS` in `don-sim` is 4,096, so this row is the ceiling of
-what a single world can currently hold, and it is not remotely a limit for the renderer.
+120.4 fps is this display's refresh rate; the rAF loop is refresh-locked at every size. At
+4,096 units — `don_sim::MAX_UNITS`, the most a single world can currently hold — the entire
+per-frame CPU cost is **0.062 ms, or 0.7% of a 120 Hz frame budget**, and the GPU is busy
+0.15 ms. Entity count is not the binding constraint on this path by any margin; the display
+is.
 
-Read the uncapped column as **per-frame latency including a full CPU↔GPU fence**: at 128
-units the work is 0.032 ms CPU + 0.095 ms GPU, yet a frame takes 0.97 ms, so ~0.85 ms of it
-is the round trip. It is a useful *comparative* number and a misleading absolute one.
+Read the uncapped column as **per-frame latency including a full CPU-GPU fence**. At 128
+units the work is 0.031 ms of CPU plus 0.108 ms of GPU, and a frame still takes 0.99 ms — so
+about 0.85 ms of it is the round trip. It is a useful comparative number and a misleading
+absolute one.
 
 ### 4.2 Cluster: frames per second against world count
 
-64 units per world. `inline` = one wasm instance in the render worker (one gather copy);
+64 units per world. `inline` = one wasm instance inside the render worker (one gather copy);
 `sab` = 4 sim workers publishing through shared memory.
 
-| worlds | instances | live units | rAF fps (inline) | uncapped (inline) | uncapped (sab ×4) | GPU ms |
-|---:|---:|---:|---:|---:|---:|---:|
-| 16 | 1,024 | 1,024 | **120.4** | 959.4 | 1075.4 | 0.12 |
-| 64 | 4,096 | 4,096 | **120.4** | 902.0 | 1036.0 | 0.13–0.15 |
-| 256 | 16,384 | 16,384 | **120.4** | 778.8 | 907.0 | 0.18 |
-| 1,024 | 65,536 | 65,536 | **120.4** | 463.5 | 651.5 | 0.34 |
-| 4,096 | 262,144 | 262,144 | **120.4** | 170.9 | 295.5 | 1.07 |
+| worlds | instances = live units | rAF fps | uncapped, `inline` | uncapped, `sab` x4 | GPU ms |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 1,024 | **120.4** | 984.6 | 1041.0 | 0.115 |
+| 64 | 4,096 | **120.4** | 903.7 | 1028.5 | 0.126 |
+| 256 | 16,384 | **120.4** | 756.9 | 896.6 | 0.180 |
+| 1,024 | 65,536 | **120.4** | 454.6 | 655.4 | 0.345 |
+| 4,096 | 262,144 | **120.4** | 167.5 | 299.0 | 1.076 |
 
-**The display cap holds at every size measured, including 4,096 worlds and 262,144 units.**
-Where the frame budget actually goes at the top row:
+**The display cap holds at every size measured**, up to 4,096 worlds and 262,144 units, on
+both paths. Where the frame budget goes at the top row:
 
-| 4,096 worlds × 64 units | step | gather | wasm→SAB | upload | encode | **render-thread CPU** | GPU |
+| 4,096 worlds x 64 units | step | gather | wasm→SAB | upload | encode | render-thread CPU | GPU |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `inline` (sim on render thread) | 1.808 | 0.322 | — | 0.862 | 0.062 | **3.054 ms** (37% of a 120 Hz frame) | 1.070 |
-| `sab` ×4 (sim on 4 other cores) | *0.866* | *0.176* | *0.067* | 0.897 | 0.053 | **0.950 ms** (11%) | 1.075 |
+| `inline` (sim on the render thread) | 1.837 | 0.315 | — | 0.836 | 0.061 | **3.049 ms** — 37% of a 120 Hz frame | 1.076 |
+| `sab` x4 (sim on four other cores) | *0.808* | *0.175* | *0.077* | 0.889 | 0.053 | **0.943 ms** — 11% | 1.075 |
 
-*Italic* columns happen on the sim workers, not on the render thread. So the `sab` path's
-real payoff is not frame rate — it is that **the renderer's own per-frame cost drops 3.2×**,
-from 3.05 ms to 0.95 ms, because stepping and gathering left the thread that draws.
+So the `sab` path's real payoff is not frame rate, which is capped anyway: it is that **the
+renderer's own per-frame cost drops 3.2x**, from 3.05 ms to 0.94 ms, because stepping and
+gathering left the thread that draws. The same effect at 1,024 worlds is 0.70 ms → 0.26 ms.
 
-Two caveats on these rows. First, one sim tick per rendered frame at 120 Hz is **8× the
-engine's real 15 Hz tick rate**, so a spectator watching at true speed pays roughly an eighth
-of the `step` column. Second, at 4,096 worlds the auto view switch has *not* engaged (33
-device pixels per cell, threshold 18), so this is the genuinely expensive rendering mode; the
-aggregate view at the same world count costs 0.16 ms of GPU instead of 1.07 ms.
+Two things to hold onto about these rows. First, one sim tick per rendered frame at 120 Hz is
+**8x the engine's real 15 Hz tick rate**, so a spectator watching at true speed pays roughly
+an eighth of the `step` column. Second, at 4,096 worlds the automatic view switch has *not*
+engaged (33 device pixels per cell against an 18 px threshold), so this is the genuinely
+expensive drawing mode — see §4.4.
 
 ### 4.3 What each copy costs
 
-Priced from the same rows, per frame:
+Priced from the rows above, per frame:
 
 | | 1,024 worlds (65,536 cells) | 4,096 worlds (262,144 cells) |
 |---|---:|---:|
-| `sim_gather` (wasm-internal, the cluster mirror) | 0.046 ms → 1.42 G cells/s | 0.322 ms → 814 M cells/s |
-| wasm → SharedArrayBuffer (`sab` only) | 0.028 ms → 585 M cells/s* | 0.067 ms → 980 M cells/s* |
-| `queue.writeBuffer` (unavoidable) | 0.217 ms | 0.862 ms |
+| `sim_gather`, the cluster mirror (`inline`/`sab`) | 0.047 ms → 1.4 G cells/s | 0.315 ms → 0.83 G cells/s |
+| wasm → SharedArrayBuffer (`sab` only, per shard) | 0.024 ms | 0.077 ms |
+| `queue.writeBuffer` — **the copy nobody can avoid** | 0.215 ms | 0.836 ms |
 
-\* per shard, over that shard's quarter of the cluster.
+The copy the cluster path adds is **roughly a fifth to a third of the copy that cannot be
+removed**, and the shared-memory hop is smaller again. Two consequences worth stating:
 
-So the copy the cluster path adds is **roughly a fifth to a third of the copy nobody can
-avoid**, and the shared-memory hop is smaller again. That is the quantitative answer to "is
-the extra copy worth caring about": at these sizes, not very — the upload dominates, and the
-upload is the floor. It also means shared wasm memory (which would delete only the second
-row) would buy less than the `Batch` layout change (which would delete the first).
+- At these sizes the extra copies are not what to optimise. The upload dominates, and the
+  upload is the floor for any design that keeps the simulation in wasm.
+- Shared wasm memory (`+atomics`, `-Zbuild-std`) would delete only the second row, the
+  smallest one. Changing `Batch` to a cluster-native column pool would delete the first,
+  which is 4x larger. If either is ever worth doing, it is the `don-sim` change — and that
+  is the opposite of where I would have guessed before measuring.
 
-### 4.4 Draw alone
+### 4.4 Drawing alone, and what the aggregate view buys
 
-1,024 worlds × 64 units, no stepping and no uploads: **820 fps, 0.41 ms of GPU time**. The
-full pipeline at the same configuration runs 463 fps with 0.34 ms of GPU. The two GPU
-figures agreeing to within noise says the render pass is not affected by the uploads — the
-difference between 820 and 463 fps is entirely CPU-side sim and upload work, which is what
-the breakdown in §4.2 already shows.
+Render only: no stepping, no uploads. This isolates the GPU cost of the two view modes.
+
+| worlds | instances | units view: fps / GPU ms | aggregate view: fps / GPU ms |
+|---:|---:|---:|---:|
+| 1,024 | 65,536 | 817 / **0.342** | 975 / **0.122** |
+| 4,096 | 262,144 | 622 / **0.617** | 998 / **0.114** |
+| 16,384 | 1,048,576 | 361 / **1.472** | 952 / **0.149** |
+
+The aggregate view costs **essentially nothing extra as the cluster grows** — 0.11–0.15 ms
+whether it summarises 1,024 worlds or 16,384 — because its instance count is the *world*
+count, not the unit count. That is what makes it the right answer above the readability
+threshold rather than a consolation prize. At 16,384 worlds x 64 units the page is drawing a
+**1,048,576-instance** unit view at 361 fps, or the aggregate of the same cluster at 952.
+
+One honest wrinkle: draw-only at 4,096 worlds reports 0.617 ms of GPU while the full
+pipeline at the same configuration reports 1.076 ms. Draw-only should be the cheaper of the
+two and it is, but not by the amount that difference implies. The plausible cause is that
+the full pipeline's vertex fetch reads 2 MB of *just-written* buffer each frame while
+draw-only re-reads resident data — that is a **hypothesis, not a measurement**; I did not
+isolate it.
 
 ### 4.5 Simulation throughput against worker count
 
 **This is the axis frame rate cannot see.** The renderer draws whatever the shards have
-published, so render fps barely moves with shard count (649 → 710 fps from 1 to 12 workers).
-What moves is how fast the cluster actually simulates, read from the shards' own frame
-counters over a 2 s window, 1,024 worlds × 64 units:
+published, so render fps barely moves with shard count (653 → 706 fps from 1 to 12 workers,
+§4.2's `shards` sweep). What moves is how fast the cluster actually simulates, read from the
+shards' own frame counters over a 2 s window at 1,024 worlds x 64 units:
 
-| sim workers | M unit-steps/s | M world-steps/s | speed-up | × real time (15 Hz tick) |
+| sim workers | M unit-steps/s | M world-steps/s | speed-up | x real time (15 Hz tick) |
 |---:|---:|---:|---:|---:|
-| 1 | 160.6 | 2.51 | 1.00× | 163× |
-| 2 | 303.5 | 4.74 | 1.89× | 309× |
-| 4 | 517.1 | 8.08 | 3.22× | 526× |
-| 6 | 744.3 | 11.63 | 4.63× | 756× |
-| 8 | 918.0 | 14.34 | 5.71× | 934× |
-| 12 | 991.0 | 15.48 | 6.17× | **1000×** |
+| 1 | 164.7 | 2.57 | 1.00x | 168x |
+| 2 | 307.8 | 4.81 | 1.87x | 313x |
+| 4 | 556.9 | 8.70 | 3.38x | 567x |
+| 6 | 788.2 | 12.32 | 4.79x | 800x |
+| 8 | 946.4 | 14.79 | 5.75x | 963x |
+| 12 | 1028.5 | 16.07 | 6.24x | **1038x** |
 
-**A browser tab simulates 1,024 worlds at about 1,000× real time while rendering all of them
-at the display's refresh rate.** Scaling is near-linear to 4 workers, still good at 8
-(5.71× on 8), and flattens at 12 — on a 12-core machine that was already at load average
-105–127 from other work, with the render worker also running. This is a *floor* on the
-scaling, not a ceiling.
+**A browser tab simulates 1,024 worlds at about 1,000x real time while rendering all of them
+at the display refresh rate.** Scaling is near-linear to 4 workers, still 5.75x at 8, and
+flattens by 12 — on a 12-core machine already at load average 50–80 from other work, with a
+render worker also running. Treat this as a floor on the scaling, not a ceiling.
+
+Measuring shard scaling with fps would have shown a 1.08x "speed-up" and concluded that
+worker parallelism does not work. It was the wrong instrument, and swapping it changed the
+answer by 6x.
 
 ### 4.6 Native reference, and why it is only a sanity check
 
 Same code, host build, single-threaded, median of 5 (`digest bench`):
 
-| configuration | native step ms [min..max] | native M unit-steps/s | wasm-in-browser M unit-steps/s |
+| configuration | native step ms [min..max] | native M unit-steps/s | wasm in browser |
 |---|---:|---:|---:|
-| 1 world × 4,096 units | 0.017 [0.008..0.049] | 247 | 256 |
-| 1,024 worlds × 64 units | 0.241 [0.165..0.701] | 272 | 161 (1 worker) |
-| 4,096 worlds × 64 units | 3.134 [1.383..6.392] | 84 | 145 |
+| 1 world x 4,096 units | 0.017 [0.008..0.049] | 247 | 273 |
+| 1,024 worlds x 64 units | 0.241 [0.165..0.701] | 272 | 165 (1 worker) |
+| 4,096 worlds x 64 units | 3.134 [1.383..6.392] | 84 | 143 |
 
-**The native spread is 4× on the same configuration**, so this table supports exactly one
-conclusion: wasm and native are within the same order of magnitude on this workload, and no
-finer claim is defensible from data taken on a machine at load average 100+. I am
-deliberately not reporting a "wasm is X% of native" figure.
+**The native spread is 4x on the same configuration**, so this table supports exactly one
+conclusion: wasm and native are within the same order of magnitude on this workload. I am
+deliberately not reporting a "wasm is X% of native" figure, because this data cannot carry
+one.
 
-The native numbers do show one structural thing that is not noise, because it is monotone
-across five configurations: **single-threaded step throughput collapses as world count
-rises** — 276 M unit-steps/s at 256 worlds, 272 M at 1,024, 84 M at 4,096, 41 M at 16,384 —
-while a *single* 4,096-unit world sustains 247 M. Same total unit count, 3–6× the cost. The
-work is identical, so the difference is memory layout: 4,096 worlds means ~53,000 small
+The native numbers do show one thing that is not noise, because it is monotone across five
+configurations: **single-threaded step throughput collapses as world count rises** — 276 M
+unit-steps/s at 256 worlds, 272 M at 1,024, 84 M at 4,096, 41 M at 16,384 — while a single
+4,096-unit world sustains 247 M. Identical total unit counts, 3–6x the cost. The arithmetic
+is the same, so the difference is memory layout: 4,096 worlds means roughly 53,000 small
 separate allocations instead of a handful of large ones. See §7.2.
 
 ### 4.7 Cross-target determinism — the check that could have failed
 
-4 worlds × 64 units, capacity 64, seed `0xC0FFEE`, exactly 1,000 frames:
+4 worlds x 64 units, capacity 64, seed `0xC0FFEE`, exactly 1,000 frames:
 
 | build | `Batch::digest()` |
 |---|---|
-| aarch64-apple-darwin, `cargo run --release --bin digest -- digest 4 64 64 1000 0xC0FFEE` | `0x1b07da068f50ba66` |
-| wasm32-unknown-unknown, in Chrome, `window.don.stepFrames(1000)` then `digest()` | `1b07da068f50ba66` |
+| aarch64-apple-darwin — `cargo run --release --bin digest -- digest 4 64 64 1000 0xC0FFEE` | `0x1b07da068f50ba66` |
+| wasm32-unknown-unknown in Chrome — `window.don.stepFrames(1000)` then `digest()` | `1b07da068f50ba66` |
 
 **Identical.** Two independently compiled targets — one where LLVM autovectorises `don-sim`'s
 tick kernels to NEON, one where it does not — agree bit-for-bit on a 64-bit digest after
-256,000 unit-frames. This is not proof of anything about the *game*; it is evidence that the
-browser is running the same simulation the host runs, which is the precondition for a
-spectator being worth looking at. It is one command to re-run, and it would fail loudly.
+256,000 unit-frames. This proves nothing about the *game*; it is evidence that the browser is
+running the same simulation the host runs, which is the precondition for a spectator being
+worth looking at. It re-runs in one command and it would fail loudly.
 
 ### 4.8 WebGL2 fallback
 
-Forced with `?backend=webgl2`. Same architecture, integer instance attributes, one draw call.
+Forced with `?backend=webgl2`. Same architecture: integer instance attributes, one draw call.
 
-| configuration | rAF fps |
-|---|---:|
-| 1 world × 2,048 units | **120.6** |
-| 256 worlds × 16,384 instances | **120.4** |
-| 1,024 worlds × 65,536 instances | **120.5** |
-| 4,096 worlds × 262,144 instances | **120.5** |
+| configuration | instances | rAF fps |
+|---|---:|---:|
+| 1 world x 2,048 units | 2,048 | **120.6** |
+| 256 worlds x 64 units | 16,384 | **120.4** |
+| 1,024 worlds x 64 units | 65,536 | **120.5** |
+| 4,096 worlds x 64 units | 262,144 | **120.5** |
 
-The fallback holds the display cap at every size too, and a screenshot is
-pixel-indistinguishable from the WebGPU one. **Its uncapped numbers are not reported**:
-WebGL2's only barrier is `gl.finish()`, which on Chrome returns once commands reach the GPU
-process rather than once the GPU has drained, so the uncapped loop there measured 18,000 fps
-— an artefact, not a result. There are no timestamp queries on this path either, so its GPU
-time is simply unmeasured.
+The fallback holds the display cap at every size and its screenshot is indistinguishable
+from the WebGPU one. **Its uncapped numbers are deliberately not reported**: WebGL2's only
+barrier is `gl.finish()`, which in Chrome returns once commands reach the GPU process rather
+than once the GPU has drained, so the uncapped loop there measured 18,000 fps — an artefact,
+not a result. There are no timestamp queries on this path either, so its GPU time is simply
+unmeasured.
 
 ---
 
@@ -440,6 +491,12 @@ pointerup  ->  render worker inverts the camera  ->  (world, subtile_x, subtile_
            ->  drained at the next tick boundary, in arrival order, before the tick
 ```
 
+Visually this is unambiguous: click inside one world of a four-world view and that world's
+512 units converge on the point while the other three carry on undisturbed. The converging
+swarm forms a cross rather than a disc, which is not a bug in the plumbing — it is the
+Chebyshev overshoot of clamping each axis independently in the placeholder follow step, and
+it is a good reminder of what is and is not derived here.
+
 The order record is deliberately integer-only and fixed-size:
 
 ```rust
@@ -452,61 +509,74 @@ Nothing about that is specific to a human. An RL policy emits the same record. T
 that makes spectating, playing, replaying, and training the same code path, and it is the
 property lockstep requires.
 
-### 5.2 What the action space must actually be, and what is already derived
+### 5.2 The action space is derived, and this page already speaks its opcodes
 
-**The action space is the engine's own `Order` hierarchy, and its class list is measured.**
-`schema/vtables.json` (RTTI, 1,777 vtables) contains **32 `…Order` classes** [measured, this
-lane, by reading that file]:
+While this lane was running, the `headless-client` lane derived the **whole command wire
+format** from the shipped `rise.pdb` — `schema/command-wire.json`, 82 entries, each with its
+struct name, byte size and complete field layout, cross-checked against
+`CommandPackage::process` = `FUN_0094a700`. I read that file [measured: 82 entries, opcodes
+`0x00`–`0x51`, no gaps]; the derivation itself is their lane's claim, not mine, and
+`docs/tracks/headless-client.md` is where it is defended.
 
-```
-AirAttackGroundOrder  AirOrder            AirPatrolOrder      AttackGroundOrder
-AttackOrder           AttackToOrder       AwaitBoardOrder     BoardOrder
-BuildOrder            CastOrder           ExploreToOrder      FleeToOrder
-FollowOrder           FormOrder           GarrisonOrder       GatherOrder
-GroupAttackOrder      GroupAttackToOrder  GroupMoveOrder      GroupOrder
-GroupPatrolOrder      GuardOrder          MoveOrder           OrderList
-PatrolOrder           RepairOrder         SpecialAnimOrder    StrafeOrder
-TargetOrder           ThinkOrder          TradeOrder          UnitOrder
-```
+That file *is* the action space, and it is far more specific than the RTTI class list I had
+started from. It settles several things this section previously had to speculate about:
 
-Some of those are bases or containers (`UnitOrder`, `GroupOrder`, `TargetOrder`, `AirOrder`,
-`OrderList`), so the *dispatchable* set is smaller — bounding it exactly is underived. The
-`Group…` variants matter for the RL surface specifically: they say the engine already models
-"this order applies to a selection", which is the difference between an action space of
-per-unit commands and one of selection+command.
+| opcode | struct | size | fields |
+|---|---|---:|---|
+| `0x00` | `GroupCommand` | 5 | `num, who, list` |
+| `0x07` | `MoveToCommand` | 22 | `to_x, to_y, set_angle, angle, orders, queued, form, width, disembark` |
+| `0x04` | `AttackCommand` | 17 | `ox, whom, ignore, queued` |
+| `0x0a` | `PatrolCommand` | 10 | `to_x, to_y, queued` |
+| `0x0c` | `HaltCommand` | 1 | — |
+| `0x13` | `GatherCommand` | 9 | `ox, queued` |
+| `0x19` | `BuildCommand` | 25 | `x, y, x2, y2, type, queued` |
+| `0x39` | `CheckSumsCommand` | 65 | sixteen named `*_checksum` channels |
 
-**The wire encoding is also partly derived, and it is the same wire.** Established ground
-truth for this project: the `.rcx` command stream **is** the engine network protocol;
-`CommandPackage::process` = `FUN_0094a700` is an 82-opcode switch (`0x00`–`0x51`) where each
-handler returns the packet's byte length, so *the function is the wire format*; records are
-framed `u32 frame, u32 play, u32 valid, u32 stamp, u16 size, u8 data[size]`. A viewer
-becoming a participant therefore means **emitting one of those 82 packets into the frame's
-command stream**, not inventing a new protocol.
+- **Selection is its own command.** `GroupCommand` (`0x00`) carries `num, who, list`, so the
+  engine's action space is genuinely *selection then command*, not per-unit commands. An RL
+  action space that emits one command per unit is modelling a different game.
+- **`queued` appears on nearly every order.** Shift-queueing is a first-class field of the
+  wire format, so it is a per-action parameter the policy must emit, not a UI convenience.
+- **`MoveToCommand` has nine fields, not two.** `form`, `width`, `orders`, `set_angle`,
+  `angle`, `disembark` are all part of a move. This is exactly the "full-game action space,
+  not a toy subset" the charter insists on, and it is now enumerable rather than guessed.
+- **The 65-byte `CheckSumsCommand` names all sixteen channels** (`units_`, `builds_`,
+  `walls_`, `ammo_`, `deaths_`, `groups_`, `guys_`, `leaders_`, `cities_`, `items_`,
+  `goods_`, `world_`, `rules_`, `scenario_data_`, `script_run_time_`, `all_`). For a
+  spectator that is a ready-made per-world divergence display (§7.5).
 
-`don_web::order_kind` in this lane is **three invented constants** (`MOVE`, `SPAWN`, `STOP`)
-and is labelled as such in its own doc comment. It exists to demonstrate the shape. When the
-opcode→`Order` mapping is derived from `FUN_0094a700`, `kind` becomes an index into that
-table and this enum is deleted.
+**This page now uses the real opcodes.** `don_web::order_kind` no longer holds invented
+constants: a click emits `kind = 0x07`, the actual `MoveToCommand` opcode, and "stop" is
+`0x0c` `HaltCommand`. The one non-engine action (adding a unit, a demo affordance) is
+`0x1000`, deliberately outside the engine's `0x00`–`0x51` range so it can never be mistaken
+for a command. What the shim honours is a strict subset — `to_x` and `to_y` of the nine
+fields — and both the Rust and the JS say exactly that at the definition site. Placeholder
+mechanics have nothing for `form` or `queued` to mean yet, and inventing values for them
+would be worse than leaving them out.
+
+The RTTI `Order` classes (32 of them in `schema/vtables.json`, including `MoveOrder`,
+`AttackToOrder`, `GatherOrder`, `GuardOrder` and their `Group…` variants) are the *engine
+side* of the same thing: a command arrives on the wire, and the unit ends up holding an
+`Order`. Both halves are now named; the mapping between them is not derived.
 
 ### 5.3 The concrete path from here
 
-1. **Derive the opcode table.** Walk the 82 cases of `FUN_0094a700`, recover each handler's
-   packet length and field layout, and cross-check against real `.rcx` records — the
-   corpus already spans 2014/2020/2024/2026 builds, so a field that is stable across twelve
-   years is structural and one that is not is build-specific. This is the single artefact
-   that turns "our order struct" into "the engine's order struct".
-2. **Make the browser order struct that struct.** The transport is already right: a
-   fixed-size integer record queued at a tick boundary. Only the *contents* are ours.
+1. **Replace the envelope with the real structs.** `don_web::Order` is a fixed-size integer
+   superset with `kind` as the opcode. `schema/command-wire.json` is machine-readable, so the
+   82 command structs and their encoders/decoders should be *generated* from it, not typed
+   out. That is a `don-sim`/`don-net` job; the browser then carries the generated type.
+2. **Selection before command.** The click path currently applies an order to every unit of
+   an owner inside a radius. The engine says selection is `GroupCommand` (`0x00`), so the UI
+   wants a real selection model whose output is that packet.
 3. **Parameter-level masking, from the start.** The charter is explicit that unmasked RTS
-   action spaces measurably train to zero. The web client is the natural place to *see*
-   the mask: the same predicate that greys out an illegal click is the mask the policy gets.
-   Not built.
+   action spaces measurably train to zero, and the field lists above show how large the
+   parameter space per action is. The web client is the natural place to *see* the mask —
+   the predicate that greys out an illegal click is the same mask the policy gets. Not built.
 4. **Join a running cluster.** Spectating is read-only today; a participant needs its orders
-   to reach the shard that owns its world, which the `sab` path already does for the local
-   case (`postMessage` to the owning sim worker). Over a network the same record goes over a
-   socket, and the determinism work (`docs/derivation/checksum.md`, the 16-channel
-   `check_all` tuple at opcode `0x39`) is what would let a late joiner verify it is in sync
-   rather than hope.
+   to reach the shard owning its world, which the `sab` path already does locally
+   (`postMessage` to the owning sim worker). Over a network the same record goes over a
+   socket, and `CheckSumsCommand` (`0x39`) is what lets a joiner verify it is in sync rather
+   than hope.
 
 ---
 
@@ -520,19 +590,24 @@ table and this enum is deleted.
 - **Any comparison of wasm against native at fine resolution.** The native reference varies
   by 4× run-to-run on this loaded machine. The two are in the same order of magnitude and I
   will not say more than that from this data.
-- **WebGL2 numbers.** The fallback compiles and is architecturally identical, but every
-  measurement here is WebGPU. The WebGL2 path is exercised only by construction, not by the
-  benchmark, and it has no timestamp queries so its GPU time is unmeasurable by this harness.
-- **Anything above 4,096 worlds × 64 units on the `sab` path.** Larger clusters were run
-  interactively (16,384 worlds × 16 units renders at the display cap) but are not in the
-  swept data.
+- **WebGL2 GPU time, and any WebGL2 throughput number.** The fallback is measured at the
+  display cap up to 262,144 instances (§4.8), and that much is real. Beyond it: `gl.finish()`
+  is not a GPU fence in Chrome, so the uncapped loop is meaningless there, and WebGL2 has no
+  timestamp query on this path, so its GPU occupancy is simply unknown. I know the WebGL2
+  path *keeps up*; I do not know by how much.
+- **Anything above 4,096 worlds on the `sab` path.** 16,384 worlds × 64 units
+  (1,048,576 units) is in the draw-only data and runs interactively at the display cap, but
+  it was never swept with the simulation on separate workers.
+- **Where the extra 0.46 ms of GPU time in the full pipeline at 4,096 worlds comes from**
+  (§4.4). I have a plausible cause and no measurement of it.
 - **Behaviour on any machine but this one.** One GPU, one browser, one OS. Nothing here
   generalises without re-measurement, and `bench.mjs` exists so that re-measurement is one
   command.
-- **Whether the aggregate view's metrics are the right ones.** Live count and summed hit
-  points are what `don-sim` exposes today; what a *spectator of a training run* actually
-  needs to see (reward, divergence from a reference, checksum mismatch) is underived because
-  those quantities do not exist yet.
+- **Whether the aggregate view's metrics are the right ones.** Population, summed hit points
+  and a digest fingerprint are what `don-sim` exposes today. What a *spectator of a training
+  run* actually needs to see — reward, divergence from a reference trajectory, a checksum
+  mismatch against the engine's own 16-channel `check_all` tuple — is underived, because
+  none of those quantities exist yet.
 
 ---
 
@@ -553,3 +628,24 @@ table and this enum is deleted.
    wasm32 build** over 1,000 frames of 4 worlds × 64 units (§4.7). That is a cross-target
    determinism check that could have failed, and it is cheap to run on every change:
    `cargo run --release --bin digest -- digest 4 64 64 1000 0xC0FFEE`.
+5. **`World::digest()` is already a usable per-world state fingerprint for visualisation**, and
+   it is what makes a 16,384-world mosaic readable at all (§2.8). The aggregate view is a
+   drop-in home for the engine's own checksum: `CheckSumsCommand` (`0x39`) carries sixteen
+   named channels, so colouring cells by `all_checksum` — or by *which* of the sixteen
+   disagrees — turns the cluster view into a live desync display with no new rendering work.
+6. **Frame rate was the wrong instrument for worker scaling and it gave the wrong answer by
+   6×** (§4.5). The renderer consumes published state, so it is decoupled from how fast the
+   simulation runs; the shards' own frame counters are the only truthful source. Any future
+   throughput lane measuring an asynchronous producer through a consumer's rate has the same
+   trap waiting for it.
+7. **Two silent-failure modes cost real time here and are cheap to pre-empt.** A module worker
+   whose source fails to parse never posts a message, so the page hangs with no error
+   anywhere unless you listen for `error` and `messageerror` on the `Worker` — the page now
+   does. And a stale module-level variable read on a path that never writes it reported a
+   *previous configuration's* step time as the current one; the fix was to make the timing
+   source a function of the active path rather than a shared mutable.
+8. **`schema/command-wire.json` is immediately usable by the client, and should be code-genned
+   rather than transcribed.** This lane switched its order path onto the real opcodes
+   (`0x07 MoveToCommand`, `0x0c HaltCommand`) in minutes just by reading the file. The 82
+   command structs deserve a generated Rust encoder/decoder that both `don-net` and this page
+   consume, so no hand-written copy of a field layout can drift from the derived one.

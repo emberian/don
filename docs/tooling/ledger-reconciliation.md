@@ -261,7 +261,7 @@ Not touched here; listed so they get fixed.
 
 | file | what is stale |
 |---|---|
-| `README-LLM.md` | "Pathfinder uses a *different* `Random` via pointer global `[0x00C06184]`; script/sim uses fixed object `0x00EB697C`" — **refuted**, §1.1 above. Also: no mention of `ron-bin/sbl/rise.pdb`, which is now the single highest-leverage artifact in the repo. |
+| `README-LLM.md` | ~~"Pathfinder uses a *different* `Random` via pointer global `[0x00C06184]`; script/sim uses fixed object `0x00EB697C`" — **refuted**, §1.1 above. Also: no mention of `ron-bin/sbl/rise.pdb`.~~ **FIXED** by `docs/derivation/PDB-RECONCILIATION.md` §8 (2026-08-08): the RNG entry is corrected with the stream census, and a §"The shipped PDB" section was added. |
 | `docs/binary-ground-truth.md` | still calls `FUN_00570170` the rules loader (two places); still calls the descriptor's second word a "type tag"; the `BorderSpline` line needs the drawn-ribbon-vs-integer-radius split. |
 | `docs/derivation/checksum.md` §4 | `CheckSumsCommand` "0x3d = 61 bytes" — it is `0x41` = 65 with `all_checksum` at `+0x3d`. |
 | `docs/replay-format.md` | `0x28` is the UTF-16 `'('`, not a length; the length is the u32 at `+2`. |

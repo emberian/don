@@ -1,0 +1,29 @@
+# Standalone workspace on purpose.
+#
+# This crate targets wasm32-unknown-unknown only. Keeping it out of the root workspace
+# means `cargo test` at /Users/ember/dev/don never tries to build it for the host, and a
+# root-level `cargo build` never drags a cdylib link step into an unrelated lane's build.
+# The dependency edge points *into* the workspace by path, never out of it.
+[workspace]
+
+[package]
+name = "don-web"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Raw C-ABI wasm shim exposing don-sim's SoA columns to a browser spectator."
+
+[lib]
+# `rlib` as well as `cdylib` so `src/bin/digest.rs` can link the same code natively and
+# print the digest the browser prints. Two targets, one source, one comparable number.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+don-sim = { path = "../../crates/don-sim" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,855 @@
+va	kind	off	aliases	symbol	type	mentions	docs
+0x00000000	NONE	+0	0			10	rng.md
+0x00000001	NONE	+0	0			5	replay-checksum.md,rng.md
+0x0000001a	NONE	+0	0			1	replay-io.md
+0x00000121	NONE	+0	0			1	replay-io.md
+0x00000191	NONE	+0	0			2	AUDIT-replay.md,replay-stream.md
+0x00000750	NONE	+0	0			1	replay-stream.md
+0x00001571	NONE	+0	0			1	rng.md
+0x00003039	NONE	+0	0			1	rng.md
+0x00063637	NONE	+0	0			8	pathfinding.md,provenance-ledger.md
+0x000fa439	NONE	+0	0			1	replay-stream.md
+0x000fa52b	NONE	+0	0			1	replay-stream.md
+0x0019660d	NONE	+0	0			1	rng.md
+0x00400000	NONE	+0	0			6	README-LLM.md,economy.md,pathfinding.md,provenance-ledger.md,replay-io.md,sim-economy.md
+0x004031af	PROC	+31	1	`dynamic initializer for 'unittypes''	void ()	1	live-tables.md
+0x004031ff	PROC	+31	1	`dynamic initializer for 'buildtypes''	void ()	1	live-tables.md
+0x0040324f	PROC	+31	1	`dynamic initializer for 'techtypes''	void ()	1	live-tables.md
+0x0041bfe0	PROC	+0	38	Buffer::set_pending_load	void Buffer::(int)	4	checksum.md,provenance-ledger.md
+0x0041bff0	PROC	+0	186	AirAttackGroundOrder::is_attack	int AirAttackGroundOrder::()	1	pathfinding.md
+0x0042d9e0	PROC	+0	1	String::num	int String::(int)	5	economy.md,provenance-ledger.md
+0x0042da30	PROC	+0	1	Log::say	void Log::(const String&, int)	1	economy.md
+0x0042e490	PROC	+0	1	Array<UnitType *>::~Array<UnitType *>	void Array<UnitType *>::()	1	live-tables.md
+0x0043cee0	PROC	+0	1	GameLog::say	void GameLog::(const String&, co...	1	economy.md
+0x0043d730	PROC	+0	1	SaveGame::walk_function	void SaveGame::(void*, void*)	5	checksum.md,provenance-ledger.md,replay-io.md
+0x0043d840	PROC	+0	1	SaveGame::walk_test	void SaveGame::(const String&)	4	replay-format.md,replay-io.md
+0x0043d875	PROC	+53	1	SaveGame::walk_test	void SaveGame::(const String&)	1	replay-io.md
+0x0043d950	PROC	+0	1	LoadGame::walk_function	void LoadGame::(void*, void*)	4	checksum.md,provenance-ledger.md,replay-io.md
+0x0043da60	PROC	+0	1	LoadGame::walk_test	void LoadGame::(const String&)	2	replay-io.md
+0x00455560	PROC	+0	1	std::_Random_shuffle_unchecked<int *,std::_Rng_from_urng<int,std::mersenne_twister_engine<unsigned int,32,624,397,31,2567483615,11,4294967295,7,2636928640,15,4022730752,18,1812433253> > >	void (int*, int*, std::_Rng_from...	1	rng.md
+0x00456820	PROC	+0	1	std::_Rng_from_urng<int,std::mersenne_twister_engine<unsigned int,32,624,397,31,2567483615,11,4294967295,7,2636928640,15,4022730752,18,1812433253> >::_Get_bits	unsigned std::_Rng_from_urng<int...	1	rng.md
+0x00456890	PROC	+0	1	std::mersenne_twister<unsigned int,32,624,397,31,2567483615,11,7,2636928640,15,4022730752,18>::_Refill_upper	void std::mersenne_twister<unsig...	1	rng.md
+0x004568e0	PROC	+0	1	std::mersenne_twister<unsigned int,32,624,397,31,2567483615,11,7,2636928640,15,4022730752,18>::_Refill_lower	void std::mersenne_twister<unsig...	1	rng.md
+0x00458410	PROC	+240	1	MainMenuBase::MainMenuBase	void MainMenuBase::()	1	AUDIT-replay.md
+0x0045e1d0	PROC	+0	1	GroupData::log_data	void GroupData::(Log*)	1	pdb-types.md
+0x00463930	PROC	+0	1	SyncLogger::logToMemory<unsigned long &>	void SyncLogger::(const char*, i...	1	replay-checksum.md
+0x0046cff0	PROC	+0	1	vector_dist	int (int, int)	10	AUDIT.md,pathfinding.md,provenance-ledger.md
+0x0046d060	PROC	+0	1	vector_dist	int (const Coord&, const Coord&,...	2	pathfinding.md
+0x0046d8b0	PROC	+0	1	Stack<PathData>::walk_data	void Stack<PathData>::(DataWalk*...	1	checksum.md
+0x0046df30	PROC	+0	1	PtrArray<Guy>::walk_data	void PtrArray<Guy>::(DataWalk*, ...	1	checksum.md
+0x0046e8c0	PROC	+0	1	Stack<PathData>::increase_size	int Stack<PathData>::(int)	1	pathfinding.md
+0x0046f020	PROC	+0	1	vector_dist	int (int, int, int, int)	2	pathfinding.md
+0x0046fa40	PROC	+0	1	UnitData::is_idle	int UnitData::()	2	sim-economy.md
+0x00470780	PROC	+0	1	TypeData::is_wonder_type	int TypeData::()	1	checksum.md
+0x00471710	PROC	+0	1	BuildQueueData::log_data	void BuildQueueData::(Log*)	1	pdb-types.md
+0x00472400	PROC	+0	1	ObjectData::get_captain	int ObjectData::()	1	GOAL.md
+0x00475af0	PROC	+0	1	ObjectsData::log_data	void ObjectsData::(Log*)	1	pdb-types.md
+0x00479320	PROC	+0	1	PathFinder::`scalar deleting destructor'	void* PathFinder::(unsigned)	1	pathfinding.md
+0x00479365	PROC	+69	1	PathFinder::`scalar deleting destructor'	void* PathFinder::(unsigned)	1	pathfinding.md
+0x004793c1	PROC	+49	1	PathFinderOut::`scalar deleting destructor'	void* PathFinderOut::(unsigned)	1	pathfinding.md
+0x004796f0	PROC	+0	1	Tree<PathNode *,int>::ordered_insert	void Tree<PathNode *,int>::(Path...	1	pathfinding.md
+0x00479770	PROC	+0	1	Tree<PathNode *,int>::remove_current	void Tree<PathNode *,int>::()	1	pathfinding.md
+0x00479920	PROC	+0	1	BRTree<TreeNode<PathNode *,int> *,unsigned long>::ordered_insert	void BRTree<TreeNode<PathNode *,...	1	pathfinding.md
+0x00479b90	PROC	+0	3	BRTree<PathNode *,unsigned long>::seek	int BRTree<PathNode *,unsigned l...	1	pathfinding.md
+0x00479c00	PROC	+0	1	BRTree<PathNode *,unsigned long>::ordered_insert	void BRTree<PathNode *,unsigned ...	1	pathfinding.md
+0x0047a160	PROC	+0	1	Recycler<BRTree<PathNode *,unsigned long> >::pop	BRTree<PathNode *,unsigned long>...	2	pathfinding.md
+0x0047a2c0	PROC	+0	1	Recycler<BRTree<TreeNode<PathNode *,int> *,unsigned long> >::pop	BRTree<TreeNode<PathNode *,int> ...	2	pathfinding.md
+0x0047a370	PROC	+0	1	Recycler<Tree<PathNode *,int> >::pop	Tree<PathNode *,int>* Recycler<T...	2	pathfinding.md
+0x0047a820	PROC	+0	1	Stack<PathNode *>::increase_size	int Stack<PathNode *>::(int)	1	pathfinding.md
+0x0047a920	PROC	+0	1	PathFinderOut::get_name	String PathFinderOut::()	1	pathfinding.md
+0x004813b0	PROC	+0	1	FormData::log_data	void FormData::(Log*)	1	pdb-types.md
+0x00487e70	PROC	+0	1	MoveOrder::log_data	void MoveOrder::(Log*)	1	pathfinding.md
+0x0048f770	PROC	+0	1	Window::get_window_height	int Window::()	1	GOAL.md
+0x004b3bb0	PROC	+0	1	LandData::log_data	void LandData::(Log*)	1	pdb-types.md
+0x004b7350	PROC	+0	1	SyncLogger::logToMemory<int &,unsigned long &,int &,short &,int const &>	void SyncLogger::(const char*, i...	1	replay-stream.md
+0x00509090	PROC	+0	1	destroy	int (gz_stream*)	1	replay-io.md
+0x00509140	PROC	+0	1	gzread	int (void*, void*, unsigned)	2	replay-io.md
+0x00509350	PROC	+0	1	gzwrite	int (void*, void* const, unsigne...	2	replay-io.md
+0x005093f0	PROC	+0	1	do_flush	int (void*, int)	1	replay-io.md
+0x00509670	PROC	+0	1	putLong	void (_iobuf*, unsigned long)	1	replay-io.md
+0x00542579	PROC	+121	1	TextureEffect::increment	void TextureEffect::(float)	2	AUDIT.md,rng.md
+0x0054258f	PROC	+143	1	TextureEffect::increment	void TextureEffect::(float)	2	AUDIT.md,rng.md
+0x0054dcf0	PROC	+0	1	png_write_flush	void (png_struct_def*)	1	replay-io.md
+0x00554ae0	PROC	+0	1	png_text_compress	int (png_struct_def*, char*, uns...	1	replay-io.md
+0x00556fc0	PROC	+0	1	png_write_finish_row	void (png_struct_def*)	1	replay-io.md
+0x00558170	PROC	+0	1	png_write_filtered_row	void (png_struct_def*, unsigned ...	1	replay-io.md
+0x0055e0a6	PUB	+0	1	__purecall		2	checksum.md
+0x00569a8d	NEAR	+1789	1	public: void __thiscall MOTD::exec(class String const &, int)		1	economy.md
+0x00569a90	PROC	+0	1	Constants::init	int Constants::()	9	GOAL.md,README-LLM.md,binary-ground-truth.md,economy.md,provenance-ledger.md
+0x00569dd3	PROC	+835	1	Constants::init	int Constants::()	1	provenance-ledger.md
+0x00569deb	PROC	+859	1	Constants::init	int Constants::()	1	provenance-ledger.md
+0x0056a123	PROC	+1683	1	Constants::init	int Constants::()	1	economy.md
+0x0056c261	PROC	+10193	1	Constants::init	int Constants::()	1	economy.md
+0x0056c476	PROC	+10726	1	Constants::init	int Constants::()	1	economy.md
+0x0057016f	PROC	+26335	1	Constants::init	int Constants::()	3	economy.md,provenance-ledger.md
+0x00570170	PROC	+0	1	Constants::log_data	void Constants::(Log*)	26	AUDIT.md,CHARTER.md,GOAL.md,README-LLM.md,binary-ground-truth.md,combat.md,economy.md,pdb-types.md,provenance-ledger.md
+0x00573c69	PROC	+15097	1	Constants::log_data	void Constants::(Log*)	3	AUDIT.md,economy.md,provenance-ledger.md
+0x00577f77	PROC	+32263	1	Constants::log_data	void Constants::(Log*)	1	economy.md
+0x00577f93	PROC	+32291	1	Constants::log_data	void Constants::(Log*)	1	economy.md
+0x0057f906	NONE	+0	0			1	economy.md
+0x0057f910	PROC	+0	1	Constants::walk_data	void Constants::(DataWalk*)	1	binary-ground-truth.md
+0x0057f950	PROC	+0	1	Constants::get_fraction	int Constants::(const String&, i...	8	binary-ground-truth.md,economy.md,provenance-ledger.md
+0x0057fa60	PROC	+0	1	Constants::get_item	int Constants::(const String&)	9	binary-ground-truth.md,economy.md,provenance-ledger.md,sim-economy.md
+0x0057fb05	PROC	+165	1	Constants::get_item	int Constants::(const String&)	1	economy.md
+0x0057fc74	PROC	+292	1	Balance::type_damage	int Balance::(TypeIndex, TypeInd...	1	combat.md
+0x00581ca0	PROC	+0	1	Balance::return_modifier	int Balance::(TypeIndex, TypeInd...	11	AUDIT.md,combat.md,live-tables.md,provenance-ledger.md
+0x00581ca3	PROC	+3	1	Balance::return_modifier	int Balance::(TypeIndex, TypeInd...	1	live-tables.md
+0x00581caa	PROC	+10	1	Balance::return_modifier	int Balance::(TypeIndex, TypeInd...	1	live-tables.md
+0x00581cad	PROC	+13	1	Balance::return_modifier	int Balance::(TypeIndex, TypeInd...	1	live-tables.md
+0x00581cc0	PROC	+0	1	Balance::compute_modifier	int Balance::(TypeIndex, TypeInd...	2	live-tables.md,provenance-ledger.md
+0x00582bd0	PROC	+0	1	Balance::log_data	void Balance::(Log*)	4	live-tables.md,provenance-ledger.md
+0x00582cc0	PROC	+0	1	Balance::walk_rules_data	void Balance::(DataWalk*)	1	binary-ground-truth.md
+0x00584590	PROC	+0	1	Game::run	void Game::()	1	replay-io.md
+0x00585287	PROC	+3319	1	Game::run	void Game::()	1	replay-io.md
+0x00585300	PROC	+3440	1	Game::run	void Game::()	1	replay-io.md
+0x00586440	PROC	+0	1	Game::run_editor	void Game::()	1	rng.md
+0x00586d26	PROC	+838	1	Game::run_oos_recovery	void Game::()	1	rng.md
+0x00586ea0	PROC	+0	1	Game::run_playback	void Game::()	1	replay-io.md
+0x005887d0	PROC	+0	1	Game::log_rules_data	void Game::(Log*)	1	combat.md
+0x005887db	PROC	+11	1	Game::log_rules_data	void Game::(Log*)	1	economy.md
+0x005887f6	PROC	+38	1	Game::log_rules_data	void Game::(Log*)	1	economy.md
+0x0058880f	PROC	+63	1	Game::log_rules_data	void Game::(Log*)	1	economy.md
+0x00588816	PROC	+70	1	Game::log_rules_data	void Game::(Log*)	1	economy.md
+0x00589550	PROC	+0	1	Game::walk_rules_data	void Game::(DataWalk*)	8	checksum.md,provenance-ledger.md,replay-checksum.md,replay-io.md
+0x00589600	PROC	+0	1	Game::walk_data	void Game::(DataWalk*)	8	AUDIT-replay.md,binary-ground-truth.md,provenance-ledger.md,replay-format.md,replay-io.md
+0x00589bb0	PROC	+0	1	Game::init_rules_and_teams	int Game::(int, int)	1	rng.md
+0x0058a500	PROC	+0	1	Game::init_starting_resources	void Game::()	1	rng.md
+0x0058a600	PROC	+0	1	Game::init_tribes	void Game::()	1	rng.md
+0x0058c1a0	PROC	+0	1	Game::init_random_colors	void Game::()	1	rng.md
+0x0058c2a1	PROC	+257	1	Game::init_random_colors	void Game::()	1	rng.md
+0x00591ef0	PROC	+0	1	Game::do_frame	void Game::()	2	provenance-ledger.md,sim-economy.md
+0x0059224f	PROC	+863	1	Game::do_frame	void Game::()	1	sim-economy.md
+0x005924bf	PROC	+1487	1	Game::do_frame	void Game::()	1	sim-economy.md
+0x005924cf	PROC	+1503	1	Game::do_frame	void Game::()	3	provenance-ledger.md,sim-economy.md
+0x00594ecf	PROC	+847	1	Game::close	void Game::(int)	1	rng.md
+0x005a76b0	PROC	+0	1	SaveGame::verify_save	int SaveGame::()	1	checksum.md
+0x005abf90	PROC	+0	1	Setup::reinit_game_units	void Setup::()	1	pathfinding.md
+0x005d6040	PROC	+0	1	GameInfo::log_data	void GameInfo::(Log*)	3	checksum.md,provenance-ledger.md
+0x005d6570	PROC	+0	1	GameInfo::walk_data	void GameInfo::(DataWalk*)	5	provenance-ledger.md,replay-io.md
+0x005d6596	PROC	+38	1	GameInfo::walk_data	void GameInfo::(DataWalk*)	1	replay-io.md
+0x005d66c1	PROC	+337	1	GameInfo::walk_data	void GameInfo::(DataWalk*)	1	replay-io.md
+0x005d7460	PROC	+0	1	Animal::do_idle	void Animal::()	2	provenance-ledger.md,rng.md
+0x005d79e0	PROC	+0	1	Animal::think_bird	void Animal::(UnitOrder*, int)	2	provenance-ledger.md,rng.md
+0x005d7ea0	PROC	+0	1	AnimalData::walk_data	void AnimalData::(DataWalk*)	1	checksum.md
+0x005dda2c	PROC	+2092	1	GuyOut::graph_inc_frame	Liberr GuyOut::()	1	live-tables.md
+0x005dda34	PROC	+2100	1	GuyOut::graph_inc_frame	Liberr GuyOut::()	1	live-tables.md
+0x005dda37	PROC	+2103	1	GuyOut::graph_inc_frame	Liberr GuyOut::()	1	live-tables.md
+0x005dda4e	PROC	+2126	1	GuyOut::graph_inc_frame	Liberr GuyOut::()	1	live-tables.md
+0x005e11a0	PROC	+0	1	Unit::process_attrition	int Unit::()	2	provenance-ledger.md
+0x005e15dd	PROC	+1085	1	Unit::process_attrition	int Unit::()	3	economy.md,provenance-ledger.md,sim-economy.md
+0x005e192b	PROC	+1931	1	Unit::process_attrition	int Unit::()	1	economy.md
+0x005e193d	PROC	+1949	1	Unit::process_attrition	int Unit::()	1	economy.md
+0x00608fd0	PROC	+0	1	UnitData::get_attrition	int UnitData::(int)	5	economy.md,provenance-ledger.md,sim-economy.md
+0x00608fed	PROC	+29	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x00608ffe	PROC	+46	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x00609027	PROC	+87	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x0060903d	PROC	+109	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x00609047	PROC	+119	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x0060905e	PROC	+142	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x0060907b	PROC	+171	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x00609096	PROC	+198	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x006090a8	PROC	+216	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x006090d1	PROC	+257	1	UnitData::get_attrition	int UnitData::(int)	1	economy.md
+0x0060911b	PROC	+331	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x00609122	PROC	+338	1	UnitData::get_attrition	int UnitData::(int)	2	economy.md,sim-economy.md
+0x0060913e	PROC	+366	1	UnitData::get_attrition	int UnitData::(int)	1	sim-economy.md
+0x0060cf40	PROC	+0	1	Unit::walk_data	void Unit::(DataWalk*)	1	checksum.md
+0x0060ee50	PROC	+0	1	Unit::close	void Unit::(char, int, float)	2	provenance-ledger.md,rng.md
+0x00610160	PROC	+0	1	UnitData::armor	int UnitData::()	3	provenance-ledger.md
+0x006103c0	PROC	+0	1	UnitData::attack	int UnitData::()	3	provenance-ledger.md
+0x006115ea	PROC	+2602	1	Unit::process	void Unit::()	3	provenance-ledger.md,sim-economy.md
+0x006117c8	PROC	+3080	1	Unit::process	void Unit::()	3	provenance-ledger.md,sim-economy.md
+0x0061ab50	PROC	+0	1	UnitType::init	int UnitType::(const XMLElement&...	6	README-LLM.md,binary-ground-truth.md,combat.md
+0x0061b01b	PROC	+1227	1	UnitType::init	int UnitType::(const XMLElement&...	1	combat.md
+0x0061b8b8	PROC	+3432	1	UnitType::init	int UnitType::(const XMLElement&...	1	combat.md
+0x0061b8df	PROC	+3471	1	UnitType::init	int UnitType::(const XMLElement&...	1	combat.md
+0x0061c490	PROC	+0	1	UnitType::log_data	void UnitType::(Log*)	15	CHARTER.md,binary-ground-truth.md,checksum.md,economy.md,live-tables.md,pathfinding.md,pdb-types.md,provenance-ledger.md
+0x0061de20	PROC	+0	1	UnitType::backup	void UnitType::(UnitTypeBak*)	1	pathfinding.md
+0x0062dd90	PROC	+0	1	BuildData::get_shot	int BuildData::()	1	damage-port.md
+0x0062e610	PROC	+0	1	BuildData::attack	int BuildData::()	3	provenance-ledger.md
+0x0062f270	PROC	+0	1	BuildData::walk_data	void BuildData::(DataWalk*)	1	checksum.md
+0x00631810	PROC	+0	1	BuildType::log_data	void BuildType::(Log*)	3	live-tables.md,provenance-ledger.md
+0x006336a9	PROC	+89	1	BuildTypeOut::set_parse_data	int BuildTypeOut::(int)	1	economy.md
+0x00633e9c	PROC	+2124	1	BuildTypeOut::set_parse_data	int BuildTypeOut::(int)	1	economy.md
+0x0063fa60	PROC	+0	1	WallData::armor	int WallData::()	4	provenance-ledger.md
+0x00642510	PROC	+0	1	WallData::walk_data	void WallData::(DataWalk*)	1	checksum.md
+0x00644130	PROC	+0	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	24	AUDIT.md,README-LLM.md,combat.md,damage-port.md,pdb-types.md,provenance-ledger.md
+0x00644178	PROC	+72	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	5	combat.md,damage-port.md,live-tables.md,provenance-ledger.md
+0x0064418e	PROC	+94	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	5	combat.md,damage-port.md,live-tables.md,provenance-ledger.md
+0x006441a0	PROC	+112	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x006442a3	PROC	+371	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	2	damage-port.md
+0x006442ab	PROC	+379	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	provenance-ledger.md
+0x00644307	PROC	+471	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x0064435f	PROC	+559	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x00644453	PROC	+803	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x006445a4	PROC	+1140	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x00644659	PROC	+1321	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x00644668	PROC	+1336	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x006446ac	PROC	+1404	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x006446b8	PROC	+1416	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x006448b9	PROC	+1929	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	2	combat.md,damage-port.md
+0x00644b26	PROC	+2550	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	2	combat.md,provenance-ledger.md
+0x00644b2b	PROC	+2555	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	4	damage-port.md,provenance-ledger.md
+0x00644b3a	PROC	+2570	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	provenance-ledger.md
+0x00644b52	PROC	+2594	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	provenance-ledger.md
+0x00644b5f	PROC	+2607	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	provenance-ledger.md
+0x00644b7d	PROC	+2637	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	combat.md
+0x00644be1	PROC	+2737	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x00644d00	PROC	+3024	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	1	damage-port.md
+0x00644d78	PROC	+3144	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	2	combat.md,damage-port.md
+0x00644e0e	PROC	+3294	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	6	damage-port.md,provenance-ledger.md
+0x00644e2d	PROC	+3325	1	ObjectData::get_damage	int ObjectData::(int, int, unsig...	2	damage-port.md,provenance-ledger.md
+0x00645100	PROC	+48	1	ObjectsArray::get_new_data	Object* ObjectsArray::(int)	4	AUDIT.md,combat.md
+0x006469f0	PROC	+0	1	ObjectData::attack	int ObjectData::()	6	combat.md,damage-port.md,provenance-ledger.md
+0x00646ad5	PROC	+229	1	ObjectData::attack	int ObjectData::()	1	damage-port.md
+0x00646ae2	PROC	+242	1	ObjectData::attack	int ObjectData::()	1	combat.md
+0x00646ae5	PROC	+245	1	ObjectData::attack	int ObjectData::()	1	damage-port.md
+0x00646b00	PROC	+0	1	ObjectData::has_general	int ObjectData::(int, int)	1	damage-port.md
+0x00647830	PROC	+0	1	Object::walk_data	void Object::(DataWalk*)	2	checksum.md
+0x00647885	PROC	+85	1	Object::walk_data	void Object::(DataWalk*)	1	checksum.md
+0x00647db0	PROC	+0	1	ObjectData::armor	int ObjectData::()	5	combat.md,damage-port.md,provenance-ledger.md
+0x00647e62	PROC	+178	1	ObjectData::armor	int ObjectData::()	1	damage-port.md
+0x00647e6f	PROC	+191	1	ObjectData::armor	int ObjectData::()	2	combat.md,damage-port.md
+0x0064a480	PROC	+0	1	Object::do_damage	void Object::(int, int, unsigned...	4	combat.md,provenance-ledger.md
+0x0064a4e2	PROC	+98	1	Object::do_damage	void Object::(int, int, unsigned...	1	combat.md
+0x0064a4f7	PROC	+119	1	Object::do_damage	void Object::(int, int, unsigned...	3	combat.md,provenance-ledger.md
+0x0064a5dd	PROC	+349	1	Object::do_damage	void Object::(int, int, unsigned...	1	combat.md
+0x0064a61a	PROC	+410	1	Object::do_damage	void Object::(int, int, unsigned...	1	combat.md
+0x0064bf8c	PROC	+6924	1	Object::do_damage	void Object::(int, int, unsigned...	1	economy.md
+0x0064e5c0	PROC	+0	1	Object::compare_target	int Object::(int, int, int, int)	2	combat.md,provenance-ledger.md
+0x0064ec10	PROC	+1616	1	Object::compare_target	int Object::(int, int, int, int)	1	provenance-ledger.md
+0x006508c0	PROC	+0	1	ObjectData::train_time	int ObjectData::(int)	5	economy.md,provenance-ledger.md,sim-economy.md
+0x006508ea	PROC	+42	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x006508eb	PROC	+43	1	ObjectData::train_time	int ObjectData::(int)	2	economy.md,sim-economy.md
+0x00650907	PROC	+71	1	ObjectData::train_time	int ObjectData::(int)	1	economy.md
+0x0065094c	PROC	+140	1	ObjectData::train_time	int ObjectData::(int)	1	provenance-ledger.md
+0x00650951	PROC	+145	1	ObjectData::train_time	int ObjectData::(int)	2	economy.md
+0x00650989	PROC	+201	1	ObjectData::train_time	int ObjectData::(int)	1	economy.md
+0x00650aa8	PROC	+488	1	ObjectData::train_time	int ObjectData::(int)	1	economy.md
+0x00650ab5	PROC	+501	1	ObjectData::train_time	int ObjectData::(int)	3	provenance-ledger.md,sim-economy.md
+0x00650af6	PROC	+566	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00650b17	PROC	+599	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00650b27	PROC	+615	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00650b31	PROC	+625	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00650b3d	PROC	+637	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00650b67	PROC	+679	1	ObjectData::train_time	int ObjectData::(int)	1	sim-economy.md
+0x00653790	PROC	+0	1	ObjectData::is	int ObjectData::(int, int)	2	damage-port.md
+0x0065f4a0	PROC	+0	1	ObjectType::finalize_init_all	void ObjectType::()	1	live-tables.md
+0x0065f880	PROC	+0	1	ObjectType::ObjectType	void ObjectType::()	2	combat.md
+0x0065fac0	PROC	+0	1	ObjectType::backup	void ObjectType::(ObjectTypeBak*...	1	combat.md
+0x0065fb30	PROC	+0	1	ObjectType::restore	void ObjectType::(ObjectTypeBak*...	1	combat.md
+0x0065fc00	PROC	+0	1	ObjectType::log_data	void ObjectType::(Log*)	19	CHARTER.md,binary-ground-truth.md,checksum.md,combat.md,live-tables.md,pathfinding.md,pdb-types.md,provenance-ledger.md
+0x006621d0	PROC	+0	1	SubObject::walk_data	void SubObject::(DataWalk*)	2	checksum.md
+0x00662300	PROC	+0	1	SubObject::init	int SubObject::(int, TypeIndex, ...	3	pathfinding.md
+0x00662680	PROC	+0	1	SubObject::set_new_location	int SubObject::(const Coord, con...	5	pathfinding.md,provenance-ledger.md
+0x006631c0	PROC	+0	1	Type::log_data	void Type::(Log*)	4	live-tables.md,provenance-ledger.md
+0x00664090	PROC	+0	1	TypeData::get_cost	int TypeData::(int, int, int, in...	7	economy.md,provenance-ledger.md,sim-economy.md
+0x006653ff	PROC	+4975	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x00665440	PROC	+5040	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x00665443	PROC	+5043	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	sim-economy.md
+0x00665452	PROC	+5058	1	TypeData::get_cost	int TypeData::(int, int, int, in...	2	provenance-ledger.md,sim-economy.md
+0x0066568f	PROC	+5631	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x0066569f	PROC	+5647	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x006656aa	PROC	+5658	1	TypeData::get_cost	int TypeData::(int, int, int, in...	2	provenance-ledger.md,sim-economy.md
+0x006656af	PROC	+5663	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x0066630c	PROC	+8828	1	TypeData::get_cost	int TypeData::(int, int, int, in...	1	economy.md
+0x00669800	PROC	+0	1	Types::walk_rules_data	void Types::(DataWalk*)	1	replay-io.md
+0x0066d630	PROC	+0	1	TechType::log_data	void TechType::(Log*)	3	live-tables.md,provenance-ledger.md
+0x0066e5d0	PROC	+0	1	Good::walk_data	void Good::(DataWalk*)	1	checksum.md
+0x0066f2c0	PROC	+0	1	GoodType::log_data	void GoodType::(Log*)	3	live-tables.md,pdb-types.md
+0x00677150	PROC	+0	1	Item::walk_data	void Item::(DataWalk*)	1	checksum.md
+0x00678060	PROC	+0	1	Ammo::do_damage	int Ammo::()	1	combat.md
+0x0067bad0	PROC	+720	1	Ammo::init_crash	void Ammo::(Guy*, int, int)	1	provenance-ledger.md
+0x0067bad6	PROC	+726	1	Ammo::init_crash	void Ammo::(Guy*, int, int)	3	AUDIT.md,economy.md,provenance-ledger.md
+0x00681db0	PROC	+0	1	init_coord_lookup_array	void (int)	6	AUDIT.md,pathfinding.md,provenance-ledger.md
+0x00683770	PROC	+0	1	PathFinder::astar_path	int PathFinder::(Stack<PathData>...	1	README-LLM.md
+0x00685950	PROC	+0	1	PathFinder::find_road_restore	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685990	PROC	+0	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	11	AUDIT.md,README-LLM.md,pathfinding.md,provenance-ledger.md
+0x00685b27	PROC	+407	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685b5d	PROC	+461	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685b83	PROC	+499	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685c2e	PROC	+670	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685c3a	PROC	+682	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685cb5	PROC	+805	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685d02	PROC	+882	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685d44	PROC	+948	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685d78	PROC	+1000	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685ddc	PROC	+1100	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00685fd9	PROC	+1609	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x0068600b	PROC	+1659	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x0068601c	PROC	+1676	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x006860af	PROC	+1823	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00686203	PROC	+2163	1	PathFinder::astar_caravan_road	int PathFinder::(Stack<PathData>...	1	pathfinding.md
+0x00686300	PROC	+0	1	PathFinder::calc_road_cost	int PathFinder::(PathNode*, int,...	8	AUDIT.md,pathfinding.md,provenance-ledger.md
+0x00686341	PROC	+65	1	PathFinder::calc_road_cost	int PathFinder::(PathNode*, int,...	3	pathfinding.md,provenance-ledger.md
+0x00686690	PROC	+0	1	PathFinder::astar_river	int PathFinder::(WCoord, WCoord,...	1	README-LLM.md
+0x00687970	PROC	+0	1	PathFinder::first_open_node	PathNode* PathFinder::()	2	pathfinding.md
+0x00687e40	PROC	+0	1	PathFinderOut::registration	void PathFinderOut::()	3	pathfinding.md
+0x00688150	PROC	+0	1	PathFinder::clear	void PathFinder::()	2	pathfinding.md
+0x006882b0	PROC	+0	1	PathFinderData::find_node_open	PathNode* PathFinderData::(PathN...	1	pathfinding.md
+0x00688360	PROC	+0	1	PathFinderOut::dbg_tree_depth	void PathFinderOut::()	2	pathfinding.md
+0x00688740	PROC	+0	1	PathFinderData::valid_roadcoord	int PathFinderData::(Coord, Coor...	3	pathfinding.md,provenance-ledger.md
+0x00688770	PROC	+48	1	PathFinderData::valid_roadcoord	int PathFinderData::(Coord, Coor...	2	pathfinding.md
+0x00688781	PROC	+65	1	PathFinderData::valid_roadcoord	int PathFinderData::(Coord, Coor...	1	pathfinding.md
+0x00688a40	PROC	+0	1	PathFinder::find_road	int PathFinder::(Stack<PathData>...	4	pathfinding.md,provenance-ledger.md
+0x00688fc0	PROC	+0	1	PathFinder::find_wpath	int PathFinder::(Stack<PathData>...	5	pathfinding.md,provenance-ledger.md
+0x006897d0	PROC	+0	1	PathFinder::find_tpath	int PathFinder::(Stack<PathData>...	5	pathfinding.md,provenance-ledger.md
+0x00689ec0	PROC	+0	1	PathFinder::init	int PathFinder::()	5	pathfinding.md,provenance-ledger.md
+0x00689f29	PROC	+105	1	PathFinder::init	int PathFinder::()	2	pathfinding.md
+0x00689ff2	PROC	+306	1	PathFinder::init	int PathFinder::()	2	pathfinding.md
+0x00689ff9	PROC	+313	1	PathFinder::init	int PathFinder::()	1	pathfinding.md
+0x0068a030	PROC	+0	1	PathFinder::PathFinder	void PathFinder::()	2	pathfinding.md
+0x0068bc90	PROC	+0	1	Map::make	void Map::(int, int, int)	6	pathfinding.md,provenance-ledger.md,rng.md
+0x00694c5b	PROC	+427	1	Map::make_continents	void Map::(int)	1	rng.md
+0x00694c7b	PROC	+459	1	Map::make_continents	void Map::(int)	1	rng.md
+0x00694cc0	PROC	+528	1	Map::make_continents	void Map::(int)	1	rng.md
+0x0069daf7	PROC	+39	1	Map::load_map_data	void Map::(int, int)	1	economy.md
+0x006b10e2	PROC	+1330	1	World::compute_reg_territory	int World::(int, int)	2	economy.md,provenance-ledger.md
+0x006b1480	PROC	+2256	1	World::compute_reg_territory	int World::(int, int)	2	economy.md,provenance-ledger.md
+0x006b1489	PROC	+2265	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b1497	PROC	+2279	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b149e	PROC	+2286	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b14a4	PROC	+2292	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b1af9	PROC	+3913	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b1b29	PROC	+3961	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b1b30	PROC	+3968	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b1b36	PROC	+3974	1	World::compute_reg_territory	int World::(int, int)	1	economy.md
+0x006b53f0	PROC	+0	1	WorldData::was_seen	int WorldData::(const FCoord&, c...	3	pathfinding.md
+0x006b5cf0	PROC	+0	1	World::walk_data	void World::(DataWalk*, int)	2	checksum.md,replay-checksum.md
+0x006b6080	PROC	+0	1	WorldData::log_data	void WorldData::(Log*)	1	pdb-types.md
+0x006b77ac	PROC	+188	1	World::init	int World::(unsigned short, unsi...	1	economy.md
+0x006bc47d	PROC	+141	1	Leader::compute_build_score	void Leader::()	1	economy.md
+0x006c3800	PROC	+7200	1	Leader::create_buildings	void Leader::()	1	replay-io.md
+0x006c5000	PROC	+3936	1	Leader::create_units	void Leader::()	1	replay-io.md
+0x006cdcc0	PROC	+0	1	Leader::calc_anti_attrition	void Leader::()	1	provenance-ledger.md
+0x006cdd20	PROC	+96	1	Leader::calc_anti_attrition	void Leader::()	2	economy.md,sim-economy.md
+0x006ce280	PROC	+0	1	Leader::gather	void Leader::()	4	provenance-ledger.md,sim-economy.md
+0x006ce450	PROC	+0	1	Leader::do_gather	void Leader::()	8	economy.md,provenance-ledger.md,sim-economy.md
+0x006ce48f	PROC	+63	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce4c8	PROC	+120	1	Leader::do_gather	void Leader::()	2	sim-economy.md
+0x006ce4e7	PROC	+151	1	Leader::do_gather	void Leader::()	2	sim-economy.md
+0x006ce512	PROC	+194	1	Leader::do_gather	void Leader::()	3	sim-economy.md
+0x006ce62f	PROC	+479	1	Leader::do_gather	void Leader::()	2	provenance-ledger.md,sim-economy.md
+0x006ce643	PROC	+499	1	Leader::do_gather	void Leader::()	2	provenance-ledger.md,sim-economy.md
+0x006ce666	PROC	+534	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce684	PROC	+564	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce69a	PROC	+586	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce6ae	PROC	+606	1	Leader::do_gather	void Leader::()	1	economy.md
+0x006ce6c2	PROC	+626	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce6dc	PROC	+652	1	Leader::do_gather	void Leader::()	2	economy.md,sim-economy.md
+0x006ce6f6	PROC	+678	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce703	PROC	+691	1	Leader::do_gather	void Leader::()	1	economy.md
+0x006ce706	PROC	+694	1	Leader::do_gather	void Leader::()	3	economy.md,sim-economy.md
+0x006ce723	PROC	+723	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce72c	PROC	+732	1	Leader::do_gather	void Leader::()	2	economy.md,sim-economy.md
+0x006ce755	PROC	+773	1	Leader::do_gather	void Leader::()	2	economy.md,sim-economy.md
+0x006ce783	PROC	+819	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce79c	PROC	+844	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce7ae	PROC	+862	1	Leader::do_gather	void Leader::()	4	economy.md,provenance-ledger.md,sim-economy.md
+0x006ce7b9	PROC	+873	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce7c1	PROC	+881	1	Leader::do_gather	void Leader::()	1	AUDIT.md
+0x006ce7c5	PROC	+885	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce7de	PROC	+910	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce810	PROC	+960	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce855	PROC	+1029	1	Leader::do_gather	void Leader::()	1	sim-economy.md
+0x006ce900	PROC	+0	1	Leader::calc_resource_caps	void Leader::()	5	economy.md,provenance-ledger.md,sim-economy.md
+0x006ce92c	PROC	+44	1	Leader::calc_resource_caps	void Leader::()	4	economy.md,provenance-ledger.md,sim-economy.md
+0x006ce940	PROC	+64	1	Leader::calc_resource_caps	void Leader::()	1	sim-economy.md
+0x006ce9a9	PROC	+169	1	Leader::calc_resource_caps	void Leader::()	1	sim-economy.md
+0x006cea04	PROC	+260	1	Leader::calc_resource_caps	void Leader::()	1	sim-economy.md
+0x006cea5c	PROC	+348	1	Leader::calc_resource_caps	void Leader::()	1	sim-economy.md
+0x006ceaa6	PROC	+422	1	Leader::calc_resource_caps	void Leader::()	1	sim-economy.md
+0x006ceee0	PROC	+0	1	Leader::calc_gather	void Leader::(int*)	2	provenance-ledger.md,sim-economy.md
+0x006cf44c	PROC	+1388	1	Leader::calc_gather	void Leader::(int*)	1	economy.md
+0x006cf64c	PROC	+1900	1	Leader::calc_gather	void Leader::(int*)	1	economy.md
+0x006d66a0	PROC	+0	1	LeaderData::get_gather_handicap	int LeaderData::()	4	economy.md,provenance-ledger.md,sim-economy.md
+0x006d6750	PROC	+0	1	LeaderData::walk_data	void LeaderData::(DataWalk*)	5	binary-ground-truth.md,checksum.md,provenance-ledger.md,replay-checksum.md
+0x006da000	PROC	+0	1	LeaderData::get_target	int LeaderData::()	2	damage-port.md
+0x006da740	PROC	+0	1	LeaderData::get_handicap	int LeaderData::()	1	sim-economy.md
+0x006db810	PROC	+0	1	LeaderData::has_preq	int LeaderData::(TypeIndex)	2	sim-economy.md
+0x006e0902	PROC	+50	1	LeaderData::calc_rare	void LeaderData::(int, int*, int...	1	economy.md
+0x006e0a36	PROC	+358	1	LeaderData::calc_rare	void LeaderData::(int, int*, int...	1	economy.md
+0x006e1370	PROC	+0	1	LeaderData::has_tribe_bonus	int LeaderData::(int)	9	damage-port.md,provenance-ledger.md,sim-economy.md
+0x006e33a0	PROC	+0	1	LeaderData::type_avail	int LeaderData::(TypeIndex, int)	2	provenance-ledger.md,sim-economy.md
+0x006e5110	PROC	+0	1	LeaderData::log_data	void LeaderData::(Log*)	1	pdb-types.md
+0x006ed2a0	PROC	+0	1	Leaders::process_all	void Leaders::()	3	provenance-ledger.md,sim-economy.md
+0x006edb50	PROC	+0	1	LeaderData::is_ally	int LeaderData::(int)	2	pathfinding.md
+0x0072a5b0	PROC	+24912	1	Options::describe	void Options::(Option*, int, int...	1	economy.md
+0x00730270	PROC	+0	1	OrderList::walk_data	void OrderList::(DataWalk*)	1	checksum.md
+0x00798410	PROC	+0	1	ConquestGame::walk_data	void ConquestGame::(DataWalk*)	1	replay-io.md
+0x007b2fc0	PROC	+0	1	GameReportWin::exec	void GameReportWin::(int)	1	replay-io.md
+0x007b4f50	PROC	+0	1	GameReportWin::on_button_clicked	void GameReportWin::(const Strin...	1	replay-io.md
+0x00803a00	PROC	+672	1	IFaceDiploNeg::on_button_redraw	int IFaceDiploNeg::(Button*, int...	1	replay-io.md
+0x00806000	PROC	+208	1	IFaceGarrison::on_button_clicked	void IFaceGarrison::(int)	1	replay-io.md
+0x00822d6d	PROC	+6301	1	IFaceSelected::draw_stat	int IFaceSelected::(const RectTe...	3	economy.md,provenance-ledger.md,sim-economy.md
+0x008437f0	PROC	+0	1	Camera::zoom_to_level	void Camera::(int)	1	replay-stream.md
+0x00846450	PROC	+0	1	Doober::get_num	int Doober::(TCoord, TCoord, int...	10	AUDIT.md,GOAL.md,README-LLM.md,provenance-ledger.md,rng.md
+0x008544a0	PROC	+0	1	TerrainOut::find_tcoord_z	Coord TerrainOut::(TCoord, TCoor...	6	pathfinding.md
+0x00883080	PROC	+688	1	BorderSpline::registration	void BorderSpline::()	2	economy.md,provenance-ledger.md
+0x008db7c0	PROC	+0	1	Particle::init	Liberr Particle::(const Particle...	1	rng.md
+0x0092bc80	PROC	+0	1	Nuke::do_damage	Liberr Nuke::()	1	combat.md
+0x0092cfe0	PROC	+0	1	flanking	int (unsigned long, unsigned lon...	9	AUDIT.md,combat.md,damage-port.md,provenance-ledger.md
+0x0092ef00	PROC	+0	1	Version::get_string	String Version::(int)	1	replay-io.md
+0x0092f3f8	PROC	+296	1	GameLog::dump_all	void GameLog::()	1	economy.md
+0x0092fc84	PROC	+20	1	GameLog::dump_constants	void GameLog::()	1	economy.md
+0x00936560	PROC	+0	1	CheckSums::check_all	unsigned long CheckSums::()	15	AUDIT-replay.md,README-LLM.md,checksum.md,pdb-types.md,provenance-ledger.md,replay-checksum.md,replay-io.md,rng.md
+0x0093657e	PROC	+30	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x00936585	PROC	+37	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x009365a1	PROC	+65	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x009365a8	PROC	+72	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x0093686b	PROC	+779	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x00936b70	PROC	+1552	1	CheckSums::check_all	unsigned long CheckSums::()	1	rng.md
+0x00936b7d	PROC	+1565	1	CheckSums::check_all	unsigned long CheckSums::()	1	AUDIT-replay.md
+0x00936b8c	PROC	+1580	1	CheckSums::check_all	unsigned long CheckSums::()	1	checksum.md
+0x00936bb0	PROC	+0	1	CheckSums::check_deaths	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x00936ff0	PROC	+0	1	CheckSum::walk_function	void CheckSum::(void*, void*)	7	AUDIT.md,checksum.md,provenance-ledger.md
+0x00937040	PROC	+0	1	CheckSums::check_wdata	void CheckSums::(CheckSum*, int)	2	checksum.md
+0x009370a0	PROC	+0	1	CheckSums::check_tdata	void CheckSums::(CheckSum*, int)	2	checksum.md
+0x009370f0	PROC	+0	1	CheckSums::check_seen	void CheckSums::(CheckSum*, int)	2	checksum.md
+0x009371d0	PROC	+0	1	CheckSums::check_units	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x009371da	PROC	+10	1	CheckSums::check_units	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x009371fd	PROC	+45	1	CheckSums::check_units	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x00937268	PROC	+152	1	CheckSums::check_units	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x00937290	PROC	+0	1	CheckSums::check_builds	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x0093729a	PROC	+10	1	CheckSums::check_builds	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x00937360	PROC	+0	1	CheckSums::check_walls	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x0093736a	PROC	+10	1	CheckSums::check_walls	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x00937430	PROC	+0	1	CheckSums::check_guys	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x0093743d	PROC	+13	1	CheckSums::check_guys	void CheckSums::(CheckSum*, int)	1	checksum.md
+0x009374e0	PROC	+0	1	CheckSums::check_ammo	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x00937530	PROC	+0	1	CheckSums::check_groups	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x009375a0	PROC	+0	1	CheckSums::check_leaders	void CheckSums::(CheckSum*, int)	1	replay-checksum.md
+0x00937600	PROC	+0	1	CheckSums::check_cities	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x00937710	PROC	+0	1	CheckSums::check_goods	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x00937790	PROC	+0	1	CheckSums::check_items	void CheckSums::(CheckSum*, int)	2	checksum.md,replay-checksum.md
+0x0093ef10	PROC	+0	1	CommandManager::process_turn	int CommandManager::()	4	checksum.md,replay-checksum.md,replay-io.md
+0x0093f0f6	PROC	+486	1	CommandManager::process_turn	int CommandManager::()	1	replay-io.md
+0x0093f103	PROC	+499	1	CommandManager::process_turn	int CommandManager::()	1	checksum.md
+0x0093f122	PROC	+530	1	CommandManager::process_turn	int CommandManager::()	1	replay-io.md
+0x0093f170	PROC	+608	1	CommandManager::process_turn	int CommandManager::()	1	replay-io.md
+0x0093f2e9	PROC	+985	1	CommandManager::process_turn	int CommandManager::()	3	AUDIT-replay.md,provenance-ledger.md,replay-checksum.md
+0x0093fa3f	PROC	+2863	1	CommandManager::process_turn	int CommandManager::()	1	replay-io.md
+0x0093fb63	PROC	+3155	1	CommandManager::process_turn	int CommandManager::()	1	checksum.md
+0x0093fbb3	PROC	+3235	1	CommandManager::process_turn	int CommandManager::()	1	replay-io.md
+0x00940120	PROC	+0	1	CommandManager::send_local_package	void CommandManager::()	1	replay-io.md
+0x00940259	PROC	+313	1	CommandManager::send_local_package	void CommandManager::()	1	replay-io.md
+0x00940770	PROC	+0	1	CommandManager::issue_check_sums	void CommandManager::()	10	AUDIT-replay.md,provenance-ledger.md,replay-checksum.md
+0x00940795	PROC	+37	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x00940799	PROC	+41	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x009407a9	PROC	+57	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x009409cd	PROC	+605	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x009409f2	PROC	+642	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x009409f8	PROC	+648	1	CommandManager::issue_check_sums	void CommandManager::()	3	provenance-ledger.md,replay-checksum.md
+0x009409fb	PROC	+651	1	CommandManager::issue_check_sums	void CommandManager::()	1	replay-checksum.md
+0x00943660	PROC	+0	1	CommandPackage::process_marwan	int CommandPackage::(MarwanComma...	1	replay-stream.md
+0x00943730	PROC	+0	1	CommandPackage::process_player_speed	int CommandPackage::(PlayerSpeed...	3	replay-io.md,replay-stream.md
+0x009438c0	PROC	+0	1	CommandPackage::process_resign	int CommandPackage::(ResignComma...	1	replay-stream.md
+0x009439a0	PROC	+0	1	CommandPackage::process_quit	int CommandPackage::(QuitCommand...	1	replay-stream.md
+0x00943b00	PROC	+0	1	CommandPackage::process_camera	int CommandPackage::(CameraComma...	3	replay-stream.md
+0x00943d20	PROC	+0	1	CommandPackage::process_turn_data	int CommandPackage::(TurnDataCom...	2	replay-checksum.md,replay-stream.md
+0x00943ea0	PROC	+0	1	CommandPackage::process_ungraceful_player_drop	int CommandPackage::(UngracefulP...	1	replay-stream.md
+0x00943f30	PROC	+0	1	CommandPackage::process_console_cmd	int CommandPackage::(ConsoleCmdC...	1	replay-stream.md
+0x00944090	PROC	+0	1	CommandPackage::process_rename_city	int CommandPackage::(RenameCityC...	1	replay-stream.md
+0x00944160	PROC	+0	1	CommandPackage::process_pause	int CommandPackage::(PauseComman...	1	replay-stream.md
+0x009441d0	PROC	+0	1	CommandPackage::process_leader_options	int CommandPackage::(LeaderOptio...	1	replay-stream.md
+0x009449b0	PROC	+0	1	CommandPackage::process_cheat_view_all	int CommandPackage::(CheatViewAl...	1	replay-stream.md
+0x00944a80	PROC	+0	1	CommandPackage::process_cheat_init_unit	int CommandPackage::(CheatInitUn...	1	replay-stream.md
+0x00944b80	PROC	+0	1	CommandPackage::process_cheat_zero_buckets	int CommandPackage::(CheatZeroBu...	1	replay-stream.md
+0x00944c50	PROC	+0	1	CommandPackage::process_cheat_increase_buckets	int CommandPackage::(CheatIncrea...	1	replay-stream.md
+0x00944d20	PROC	+0	1	CommandPackage::process_cheat_ai_toggle	int CommandPackage::(CheatAITogg...	1	replay-stream.md
+0x00944df0	PROC	+0	1	CommandPackage::process_cheat_ai_speed_normal	int CommandPackage::(CheatAISpee...	1	replay-stream.md
+0x00944ec0	PROC	+0	1	CommandPackage::process_cheat_ai_speed_increase	int CommandPackage::(CheatAISpee...	1	replay-stream.md
+0x00944fa0	PROC	+0	1	CommandPackage::process_cheat_zero_techs	int CommandPackage::(CheatZeroTe...	1	replay-stream.md
+0x00945070	PROC	+0	1	CommandPackage::process_cheat_give_techs	int CommandPackage::(CheatGiveTe...	1	replay-stream.md
+0x00945140	PROC	+0	1	CommandPackage::process_spline	int CommandPackage::(SplineComma...	2	replay-io.md,replay-stream.md
+0x009453f0	PROC	+0	1	CommandPackage::process_ping	int CommandPackage::(PingCommand...	1	replay-stream.md
+0x009454f0	PROC	+0	1	CommandPackage::process_chat	int CommandPackage::(ChatCommand...	2	replay-io.md,replay-stream.md
+0x009458e0	PROC	+0	1	CommandPackage::process_chat_set	int CommandPackage::(ChatSetComm...	1	replay-stream.md
+0x009459d0	PROC	+0	1	CommandPackage::process_check_sums	int CommandPackage::(CheckSumsCo...	15	AUDIT-replay.md,README-LLM.md,checksum.md,pdb-types.md,replay-checksum.md,replay-io.md,replay-stream.md
+0x00945a4b	PROC	+123	1	CommandPackage::process_check_sums	int CommandPackage::(CheckSumsCo...	1	AUDIT-replay.md
+0x00945e0e	PROC	+1086	1	CommandPackage::process_check_sums	int CommandPackage::(CheckSumsCo...	2	provenance-ledger.md
+0x00945e20	PROC	+0	1	CommandPackage::process_next_check_sum	int CommandPackage::(NextCheckSu...	1	replay-stream.md
+0x00946020	PROC	+0	1	CommandPackage::process_check_random	int CommandPackage::(CheckRandom...	1	replay-stream.md
+0x00946080	PROC	+0	1	CommandPackage::process_mp_log	int CommandPackage::(MPLogComman...	1	replay-stream.md
+0x009461a0	PROC	+0	1	CommandPackage::process_speed_up	int CommandPackage::(SpeedUpComm...	1	replay-stream.md
+0x00946290	PROC	+0	1	CommandPackage::process_speed_down	int CommandPackage::(SpeedDownCo...	1	replay-stream.md
+0x00946380	PROC	+0	1	CommandPackage::process_speed_set	int CommandPackage::(SpeedSetCom...	1	replay-stream.md
+0x009464f0	PROC	+0	1	CommandPackage::process_cannon_time	int CommandPackage::(CannonTimeC...	1	replay-stream.md
+0x009465d0	PROC	+0	1	CommandPackage::process_come_out	int CommandPackage::(ComeOutComm...	1	replay-stream.md
+0x009466f0	PROC	+0	1	CommandPackage::process_unqueue	int CommandPackage::(UnqueueComm...	1	replay-stream.md
+0x009468a0	PROC	+0	1	CommandPackage::process_sell	int CommandPackage::(SellCommand...	1	replay-stream.md
+0x00946a20	PROC	+0	1	CommandPackage::process_buy	int CommandPackage::(BuyCommand*...	1	replay-stream.md
+0x00946b30	PROC	+0	1	CommandPackage::process_propose_attack	int CommandPackage::(ProposeAtta...	1	replay-stream.md
+0x00946c50	PROC	+0	1	CommandPackage::process_demand_tribute	int CommandPackage::(DemandTribu...	1	replay-stream.md
+0x00946d70	PROC	+0	1	CommandPackage::process_tribute	int CommandPackage::(TributeComm...	1	replay-stream.md
+0x00946e90	PROC	+0	1	CommandPackage::process_reject	int CommandPackage::(RejectComma...	1	replay-stream.md
+0x00946fb0	PROC	+0	1	CommandPackage::process_accept	int CommandPackage::(AcceptComma...	1	replay-stream.md
+0x009470b0	PROC	+0	1	CommandPackage::process_clear_all	int CommandPackage::(ClearAllCom...	1	replay-stream.md
+0x009471b0	PROC	+0	1	CommandPackage::process_clear_tributes	int CommandPackage::(ClearTribut...	1	replay-stream.md
+0x009472b0	PROC	+0	1	CommandPackage::process_declare	int CommandPackage::(DeclareComm...	1	replay-stream.md
+0x009473c0	PROC	+0	1	CommandPackage::process_treaty	int CommandPackage::(TreatyComma...	1	replay-stream.md
+0x009474d0	PROC	+0	1	CommandPackage::process_hotkey	int CommandPackage::(HotKeyComma...	1	replay-stream.md
+0x00947680	PROC	+0	1	CommandPackage::process_buildmask	int CommandPackage::(BuildmaskCo...	1	replay-stream.md
+0x00947790	PROC	+0	1	CommandPackage::process_unitmask	int CommandPackage::(UnitmaskCom...	1	replay-stream.md
+0x009478a0	PROC	+0	1	CommandPackage::process_guard	int CommandPackage::(GuardComman...	1	replay-stream.md
+0x009479c0	PROC	+0	1	CommandPackage::process_follow	int CommandPackage::(FollowComma...	1	replay-stream.md
+0x00947ae0	PROC	+0	1	CommandPackage::process_scramble	int CommandPackage::(ScrambleCom...	1	replay-stream.md
+0x00947bd0	PROC	+0	1	CommandPackage::process_recall	int CommandPackage::(RecallComma...	1	replay-stream.md
+0x00947cc0	PROC	+0	1	CommandPackage::process_stop_spell	int CommandPackage::(StopSpellCo...	1	replay-stream.md
+0x00947db0	PROC	+0	1	CommandPackage::process_flight	int CommandPackage::(FlightComma...	1	replay-stream.md
+0x00947ef0	PROC	+0	1	CommandPackage::process_alarm	int CommandPackage::(AlarmComman...	1	replay-stream.md
+0x00947fe0	PROC	+0	1	CommandPackage::process_eject_all	int CommandPackage::(EjectAllCom...	1	replay-stream.md
+0x00948110	PROC	+0	1	CommandPackage::process_build	int CommandPackage::(BuildComman...	1	replay-stream.md
+0x00948230	PROC	+0	1	CommandPackage::process_queue_up	int CommandPackage::(QueueUpComm...	1	replay-stream.md
+0x00948340	PROC	+0	1	CommandPackage::process_spell	int CommandPackage::(SpellComman...	1	replay-stream.md
+0x00948510	PROC	+0	1	CommandPackage::process_gather_point	int CommandPackage::(GatherPoint...	1	replay-stream.md
+0x00948660	PROC	+0	1	CommandPackage::process_disband	int CommandPackage::(DisbandComm...	1	replay-stream.md
+0x00948760	PROC	+0	1	CommandPackage::process_garrison	int CommandPackage::(GarrisonCom...	1	replay-stream.md
+0x009488b0	PROC	+0	1	CommandPackage::process_gather	int CommandPackage::(GatherComma...	1	replay-stream.md
+0x00948a10	PROC	+0	1	CommandPackage::process_city_gather	int CommandPackage::(CityGatherC...	1	replay-stream.md
+0x00948b20	PROC	+0	1	CommandPackage::process_trade	int CommandPackage::(TradeComman...	1	replay-stream.md
+0x00948cb0	PROC	+0	1	CommandPackage::process_repair	int CommandPackage::(RepairComma...	1	replay-stream.md
+0x00948e00	PROC	+0	1	CommandPackage::process_board_ship	int CommandPackage::(BoardShipCo...	1	replay-stream.md
+0x00948f60	PROC	+0	1	CommandPackage::process_set_transport	int CommandPackage::(SetTranspor...	1	replay-stream.md
+0x00949050	PROC	+0	1	CommandPackage::process_transport	int CommandPackage::(TransportCo...	1	replay-stream.md
+0x00949140	PROC	+0	1	CommandPackage::process_halt	int CommandPackage::(HaltCommand...	1	replay-stream.md
+0x00949230	PROC	+0	1	CommandPackage::process_launch_patrol	int CommandPackage::(LaunchPatro...	1	replay-stream.md
+0x00949380	PROC	+0	1	CommandPackage::process_patrol	int CommandPackage::(PatrolComma...	1	replay-stream.md
+0x009494a0	PROC	+0	1	CommandPackage::process_attack_ground	int CommandPackage::(AttackGroun...	1	replay-stream.md
+0x009495c0	PROC	+0	1	CommandPackage::process_move_near	int CommandPackage::(MoveNearCom...	2	replay-io.md,replay-stream.md
+0x009497c0	PROC	+0	1	CommandPackage::process_move_to	int CommandPackage::(MoveToComma...	1	replay-stream.md
+0x00949970	PROC	+0	1	CommandPackage::process_swarm_around	int CommandPackage::(SwarmAround...	1	replay-stream.md
+0x00949ae0	PROC	+0	1	CommandPackage::process_siege_attack	int CommandPackage::(SiegeAttack...	1	replay-stream.md
+0x00949c30	PROC	+0	1	CommandPackage::process_attack	int CommandPackage::(AttackComma...	1	replay-stream.md
+0x00949d90	PROC	+0	1	CommandPackage::process_form	int CommandPackage::(FormCommand...	1	replay-stream.md
+0x00949ed0	PROC	+0	1	CommandPackage::process_stance	int CommandPackage::(StanceComma...	2	replay-io.md,replay-stream.md
+0x00949fd0	PROC	+0	1	CommandPackage::process_begin	int CommandPackage::(BeginComman...	1	replay-stream.md
+0x0094a0c0	PROC	+0	1	CommandPackage::process_group	int CommandPackage::(GroupComman...	2	replay-io.md,replay-stream.md
+0x0094a700	PROC	+0	1	CommandPackage::process	int CommandPackage::(Command*)	15	provenance-ledger.md,replay-checksum.md,replay-format.md,replay-io.md,replay-stream.md
+0x0094b7c0	PROC	+0	1	CommandPackage::log_data	void CommandPackage::(Log*)	4	AUDIT-replay.md,provenance-ledger.md,replay-io.md
+0x0094c500	PROC	+0	1	CommandPackage::process_all	void CommandPackage::()	12	AUDIT-replay.md,provenance-ledger.md,replay-checksum.md,replay-stream.md
+0x0094c5a2	PROC	+162	1	CommandPackage::process_all	void CommandPackage::()	3	AUDIT-replay.md,provenance-ledger.md
+0x0094c5e0	PROC	+224	1	CommandPackage::process_all	void CommandPackage::()	2	AUDIT-replay.md
+0x0094c651	PROC	+337	1	CommandPackage::process_all	void CommandPackage::()	1	AUDIT-replay.md
+0x0094c690	PROC	+400	1	CommandPackage::process_all	void CommandPackage::()	1	AUDIT-replay.md
+0x0094c6a4	PROC	+420	1	CommandPackage::process_all	void CommandPackage::()	2	AUDIT-replay.md
+0x00952920	PROC	+0	1	RecordGame::select_file	String RecordGame::()	1	replay-io.md
+0x00952990	PROC	+0	1	RecordGame::write_ctw_header	void RecordGame::()	2	replay-io.md
+0x00952a50	PROC	+0	1	RecordGame::write_header	void RecordGame::()	3	replay-io.md
+0x00952b40	PROC	+0	1	RecordGame::finalize	void RecordGame::(int)	6	provenance-ledger.md,replay-io.md
+0x00952c7b	PROC	+315	1	RecordGame::finalize	void RecordGame::(int)	1	replay-io.md
+0x00952d30	PROC	+496	1	RecordGame::finalize	void RecordGame::(int)	1	replay-io.md
+0x00952d90	PROC	+0	1	RecordGame::read_package	int RecordGame::(CommandPackage*...	8	AUDIT-replay.md,provenance-ledger.md,replay-io.md
+0x00952e2d	PROC	+157	1	RecordGame::read_package	int RecordGame::(CommandPackage*...	1	AUDIT-replay.md
+0x00952e74	PROC	+228	1	RecordGame::read_package	int RecordGame::(CommandPackage*...	1	AUDIT-replay.md
+0x00952fb0	PROC	+0	1	RecordGame::write_package	void RecordGame::(const CommandP...	11	AUDIT-replay.md,provenance-ledger.md,replay-io.md
+0x00952fb3	PROC	+3	1	RecordGame::write_package	void RecordGame::(const CommandP...	2	AUDIT-replay.md,provenance-ledger.md
+0x00953120	PROC	+0	1	RecordGame::flush	void RecordGame::()	1	replay-io.md
+0x00953160	PROC	+0	1	RecordGame::fill_game_info	void RecordGame::()	1	replay-io.md
+0x009533e0	PROC	+0	1	RecordGame::read_random_game_info	void RecordGame::()	2	replay-io.md
+0x009534e0	PROC	+0	1	RecordGame::write_random_game_info	void RecordGame::()	2	replay-io.md
+0x00953610	PROC	+0	1	RecordGame::read_rules	void RecordGame::()	2	replay-io.md
+0x00953630	PROC	+0	1	RecordGame::write_rules	void RecordGame::()	2	replay-io.md
+0x009536f0	PROC	+0	1	RecordGame::read_ctw_header	void RecordGame::()	1	replay-io.md
+0x00953710	PROC	+0	1	RecordGame::read_header	int RecordGame::()	2	replay-io.md
+0x009537a0	PROC	+0	1	RecordGame::init_record	int RecordGame::()	3	replay-io.md
+0x00953990	PROC	+0	1	RecordGame::close	void RecordGame::()	3	replay-io.md
+0x00956cc0	PROC	+0	1	TurnControl::log_data	void TurnControl::(Log*)	1	pdb-types.md
+0x009598b0	PROC	+0	1	DropControl::process_drops	void DropControl::()	1	replay-io.md
+0x0095d840	PROC	+0	1	GameSpy::process_quickmatch	void GameSpy::()	1	rng.md
+0x00960000	PROC	+96	1	GameSpy::check_steam_command_line	int GameSpy::(const String&)	4	live-tables.md,provenance-ledger.md
+0x009636d1	PROC	+2657	1	GameSpy::UpdateLobbyFromDTO	void GameSpy::(LobbyManager*, co...	1	rng.md
+0x0097d770	PROC	+0	1	JukeBox::init	int JukeBox::()	1	rng.md
+0x00997ad0	PROC	+0	1	ScenarioData::walk_data	void ScenarioData::(DataWalk*)	2	checksum.md,replay-checksum.md
+0x009a0950	PROC	+0	1	ScenarioEditor::generate_map	int ScenarioEditor::(int)	1	rng.md
+0x009a19d0	PROC	+0	1	ScenarioEditor::init_terrain	void ScenarioEditor::(unsigned c...	1	rng.md
+0x009c41a0	PROC	+0	1	RunTimeEnv::walk_data	void RunTimeEnv::(DataWalk*)	2	checksum.md,replay-checksum.md
+0x009e1890	PROC	+0	1	MathUtilFuncSet::rand_int	int MathUtilFuncSet::(const int&...	6	AUDIT.md,provenance-ledger.md,rng.md
+0x009e18b0	PROC	+0	1	MathUtilFuncSet::rand_real	float MathUtilFuncSet::()	1	rng.md
+0x009e1900	PROC	+0	1	MathUtilFuncSet::rand_seed	void MathUtilFuncSet::(const int...	1	rng.md
+0x009e190c	PROC	+12	1	MathUtilFuncSet::rand_seed	void MathUtilFuncSet::(const int...	1	rng.md
+0x009e1930	PROC	+0	1	MathUtilFuncSet::rand_get_seed	int MathUtilFuncSet::()	1	rng.md
+0x009e1937	PROC	+7	1	MathUtilFuncSet::rand_get_seed	int MathUtilFuncSet::()	1	rng.md
+0x009e59e1	PROC	+129	1	ScenarioFuncSet::switch_player_control	int ScenarioFuncSet::(const int&...	1	rng.md
+0x00a15fc0	PROC	+0	1	String::convert_int	int String::(const wchar_t*, int...	4	economy.md,provenance-ledger.md
+0x00a16010	PROC	+80	1	String::convert_int	int String::(const wchar_t*, int...	1	economy.md
+0x00a1b2d0	PROC	+0	1	String::walk_data	void String::(DataWalk*)	2	replay-io.md
+0x00a1b6b0	PROC	+0	1	String::generate_hash	unsigned long String::(const wch...	2	replay-io.md
+0x00a1cf40	PROC	+0	1	String::close	void String::()	1	economy.md
+0x00a1d110	PROC	+0	1	String::fraction	int String::(int)	17	AUDIT.md,GOAL.md,README-LLM.md,economy.md,pdb-types.md,provenance-ledger.md,sim-economy.md
+0x00a1d163	PROC	+83	1	String::fraction	int String::(int)	1	AUDIT.md
+0x00a1d16b	PROC	+91	1	String::fraction	int String::(int)	1	AUDIT.md
+0x00a1d180	PROC	+0	1	String::operator+=	String& String::(int)	1	economy.md
+0x00a1d210	PROC	+0	1	String::number	int String::(int)	4	economy.md,provenance-ledger.md
+0x00a27900	PROC	+0	1	XMLElement::get_attrib	String XMLElement::(const String...	1	economy.md
+0x00a2cc10	PROC	+0	1	File::write	int File::(const void*, int)	1	replay-io.md
+0x00a2dc70	PROC	+0	1	File::close	void File::()	1	replay-io.md
+0x00a2dcd0	PROC	+0	1	File::open	Liberr File::(const String&, int...	1	replay-io.md
+0x00a2e880	PROC	+0	1	SyncLogger::reportSettingsAndOptions	void SyncLogger::()	3	checksum.md,provenance-ledger.md
+0x00a2f580	PROC	+0	1	SyncLogger::writeToFileAndReset	void SyncLogger::(std::vector<Sk...	3	checksum.md
+0x00a30080	PROC	+0	1	SyncLogger::setupWithConfigSettings	void SyncLogger::()	7	checksum.md,provenance-ledger.md,replay-checksum.md
+0x00a301d6	PROC	+342	1	SyncLogger::setupWithConfigSettings	void SyncLogger::()	1	replay-checksum.md
+0x00a30206	PROC	+390	1	SyncLogger::setupWithConfigSettings	void SyncLogger::()	1	replay-checksum.md
+0x00a30327	PROC	+679	1	SyncLogger::setupWithConfigSettings	void SyncLogger::()	1	checksum.md
+0x00a3566c	PROC	+876	1	ModPackage::calculateSteamTags	void ModPackage::()	1	combat.md
+0x00a39cf0	PROC	+0	1	Random::get	float Random::()	16	AUDIT.md,README-LLM.md,pdb-types.md,provenance-ledger.md,replay-io.md,rng.md
+0x00a39d30	PROC	+0	1	Random::reseed	unsigned long Random::(unsigned ...	4	README-LLM.md,provenance-ledger.md,rng.md
+0x00a39d40	PROC	+0	1	random	int (int, int)	3	README-LLM.md,provenance-ledger.md,rng.md
+0x00a39d50	PROC	+0	1	Random::Random	void Random::()	1	rng.md
+0x00a39d60	PROC	+0	1	Random::~Random	void Random::()	1	rng.md
+0x00a39d70	PROC	+0	1	Random::get	int Random::(int, int)	19	AUDIT-replay.md,AUDIT.md,README-LLM.md,pathfinding.md,pdb-types.md,provenance-ledger.md,replay-stream.md,rng.md
+0x00a39df0	PROC	+128	1	Random::get	int Random::(int, int)	1	pathfinding.md
+0x00a39e83	PROC	+275	1	Random::get	int Random::(int, int)	1	AUDIT.md
+0x00a39ea5	PROC	+309	1	Random::get	int Random::(int, int)	3	AUDIT-replay.md,rng.md
+0x00a39ec0	PROC	+336	1	Random::get	int Random::(int, int)	1	AUDIT.md
+0x00a46830	PROC	+0	1	adler32	unsigned long (unsigned long, co...	13	AUDIT.md,README-LLM.md,checksum.md,pdb-types.md,provenance-ledger.md
+0x00ab4dd0	PROC	+0	1	`dynamic atexit destructor for 'game_random''	void ()	2	rng.md
+0x00abde30	PROC	+0	1	`dynamic atexit destructor for 'SoundGlobal::random''	void ()	1	rng.md
+0x00abde40	PROC	+0	1	`dynamic atexit destructor for 'SoundType::random''	void ()	1	rng.md
+0x00ac0b90	PROC	+0	1	`dynamic atexit destructor for 'internal_random''	void ()	1	rng.md
+0x00ac5000	PUB	+0	1	__imp__RegOpenKeyExA@20		1	replay-io.md
+0x00ac5434	PUB	+0	1	__imp__wcschr		2	economy.md,provenance-ledger.md
+0x00ac54ac	PUB	+0	1	__imp___wtoi		3	economy.md,provenance-ledger.md,sim-economy.md
+0x00ac5518	PUB	+0	1	__imp___libm_sse2_acos_precise		1	pathfinding.md
+0x00ac551c	PUB	+0	1	__imp___libm_sse2_asin_precise		1	pathfinding.md
+0x00ac5520	PUB	+0	1	__imp___libm_sse2_atan_precise		1	pathfinding.md
+0x00ac5524	PUB	+0	1	__imp___libm_sse2_cos_precise		1	pathfinding.md
+0x00ac5528	PUB	+0	1	__imp___libm_sse2_pow_precise		1	pathfinding.md
+0x00ac552c	PUB	+0	1	__imp___libm_sse2_sin_precise		1	pathfinding.md
+0x00ac5530	PUB	+0	1	__imp___libm_sse2_sqrt_precise		1	pathfinding.md
+0x00ac5534	PUB	+0	1	__imp___libm_sse2_tan_precise		1	pathfinding.md
+0x00ac5690	PUB	+0	1	__imp__towlower		1	replay-io.md
+0x00ac80fc	NEAR	+3899	1	char cNUMERIC_GROUP_SEPARATOR		1	replay-stream.md
+0x00ac81e8	NONE	+0	0			1	replay-stream.md
+0x00ad1190	NEAR	+2736	1	public: static class VTUNEProfile &MiscAccess::vtune_profile		1	replay-io.md
+0x00ad1ae0	NONE	+0	0			1	economy.md
+0x00ad5d98	NONE	+0	0			1	checksum.md
+0x00ad5e14	NONE	+0	0			1	checksum.md
+0x00ad5e98	NONE	+0	0			1	checksum.md
+0x00ad6c34	NONE	+0	0			1	checksum.md
+0x00ad8d4c	NONE	+0	0			1	checksum.md
+0x00ad8d68	NONE	+0	0			1	checksum.md
+0x00ad8da0	NONE	+0	0			1	checksum.md
+0x00adc400	PUB	+0	1	int const *const move_y		1	pathfinding.md
+0x00adcaf0	PUB	+0	1	int const *const move_x		1	pathfinding.md
+0x00add1d4	NEAR	+1764	1	int const *const move_x		1	pathfinding.md
+0x00add224	PUB	+20	1	int const *const orthog_y		1	pathfinding.md
+0x00add238	NEAR	+40	1	int const *const orthog_y		1	pathfinding.md
+0x00add264	PUB	+20	1	int const *const orthog_x		1	pathfinding.md
+0x00add278	NEAR	+40	1	int const *const orthog_x		1	pathfinding.md
+0x00add284	NEAR	+52	1	int const *const orthog_x		1	pathfinding.md
+0x00add2c0	PUB	+16	1	int const *const corner_box_y		1	pathfinding.md
+0x00add2d0	PUB	+32	1	int const *const corner_box_y		1	pathfinding.md
+0x00add2e0	NEAR	+48	1	int const *const corner_box_y		1	pathfinding.md
+0x00add2f0	NEAR	+64	1	int const *const corner_box_y		1	pathfinding.md
+0x00add350	NEAR	+160	1	int const *const corner_box_y		1	pathfinding.md
+0x00add368	NEAR	+184	1	int const *const corner_box_y		1	pathfinding.md
+0x00add370	NEAR	+192	1	int const *const corner_box_y		1	pathfinding.md
+0x00add3a4	NEAR	+244	1	int const *const corner_box_y		1	pathfinding.md
+0x00ae6b04	NONE	+0	0			1	replay-io.md
+0x00ae6b90	NONE	+0	0			1	replay-io.md
+0x00ae6b91	NONE	+0	0			1	replay-io.md
+0x00ae6c10	NONE	+0	0			1	replay-io.md
+0x00ae705c	NONE	+0	0			2	replay-io.md
+0x00af6894	NONE	+0	0			1	checksum.md
+0x00af6a10	NONE	+0	0			1	checksum.md
+0x00af6ac8	NONE	+0	0			1	checksum.md
+0x00af6adc	NONE	+0	0			1	checksum.md
+0x00af6af0	NONE	+0	0			1	checksum.md
+0x00af7008	NONE	+0	0			1	replay-io.md
+0x00af7120	NONE	+0	0			1	checksum.md
+0x00af7210	NONE	+0	0			3	AUDIT-replay.md,checksum.md
+0x00af7318	NONE	+0	0			1	checksum.md
+0x00af73c6	NONE	+0	0			2	replay-io.md
+0x00af75a6	NONE	+0	0			1	replay-io.md
+0x00af76b8	NONE	+0	0			2	replay-io.md
+0x00af7718	NONE	+0	0			2	replay-io.md
+0x00af7738	NONE	+0	0			2	replay-io.md
+0x00af7974	NONE	+0	0			1	replay-io.md
+0x00af7c00	NONE	+0	0			1	replay-io.md
+0x00af7ca0	NONE	+0	0			2	replay-stream.md
+0x00af7d20	NONE	+0	0			1	replay-io.md
+0x00af7f28	NONE	+0	0			1	checksum.md
+0x00af9398	NONE	+0	0			1	replay-io.md
+0x00afa720	NONE	+0	0			2	checksum.md,replay-io.md
+0x00afa8c0	NONE	+0	0			1	replay-io.md
+0x00afba70	NONE	+0	0			1	replay-checksum.md
+0x00afbc00	NONE	+0	0			1	replay-stream.md
+0x00afbe40	NONE	+0	0			1	replay-stream.md
+0x00afc438	NONE	+0	0			1	replay-io.md
+0x00afc61c	NEAR	+376	1	public: static int *TurnControl::timings		1	replay-io.md
+0x00afc63c	NEAR	+408	1	public: static int *TurnControl::timings		1	replay-io.md
+0x00afc6d8	NEAR	+564	1	public: static int *TurnControl::timings		1	replay-io.md
+0x00b14500	NONE	+0	0			1	replay-io.md
+0x00b179c0	NONE	+0	0			1	checksum.md
+0x00b179e8	NONE	+0	0			1	checksum.md
+0x00b17a1c	NONE	+0	0			1	checksum.md
+0x00b17a3c	NONE	+0	0			1	checksum.md
+0x00b17a58	NONE	+0	0			1	checksum.md
+0x00b17a80	NONE	+0	0			1	checksum.md
+0x00b17a9c	NONE	+0	0			1	checksum.md
+0x00b17adc	NONE	+0	0			1	checksum.md
+0x00b17b08	NONE	+0	0			1	replay-stream.md
+0x00b17b44	NONE	+0	0			1	checksum.md
+0x00b17b60	NONE	+0	0			1	checksum.md
+0x00b17b90	NONE	+0	0			1	checksum.md
+0x00b17d78	NONE	+0	0			1	replay-stream.md
+0x00b18090	NONE	+0	0			1	checksum.md
+0x00b18204	NONE	+0	0			2	checksum.md,replay-stream.md
+0x00b18224	NONE	+0	0			1	checksum.md
+0x00b18270	NONE	+0	0			1	checksum.md
+0x00b18294	NONE	+0	0			1	checksum.md
+0x00b182dc	NONE	+0	0			1	checksum.md
+0x00b18538	NONE	+0	0			1	checksum.md
+0x00b18680	NONE	+0	0			1	checksum.md
+0x00b1871c	NONE	+0	0			1	checksum.md
+0x00b18c34	NEAR	+528	1	wchar_t const *LOBBY_DATA_KEY_START_LOGGING_ON_WORLDTIMEMS		1	checksum.md
+0x00b18ccc	NEAR	+680	1	wchar_t const *LOBBY_DATA_KEY_START_LOGGING_ON_WORLDTIMEMS		1	checksum.md
+0x00b18cf0	NEAR	+716	1	wchar_t const *LOBBY_DATA_KEY_START_LOGGING_ON_WORLDTIMEMS		1	checksum.md
+0x00b1a840	NONE	+0	0			1	pathfinding.md
+0x00b24798	PUB	+0	1	const Spline::`vftable'		1	economy.md
+0x00b2bcd8	PUB	+0	1	const DataWalk::`vftable'		6	AUDIT.md,checksum.md,pdb-types.md,replay-io.md
+0x00b2bd00	PUB	+0	1	const SyncDisplay::`vftable'{for `ImageIO'}		1	checksum.md
+0x00b2d4f8	PUB	+0	1	const ConquestSaveGame::`vftable'		1	checksum.md
+0x00b30c88	PUB	+0	1	const LoadGame::`vftable'		3	checksum.md,pdb-types.md,replay-io.md
+0x00b32c20	PUB	+0	1	const SyncDisplay::`vftable'		1	checksum.md
+0x00b35ac4	PUB	+0	1	const SaveGame::`vftable'		3	checksum.md,pdb-types.md,replay-io.md
+0x00b38b94	PUB	+0	1	const SyncDisplay::`vftable'{for `BufferBase'}		1	checksum.md
+0x00b39158	PUB	+0	1	const GameLog::`vftable'		1	economy.md
+0x00b3f920	PUB	+0	1	const CheckSum::`vftable'		5	AUDIT.md,checksum.md,pdb-types.md
+0x00b41fd4	PUB	+0	1	const UnitType::`vftable'{for `Type'}		2	live-tables.md
+0x00b42174	PUB	+0	1	const Build::`vftable'		1	damage-port.md
+0x00b42b94	PUB	+0	1	const BuildType::`vftable'{for `Type'}		1	live-tables.md
+0x00b43aac	PUB	+0	1	const ObjectType::`vftable'{for `Type'}		1	live-tables.md
+0x00b43da4	PUB	+0	1	const TypeOut::`vftable'		1	checksum.md
+0x00b44384	PUB	+0	1	const BonusType::`vftable'		1	live-tables.md
+0x00b4456c	PUB	+0	1	const TechType::`vftable'		1	live-tables.md
+0x00b44b70	PUB	+0	1	const GoodType::`vftable'{for `Type'}		1	live-tables.md
+0x00b452bc	PUB	+0	1	const ItemType::`vftable'{for `Type'}		1	live-tables.md
+0x00b45448	PUB	+0	1	"Pathfinding"		1	pathfinding.md
+0x00b45458	PUB	+0	1	const PathFinderOut::`vftable'		1	pathfinding.md
+0x00b4546c	PUB	+0	1	const PathFinder::`vftable'		1	pathfinding.md
+0x00b4547c	PUB	+0	1	const PathFinder::`vbtable'		1	pathfinding.md
+0x00b4a12c	PUB	+0	1	const MoveOrder::`vftable'		1	pathfinding.md
+0x00b5419c	PUB	+0	1	const BorderSpline::`vftable'		1	economy.md
+0x00b557cc	PUB	+0	1	const SplineOut::`vftable'		1	economy.md
+0x00b66858	PUB	+0	1	L"netsys.cpp"		1	replay-io.md
+0x00b67f24	PUB	+0	1	"zlib error"		1	replay-io.md
+0x00b69430	PUB	+0	1	__real@3b800000		1	economy.md
+0x00b696ac	PUB	+0	1	__real@42c80000		1	economy.md
+0x00b69a30	PUB	+0	1	__xmm@0000021c000000640000006400000037		6	pathfinding.md,provenance-ledger.md
+0x00b69a60	PUB	+0	1	__xmm@000002580000003c000000c8000000f0		6	pathfinding.md,provenance-ledger.md
+0x00b74364	PUB	+0	1	const GameLog::`RTTI Complete Object Locator'		1	economy.md
+0x00b7b9d4	PUB	+0	1	PathFinder::`RTTI Base Class Array'		1	pathfinding.md
+0x00b7b9f4	PUB	+0	1	PathFinderOut::`RTTI Base Class Array'		1	pathfinding.md
+0x00b7bab8	PUB	+0	1	const PathFinderOut::`RTTI Complete Object Locator'		1	pathfinding.md
+0x00b7bacc	PUB	+0	1	const PathFinder::`RTTI Complete Object Locator'		1	pathfinding.md
+0x00c06000	PUB	+0	1	_m_rgDLLMap		2	live-tables.md,replay-io.md
+0x00c0617c	PUB	+0	1	public: static class ConquestGame &GameAccess::conquest_game		1	rng.md
+0x00c06184	PUB	+0	1	public: static class Random &GameAccess::game_random		19	README-LLM.md,pathfinding.md,pdb-types.md,provenance-ledger.md,replay-io.md,rng.md
+0x00c06188	PUB	+0	1	public: static class World &GameAccess::world		7	checksum.md,pathfinding.md,replay-checksum.md,replay-io.md,rng.md
+0x00c0618c	PUB	+0	1	public: static class Objects &GameAccess::objects		6	checksum.md,provenance-ledger.md,replay-checksum.md
+0x00c061c0	PUB	+0	1	public: static int &GameAccess::ai_speed		1	economy.md
+0x00c061d0	PUB	+0	1	public: static class World const &GameAccessConst::worldc		3	damage-port.md,pathfinding.md
+0x00c061d4	PUB	+0	1	public: static class Cities const &GameAccessConst::citiesc		1	damage-port.md
+0x00c061e0	PUB	+0	1	public: static class Leaders const &GameAccessConst::leadersc		3	combat.md,damage-port.md,economy.md
+0x00c061e4	PUB	+0	1	public: static class Constants const &GameAccessConst::constantsc		11	AUDIT.md,README-LLM.md,combat.md,damage-port.md,economy.md,pdb-types.md,provenance-ledger.md,replay-checksum.md
+0x00c061e8	PUB	+0	1	public: static class Game const &GameAccessConst::gamec		3	combat.md,damage-port.md
+0x00c061ec	PUB	+0	1	public: static class Game &GameAccess::game		21	AUDIT-replay.md,checksum.md,combat.md,economy.md,provenance-ledger.md,replay-checksum.md,replay-stream.md,rng.md,sim-economy.md
+0x00c061f0	PUB	+0	1	public: static class Constants &GameAccess::constants		14	AUDIT.md,README-LLM.md,combat.md,economy.md,pdb-types.md,provenance-ledger.md
+0x00c06200	PUB	+0	1	public: static class Camera &MiscAccess::camera		1	replay-stream.md
+0x00c06210	PUB	+0	1	public: static class Console &MiscAccess::console		1	replay-checksum.md
+0x00c06218	PUB	+0	1	public: static class Terrain &MiscAccess::terrain		1	pathfinding.md
+0x00c06370	PUB	+0	1	public: static int String::output_char_buffer_length		3	checksum.md,provenance-ledger.md,replay-checksum.md
+0x00c06378	PUB	+0	1	class StringTable *int_str_array		6	README-LLM.md,binary-ground-truth.md,economy.md,provenance-ledger.md
+0x00c06664	PUB	+0	1	wchar_t const *LOBBY_DATA_KEY_DESYNC_UPLOADS_WANTED		3	checksum.md,replay-checksum.md
+0x00c06668	PUB	+0	1	wchar_t const *LOBBY_DATA_KEY_DESYNC_DIAGNOSTICS_FRAME_HISTORY_SIZE		1	replay-checksum.md
+0x00c0666c	PUB	+0	1	wchar_t const *LOBBY_DATA_KEY_DESYNC_DIAGNOSTICS_TRACKING_ENABLED		1	replay-checksum.md
+0x00c06670	PUB	+0	1	wchar_t const *LOBBY_DATA_KEY_SKIP_COUNTDOWN		1	replay-checksum.md
+0x00c06674	PUB	+0	1	wchar_t const *LOBBY_DATA_KEY_DESYNC_DIAGNOSTICS_CHECK_DESYNCS_EVERY_X_FRAMES		2	checksum.md,replay-checksum.md
+0x00c068d0	PUB	+28	1	public: static int IncrementalLoad::read_increment		1	pdb-types.md
+0x00c06afc	NEAR	+584	1	public: static int IncrementalLoad::read_increment		18	AUDIT.md,README-LLM.md,combat.md,damage-port.md,live-tables.md,pdb-types.md,provenance-ledger.md,replay-stream.md
+0x00c07340	NEAR	+2700	1	public: static int IncrementalLoad::read_increment		1	replay-io.md
+0x00c07380	NEAR	+2764	1	public: static int IncrementalLoad::read_increment		1	replay-io.md
+0x00c07388	NEAR	+2772	1	public: static int IncrementalLoad::read_increment		1	replay-io.md
+0x00c07ac0	NONE	+0	0			1	AUDIT.md
+0x00c07ad0	NONE	+0	0			2	combat.md,pdb-types.md
+0x00c096e4	PUB	+0	1	class PtrArray<class GoodType> goodtypes		3	live-tables.md,provenance-ledger.md
+0x00c097e8	PUB	+0	1	class World world		1	rng.md
+0x00c0a264	PUB	+0	1	class PtrArray<class UnitType> unittypes		3	live-tables.md,provenance-ledger.md
+0x00c0aa90	PUB	+0	1	class PtrArray<class BuildType> buildtypes		3	live-tables.md,provenance-ledger.md
+0x00c0aaac	PUB	+0	1	class PtrArray<class TechType> techtypes		2	live-tables.md,provenance-ledger.md
+0x00c0aac8	PUB	+0	1	class PtrArray<class ItemType> itemtypes		2	live-tables.md,provenance-ledger.md
+0x00c0aae4	PUB	+0	1	class PtrArray<class ObjectType> objecttypes		2	live-tables.md,provenance-ledger.md
+0x00c0ab00	PUB	+0	1	class PtrArray<class SpellType> spelltypes		2	live-tables.md,provenance-ledger.md
+0x00c0ab1c	PUB	+0	1	class PtrArray<class BonusType> bonustypes		2	live-tables.md,provenance-ledger.md
+0x00c0ab38	PUB	+0	1	class PtrArray<class GovType> govtypes		2	live-tables.md,provenance-ledger.md
+0x00c0ab54	PUB	+0	1	class PtrArray<struct TypeBak> typesbak		2	live-tables.md,provenance-ledger.md
+0x00c0ab84	PUB	+20	1	class Objects objects		5	combat.md,damage-port.md,provenance-ledger.md
+0x00c0aec0	PUB	+16	1	class Units units		6	combat.md,damage-port.md,provenance-ledger.md
+0x00c12b70	PUB	+0	1	struct LoadGame load_game		1	replay-io.md
+0x00c12bf0	PUB	+0	1	class Balance combat_table		1	README-LLM.md
+0x00c12bf2	PUB	+2	1	class Balance combat_table		1	live-tables.md
+0x00c12bf4	PUB	+4	1	class Balance combat_table		11	README-LLM.md,live-tables.md,provenance-ledger.md
+0x00c7d06e	NONE	+0	0			2	AUDIT.md,combat.md
+0x00c7d5ce	NONE	+0	0			1	AUDIT.md
+0x00c896c6	NONE	+0	0			4	live-tables.md,provenance-ledger.md
+0x00c896c8	PUB	+0	1	class ObjectArray<class String> doober_names		1	live-tables.md
+0x00c8be38	PUB	+0	1	public: static class Fractal TerrainData::random_frac		1	rng.md
+0x00c8da70	PUB	+0	1	public: static class Stack<class PathNode *> Recycler<class PathNode>::temp_pool		2	pathfinding.md
+0x00c8da74	PUB	+4	1	public: static class Stack<class PathNode *> Recycler<class PathNode>::temp_pool		1	pathfinding.md
+0x00c8da78	PUB	+8	1	public: static class Stack<class PathNode *> Recycler<class PathNode>::temp_pool		1	pathfinding.md
+0x00c8da7c	PUB	+12	1	public: static class Stack<class PathNode *> Recycler<class PathNode>::temp_pool		1	pathfinding.md
+0x00c93854	PUB	+0	1	class GameLog `RTTI Type Descriptor'		1	economy.md
+0x00c9425c	PUB	+8	1	class ObjectArray<struct RandomLogEntry> `RTTI Type Descriptor'		2	checksum.md
+0x00c952e0	PUB	+0	1	struct DataWalk `RTTI Type Descriptor'		3	checksum.md
+0x00c95884	PUB	+0	1	class SyncDisplay `RTTI Type Descriptor'		1	checksum.md
+0x00c96814	PUB	+0	1	struct CheckSum `RTTI Type Descriptor'		2	checksum.md
+0x00c98504	PUB	+0	1	class PathFinderOut `RTTI Type Descriptor'		1	pathfinding.md
+0x00c98520	PUB	+0	1	class PathFinderData `RTTI Type Descriptor'		1	pathfinding.md
+0x00c98540	PUB	+0	1	class PathFinder `RTTI Type Descriptor'		1	pathfinding.md
+0x00c9bc00	PUB	+8	1	class BorderSpline `RTTI Type Descriptor'		1	economy.md
+0x00cae5fc	PUB	+0	1	int *div_3_table		7	damage-port.md,pathfinding.md,provenance-ledger.md
+0x00cbe54c	PUB	+0	1	float land_height		1	pathfinding.md
+0x00cbee88	PUB	+0	1	public: static unsigned char *CommandPackage::last_num_received		1	replay-stream.md
+0x00cbee90	PUB	+0	1	public: static unsigned long *CommandPackage::checksums		6	replay-checksum.md,replay-stream.md
+0x00cbeeb0	PUB	+0	1	public: static short (*CommandPackage::last_objects_received)[128]		1	replay-stream.md
+0x00d60000	NONE	+0	0			4	live-tables.md,provenance-ledger.md
+0x00e37a8c	PUB	+0	1	class Random game_random		15	README-LLM.md,provenance-ledger.md,replay-io.md,rng.md
+0x00e3a2a0	PUB	+16	1	class Caravans caravans		3	pathfinding.md
+0x00e3a390	PUB	+0	1	class Leaders leaders		2	checksum.md
+0x00e3a39c	PUB	+12	1	class Leaders leaders		1	replay-io.md
+0x00e71af0	NONE	+0	0			2	checksum.md
+0x00e789dc	NONE	+0	0			1	checksum.md
+0x00e7fc94	PUB	+0	1	struct Version current_version		1	pdb-types.md
+0x00e85dc8	PUB	+0	1	class Types types		1	live-tables.md
+0x00e85dcc	PUB	+4	1	class Types types		1	live-tables.md
+0x00e85ddc	PUB	+20	1	class Types types		2	damage-port.md,live-tables.md
+0x00e85e40	PUB	+0	1	class PathFinder pathfinder		3	pathfinding.md
+0x00e85e80	NEAR	+64	1	class PathFinder pathfinder		3	pathfinding.md
+0x00e85e84	NEAR	+68	1	class PathFinder pathfinder		1	pathfinding.md
+0x00e85e88	NEAR	+72	1	class PathFinder pathfinder		1	pathfinding.md
+0x00e85ecc	NEAR	+140	1	class PathFinder pathfinder		1	pathfinding.md
+0x00e85ee0	NEAR	+160	1	class PathFinder pathfinder		4	pathfinding.md
+0x00e85ee4	NEAR	+164	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85ee8	NEAR	+168	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85eec	NEAR	+172	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85ef0	NEAR	+176	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85ef4	NEAR	+180	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85ef8	NEAR	+184	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85efc	NEAR	+188	1	class PathFinder pathfinder		3	pathfinding.md
+0x00e85f00	NEAR	+192	1	class PathFinder pathfinder		2	pathfinding.md
+0x00e85f0c	PUB	+0	1	public: static class Random SoundGlobal::random		4	rng.md
+0x00e86880	PUB	+0	1	class ConquestGame conquest_game		1	rng.md
+0x00e87d3c	PUB	+0	1	public: static class Random SoundType::random		3	rng.md
+0x00e8f7a8	PUB	+0	1	struct RecordGame record_game		1	replay-io.md
+0x00e8f7ac	PUB	+4	1	struct RecordGame record_game		1	replay-io.md
+0x00e8f7c0	PUB	+24	1	struct RecordGame record_game		4	replay-io.md
+0x00e8f7e8	NEAR	+64	1	struct RecordGame record_game		3	replay-io.md
+0x00e8f7ec	NEAR	+68	1	struct RecordGame record_game		1	replay-io.md
+0x00e8f80c	NEAR	+100	1	struct RecordGame record_game		2	replay-io.md
+0x00eb437c	PUB	+0	1	class String const EMPTY_STRING		1	binary-ground-truth.md
+0x00eb697c	PUB	+0	1	class Random internal_random		11	README-LLM.md,pdb-types.md,provenance-ledger.md,replay-io.md,rng.md
+0x00ecba54	NEAR	+68	1	class JukeBox juke_box		2	rng.md
+0x00ee13a8	NEAR	+36	1	void **`class CSteamGameServerAPIContext & __cdecl SteamGameServerInternal_ModuleContext(void)'::`2'::ctx		2	rng.md
+0x00ee1aec	NEAR	+1852	1	double `public: static double __cdecl ProfileLog::get_frequency(void)'::`2'::ffreq		2	rng.md

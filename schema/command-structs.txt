@@ -1,0 +1,475 @@
+struct ABI::Windows::UI::Popups::IUICommand  // sizeof = 4 (0x4)
+    +0x00  IInspectable                 IInspectable           [base]
+
+struct AcceptCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+
+struct AlarmCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct AttackCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  int                          ignore                 
+    +0x0d  QueuePos                     queued                 
+
+struct AttackGroundCommand  // sizeof = 10 (0xa)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          to_x                   
+    +0x05  int                          to_y                   
+    +0x09  char                         queued                 
+
+struct BeginCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct BoardShipCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  QueuePos                     queued                 
+
+struct BuildCommand  // sizeof = 25 (0x19)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          x                      
+    +0x05  int                          y                      
+    +0x09  int                          x2                     
+    +0x0d  int                          y2                     
+    +0x11  int                          type                   
+    +0x15  QueuePos                     queued                 
+
+struct BuildmaskCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          buildmask              
+    +0x05  int                          set                    
+
+struct BuyCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          good                   
+    +0x09  int                          flags                  
+
+struct CameraCommand  // sizeof = 10 (0xa)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                zoom                   
+    +0x02  int                          x_loc                  
+    +0x06  int                          y_loc                  
+
+struct CannonTimeCommand  // sizeof = 2 (0x2)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                state                  
+
+struct ChatCommand  // sizeof = 19 (0x13)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          bits                   
+    +0x05  int                          taunt                  
+    +0x09  int                          taunt_num              
+    +0x0d  int                          len                    
+    +0x11  wchar_t[1]                   string                 
+
+struct ChatSetCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char[8]             status                 
+
+struct CheatAISpeedIncreaseCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct CheatAISpeedNormalCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct CheatAIToggleCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct CheatGiveTechsCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+
+struct CheatIncreaseBucketsCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+
+struct CheatInitUnitCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          t                      
+    +0x09  int                          x                      
+    +0x0d  int                          y                      
+
+struct CheatViewAllCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+
+struct CheatZeroBucketsCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+
+struct CheatZeroTechsCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+
+struct CheckRandomCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned long                seed                   
+
+struct CheckSumsCommand  // sizeof = 65 (0x41)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned long                units_checksum         
+    +0x05  unsigned long                builds_checksum        
+    +0x09  unsigned long                walls_checksum         
+    +0x0d  unsigned long                ammo_checksum          
+    +0x11  unsigned long                deaths_checksum        
+    +0x15  unsigned long                groups_checksum        
+    +0x19  unsigned long                guys_checksum          
+    +0x1d  unsigned long                leaders_checksum       
+    +0x21  unsigned long                cities_checksum        
+    +0x25  unsigned long                items_checksum         
+    +0x29  unsigned long                goods_checksum         
+    +0x2d  unsigned long                world_checksum         
+    +0x31  unsigned long                rules_checksum         
+    +0x35  unsigned long                scenario_data_checksum 
+    +0x39  unsigned long                script_run_time_checksum 
+    +0x3d  unsigned long                all_checksum           
+
+struct CityGatherCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          t                      
+    +0x05  QueuePos                     queued                 
+
+struct ClearAllCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+
+struct ClearTributesCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+
+struct ComeOutCommand  // sizeof = 11 (0xb)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          o                      
+    +0x09  short                        uid                    
+
+struct Command  // sizeof = 1 (0x1)
+    +0x00  unsigned char                command_type           
+
+struct ConsoleCmdCommand  // sizeof = 521 (0x209)
+    +0x00  Command                      Command                [base]
+    +0x01  Coord                        mouse_x                
+    +0x05  Coord                        mouse_y                
+    +0x09  wchar_t[256]                 cmd                    
+
+enum Conversion::Command  // sizeof = 4 (0x4)
+    COPY_TEXT                          = 0
+    FORMAT_ARGUMENT                    = 1
+
+struct DeclareCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+    +0x09  int                          treaty                 
+
+struct DemandTributeCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+    +0x09  int                          good                   
+    +0x0d  int                          amount                 
+
+struct DisbandCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          all                    
+
+struct EjectAllCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          back_to_work           
+    +0x05  int                          who                    
+    +0x09  int                          eject_o                
+    +0x0d  int                          eject_who              
+
+struct FlightCommand  // sizeof = 25 (0x19)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  int                          shift                  
+    +0x0d  int                          ctrl                   
+    +0x11  int                          alt                    
+    +0x15  OrderIndex                   orders                 
+
+struct FollowCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+
+struct FormCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          form                   
+    +0x05  int                          rotate                 
+    +0x09  QueuePos                     queued                 
+
+struct GarrisonCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+
+struct GatherCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  QueuePos                     queued                 
+
+struct GatherPointCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          x                      
+    +0x05  int                          y                      
+    +0x09  int                          action                 
+    +0x0d  int                          add_to_end             
+
+struct GroupCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                num                    
+    +0x02  char                         who                    
+    +0x03  GroupCommand::<unnamed-type-list>[2] list                   
+
+struct GuardCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+
+struct HaltCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct HotKeyCommand  // sizeof = 25 (0x19)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          group                  
+    +0x05  int                          clear                  
+    +0x09  int                          valid                  
+    +0x0d  float                        x                      
+    +0x11  float                        y                      
+    +0x15  int                          zoom                   
+
+struct LaunchPatrolCommand  // sizeof = 25 (0x19)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          to_x                   
+    +0x05  int                          to_y                   
+    +0x09  QueuePos                     queued                 
+    +0x0d  int                          shift                  
+    +0x11  int                          ctrl                   
+    +0x15  int                          alt                    
+
+struct LeaderOptionsCommand  // sizeof = 33 (0x21)
+    +0x00  Command                      Command                [base]
+    +0x01  LeaderOptionData             leader_option          
+
+struct MPLogCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct MarwanCommand  // sizeof = 2 (0x2)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                start                  
+
+struct MoveNearCommand  // sizeof = 26 (0x1a)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          to_x                   
+    +0x05  int                          to_y                   
+    +0x09  int                          tolerance              
+    +0x0d  int                          set_angle              
+    +0x11  int                          angle                  
+    +0x15  char                         orders                 
+    +0x16  char                         queued                 
+    +0x17  char                         form                   
+    +0x18  char                         width                  
+    +0x19  char                         disembark              
+
+struct MoveToCommand  // sizeof = 22 (0x16)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          to_x                   
+    +0x05  int                          to_y                   
+    +0x09  int                          set_angle              
+    +0x0d  int                          angle                  
+    +0x11  char                         orders                 
+    +0x12  char                         queued                 
+    +0x13  char                         form                   
+    +0x14  char                         width                  
+    +0x15  char                         disembark              
+
+struct NextCheckSumCommand  // sizeof = 6 (0x6)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                checksum_type          
+    +0x02  unsigned long                checksum               
+
+struct PatrolCommand  // sizeof = 10 (0xa)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          to_x                   
+    +0x05  int                          to_y                   
+    +0x09  char                         queued                 
+
+struct PauseCommand  // sizeof = 2 (0x2)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                state                  
+
+struct PingCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  Coord                        x                      
+    +0x05  Coord                        y                      
+
+struct PlayerSpeedCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                accum_frames_zoomed_in 
+    +0x02  unsigned char                accum_frames_zoomed_out 
+    +0x03  unsigned char                accum_clicks           
+    +0x04  unsigned char                accum_hotkeys          
+    +0x05  unsigned char                accum_minimap_clicks   
+    +0x06  unsigned char                accum_mainmap_clicks   
+    +0x07  unsigned char                accum_control_groups_formed 
+    +0x08  unsigned char                accum_control_groups_activated 
+
+struct ProposeAttackCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+    +0x09  int                          whose                  
+    +0x0d  int                          onoff                  
+
+struct QueueUpCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          type                   
+    +0x05  int                          num                    
+
+struct QuitCommand  // sizeof = 7 (0x7)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          play                   
+    +0x05  unsigned char                replay                 
+    +0x06  unsigned char                system_quit            
+
+struct RecallCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct RejectCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+
+struct RenameCityCommand  // sizeof = 53 (0x35)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          o                      
+    +0x09  wchar_t[22]                  name                   
+
+struct RepairCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+
+struct ResignCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          play                   
+
+struct ScrambleCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct SellCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          good                   
+    +0x09  int                          flags                  
+
+struct SetTransportCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          flag                   
+
+struct SiegeAttackCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+
+struct SpeedDownCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct SpeedSetCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          speed                  
+
+struct SpeedUpCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct SpellCommand  // sizeof = 21 (0x15)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  int                          type                   
+    +0x0d  int                          x                      
+    +0x11  int                          y                      
+
+struct SplineCommand  // sizeof = 14 (0xe)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned char                spline_type            
+    +0x02  unsigned char                spline_flags           
+    +0x03  unsigned char                spline_cmd             
+    +0x04  unsigned short               len                    
+    +0x06  SplineCommand::<unnamed-type-vert_data>[8] vert_data              
+
+struct StanceCommand  // sizeof = 5 (0x5)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          stance                 
+
+struct StopSpellCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct SwarmAroundCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  QueuePos                     queued                 
+    +0x0d  int                          orders                 
+
+struct TradeCommand  // sizeof = 21 (0x15)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          ox                     
+    +0x05  int                          whom                   
+    +0x09  int                          oxx                    
+    +0x0d  int                          whose                  
+    +0x11  QueuePos                     queued                 
+
+struct TransportCommand  // sizeof = 1 (0x1)
+    +0x00  Command                      Command                [base]
+
+struct TreatyCommand  // sizeof = 13 (0xd)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+    +0x09  int                          treaty                 
+
+struct TributeCommand  // sizeof = 17 (0x11)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          whom                   
+    +0x09  int                          good                   
+    +0x0d  int                          amount                 
+
+struct TurnDataCommand  // sizeof = 11 (0xb)
+    +0x00  Command                      Command                [base]
+    +0x01  unsigned short               ping_time              
+    +0x03  unsigned short               frame_average          
+    +0x05  unsigned short               wait_time              
+    +0x07  unsigned short               game_lag               
+    +0x09  unsigned short               forced_loads           
+
+struct UnitmaskCommand  // sizeof = 9 (0x9)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          unitmask               
+    +0x05  int                          set                    
+
+struct UnqueueCommand  // sizeof = 15 (0xf)
+    +0x00  Command                      Command                [base]
+    +0x01  int                          who                    
+    +0x05  int                          o                      
+    +0x09  int                          type                   
+    +0x0d  short                        uid                    
+

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descent of Nations — spectator</title>
+<link rel="icon" href="data:,">
+
+<style>
+  :root {
+    --bg: #0a0b10; --panel: #12141c; --line: #232733; --ink: #e7e9f0;
+    --dim: #8b93a6; --accent: #5ab7ff; --warn: #ffb454; --bad: #ff6b5b; --good: #6ee7a8;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  #app { display: grid; grid-template-columns: 1fr 320px; height: 100%; }
+  #stage { position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+  #hud { position: absolute; left: 12px; top: 12px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(10,11,16,.72); border: 1px solid var(--line); font: 11px/1.6 var(--mono);
+    pointer-events: none; white-space: pre; backdrop-filter: blur(6px); }
+  #hud b { color: var(--accent); font-weight: 600; }
+  #side { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px; }
+  h1 { font-size: 13px; margin: 0 0 2px; letter-spacing: .02em; }
+  .sub { color: var(--dim); font-size: 11px; margin-bottom: 14px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 12px; margin: 0 0 12px; }
+  legend { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 0 4px; }
+  label { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center;
+    margin: 6px 0; font-size: 11px; color: var(--dim); }
+  label > span.v { color: var(--ink); font-family: var(--mono); font-size: 11px; }
+  select, input[type=number] { background: #0d0f16; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 5px; padding: 3px 5px; font: 11px var(--mono); width: 100%; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  button { background: #1b2130; color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 9px; font: 11px var(--mono); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #16354d; border-color: #2b6d99; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  #log { font: 10.5px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap;
+    max-height: 260px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+  #log .ok { color: var(--good); } #log .err { color: var(--bad); } #log .hi { color: var(--ink); }
+  #results { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font: 10.5px var(--mono); }
+  th, td { text-align: right; padding: 2px 3px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; }
+  .note { color: var(--dim); font-size: 10.5px; margin-top: 6px; }
+  .badge { display: inline-block; padding: 1px 5px; border-radius: 4px; font: 10px var(--mono);
+    border: 1px solid var(--line); color: var(--dim); }
+  .badge.on { color: var(--good); border-color: #2d5c46; }
+  .badge.off { color: var(--warn); border-color: #5c4a2d; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="hud">booting…</div>
+  </div>
+  <div id="side">
+    <h1>Descent of Nations — spectator</h1>
+    <div class="sub">
+      <span id="iso" class="badge">isolation?</span>
+      <span id="be" class="badge">backend?</span>
+      <span id="ts" class="badge">timestamps?</span>
+    </div>
+
+    <fieldset>
+      <legend>cluster</legend>
+      <label>worlds <input id="worlds" type="number" min="1" max="16384" value="1" style="width:82px"></label>
+      <label>units / world <input id="units" type="number" min="1" max="4096" value="2048" style="width:82px"></label>
+      <label>data path
+        <select id="path" style="width:118px">
+          <option value="zerocopy">zerocopy (1 world)</option>
+          <option value="inline" selected>inline (worker sim)</option>
+          <option value="sab">sab (N sim workers)</option>
+        </select>
+      </label>
+      <label>sim workers <input id="shards" type="number" min="1" max="32" value="4" style="width:82px"></label>
+      <label>backend
+        <select id="prefer" style="width:118px">
+          <option value="webgpu" selected>WebGPU</option>
+          <option value="webgl2">WebGL2</option>
+        </select>
+      </label>
+      <div class="row"><button id="apply" class="primary">apply / restart</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>view</legend>
+      <label>mode
+        <select id="view" style="width:118px">
+          <option value="auto" selected>auto</option>
+          <option value="units">units</option>
+          <option value="aggregate">aggregate</option>
+        </select>
+      </label>
+      <label>aggregate metric
+        <select id="metric" style="width:118px">
+          <option value="0" selected>population</option>
+          <option value="1">state fingerprint</option>
+        </select>
+      </label>
+      <label>zoom <span class="v" id="zoomv">1.00</span></label>
+      <input id="zoom" type="range" min="0" max="1000" value="0">
+      <label>unit size <span class="v" id="psv">1.0</span></label>
+      <input id="ps" type="range" min="20" max="400" value="100">
+      <label>sim speed (frames/s, 0 = max) <span class="v" id="hzv">15</span></label>
+      <input id="hz" type="range" min="0" max="600" value="15">
+      <div class="row"><button id="playpause">pause</button><button id="recenter">recenter</button></div>
+      <div class="note">drag to pan · wheel to zoom · click to order the blue team to a point</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>measure</legend>
+      <div class="row">
+        <button id="b-raf">rAF 3 s</button>
+        <button id="b-unc">uncapped 3 s</button>
+        <button id="b-draw">draw-only 3 s</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="sweep-units">sweep: units</button>
+        <button id="sweep-worlds">sweep: worlds</button>
+        <button id="sweep-paths">sweep: paths</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="digest">digest</button>
+        <button id="dump">copy JSON</button>
+      </div>
+      <div id="results"></div>
+    </fieldset>
+
+    <div id="log"></div>
+  </div>
+</div>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

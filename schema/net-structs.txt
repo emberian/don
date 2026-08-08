@@ -1,0 +1,142 @@
+struct GameInfo  // sizeof = 1348 (0x544)
+    +0x00  GameAccess                   GameAccess             [base]
+    +0x00  unsigned long                version                
+    +0x04  unsigned long                seed                   
+    +0x08  int                          checksum_deep          
+    +0x0c  int                          checksum_window_size   
+    +0x10  int                          checksum_failure_threshold 
+    +0x14  unsigned long                flags                  
+    +0x18  unsigned char                team_style             
+    +0x19  unsigned char                map_style              
+    +0x1a  unsigned char                map_size               
+    +0x1b  unsigned char                players                
+    +0x1c  unsigned char                max_observers          
+    +0x1d  unsigned char                game_speed             
+    +0x1e  unsigned char                game_rules             
+    +0x1f  unsigned char                difficulty             
+    +0x20  unsigned char                starting_town          
+    +0x21  unsigned char                starting_resources     
+    +0x22  unsigned char                starting_resources2    
+    +0x23  unsigned char                tech_cost              
+    +0x24  unsigned char                reveal_map             
+    +0x25  unsigned char                pop_limit              
+    +0x26  unsigned char                rush_rules             
+    +0x27  unsigned char                cannon_times           
+    +0x28  unsigned char                starting_technology    
+    +0x29  unsigned char                starting_technology2   
+    +0x2a  unsigned char                ending_technology      
+    +0x2b  unsigned char                elimination            
+    +0x2c  unsigned char                victory                
+    +0x2d  unsigned char                wonderwin              
+    +0x2e  unsigned char                score_goal             
+    +0x2f  unsigned char                popwin                 
+    +0x30  unsigned char                time_limit             
+    +0x31  unsigned char                chairs                 
+    +0x32  unsigned char                econwin                
+    +0x33  unsigned char                scenario_type          
+    +0x34  unsigned char                script_type            
+    +0x35  unsigned char                mods                   
+    +0x18  unsigned char[30]            data                   
+    +0x38  Player[1120]                 player                 
+    +0x498  bool                         is_ranked              
+    +0x499  bool                         elo_penalty_applied    
+    +0x49c  int                          elo_loss               
+    +0x4a0  int                          elo_win                
+    +0x4a4  GameMod                      current_mod            
+    +0x4f4  String                       scenario_script        
+    +0x508  String                       scenario_path          
+    +0x51c  String                       scenario_dir           
+    +0x530  String                       save_name              
+
+struct TurnControl  // sizeof = 376 (0x178)
+    +0x04  GameAccess                   GameAccess             [base]
+    vbase  MiscAccess
+    +0x04  BitMask<8>                   semaphore              
+    +0x14  unsigned long                frame_base_time        
+    +0x18  unsigned long                frame_counter          
+    +0x1c  unsigned long                frame_average          
+    +0x20  unsigned long                frame_timing_clock     
+    +0x24  int                          cannon_time_who        
+    +0x28  int                          cannon_time_stamp      
+    +0x2c  int                          cannon_saved_speed     
+    +0x30  int                          speed                  
+    +0x34  int                          playback_speed         
+    +0x38  unsigned long                target_frame_time      
+    +0x3c  int                          turn_length            
+    +0x40  int                          turn_counter           
+    +0x44  int                          cannon_time_start      
+    +0x48  unsigned long                expected_last_frame_time 
+    +0x4c  unsigned long                last_diff_time         
+    +0x50  unsigned long                last_frame_time        
+    +0x54  unsigned long[8]             last_package_sizes     
+    +0x74  unsigned long[8]             last_wait_times        
+    +0x94  unsigned long[8]             last_lag_times         
+    +0xb4  unsigned long[8]             last_average_frame_times 
+    +0xd4  unsigned long[8]             last_ping_times        
+    +0xf4  unsigned long[8]             last_diff_times        
+    +0x114  unsigned long[8]             last_forced_loads      
+    +0x134  unsigned long[10]            max_wait_times         
+    +0x15c  int                          max_wait_index         
+    +0x160  unsigned long                average_max_wait_time  
+    +0x164  unsigned long                extra_time             
+    +0x168  unsigned char                turn_flags             
+    +0x16c  unsigned long                last_lag_adjust        
+    +0x170  unsigned long                min_turn_time          
+    +0x174  int                          turn_index             
+    static timings
+
+struct CommandManager  // sizeof = 86632 (0x15268)
+    +0x04  GameAccess                   GameAccess             [base]
+    vbase  MiscAccess
+    +0x04  unsigned long[8]             package_stamps         
+    +0x24  unsigned long                local_package_stamp    
+    +0x28  CommandPackage               local_package          
+    +0x240  PackageFifo[85888]           package_fifos          
+    +0x151c0  unsigned long                wait_time_accum        
+    +0x151c4  unsigned long[8]             wait_time_per_player   
+    +0x151e4  int                          end_net_session        
+    +0x151e8  int                          message_set            
+    +0x151ec  RecordGame                   mp_playback            
+    +0x15264  unsigned char                use_mp_playback        
+
+struct ConnectionData  // sizeof = 5264 (0x1490)
+    +0x00  GameAccessConst              GameAccessConst        [base]
+    +0x00  PlayerConnectionData[472]    player_data_server     
+    +0x1d8  std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t> >[192] allocated_slots        
+    +0x298  GameConnectionDataFull       game_data              
+    +0xa87  PlayerConnectionData[472]    last_send_player_data  
+    +0xc5f  GameConnectionDataFull       last_send_data         
+    +0x1450  int                          using_config           
+    +0x1454  String                       full_save_path         
+    +0x1468  String                       full_scenario_path     
+    +0x147c  String                       full_script_path       
+
+struct PlayerConnectionData  // sizeof = 59 (0x3b)
+    +0x00  std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t> > player_id              
+    +0x18  std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t> > platform_player_id     
+    +0x30  int                          elo                    
+    +0x34  unsigned char                slot_type              
+    +0x35  unsigned char                tribe                  
+    +0x36  unsigned char                who                    
+    +0x37  unsigned char                team                   
+    +0x38  unsigned char                handicap               
+    +0x39  unsigned char                diff                   
+    +0x3a  unsigned char                ready                  
+
+struct GameConnectionDataFull  // sizeof = 2031 (0x7ef)
+    +0x00  GameConnectionData           data                   
+    +0x2e  char[180]                    scenario_name          
+    +0x2e  char[180]                    script_name            
+    +0xe2  wchar_t[260]                 save_name              
+    +0x2ea  char[512]                    desc                   
+    +0x4ea  char[180]                    mod_name               
+    +0x59e  char[512]                    mod_desc               
+    +0x79e  unsigned long                mod_size               
+    +0x7a2  unsigned long                mod_checksum           
+    +0x7a6  unsigned __int64             mod_workshop_id        
+    +0x7ae  ScenFilePreviewData          scenario_data          
+    +0x7db  unsigned long                scenario_size          
+    +0x7df  unsigned long                scenario_checksum      
+    +0x7e3  unsigned long                scenario_num_files     
+    +0x7e7  unsigned __int64             scenario_workshop_id   
+

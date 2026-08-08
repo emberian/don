@@ -1,0 +1,2779 @@
+{
+  "env": {
+    "cfg": {
+      "worlds": 1,
+      "units": 2048,
+      "capacity": 2048,
+      "path": "zerocopy",
+      "shards": 1,
+      "worldsPerShard": 1,
+      "stride": 2048,
+      "seed": 12648430,
+      "simHz": 15
+    },
+    "backend": "webgpu",
+    "timestamps": true,
+    "isolated": true,
+    "cores": 12,
+    "dpr": 2,
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+  },
+  "chrome": {
+    "Browser": "Chrome/153.0.7979.3",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+    "V8-Version": "15.3.8",
+    "WebKit-Version": "537.36 (@f563f57345b3e8ace8f36df25441f3a5052806e7)",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:9354/devtools/browser/4df28822-4016-468d-9d53-52e50391f47b"
+  },
+  "ms": 2500,
+  "repeats": 3,
+  "when": "2026-08-08T18:24:56.950Z",
+  "machine": {
+    "cpus": 12,
+    "model": "Apple M2 Max",
+    "loadavgStart": [
+      149.142578125,
+      174.16015625,
+      143.53662109375
+    ],
+    "loadavgEnd": [
+      77.43896484375,
+      99.11279296875,
+      116.99169921875
+    ]
+  },
+  "suites": {
+    "units_zerocopy": [
+      {
+        "kind": "uncapped",
+        "frames": 2624,
+        "ms": 2500.3799999952316,
+        "fps": 1013.620905756114,
+        "uploadMs": 0.0035423014040400344,
+        "encodeMs": 0.025914634691505897,
+        "stepMs": 0.001429116353392601,
+        "gatherMs": 0.00016958838919313942,
+        "copyMs": 0,
+        "gpuMs": 0.107873,
+        "gpuSamples": [
+          0.106748,
+          0.108206,
+          0.107873
+        ],
+        "warmupMs": 7.050000071525574,
+        "worlds": 1,
+        "stride": 128,
+        "instances": 128,
+        "live": 128,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 128,
+          "capacity": 128,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 128,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          1049.4404850482742,
+          1013.620905756114,
+          993.6681148344832
+        ],
+        "stepSamples": [
+          0.001429116353392601,
+          0.0014181458268174994,
+          0.001525150842110156
+        ],
+        "uploadSamples": [
+          0.0035423014040400344,
+          0.0035502959050135265,
+          0.0035070425068108846
+        ],
+        "fpsMin": 993.6681148344832,
+        "fpsMax": 1049.4404850482742,
+        "loadavg": 105.88134765625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2465,
+        "ms": 2500.735000014305,
+        "fps": 989.0733985842296,
+        "uploadMs": 0.004969672350762009,
+        "encodeMs": 0.029618659416028502,
+        "stepMs": 0.0029371195826037176,
+        "gatherMs": 0.00016632853850389833,
+        "copyMs": 0,
+        "gpuMs": 0.109874,
+        "gpuSamples": [
+          0.109874,
+          0.11004,
+          0.109873
+        ],
+        "warmupMs": 7.6549999713897705,
+        "worlds": 1,
+        "stride": 512,
+        "instances": 512,
+        "live": 512,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 512,
+          "capacity": 512,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 512,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          985.7102011952084,
+          1014.7614390537029,
+          989.0733985842296
+        ],
+        "stepSamples": [
+          0.0029371195826037176,
+          0.0028892389939533334,
+          0.002953902170140397
+        ],
+        "uploadSamples": [
+          0.005131845590309003,
+          0.004708315802691816,
+          0.004969672350762009
+        ],
+        "fpsMin": 985.7102011952084,
+        "fpsMax": 1014.7614390537029,
+        "loadavg": 105.88134765625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2580,
+        "ms": 2500.7399998903275,
+        "fps": 1004.7397156266444,
+        "uploadMs": 0.006431718134240336,
+        "encodeMs": 0.026129844160967097,
+        "stepMs": 0.004891869875732593,
+        "gatherMs": 0.00019961244376130805,
+        "copyMs": 0,
+        "gpuMs": 0.127956,
+        "gpuSamples": [
+          0.127956,
+          0.127708,
+          0.127998
+        ],
+        "warmupMs": 7.045000076293945,
+        "worlds": 1,
+        "stride": 1024,
+        "instances": 1024,
+        "live": 1024,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 1024,
+          "capacity": 1024,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 1024,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          1031.6946184382018,
+          998.532393288126,
+          1004.7397156266444
+        ],
+        "stepSamples": [
+          0.0046569765538208244,
+          0.004891869875732593,
+          0.005083599098169121
+        ],
+        "uploadSamples": [
+          0.006246124127114466,
+          0.006431718134240336,
+          0.006616241945202943
+        ],
+        "fpsMin": 998.532393288126,
+        "fpsMax": 1031.6946184382018,
+        "loadavg": 105.88134765625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2378,
+        "ms": 2500.235000014305,
+        "fps": 957.2056312908625,
+        "uploadMs": 0.010058479500294927,
+        "encodeMs": 0.029781327817097143,
+        "stepMs": 0.008404343747654456,
+        "gatherMs": 0.00020185030238582268,
+        "copyMs": 0,
+        "gpuMs": 0.134664,
+        "gpuSamples": [
+          0.134664,
+          0.134706,
+          0.134415
+        ],
+        "warmupMs": 7.299999952316284,
+        "worlds": 1,
+        "stride": 2048,
+        "instances": 2048,
+        "live": 2048,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 2048,
+          "capacity": 2048,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 2048,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          951.1105955985714,
+          957.2056312908625,
+          977.496385388742
+        ],
+        "stepSamples": [
+          0.008137090703436465,
+          0.008404343747654456,
+          0.008502454931334075
+        ],
+        "uploadSamples": [
+          0.009964256050007197,
+          0.010058479500294927,
+          0.010118658189492608
+        ],
+        "fpsMin": 951.1105955985714,
+        "fpsMax": 977.496385388742,
+        "loadavg": 105.88134765625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2313,
+        "ms": 2500.5650000572205,
+        "fps": 894.2336725676035,
+        "uploadMs": 0.016565067758819937,
+        "encodeMs": 0.03012321719966613,
+        "stepMs": 0.01549194846468876,
+        "gatherMs": 0.00020752270604128246,
+        "copyMs": 0,
+        "gpuMs": 0.149956,
+        "gpuSamples": [
+          0.149206,
+          0.149956,
+          0.149998
+        ],
+        "warmupMs": 7.164999961853027,
+        "worlds": 1,
+        "stride": 4096,
+        "instances": 4096,
+        "live": 4096,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 4096,
+          "capacity": 4096,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 4096,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          924.9909520236713,
+          894.2336725676035,
+          889.3100849343623
+        ],
+        "stepSamples": [
+          0.015211846423365571,
+          0.01549194846468876,
+          0.01557778813641706
+        ],
+        "uploadSamples": [
+          0.016565067758819937,
+          0.016831395931022113,
+          0.016555754722451136
+        ],
+        "fpsMin": 889.3100849343623,
+        "fpsMax": 924.9909520236713,
+        "loadavg": 105.88134765625
+      }
+    ],
+    "units_zerocopy_raf": [
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2508.3700000000026,
+        "fps": 120.39835110072814,
+        "uploadMs": 0.01402318003951319,
+        "encodeMs": 0.07213575950521507,
+        "stepMs": 0.004437086203240401,
+        "gatherMs": 0.00044702062543654285,
+        "copyMs": 0,
+        "gpuMs": 0.095665,
+        "gpuSamples": [
+          0.095665,
+          0.095581,
+          0.095665
+        ],
+        "worlds": 1,
+        "stride": 128,
+        "instances": 128,
+        "live": 128,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 128,
+          "capacity": 128,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 128,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.39691114149814,
+          120.75725193281569,
+          120.39835110072814
+        ],
+        "stepSamples": [
+          0.004437086203240401,
+          0.004420531111837223,
+          0.0045529769745883564
+        ],
+        "uploadSamples": [
+          0.014453643205150074,
+          0.013874171585436688,
+          0.01402318003951319
+        ],
+        "fpsMin": 120.39691114149814,
+        "fpsMax": 120.75725193281569,
+        "loadavg": 101.49169921875
+      },
+      {
+        "kind": "raf",
+        "frames": 301,
+        "ms": 2500.779999999999,
+        "fps": 120.35787474383966,
+        "uploadMs": 0.015099669611731242,
+        "encodeMs": 0.07093022788481855,
+        "stepMs": 0.006129567805318738,
+        "gatherMs": 0.00043189406791002645,
+        "copyMs": 0,
+        "gpuMs": 0.109623,
+        "gpuSamples": [
+          0.109499,
+          0.109832,
+          0.109623
+        ],
+        "worlds": 1,
+        "stride": 512,
+        "instances": 512,
+        "live": 512,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 512,
+          "capacity": 512,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 512,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.36244691656209,
+          120.35739348270738,
+          120.35787474383966
+        ],
+        "stepSamples": [
+          0.006245849932547028,
+          0.006129567805318738,
+          0.006029900126282955
+        ],
+        "uploadSamples": [
+          0.015099669611731242,
+          0.014202659708320896,
+          0.015199332142193055
+        ],
+        "fpsMin": 120.35739348270738,
+        "fpsMax": 120.36244691656209,
+        "loadavg": 101.49169921875
+      },
+      {
+        "kind": "raf",
+        "frames": 301,
+        "ms": 2500.4200000000055,
+        "fps": 120.39907109325958,
+        "uploadMs": 0.01607616018775283,
+        "encodeMs": 0.07347175924484912,
+        "stepMs": 0.0077076421623610185,
+        "gatherMs": 0.0004983391872672147,
+        "copyMs": 0,
+        "gpuMs": 0.128206,
+        "gpuSamples": [
+          0.128206,
+          0.1286435,
+          0.1272065
+        ],
+        "worlds": 1,
+        "stride": 1024,
+        "instances": 1024,
+        "live": 1024,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 1024,
+          "capacity": 1024,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 1024,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.37977619759853,
+          120.39907109325958,
+          120.39931109268392
+        ],
+        "stepSamples": [
+          0.0077076421623610185,
+          0.007698674865116347,
+          0.007715232324916006
+        ],
+        "uploadSamples": [
+          0.015946842903314634,
+          0.01607616018775283,
+          0.016225165089234612
+        ],
+        "fpsMin": 120.37977619759853,
+        "fpsMax": 120.39931109268392,
+        "loadavg": 101.49169921875
+      },
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2508.260000000002,
+        "fps": 120.39735125827265,
+        "uploadMs": 0.019651159495610335,
+        "encodeMs": 0.0820033135793067,
+        "stepMs": 0.01124172258061289,
+        "gatherMs": 0.00038079473356537473,
+        "copyMs": 0,
+        "gpuMs": 0.136123,
+        "gpuSamples": [
+          0.136123,
+          0.13329,
+          0.136206
+        ],
+        "worlds": 1,
+        "stride": 2048,
+        "instances": 2048,
+        "live": 2048,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 2048,
+          "capacity": 2048,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 2048,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.40219116040592,
+          120.39422107738851,
+          120.39735125827265
+        ],
+        "stepSamples": [
+          0.01124172258061289,
+          0.011411962319054081,
+          0.01122923705268936
+        ],
+        "uploadSamples": [
+          0.01998344241388586,
+          0.019534886081353373,
+          0.019651159495610335
+        ],
+        "fpsMin": 120.39422107738851,
+        "fpsMax": 120.40219116040592,
+        "loadavg": 101.49169921875
+      },
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2508.3250000000044,
+        "fps": 120.40363124593857,
+        "uploadMs": 0.026142382858604783,
+        "encodeMs": 0.07889072350318858,
+        "stepMs": 0.018261590935536566,
+        "gatherMs": 0.00028145668522411624,
+        "copyMs": 0,
+        "gpuMs": 0.150893,
+        "gpuSamples": [
+          0.150643,
+          0.17008,
+          0.150893
+        ],
+        "worlds": 1,
+        "stride": 4096,
+        "instances": 4096,
+        "live": 4096,
+        "path": "zerocopy",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 1,
+          "rows": 1
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1,
+          "units": 4096,
+          "capacity": 4096,
+          "path": "zerocopy",
+          "shards": 1,
+          "worldsPerShard": 1,
+          "stride": 4096,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.39907109325924,
+          120.40363124593857,
+          120.42235549317357
+        ],
+        "stepSamples": [
+          0.018261590935536566,
+          0.018807948425116128,
+          0.01779801837655882
+        ],
+        "uploadSamples": [
+          0.026142382858604783,
+          0.026423838754363407,
+          0.02592715167051909
+        ],
+        "fpsMin": 120.39907109325924,
+        "fpsMax": 120.42235549317357,
+        "loadavg": 101.49169921875
+      }
+    ],
+    "worlds_inline": [
+      {
+        "kind": "uncapped",
+        "frames": 2678,
+        "ms": 2500.9250000715256,
+        "fps": 984.5696106960738,
+        "uploadMs": 0.006620633902344444,
+        "encodeMs": 0.02622479489706095,
+        "stepMs": 0.005586920909819614,
+        "gatherMs": 0.0013050780178807937,
+        "copyMs": 0,
+        "gpuMs": 0.115458,
+        "gpuSamples": [
+          0.116331,
+          0.1152075,
+          0.115458
+        ],
+        "warmupMs": 7.399999976158142,
+        "worlds": 16,
+        "stride": 64,
+        "instances": 1024,
+        "live": 1024,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 5,
+          "rows": 4
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 16,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 16,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          1070.803802562416,
+          984.5696106960738,
+          933.4039851720155
+        ],
+        "stepSamples": [
+          0.005082150151962839,
+          0.005586920909819614,
+          0.00573479036234747
+        ],
+        "uploadSamples": [
+          0.006082897314480475,
+          0.006620633902344444,
+          0.006756641513379905
+        ],
+        "fpsMin": 933.4039851720155,
+        "fpsMax": 1070.803802562416,
+        "loadavg": 74.71630859375
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2336,
+        "ms": 2500.0199999809265,
+        "fps": 903.6782904906655,
+        "uploadMs": 0.01665929302705073,
+        "encodeMs": 0.031106594031395977,
+        "stepMs": 0.019663714835074095,
+        "gatherMs": 0.0027868152175047627,
+        "copyMs": 0,
+        "gpuMs": 0.126165,
+        "gpuSamples": [
+          0.123582,
+          0.126289,
+          0.126165
+        ],
+        "warmupMs": 6.935000061988831,
+        "worlds": 64,
+        "stride": 64,
+        "instances": 4096,
+        "live": 4096,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 9,
+          "rows": 8
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 64,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 64,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          934.3925248669299,
+          903.6782904906655,
+          897.9874281879947
+        ],
+        "stepSamples": [
+          0.019246574899513428,
+          0.019663714835074095,
+          0.019870823635024855
+        ],
+        "uploadSamples": [
+          0.0161986295388986,
+          0.01665929302705073,
+          0.01669710356833409
+        ],
+        "fpsMin": 897.9874281879947,
+        "fpsMax": 934.3925248669299,
+        "loadavg": 74.71630859375
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1854,
+        "ms": 2500.2400000095367,
+        "fps": 756.9184263251951,
+        "uploadMs": 0.05693608053260799,
+        "encodeMs": 0.03480852081037519,
+        "stepMs": 0.08179609056383104,
+        "gatherMs": 0.00963322604486986,
+        "copyMs": 0,
+        "gpuMs": 0.180289,
+        "gpuSamples": [
+          0.168247,
+          0.180289,
+          0.180289
+        ],
+        "warmupMs": 8.514999985694885,
+        "worlds": 256,
+        "stride": 64,
+        "instances": 16384,
+        "live": 16384,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 19,
+          "rows": 14
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 256,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 256,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          741.5288132311011,
+          756.9184263251951,
+          783.2569334541834
+        ],
+        "stepSamples": [
+          0.08128370931362,
+          0.08179609056383104,
+          0.08217713089242402
+        ],
+        "uploadSamples": [
+          0.05623516816537357,
+          0.05693608053260799,
+          0.05717968368725
+        ],
+        "fpsMin": 741.5288132311011,
+        "fpsMax": 783.2569334541834,
+        "loadavg": 74.71630859375
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1064,
+        "ms": 2500.75,
+        "fps": 454.58907065560874,
+        "uploadMs": 0.21545654341670062,
+        "encodeMs": 0.04754229080408139,
+        "stepMs": 0.39040825553271097,
+        "gatherMs": 0.04731203055471406,
+        "copyMs": 0,
+        "gpuMs": 0.344787,
+        "gpuSamples": [
+          0.341661,
+          0.345036,
+          0.344787
+        ],
+        "warmupMs": 12.634999990463257,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          425.47235829251224,
+          455.31952315897036,
+          454.58907065560874
+        ],
+        "stepSamples": [
+          0.39770206629781796,
+          0.39040825553271097,
+          0.3890369372506255
+        ],
+        "uploadSamples": [
+          0.21814379779467905,
+          0.21545654341670062,
+          0.21451186987005416
+        ],
+        "fpsMin": 425.47235829251224,
+        "fpsMax": 455.31952315897036,
+        "loadavg": 74.71630859375
+      },
+      {
+        "kind": "uncapped",
+        "frames": 419,
+        "ms": 2501.2949999570847,
+        "fps": 167.5132281506935,
+        "uploadMs": 0.8355489269361291,
+        "encodeMs": 0.06112171812672035,
+        "stepMs": 1.8372380946363722,
+        "gatherMs": 0.3152505956003376,
+        "copyMs": 0,
+        "gpuMs": 1.0763585,
+        "gpuSamples": [
+          1.075775,
+          1.076359,
+          1.0763585
+        ],
+        "warmupMs": 27.794999957084656,
+        "worlds": 4096,
+        "stride": 64,
+        "instances": 262144,
+        "live": 262144,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 76,
+          "rows": 54
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 4096,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 4096,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          167.5132281506935,
+          167.37538223576263,
+          167.83216783216784
+        ],
+        "stepSamples": [
+          1.8273389006571439,
+          1.8496062089833554,
+          1.8372380946363722
+        ],
+        "uploadSamples": [
+          0.8645107381952691,
+          0.8355489269361291,
+          0.8351071411655062
+        ],
+        "fpsMin": 167.37538223576263,
+        "fpsMax": 167.83216783216784,
+        "loadavg": 74.71630859375
+      }
+    ],
+    "worlds_inline_raf": [
+      {
+        "kind": "raf",
+        "frames": 301,
+        "ms": 2508.320000000007,
+        "fps": 120.39955109306436,
+        "uploadMs": 0.01615893446057048,
+        "encodeMs": 0.07254152678176018,
+        "stepMs": 0.009269104447475699,
+        "gatherMs": 0.003122924966273514,
+        "copyMs": 0,
+        "gpuMs": 0.116831,
+        "gpuSamples": [
+          0.116831,
+          0.116873,
+          0.116581
+        ],
+        "worlds": 16,
+        "stride": 64,
+        "instances": 1024,
+        "live": 1024,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 5,
+          "rows": 4
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 16,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 16,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.00063787714453,
+          120.4,
+          120.39955109306436
+        ],
+        "stepSamples": [
+          0.009269104447475699,
+          0.008903652330569651,
+          0.009288082454378241
+        ],
+        "uploadSamples": [
+          0.016063121862189715,
+          0.016345513223413613,
+          0.01615893446057048
+        ],
+        "fpsMin": 120.00063787714453,
+        "fpsMax": 120.4,
+        "loadavg": 61.9111328125
+      },
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2508.320000000007,
+        "fps": 120.39931109268322,
+        "uploadMs": 0.026109275833660402,
+        "encodeMs": 0.07551324604362841,
+        "stepMs": 0.0265614618098617,
+        "gatherMs": 0.004586090315256687,
+        "copyMs": 0,
+        "gpuMs": 0.126581,
+        "gpuSamples": [
+          0.126581,
+          0.126581,
+          0.1263525
+        ],
+        "worlds": 64,
+        "stride": 64,
+        "instances": 4096,
+        "live": 4096,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 9,
+          "rows": 8
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 64,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 64,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.39931109268322,
+          120.39542497385094,
+          120.41419292586508
+        ],
+        "stepSamples": [
+          0.02692052544347498,
+          0.0265614618098617,
+          0.026390726597893318
+        ],
+        "uploadSamples": [
+          0.026109275833660402,
+          0.025614618462977617,
+          0.02610927622839315
+        ],
+        "fpsMin": 120.39542497385094,
+        "fpsMax": 120.41419292586508,
+        "loadavg": 61.9111328125
+      },
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2500.8949999999895,
+        "fps": 120.40675154944054,
+        "uploadMs": 0.06624172025958434,
+        "encodeMs": 0.0724503311100385,
+        "stepMs": 0.11099337899921746,
+        "gatherMs": 0.01226821206263359,
+        "copyMs": 0,
+        "gpuMs": 0.182414,
+        "gpuSamples": [
+          0.182414,
+          0.203247,
+          0.1818305
+        ],
+        "worlds": 256,
+        "stride": 64,
+        "instances": 16384,
+        "live": 16384,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 19,
+          "rows": 14
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 256,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 256,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.75676907667106,
+          120.40675154944054,
+          120.39907109325888
+        ],
+        "stepSamples": [
+          0.11099337899921746,
+          0.11433774706543676,
+          0.10870861099255795
+        ],
+        "uploadSamples": [
+          0.06624172025958434,
+          0.06754967076888937,
+          0.06584437951346897
+        ],
+        "fpsMin": 120.39907109325888,
+        "fpsMax": 120.75676907667106,
+        "loadavg": 61.9111328125
+      },
+      {
+        "kind": "raf",
+        "frames": 301,
+        "ms": 2500.470000000001,
+        "fps": 120.37736905461767,
+        "uploadMs": 0.2229402029633126,
+        "encodeMs": 0.06916943539020627,
+        "stepMs": 0.4649999981306716,
+        "gatherMs": 0.05968438628504046,
+        "copyMs": 0,
+        "gpuMs": 0.34687,
+        "gpuSamples": [
+          0.34662,
+          0.34687,
+          0.347494
+        ],
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.37736905461767,
+          120.44156589988184,
+          120.35763411279207
+        ],
+        "stepSamples": [
+          0.4649999981306716,
+          0.47756622090244927,
+          0.4554485031140603
+        ],
+        "uploadSamples": [
+          0.2164451846252644,
+          0.22319535782795077,
+          0.2229402029633126
+        ],
+        "fpsMin": 120.35763411279207,
+        "fpsMax": 120.44156589988184,
+        "loadavg": 61.9111328125
+      },
+      {
+        "kind": "raf",
+        "frames": 302,
+        "ms": 2508.3250000000116,
+        "fps": 120.39931109268322,
+        "uploadMs": 0.8325496639636968,
+        "encodeMs": 0.06865894083945168,
+        "stepMs": 1.823956957716026,
+        "gatherMs": 0.3027814504326574,
+        "copyMs": 0,
+        "gpuMs": 1.0757335000000001,
+        "gpuSamples": [
+          1.076192,
+          1.0757335000000001,
+          1.075651
+        ],
+        "worlds": 4096,
+        "stride": 64,
+        "instances": 262144,
+        "live": 262144,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 76,
+          "rows": 54
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 4096,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 4096,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          120.39907109325888,
+          120.41779392209139,
+          120.39931109268322
+        ],
+        "stepSamples": [
+          1.823956957716026,
+          1.910099339011489,
+          1.8107615890881874
+        ],
+        "uploadSamples": [
+          0.8307284839105922,
+          0.8325496639636968,
+          0.8384602650111874
+        ],
+        "fpsMin": 120.39907109325888,
+        "fpsMax": 120.41779392209139,
+        "loadavg": 61.9111328125
+      }
+    ],
+    "worlds_sab": [
+      {
+        "kind": "uncapped",
+        "frames": 2706,
+        "ms": 2500.6299999952316,
+        "fps": 1041.0459252010846,
+        "uploadMs": 0.007229911139817111,
+        "encodeMs": 0.027130450351275256,
+        "stepMs": 0.006497500961168943,
+        "gatherMs": 0.0017257945306725557,
+        "copyMs": 0.0032520325203251985,
+        "gpuMs": 0.114914,
+        "gpuSamples": [
+          0.115165,
+          0.114833,
+          0.114914
+        ],
+        "warmupMs": 7.450000047683716,
+        "worlds": 16,
+        "stride": 64,
+        "instances": 1024,
+        "live": 1024,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 5,
+          "rows": 4
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 16,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 4,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          1082.1273039214757,
+          1040.1898816458915,
+          1041.0459252010846
+        ],
+        "stepSamples": [
+          0.0058832224685885035,
+          0.006497500961168943,
+          0.007264694583173388
+        ],
+        "uploadSamples": [
+          0.007252401717045707,
+          0.007229911139817111,
+          0.007145601879666504
+        ],
+        "fpsMin": 1040.1898816458915,
+        "fpsMax": 1082.1273039214757,
+        "loadavg": 59.37841796875
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2584,
+        "ms": 2500.8250000476837,
+        "fps": 1028.4647204775847,
+        "uploadMs": 0.01751749646237256,
+        "encodeMs": 0.02655572792509392,
+        "stepMs": 0.018624054161688726,
+        "gatherMs": 0.003233359133126908,
+        "copyMs": 0.004837461300309711,
+        "gpuMs": 0.125332,
+        "gpuSamples": [
+          0.1256025,
+          0.125248,
+          0.125332
+        ],
+        "warmupMs": 6.439999938011169,
+        "worlds": 64,
+        "stride": 64,
+        "instances": 4096,
+        "live": 4096,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 9,
+          "rows": 8
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 64,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 16,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          1033.2590245022063,
+          1028.4647204775847,
+          1004.3377310721672
+        ],
+        "stepSamples": [
+          0.018974458204334417,
+          0.01786936236391921,
+          0.018624054161688726
+        ],
+        "uploadSamples": [
+          0.01746130118798176,
+          0.01751749646237256,
+          0.017644364679063853
+        ],
+        "fpsMin": 1004.3377310721672,
+        "fpsMax": 1033.2590245022063,
+        "loadavg": 59.37841796875
+      },
+      {
+        "kind": "uncapped",
+        "frames": 2239,
+        "ms": 2500.929999947548,
+        "fps": 896.6439839245644,
+        "uploadMs": 0.05905538203727991,
+        "encodeMs": 0.028479231420826197,
+        "stepMs": 0.07326940231935752,
+        "gatherMs": 0.010817329164805748,
+        "copyMs": 0.010451094238499272,
+        "gpuMs": 0.179873,
+        "gpuSamples": [
+          0.179873,
+          0.179955,
+          0.179872
+        ],
+        "warmupMs": 7.680000066757202,
+        "worlds": 256,
+        "stride": 64,
+        "instances": 16384,
+        "live": 16384,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 19,
+          "rows": 14
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 256,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 64,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          895.2669607093995,
+          896.6439839245644,
+          911.5416613023814
+        ],
+        "stepSamples": [
+          0.06762617239839186,
+          0.07326940231935752,
+          0.08102018429135537
+        ],
+        "uploadSamples": [
+          0.05905538203727991,
+          0.059678857343522275,
+          0.05888767093877721
+        ],
+        "fpsMin": 895.2669607093995,
+        "fpsMax": 911.5416613023814,
+        "loadavg": 59.37841796875
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1631,
+        "ms": 2500.7050000429153,
+        "fps": 655.4033789863041,
+        "uploadMs": 0.22553996279008365,
+        "encodeMs": 0.033093195689521196,
+        "stepMs": 0.17632434089515506,
+        "gatherMs": 0.03405272838749246,
+        "copyMs": 0.024353157572041952,
+        "gpuMs": 0.342286,
+        "gpuSamples": [
+          0.342287,
+          0.342077,
+          0.342286
+        ],
+        "warmupMs": 10.769999980926514,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 256,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          652.2160750556383,
+          664.4066712455536,
+          655.4033789863041
+        ],
+        "stepSamples": [
+          0.17632434089515506,
+          0.1800481347773757,
+          0.17219035997559365
+        ],
+        "uploadSamples": [
+          0.2242366652193426,
+          0.22587845959531413,
+          0.22553996279008365
+        ],
+        "fpsMin": 652.2160750556383,
+        "fpsMax": 664.4066712455536,
+        "loadavg": 59.37841796875
+      },
+      {
+        "kind": "uncapped",
+        "frames": 748,
+        "ms": 2501.4900000095367,
+        "fps": 299.0217830161817,
+        "uploadMs": 0.8893935298019985,
+        "encodeMs": 0.05318181766545709,
+        "stepMs": 0.8081350267379666,
+        "gatherMs": 0.17521390374331555,
+        "copyMs": 0.0769786096256685,
+        "gpuMs": 1.075067,
+        "gpuSamples": [
+          1.075067,
+          1.074984,
+          1.075358
+        ],
+        "warmupMs": 16.335000038146973,
+        "worlds": 4096,
+        "stride": 64,
+        "instances": 262144,
+        "live": 262144,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 76,
+          "rows": 54
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 4096,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          299.0217830161817,
+          296.70446116972846,
+          304.4468416665702
+        ],
+        "stepSamples": [
+          0.8081350267379666,
+          0.7994272237196774,
+          0.860649606299212
+        ],
+        "uploadSamples": [
+          0.887038768453394,
+          0.8893935298019985,
+          0.8917847770092682
+        ],
+        "fpsMin": 296.70446116972846,
+        "fpsMax": 304.4468416665702,
+        "loadavg": 59.37841796875
+      }
+    ],
+    "shards": [
+      {
+        "kind": "uncapped",
+        "frames": 1576,
+        "ms": 2501.4700000286102,
+        "fps": 652.6277062942519,
+        "uploadMs": 0.21029987759806099,
+        "encodeMs": 0.03878172513494637,
+        "stepMs": 0.3281066176470586,
+        "gatherMs": 0.05381027918781718,
+        "copyMs": 0.035786802030456664,
+        "gpuMs": 0.341744,
+        "gpuSamples": [
+          0.342662,
+          0.341744,
+          0.341578
+        ],
+        "warmupMs": 7.959999918937683,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 1,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          630.0295426217283,
+          652.6277062942519,
+          653.4092045072988
+        ],
+        "stepSamples": [
+          0.3546414974619255,
+          0.3281066176470586,
+          0.3210006119951039
+        ],
+        "uploadSamples": [
+          0.2221256358369353,
+          0.2087959553681168,
+          0.21029987759806099
+        ],
+        "fpsMin": 630.0295426217283,
+        "fpsMax": 653.4092045072988,
+        "loadavg": 67.48291015625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1568,
+        "ms": 2501.264999985695,
+        "fps": 647.1430514040704,
+        "uploadMs": 0.2280516600122257,
+        "encodeMs": 0.03602678625255215,
+        "stepMs": 0.2513649940262819,
+        "gatherMs": 0.036307397959184175,
+        "copyMs": 0.025507015306122646,
+        "gpuMs": 0.34212,
+        "gpuSamples": [
+          0.342329,
+          0.34212,
+          0.34137
+        ],
+        "warmupMs": 9.480000019073486,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 2,
+          "worldsPerShard": 512,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          626.8827973081492,
+          669.4794936783686,
+          647.1430514040704
+        ],
+        "stepSamples": [
+          0.2345248724489766,
+          0.2513649940262819,
+          0.2518881334981434
+        ],
+        "uploadSamples": [
+          0.2280516600122257,
+          0.22753285756390296,
+          0.2286063016418768
+        ],
+        "fpsMin": 626.8827973081492,
+        "fpsMax": 669.4794936783686,
+        "loadavg": 67.48291015625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1624,
+        "ms": 2500.8550000190735,
+        "fps": 646.2481041215455,
+        "uploadMs": 0.23577210503824028,
+        "encodeMs": 0.033343596925289175,
+        "stepMs": 0.17325738916256014,
+        "gatherMs": 0.033786945812807966,
+        "copyMs": 0.024137931034482963,
+        "gpuMs": 0.342078,
+        "gpuSamples": [
+          0.342203,
+          0.342078,
+          0.3416615
+        ],
+        "warmupMs": 9.210000038146973,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 4,
+          "worldsPerShard": 256,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          649.3779127488855,
+          646.2481041215455,
+          642.3974304127289
+        ],
+        "stepSamples": [
+          0.17325738916256014,
+          0.17271181199752503,
+          0.17878580323785712
+        ],
+        "uploadSamples": [
+          0.23254002491241604,
+          0.2362244885573803,
+          0.23577210503824028
+        ],
+        "fpsMin": 642.3974304127289,
+        "fpsMax": 649.3779127488855,
+        "loadavg": 67.48291015625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1733,
+        "ms": 2501.179999947548,
+        "fps": 692.8729639755406,
+        "uploadMs": 0.2404971270725645,
+        "encodeMs": 0.026788805030496975,
+        "stepMs": 0.18880842469705622,
+        "gatherMs": 0.04776399307559181,
+        "copyMs": 0.047922677437969054,
+        "gpuMs": 0.341912,
+        "gpuSamples": [
+          0.342162,
+          0.341912,
+          0.341911
+        ],
+        "warmupMs": 9.695000052452087,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 8,
+          "worldsPerShard": 128,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          692.8729639755406,
+          695.8719595488249,
+          668.1487760767623
+        ],
+        "stepSamples": [
+          0.18880842469705622,
+          0.1850718390804595,
+          0.23829443447037674
+        ],
+        "uploadSamples": [
+          0.23793421868843215,
+          0.2404971270725645,
+          0.24174745799109723
+        ],
+        "fpsMin": 668.1487760767623,
+        "fpsMax": 695.8719595488249,
+        "loadavg": 67.48291015625
+      },
+      {
+        "kind": "uncapped",
+        "frames": 1766,
+        "ms": 2500.3799999952316,
+        "fps": 705.7219455494154,
+        "uploadMs": 0.2362492906473176,
+        "encodeMs": 0.026562853415717087,
+        "stepMs": 2.609946206115507,
+        "gatherMs": 0.07314269535673897,
+        "copyMs": 0.0771432616081542,
+        "gpuMs": 0.338495,
+        "gpuSamples": [
+          0.338495,
+          0.338578,
+          0.338162
+        ],
+        "warmupMs": 8.715000033378601,
+        "worlds": 1032,
+        "stride": 64,
+        "instances": 66048,
+        "live": 66048,
+        "path": "sab",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 28
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1032,
+          "units": 64,
+          "capacity": 64,
+          "path": "sab",
+          "shards": 12,
+          "worldsPerShard": 86,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "fpsSamples": [
+          706.2926435195321,
+          705.7219455494154,
+          683.7183080649017
+        ],
+        "stepSamples": [
+          2.609946206115507,
+          1.6625552407932052,
+          2.637233918128636
+        ],
+        "uploadSamples": [
+          0.2341591156217547,
+          0.2362492906473176,
+          0.2382573091495804
+        ],
+        "fpsMin": 683.7183080649017,
+        "fpsMax": 706.2926435195321,
+        "loadavg": 67.48291015625
+      }
+    ],
+    "draw_only": [
+      {
+        "kind": "draw-only",
+        "frames": 2106,
+        "ms": 2500.2450000047684,
+        "fps": 817.067635052472,
+        "gpuMs": 0.341579,
+        "gpuSamples": [
+          0.341579,
+          0.341578,
+          0.341787
+        ],
+        "setupMs": 8.97000002861023,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "units",
+        "fpsSamples": [
+          842.3174528880104,
+          817.067635052472,
+          770.3553193973523
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 770.3553193973523,
+        "fpsMax": 842.3174528880104,
+        "loadavg": 62.64208984375
+      },
+      {
+        "kind": "draw-only",
+        "frames": 2438,
+        "ms": 2500.2300000190735,
+        "fps": 975.1102898458947,
+        "gpuMs": 0.12243599999999999,
+        "gpuSamples": [
+          0.12243599999999999,
+          0.122498,
+          0.122415
+        ],
+        "setupMs": 6.695000052452087,
+        "worlds": 1024,
+        "stride": 64,
+        "instances": 65536,
+        "live": 65536,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "aggregate",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 38,
+          "rows": 27
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 1024,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 1024,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "aggregate",
+        "fpsSamples": [
+          975.1102898458947,
+          969.8312493848047,
+          984.6800888924054
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 969.8312493848047,
+        "fpsMax": 984.6800888924054,
+        "loadavg": 60.39990234375
+      },
+      {
+        "kind": "draw-only",
+        "frames": 1554,
+        "ms": 2501.539999961853,
+        "fps": 621.6406916967989,
+        "gpuMs": 0.616657,
+        "gpuSamples": [
+          0.659844,
+          0.597448,
+          0.616657
+        ],
+        "setupMs": 12.735000014305115,
+        "worlds": 4096,
+        "stride": 64,
+        "instances": 262144,
+        "live": 262144,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 76,
+          "rows": 54
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 4096,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 4096,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "units",
+        "fpsSamples": [
+          621.2173301341164,
+          625.0487382005867,
+          621.6406916967989
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 621.2173301341164,
+        "fpsMax": 625.0487382005867,
+        "loadavg": 59.00634765625
+      },
+      {
+        "kind": "draw-only",
+        "frames": 2475,
+        "ms": 2500.235000014305,
+        "fps": 997.5800484180589,
+        "gpuMs": 0.114373,
+        "gpuSamples": [
+          0.114415,
+          0.114373,
+          0.114291
+        ],
+        "setupMs": 5.875,
+        "worlds": 4096,
+        "stride": 64,
+        "instances": 262144,
+        "live": 262144,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "aggregate",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 76,
+          "rows": 54
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 4096,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 4096,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "aggregate",
+        "fpsSamples": [
+          989.906948741154,
+          1005.0874301713968,
+          997.5800484180589
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 989.906948741154,
+        "fpsMax": 1005.0874301713968,
+        "loadavg": 55.38232421875
+      },
+      {
+        "kind": "draw-only",
+        "frames": 940,
+        "ms": 2502.110000014305,
+        "fps": 360.72136274911287,
+        "gpuMs": 1.4721435,
+        "gpuSamples": [
+          1.43577,
+          1.4834779999999999,
+          1.4721435
+        ],
+        "setupMs": 23.149999976158142,
+        "worlds": 16384,
+        "stride": 64,
+        "instances": 1048576,
+        "live": 1048576,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "units",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 152,
+          "rows": 108
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 16384,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 16384,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "units",
+        "fpsSamples": [
+          375.6829236103232,
+          360.72136274911287,
+          358.3870980596849
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 358.3870980596849,
+        "fpsMax": 375.6829236103232,
+        "loadavg": 52.02099609375
+      },
+      {
+        "kind": "draw-only",
+        "frames": 2305,
+        "ms": 2500.4049999713898,
+        "fps": 951.7468353563178,
+        "gpuMs": 0.148539,
+        "gpuSamples": [
+          0.148665,
+          0.148539,
+          0.148164
+        ],
+        "setupMs": 5.514999985694885,
+        "worlds": 16384,
+        "stride": 64,
+        "instances": 1048576,
+        "live": 1048576,
+        "path": "inline",
+        "backend": "webgpu",
+        "view": "aggregate",
+        "canvas": [
+          2560,
+          1826
+        ],
+        "zoom": 1,
+        "grid": {
+          "cols": 152,
+          "rows": 108
+        },
+        "simHz": 0,
+        "cfg": {
+          "worlds": 16384,
+          "units": 64,
+          "capacity": 64,
+          "path": "inline",
+          "shards": 1,
+          "worldsPerShard": 16384,
+          "stride": 64,
+          "seed": 12648430,
+          "simHz": 0
+        },
+        "dpr": 2,
+        "timestamps": true,
+        "forcedView": "aggregate",
+        "fpsSamples": [
+          921.8506602035968,
+          957.5018632413219,
+          951.7468353563178
+        ],
+        "stepSamples": [
+          0,
+          0,
+          0
+        ],
+        "uploadSamples": [
+          0,
+          0,
+          0
+        ],
+        "stepMs": 0,
+        "uploadMs": 0,
+        "fpsMin": 921.8506602035968,
+        "fpsMax": 957.5018632413219,
+        "loadavg": 51.53857421875
+      }
+    ],
+    "sim_rate": [
+      {
+        "shards": 1,
+        "worlds": 1024,
+        "units": 64,
+        "unitStepsPerSec": 164713268.5418515,
+        "worldStepsPerSec": 2573644.8209664295,
+        "simFramesPerSec": 2513.325020475029,
+        "samples": [
+          164713268.5418515,
+          162391363.5955564,
+          165025950.03207022
+        ],
+        "loadavg": 51.52587890625
+      },
+      {
+        "shards": 2,
+        "worlds": 1024,
+        "units": 64,
+        "unitStepsPerSec": 307843506.9719308,
+        "worldStepsPerSec": 4810054.796436419,
+        "simFramesPerSec": 4697.31913714494,
+        "samples": [
+          301512049.46989733,
+          314283337.1110687,
+          307843506.9719308
+        ],
+        "loadavg": 52.6044921875
+      },
+      {
+        "shards": 4,
+        "worlds": 1024,
+        "units": 64,
+        "unitStepsPerSec": 556917030.7347158,
+        "worldStepsPerSec": 8701828.605229935,
+        "simFramesPerSec": 8497.879497294858,
+        "samples": [
+          559274922.5387306,
+          549672778.152385,
+          556917030.7347158
+        ],
+        "loadavg": 56.18505859375
+      },
+      {
+        "shards": 6,
+        "worlds": 1026,
+        "units": 64,
+        "unitStepsPerSec": 788249957.2846416,
+        "worldStepsPerSec": 12316405.582572525,
+        "simFramesPerSec": 12004.293940129166,
+        "samples": [
+          778403218.2083268,
+          788249957.2846416,
+          796148573.0964998
+        ],
+        "loadavg": 59.453125
+      },
+      {
+        "shards": 8,
+        "worlds": 1024,
+        "units": 64,
+        "unitStepsPerSec": 946413847.5552398,
+        "worldStepsPerSec": 14787716.368050622,
+        "simFramesPerSec": 14441.129265674435,
+        "samples": [
+          939481598.9758425,
+          985913301.3688455,
+          946413847.5552398
+        ],
+        "loadavg": 69.9755859375
+      },
+      {
+        "shards": 12,
+        "worlds": 1032,
+        "units": 64,
+        "unitStepsPerSec": 1028507614.1617419,
+        "worldStepsPerSec": 16070431.471277216,
+        "simFramesPerSec": 15572.123518679473,
+        "samples": [
+          1028507614.1617419,
+          1005145596.2480181,
+          1034410162.6433938
+        ],
+        "loadavg": 77.43896484375
+      }
+    ]
+  },
+  "digest": {
+    "type": "digest",
+    "digest": "1b07da068f50ba66",
+    "frames": 1000
+  },
+  "pageErrors": [],
+  "pageLog": [
+    "wasm loaded — map span 49152 subtiles, tick 15 Hz",
+    "backend webgpu — apple / metal-3 / 0x0000 / Apple M2 Max",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 1049.4 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 985.7 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 1031.7 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 951.1 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 925.0 fps (4,096 instances)",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 1013.6 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 1014.8 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 998.5 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 957.2 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 894.2 fps (4,096 instances)",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 993.7 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 989.1 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 1004.7 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 977.5 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 889.3 fps (4,096 instances)",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 120.4 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 120.4 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 120.4 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 120.4 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 120.4 fps (4,096 instances)",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 120.8 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 120.4 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 120.4 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 120.4 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 120.4 fps (4,096 instances)",
+    "configured: 1 worlds x 128 units (stride 128) via zerocopy",
+    "units=128: 120.4 fps (128 instances)",
+    "configured: 1 worlds x 512 units (stride 512) via zerocopy",
+    "units=512: 120.4 fps (512 instances)",
+    "configured: 1 worlds x 1024 units (stride 1024) via zerocopy",
+    "units=1024: 120.4 fps (1,024 instances)",
+    "configured: 1 worlds x 2048 units (stride 2048) via zerocopy",
+    "units=2048: 120.4 fps (2,048 instances)",
+    "configured: 1 worlds x 4096 units (stride 4096) via zerocopy",
+    "units=4096: 120.4 fps (4,096 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 1070.8 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 934.4 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 741.5 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 425.5 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 167.5 fps (262,144 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 984.6 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 903.7 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 756.9 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 455.3 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 167.4 fps (262,144 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 933.4 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 898.0 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 783.3 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 454.6 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 167.8 fps (262,144 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 120.0 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 120.4 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 120.8 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 120.4 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 120.4 fps (262,144 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 120.4 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 120.4 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 120.4 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 120.4 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 120.4 fps (262,144 instances)",
+    "configured: 16 worlds x 64 units (stride 64) via inline",
+    "worlds=16: 120.4 fps (1,024 instances)",
+    "configured: 64 worlds x 64 units (stride 64) via inline",
+    "worlds=64: 120.4 fps (4,096 instances)",
+    "configured: 256 worlds x 64 units (stride 64) via inline",
+    "worlds=256: 120.4 fps (16,384 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "worlds=1024: 120.4 fps (65,536 instances)",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "worlds=4096: 120.4 fps (262,144 instances)",
+    "SAB 0.04 MiB — 4 shards x 3 banks x 0.00 MiB",
+    "configured: 16 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=16: 1082.1 fps (1,024 instances)",
+    "SAB 0.14 MiB — 4 shards x 3 banks x 0.01 MiB",
+    "configured: 64 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=64: 1033.3 fps (4,096 instances)",
+    "SAB 0.56 MiB — 4 shards x 3 banks x 0.05 MiB",
+    "configured: 256 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=256: 895.3 fps (16,384 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=1024: 652.2 fps (65,536 instances)",
+    "SAB 9.00 MiB — 4 shards x 3 banks x 0.75 MiB",
+    "configured: 4096 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=4096: 299.0 fps (262,144 instances)",
+    "SAB 0.04 MiB — 4 shards x 3 banks x 0.00 MiB",
+    "configured: 16 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=16: 1040.2 fps (1,024 instances)",
+    "SAB 0.14 MiB — 4 shards x 3 banks x 0.01 MiB",
+    "configured: 64 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=64: 1028.5 fps (4,096 instances)",
+    "SAB 0.56 MiB — 4 shards x 3 banks x 0.05 MiB",
+    "configured: 256 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=256: 896.6 fps (16,384 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=1024: 664.4 fps (65,536 instances)",
+    "SAB 9.00 MiB — 4 shards x 3 banks x 0.75 MiB",
+    "configured: 4096 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=4096: 296.7 fps (262,144 instances)",
+    "SAB 0.04 MiB — 4 shards x 3 banks x 0.00 MiB",
+    "configured: 16 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=16: 1041.0 fps (1,024 instances)",
+    "SAB 0.14 MiB — 4 shards x 3 banks x 0.01 MiB",
+    "configured: 64 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=64: 1004.3 fps (4,096 instances)",
+    "SAB 0.56 MiB — 4 shards x 3 banks x 0.05 MiB",
+    "configured: 256 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=256: 911.5 fps (16,384 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=1024: 655.4 fps (65,536 instances)",
+    "SAB 9.00 MiB — 4 shards x 3 banks x 0.75 MiB",
+    "configured: 4096 worlds x 64 units (stride 64) via sab on 4 workers",
+    "worlds=4096: 304.4 fps (262,144 instances)",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "shards=1: 630.0 fps (65,536 instances)",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "shards=2: 626.9 fps (65,536 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "shards=4: 649.4 fps (65,536 instances)",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "shards=8: 692.9 fps (65,536 instances)",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "shards=12: 706.3 fps (66,048 instances)",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "shards=1: 652.6 fps (65,536 instances)",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "shards=2: 669.5 fps (65,536 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "shards=4: 646.2 fps (65,536 instances)",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "shards=8: 695.9 fps (65,536 instances)",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "shards=12: 705.7 fps (66,048 instances)",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "shards=1: 653.4 fps (65,536 instances)",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "shards=2: 647.1 fps (65,536 instances)",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "shards=4: 642.4 fps (65,536 instances)",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "shards=8: 668.1 fps (65,536 instances)",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "shards=12: 683.7 fps (66,048 instances)",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 1024 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 4096 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "configured: 16384 worlds x 64 units (stride 64) via inline",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "SAB 2.25 MiB — 1 shards x 3 banks x 0.75 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 1 workers",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "SAB 2.25 MiB — 2 shards x 3 banks x 0.38 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 2 workers",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "SAB 2.25 MiB — 4 shards x 3 banks x 0.19 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 4 workers",
+    "SAB 2.25 MiB — 6 shards x 3 banks x 0.13 MiB",
+    "configured: 1026 worlds x 64 units (stride 64) via sab on 6 workers",
+    "SAB 2.25 MiB — 6 shards x 3 banks x 0.13 MiB",
+    "configured: 1026 worlds x 64 units (stride 64) via sab on 6 workers",
+    "SAB 2.25 MiB — 6 shards x 3 banks x 0.13 MiB",
+    "configured: 1026 worlds x 64 units (stride 64) via sab on 6 workers",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "SAB 2.25 MiB — 8 shards x 3 banks x 0.09 MiB",
+    "configured: 1024 worlds x 64 units (stride 64) via sab on 8 workers",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "SAB 2.27 MiB — 12 shards x 3 banks x 0.06 MiB",
+    "configured: 1032 worlds x 64 units (stride 64) via sab on 12 workers",
+    "configured: 4 worlds x 64 units (stride 64) via inline",
+    "digest after 1000 frames: 1b07da068f50ba66"
+  ]
+}

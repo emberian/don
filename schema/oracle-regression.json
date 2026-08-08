@@ -1,0 +1,331 @@
+{
+  "schema": "don/oracle-regression",
+  "schema_version": 1,
+  "generated_unix": 1786212049,
+  "host": "hbox",
+  "target": "i686-unknown-linux-musl",
+  "harness_selftest": "pass",
+  "image": {
+    "path": "data/riseofnations.exe",
+    "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+    "bytes": 9925120
+  },
+  "seed": "0x2545f4914f6cdd1d",
+  "scale": 1,
+  "only": null,
+  "wall_ms": 58687,
+  "exit_code": 0,
+  "summary": {
+    "registered": 12,
+    "pass": 12,
+    "fail": 0,
+    "skipped": 0,
+    "crashed": 0,
+    "error": 0,
+    "total_trials": 16236396
+  },
+  "cases": [
+    {
+      "id": "hash_into_range",
+      "va": "0x00846450",
+      "abi": "__stdcall(i32,i32,i32,i32) -> i32, ret 0x10. PDB: Doober::get_num(TCoord, TCoord, int, int)",
+      "model": "don_sim::mechanics::hash_into_range",
+      "subsystem": "arithmetic (dead code in this image; not the engine RNG)",
+      "ledger_entry": "§1.1 hash_into_range(a, b, lo, hi) — Doober::get_num",
+      "derivation": "docs/provenance-ledger.md §1.1; docs/derivation/rng.md",
+      "reachability": "dead code in this image — 0 rel32 targets and 0 occurrences of the LE dword 0x00846450 in any section",
+      "caveat": "Called by nothing in the retail image, so this case keeps the port honest without making it load-bearing. An unreferenced COMDAT can still be semantically live, and the function's PURPOSE is underived: the PDB says it takes two TCoords, so it is a coordinate-keyed number generator for dropped resources, not a general hash.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 500008,
+      "mismatches": 0,
+      "wall_ms": 11,
+      "phases": [
+        {"kind": "edges", "count": 8, "distribution": "hand-chosen edge tuples"},
+        {"kind": "random", "count": 500000, "distribution": "xorshift64 (seed per --seed): a,b uniform over i32; lo,hi uniform over ±2^15"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "flank_level",
+      "va": "0x0092cfe0",
+      "abi": "argument in ECX, result in EAX (11 instructions, preserves EDX). PDB: flanking(unsigned long, unsigned long)",
+      "model": "don_sim::mechanics::flank_level",
+      "subsystem": "combat",
+      "ledger_entry": "§1.3 flank_level(angle_delta) — flanking(u32, u32)",
+      "derivation": "docs/derivation/combat.md §3 step 20",
+      "reachability": "ISLAND",
+      "caveat": "Standalone classification only; whether the caller at 0x00644B3A feeds it the angle we think it does is pinned separately, inside the damage case. OPEN (ledger §5.6): the PDB signature takes TWO unsigned longs and this model takes one, in ECX. Every trial here passed with whatever the second argument happened to be, so the case does not establish that it is unread.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 500017,
+      "mismatches": 0,
+      "wall_ms": 4,
+      "phases": [
+        {"kind": "edges", "count": 17, "distribution": "instruction-sequence boundaries and neighbours"},
+        {"kind": "stride-sweep", "count": 500000, "distribution": "every boundary the instruction sequence can distinguish, plus neighbours; then a stride-8191 walk of the full u32 domain (8191 is odd, so the walk never repeats within 2^32)"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "balance_accessor",
+      "va": "0x00581ca0",
+      "abi": "__stdcall(i32 atk_type, i32 def_type) -> i32, ret 8. PDB: Balance::return_modifier(TypeIndex, TypeIndex)",
+      "model": "don_sim::mechanics::balance_index + sign-extending i16 load",
+      "subsystem": "combat",
+      "ledger_entry": "§1.5 balance_index(atk, def) — Balance::return_modifier",
+      "derivation": "docs/derivation/combat.md §1, §5; ledger §4.5, §5.4",
+      "reachability": "WRITES_GLOBAL — reads the table through 0x00C06AFC, writes nothing",
+      "caveat": "Address arithmetic only, and against the FILE image: 0x00C06AFC is a bias-folded base (ledger §4.5) whose live array is final_balance_table at 0x00C12BF4, so this case pins the multiply/add/movsx and says nothing about the table's contents. OPEN (ledger §5.4): the live damage hook observed defender type ids 521, 522 and 526, so the 493x493 grid is not the whole id domain even though the stride 493 is Tier-B pinned.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 247049,
+      "mismatches": 0,
+      "wall_ms": 2,
+      "phases": [
+        {"kind": "grid", "count": 243049, "distribution": "exhaustive over the 493x493 defined type domain"},
+        {"kind": "grid", "count": 4000, "distribution": "rows past the type domain, exercising the multiply/add with no bounds check"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "accessor_movsx_word_0xa",
+      "va": "0x00472400",
+      "abi": "__thiscall, no stack args (movsx eax, word ptr [ecx+0xA])",
+      "model": "oracle::models::accessor_movsx_0xa — shape probe, no don-sim counterpart",
+      "subsystem": "harness self-evidence",
+      "ledger_entry": "(none — this is a mechanism check, not a mechanic)",
+      "derivation": "crates/oracle/src/main.rs, original difftest",
+      "reachability": "ISLAND",
+      "caveat": "Proves the harness reproduces __thiscall field reads. It is not evidence about any shipped Rust.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 100000,
+      "mismatches": 0,
+      "wall_ms": 1,
+      "phases": [
+        {"kind": "random", "count": 100000, "distribution": "xorshift64; low 16 bits written to obj+0xA, so uniform over u16"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "accessor_diff_0x12c_0x12a",
+      "va": "0x0048f770",
+      "abi": "__thiscall, no stack args ([this+0x12C] - [this+0x12A], both i16)",
+      "model": "oracle::models::accessor_diff_12c_12a — shape probe, no don-sim counterpart",
+      "subsystem": "harness self-evidence",
+      "ledger_entry": "(none — this is a mechanism check, not a mechanic)",
+      "derivation": "crates/oracle/src/main.rs, original difftest",
+      "reachability": "ISLAND",
+      "caveat": "As above: mechanism, not mechanic.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 100000,
+      "mismatches": 0,
+      "wall_ms": 1,
+      "phases": [
+        {"kind": "random", "count": 100000, "distribution": "xorshift64; two independent uniform u16 fields"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "damage_pipeline",
+      "va": "0x00644130",
+      "abi": "__thiscall + six stack dwords, ret 0x18. PDB: ObjectData::get_damage",
+      "model": "don_sim::mechanics::damage_traced",
+      "subsystem": "combat",
+      "ledger_entry": "§1.2 damage() — ObjectData::get_damage, 0x00644130",
+      "derivation": "docs/derivation/damage-port.md; docs/derivation/combat.md §3",
+      "reachability": "SELF_CALL — not callable with fabricated bytes; damage_env.rs builds the world (two objects, four vtables, RULES, game, players, map, both object tables, city table) so every predicate becomes a settable dword",
+      "caveat": "Steps 10, 11 and 27 and the get_attack/get_armor upgrade branches are structurally unreachable here and remain UNVERIFIED. The ~30 object-graph predicates are inputs, not derivations. out_kind is written by retail and never compared: '0 mismatches' is about the return value only. REFUTED ASSUMPTION (ledger §4.3): the harness aliases [0x00C0AB84] and [0x00C0AEC0], and a live capture shows they do NOT alias — they agree on every unit defender and differ on every building defender. That does not disturb the trial count; it BOUNDS which inputs it covers, excluding building defenders. REFUTED ASSUMPTION (ledger §4.4): attack/armor are modelled as the base-class getters 0x006469F0/0x00647DB0, which live combat dispatched to zero times in 56,789 captured calls.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 7986675,
+      "mismatches": 0,
+      "wall_ms": 42570,
+      "phases": [
+        {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998358, "distribution": "seed 0x0000000000000001: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998388, "distribution": "seed 0xdeadbeefcafebabe: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998240, "distribution": "seed 0x123456789abcdef0: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998348, "distribution": "seed 0xffffffffffffffff: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998340, "distribution": "seed 0x0f0f0f0ff0f0f0f0: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
+        {"kind": "random", "count": 998354, "distribution": "seed 0xa5a55a5ac3c33c3c: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"}
+      ],
+      "excluded": [
+        {"reason": "retail #DE (unchecked idiv)", "count": 10304},
+        {"reason": "balance write would collide with harness-owned .data", "count": 3021}
+      ],
+      "extras": {
+        "steps_never_taken": "10-add,11-pct",
+        "step_coverage": "0-maskfix:2196933 2-armor133:3575268 3-div3:172761 4a-mul3div4:173101 4b-div2:284465 5-mul4:998386 6-div2:1047570 7-div2:997720 8-redfort:464491 9a-mul2:1997317 9b-armor+1:996183 10-add:0 11-pct:0 12-mul2:1220754 13-idiv:1995743 14-splashpct:3991620 15-mul3:249086 16-mul25:997882 17-river:2629411 18-x1000:1995930 19-mul4:747106 20-flank:183307 23-overkill:109011 23b-div2:27323 24-rocky:2631225 25-height:875436 26-entrench:641985 28-floor1:975264 29-zero:164538 30-recapture:249811"
+      },
+      "detail": null
+    },
+    {
+      "id": "rng_next_float",
+      "va": "0x00a39cf0",
+      "abi": "__thiscall(this = &u32 state), f32 result in xmm0",
+      "model": "oracle::models::rng::next_float — NO don-sim implementation exists",
+      "subsystem": "rng",
+      "ledger_entry": "§2.1 Random::get() / Random::get(lo, hi) — the engine RNG",
+      "derivation": "docs/derivation/rng.md §2; ledger §2.1. PDB: ?get@Random@@QAEMXZ",
+      "reachability": "reads and writes only *(u32*)this — a 4-byte scratch is a complete environment",
+      "caveat": "Ledger §2.1 is explicit that there is NO implementation of this in the repo — the model exists only in the oracle. So this case tests a transcription and nothing the simulation will ever run. Half-open [lo, hi), and lo == hi returns lo WITHOUT advancing the state, which is a determinism hazard for a whole stream rather than one draw.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 999950,
+      "mismatches": 0,
+      "wall_ms": 25,
+      "phases": [
+        {"kind": "chained-walk", "count": 999950, "distribution": "70 seeds x 14285 steps: six edge seeds (0 is what every statically-constructed Random starts at) plus 64 random seeds, each walked forward; compares the f32 bit pattern and the resulting state at every step"}
+      ],
+      "excluded": [],
+      "extras": {
+        "state_mismatches": "0",
+        "float_mismatches": "0"
+      },
+      "detail": null
+    },
+    {
+      "id": "rng_in_range",
+      "va": "0x00a39d70",
+      "abi": "__thiscall(this = &u32 state) + 2 stdcall dwords, ret 8 (SEH prologue)",
+      "model": "oracle::models::rng::in_range — NO don-sim implementation exists",
+      "subsystem": "rng",
+      "ledger_entry": "§2.1 Random::get() / Random::get(lo, hi) — the engine RNG",
+      "derivation": "docs/derivation/rng.md §2",
+      "reachability": "same 4-byte state; needs a %fs base because the prologue writes fs:[0]",
+      "caveat": "Bounds kept inside ±0xFFFF so the retail warning branch at 0x00A39DB7 — which calls into unconstructed globals — is never taken. See rng_in_range_wide for the other side. The SEH frame is installed but never unwound: no exception is raised in any trial.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 1000012,
+      "mismatches": 0,
+      "wall_ms": 46,
+      "phases": [
+        {"kind": "edges", "count": 12, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
+        {"kind": "random", "count": 1000000, "distribution": "state uniform over u32; lo,hi uniform over ±0xFFFF; compares the return value and the resulting state"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "rng_in_range_wide",
+      "va": "0x00a39d70",
+      "abi": "__thiscall(this = &u32 state) + 2 stdcall dwords, ret 8 (SEH prologue)",
+      "model": "oracle::models::rng::in_range — NO don-sim implementation exists",
+      "subsystem": "rng",
+      "ledger_entry": "§2.1 Random::get() / Random::get(lo, hi) — the engine RNG",
+      "derivation": "docs/derivation/rng.md §2",
+      "reachability": "as above, plus the once-per-session warning flag at 0x00EE13A8 forced to 1 so the arithmetic path runs without touching live globals",
+      "caveat": "The warning flag is *forced*, so this case establishes what the arithmetic does past 0xFFFF, not what a real session does the first time it happens.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 500003,
+      "mismatches": 0,
+      "wall_ms": 23,
+      "phases": [
+        {"kind": "edges", "count": 3, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
+        {"kind": "random", "count": 500000, "distribution": "state uniform over u32; lo,hi uniform over ±2^29"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "vector_dist",
+      "va": "0x0046cff0",
+      "abi": "__fastcall(ecx, edx) -> eax (105 bytes)",
+      "model": "oracle::models::vector_dist — NO implementation in this repo (ledger §2.2)",
+      "subsystem": "pathfinding / geometry",
+      "ledger_entry": "§2.2 vector_dist(a, b) — the engine's integer distance kernel",
+      "derivation": "docs/derivation/pathfinding.md; PDB ?vector_dist@@YAHHH@Z",
+      "reachability": "ISLAND, called from 105 distinct functions engine-wide",
+      "caveat": "Ledger §7.4 recorded this harness as living ONLY at hbox:~/lane-pathfinding, so the result would not survive that box being rebuilt. The model is now in-tree — but there is still no don-sim implementation, so this tests a transcription and not anything the simulation runs.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 4000026,
+      "mismatches": 0,
+      "wall_ms": 105,
+      "phases": [
+        {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
+        {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
+        {"kind": "random", "count": 1000000, "distribution": "realistic map deltas: RoN world coords step 192 per A* cell and a big map is a few hundred cells across, so |d| ≲ 40k"},
+        {"kind": "random", "count": 1000000, "distribution": "straddling the 0xEA60 guard exactly, both signs"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "adler32",
+      "va": "0x00a46830",
+      "abi": "__fastcall(ecx = sum, edx = buf) + one stack dword len; CALLER cleans (`ret`)",
+      "model": "oracle::models::adler32 — NO implementation in this repo (ledger §2.3)",
+      "subsystem": "determinism / lockstep checksum",
+      "ledger_entry": "§2.3 adler32(adler, buf, len) — the lockstep checksum primitive",
+      "derivation": "docs/derivation/checksum.md; PDB ?adler32@@YAKKPBEK@Z",
+      "reachability": "leaf; reads only the buffer it is handed",
+      "caveat": "Ledger §7.4 recorded this harness as living ONLY at hbox:~/don-oracle-checksum. Default case count here is 100,000 rather than the historical 500,000 so the suite stays runnable; `--scale 5` reproduces the original count. The model is written from the algorithm, not from zlib, so agreement is evidence about the routine rather than about a shared source.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 100013,
+      "mismatches": 0,
+      "wall_ms": 15380,
+      "phases": [
+        {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
+        {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
+        {"kind": "edges", "count": 1, "distribution": "buf == NULL, which the disassembly says returns 1"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    },
+    {
+      "id": "rules_as_scaled",
+      "va": "0x00a1d110",
+      "abi": "__thiscall(this = String) + one stack dword, ret 4. PDB: String::fraction(int)",
+      "model": "don_rules::value::as_scaled",
+      "subsystem": "rules",
+      "ledger_entry": "§1.7 as_scaled / as_int / wtoi — the rule-value tokenizer",
+      "derivation": "docs/derivation/economy.md §2.2; ledger §1.7",
+      "reachability": "callable once its two CRT imports are replaced: IAT slots 0x00AC54AC (_wtoi) and 0x00AC5434 (wcschr) are patched to our own leaves",
+      "caveat": "Conditional on the two substituted CRT leaves. The claim covers the slash search, the 32-bit multiply, the truncating divide and the zero-denominator early-out — NOT _wtoi itself. Overflowing digit strings have never been compared against MSVC's CRT. The engine parses UTF-16 and don_rules takes &str; they agree on ASCII, which is all the shipped corpus contains. wcschr searches the WHOLE string, so a '/' in trailing prose would open a denominator in a scaled field; no shipped value does, but a mod could.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 202643,
+      "mismatches": 0,
+      "wall_ms": 178,
+      "phases": [
+        {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
+        {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},
+        {"kind": "generated", "count": 200000, "distribution": "every value=\"…\" and entryN=\"…\" string in the shipped rules.xml at all three scales, plus 31 hand-chosen edges at all three scales, plus generated num[/den][prose] with num ∈ [-2000,2000], den ∈ [-200,200], eight prose tails; INT_MIN/-1 excluded as a retail #DE"}
+      ],
+      "excluded": [],
+      "extras": {},
+      "detail": null
+    }
+  ],
+  "known_gaps": [
+    {"claim": "§1.4 entrench_dir_level — the entrenchment direction classifier", "why": "Inlined at 0x00644E0E–0x00644E2D inside ObjectData::get_damage; there is no standalone function to call. It runs only indirectly, inside damage_pipeline (642,609 of 7,986,695 trials), and its boundaries are pinned by mutation rather than by a direct differential."},
+    {"claim": "§1.6 get_attack / get_armor — upgrade branches, and live dispatch", "why": "The base paths run as real retail code inside damage_pipeline. The upgrade branches need LeaderData::has_tribe_bonus(0x16) to return true, and the fabricated world sets game[+0x20] |= 4 to force it false — never executed. Worse (ledger §4.4): over 56,789 live damage calls the vtable dispatched to these two base-class leaves ZERO times, so even the tested path is not the one live combat takes."},
+    {"claim": "§1.8 Rules — the typed rules block (828/834 constants matched live memory)", "why": "Validated against a running process on the Parallels VM, not against the oracle. Re-running it needs the live game, so it is outside this harness by construction."},
+    {"claim": "§1.10 Field-offset table, 1,223 constants", "why": "Mechanically extracted from loader bind sites and downgraded from B to structural (ledger §4.10). There is no callable function to differentially test."},
+    {"claim": "§1.9 Economy — resource tick, commerce caps, rate ramp, attrition timing", "why": "Ledger tier is C: transcribed from capstone output and never executed against retail. No oracle harness exists for any of it. Listed here so the absence stays visible rather than being read off a green suite."},
+    {"claim": "damage_pipeline mutation evidence (31 of 32 step mutations caught)", "why": "Produced by editing the port and re-running (hbox:~/don-oracle/mutate.py). It is a property of a deliberately modified tree and cannot be reproduced by running the unmodified suite. A mutation run is the right way to check this harness still bites; it is not something the harness can assert about itself."},
+    {"claim": "§3 Structural results — checksum field set, replay format, live type tables, pathfinding structure, live damage capture", "why": "Measured, but not behavioural claims about a Rust function, so there is nothing for a differential case to compare. They are not weakened by this suite's silence and must not be strengthened by its green."}
+  ],
+  "note": "Tier B is differential testing, not verification. Each count is a sample size over the stated distribution. A case with status != 'pass' produced no evidence and must not be cited as if it had."
+}

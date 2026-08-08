@@ -39,12 +39,17 @@ It declares its own `[workspace]`, so it is deliberately **not** a member of the
 workspace and `cargo test` at the root never builds it.
 
 ```sh
-cd tools/pdb-extract && cargo build --release
-./target/release/pdb-extract ../../ron-bin/sbl/rise.pdb 0x00400000 \
-    ../../schema/symbols.json ../../schema/types.json
+cd /Users/ember/dev/don/tools/pdb-extract && cargo build --release
+./target/release/pdb-extract \
+    /Users/ember/dev/don/ron-bin/sbl/rise.pdb 0x00400000 \
+    /Users/ember/dev/don/schema/symbols.json \
+    /Users/ember/dev/don/schema/types.json
 ```
 
-Runs in about 40 s on this Mac. `llvm-pdbutil` (`/opt/homebrew/opt/llvm/bin/`) was used for
+Use the **absolute** PDB path: it is recorded verbatim in `_meta.pdb`, and it is the only
+thing in either output that varies between runs.
+
+Runs in about 8 s cold, under 1 s warm, and is deterministic — re-running reproduces both files byte-for-byte. `llvm-pdbutil` (`/opt/homebrew/opt/llvm/bin/`) was used for
 cross-checking stream and section headers; Ghidra's PDB Universal reader — pure Java, fine on
 arm64 — did the application. The in-tree `README_PDB.html` describing a Windows-only
 `pdb.exe`/XML path is years stale and was ignored.
@@ -178,8 +183,10 @@ zero rows on either side alone.** Two independently written parsers, exact agree
 Of the 112 loader addresses in `schema/bindings.json`, **111 resolve to `SomeClass::log_data`**
 and one to `Constants::init`. `Log` is unambiguously a *writer*: it holds a `FILE*` (`_iobuf*
 handle`), and its vtable is `init / reset / flush / begin / end / say / say_hex / set_type /
-set_detail / check_accept`. `Constants::log_data` calls one function 719 times — once per
-constant — and never calls `Constants::get_fraction`.
+set_detail / check_accept`. Disassembling `Constants::log_data` and counting call targets:
+**509 × `Log::say(const String&, int)`**, **508 × `String::String(const wchar_t*)`** (building
+the rule-name literals it prints), 719 × `String::close` (destroying those temporaries) — and
+**zero** calls to `Constants::get_fraction`. It writes; it does not read. **[measured]**
 
 The real parse path is `Constants::init` at **`0x00569a90`** (`constants.cpp:911‑1964`,
 26,336 B), which calls `Constants::get_item(const String&)` **661×** and
@@ -194,6 +201,11 @@ the same field under the same name, and the 719/719 agreement above proves it. W
 `rules-constants.json`: those were read off the *output-formatting* path, and nothing here
 establishes that the display scale equals the parse scale. That has to be re-derived from
 `Constants::init` before any of it is treated as parser semantics.
+
+A parallel lane reached the same conclusion from the string side and traced it further —
+the real loaders pull names from the runtime `StringTable` at `[0x00C06378]` and reference no
+literal, which is why following a rule-name string in `.rdata` always lands in the logger. See
+`docs/derivation/PDB-RECONCILIATION.md` §2.
 
 ### 5.2 The balance table address is wrong; the real one is `0x00C12BF4`
 
@@ -226,14 +238,15 @@ declared methods. Rename it in the ledger; the semantics claim is untouched.
 
 Against `re/decomp-all/MANIFEST.jsonl` (46,727 Ghidra functions):
 
-- 18,351 addresses match a PDB procedure exactly.
-- **28,376 are Ghidra-only, and 28,326 of those are under 40 bytes** — C++ EH unwind funclets
+- 18,350 addresses match a PDB procedure exactly.
+- **28,377 are Ghidra-only, and 28,327 of those are under 40 bytes** — C++ EH unwind funclets
   and `catch` blocks (`mov ecx,[ebp-0x18]; call …; push 0; push 0; call …`) and 6-byte EH
   state markers. They are not functions. Only 50 Ghidra-only entries exceed 40 bytes.
-- **2,063 PDB procedures have no Ghidra function at all** — this is the concrete list behind
-  the README's "Ghidra left gaps". Among them: `Leader::close` (602 B), `Leader::process`
-  (353 B), `basic_idle_modal` (266 B), and four `ScenarioFuncSet` scripting entry points.
-- Of the 18,351 shared addresses, **827 disagree on size**, and in every sample the PDB's
+- **2,063 PDB procedure addresses have no Ghidra function at all** — this is the concrete list
+  behind the README's "Ghidra left gaps", and `schema/symbols.json` now enumerates it. Among
+  them: `Leader::close` (602 B), `Leader::process` (353 B), `basic_idle_modal` (266 B), and
+  four `ScenarioFuncSet` scripting entry points.
+- Of the 18,350 shared addresses, **827 disagree on size**, and in **820** of those the PDB's
   extent is *larger* — Ghidra truncated the tail (`ListBox::on_key_click`: 852 B vs 299 B).
 
 `schema/islands.jsonl` is separately incomplete in a way worth knowing: its largest recorded
@@ -302,7 +315,7 @@ does not re-analyze the program; it only layers the PDB on. Takes about 7 minute
 | | before | after |
 |---|---|---|
 | functions | 47,177 | **48,791** (+1,614 created from PDB) |
-| still named `FUN_…` | ~47,000 | **37** |
+| still named `FUN_…` | — | **37** |
 | non-default symbols | — | 156,486 |
 | data types | — | 132,197 |
 

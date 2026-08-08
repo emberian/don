@@ -1,0 +1,1765 @@
+[
+ {
+  "op": 0,
+  "struct": "GroupCommand",
+  "size": 5,
+  "method": "process_group",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "num"
+   },
+   {
+    "off": 2,
+    "type": "char",
+    "name": "who"
+   },
+   {
+    "off": 3,
+    "type": "GroupCommand::<unnamed-type-list>[2]",
+    "name": "list"
+   }
+  ]
+ },
+ {
+  "op": 1,
+  "struct": "BeginCommand",
+  "size": 1,
+  "method": "process_begin",
+  "fields": []
+ },
+ {
+  "op": 2,
+  "struct": "StanceCommand",
+  "size": 5,
+  "method": "process_stance",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "stance"
+   }
+  ]
+ },
+ {
+  "op": 3,
+  "struct": "FormCommand",
+  "size": 13,
+  "method": "process_form",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "form"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "rotate"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 4,
+  "struct": "AttackCommand",
+  "size": 17,
+  "method": "process_attack",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "ignore"
+   },
+   {
+    "off": 13,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 5,
+  "struct": "SiegeAttackCommand",
+  "size": 13,
+  "method": "process_siege_attack",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 6,
+  "struct": "SwarmAroundCommand",
+  "size": 17,
+  "method": "process_swarm_around",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "orders"
+   }
+  ]
+ },
+ {
+  "op": 7,
+  "struct": "MoveToCommand",
+  "size": 22,
+  "method": "process_move_to",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "to_x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "to_y"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "set_angle"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "angle"
+   },
+   {
+    "off": 17,
+    "type": "char",
+    "name": "orders"
+   },
+   {
+    "off": 18,
+    "type": "char",
+    "name": "queued"
+   },
+   {
+    "off": 19,
+    "type": "char",
+    "name": "form"
+   },
+   {
+    "off": 20,
+    "type": "char",
+    "name": "width"
+   },
+   {
+    "off": 21,
+    "type": "char",
+    "name": "disembark"
+   }
+  ]
+ },
+ {
+  "op": 8,
+  "struct": "MoveNearCommand",
+  "size": 26,
+  "method": "process_move_near",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "to_x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "to_y"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "tolerance"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "set_angle"
+   },
+   {
+    "off": 17,
+    "type": "int",
+    "name": "angle"
+   },
+   {
+    "off": 21,
+    "type": "char",
+    "name": "orders"
+   },
+   {
+    "off": 22,
+    "type": "char",
+    "name": "queued"
+   },
+   {
+    "off": 23,
+    "type": "char",
+    "name": "form"
+   },
+   {
+    "off": 24,
+    "type": "char",
+    "name": "width"
+   },
+   {
+    "off": 25,
+    "type": "char",
+    "name": "disembark"
+   }
+  ]
+ },
+ {
+  "op": 9,
+  "struct": "AttackGroundCommand",
+  "size": 10,
+  "method": "process_attack_ground",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "to_x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "to_y"
+   },
+   {
+    "off": 9,
+    "type": "char",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 10,
+  "struct": "PatrolCommand",
+  "size": 10,
+  "method": "process_patrol",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "to_x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "to_y"
+   },
+   {
+    "off": 9,
+    "type": "char",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 11,
+  "struct": "LaunchPatrolCommand",
+  "size": 25,
+  "method": "process_launch_patrol",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "to_x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "to_y"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "shift"
+   },
+   {
+    "off": 17,
+    "type": "int",
+    "name": "ctrl"
+   },
+   {
+    "off": 21,
+    "type": "int",
+    "name": "alt"
+   }
+  ]
+ },
+ {
+  "op": 12,
+  "struct": "HaltCommand",
+  "size": 1,
+  "method": "process_halt",
+  "fields": []
+ },
+ {
+  "op": 13,
+  "struct": "TransportCommand",
+  "size": 1,
+  "method": "process_transport",
+  "fields": []
+ },
+ {
+  "op": 14,
+  "struct": "SetTransportCommand",
+  "size": 5,
+  "method": "process_set_transport",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "flag"
+   }
+  ]
+ },
+ {
+  "op": 15,
+  "struct": "BoardShipCommand",
+  "size": 9,
+  "method": "process_board_ship",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 16,
+  "struct": "RepairCommand",
+  "size": 13,
+  "method": "process_repair",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 17,
+  "struct": "TradeCommand",
+  "size": 21,
+  "method": "process_trade",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "oxx"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "whose"
+   },
+   {
+    "off": 17,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 18,
+  "struct": "CityGatherCommand",
+  "size": 9,
+  "method": "process_city_gather",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "t"
+   },
+   {
+    "off": 5,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 19,
+  "struct": "GatherCommand",
+  "size": 9,
+  "method": "process_gather",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 20,
+  "struct": "GarrisonCommand",
+  "size": 13,
+  "method": "process_garrison",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 21,
+  "struct": "DisbandCommand",
+  "size": 5,
+  "method": "process_disband",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "all"
+   }
+  ]
+ },
+ {
+  "op": 22,
+  "struct": "GatherPointCommand",
+  "size": 17,
+  "method": "process_gather_point",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "y"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "action"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "add_to_end"
+   }
+  ]
+ },
+ {
+  "op": 23,
+  "struct": "SpellCommand",
+  "size": 21,
+  "method": "process_spell",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "type"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "x"
+   },
+   {
+    "off": 17,
+    "type": "int",
+    "name": "y"
+   }
+  ]
+ },
+ {
+  "op": 24,
+  "struct": "QueueUpCommand",
+  "size": 9,
+  "method": "process_queue_up",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "type"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "num"
+   }
+  ]
+ },
+ {
+  "op": 25,
+  "struct": "BuildCommand",
+  "size": 25,
+  "method": "process_build",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "x"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "y"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "x2"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "y2"
+   },
+   {
+    "off": 17,
+    "type": "int",
+    "name": "type"
+   },
+   {
+    "off": 21,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 26,
+  "struct": "EjectAllCommand",
+  "size": 17,
+  "method": "process_eject_all",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "back_to_work"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "eject_o"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "eject_who"
+   }
+  ]
+ },
+ {
+  "op": 27,
+  "struct": "AlarmCommand",
+  "size": 1,
+  "method": "process_alarm",
+  "fields": []
+ },
+ {
+  "op": 28,
+  "struct": "FlightCommand",
+  "size": 25,
+  "method": "process_flight",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "shift"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "ctrl"
+   },
+   {
+    "off": 17,
+    "type": "int",
+    "name": "alt"
+   },
+   {
+    "off": 21,
+    "type": "OrderIndex",
+    "name": "orders"
+   }
+  ]
+ },
+ {
+  "op": 29,
+  "struct": "StopSpellCommand",
+  "size": 1,
+  "method": "process_stop_spell",
+  "fields": []
+ },
+ {
+  "op": 30,
+  "struct": "FollowCommand",
+  "size": 13,
+  "method": "process_follow",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 31,
+  "struct": "GuardCommand",
+  "size": 13,
+  "method": "process_guard",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "ox"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "QueuePos",
+    "name": "queued"
+   }
+  ]
+ },
+ {
+  "op": 32,
+  "struct": "UnitmaskCommand",
+  "size": 9,
+  "method": "process_unitmask",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "unitmask"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "set"
+   }
+  ]
+ },
+ {
+  "op": 33,
+  "struct": "BuildmaskCommand",
+  "size": 9,
+  "method": "process_buildmask",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "buildmask"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "set"
+   }
+  ]
+ },
+ {
+  "op": 34,
+  "struct": "HotKeyCommand",
+  "size": 25,
+  "method": "process_hotkey",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "group"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "clear"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "valid"
+   },
+   {
+    "off": 13,
+    "type": "float",
+    "name": "x"
+   },
+   {
+    "off": 17,
+    "type": "float",
+    "name": "y"
+   },
+   {
+    "off": 21,
+    "type": "int",
+    "name": "zoom"
+   }
+  ]
+ },
+ {
+  "op": 35,
+  "struct": "RecallCommand",
+  "size": 1,
+  "method": "process_recall",
+  "fields": []
+ },
+ {
+  "op": 36,
+  "struct": "ScrambleCommand",
+  "size": 1,
+  "method": "process_scramble",
+  "fields": []
+ },
+ {
+  "op": 37,
+  "struct": "TreatyCommand",
+  "size": 13,
+  "method": "process_treaty",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "treaty"
+   }
+  ]
+ },
+ {
+  "op": 38,
+  "struct": "DeclareCommand",
+  "size": 13,
+  "method": "process_declare",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "treaty"
+   }
+  ]
+ },
+ {
+  "op": 39,
+  "struct": "ClearTributesCommand",
+  "size": 9,
+  "method": "process_clear_tributes",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   }
+  ]
+ },
+ {
+  "op": 40,
+  "struct": "ClearAllCommand",
+  "size": 9,
+  "method": "process_clear_all",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   }
+  ]
+ },
+ {
+  "op": 41,
+  "struct": "AcceptCommand",
+  "size": 9,
+  "method": "process_accept",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   }
+  ]
+ },
+ {
+  "op": 42,
+  "struct": "RejectCommand",
+  "size": 9,
+  "method": "process_reject",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   }
+  ]
+ },
+ {
+  "op": 43,
+  "struct": "TributeCommand",
+  "size": 17,
+  "method": "process_tribute",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "good"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "amount"
+   }
+  ]
+ },
+ {
+  "op": 44,
+  "struct": "DemandTributeCommand",
+  "size": 17,
+  "method": "process_demand_tribute",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "good"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "amount"
+   }
+  ]
+ },
+ {
+  "op": 45,
+  "struct": "ProposeAttackCommand",
+  "size": 17,
+  "method": "process_propose_attack",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "whom"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "whose"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "onoff"
+   }
+  ]
+ },
+ {
+  "op": 46,
+  "struct": "BuyCommand",
+  "size": 13,
+  "method": "process_buy",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "good"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "flags"
+   }
+  ]
+ },
+ {
+  "op": 47,
+  "struct": "SellCommand",
+  "size": 13,
+  "method": "process_sell",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "good"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "flags"
+   }
+  ]
+ },
+ {
+  "op": 48,
+  "struct": "UnqueueCommand",
+  "size": 15,
+  "method": "process_unqueue",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "o"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "type"
+   },
+   {
+    "off": 13,
+    "type": "short",
+    "name": "uid"
+   }
+  ]
+ },
+ {
+  "op": 49,
+  "struct": "ComeOutCommand",
+  "size": 11,
+  "method": "process_come_out",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "o"
+   },
+   {
+    "off": 9,
+    "type": "short",
+    "name": "uid"
+   }
+  ]
+ },
+ {
+  "op": 50,
+  "struct": "PingCommand",
+  "size": 9,
+  "method": "process_ping",
+  "fields": [
+   {
+    "off": 1,
+    "type": "Coord",
+    "name": "x"
+   },
+   {
+    "off": 5,
+    "type": "Coord",
+    "name": "y"
+   }
+  ]
+ },
+ {
+  "op": 51,
+  "struct": "SplineCommand",
+  "size": 14,
+  "method": "process_spline",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "spline_type"
+   },
+   {
+    "off": 2,
+    "type": "unsigned char",
+    "name": "spline_flags"
+   },
+   {
+    "off": 3,
+    "type": "unsigned char",
+    "name": "spline_cmd"
+   },
+   {
+    "off": 4,
+    "type": "unsigned short",
+    "name": "len"
+   },
+   {
+    "off": 6,
+    "type": "SplineCommand::<unnamed-type-vert_data>[8]",
+    "name": "vert_data"
+   }
+  ]
+ },
+ {
+  "op": 52,
+  "struct": "SpeedSetCommand",
+  "size": 5,
+  "method": "process_speed_set",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "speed"
+   }
+  ]
+ },
+ {
+  "op": 53,
+  "struct": "SpeedUpCommand",
+  "size": 1,
+  "method": "process_speed_up",
+  "fields": []
+ },
+ {
+  "op": 54,
+  "struct": "SpeedDownCommand",
+  "size": 1,
+  "method": "process_speed_down",
+  "fields": []
+ },
+ {
+  "op": 55,
+  "struct": "MPLogCommand",
+  "size": 1,
+  "method": "process_mp_log",
+  "fields": []
+ },
+ {
+  "op": 56,
+  "struct": "CheckRandomCommand",
+  "size": 5,
+  "method": "process_check_random",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned long",
+    "name": "seed"
+   }
+  ]
+ },
+ {
+  "op": 57,
+  "struct": "CheckSumsCommand",
+  "size": 65,
+  "method": "process_check_sums",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned long",
+    "name": "units_checksum"
+   },
+   {
+    "off": 5,
+    "type": "unsigned long",
+    "name": "builds_checksum"
+   },
+   {
+    "off": 9,
+    "type": "unsigned long",
+    "name": "walls_checksum"
+   },
+   {
+    "off": 13,
+    "type": "unsigned long",
+    "name": "ammo_checksum"
+   },
+   {
+    "off": 17,
+    "type": "unsigned long",
+    "name": "deaths_checksum"
+   },
+   {
+    "off": 21,
+    "type": "unsigned long",
+    "name": "groups_checksum"
+   },
+   {
+    "off": 25,
+    "type": "unsigned long",
+    "name": "guys_checksum"
+   },
+   {
+    "off": 29,
+    "type": "unsigned long",
+    "name": "leaders_checksum"
+   },
+   {
+    "off": 33,
+    "type": "unsigned long",
+    "name": "cities_checksum"
+   },
+   {
+    "off": 37,
+    "type": "unsigned long",
+    "name": "items_checksum"
+   },
+   {
+    "off": 41,
+    "type": "unsigned long",
+    "name": "goods_checksum"
+   },
+   {
+    "off": 45,
+    "type": "unsigned long",
+    "name": "world_checksum"
+   },
+   {
+    "off": 49,
+    "type": "unsigned long",
+    "name": "rules_checksum"
+   },
+   {
+    "off": 53,
+    "type": "unsigned long",
+    "name": "scenario_data_checksum"
+   },
+   {
+    "off": 57,
+    "type": "unsigned long",
+    "name": "script_run_time_checksum"
+   },
+   {
+    "off": 61,
+    "type": "unsigned long",
+    "name": "all_checksum"
+   }
+  ]
+ },
+ {
+  "op": 58,
+  "struct": "NextCheckSumCommand",
+  "size": 6,
+  "method": "process_next_check_sum",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "checksum_type"
+   },
+   {
+    "off": 2,
+    "type": "unsigned long",
+    "name": "checksum"
+   }
+  ]
+ },
+ {
+  "op": 59,
+  "struct": "CheatViewAllCommand",
+  "size": 5,
+  "method": "process_cheat_view_all",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   }
+  ]
+ },
+ {
+  "op": 60,
+  "struct": "CheatGiveTechsCommand",
+  "size": 5,
+  "method": "process_cheat_give_techs",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   }
+  ]
+ },
+ {
+  "op": 61,
+  "struct": "CheatZeroTechsCommand",
+  "size": 5,
+  "method": "process_cheat_zero_techs",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   }
+  ]
+ },
+ {
+  "op": 62,
+  "struct": "CheatAISpeedIncreaseCommand",
+  "size": 1,
+  "method": "process_cheat_ai_speed_increase",
+  "fields": []
+ },
+ {
+  "op": 63,
+  "struct": "CheatAISpeedNormalCommand",
+  "size": 1,
+  "method": "process_cheat_ai_speed_normal",
+  "fields": []
+ },
+ {
+  "op": 64,
+  "struct": "CheatAIToggleCommand",
+  "size": 1,
+  "method": "process_cheat_ai_toggle",
+  "fields": []
+ },
+ {
+  "op": 65,
+  "struct": "CheatIncreaseBucketsCommand",
+  "size": 5,
+  "method": "process_cheat_increase_buckets",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   }
+  ]
+ },
+ {
+  "op": 66,
+  "struct": "CheatZeroBucketsCommand",
+  "size": 5,
+  "method": "process_cheat_zero_buckets",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   }
+  ]
+ },
+ {
+  "op": 67,
+  "struct": "CheatInitUnitCommand",
+  "size": 17,
+  "method": "process_cheat_init_unit",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "t"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "x"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "y"
+   }
+  ]
+ },
+ {
+  "op": 68,
+  "struct": "ChatCommand",
+  "size": 19,
+  "method": "process_chat",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "bits"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "taunt"
+   },
+   {
+    "off": 9,
+    "type": "int",
+    "name": "taunt_num"
+   },
+   {
+    "off": 13,
+    "type": "int",
+    "name": "len"
+   },
+   {
+    "off": 17,
+    "type": "wchar_t[1]",
+    "name": "string"
+   }
+  ]
+ },
+ {
+  "op": 69,
+  "struct": "ChatSetCommand",
+  "size": 9,
+  "method": "process_chat_set",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char[8]",
+    "name": "status"
+   }
+  ]
+ },
+ {
+  "op": 70,
+  "struct": "ResignCommand",
+  "size": 5,
+  "method": "process_resign",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "play"
+   }
+  ]
+ },
+ {
+  "op": 71,
+  "struct": "QuitCommand",
+  "size": 7,
+  "method": "process_quit",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "play"
+   },
+   {
+    "off": 5,
+    "type": "unsigned char",
+    "name": "replay"
+   },
+   {
+    "off": 6,
+    "type": "unsigned char",
+    "name": "system_quit"
+   }
+  ]
+ },
+ {
+  "op": 72,
+  "struct": "CameraCommand",
+  "size": 10,
+  "method": "process_camera",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "zoom"
+   },
+   {
+    "off": 2,
+    "type": "int",
+    "name": "x_loc"
+   },
+   {
+    "off": 6,
+    "type": "int",
+    "name": "y_loc"
+   }
+  ]
+ },
+ {
+  "op": 73,
+  "struct": "LeaderOptionsCommand",
+  "size": 33,
+  "method": "process_leader_options",
+  "fields": [
+   {
+    "off": 1,
+    "type": "LeaderOptionData",
+    "name": "leader_option"
+   }
+  ]
+ },
+ {
+  "op": 74,
+  "struct": "TurnDataCommand",
+  "size": 11,
+  "method": "process_turn_data",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned short",
+    "name": "ping_time"
+   },
+   {
+    "off": 3,
+    "type": "unsigned short",
+    "name": "frame_average"
+   },
+   {
+    "off": 5,
+    "type": "unsigned short",
+    "name": "wait_time"
+   },
+   {
+    "off": 7,
+    "type": "unsigned short",
+    "name": "game_lag"
+   },
+   {
+    "off": 9,
+    "type": "unsigned short",
+    "name": "forced_loads"
+   }
+  ]
+ },
+ {
+  "op": 75,
+  "struct": "RenameCityCommand",
+  "size": 53,
+  "method": "process_rename_city",
+  "fields": [
+   {
+    "off": 1,
+    "type": "int",
+    "name": "who"
+   },
+   {
+    "off": 5,
+    "type": "int",
+    "name": "o"
+   },
+   {
+    "off": 9,
+    "type": "wchar_t[22]",
+    "name": "name"
+   }
+  ]
+ },
+ {
+  "op": 76,
+  "struct": "PauseCommand",
+  "size": 2,
+  "method": "process_pause",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "state"
+   }
+  ]
+ },
+ {
+  "op": 77,
+  "struct": "CannonTimeCommand",
+  "size": 2,
+  "method": "process_cannon_time",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "state"
+   }
+  ]
+ },
+ {
+  "op": 78,
+  "struct": "ConsoleCmdCommand",
+  "size": 521,
+  "method": "process_console_cmd",
+  "fields": [
+   {
+    "off": 1,
+    "type": "Coord",
+    "name": "mouse_x"
+   },
+   {
+    "off": 5,
+    "type": "Coord",
+    "name": "mouse_y"
+   },
+   {
+    "off": 9,
+    "type": "wchar_t[256]",
+    "name": "cmd"
+   }
+  ]
+ },
+ {
+  "op": 79,
+  "struct": "PlayerSpeedCommand",
+  "size": 9,
+  "method": "process_player_speed",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "accum_frames_zoomed_in"
+   },
+   {
+    "off": 2,
+    "type": "unsigned char",
+    "name": "accum_frames_zoomed_out"
+   },
+   {
+    "off": 3,
+    "type": "unsigned char",
+    "name": "accum_clicks"
+   },
+   {
+    "off": 4,
+    "type": "unsigned char",
+    "name": "accum_hotkeys"
+   },
+   {
+    "off": 5,
+    "type": "unsigned char",
+    "name": "accum_minimap_clicks"
+   },
+   {
+    "off": 6,
+    "type": "unsigned char",
+    "name": "accum_mainmap_clicks"
+   },
+   {
+    "off": 7,
+    "type": "unsigned char",
+    "name": "accum_control_groups_formed"
+   },
+   {
+    "off": 8,
+    "type": "unsigned char",
+    "name": "accum_control_groups_activated"
+   }
+  ]
+ },
+ {
+  "op": 80,
+  "struct": "UngracefulPlayerDrop",
+  "size": 3,
+  "method": "process_ungraceful_player_drop",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "play"
+   },
+   {
+    "off": 2,
+    "type": "unsigned char",
+    "name": "state"
+   }
+  ]
+ },
+ {
+  "op": 81,
+  "struct": "MarwanCommand",
+  "size": 2,
+  "method": "process_marwan",
+  "fields": [
+   {
+    "off": 1,
+    "type": "unsigned char",
+    "name": "start"
+   }
+  ]
+ }
+]

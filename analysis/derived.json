@@ -1,0 +1,15073 @@
+{
+ "_provenance": {
+  "live_tables": "schema/live/{unit,building,tech}-attributes.txt (read from a running riseofnations.exe, pid 14644)",
+  "rules": "docs/derivation/rules-constants.json (719 rules.xml constants; 828/834 confirmed against live memory)",
+  "resource_order": [
+   "food",
+   "timber",
+   "wealth",
+   "knowledge",
+   "metal",
+   "oil"
+  ]
+ },
+ "res": [
+  "food",
+  "timber",
+  "wealth",
+  "knowledge",
+  "metal",
+  "oil"
+ ],
+ "rules": {
+  "gather_rate": {
+   "offset": 636,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    450
+   ],
+   "xml": [
+    "450 frames"
+   ]
+  },
+  "peasant_rate": {
+   "offset": 640,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 256,
+   "values": [
+    2560
+   ],
+   "xml": [
+    "10 resources"
+   ]
+  },
+  "oil_rate": {
+   "offset": 668,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 256,
+   "values": [
+    8960
+   ],
+   "xml": [
+    "35 oil"
+   ]
+  },
+  "city_gather": {
+   "offset": 612,
+   "count": 6,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10,
+    10,
+    0,
+    0,
+    0,
+    0
+   ],
+   "xml": [
+    "10food",
+    "10timb&#xA;",
+    "0gd",
+    "0know",
+    "0met",
+    "0oil"
+   ]
+  },
+  "basic_gather": {
+   "offset": 588,
+   "count": 6,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "xml": [
+    "0food",
+    "0timb&#xA;",
+    "0gd",
+    "0know",
+    "0met",
+    "0oil"
+   ]
+  },
+  "starting_goods": {
+   "offset": 564,
+   "count": 6,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    200,
+    200,
+    100,
+    100,
+    100,
+    100
+   ],
+   "xml": [
+    "200food&#xA;",
+    "200timb",
+    "100gd",
+    "100know",
+    "100met",
+    "100oil"
+   ]
+  },
+  "commerce_cap": {
+   "offset": 1024,
+   "count": 8,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    70,
+    100,
+    150,
+    200,
+    260,
+    320,
+    400,
+    500
+   ],
+   "xml": [
+    "70",
+    "100",
+    "150",
+    "200",
+    "260",
+    "320",
+    "400",
+    "500 commerce cap"
+   ]
+  },
+  "pop_cap": {
+   "offset": 964,
+   "count": 8,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    25,
+    50,
+    75,
+    100,
+    125,
+    150,
+    175,
+    200
+   ],
+   "xml": [
+    "25",
+    "50",
+    "75",
+    "100",
+    "125",
+    "150",
+    "175",
+    "200 pop cap"
+   ]
+  },
+  "max_pop_limit": {
+   "offset": 1008,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    300
+   ],
+   "xml": [
+    "300 pop cap"
+   ]
+  },
+  "farms_per_city_base": {
+   "offset": 672,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    5
+   ],
+   "xml": [
+    "5"
+   ]
+  },
+  "granary_bonus": {
+   "offset": 700,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    20,
+    50,
+    100,
+    200,
+    250
+   ],
+   "xml": [
+    "20%",
+    "50%",
+    "100%",
+    "200%",
+    "250%"
+   ]
+  },
+  "lumbermill_bonus": {
+   "offset": 720,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    20,
+    50,
+    100,
+    200,
+    250
+   ],
+   "xml": [
+    "20%",
+    "50%",
+    "100%",
+    "200%",
+    "250%"
+   ]
+  },
+  "smelter_bonus": {
+   "offset": 740,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    50,
+    100,
+    150,
+    200,
+    250
+   ],
+   "xml": [
+    "50%",
+    "100%",
+    "150%",
+    "200%",
+    "250%"
+   ]
+  },
+  "fishermen_bonus": {
+   "offset": 680,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    0,
+    50,
+    100,
+    200,
+    200
+   ],
+   "xml": [
+    "0%",
+    "50%",
+    "100%",
+    "200%",
+    "200%"
+   ]
+  },
+  "merchants_bonus": {
+   "offset": 784,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    100,
+    120,
+    150,
+    200,
+    300
+   ],
+   "xml": [
+    "100%",
+    "120%",
+    "150%",
+    "200%",
+    "300%"
+   ]
+  },
+  "refinery_bonus": {
+   "offset": 760,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    33
+   ],
+   "xml": [
+    "33% per refinery"
+   ]
+  },
+  "market_taxes": {
+   "offset": 812,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10
+   ],
+   "xml": [
+    "10 bonus wealth (+ amount above for just being a building)"
+   ]
+  },
+  "university_literacy": {
+   "offset": 844,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10
+   ],
+   "xml": [
+    "10 bonus knowledge"
+   ]
+  },
+  "unit_cost_factor": {
+   "offset": 852,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10
+   ],
+   "xml": [
+    "10 resources"
+   ]
+  },
+  "build_cost_factor": {
+   "offset": 856,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10
+   ],
+   "xml": [
+    "10 resources"
+   ]
+  },
+  "tech_cost_factor": {
+   "offset": 860,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    10
+   ],
+   "xml": [
+    "10 resources"
+   ]
+  },
+  "unit_scholar_ramp_max": {
+   "offset": 916,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    2000
+   ],
+   "xml": [
+    "2000% additional ramping cost max"
+   ]
+  },
+  "unit_worker_ramp_max": {
+   "offset": 920,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    500
+   ],
+   "xml": [
+    "500% additional ramping cost max"
+   ]
+  },
+  "unit_other_civilian_ramp_max": {
+   "offset": 924,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    200
+   ],
+   "xml": [
+    "200% additional ramping cost max"
+   ]
+  },
+  "unit_military_ramp_max": {
+   "offset": 928,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    125
+   ],
+   "xml": [
+    "125% additional ramping cost max"
+   ]
+  },
+  "unit_rate_base": {
+   "offset": 544,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 100,
+   "values": [
+    120
+   ],
+   "xml": [
+    "6/5 base rate (See BR before adjusting)"
+   ]
+  },
+  "unit_rate_progression": {
+   "offset": 548,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 100,
+   "values": [
+    75
+   ],
+   "xml": [
+    "3/4 progression (See BR before adjusting)"
+   ]
+  },
+  "accel_train": {
+   "offset": 552,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 100,
+   "values": [
+    100
+   ],
+   "xml": [
+    "1/1 speed  (Please don't use except on your own machine for testing; for main line game adjust times individually -- BR)"
+   ]
+  },
+  "accel_construct": {
+   "offset": 556,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 100,
+   "values": [
+    100
+   ],
+   "xml": [
+    "1/1 speed  (Please don't use except on your own machine for testing; for main line game adjust times individually -- BR)"
+   ]
+  },
+  "accel_research": {
+   "offset": 560,
+   "count": 1,
+   "parser": "scaled",
+   "scale": 100,
+   "values": [
+    100
+   ],
+   "xml": [
+    "1/1 speed  (Please don't use except on your own machine for testing; for main line game adjust times individually -- BR)"
+   ]
+  },
+  "scholar_rate": {
+   "offset": 644,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    5,
+    7,
+    10,
+    15,
+    20
+   ],
+   "xml": [
+    "5",
+    "7",
+    "10",
+    "15",
+    "20"
+   ]
+  },
+  "territory_taxes": {
+   "offset": 820,
+   "count": 5,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    0,
+    50,
+    100,
+    200,
+    300
+   ],
+   "xml": [
+    "0%",
+    "50%",
+    "100%",
+    "200%",
+    "300%"
+   ]
+  },
+  "dutch_interest": {
+   "offset": 2216,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    5
+   ],
+   "xml": [
+    "5%"
+   ]
+  },
+  "dutch_interest_cap": {
+   "offset": 2220,
+   "count": 1,
+   "parser": "wtoi",
+   "scale": null,
+   "values": [
+    50
+   ],
+   "xml": [
+    "50 over econ cap"
+   ]
+  }
+ },
+ "units": {
+  "Citizen": {
+   "kind": "unit",
+   "slot": 50,
+   "name": "Citizen",
+   "job_time": 50,
+   "cost": [
+    2,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 414,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Scholar": {
+   "kind": "unit",
+   "slot": 52,
+   "name": "Scholar",
+   "job_time": 75,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 420,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "General": {
+   "kind": "unit",
+   "slot": 54,
+   "name": "General",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": 443,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Spy": {
+   "kind": "unit",
+   "slot": 58,
+   "name": "Spy",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    552,
+    545,
+    -1
+   ],
+   "where": 443,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Caravan": {
+   "kind": "unit",
+   "slot": 59,
+   "name": "Caravan",
+   "job_time": 156,
+   "cost": [
+    1,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    10,
+    5
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 436,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armed Caravan": {
+   "kind": "unit",
+   "slot": 60,
+   "name": "Armed Caravan",
+   "job_time": 156,
+   "cost": [
+    1,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    10,
+    5
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 436,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Merchant": {
+   "kind": "unit",
+   "slot": 61,
+   "name": "Merchant",
+   "job_time": 156,
+   "cost": [
+    0,
+    3,
+    1,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 436,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armed Merchant": {
+   "kind": "unit",
+   "slot": 62,
+   "name": "Armed Merchant",
+   "job_time": 156,
+   "cost": [
+    0,
+    3,
+    1,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 436,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Supply Wagon": {
+   "kind": "unit",
+   "slot": 63,
+   "name": "Supply Wagon",
+   "job_time": 188,
+   "cost": [
+    8,
+    8,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    40,
+    40
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 430,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armed Supply Wagon": {
+   "kind": "unit",
+   "slot": 65,
+   "name": "Armed Supply Wagon",
+   "job_time": 188,
+   "cost": [
+    8,
+    8,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    40,
+    40
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 430,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Militia": {
+   "kind": "unit",
+   "slot": 66,
+   "name": "Militia",
+   "job_time": 200,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    0,
+    0
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 439,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Minuteman": {
+   "kind": "unit",
+   "slot": 67,
+   "name": "Minuteman",
+   "job_time": 200,
+   "cost": [
+    30,
+    0,
+    0,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    0,
+    0
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 439,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Partisan": {
+   "kind": "unit",
+   "slot": 68,
+   "name": "Partisan",
+   "job_time": 200,
+   "cost": [
+    60,
+    0,
+    0,
+    0,
+    60,
+    0
+   ],
+   "support": [
+    0,
+    0
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 439,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Scout": {
+   "kind": "unit",
+   "slot": 69,
+   "name": "Scout",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Explorer": {
+   "kind": "unit",
+   "slot": 71,
+   "name": "Explorer",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Commando": {
+   "kind": "unit",
+   "slot": 73,
+   "name": "Commando",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Special Forces": {
+   "kind": "unit",
+   "slot": 75,
+   "name": "Special Forces",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    549,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Special Forces": {
+   "kind": "unit",
+   "slot": 77,
+   "name": "Elite Special Forces",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    550,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Takohs": {
+   "kind": "unit",
+   "slot": 79,
+   "name": "Takohs",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Akweks": {
+   "kind": "unit",
+   "slot": 80,
+   "name": "Akweks",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Okwari": {
+   "kind": "unit",
+   "slot": 81,
+   "name": "Okwari",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    547,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Slingers": {
+   "kind": "unit",
+   "slot": 82,
+   "name": "Slingers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Javelineers": {
+   "kind": "unit",
+   "slot": 83,
+   "name": "Javelineers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Javelineers": {
+   "kind": "unit",
+   "slot": 84,
+   "name": "Elite Javelineers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Atl-Atls": {
+   "kind": "unit",
+   "slot": 85,
+   "name": "Atl-Atls",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Atl-Atls": {
+   "kind": "unit",
+   "slot": 86,
+   "name": "Royal Atl-Atls",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Xopilli Atl-Atls": {
+   "kind": "unit",
+   "slot": 87,
+   "name": "Xopilli Atl-Atls",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Balamob Slingers": {
+   "kind": "unit",
+   "slot": 88,
+   "name": "Balamob Slingers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Balamob Slingers": {
+   "kind": "unit",
+   "slot": 89,
+   "name": "Royal Balamob Slingers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Eagle Balamob Slingers": {
+   "kind": "unit",
+   "slot": 90,
+   "name": "Eagle Balamob Slingers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Inti Clubmen": {
+   "kind": "unit",
+   "slot": 91,
+   "name": "Inti Clubmen",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Inti Macemen": {
+   "kind": "unit",
+   "slot": 92,
+   "name": "Inti Macemen",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Umpakati": {
+   "kind": "unit",
+   "slot": 93,
+   "name": "Umpakati",
+   "job_time": 125,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Yangombi Umpakati": {
+   "kind": "unit",
+   "slot": 94,
+   "name": "Yangombi Umpakati",
+   "job_time": 125,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Impi": {
+   "kind": "unit",
+   "slot": 95,
+   "name": "Impi",
+   "job_time": 125,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fire Lances": {
+   "kind": "unit",
+   "slot": 96,
+   "name": "Fire Lances",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Fire Lances": {
+   "kind": "unit",
+   "slot": 97,
+   "name": "Heavy Fire Lances",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Arquebusiers": {
+   "kind": "unit",
+   "slot": 98,
+   "name": "Arquebusiers",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Musketeers": {
+   "kind": "unit",
+   "slot": 99,
+   "name": "Musketeers",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Riflemen": {
+   "kind": "unit",
+   "slot": 100,
+   "name": "Riflemen",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Infantry": {
+   "kind": "unit",
+   "slot": 102,
+   "name": "Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Assault Infantry": {
+   "kind": "unit",
+   "slot": 104,
+   "name": "Assault Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Red Guards Infantry": {
+   "kind": "unit",
+   "slot": 107,
+   "name": "Red Guards Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Shock Infantry": {
+   "kind": "unit",
+   "slot": 108,
+   "name": "Shock Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Volksgrenadiers": {
+   "kind": "unit",
+   "slot": 109,
+   "name": "Volksgrenadiers",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Jaguar Infantry": {
+   "kind": "unit",
+   "slot": 110,
+   "name": "Jaguar Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Jaguar Assault Infantry": {
+   "kind": "unit",
+   "slot": 111,
+   "name": "Jaguar Assault Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Janissaries": {
+   "kind": "unit",
+   "slot": 112,
+   "name": "Janissaries",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Janissaries": {
+   "kind": "unit",
+   "slot": 113,
+   "name": "Royal Janissaries",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Highlanders": {
+   "kind": "unit",
+   "slot": 114,
+   "name": "Highlanders",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Black Watch": {
+   "kind": "unit",
+   "slot": 115,
+   "name": "Black Watch",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Manchu Musketeers": {
+   "kind": "unit",
+   "slot": 116,
+   "name": "Manchu Musketeers",
+   "job_time": 138,
+   "cost": [
+    7,
+    5,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Manchu Riflemen": {
+   "kind": "unit",
+   "slot": 117,
+   "name": "Manchu Riflemen",
+   "job_time": 138,
+   "cost": [
+    8,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Manchu Infantry": {
+   "kind": "unit",
+   "slot": 118,
+   "name": "Manchu Infantry",
+   "job_time": 138,
+   "cost": [
+    8,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Continental Marines": {
+   "kind": "unit",
+   "slot": 119,
+   "name": "Continental Marines",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Marine Riflemen": {
+   "kind": "unit",
+   "slot": 120,
+   "name": "Marine Riflemen",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Marine Infantry": {
+   "kind": "unit",
+   "slot": 121,
+   "name": "Marine Infantry",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Assault Marines": {
+   "kind": "unit",
+   "slot": 122,
+   "name": "Assault Marines",
+   "job_time": 169,
+   "cost": [
+    8,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Machine Gun": {
+   "kind": "unit",
+   "slot": 123,
+   "name": "Machine Gun",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Machine Gun": {
+   "kind": "unit",
+   "slot": 125,
+   "name": "Heavy Machine Gun",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Advanced Machine Gun": {
+   "kind": "unit",
+   "slot": 127,
+   "name": "Advanced Machine Gun",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "MG42": {
+   "kind": "unit",
+   "slot": 130,
+   "name": "MG42",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Flamethrower": {
+   "kind": "unit",
+   "slot": 131,
+   "name": "Flamethrower",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    4,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Hoplites": {
+   "kind": "unit",
+   "slot": 132,
+   "name": "Hoplites",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Phalanx": {
+   "kind": "unit",
+   "slot": 133,
+   "name": "Phalanx",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Pikemen": {
+   "kind": "unit",
+   "slot": 134,
+   "name": "Pikemen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Pikemen": {
+   "kind": "unit",
+   "slot": 135,
+   "name": "Elite Pikemen",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fusiliers": {
+   "kind": "unit",
+   "slot": 136,
+   "name": "Fusiliers",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anti-tank Rifle": {
+   "kind": "unit",
+   "slot": 137,
+   "name": "Anti-tank Rifle",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Bazooka": {
+   "kind": "unit",
+   "slot": 139,
+   "name": "Bazooka",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anti-Tank Missile": {
+   "kind": "unit",
+   "slot": 141,
+   "name": "Anti-Tank Missile",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Recoilless Gun": {
+   "kind": "unit",
+   "slot": 144,
+   "name": "Recoilless Gun",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Dragon AT Missile": {
+   "kind": "unit",
+   "slot": 145,
+   "name": "Dragon AT Missile",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Legions": {
+   "kind": "unit",
+   "slot": 146,
+   "name": "Legions",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Caesar's Legions": {
+   "kind": "unit",
+   "slot": 147,
+   "name": "Caesar's Legions",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Praetorian Guards": {
+   "kind": "unit",
+   "slot": 148,
+   "name": "Praetorian Guards",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Scutari": {
+   "kind": "unit",
+   "slot": 149,
+   "name": "Scutari",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Scutari": {
+   "kind": "unit",
+   "slot": 150,
+   "name": "Royal Scutari",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Tercios": {
+   "kind": "unit",
+   "slot": 151,
+   "name": "Tercios",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Tercios": {
+   "kind": "unit",
+   "slot": 152,
+   "name": "Royal Tercios",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Solduri": {
+   "kind": "unit",
+   "slot": 153,
+   "name": "Solduri",
+   "job_time": 160,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Barbarians": {
+   "kind": "unit",
+   "slot": 154,
+   "name": "Barbarians",
+   "job_time": 160,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Vandals": {
+   "kind": "unit",
+   "slot": 155,
+   "name": "Vandals",
+   "job_time": 160,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Landsknechts": {
+   "kind": "unit",
+   "slot": 156,
+   "name": "Landsknechts",
+   "job_time": 160,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Ashigaru Spearmen": {
+   "kind": "unit",
+   "slot": 157,
+   "name": "Ashigaru Spearmen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Bushi": {
+   "kind": "unit",
+   "slot": 158,
+   "name": "Bushi",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Bushi": {
+   "kind": "unit",
+   "slot": 159,
+   "name": "Elite Bushi",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Samurai": {
+   "kind": "unit",
+   "slot": 160,
+   "name": "Samurai",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Gun Samurai": {
+   "kind": "unit",
+   "slot": 161,
+   "name": "Gun Samurai",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Immortals": {
+   "kind": "unit",
+   "slot": 162,
+   "name": "Immortals",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anusiya": {
+   "kind": "unit",
+   "slot": 163,
+   "name": "Anusiya",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Athanatoi": {
+   "kind": "unit",
+   "slot": 164,
+   "name": "Athanatoi",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Arqimmortal": {
+   "kind": "unit",
+   "slot": 165,
+   "name": "Arqimmortal",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Spearmen": {
+   "kind": "unit",
+   "slot": 166,
+   "name": "Spearmen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Mohawk Spearmen": {
+   "kind": "unit",
+   "slot": 167,
+   "name": "Mohawk Spearmen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Mohawk Spearmen": {
+   "kind": "unit",
+   "slot": 168,
+   "name": "Heavy Mohawk Spearmen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Mohawk Spearmen": {
+   "kind": "unit",
+   "slot": 169,
+   "name": "Elite Mohawk Spearmen",
+   "job_time": 188,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Bowmen": {
+   "kind": "unit",
+   "slot": 170,
+   "name": "Bowmen",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Archers": {
+   "kind": "unit",
+   "slot": 171,
+   "name": "Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Crossbowmen": {
+   "kind": "unit",
+   "slot": 172,
+   "name": "Crossbowmen",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Archers": {
+   "kind": "unit",
+   "slot": 173,
+   "name": "Heavy Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Kushite Archers": {
+   "kind": "unit",
+   "slot": 174,
+   "name": "Kushite Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Kushite Archers": {
+   "kind": "unit",
+   "slot": 175,
+   "name": "Royal Kushite Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Apedemak Archers": {
+   "kind": "unit",
+   "slot": 176,
+   "name": "Apedemak Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Longbowmen": {
+   "kind": "unit",
+   "slot": 177,
+   "name": "Longbowmen",
+   "job_time": 169,
+   "cost": [
+    0,
+    3,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "King's Longbowmen": {
+   "kind": "unit",
+   "slot": 178,
+   "name": "King's Longbowmen",
+   "job_time": 169,
+   "cost": [
+    0,
+    3,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "King's Yeomanry": {
+   "kind": "unit",
+   "slot": 179,
+   "name": "King's Yeomanry",
+   "job_time": 169,
+   "cost": [
+    0,
+    3,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Hwarang": {
+   "kind": "unit",
+   "slot": 180,
+   "name": "Hwarang",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Hwarang": {
+   "kind": "unit",
+   "slot": 181,
+   "name": "Elite Hwarang",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Hwarang": {
+   "kind": "unit",
+   "slot": 182,
+   "name": "Royal Hwarang",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Royal Hwarang": {
+   "kind": "unit",
+   "slot": 183,
+   "name": "Elite Royal Hwarang",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Immortal Bowmen": {
+   "kind": "unit",
+   "slot": 184,
+   "name": "Immortal Bowmen",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anusiya Archers": {
+   "kind": "unit",
+   "slot": 185,
+   "name": "Anusiya Archers",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Athanatoi Archers": {
+   "kind": "unit",
+   "slot": 186,
+   "name": "Athanatoi Archers",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 427,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Horse Archer": {
+   "kind": "unit",
+   "slot": 187,
+   "name": "Horse Archer",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Horse Archer": {
+   "kind": "unit",
+   "slot": 188,
+   "name": "Heavy Horse Archer",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Dragoon": {
+   "kind": "unit",
+   "slot": 189,
+   "name": "Dragoon",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Carabineer": {
+   "kind": "unit",
+   "slot": 190,
+   "name": "Carabineer",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Camel Archer": {
+   "kind": "unit",
+   "slot": 191,
+   "name": "Camel Archer",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Camel Archer": {
+   "kind": "unit",
+   "slot": 192,
+   "name": "Heavy Camel Archer",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Camel Raider": {
+   "kind": "unit",
+   "slot": 193,
+   "name": "Camel Raider",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Camel Corps": {
+   "kind": "unit",
+   "slot": 194,
+   "name": "Camel Corps",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Chariot": {
+   "kind": "unit",
+   "slot": 195,
+   "name": "Chariot",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Chariot": {
+   "kind": "unit",
+   "slot": 196,
+   "name": "Heavy Chariot",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Mameluke": {
+   "kind": "unit",
+   "slot": 197,
+   "name": "Mameluke",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Mameluke": {
+   "kind": "unit",
+   "slot": 198,
+   "name": "Royal Mameluke",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Nomad": {
+   "kind": "unit",
+   "slot": 199,
+   "name": "Nomad",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Steppe Nomad": {
+   "kind": "unit",
+   "slot": 200,
+   "name": "Steppe Nomad",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Conquistador": {
+   "kind": "unit",
+   "slot": 201,
+   "name": "Conquistador",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    573,
+    -1
+   ],
+   "where": -2,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Conquistador": {
+   "kind": "unit",
+   "slot": 202,
+   "name": "Elite Conquistador",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    573,
+    -1
+   ],
+   "where": -2,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Horde": {
+   "kind": "unit",
+   "slot": 203,
+   "name": "Horde",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Golden Horde": {
+   "kind": "unit",
+   "slot": 204,
+   "name": "Golden Horde",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Sunka Wakan": {
+   "kind": "unit",
+   "slot": 205,
+   "name": "Sunka Wakan",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Eagle Feather Horse": {
+   "kind": "unit",
+   "slot": 206,
+   "name": "Eagle Feather Horse",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Musket Horse": {
+   "kind": "unit",
+   "slot": 207,
+   "name": "Musket Horse",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Repeating Rifle Horse": {
+   "kind": "unit",
+   "slot": 208,
+   "name": "Repeating Rifle Horse",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Light Horse": {
+   "kind": "unit",
+   "slot": 209,
+   "name": "Light Horse",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Light Cavalry": {
+   "kind": "unit",
+   "slot": 210,
+   "name": "Light Cavalry",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Light Cavalry": {
+   "kind": "unit",
+   "slot": 211,
+   "name": "Elite Light Cavalry",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Hussar": {
+   "kind": "unit",
+   "slot": 212,
+   "name": "Hussar",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Light Camel": {
+   "kind": "unit",
+   "slot": 213,
+   "name": "Light Camel",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Camel Warrior": {
+   "kind": "unit",
+   "slot": 214,
+   "name": "Camel Warrior",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Camel Warrior": {
+   "kind": "unit",
+   "slot": 215,
+   "name": "Elite Camel Warrior",
+   "job_time": 175,
+   "cost": [
+    6,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armored Car": {
+   "kind": "unit",
+   "slot": 216,
+   "name": "Armored Car",
+   "job_time": 188,
+   "cost": [
+    9,
+    0,
+    0,
+    0,
+    0,
+    4
+   ],
+   "support": [
+    0,
+    5
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armored Scout Car": {
+   "kind": "unit",
+   "slot": 218,
+   "name": "Armored Scout Car",
+   "job_time": 188,
+   "cost": [
+    9,
+    0,
+    0,
+    0,
+    0,
+    4
+   ],
+   "support": [
+    0,
+    5
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Armored Cavalry": {
+   "kind": "unit",
+   "slot": 220,
+   "name": "Armored Cavalry",
+   "job_time": 188,
+   "cost": [
+    9,
+    0,
+    0,
+    0,
+    0,
+    4
+   ],
+   "support": [
+    0,
+    5
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Rusiny Lancer": {
+   "kind": "unit",
+   "slot": 224,
+   "name": "Rusiny Lancer",
+   "job_time": 155,
+   "cost": [
+    6,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Cossack": {
+   "kind": "unit",
+   "slot": 225,
+   "name": "Cossack",
+   "job_time": 155,
+   "cost": [
+    6,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Don Cossack": {
+   "kind": "unit",
+   "slot": 226,
+   "name": "Don Cossack",
+   "job_time": 155,
+   "cost": [
+    6,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Cataphract": {
+   "kind": "unit",
+   "slot": 227,
+   "name": "Cataphract",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Knight": {
+   "kind": "unit",
+   "slot": 228,
+   "name": "Knight",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Knight": {
+   "kind": "unit",
+   "slot": 229,
+   "name": "Heavy Knight",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Cuirassier": {
+   "kind": "unit",
+   "slot": 230,
+   "name": "Cuirassier",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Companion": {
+   "kind": "unit",
+   "slot": 231,
+   "name": "Companion",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Companion": {
+   "kind": "unit",
+   "slot": 232,
+   "name": "Royal Companion",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Stratiotai": {
+   "kind": "unit",
+   "slot": 233,
+   "name": "Stratiotai",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Royal Stratiotai": {
+   "kind": "unit",
+   "slot": 234,
+   "name": "Royal Stratiotai",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Chevalier": {
+   "kind": "unit",
+   "slot": 235,
+   "name": "Chevalier",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Heavy Chevalier": {
+   "kind": "unit",
+   "slot": 236,
+   "name": "Heavy Chevalier",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Horse Grenadier": {
+   "kind": "unit",
+   "slot": 237,
+   "name": "Horse Grenadier",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Horse Guard Grenadier": {
+   "kind": "unit",
+   "slot": 238,
+   "name": "Horse Guard Grenadier",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    6,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Light Tank": {
+   "kind": "unit",
+   "slot": 239,
+   "name": "Light Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    8,
+    6
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Tank": {
+   "kind": "unit",
+   "slot": 244,
+   "name": "Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    8,
+    6
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Main Battle Tank": {
+   "kind": "unit",
+   "slot": 251,
+   "name": "Main Battle Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    8,
+    6
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Tiger Tank": {
+   "kind": "unit",
+   "slot": 258,
+   "name": "Tiger Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    8,
+    6
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Leopard Tank": {
+   "kind": "unit",
+   "slot": 259,
+   "name": "Leopard Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    8,
+    6
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "T80 Tank": {
+   "kind": "unit",
+   "slot": 260,
+   "name": "T80 Tank",
+   "job_time": 245,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    7,
+    5
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 428,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "War Elephant": {
+   "kind": "unit",
+   "slot": 261,
+   "name": "War Elephant",
+   "job_time": 245,
+   "cost": [
+    12,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    3,
+    3
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 2,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Mahout": {
+   "kind": "unit",
+   "slot": 262,
+   "name": "Mahout",
+   "job_time": 245,
+   "cost": [
+    12,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    3,
+    3
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 2,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Gun Mahout": {
+   "kind": "unit",
+   "slot": 263,
+   "name": "Gun Mahout",
+   "job_time": 245,
+   "cost": [
+    12,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    3,
+    3
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 2,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Culverin Mahout": {
+   "kind": "unit",
+   "slot": 264,
+   "name": "Culverin Mahout",
+   "job_time": 245,
+   "cost": [
+    12,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    3,
+    3
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 2,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Catapult": {
+   "kind": "unit",
+   "slot": 265,
+   "name": "Catapult",
+   "job_time": 250,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Trebuchet": {
+   "kind": "unit",
+   "slot": 266,
+   "name": "Trebuchet",
+   "job_time": 250,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Bombard": {
+   "kind": "unit",
+   "slot": 267,
+   "name": "Bombard",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Cannon": {
+   "kind": "unit",
+   "slot": 268,
+   "name": "Cannon",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Artillery": {
+   "kind": "unit",
+   "slot": 269,
+   "name": "Artillery",
+   "job_time": 250,
+   "cost": [
+    0,
+    10,
+    0,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Howitzer": {
+   "kind": "unit",
+   "slot": 271,
+   "name": "Howitzer",
+   "job_time": 250,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    10,
+    10
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Rocket Artillery": {
+   "kind": "unit",
+   "slot": 273,
+   "name": "Rocket Artillery",
+   "job_time": 250,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    10,
+    10
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Mortar": {
+   "kind": "unit",
+   "slot": 274,
+   "name": "Mortar",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Siege Mortar": {
+   "kind": "unit",
+   "slot": 275,
+   "name": "Siege Mortar",
+   "job_time": 250,
+   "cost": [
+    0,
+    10,
+    0,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Basilica Bombard": {
+   "kind": "unit",
+   "slot": 276,
+   "name": "Basilica Bombard",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Basilica Cannon": {
+   "kind": "unit",
+   "slot": 277,
+   "name": "Basilica Cannon",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Katyusha Rocket": {
+   "kind": "unit",
+   "slot": 278,
+   "name": "Katyusha Rocket",
+   "job_time": 250,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    10,
+    10
+   ],
+   "support": [
+    5,
+    4
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Flaming Arrow": {
+   "kind": "unit",
+   "slot": 279,
+   "name": "Flaming Arrow",
+   "job_time": 250,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Heavy Flaming Arrow": {
+   "kind": "unit",
+   "slot": 280,
+   "name": "Heavy Flaming Arrow",
+   "job_time": 250,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 430,
+   "cat": 3,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Anti-Aircraft Gun": {
+   "kind": "unit",
+   "slot": 281,
+   "name": "Anti-Aircraft Gun",
+   "job_time": 170,
+   "cost": [
+    8,
+    0,
+    8,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 430,
+   "cat": 2,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anti-Aircraft Battery": {
+   "kind": "unit",
+   "slot": 282,
+   "name": "Anti-Aircraft Battery",
+   "job_time": 170,
+   "cost": [
+    8,
+    0,
+    8,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 430,
+   "cat": 2,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Anti-Aircraft Missile": {
+   "kind": "unit",
+   "slot": 284,
+   "name": "Anti-Aircraft Missile",
+   "job_time": 170,
+   "cost": [
+    8,
+    0,
+    8,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 430,
+   "cat": 2,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Biplane": {
+   "kind": "unit",
+   "slot": 287,
+   "name": "Biplane",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fighter": {
+   "kind": "unit",
+   "slot": 289,
+   "name": "Fighter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Jet Fighter": {
+   "kind": "unit",
+   "slot": 295,
+   "name": "Jet Fighter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Advanced Fighter": {
+   "kind": "unit",
+   "slot": 301,
+   "name": "Advanced Fighter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    550,
+    581,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Hawk Fighter": {
+   "kind": "unit",
+   "slot": 302,
+   "name": "Hawk Fighter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Eagle Fighter": {
+   "kind": "unit",
+   "slot": 303,
+   "name": "Eagle Fighter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Bomber": {
+   "kind": "unit",
+   "slot": 304,
+   "name": "Bomber",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    11,
+    0,
+    0,
+    11
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    5,
+    5
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Strategic Bomber": {
+   "kind": "unit",
+   "slot": 305,
+   "name": "Strategic Bomber",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    11,
+    0,
+    0,
+    11
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    5,
+    5
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Stealth Bomber": {
+   "kind": "unit",
+   "slot": 306,
+   "name": "Stealth Bomber",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    11,
+    0,
+    0,
+    11
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    5,
+    5
+   ],
+   "preq": [
+    550,
+    581,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Lancaster Bomber": {
+   "kind": "unit",
+   "slot": 307,
+   "name": "Lancaster Bomber",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    11,
+    0,
+    0,
+    11
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    5,
+    5
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fighter Bomber": {
+   "kind": "unit",
+   "slot": 308,
+   "name": "Fighter Bomber",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": -1,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Jet Fighter Bomber": {
+   "kind": "unit",
+   "slot": 309,
+   "name": "Jet Fighter Bomber",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": -1,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Helicopter": {
+   "kind": "unit",
+   "slot": 310,
+   "name": "Helicopter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Attack Helicopter": {
+   "kind": "unit",
+   "slot": 311,
+   "name": "Attack Helicopter",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 447,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "V2 Rocket": {
+   "kind": "unit",
+   "slot": 313,
+   "name": "V2 Rocket",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    0,
+    10,
+    0,
+    10
+   ],
+   "support": [
+    5,
+    3
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 520,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 0,
+   "pop": 1
+  },
+  "Cruise Missile": {
+   "kind": "unit",
+   "slot": 314,
+   "name": "Cruise Missile",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    0,
+    10,
+    0,
+    10
+   ],
+   "support": [
+    5,
+    3
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 520,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 0,
+   "pop": 1
+  },
+  "Nuclear Missile": {
+   "kind": "unit",
+   "slot": 315,
+   "name": "Nuclear Missile",
+   "job_time": 600,
+   "cost": [
+    0,
+    0,
+    0,
+    50,
+    0,
+    60
+   ],
+   "support": [
+    5,
+    3
+   ],
+   "support_cost": [
+    50,
+    50
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 520,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 0,
+   "pop": 1
+  },
+  "Nuclear ICBM": {
+   "kind": "unit",
+   "slot": 316,
+   "name": "Nuclear ICBM",
+   "job_time": 600,
+   "cost": [
+    0,
+    0,
+    0,
+    75,
+    0,
+    90
+   ],
+   "support": [
+    5,
+    3
+   ],
+   "support_cost": [
+    75,
+    75
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 520,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 0,
+   "pop": 1
+  },
+  "Fishermen": {
+   "kind": "unit",
+   "slot": 317,
+   "name": "Fishermen",
+   "job_time": 94,
+   "cost": [
+    0,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    5,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Merchant Fleet": {
+   "kind": "unit",
+   "slot": 318,
+   "name": "Merchant Fleet",
+   "job_time": 94,
+   "cost": [
+    0,
+    3,
+    2,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Modern Merchant Fleet": {
+   "kind": "unit",
+   "slot": 319,
+   "name": "Modern Merchant Fleet",
+   "job_time": 94,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 7,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Transport Barge": {
+   "kind": "unit",
+   "slot": 320,
+   "name": "Transport Barge",
+   "job_time": 94,
+   "cost": [
+    0,
+    3,
+    3,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "Transport Galleon": {
+   "kind": "unit",
+   "slot": 321,
+   "name": "Transport Galleon",
+   "job_time": 94,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 7,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "Transport Freighter": {
+   "kind": "unit",
+   "slot": 322,
+   "name": "Transport Freighter",
+   "job_time": 94,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    3,
+    3
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 7,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "Bark": {
+   "kind": "unit",
+   "slot": 323,
+   "name": "Bark",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    -1,
+    572,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Dromon": {
+   "kind": "unit",
+   "slot": 324,
+   "name": "Dromon",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Caravel": {
+   "kind": "unit",
+   "slot": 325,
+   "name": "Caravel",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Corvette": {
+   "kind": "unit",
+   "slot": 326,
+   "name": "Corvette",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Sloop": {
+   "kind": "unit",
+   "slot": 327,
+   "name": "Sloop",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Destroyer": {
+   "kind": "unit",
+   "slot": 328,
+   "name": "Destroyer",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    7,
+    7
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Cruiser": {
+   "kind": "unit",
+   "slot": 329,
+   "name": "Cruiser",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    7,
+    7
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Missile Cruiser": {
+   "kind": "unit",
+   "slot": 330,
+   "name": "Missile Cruiser",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    7,
+    7
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Brig": {
+   "kind": "unit",
+   "slot": 331,
+   "name": "Brig",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fluyt": {
+   "kind": "unit",
+   "slot": 332,
+   "name": "Fluyt",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Clipper": {
+   "kind": "unit",
+   "slot": 333,
+   "name": "Clipper",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Fire Raft": {
+   "kind": "unit",
+   "slot": 334,
+   "name": "Fire Raft",
+   "job_time": 150,
+   "cost": [
+    0,
+    2,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Heavy Fire Raft": {
+   "kind": "unit",
+   "slot": 335,
+   "name": "Heavy Fire Raft",
+   "job_time": 150,
+   "cost": [
+    0,
+    2,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Fireship": {
+   "kind": "unit",
+   "slot": 336,
+   "name": "Fireship",
+   "job_time": 150,
+   "cost": [
+    0,
+    3,
+    6,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Heavy Fireship": {
+   "kind": "unit",
+   "slot": 337,
+   "name": "Heavy Fireship",
+   "job_time": 150,
+   "cost": [
+    0,
+    3,
+    6,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Submarine": {
+   "kind": "unit",
+   "slot": 338,
+   "name": "Submarine",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    0,
+    6
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Attack Submarine": {
+   "kind": "unit",
+   "slot": 339,
+   "name": "Attack Submarine",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    0,
+    6
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Trireme": {
+   "kind": "unit",
+   "slot": 340,
+   "name": "Trireme",
+   "job_time": 225,
+   "cost": [
+    0,
+    4,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    -1,
+    572,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Galley": {
+   "kind": "unit",
+   "slot": 341,
+   "name": "Galley",
+   "job_time": 225,
+   "cost": [
+    0,
+    4,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Carrack": {
+   "kind": "unit",
+   "slot": 342,
+   "name": "Carrack",
+   "job_time": 225,
+   "cost": [
+    0,
+    4,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    545,
+    573,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Frigate": {
+   "kind": "unit",
+   "slot": 343,
+   "name": "Frigate",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Man o' War": {
+   "kind": "unit",
+   "slot": 344,
+   "name": "Man o' War",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Siegeship": {
+   "kind": "unit",
+   "slot": 345,
+   "name": "Siegeship",
+   "job_time": 300,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Bomb Vessel": {
+   "kind": "unit",
+   "slot": 346,
+   "name": "Bomb Vessel",
+   "job_time": 300,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Bomb Ketch": {
+   "kind": "unit",
+   "slot": 347,
+   "name": "Bomb Ketch",
+   "job_time": 300,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": 432,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Dreadnought": {
+   "kind": "unit",
+   "slot": 348,
+   "name": "Dreadnought",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    14,
+    9
+   ],
+   "support": [
+    4,
+    5
+   ],
+   "support_cost": [
+    5,
+    2
+   ],
+   "preq": [
+    548,
+    576,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Battleship": {
+   "kind": "unit",
+   "slot": 349,
+   "name": "Battleship",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    14,
+    9
+   ],
+   "support": [
+    4,
+    5
+   ],
+   "support_cost": [
+    5,
+    2
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Advanced Battleship": {
+   "kind": "unit",
+   "slot": 350,
+   "name": "Advanced Battleship",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    0,
+    0,
+    14,
+    9
+   ],
+   "support": [
+    4,
+    5
+   ],
+   "support_cost": [
+    5,
+    2
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Aircraft Carrier": {
+   "kind": "unit",
+   "slot": 351,
+   "name": "Aircraft Carrier",
+   "job_time": 250,
+   "cost": [
+    0,
+    0,
+    65,
+    0,
+    0,
+    65
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    100,
+    100
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": 432,
+   "cat": 7,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "The Despot": {
+   "kind": "unit",
+   "slot": 352,
+   "name": "The Despot",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    623,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "The Senator": {
+   "kind": "unit",
+   "slot": 353,
+   "name": "The Senator",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    624,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "The Monarch": {
+   "kind": "unit",
+   "slot": 354,
+   "name": "The Monarch",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    625,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "The President": {
+   "kind": "unit",
+   "slot": 355,
+   "name": "The President",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    626,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "The Comrade": {
+   "kind": "unit",
+   "slot": 356,
+   "name": "The Comrade",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    627,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "The CEO": {
+   "kind": "unit",
+   "slot": 357,
+   "name": "The CEO",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    628,
+    -2,
+    -1
+   ],
+   "where": 438,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 0
+  },
+  "Alexander": {
+   "kind": "unit",
+   "slot": 358,
+   "name": "Alexander",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Napoleon": {
+   "kind": "unit",
+   "slot": 359,
+   "name": "Napoleon",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Parmenio": {
+   "kind": "unit",
+   "slot": 360,
+   "name": "Parmenio",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Antipater": {
+   "kind": "unit",
+   "slot": 361,
+   "name": "Antipater",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Ptolemy": {
+   "kind": "unit",
+   "slot": 362,
+   "name": "Ptolemy",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Darius": {
+   "kind": "unit",
+   "slot": 363,
+   "name": "Darius",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Memnon": {
+   "kind": "unit",
+   "slot": 364,
+   "name": "Memnon",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Spitamenes": {
+   "kind": "unit",
+   "slot": 365,
+   "name": "Spitamenes",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Chandragupta Maurya": {
+   "kind": "unit",
+   "slot": 366,
+   "name": "Chandragupta Maurya",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Porus": {
+   "kind": "unit",
+   "slot": 367,
+   "name": "Porus",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Wellington": {
+   "kind": "unit",
+   "slot": 368,
+   "name": "Wellington",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Archduke Charles": {
+   "kind": "unit",
+   "slot": 369,
+   "name": "Archduke Charles",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Djezzar": {
+   "kind": "unit",
+   "slot": 370,
+   "name": "Djezzar",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Advisor Fouch\u00e9": {
+   "kind": "unit",
+   "slot": 371,
+   "name": "Advisor Fouch\u00e9",
+   "job_time": 225,
+   "cost": [
+    0,
+    0,
+    5,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    552,
+    545,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Commander Schwarzenberg": {
+   "kind": "unit",
+   "slot": 372,
+   "name": "Commander Schwarzenberg",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "General Blucher": {
+   "kind": "unit",
+   "slot": 373,
+   "name": "General Blucher",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "General Kutosov": {
+   "kind": "unit",
+   "slot": 374,
+   "name": "General Kutosov",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 4,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Commander Paoli": {
+   "kind": "unit",
+   "slot": 375,
+   "name": "Commander Paoli",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "War Chariot": {
+   "kind": "unit",
+   "slot": 376,
+   "name": "War Chariot",
+   "job_time": 225,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    544,
+    573,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Ship of the Line": {
+   "kind": "unit",
+   "slot": 377,
+   "name": "Ship of the Line",
+   "job_time": 225,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Junkers": {
+   "kind": "unit",
+   "slot": 378,
+   "name": "Junkers",
+   "job_time": 169,
+   "cost": [
+    7,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Patrol Jeep": {
+   "kind": "unit",
+   "slot": 379,
+   "name": "Patrol Jeep",
+   "job_time": 188,
+   "cost": [
+    8,
+    0,
+    0,
+    0,
+    0,
+    2
+   ],
+   "support": [
+    0,
+    5
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Guerilla Fighters": {
+   "kind": "unit",
+   "slot": 380,
+   "name": "Guerilla Fighters",
+   "job_time": 130,
+   "cost": [
+    5,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Bandeirantes": {
+   "kind": "unit",
+   "slot": 384,
+   "name": "Bandeirantes",
+   "job_time": 174,
+   "cost": [
+    7,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    4,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Elite Bandeirantes": {
+   "kind": "unit",
+   "slot": 385,
+   "name": "Elite Bandeirantes",
+   "job_time": 174,
+   "cost": [
+    7,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    4,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Red Coats": {
+   "kind": "unit",
+   "slot": 386,
+   "name": "Red Coats",
+   "job_time": 169,
+   "cost": [
+    7,
+    0,
+    6,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "SAS": {
+   "kind": "unit",
+   "slot": 387,
+   "name": "SAS",
+   "job_time": 180,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    10
+   ],
+   "preq": [
+    550,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Harrier Jet": {
+   "kind": "unit",
+   "slot": 388,
+   "name": "Harrier Jet",
+   "job_time": 170,
+   "cost": [
+    0,
+    0,
+    9,
+    0,
+    0,
+    9
+   ],
+   "support": [
+    5,
+    2
+   ],
+   "support_cost": [
+    2,
+    2
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": -1,
+   "cat": 8,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Patrol Boat": {
+   "kind": "unit",
+   "slot": 389,
+   "name": "Patrol Boat",
+   "job_time": 120,
+   "cost": [
+    0,
+    5,
+    0,
+    0,
+    0,
+    3
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    549,
+    577,
+    -1
+   ],
+   "where": -1,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Humvee": {
+   "kind": "unit",
+   "slot": 390,
+   "name": "Humvee",
+   "job_time": 188,
+   "cost": [
+    0,
+    0,
+    4,
+    0,
+    0,
+    4
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Barbarian Archers": {
+   "kind": "unit",
+   "slot": 391,
+   "name": "Barbarian Archers",
+   "job_time": 169,
+   "cost": [
+    0,
+    4,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Barbarian Javelineers": {
+   "kind": "unit",
+   "slot": 392,
+   "name": "Barbarian Javelineers",
+   "job_time": 150,
+   "cost": [
+    4,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Barbarian Phalanx": {
+   "kind": "unit",
+   "slot": 393,
+   "name": "Barbarian Phalanx",
+   "job_time": 188,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    3,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Greek Mercenaries": {
+   "kind": "unit",
+   "slot": 394,
+   "name": "Greek Mercenaries",
+   "job_time": 150,
+   "cost": [
+    1,
+    0,
+    3,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Imperial Guard": {
+   "kind": "unit",
+   "slot": 395,
+   "name": "Imperial Guard",
+   "job_time": 169,
+   "cost": [
+    7,
+    0,
+    6,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    2
+   ],
+   "support_cost": [
+    1,
+    1
+   ],
+   "preq": [
+    547,
+    575,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Galleon": {
+   "kind": "unit",
+   "slot": 396,
+   "name": "Galleon",
+   "job_time": 225,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Ironclad": {
+   "kind": "unit",
+   "slot": 397,
+   "name": "Ironclad",
+   "job_time": 150,
+   "cost": [
+    3,
+    3,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    1,
+    0
+   ],
+   "preq": [
+    546,
+    574,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Nuclear Missile Sub": {
+   "kind": "unit",
+   "slot": 398,
+   "name": "Nuclear Missile Sub",
+   "job_time": 150,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    0,
+    6
+   ],
+   "support": [
+    5,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    550,
+    578,
+    -1
+   ],
+   "where": -1,
+   "cat": 7,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Catapult Ship": {
+   "kind": "unit",
+   "slot": 399,
+   "name": "Catapult Ship",
+   "job_time": 300,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    4,
+    -1
+   ],
+   "support_cost": [
+    2,
+    0
+   ],
+   "preq": [
+    544,
+    572,
+    -1
+   ],
+   "where": -1,
+   "cat": 6,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 2
+  },
+  "Fur Trapper": {
+   "kind": "unit",
+   "slot": 400,
+   "name": "Fur Trapper",
+   "job_time": 156,
+   "cost": [
+    0,
+    5,
+    2,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    5,
+    5
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 5,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Boadicea": {
+   "kind": "unit",
+   "slot": 401,
+   "name": "Boadicea",
+   "job_time": 375,
+   "cost": [
+    0,
+    0,
+    3,
+    6,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    551,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "progression": 0,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Wild Bird": {
+   "kind": "unit",
+   "slot": 402,
+   "name": "Wild Bird",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 8,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Flock Bird": {
+   "kind": "unit",
+   "slot": 403,
+   "name": "Flock Bird",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 8,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Gull Bird": {
+   "kind": "unit",
+   "slot": 404,
+   "name": "Gull Bird",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 8,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Farm Pig": {
+   "kind": "unit",
+   "slot": 405,
+   "name": "Farm Pig",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Farm Chicken": {
+   "kind": "unit",
+   "slot": 406,
+   "name": "Farm Chicken",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Horse": {
+   "kind": "unit",
+   "slot": 407,
+   "name": "Herd Horse",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Sheep": {
+   "kind": "unit",
+   "slot": 408,
+   "name": "Herd Sheep",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Bison": {
+   "kind": "unit",
+   "slot": 409,
+   "name": "Herd Bison",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Bear": {
+   "kind": "unit",
+   "slot": 410,
+   "name": "Herd Bear",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Fish": {
+   "kind": "unit",
+   "slot": 411,
+   "name": "Herd Fish",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Whales": {
+   "kind": "unit",
+   "slot": 412,
+   "name": "Herd Whales",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  },
+  "Herd Peacock": {
+   "kind": "unit",
+   "slot": 413,
+   "name": "Herd Peacock",
+   "job_time": 188,
+   "cost": [
+    3,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 1,
+   "progression": 3,
+   "job_extra_time": 10,
+   "pop": 1
+  }
+ },
+ "buildings": {
+  "Small City": {
+   "kind": "building",
+   "slot": 414,
+   "name": "Small City",
+   "job_time": 600,
+   "cost": [
+    1,
+    1,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    50,
+    50
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": -1543495663
+  },
+  "Large City": {
+   "kind": "building",
+   "slot": 415,
+   "name": "Large City",
+   "job_time": 600,
+   "cost": [
+    2,
+    2,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    50,
+    50
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 414,
+   "cat": 0,
+   "build_flags": -2080366575
+  },
+  "Major City": {
+   "kind": "building",
+   "slot": 416,
+   "name": "Major City",
+   "job_time": 600,
+   "cost": [
+    5,
+    5,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    50,
+    50
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": 415,
+   "cat": 0,
+   "build_flags": 67117073
+  },
+  "Farm": {
+   "kind": "building",
+   "slot": 417,
+   "name": "Farm",
+   "job_time": 150,
+   "cost": [
+    0,
+    4,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    4,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 268435529
+  },
+  "Woodcutter's Camp": {
+   "kind": "building",
+   "slot": 418,
+   "name": "Woodcutter's Camp",
+   "job_time": 150,
+   "cost": [
+    5,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    -1
+   ],
+   "support_cost": [
+    20,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 89
+  },
+  "Mine": {
+   "kind": "building",
+   "slot": 419,
+   "name": "Mine",
+   "job_time": 150,
+   "cost": [
+    0,
+    5,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    20,
+    0
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 89
+  },
+  "University": {
+   "kind": "building",
+   "slot": 420,
+   "name": "University",
+   "job_time": 420,
+   "cost": [
+    0,
+    6,
+    3,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": -2013265335
+  },
+  "Oil Well": {
+   "kind": "building",
+   "slot": 421,
+   "name": "Oil Well",
+   "job_time": 420,
+   "cost": [
+    0,
+    10,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    15,
+    15
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 268435545
+  },
+  "Oil Platform": {
+   "kind": "building",
+   "slot": 422,
+   "name": "Oil Platform",
+   "job_time": 420,
+   "cost": [
+    0,
+    10,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    20,
+    20
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 268435794
+  },
+  "Granary": {
+   "kind": "building",
+   "slot": 423,
+   "name": "Granary",
+   "job_time": 1000,
+   "cost": [
+    0,
+    6,
+    4,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    40,
+    0
+   ],
+   "preq": [
+    552,
+    544,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134218241
+  },
+  "Lumber Mill": {
+   "kind": "building",
+   "slot": 424,
+   "name": "Lumber Mill",
+   "job_time": 1000,
+   "cost": [
+    6,
+    0,
+    0,
+    0,
+    4,
+    0
+   ],
+   "support": [
+    4,
+    0
+   ],
+   "support_cost": [
+    40,
+    0
+   ],
+   "preq": [
+    552,
+    544,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134218241
+  },
+  "Smelter": {
+   "kind": "building",
+   "slot": 425,
+   "name": "Smelter",
+   "job_time": 1000,
+   "cost": [
+    0,
+    7,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    0,
+    40
+   ],
+   "preq": [
+    553,
+    544,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134218241
+  },
+  "Refinery": {
+   "kind": "building",
+   "slot": 426,
+   "name": "Refinery",
+   "job_time": 1000,
+   "cost": [
+    0,
+    10,
+    0,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    15,
+    15
+   ],
+   "preq": [
+    556,
+    548,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 513
+  },
+  "Barracks": {
+   "kind": "building",
+   "slot": 427,
+   "name": "Barracks",
+   "job_time": 420,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    25,
+    0
+   ],
+   "preq": [
+    572,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1073733615
+  },
+  "Stable": {
+   "kind": "building",
+   "slot": 428,
+   "name": "Stable",
+   "job_time": 420,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    25,
+    0
+   ],
+   "preq": [
+    572,
+    544,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1006624751
+  },
+  "Auto Plant": {
+   "kind": "building",
+   "slot": 429,
+   "name": "Auto Plant",
+   "job_time": 420,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    25,
+    0
+   ],
+   "preq": [
+    572,
+    548,
+    -1
+   ],
+   "where": 428,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "Siege Factory": {
+   "kind": "building",
+   "slot": 430,
+   "name": "Siege Factory",
+   "job_time": 420,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    25,
+    0
+   ],
+   "preq": [
+    573,
+    544,
+    572
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1006624751
+  },
+  "Factory": {
+   "kind": "building",
+   "slot": 431,
+   "name": "Factory",
+   "job_time": 420,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    -1
+   ],
+   "support_cost": [
+    25,
+    0
+   ],
+   "preq": [
+    573,
+    548,
+    -1
+   ],
+   "where": 430,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "Dock": {
+   "kind": "building",
+   "slot": 432,
+   "name": "Dock",
+   "job_time": 420,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    30,
+    0
+   ],
+   "preq": [
+    558,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1006624750
+  },
+  "Anchorage": {
+   "kind": "building",
+   "slot": 433,
+   "name": "Anchorage",
+   "job_time": 420,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    30,
+    0
+   ],
+   "preq": [
+    558,
+    546,
+    -1
+   ],
+   "where": 432,
+   "cat": 1,
+   "build_flags": 67117078
+  },
+  "Shipyard": {
+   "kind": "building",
+   "slot": 434,
+   "name": "Shipyard",
+   "job_time": 420,
+   "cost": [
+    0,
+    7,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    30,
+    0
+   ],
+   "preq": [
+    558,
+    548,
+    -1
+   ],
+   "where": 433,
+   "cat": 1,
+   "build_flags": 67117078
+  },
+  "Library": {
+   "kind": "building",
+   "slot": 435,
+   "name": "Library",
+   "job_time": 420,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    0,
+    20
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134222337
+  },
+  "Market": {
+   "kind": "building",
+   "slot": 436,
+   "name": "Market",
+   "job_time": 420,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    0
+   ],
+   "support_cost": [
+    30,
+    0
+   ],
+   "preq": [
+    558,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": -2147479039
+  },
+  "Temple": {
+   "kind": "building",
+   "slot": 437,
+   "name": "Temple",
+   "job_time": 420,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    30,
+    0
+   ],
+   "preq": [
+    551,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134222337
+  },
+  "Senate": {
+   "kind": "building",
+   "slot": 438,
+   "name": "Senate",
+   "job_time": 500,
+   "cost": [
+    0,
+    5,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 134222337
+  },
+  "Tower": {
+   "kind": "building",
+   "slot": 439,
+   "name": "Tower",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    572,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 201334801
+  },
+  "Keep": {
+   "kind": "building",
+   "slot": 440,
+   "name": "Keep",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    545,
+    573,
+    572
+   ],
+   "where": 439,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Stockade": {
+   "kind": "building",
+   "slot": 441,
+   "name": "Stockade",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    547,
+    575,
+    572
+   ],
+   "where": 440,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Bunker": {
+   "kind": "building",
+   "slot": 442,
+   "name": "Bunker",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    549,
+    577,
+    572
+   ],
+   "where": 441,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Fort": {
+   "kind": "building",
+   "slot": 443,
+   "name": "Fort",
+   "job_time": 2000,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    25,
+    75
+   ],
+   "preq": [
+    544,
+    573,
+    573
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1946148847
+  },
+  "Castle": {
+   "kind": "building",
+   "slot": 444,
+   "name": "Castle",
+   "job_time": 2000,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    25,
+    75
+   ],
+   "preq": [
+    545,
+    573,
+    573
+   ],
+   "where": 443,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Fortress": {
+   "kind": "building",
+   "slot": 445,
+   "name": "Fortress",
+   "job_time": 2000,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    25,
+    75
+   ],
+   "preq": [
+    547,
+    575,
+    573
+   ],
+   "where": 444,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Redoubt": {
+   "kind": "building",
+   "slot": 446,
+   "name": "Redoubt",
+   "job_time": 2000,
+   "cost": [
+    0,
+    0,
+    10,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    25,
+    75
+   ],
+   "preq": [
+    549,
+    577,
+    573
+   ],
+   "where": 445,
+   "cat": 1,
+   "build_flags": 201334805
+  },
+  "Airbase": {
+   "kind": "building",
+   "slot": 447,
+   "name": "Airbase",
+   "job_time": 600,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    0,
+    7
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    25,
+    25
+   ],
+   "preq": [
+    573,
+    548,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1073733615
+  },
+  "El Dorado": {
+   "kind": "building",
+   "slot": 448,
+   "name": "El Dorado",
+   "job_time": 420,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    0,
+    20
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 0,
+   "build_flags": 8721
+  },
+  "Washington Monument": {
+   "kind": "building",
+   "slot": 449,
+   "name": "Washington Monument",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 17
+  },
+  "Lenin Statue": {
+   "kind": "building",
+   "slot": 450,
+   "name": "Lenin Statue",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 17
+  },
+  "House": {
+   "kind": "building",
+   "slot": 451,
+   "name": "House",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 17
+  },
+  "Apartments": {
+   "kind": "building",
+   "slot": 487,
+   "name": "Apartments",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 17
+  },
+  "Office Building": {
+   "kind": "building",
+   "slot": 507,
+   "name": "Office Building",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    3,
+    0,
+    5,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    10,
+    25
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 17
+  },
+  "Courtyard Fountain": {
+   "kind": "building",
+   "slot": 519,
+   "name": "Courtyard Fountain",
+   "job_time": 4000,
+   "cost": [
+    0,
+    20,
+    20,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    60,
+    60
+   ],
+   "preq": [
+    -2,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Missile Silo": {
+   "kind": "building",
+   "slot": 520,
+   "name": "Missile Silo",
+   "job_time": 600,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    0,
+    7
+   ],
+   "support": [
+    2,
+    5
+   ],
+   "support_cost": [
+    50,
+    50
+   ],
+   "preq": [
+    573,
+    549,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": -1073733615
+  },
+  "Lookout": {
+   "kind": "building",
+   "slot": 521,
+   "name": "Lookout",
+   "job_time": 200,
+   "cost": [
+    0,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    4,
+    2
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 1,
+   "build_flags": 67117073
+  },
+  "Observation Post": {
+   "kind": "building",
+   "slot": 522,
+   "name": "Observation Post",
+   "job_time": 200,
+   "cost": [
+    0,
+    8,
+    0,
+    0,
+    6,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    15,
+    15
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": 521,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "Air Defense Gun": {
+   "kind": "building",
+   "slot": 523,
+   "name": "Air Defense Gun",
+   "job_time": 200,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    12,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    25,
+    25
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": 522,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "Radar Air Defense": {
+   "kind": "building",
+   "slot": 524,
+   "name": "Radar Air Defense",
+   "job_time": 300,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    12,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    25,
+    25
+   ],
+   "preq": [
+    549,
+    -1,
+    -1
+   ],
+   "where": 523,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "SAM Installation": {
+   "kind": "building",
+   "slot": 525,
+   "name": "SAM Installation",
+   "job_time": 400,
+   "cost": [
+    0,
+    12,
+    0,
+    0,
+    12,
+    0
+   ],
+   "support": [
+    1,
+    4
+   ],
+   "support_cost": [
+    25,
+    25
+   ],
+   "preq": [
+    550,
+    -1,
+    -1
+   ],
+   "where": 524,
+   "cat": 1,
+   "build_flags": 67117077
+  },
+  "Pyramids": {
+   "kind": "building",
+   "slot": 526,
+   "name": "Pyramids",
+   "job_time": 4000,
+   "cost": [
+    20,
+    20,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    60,
+    60
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Colossus": {
+   "kind": "building",
+   "slot": 527,
+   "name": "Colossus",
+   "job_time": 4000,
+   "cost": [
+    0,
+    20,
+    20,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    60,
+    60
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Hanging Gardens": {
+   "kind": "building",
+   "slot": 528,
+   "name": "Hanging Gardens",
+   "job_time": 4000,
+   "cost": [
+    20,
+    0,
+    20,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    2
+   ],
+   "support_cost": [
+    60,
+    60
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Terra Cotta Army": {
+   "kind": "building",
+   "slot": 529,
+   "name": "Terra Cotta Army",
+   "job_time": 5000,
+   "cost": [
+    30,
+    0,
+    30,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    2
+   ],
+   "support_cost": [
+    90,
+    90
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Colosseum": {
+   "kind": "building",
+   "slot": 530,
+   "name": "Colosseum",
+   "job_time": 5000,
+   "cost": [
+    0,
+    30,
+    0,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    90,
+    90
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Forbidden City": {
+   "kind": "building",
+   "slot": 531,
+   "name": "Forbidden City",
+   "job_time": 5000,
+   "cost": [
+    30,
+    30,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    90,
+    90
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 414,
+   "cat": 2,
+   "build_flags": 67117073
+  },
+  "Temple of Tikal": {
+   "kind": "building",
+   "slot": 532,
+   "name": "Temple of Tikal",
+   "job_time": 6000,
+   "cost": [
+    40,
+    40,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    1
+   ],
+   "support_cost": [
+    120,
+    120
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Porcelain Tower": {
+   "kind": "building",
+   "slot": 533,
+   "name": "Porcelain Tower",
+   "job_time": 6000,
+   "cost": [
+    0,
+    0,
+    40,
+    0,
+    40,
+    0
+   ],
+   "support": [
+    2,
+    4
+   ],
+   "support_cost": [
+    120,
+    130
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Red Fort": {
+   "kind": "building",
+   "slot": 534,
+   "name": "Red Fort",
+   "job_time": 3000,
+   "cost": [
+    0,
+    0,
+    40,
+    0,
+    40,
+    0
+   ],
+   "support": [
+    4,
+    2
+   ],
+   "support_cost": [
+    120,
+    120
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": 443,
+   "cat": 2,
+   "build_flags": 201334801
+  },
+  "Angkor Wat": {
+   "kind": "building",
+   "slot": 535,
+   "name": "Angkor Wat",
+   "job_time": 7000,
+   "cost": [
+    0,
+    50,
+    50,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    2,
+    1
+   ],
+   "support_cost": [
+    180,
+    180
+   ],
+   "preq": [
+    547,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Versailles": {
+   "kind": "building",
+   "slot": 536,
+   "name": "Versailles",
+   "job_time": 7000,
+   "cost": [
+    50,
+    0,
+    0,
+    0,
+    50,
+    0
+   ],
+   "support": [
+    0,
+    4
+   ],
+   "support_cost": [
+    180,
+    180
+   ],
+   "preq": [
+    547,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Statue of Liberty": {
+   "kind": "building",
+   "slot": 537,
+   "name": "Statue of Liberty",
+   "job_time": 8000,
+   "cost": [
+    60,
+    0,
+    60,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    0,
+    2
+   ],
+   "support_cost": [
+    240,
+    240
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Kremlin": {
+   "kind": "building",
+   "slot": 538,
+   "name": "Kremlin",
+   "job_time": 10000,
+   "cost": [
+    70,
+    0,
+    0,
+    0,
+    70,
+    0
+   ],
+   "support": [
+    4,
+    0
+   ],
+   "support_cost": [
+    360,
+    360
+   ],
+   "preq": [
+    549,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Taj Mahal": {
+   "kind": "building",
+   "slot": 539,
+   "name": "Taj Mahal",
+   "job_time": 8000,
+   "cost": [
+    0,
+    60,
+    60,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    1,
+    2
+   ],
+   "support_cost": [
+    240,
+    240
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Eiffel Tower": {
+   "kind": "building",
+   "slot": 540,
+   "name": "Eiffel Tower",
+   "job_time": 10000,
+   "cost": [
+    0,
+    70,
+    0,
+    0,
+    70,
+    0
+   ],
+   "support": [
+    4,
+    1
+   ],
+   "support_cost": [
+    360,
+    360
+   ],
+   "preq": [
+    549,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Supercollider": {
+   "kind": "building",
+   "slot": 541,
+   "name": "Supercollider",
+   "job_time": 12000,
+   "cost": [
+    80,
+    0,
+    0,
+    80,
+    0,
+    0
+   ],
+   "support": [
+    3,
+    0
+   ],
+   "support_cost": [
+    480,
+    480
+   ],
+   "preq": [
+    550,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  },
+  "Space Program": {
+   "kind": "building",
+   "slot": 542,
+   "name": "Space Program",
+   "job_time": 12000,
+   "cost": [
+    0,
+    0,
+    80,
+    80,
+    0,
+    0
+   ],
+   "support": [
+    3,
+    2
+   ],
+   "support_cost": [
+    480,
+    480
+   ],
+   "preq": [
+    550,
+    -1,
+    -1
+   ],
+   "where": -1,
+   "cat": 2,
+   "build_flags": 1
+  }
+ },
+ "techs": {
+  "Classical Age": {
+   "kind": "tech",
+   "slot": 544,
+   "name": "Classical Age",
+   "job_time": 400,
+   "cost": [
+    25,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 0
+  },
+  "Medieval Age": {
+   "kind": "tech",
+   "slot": 545,
+   "name": "Medieval Age",
+   "job_time": 550,
+   "cost": [
+    25,
+    0,
+    0,
+    25,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    544,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 1
+  },
+  "Gunpowder Age": {
+   "kind": "tech",
+   "slot": 546,
+   "name": "Gunpowder Age",
+   "job_time": 700,
+   "cost": [
+    50,
+    0,
+    0,
+    50,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    545,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 2
+  },
+  "Enlightenment Age": {
+   "kind": "tech",
+   "slot": 547,
+   "name": "Enlightenment Age",
+   "job_time": 850,
+   "cost": [
+    50,
+    0,
+    0,
+    100,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    546,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 3
+  },
+  "Industrial Age": {
+   "kind": "tech",
+   "slot": 548,
+   "name": "Industrial Age",
+   "job_time": 1000,
+   "cost": [
+    75,
+    0,
+    0,
+    150,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    547,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 4
+  },
+  "Modern Age": {
+   "kind": "tech",
+   "slot": 549,
+   "name": "Modern Age",
+   "job_time": 1150,
+   "cost": [
+    0,
+    0,
+    0,
+    250,
+    0,
+    100
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    548,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 5
+  },
+  "Information Age": {
+   "kind": "tech",
+   "slot": 550,
+   "name": "Information Age",
+   "job_time": 1300,
+   "cost": [
+    0,
+    0,
+    0,
+    375,
+    0,
+    150
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    549,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 6
+  },
+  "Written Word": {
+   "kind": "tech",
+   "slot": 551,
+   "name": "Written Word",
+   "job_time": 200,
+   "cost": [
+    0,
+    12,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 0
+  },
+  "Mathematics": {
+   "kind": "tech",
+   "slot": 552,
+   "name": "Mathematics",
+   "job_time": 275,
+   "cost": [
+    0,
+    0,
+    12,
+    8,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    551,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 1
+  },
+  "Chemistry": {
+   "kind": "tech",
+   "slot": 553,
+   "name": "Chemistry",
+   "job_time": 350,
+   "cost": [
+    0,
+    0,
+    20,
+    16,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    552,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 2
+  },
+  "Laws of Nature": {
+   "kind": "tech",
+   "slot": 554,
+   "name": "Laws of Nature",
+   "job_time": 425,
+   "cost": [
+    0,
+    0,
+    30,
+    30,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 3
+  },
+  "Electricity": {
+   "kind": "tech",
+   "slot": 555,
+   "name": "Electricity",
+   "job_time": 500,
+   "cost": [
+    0,
+    0,
+    50,
+    50,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 4
+  },
+  "Electronics": {
+   "kind": "tech",
+   "slot": 556,
+   "name": "Electronics",
+   "job_time": 575,
+   "cost": [
+    0,
+    0,
+    90,
+    90,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    555,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 5
+  },
+  "Computerization": {
+   "kind": "tech",
+   "slot": 557,
+   "name": "Computerization",
+   "job_time": 650,
+   "cost": [
+    0,
+    0,
+    150,
+    150,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 6
+  },
+  "Barter": {
+   "kind": "tech",
+   "slot": 558,
+   "name": "Barter",
+   "job_time": 200,
+   "cost": [
+    6,
+    6,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 0
+  },
+  "Coinage": {
+   "kind": "tech",
+   "slot": 559,
+   "name": "Coinage",
+   "job_time": 275,
+   "cost": [
+    0,
+    6,
+    0,
+    14,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    558,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 1
+  },
+  "Trade": {
+   "kind": "tech",
+   "slot": 560,
+   "name": "Trade",
+   "job_time": 350,
+   "cost": [
+    0,
+    10,
+    0,
+    26,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    559,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 2
+  },
+  "Mercantilism": {
+   "kind": "tech",
+   "slot": 561,
+   "name": "Mercantilism",
+   "job_time": 425,
+   "cost": [
+    0,
+    15,
+    0,
+    50,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    560,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 3
+  },
+  "Finance": {
+   "kind": "tech",
+   "slot": 562,
+   "name": "Finance",
+   "job_time": 500,
+   "cost": [
+    0,
+    25,
+    0,
+    90,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    561,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 4
+  },
+  "Assembly Line": {
+   "kind": "tech",
+   "slot": 563,
+   "name": "Assembly Line",
+   "job_time": 575,
+   "cost": [
+    0,
+    50,
+    0,
+    130,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    562,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 5
+  },
+  "Globalization": {
+   "kind": "tech",
+   "slot": 564,
+   "name": "Globalization",
+   "job_time": 650,
+   "cost": [
+    0,
+    120,
+    0,
+    180,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    563,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 2,
+   "age": 6
+  },
+  "City State": {
+   "kind": "tech",
+   "slot": 565,
+   "name": "City State",
+   "job_time": 200,
+   "cost": [
+    12,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 0
+  },
+  "Empire": {
+   "kind": "tech",
+   "slot": 566,
+   "name": "Empire",
+   "job_time": 275,
+   "cost": [
+    16,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    565,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 1
+  },
+  "Feudalism": {
+   "kind": "tech",
+   "slot": 567,
+   "name": "Feudalism",
+   "job_time": 350,
+   "cost": [
+    16,
+    0,
+    0,
+    16,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    566,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 2
+  },
+  "Divine Right": {
+   "kind": "tech",
+   "slot": 568,
+   "name": "Divine Right",
+   "job_time": 425,
+   "cost": [
+    30,
+    0,
+    0,
+    30,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    567,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 3
+  },
+  "Constitution": {
+   "kind": "tech",
+   "slot": 569,
+   "name": "Constitution",
+   "job_time": 500,
+   "cost": [
+    50,
+    0,
+    0,
+    50,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    568,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 4
+  },
+  "Great Power": {
+   "kind": "tech",
+   "slot": 570,
+   "name": "Great Power",
+   "job_time": 575,
+   "cost": [
+    80,
+    0,
+    0,
+    100,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    569,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 5
+  },
+  "International Law": {
+   "kind": "tech",
+   "slot": 571,
+   "name": "International Law",
+   "job_time": 650,
+   "cost": [
+    150,
+    0,
+    0,
+    150,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    570,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 1,
+   "age": 6
+  },
+  "The Art of War": {
+   "kind": "tech",
+   "slot": 572,
+   "name": "The Art of War",
+   "job_time": 200,
+   "cost": [
+    12,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 0
+  },
+  "Mercenaries": {
+   "kind": "tech",
+   "slot": 573,
+   "name": "Mercenaries",
+   "job_time": 275,
+   "cost": [
+    10,
+    0,
+    0,
+    0,
+    10,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    572,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 1
+  },
+  "Standing Army": {
+   "kind": "tech",
+   "slot": 574,
+   "name": "Standing Army",
+   "job_time": 350,
+   "cost": [
+    0,
+    0,
+    0,
+    16,
+    20,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    573,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 2
+  },
+  "Conscription": {
+   "kind": "tech",
+   "slot": 575,
+   "name": "Conscription",
+   "job_time": 425,
+   "cost": [
+    0,
+    0,
+    0,
+    36,
+    25,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    574,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 3
+  },
+  "Levee en Masse": {
+   "kind": "tech",
+   "slot": 576,
+   "name": "Levee en Masse",
+   "job_time": 500,
+   "cost": [
+    0,
+    0,
+    0,
+    65,
+    40,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    575,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 4
+  },
+  "Nation-in-Arms": {
+   "kind": "tech",
+   "slot": 577,
+   "name": "Nation-in-Arms",
+   "job_time": 575,
+   "cost": [
+    0,
+    0,
+    0,
+    130,
+    50,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    576,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 5
+  },
+  "Selective Service": {
+   "kind": "tech",
+   "slot": 578,
+   "name": "Selective Service",
+   "job_time": 650,
+   "cost": [
+    0,
+    0,
+    0,
+    180,
+    120,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    577,
+    -1,
+    -1
+   ],
+   "where": 435,
+   "cat": 0,
+   "age": 6
+  },
+  "Missile Shield": {
+   "kind": "tech",
+   "slot": 579,
+   "name": "Missile Shield",
+   "job_time": 4000,
+   "cost": [
+    0,
+    0,
+    0,
+    400,
+    300,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    578,
+    550,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 7
+  },
+  "World Government": {
+   "kind": "tech",
+   "slot": 580,
+   "name": "World Government",
+   "job_time": 4000,
+   "cost": [
+    300,
+    0,
+    0,
+    400,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    571,
+    550,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 7
+  },
+  "Global Prosperity": {
+   "kind": "tech",
+   "slot": 581,
+   "name": "Global Prosperity",
+   "job_time": 4000,
+   "cost": [
+    0,
+    0,
+    300,
+    400,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    564,
+    550,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 7
+  },
+  "Artificial Intelligence": {
+   "kind": "tech",
+   "slot": 582,
+   "name": "Artificial Intelligence",
+   "job_time": 4000,
+   "cost": [
+    0,
+    300,
+    0,
+    400,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    557,
+    550,
+    -1
+   ],
+   "where": 435,
+   "cat": 3,
+   "age": 7
+  },
+  "Tactics": {
+   "kind": "tech",
+   "slot": 583,
+   "name": "Tactics",
+   "job_time": 300,
+   "cost": [
+    5,
+    0,
+    5,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    574,
+    -1,
+    545
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 2
+  },
+  "Operations": {
+   "kind": "tech",
+   "slot": 584,
+   "name": "Operations",
+   "job_time": 350,
+   "cost": [
+    15,
+    0,
+    15,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    575,
+    583,
+    546
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 3
+  },
+  "Strategy": {
+   "kind": "tech",
+   "slot": 585,
+   "name": "Strategy",
+   "job_time": 450,
+   "cost": [
+    30,
+    0,
+    30,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    577,
+    584,
+    548
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 5
+  },
+  "Religion": {
+   "kind": "tech",
+   "slot": 586,
+   "name": "Religion",
+   "job_time": 250,
+   "cost": [
+    7,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    566,
+    -1,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 1
+  },
+  "Monotheism": {
+   "kind": "tech",
+   "slot": 587,
+   "name": "Monotheism",
+   "job_time": 350,
+   "cost": [
+    15,
+    0,
+    15,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    568,
+    586,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 3
+  },
+  "Existentialism": {
+   "kind": "tech",
+   "slot": 588,
+   "name": "Existentialism",
+   "job_time": 450,
+   "cost": [
+    30,
+    0,
+    30,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    570,
+    587,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 5
+  },
+  "Taxation": {
+   "kind": "tech",
+   "slot": 589,
+   "name": "Taxation",
+   "job_time": 200,
+   "cost": [
+    8,
+    8,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    565,
+    -1,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 1
+  },
+  "Vassalage": {
+   "kind": "tech",
+   "slot": 590,
+   "name": "Vassalage",
+   "job_time": 300,
+   "cost": [
+    16,
+    16,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    567,
+    589,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 2
+  },
+  "Social Contract": {
+   "kind": "tech",
+   "slot": 591,
+   "name": "Social Contract",
+   "job_time": 400,
+   "cost": [
+    32,
+    32,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    569,
+    590,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 4
+  },
+  "Income Tax": {
+   "kind": "tech",
+   "slot": 592,
+   "name": "Income Tax",
+   "job_time": 500,
+   "cost": [
+    48,
+    48,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    570,
+    591,
+    -1
+   ],
+   "where": 437,
+   "cat": 3,
+   "age": 5
+  },
+  "Fortification": {
+   "kind": "tech",
+   "slot": 593,
+   "name": "Fortification",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    12,
+    0,
+    12,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    574,
+    -1,
+    545
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 2
+  },
+  "Bombardment": {
+   "kind": "tech",
+   "slot": 594,
+   "name": "Bombardment",
+   "job_time": 350,
+   "cost": [
+    0,
+    0,
+    24,
+    0,
+    24,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    575,
+    593,
+    546
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 3
+  },
+  "Strategic Reserves": {
+   "kind": "tech",
+   "slot": 595,
+   "name": "Strategic Reserves",
+   "job_time": 450,
+   "cost": [
+    0,
+    0,
+    36,
+    0,
+    36,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    577,
+    594,
+    548
+   ],
+   "where": 443,
+   "cat": 3,
+   "age": 5
+  },
+  "Allegiance": {
+   "kind": "tech",
+   "slot": 596,
+   "name": "Allegiance",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    565,
+    -1,
+    544
+   ],
+   "where": 439,
+   "cat": 3,
+   "age": 1
+  },
+  "Oath of Fealty": {
+   "kind": "tech",
+   "slot": 597,
+   "name": "Oath of Fealty",
+   "job_time": 350,
+   "cost": [
+    0,
+    0,
+    15,
+    0,
+    15,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    566,
+    596,
+    545
+   ],
+   "where": 439,
+   "cat": 3,
+   "age": 2
+  },
+  "Patriotism": {
+   "kind": "tech",
+   "slot": 598,
+   "name": "Patriotism",
+   "job_time": 400,
+   "cost": [
+    0,
+    0,
+    30,
+    0,
+    30,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    568,
+    597,
+    547
+   ],
+   "where": 439,
+   "cat": 3,
+   "age": 4
+  },
+  "Nationalism": {
+   "kind": "tech",
+   "slot": 599,
+   "name": "Nationalism",
+   "job_time": 450,
+   "cost": [
+    0,
+    0,
+    45,
+    0,
+    45,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    570,
+    598,
+    549
+   ],
+   "where": 439,
+   "cat": 3,
+   "age": 6
+  },
+  "Construction": {
+   "kind": "tech",
+   "slot": 600,
+   "name": "Construction",
+   "job_time": 250,
+   "cost": [
+    0,
+    8,
+    8,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    552,
+    -1,
+    544
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 1
+  },
+  "Architecture": {
+   "kind": "tech",
+   "slot": 601,
+   "name": "Architecture",
+   "job_time": 300,
+   "cost": [
+    0,
+    15,
+    15,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    600,
+    546
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 2
+  },
+  "Engineering": {
+   "kind": "tech",
+   "slot": 602,
+   "name": "Engineering",
+   "job_time": 400,
+   "cost": [
+    0,
+    35,
+    35,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    555,
+    601,
+    548
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 4
+  },
+  "Herbal Lore": {
+   "kind": "tech",
+   "slot": 603,
+   "name": "Herbal Lore",
+   "job_time": 250,
+   "cost": [
+    8,
+    0,
+    8,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    552,
+    -1,
+    544
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 1
+  },
+  "Medicine": {
+   "kind": "tech",
+   "slot": 604,
+   "name": "Medicine",
+   "job_time": 300,
+   "cost": [
+    18,
+    0,
+    18,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    603,
+    546
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 3
+  },
+  "Pharmaceuticals": {
+   "kind": "tech",
+   "slot": 605,
+   "name": "Pharmaceuticals",
+   "job_time": 400,
+   "cost": [
+    35,
+    0,
+    35,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    555,
+    604,
+    548
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 5
+  },
+  "Forage": {
+   "kind": "tech",
+   "slot": 606,
+   "name": "Forage",
+   "job_time": 300,
+   "cost": [
+    0,
+    0,
+    8,
+    0,
+    8,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    552,
+    -1,
+    545
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 2
+  },
+  "Supply": {
+   "kind": "tech",
+   "slot": 607,
+   "name": "Supply",
+   "job_time": 400,
+   "cost": [
+    0,
+    0,
+    16,
+    0,
+    16,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    606,
+    547
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 3
+  },
+  "Logistics": {
+   "kind": "tech",
+   "slot": 608,
+   "name": "Logistics",
+   "job_time": 500,
+   "cost": [
+    0,
+    0,
+    24,
+    0,
+    24,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    607,
+    549
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 5
+  },
+  "Carpentry": {
+   "kind": "tech",
+   "slot": 609,
+   "name": "Carpentry",
+   "job_time": 300,
+   "cost": [
+    15,
+    0,
+    0,
+    0,
+    15,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    -1,
+    -1
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 2
+  },
+  "Logging Industry": {
+   "kind": "tech",
+   "slot": 610,
+   "name": "Logging Industry",
+   "job_time": 350,
+   "cost": [
+    25,
+    0,
+    0,
+    0,
+    25,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    609,
+    -1
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 3
+  },
+  "Papermill": {
+   "kind": "tech",
+   "slot": 611,
+   "name": "Papermill",
+   "job_time": 450,
+   "cost": [
+    45,
+    0,
+    0,
+    0,
+    45,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    610,
+    -1
+   ],
+   "where": 424,
+   "cat": 3,
+   "age": 5
+  },
+  "Agriculture": {
+   "kind": "tech",
+   "slot": 612,
+   "name": "Agriculture",
+   "job_time": 300,
+   "cost": [
+    0,
+    15,
+    0,
+    0,
+    15,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    -1,
+    -1
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 2
+  },
+  "Crop Rotation": {
+   "kind": "tech",
+   "slot": 613,
+   "name": "Crop Rotation",
+   "job_time": 350,
+   "cost": [
+    0,
+    25,
+    0,
+    0,
+    25,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    612,
+    -1
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 3
+  },
+  "Food Industry": {
+   "kind": "tech",
+   "slot": 614,
+   "name": "Food Industry",
+   "job_time": 450,
+   "cost": [
+    0,
+    45,
+    0,
+    0,
+    45,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    613,
+    -1
+   ],
+   "where": 423,
+   "cat": 3,
+   "age": 5
+  },
+  "Literacy": {
+   "kind": "tech",
+   "slot": 615,
+   "name": "Literacy",
+   "job_time": 300,
+   "cost": [
+    0,
+    20,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    553,
+    -1,
+    545
+   ],
+   "where": 420,
+   "cat": 3,
+   "age": 2
+  },
+  "Printing Press": {
+   "kind": "tech",
+   "slot": 616,
+   "name": "Printing Press",
+   "job_time": 350,
+   "cost": [
+    0,
+    40,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    615,
+    546
+   ],
+   "where": 420,
+   "cat": 3,
+   "age": 3
+  },
+  "Scientific Method": {
+   "kind": "tech",
+   "slot": 617,
+   "name": "Scientific Method",
+   "job_time": 450,
+   "cost": [
+    0,
+    60,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    555,
+    616,
+    547
+   ],
+   "where": 420,
+   "cat": 3,
+   "age": 4
+  },
+  "Institutional Research": {
+   "kind": "tech",
+   "slot": 618,
+   "name": "Institutional Research",
+   "job_time": 500,
+   "cost": [
+    0,
+    90,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    617,
+    548
+   ],
+   "where": 420,
+   "cat": 3,
+   "age": 5
+  },
+  "Supercomputers": {
+   "kind": "tech",
+   "slot": 619,
+   "name": "Supercomputers",
+   "job_time": 600,
+   "cost": [
+    0,
+    120,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    557,
+    618,
+    549
+   ],
+   "where": 420,
+   "cat": 3,
+   "age": 6
+  },
+  "Metal Alloys": {
+   "kind": "tech",
+   "slot": 620,
+   "name": "Metal Alloys",
+   "job_time": 350,
+   "cost": [
+    25,
+    25,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    554,
+    -1,
+    -1
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 3
+  },
+  "Cold Casting": {
+   "kind": "tech",
+   "slot": 621,
+   "name": "Cold Casting",
+   "job_time": 400,
+   "cost": [
+    35,
+    35,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    555,
+    620,
+    -1
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 4
+  },
+  "Steel": {
+   "kind": "tech",
+   "slot": 622,
+   "name": "Steel",
+   "job_time": 450,
+   "cost": [
+    45,
+    45,
+    0,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    556,
+    621,
+    -1
+   ],
+   "where": 425,
+   "cat": 3,
+   "age": 5
+  },
+  "Despotism": {
+   "kind": "tech",
+   "slot": 623,
+   "name": "Despotism",
+   "job_time": 400,
+   "cost": [
+    7,
+    0,
+    7,
+    0,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    544,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 1
+  },
+  "Republic": {
+   "kind": "tech",
+   "slot": 624,
+   "name": "Republic",
+   "job_time": 400,
+   "cost": [
+    7,
+    0,
+    0,
+    0,
+    7,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    544,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 1
+  },
+  "Monarchy": {
+   "kind": "tech",
+   "slot": 625,
+   "name": "Monarchy",
+   "job_time": 700,
+   "cost": [
+    0,
+    0,
+    25,
+    20,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    546,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 3
+  },
+  "Democracy": {
+   "kind": "tech",
+   "slot": 626,
+   "name": "Democracy",
+   "job_time": 700,
+   "cost": [
+    0,
+    0,
+    0,
+    20,
+    25,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    546,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 3
+  },
+  "Socialism": {
+   "kind": "tech",
+   "slot": 627,
+   "name": "Socialism",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    75,
+    50,
+    0,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    548,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 5
+  },
+  "Capitalism": {
+   "kind": "tech",
+   "slot": 628,
+   "name": "Capitalism",
+   "job_time": 1000,
+   "cost": [
+    0,
+    0,
+    0,
+    50,
+    75,
+    0
+   ],
+   "support": [
+    -1,
+    -1
+   ],
+   "support_cost": [
+    0,
+    0
+   ],
+   "preq": [
+    -1,
+    548,
+    -1
+   ],
+   "where": 438,
+   "cat": 3,
+   "age": 5
+  }
+ },
+ "slot_names": {
+  "50": "Citizen",
+  "52": "Scholar",
+  "54": "General",
+  "58": "Spy",
+  "59": "Caravan",
+  "60": "Armed Caravan",
+  "61": "Merchant",
+  "62": "Armed Merchant",
+  "63": "Supply Wagon",
+  "65": "Armed Supply Wagon",
+  "66": "Militia",
+  "67": "Minuteman",
+  "68": "Partisan",
+  "69": "Scout",
+  "71": "Explorer",
+  "73": "Commando",
+  "75": "Special Forces",
+  "77": "Elite Special Forces",
+  "79": "Takohs",
+  "80": "Akweks",
+  "81": "Okwari",
+  "82": "Slingers",
+  "83": "Javelineers",
+  "84": "Elite Javelineers",
+  "85": "Atl-Atls",
+  "86": "Royal Atl-Atls",
+  "87": "Xopilli Atl-Atls",
+  "88": "Balamob Slingers",
+  "89": "Royal Balamob Slingers",
+  "90": "Eagle Balamob Slingers",
+  "91": "Inti Clubmen",
+  "92": "Inti Macemen",
+  "93": "Umpakati",
+  "94": "Yangombi Umpakati",
+  "95": "Impi",
+  "96": "Fire Lances",
+  "97": "Heavy Fire Lances",
+  "98": "Arquebusiers",
+  "99": "Musketeers",
+  "100": "Riflemen",
+  "102": "Infantry",
+  "104": "Assault Infantry",
+  "107": "Red Guards Infantry",
+  "108": "Shock Infantry",
+  "109": "Volksgrenadiers",
+  "110": "Jaguar Infantry",
+  "111": "Jaguar Assault Infantry",
+  "112": "Janissaries",
+  "113": "Royal Janissaries",
+  "114": "Highlanders",
+  "115": "Black Watch",
+  "116": "Manchu Musketeers",
+  "117": "Manchu Riflemen",
+  "118": "Manchu Infantry",
+  "119": "Continental Marines",
+  "120": "Marine Riflemen",
+  "121": "Marine Infantry",
+  "122": "Assault Marines",
+  "123": "Machine Gun",
+  "125": "Heavy Machine Gun",
+  "127": "Advanced Machine Gun",
+  "130": "MG42",
+  "131": "Flamethrower",
+  "132": "Hoplites",
+  "133": "Phalanx",
+  "134": "Pikemen",
+  "135": "Elite Pikemen",
+  "136": "Fusiliers",
+  "137": "Anti-tank Rifle",
+  "139": "Bazooka",
+  "141": "Anti-Tank Missile",
+  "144": "Recoilless Gun",
+  "145": "Dragon AT Missile",
+  "146": "Legions",
+  "147": "Caesar's Legions",
+  "148": "Praetorian Guards",
+  "149": "Scutari",
+  "150": "Royal Scutari",
+  "151": "Tercios",
+  "152": "Royal Tercios",
+  "153": "Solduri",
+  "154": "Barbarians",
+  "155": "Vandals",
+  "156": "Landsknechts",
+  "157": "Ashigaru Spearmen",
+  "158": "Bushi",
+  "159": "Elite Bushi",
+  "160": "Samurai",
+  "161": "Gun Samurai",
+  "162": "Immortals",
+  "163": "Anusiya",
+  "164": "Athanatoi",
+  "165": "Arqimmortal",
+  "166": "Spearmen",
+  "167": "Mohawk Spearmen",
+  "168": "Heavy Mohawk Spearmen",
+  "169": "Elite Mohawk Spearmen",
+  "170": "Bowmen",
+  "171": "Archers",
+  "172": "Crossbowmen",
+  "173": "Heavy Archers",
+  "174": "Kushite Archers",
+  "175": "Royal Kushite Archers",
+  "176": "Apedemak Archers",
+  "177": "Longbowmen",
+  "178": "King's Longbowmen",
+  "179": "King's Yeomanry",
+  "180": "Hwarang",
+  "181": "Elite Hwarang",
+  "182": "Royal Hwarang",
+  "183": "Elite Royal Hwarang",
+  "184": "Immortal Bowmen",
+  "185": "Anusiya Archers",
+  "186": "Athanatoi Archers",
+  "187": "Horse Archer",
+  "188": "Heavy Horse Archer",
+  "189": "Dragoon",
+  "190": "Carabineer",
+  "191": "Camel Archer",
+  "192": "Heavy Camel Archer",
+  "193": "Camel Raider",
+  "194": "Camel Corps",
+  "195": "Chariot",
+  "196": "Heavy Chariot",
+  "197": "Mameluke",
+  "198": "Royal Mameluke",
+  "199": "Nomad",
+  "200": "Steppe Nomad",
+  "201": "Conquistador",
+  "202": "Elite Conquistador",
+  "203": "Horde",
+  "204": "Golden Horde",
+  "205": "Sunka Wakan",
+  "206": "Eagle Feather Horse",
+  "207": "Musket Horse",
+  "208": "Repeating Rifle Horse",
+  "209": "Light Horse",
+  "210": "Light Cavalry",
+  "211": "Elite Light Cavalry",
+  "212": "Hussar",
+  "213": "Light Camel",
+  "214": "Camel Warrior",
+  "215": "Elite Camel Warrior",
+  "216": "Armored Car",
+  "218": "Armored Scout Car",
+  "220": "Armored Cavalry",
+  "224": "Rusiny Lancer",
+  "225": "Cossack",
+  "226": "Don Cossack",
+  "227": "Cataphract",
+  "228": "Knight",
+  "229": "Heavy Knight",
+  "230": "Cuirassier",
+  "231": "Companion",
+  "232": "Royal Companion",
+  "233": "Stratiotai",
+  "234": "Royal Stratiotai",
+  "235": "Chevalier",
+  "236": "Heavy Chevalier",
+  "237": "Horse Grenadier",
+  "238": "Horse Guard Grenadier",
+  "239": "Light Tank",
+  "244": "Tank",
+  "251": "Main Battle Tank",
+  "258": "Tiger Tank",
+  "259": "Leopard Tank",
+  "260": "T80 Tank",
+  "261": "War Elephant",
+  "262": "Mahout",
+  "263": "Gun Mahout",
+  "264": "Culverin Mahout",
+  "265": "Catapult",
+  "266": "Trebuchet",
+  "267": "Bombard",
+  "268": "Cannon",
+  "269": "Artillery",
+  "271": "Howitzer",
+  "273": "Rocket Artillery",
+  "274": "Mortar",
+  "275": "Siege Mortar",
+  "276": "Basilica Bombard",
+  "277": "Basilica Cannon",
+  "278": "Katyusha Rocket",
+  "279": "Flaming Arrow",
+  "280": "Heavy Flaming Arrow",
+  "281": "Anti-Aircraft Gun",
+  "282": "Anti-Aircraft Battery",
+  "284": "Anti-Aircraft Missile",
+  "287": "Biplane",
+  "289": "Fighter",
+  "295": "Jet Fighter",
+  "301": "Advanced Fighter",
+  "302": "Hawk Fighter",
+  "303": "Eagle Fighter",
+  "304": "Bomber",
+  "305": "Strategic Bomber",
+  "306": "Stealth Bomber",
+  "307": "Lancaster Bomber",
+  "308": "Fighter Bomber",
+  "309": "Jet Fighter Bomber",
+  "310": "Helicopter",
+  "311": "Attack Helicopter",
+  "313": "V2 Rocket",
+  "314": "Cruise Missile",
+  "315": "Nuclear Missile",
+  "316": "Nuclear ICBM",
+  "317": "Fishermen",
+  "318": "Merchant Fleet",
+  "319": "Modern Merchant Fleet",
+  "320": "Transport Barge",
+  "321": "Transport Galleon",
+  "322": "Transport Freighter",
+  "323": "Bark",
+  "324": "Dromon",
+  "325": "Caravel",
+  "326": "Corvette",
+  "327": "Sloop",
+  "328": "Destroyer",
+  "329": "Cruiser",
+  "330": "Missile Cruiser",
+  "331": "Brig",
+  "332": "Fluyt",
+  "333": "Clipper",
+  "334": "Fire Raft",
+  "335": "Heavy Fire Raft",
+  "336": "Fireship",
+  "337": "Heavy Fireship",
+  "338": "Submarine",
+  "339": "Attack Submarine",
+  "340": "Trireme",
+  "341": "Galley",
+  "342": "Carrack",
+  "343": "Frigate",
+  "344": "Man o' War",
+  "345": "Siegeship",
+  "346": "Bomb Vessel",
+  "347": "Bomb Ketch",
+  "348": "Dreadnought",
+  "349": "Battleship",
+  "350": "Advanced Battleship",
+  "351": "Aircraft Carrier",
+  "352": "The Despot",
+  "353": "The Senator",
+  "354": "The Monarch",
+  "355": "The President",
+  "356": "The Comrade",
+  "357": "The CEO",
+  "358": "Alexander",
+  "359": "Napoleon",
+  "360": "Parmenio",
+  "361": "Antipater",
+  "362": "Ptolemy",
+  "363": "Darius",
+  "364": "Memnon",
+  "365": "Spitamenes",
+  "366": "Chandragupta Maurya",
+  "367": "Porus",
+  "368": "Wellington",
+  "369": "Archduke Charles",
+  "370": "Djezzar",
+  "371": "Advisor Fouch\u00e9",
+  "372": "Commander Schwarzenberg",
+  "373": "General Blucher",
+  "374": "General Kutosov",
+  "375": "Commander Paoli",
+  "376": "War Chariot",
+  "377": "Ship of the Line",
+  "378": "Junkers",
+  "379": "Patrol Jeep",
+  "380": "Guerilla Fighters",
+  "384": "Bandeirantes",
+  "385": "Elite Bandeirantes",
+  "386": "Red Coats",
+  "387": "SAS",
+  "388": "Harrier Jet",
+  "389": "Patrol Boat",
+  "390": "Humvee",
+  "391": "Barbarian Archers",
+  "392": "Barbarian Javelineers",
+  "393": "Barbarian Phalanx",
+  "394": "Greek Mercenaries",
+  "395": "Imperial Guard",
+  "396": "Galleon",
+  "397": "Ironclad",
+  "398": "Nuclear Missile Sub",
+  "399": "Catapult Ship",
+  "400": "Fur Trapper",
+  "401": "Boadicea",
+  "402": "Wild Bird",
+  "403": "Flock Bird",
+  "404": "Gull Bird",
+  "405": "Farm Pig",
+  "406": "Farm Chicken",
+  "407": "Herd Horse",
+  "408": "Herd Sheep",
+  "409": "Herd Bison",
+  "410": "Herd Bear",
+  "411": "Herd Fish",
+  "412": "Herd Whales",
+  "413": "Herd Peacock",
+  "414": "Small City",
+  "415": "Large City",
+  "416": "Major City",
+  "417": "Farm",
+  "418": "Woodcutter's Camp",
+  "419": "Mine",
+  "420": "University",
+  "421": "Oil Well",
+  "422": "Oil Platform",
+  "423": "Granary",
+  "424": "Lumber Mill",
+  "425": "Smelter",
+  "426": "Refinery",
+  "427": "Barracks",
+  "428": "Stable",
+  "429": "Auto Plant",
+  "430": "Siege Factory",
+  "431": "Factory",
+  "432": "Dock",
+  "433": "Anchorage",
+  "434": "Shipyard",
+  "435": "Library",
+  "436": "Market",
+  "437": "Temple",
+  "438": "Senate",
+  "439": "Tower",
+  "440": "Keep",
+  "441": "Stockade",
+  "442": "Bunker",
+  "443": "Fort",
+  "444": "Castle",
+  "445": "Fortress",
+  "446": "Redoubt",
+  "447": "Airbase",
+  "448": "El Dorado",
+  "449": "Washington Monument",
+  "450": "Lenin Statue",
+  "451": "House",
+  "487": "Apartments",
+  "507": "Office Building",
+  "519": "Courtyard Fountain",
+  "520": "Missile Silo",
+  "521": "Lookout",
+  "522": "Observation Post",
+  "523": "Air Defense Gun",
+  "524": "Radar Air Defense",
+  "525": "SAM Installation",
+  "526": "Pyramids",
+  "527": "Colossus",
+  "528": "Hanging Gardens",
+  "529": "Terra Cotta Army",
+  "530": "Colosseum",
+  "531": "Forbidden City",
+  "532": "Temple of Tikal",
+  "533": "Porcelain Tower",
+  "534": "Red Fort",
+  "535": "Angkor Wat",
+  "536": "Versailles",
+  "537": "Statue of Liberty",
+  "538": "Kremlin",
+  "539": "Taj Mahal",
+  "540": "Eiffel Tower",
+  "541": "Supercollider",
+  "542": "Space Program",
+  "544": "Classical Age",
+  "545": "Medieval Age",
+  "546": "Gunpowder Age",
+  "547": "Enlightenment Age",
+  "548": "Industrial Age",
+  "549": "Modern Age",
+  "550": "Information Age",
+  "551": "Written Word",
+  "552": "Mathematics",
+  "553": "Chemistry",
+  "554": "Laws of Nature",
+  "555": "Electricity",
+  "556": "Electronics",
+  "557": "Computerization",
+  "558": "Barter",
+  "559": "Coinage",
+  "560": "Trade",
+  "561": "Mercantilism",
+  "562": "Finance",
+  "563": "Assembly Line",
+  "564": "Globalization",
+  "565": "City State",
+  "566": "Empire",
+  "567": "Feudalism",
+  "568": "Divine Right",
+  "569": "Constitution",
+  "570": "Great Power",
+  "571": "International Law",
+  "572": "The Art of War",
+  "573": "Mercenaries",
+  "574": "Standing Army",
+  "575": "Conscription",
+  "576": "Levee en Masse",
+  "577": "Nation-in-Arms",
+  "578": "Selective Service",
+  "579": "Missile Shield",
+  "580": "World Government",
+  "581": "Global Prosperity",
+  "582": "Artificial Intelligence",
+  "583": "Tactics",
+  "584": "Operations",
+  "585": "Strategy",
+  "586": "Religion",
+  "587": "Monotheism",
+  "588": "Existentialism",
+  "589": "Taxation",
+  "590": "Vassalage",
+  "591": "Social Contract",
+  "592": "Income Tax",
+  "593": "Fortification",
+  "594": "Bombardment",
+  "595": "Strategic Reserves",
+  "596": "Allegiance",
+  "597": "Oath of Fealty",
+  "598": "Patriotism",
+  "599": "Nationalism",
+  "600": "Construction",
+  "601": "Architecture",
+  "602": "Engineering",
+  "603": "Herbal Lore",
+  "604": "Medicine",
+  "605": "Pharmaceuticals",
+  "606": "Forage",
+  "607": "Supply",
+  "608": "Logistics",
+  "609": "Carpentry",
+  "610": "Logging Industry",
+  "611": "Papermill",
+  "612": "Agriculture",
+  "613": "Crop Rotation",
+  "614": "Food Industry",
+  "615": "Literacy",
+  "616": "Printing Press",
+  "617": "Scientific Method",
+  "618": "Institutional Research",
+  "619": "Supercomputers",
+  "620": "Metal Alloys",
+  "621": "Cold Casting",
+  "622": "Steel",
+  "623": "Despotism",
+  "624": "Republic",
+  "625": "Monarchy",
+  "626": "Democracy",
+  "627": "Socialism",
+  "628": "Capitalism"
+ }
+}
