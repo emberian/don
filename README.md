@@ -29,8 +29,8 @@ be necessary — a lot of what everyone knows is wrong:
 Reverse engineering is mostly done; the simulation is early.
 
 - 22,750 functions and 19,914 types recovered, with field-level layouts
-- `.rcx` replay format decoded — 1,296,192 of 1,296,194 command packages round-trip
-  byte-exact across 61 recordings
+- `.rcx` replay command streams structurally decoded — 1,296,192 of 1,296,194 packages
+  tile cleanly across 61 streams; payload interpretation remains partial
 - Two processes play a lockstep game over TCP with a hand-built replacement netcode DLL
 - RL env runs at ~98,000 steps/s across 1024 environments, ~4,600× real time
 - …but 34% of actions it accepts still do nothing, because the mechanics behind them
@@ -41,4 +41,6 @@ pathfinding, and terrain all have isolated ports with tests. Most are not yet wi
 the runnable tick; map generation and major command/order paths remain absent.
 
 Live execution status: [`GOAL.md`](GOAL.md). Interrupted-work recovery ledger:
-[`docs/RECOVERY.md`](docs/RECOVERY.md).
+[`docs/RECOVERY.md`](docs/RECOVERY.md). Read-only live economy coaching:
+[`docs/tracks/rontoy.md`](docs/tracks/rontoy.md). Replay browser:
+[`docs/tracks/replay-viewer.md`](docs/tracks/replay-viewer.md).
