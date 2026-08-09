@@ -230,6 +230,8 @@ try {
       sessionSetup: window.don.session.setup(),
       sessionUrl: window.don.session.url(),
       coreActivationExported: typeof m.x.game_activate_player === 'function',
+      coreRosterQueryExported: typeof m.x.game_active_player_mask === 'function',
+      coreActiveMask: m.x.game_active_player_mask(m.g) >>> 0,
       unsupportedSetupExportsAbsent:
         typeof m.x.game_set_team === 'undefined' &&
         typeof m.x.game_set_victory_mode === 'undefined',
@@ -319,7 +321,8 @@ try {
     ['session setup exposes the deterministic seed', out.ui.sessionSeed === '0x00c0ffee'],
     ['session setup exposes every player perspective', out.ui.sessionPlayers >= 2],
     ['explicit Sim roster activation is exposed but not hidden in world creation',
-      out.ui.coreActivationExported && out.ui.sessionActivate &&
+      out.ui.coreActivationExported && out.ui.coreRosterQueryExported && out.ui.sessionActivate &&
+      out.ui.coreActiveMask === 0 && out.ui.sessionSetup.phase === 'setup' &&
       JSON.stringify(out.ui.sessionSetup.activePlayers) === JSON.stringify([]) &&
       !out.ui.coreLeader.active],
     ['team and victory setters remain absent from the Wasm ABI',
@@ -346,12 +349,14 @@ try {
       out.ui.sessionSetup.income === 'unavailable' && out.ui.sessionSetup.population === 'unavailable' &&
       out.boot.player.popCap === 0],
     ['the pregame summary exposes world, slots, read-only facts, and unavailable systems',
+      out.ui.sessionSummary.includes('setup · roster inactive') &&
       out.ui.sessionSummary.includes('128 × 128') && out.ui.sessionSummary.includes('manual') &&
       out.ui.sessionSummary.includes('population unavailable') &&
       out.ui.sessionSummary.includes('Standard victory (read-only)')],
     ['the objective panel projects core mode/score but disables the absent countdown',
       out.ui.objectiveTime.includes('frame') && out.ui.objectiveFactsProjected &&
-      out.ui.objectiveState.includes('Standard') && out.ui.objectiveState.includes('core read-only') &&
+      out.ui.objectiveState.includes('Standard') && out.ui.objectiveState.includes('setup') &&
+      out.ui.objectiveState.includes('core read-only') &&
       out.ui.objectiveScore.includes('victory 0') &&
       out.ui.objectiveCountdown.includes('not exported')],
     ['the objective panel labels omniscient visibility and inactive relations honestly',
@@ -364,7 +369,7 @@ try {
       out.ui.minimapLabel.includes('All exported owners are visible') &&
       out.ui.minimapLabel.includes('fog is unavailable')],
     ['the command journal exposes playback, timeline, import, and export controls',
-      out.ui.replayProtocol === 'don.command-journal.v1' && out.ui.replayControls >= 5 &&
+      out.ui.replayProtocol === 'don.command-journal.v2' && out.ui.replayControls >= 5 &&
       out.ui.replayTimeline.includes('Command journal frame') && out.ui.replayJournalActionsEnabled &&
       out.ui.replayPauseWorked && out.ui.replaySpeedWorked],
     ['journal feedback is announced and does not claim to be a native save',
@@ -817,22 +822,44 @@ try {
 
   // Roster activation is deliberately after the save/resume gate: active step-8 and
   // victory state are not in the current save format, so the UI must never imply otherwise.
-  out.activation = await c.eval(`(() => {
+  out.activation = await c.eval(`(async () => {
     const d = window.don;
     const activated = d.session.activate();
-    const leaders = Array.from({ length: d.state.mod.playerCount }, (_, p) => d.state.mod.leader(p));
+    const m = d.state.mod;
+    const leaders = Array.from({ length: m.playerCount }, (_, p) => m.leader(p));
+    const activePlayers = m.activePlayers();
+    const activeMask = m.x.game_active_player_mask(m.g) >>> 0;
+    const match = m.match();
+    const startedFrame = m.frame;
+    const journal = JSON.parse(d.replay.export());
     const saveDisabled = document.getElementById('core-save').disabled;
     const status = document.getElementById('core-save-status').textContent;
+    d.replay.step();
+    const imported = await d.replay.import(JSON.stringify(journal));
+    const importedMatch = m.match();
     d.session.restart('0x1234abcd');
-    return JSON.stringify({ activated, leaders, saveDisabled, status,
-      afterRestart: d.state.mod.activePlayers() });
+    return JSON.stringify({ activated, leaders, activePlayers, activeMask, match, startedFrame,
+      journal, saveDisabled, status, imported, importedMatch,
+      afterRestart: m.activePlayers(), afterRestartMatch: m.match() });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
-    ['user-triggered roster activation reaches every authoritative Sim leader',
-      out.activation.activated && out.activation.leaders.every(leader => leader.active)],
+    ['frame-zero match start reaches every Sim leader and is queried without a JS roster copy',
+      out.activation.activated && out.activation.startedFrame === 0 &&
+      out.activation.leaders.every(leader => leader.active) &&
+      out.activation.activePlayers.length === out.activation.leaders.length &&
+      out.activation.activeMask === (1 << out.activation.leaders.length) - 1 &&
+      out.activation.match.phase === 'active'],
+    ['journal v2 owns the authoritative roster and reconstructs the active baseline',
+      out.activation.journal.protocol === 'don.command-journal.v2' &&
+      JSON.stringify(out.activation.journal.setup.activePlayers) ===
+        JSON.stringify(out.activation.activePlayers) &&
+      out.activation.journal.setup.initialDigest.length === 16 &&
+      out.activation.imported.frame === 0 && out.activation.importedMatch.phase === 'active' &&
+      JSON.stringify(out.activation.importedMatch.activePlayers) ===
+        JSON.stringify(out.activation.activePlayers)],
     ['active roster makes unsupported live save status explicit and restart returns to saveable setup',
       out.activation.saveDisabled && out.activation.status.includes('not serialized') &&
-      out.activation.afterRestart.length === 0],
+      out.activation.afterRestart.length === 0 && out.activation.afterRestartMatch.phase === 'setup'],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -869,6 +896,10 @@ try {
     const advanced = d.replay.snapshot();
     const imported = await d.replay.import(journal);
     const digestAfterImport = m.digest();
+    const legacy = JSON.parse(journal);
+    legacy.protocol = 'don.command-journal.v1';
+    delete legacy.setup.activePlayers;
+    const legacyImported = await d.replay.import(JSON.stringify(legacy));
     const stableBeforeMalformed = { frame: m.frame, digest: m.digest() };
     let malformedRefused = false;
     try { await d.replay.import('{"protocol":"not-don"}'); }
@@ -891,7 +922,7 @@ try {
     d.session.restart('0x1234abcd');
     d.replay.play();
     return JSON.stringify({
-      mobile, recorded, advanced, imported, digestAtExport, digestAfterImport,
+      mobile, recorded, advanced, imported, legacyImported, digestAtExport, digestAfterImport,
       malformedRefused, wrongDigestRefused, stableBeforeMalformed, stableAfterMalformed,
       stableAfterWrongDigest,
       zero, sought, resumed, status, time,
@@ -903,9 +934,13 @@ try {
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['the journal exports its bounded protocol and deterministic session baseline',
-      out.journal.protocol === 'don.command-journal.v1' &&
+      out.journal.protocol === 'don.command-journal.v2' &&
       out.journal.boundary.includes('not a native save') &&
-      out.journal.setup.seed === '0x1234abcd' && out.journal.setup.initialDigest.length === 16],
+      out.journal.setup.seed === '0x1234abcd' && out.journal.setup.initialDigest.length === 16 &&
+      Array.isArray(out.journal.setup.activePlayers) && out.journal.setup.activePlayers.length === 0],
+    ['journal v1 remains an inactive-roster compatibility baseline',
+      out.journal.legacyImported.frame === out.journal.recorded.frame &&
+      out.journal.legacyImported.digest === out.journal.digestAtExport],
     ['the journal records exact wire packets with frame and selection context',
       out.journal.mobile >= 0 && out.journal.recorded.events >= 2 &&
       out.journal.eventKinds.filter(kind => kind === 'command').length >= 2 &&
@@ -1081,6 +1116,7 @@ try {
       out.objectives.snapshot.owners.reduce((n, owner) => n + owner.objects, 0) === out.objectives.live],
     ['the world snapshot projects victory, score, and diplomacy but refuses countdown/fog claims',
       out.objectives.snapshot.visibility === 'omniscient-export' &&
+      out.objectives.snapshot.phase === 'setup' && out.objectives.snapshot.activePlayers.length === 0 &&
       out.objectives.snapshot.victory === 'standard' && out.objectives.snapshot.score === 0 &&
       out.objectives.snapshot.teamScore === 0 && !out.objectives.snapshot.gameOver &&
       out.objectives.snapshot.countdown === 'unavailable' &&

@@ -87,6 +87,23 @@ ordinary technologies, live rule setters, fog/LOS, diplomacy mutation, AI, victo
 objective countdowns remain disabled until their exact core hosts are exposed. Team identity,
 effective diplomacy, victory mode/status, and personal/team score are read-only projections from
 the authoritative Sim; the setup controls stay disabled because those queries do not assign state.
+The manual start action is the narrower exception: it recreates the requested seed at frame zero,
+calls `Sim::activate` for the explicit roster, and then queries the active-player mask back from
+`Sim::vic_leaders`. The browser retains no parallel roster or match-phase state. Shared-session URLs
+and command-journal v2 baselines carry that bounded roster and reconstruct it through the same
+transaction. A v1 journal remains importable as an inactive-roster baseline. `setup`, `active`, and
+`ended` are projections of the live roster plus the core game-over latch, not UI-only phases.
+
+This does not make team setup mutable. `setup_diplomacy::SetupDiplomacy` still lacks a Sim-owned
+`PlayerSetup` image in this adapter, so no team setter is exported; the current team hook remains
+explicitly unconfigured/read-only. Victory mode mutation remains absent for the same reason.
+
+The authoritative-roster ABI tranche passed six focused native tests in both independent remote
+profiles on 2026-08-09: hbox
+`web-authoritative-roster-20260809T214825Z-33897-19722-18c26aa332f9` and persvati release
+`web-authoritative-roster-release-20260809T214825Z-33893-25343-18c26aa332f9`. Both exited 0.
+The JavaScript modules and smoke source also pass `node --check`; a rebuilt Wasm/browser smoke is
+still required before treating generated browser artefacts as current.
 
 Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
 browser adapter (not `don_ai::arena::World`), the playable blocker list is read from

@@ -59,7 +59,6 @@ export class GameModule {
     this.gapCount = this.x.game_gap_count();
     this.capabilityBits = this.x.game_capabilities() >>> 0;
     this._submitted = 0;
-    this._activePlayers = Object.freeze([]);
     this._commandObserver = null;
     this._readiness = this._loadReadiness();
   }
@@ -83,7 +82,6 @@ export class GameModule {
     }
     this.g = this.x.game_create(seed >>> 0, 0);
     this.seed = seed >>> 0;
-    this._activePlayers = Object.freeze([]);
     this._submitted = 0;
     this._buf = null;
     // `Game::players` is an exported snapshot populated by `game_step`, rather than the
@@ -105,7 +103,6 @@ export class GameModule {
     const previous = this.g;
     this.g = next;
     this.seed = normalized;
-    this._activePlayers = Object.freeze([]);
     this._submitted = 0;
     this._buf = null;
     this._v = {};
@@ -128,12 +125,19 @@ export class GameModule {
     for (const player of roster) {
       if (this.x.game_activate_player(this.g, player) !== 1) return false;
     }
-    this._activePlayers = Object.freeze(roster);
-    return true;
+    const active = new Set(this.activePlayers());
+    return roster.every((player) => active.has(player));
   }
 
-  /** The explicit setup roster already activated through `Sim::activate`. */
-  activePlayers() { return this._activePlayers.slice(); }
+  /** Live setup roster queried from `Sim::vic_leaders`; JavaScript owns no roster copy. */
+  activePlayers() {
+    const mask = this.x.game_active_player_mask(this.g) >>> 0;
+    const players = [];
+    for (let player = 0; player < this.playerCount; player++) {
+      if ((mask & (1 << player)) !== 0) players.push(player);
+    }
+    return players;
+  }
 
   _staticText(ptr, len) {
     if (!ptr || !len) return '';
@@ -211,7 +215,7 @@ export class GameModule {
   /** Copy the deterministic `don_sim::systems::save_load` image out of wasm memory. */
   saveCore() {
     if (!this.supports('save')) throw new Error('core save export is unavailable');
-    if (this._activePlayers.length) {
+    if (this.activePlayers().length) {
       throw new Error('core save unavailable after roster activation; start or load an inactive setup boundary');
     }
     if (this.x.game_save(this.g) !== 1) throw new Error(this._lastError());
@@ -233,7 +237,6 @@ export class GameModule {
     new Uint8Array(this.mem.buffer, ptr, bytes.length).set(bytes);
     if (this.x.game_load_commit(this.g) !== 1) throw new Error(this._lastError());
     this._submitted = 0;
-    this._activePlayers = Object.freeze([]);
     this._buf = null;
     this._v = {};
     return {
@@ -334,7 +337,10 @@ export class GameModule {
     const mode = VICTORY_MODES[modeId] ?? Object.freeze({
       slug: `unknown-${modeId}`, label: `Unknown mode ${modeId}`,
     });
-    return Object.freeze({ modeId, ...mode, gameOver: this.x.game_is_over(this.g) === 1 });
+    const activePlayers = Object.freeze(this.activePlayers());
+    const gameOver = this.x.game_is_over(this.g) === 1;
+    const phase = gameOver ? 'ended' : activePlayers.length ? 'active' : 'setup';
+    return Object.freeze({ modeId, ...mode, gameOver, phase, activePlayers });
   }
 
   gaps() { return Array.from(this.views().gaps); }

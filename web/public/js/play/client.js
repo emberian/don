@@ -51,7 +51,8 @@ const BINDING_ACTIONS = Object.freeze([
   Object.freeze({ id: 'idle', label: 'next idle worker', fallback: 'Period' }),
   Object.freeze({ id: 'selectAll', label: 'select all units', fallback: 'Primary+KeyA' }),
 ]);
-const JOURNAL_PROTOCOL = 'don.command-journal.v1';
+const JOURNAL_PROTOCOL = 'don.command-journal.v2';
+const LEGACY_JOURNAL_PROTOCOL = 'don.command-journal.v1';
 const MAX_JOURNAL_FRAMES = 1000000; // about 18.6 hours at the recovered 67 ms tick.
 const MAX_JOURNAL_EVENTS = 50000;
 const MAX_JOURNAL_JSON_BYTES = 16 * 1024 * 1024;
@@ -135,7 +136,15 @@ async function boot() {
   state.sessionPopSetting = parseSessionPopulation(params.get('population'));
   mod.setIncomeMode(state.sessionIncomeMode);
   mod.setPopSetting(state.sessionPopSetting);
+  const requestedRoster = parseSessionRoster(params.get('slots'), mod.playerCount);
+  if (requestedRoster.length && !mod.activatePlayers(requestedRoster)) {
+    throw new Error('the authoritative Sim refused the roster encoded by the session link');
+  }
   state.sessionInitialDigest = mod.digest();
+  if (requestedRoster.length) {
+    state.coreSaveStatus =
+      'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+  }
   if (!mod.hasGameData || !mod.hasPlayData) {
     throw new Error('packed retail-derived tables failed validation');
   }
@@ -547,6 +556,16 @@ function parseSessionPlayer(value, count) {
   if (value === null || value === undefined || value === '') return 0;
   const player = Number(value);
   return Number.isInteger(player) && player >= 0 && player < count ? player : 0;
+}
+
+function parseSessionRoster(value, count) {
+  if (value === null || value === undefined || value === '') return [];
+  const slots = String(value).split(',').map(Number);
+  if (!slots.length || slots.some((slot) =>
+    !Number.isInteger(slot) || slot < 0 || slot >= count) || new Set(slots).size !== slots.length) {
+    return [];
+  }
+  return slots;
 }
 
 function formatSeed(seed) { return `0x${(seed >>> 0).toString(16).padStart(8, '0')}`; }
@@ -1214,17 +1233,24 @@ function initializeSessionPanel() {
 }
 
 function activateSessionRoster() {
-  const roster = Array.from({ length: state.mod.playerCount }, (_, player) => player);
-  if (!state.mod.activatePlayers(roster)) return false;
-  $('session-activate').disabled = true;
-  $('core-save').disabled = true;
+  const requested = Array.from({ length: state.mod.playerCount }, (_, player) => player);
+  // Match start is a reproducible setup transaction, not a mutation of however many
+  // inactive frames happened to elapse while the player read the setup panel.
+  if (!state.mod.restart(state.sessionSeed)) return false;
+  resetClientForWorld(state.sessionSeed, true, `manual match start: P${state.who}`);
+  if (!state.mod.activatePlayers(requested)) return false;
+  const roster = state.mod.activePlayers();
+  state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
     'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
   $('core-save-status').textContent = state.coreSaveStatus;
+  startReplayJournal();
+  setPaused(false, false);
   syncSessionUrl();
+  renderSessionStatus();
   renderSessionSummary();
   renderObjectivesPanel();
-  say(`activated authoritative Sim roster ${roster.join(', ')}`, 'ok');
+  say(`started authoritative Sim roster ${roster.join(', ')} from frame-zero setup`, 'ok');
   return true;
 }
 
@@ -1275,8 +1301,14 @@ function resetClientForWorld(seed, paused, cameraSource) {
   state.mod.setPopSetting(state.sessionPopSetting);
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus = 'core save/load ready at inactive setup boundary';
-  if ($('session-activate')) $('session-activate').disabled = false;
-  if ($('core-save')) $('core-save').disabled = !state.mod.supports('save');
+  if ($('session-activate')) {
+    $('session-activate').disabled = state.mod.activePlayers().length > 0;
+    $('session-activate').textContent = state.mod.activePlayers().length
+      ? 'manual match active' : 'start manual match';
+  }
+  if ($('core-save')) {
+    $('core-save').disabled = !state.mod.supports('save') || state.mod.activePlayers().length > 0;
+  }
   resetCommandFeedback();
   miniVersion = -1;
   miniTerrain = null;
@@ -1375,14 +1407,24 @@ async function shareSessionLink() {
 
 function renderSessionStatus() {
   if (!$('session-status') || !state.mod) return;
+  const match = state.mod.match();
+  if ($('session-activate')) {
+    $('session-activate').disabled = match.phase !== 'setup';
+    $('session-activate').textContent = match.phase === 'setup'
+      ? 'start manual match' : match.phase === 'active' ? 'manual match active' : 'match ended';
+  }
+  if ($('core-save')) {
+    $('core-save').disabled = !state.mod.supports('save') || match.activePlayers.length > 0;
+  }
   $('session-status').textContent =
-    `${formatSeed(state.sessionSeed)} · player ${state.who} · frame ${state.mod.frame} · ` +
+    `${match.phase} · ${formatSeed(state.sessionSeed)} · player ${state.who} · frame ${state.mod.frame} · ` +
     `initial digest ${state.sessionInitialDigest} · seed is owned by don_sim::Sim`;
 }
 
 function sessionDescriptor() {
   const leader = state.mod.leader(state.who);
   const match = state.mod.match();
+  const activePlayers = match.activePlayers.slice();
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
     player: state.who,
@@ -1392,8 +1434,9 @@ function sessionDescriptor() {
     team: leader.team,
     teamConfigured: leader.teamConfigured,
     teamMutable: false,
-    slots: state.mod.activePlayers().length,
-    activePlayers: state.mod.activePlayers(),
+    phase: match.phase,
+    slots: activePlayers.length,
+    activePlayers,
     aiSlots: 'unavailable',
     aiDifficulty: 'unavailable',
     income: 'unavailable',
@@ -1418,6 +1461,9 @@ function renderSessionSummary() {
   $('session-victory').value = match.slug;
   $('summary-world').textContent =
     `integration land · ${state.mod.tiles} × ${state.mod.tiles} tiles · fixed`;
+  $('summary-phase').textContent = match.phase === 'setup'
+    ? 'setup · roster inactive'
+    : match.phase === 'active' ? 'active match · authoritative roster live' : 'ended · core game-over latch';
   $('summary-player').textContent =
     `P${setup.player} · nation unavailable · unconfigured team slot ${setup.team} (read-only)`;
   $('summary-slots').textContent =
@@ -1499,6 +1545,8 @@ function exportedWorldSnapshot() {
   return Object.freeze({
     frame: m.frame,
     elapsedSeconds: m.frame * TICK_MS / 1000,
+    phase: match.phase,
+    activePlayers: match.activePlayers.slice(),
     visibility: 'omniscient-export',
     diplomacy: 'effective-core-readonly',
     victory: match.slug,
@@ -1546,7 +1594,7 @@ function renderObjectivesPanel() {
   $('objective-time').textContent =
     `frame ${snapshot.frame.toLocaleString()} · elapsed ${snapshot.elapsedSeconds.toFixed(1)} s`;
   $('objective-state').textContent =
-    `${match.label} · ${snapshot.gameOver ? 'game over' : outcome} · core read-only`;
+    `${match.label} · ${match.phase} · ${snapshot.gameOver ? 'game over' : outcome} · core read-only`;
   $('objective-score').textContent =
     `P${state.who} victory ${snapshot.score} · team ${snapshot.teamScore} · ` +
     `economy stock ${local.economyStock}`;
@@ -1798,6 +1846,7 @@ function replayBaseline() {
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
     player: state.who,
+    activePlayers: Object.freeze(state.mod.activePlayers()),
     income: INCOME_MODES[state.sessionIncomeMode].slug,
     population: POPULATION_LIMITS[state.sessionPopSetting],
     initialDigest: state.sessionInitialDigest,
@@ -1894,7 +1943,7 @@ function normalizeReplayJournal(input) {
   if (!documentValue || typeof documentValue !== 'object' || Array.isArray(documentValue)) {
     throw new Error('journal root must be an object');
   }
-  if (documentValue.protocol !== JOURNAL_PROTOCOL) {
+  if (![JOURNAL_PROTOCOL, LEGACY_JOURNAL_PROTOCOL].includes(documentValue.protocol)) {
     throw new Error(`unsupported journal protocol ${JSON.stringify(documentValue.protocol)}`);
   }
   const setup = documentValue.setup;
@@ -1903,6 +1952,13 @@ function normalizeReplayJournal(input) {
   const player = Number(setup.player);
   if (!Number.isInteger(player) || player < 0 || player >= state.mod.playerCount) {
     throw new Error('journal player is outside the exported player range');
+  }
+  const activePlayers = documentValue.protocol === LEGACY_JOURNAL_PROTOCOL
+    ? [] : setup.activePlayers;
+  if (!Array.isArray(activePlayers) || activePlayers.some((slot) =>
+    !Number.isInteger(slot) || slot < 0 || slot >= state.mod.playerCount) ||
+    new Set(activePlayers).size !== activePlayers.length) {
+    throw new Error('journal active roster is invalid');
   }
   const incomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income);
   if (!incomeMode) throw new Error('journal income mode is unsupported');
@@ -1976,7 +2032,8 @@ function normalizeReplayJournal(input) {
   const normalized = Object.freeze({
     protocol: JOURNAL_PROTOCOL,
     setup: Object.freeze({
-      seed: formatSeed(seed), player, income: incomeMode.slug,
+      seed: formatSeed(seed), player, activePlayers: Object.freeze(activePlayers.slice()),
+      income: incomeMode.slug,
       population: POPULATION_LIMITS[popIndex], initialDigest: setup.initialDigest.toLowerCase(),
     }),
     frame: targetFrame,
@@ -1996,7 +2053,7 @@ function scratchReplayBaselineDigest(setup) {
   const game = x.game_create(parseSessionSeed(setup.seed), 0);
   if (!game) throw new Error('could not allocate a scratch world to validate the journal baseline');
   try {
-    for (const player of state.mod.activePlayers()) {
+    for (const player of setup.activePlayers) {
       if (x.game_activate_player(game, player) !== 1) {
         throw new Error(`scratch world refused active roster slot ${player}`);
       }
@@ -2050,6 +2107,15 @@ async function restoreReplayFrame(targetFrame) {
     state.sessionPopSetting = POPULATION_LIMITS.indexOf(setup.population);
     if (!state.mod.restart(parseSessionSeed(setup.seed))) throw new Error('Wasm world restart failed');
     resetClientForWorld(parseSessionSeed(setup.seed), true, `journal frame ${target}`);
+    if (!state.mod.activatePlayers(setup.activePlayers)) {
+      throw new Error('Wasm world refused the journal active roster');
+    }
+    state.sessionInitialDigest = state.mod.digest();
+    if (setup.activePlayers.length) {
+      state.coreSaveStatus =
+        'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+      $('core-save-status').textContent = state.coreSaveStatus;
+    }
     if (state.sessionInitialDigest !== setup.initialDigest) {
       throw new Error(`baseline digest mismatch: expected ${setup.initialDigest}, got ${state.sessionInitialDigest}`);
     }
@@ -2086,6 +2152,7 @@ async function restoreReplayFrame(targetFrame) {
     syncSessionUrl();
     renderMenus();
     renderSelection();
+    renderSessionStatus();
     renderSessionSummary();
     return replaySnapshot();
   } finally {
@@ -2285,7 +2352,7 @@ function initializeReplayPanel() {
       say(`command journal refused — ${error.message}`, 'warn');
     }
   });
-  $('core-save').disabled = !state.mod.supports('save');
+  $('core-save').disabled = !state.mod.supports('save') || state.mod.activePlayers().length > 0;
   $('core-load').disabled = !state.mod.supports('load');
   $('core-save').addEventListener('click', downloadCoreSave);
   $('core-load').addEventListener('click', () => $('core-load-file').click());

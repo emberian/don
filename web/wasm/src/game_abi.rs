@@ -1241,6 +1241,23 @@ pub unsafe extern "C" fn game_activate_player(g: *mut Game, who: u32) -> u32 {
     1
 }
 
+/// Authoritative browser-cohort roster as a bit mask of live victory leader slots.
+///
+/// This is deliberately a query over `Sim::vic_leaders`, not an adapter-maintained copy.
+/// A slot remains in the roster after defeat; `game_leader_flags` exposes that separate
+/// outcome. The browser cohort is four players, so every returned bit is bounded here.
+#[no_mangle]
+pub unsafe extern "C" fn game_active_player_mask(g: *mut Game) -> u32 {
+    let game = game_ref!(g);
+    let mut mask = 0u32;
+    for who in 0..PLAYERS {
+        if game.core.vic_leaders.slots[who].is_active() {
+            mask |= 1u32 << who;
+        }
+    }
+    mask
+}
+
 /// # Safety
 /// `g` must be a live handle returned by [`game_create`].
 #[no_mangle]
@@ -1986,12 +2003,16 @@ mod tests {
         let mut game = Game::new(0x51a7_2026);
         let before_invalid = game.core.channel_digest();
 
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0);
+
         assert_eq!(
             unsafe { game_activate_player(&mut game, PLAYERS as u32) },
             0
         );
         assert_eq!(game.core.channel_digest(), before_invalid);
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0);
         assert_eq!(unsafe { game_activate_player(&mut game, 2) }, 1);
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 1 << 2);
         assert!(game.core.leaders[2].active);
         assert_eq!(
             game.core.step8.leaders[2].flags
@@ -2005,6 +2026,12 @@ mod tests {
         assert!(game.core.world.objects.is_active(2));
         assert_eq!(game.core.map.fog.leaders[2].player_mask, 1 << 2);
         assert!(!game.core.vic_leaders.slots[1].flag(victory_score::leader_flag::ACTIVE));
+
+        let before_query = game.core.channel_digest();
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 1 << 2);
+        assert_eq!(game.core.channel_digest(), before_query);
+        assert_eq!(unsafe { game_activate_player(&mut game, 0) }, 1);
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, (1 << 2) | 1);
     }
 
     #[test]

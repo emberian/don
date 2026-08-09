@@ -429,6 +429,7 @@
       </label>
 
       <div id="session-summary" aria-label="Pregame summary">
+        <div class="summary-row"><span>phase</span><b id="summary-phase">loading…</b></div>
         <div class="summary-row"><span>world</span><b id="summary-world">loading…</b></div>
         <div class="summary-row"><span>player</span><b id="summary-player">loading…</b></div>
         <div class="summary-row"><span>slots</span><b id="summary-slots">loading…</b></div>
@@ -436,7 +437,7 @@
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap">
         <button id="session-new" class="primary">new game</button>
-        <button id="session-activate" type="button">activate manual roster</button>
+        <button id="session-activate" type="button">start manual match</button>
         <button id="session-share">copy session link</button>
       </div>
       <div id="session-status" class="hint" style="margin-top:6px" aria-live="polite">
@@ -444,8 +445,9 @@
       </div>
       <div class="hint" style="margin-top:4px">
         The seed reaches the authoritative <code>don_sim::Sim</code> initializer. The current
-        explicit manual player roster reaches <code>Sim::activate</code> only when the activation
-        button is pressed; the unconfigured
+        explicit manual player roster reaches <code>Sim::activate</code> only at the frame-zero
+        start transaction (or from a canonical shared-session roster). The active phase and roster
+        are queried back from <code>Sim::vic_leaders</code>; JavaScript keeps no roster copy. The unconfigured
         team-slot hook and victory mode are live read-only core facts. Map style, income, population,
         nation, AI, and every team/victory setter remain disabled until an exact core command owns
         them. Disabled choices are not frontend-only rules pretending to affect play.
@@ -473,8 +475,8 @@
       </div>
       <div id="visibility-honesty" class="status-note">
         Omniscient integration view: every exported object is drawn. Effective diplomacy and the
-        setup-owned team query are read-only core facts; the manual roster remains inactive until
-        the explicit <code>Sim::activate</code> action. Fog and seen-state are not exported, so relations never hide objects.
+        setup-owned team query are read-only core facts; setup, active, and ended phases come from
+        the authoritative roster/game-over queries. Fog and seen-state are not exported, so relations never hide objects.
       </div>
       <div id="owner-legend" aria-label="Minimap owner colours"></div>
       <div id="world-players" aria-label="Exported per-player world snapshot"></div>
@@ -506,7 +508,7 @@
         <input id="replay-file" type="file" accept="application/json,.json">
       </div>
       <div id="replay-capabilities" aria-label="Save and replay capability boundaries">
-        <div class="replay-capability"><span>Command journal: tick-boundary restart plus exact frame-stamped wire packets; seek and resume supported.</span><b>supported</b></div>
+        <div class="replay-capability"><span>Command journal v2: authoritative roster baseline, tick-boundary restart, and exact frame-stamped wire packets; seek and resume supported.</span><b>supported</b></div>
         <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes at the inactive setup boundary. Live active step-8/victory state is not yet serialized.</span><button id="core-save" type="button">download save</button></div>
         <div class="replay-capability"><span>DoN core load: bounded, validated, and atomic; malformed files leave the running session unchanged.</span><button id="core-load" type="button">load save</button></div>
         <input id="core-load-file" type="file" accept="application/octet-stream,.donsave">
