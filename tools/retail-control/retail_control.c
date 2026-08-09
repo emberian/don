@@ -31,6 +31,11 @@
 #define RVA_OBJECTS_PTR    (0x00c0618cu - PREFERRED_BASE)
 #define RVA_WORLD_PTR      (0x00c061d0u - PREFERRED_BASE)
 #define RVA_LEADERS_PTR    (0x00c061e0u - PREFERRED_BASE)
+#define RVA_BUILDTYPES_PTR (0x00c061f4u - PREFERRED_BASE)
+#define RVA_COORD_LOOKUP   (0x00cae5fcu - PREFERRED_BASE)
+#define RVA_CIRCLE_X       (0x00cb7e90u - PREFERRED_BASE)
+#define RVA_CIRCLE_Y       (0x00cbb0e0u - PREFERRED_BASE)
+#define RVA_CIRCLE_RADIUS  (0x00cbe330u - PREFERRED_BASE)
 #define RVA_COMMAND_MANAGER (0x00e8ff60u - PREFERRED_BASE)
 #define RVA_COMMAND_PACKAGE (0x00e8ff88u - PREFERRED_BASE)
 #define RVA_ISSUE_CHECKSUM (0x00940770u - PREFERRED_BASE)
@@ -46,8 +51,15 @@
 #define RVA_GROUP_ISSUE_GATHER (0x0070aa20u - PREFERRED_BASE)
 #define RVA_GROUP_VALIDATE_BUILD (0x00708620u - PREFERRED_BASE)
 #define RVA_BUILD_CAN_QUEUE (0x0062da00u - PREFERRED_BASE)
+#define RVA_BUILD_SNAP_CENTER (0x00636190u - PREFERRED_BASE)
+#define RVA_BUILD_TILE_CORNER (0x00636440u - PREFERRED_BASE)
+#define RVA_BUILD_GATHER_RADIUS (0x0063bc60u - PREFERRED_BASE)
+#define RVA_BUILD_MAX_GATHERERS (0x0063c430u - PREFERRED_BASE)
+#define RVA_WORLD_IS_REALLY_SEEN (0x006b42c0u - PREFERRED_BASE)
+#define RVA_VECTOR_DIST_COORDS (0x0046d060u - PREFERRED_BASE)
 #define RVA_MOVE_ORDER_VTABLE (0x00b4a12cu - PREFERRED_BASE)
 #define RVA_GATHER_ORDER_VTABLE (0x00b49c1cu - PREFERRED_BASE)
+#define RVA_BUILD_ORDER_VTABLE (0x00b4834cu - PREFERRED_BASE)
 #define RVA_BUILD_VTABLE (0x00b42174u - PREFERRED_BASE)
 
 #define OFF_GAME_FRAME 0x550u
@@ -104,7 +116,8 @@ enum Verb {
     V_VALIDATE_QUEUE,
     V_VALIDATE_BUILD,
     V_RUN_FRAMES,
-    V_FIND_BUILD
+    V_FIND_BUILD,
+    V_FIND_GATHER_BUILD
 };
 
 typedef struct {
@@ -155,11 +168,16 @@ typedef struct {
     int order_target_id;
     unsigned order_target_uid;
     int order_target_valid;
+    int queued_build_target_id;
+    unsigned queued_build_target_uid;
+    int queued_build_target_valid;
+    int queued_build_order_seen;
     int guy_length;
     int queue_logical;
     int queue_size;
     int queue_count;
     int queue_truncated;
+    int gather_max;
     queue_sample_t queue[MAX_BUILD_QUEUE];
 } public_object_t;
 
@@ -261,6 +279,12 @@ typedef struct {
     int placement_x;
     int placement_y;
     int placement_tested;
+    int placement_legal;
+    int placement_seen;
+    int placement_capacity;
+    int placement_snap_x;
+    int placement_snap_y;
+    int placement_ring;
     unsigned note;
 } event_t;
 
@@ -391,11 +415,14 @@ static void observe_public_order(unsigned unit, unsigned who, public_object_t *o
     if (rd32(order, &vtable)) out->order_vtable = vtable;
     if (safe_read(order + 4u, &b, 1)) out->order_flags = b;
     if (safe_read(node + 0xcu, &b, 1)) out->order_metric = b;
-    if (vtable == g_base + RVA_GATHER_ORDER_VTABLE) {
-        /* GatherOrder's current pointer is its UnitOrder virtual base at +0x2c.
-           Its TargetOrder::whom/uid pair is safe to expose only after resolving
-           back through the same local owner's active object list. */
-        unsigned complete = order - 44u, target = 0;
+    if (vtable == g_base + RVA_GATHER_ORDER_VTABLE ||
+        vtable == g_base + RVA_BUILD_ORDER_VTABLE) {
+        /* GatherOrder and BuildOrder expose their UnitOrder virtual bases at
+           complete+0x2c and complete+0x18 respectively.  Their common
+           TargetOrder whom/o/uid identity is public only after resolving it
+           through this same local owner's active object table. */
+        unsigned delta = vtable == g_base + RVA_GATHER_ORDER_VTABLE ? 44u : 24u;
+        unsigned complete = order - delta, target = 0;
         int target_id = -1, target_who = -1, target_is_unit = 0;
         unsigned short target_uid = 0, live_uid = 0;
         if (safe_read(complete + 0x08u, &target_id, 4) &&
@@ -408,6 +435,42 @@ static void observe_public_order(unsigned unit, unsigned who, public_object_t *o
             out->order_target_id = target_id;
             out->order_target_uid = target_uid;
             out->order_target_valid = 1;
+        }
+    }
+    /* A distant BUILD_AT is represented as a front MoveOrder followed by a
+       BuildOrder. Walk the exact bounded circular queue so the public proof can
+       attribute that pending BuildOrder without treating the front move as a
+       failed worker transition. */
+    {
+        unsigned cursor = node;
+        int q;
+        for (q = 0; q < length && q < 256; q++) {
+            unsigned queued_order = 0, queued_vtable = 0, complete, target = 0;
+            unsigned next_cursor = 0;
+            int target_id = -1, target_who = -1, target_is_unit = 0;
+            unsigned short target_uid = 0, live_uid = 0;
+            if (!rd32(cursor + 8u, &queued_order) || !queued_order ||
+                !rd32(queued_order, &queued_vtable))
+                break;
+            if (queued_vtable == g_base + RVA_BUILD_ORDER_VTABLE) {
+                out->queued_build_order_seen = 1;
+                complete = queued_order - 24u;
+                if (safe_read(complete + 0x08u, &target_id, 4) &&
+                    safe_read(complete + 0x0cu, &target_who, 4) &&
+                    safe_read(complete + 0x10u, &target_uid, 2) && target_id >= 0 &&
+                    target_who == (int)who &&
+                    (target = object_ptr(who, target_id, &target_is_unit)) != 0 &&
+                    !target_is_unit && safe_read(target + 0x30u, &live_uid, 2) &&
+                    live_uid == target_uid) {
+                    out->queued_build_target_id = target_id;
+                    out->queued_build_target_uid = target_uid;
+                    out->queued_build_target_valid = 1;
+                }
+                break;
+            }
+            if (!rd32(cursor + 4u, &next_cursor) || !next_cursor || next_cursor == cursor)
+                break;
+            cursor = next_cursor;
         }
     }
 }
@@ -597,15 +660,18 @@ static void observe_player_public(event_t *e) {
                 observe_public_order(p, (unsigned)who, out);
             } else if (out->category == 2u) {
                 unsigned char logical = 0;
+                signed char gather_max = 0;
                 unsigned queue_list = 0;
                 int q, queue_size = -1;
-                if (!safe_read(p + 0x82u, &logical, 1) ||
+                if (!safe_read(p + 0x80u, &gather_max, 1) ||
+                    !safe_read(p + 0x82u, &logical, 1) ||
                     !safe_read(p + 0x88u, &queue_size, 4) || queue_size < logical ||
                     queue_size > 256 || (logical && !rd32(p + 0x8cu, &queue_list))) {
                     e->note = 16;
                     e->player_object_count = 0;
                     return;
                 }
+                out->gather_max = (int)gather_max;
                 out->queue_logical = logical;
                 out->queue_size = queue_size;
                 out->queue_count = logical < MAX_BUILD_QUEUE ? logical : MAX_BUILD_QUEUE;
@@ -800,6 +866,24 @@ typedef int (__attribute__((thiscall)) *fn_validate_build)(const void *self,
                                                            int x2, int y2,
                                                            int type, int queued);
 typedef int (__attribute__((thiscall)) *fn_can_queue)(const void *self, int type);
+typedef void (__attribute__((thiscall)) *fn_snap_center)(const void *self,
+                                                         int x, int y,
+                                                         int *sx, int *sy,
+                                                         int who);
+typedef void (__attribute__((thiscall)) *fn_tile_corner)(const void *self,
+                                                         int x, int y,
+                                                         int *tx, int *ty);
+typedef int (__attribute__((thiscall)) *fn_max_gatherers)(const void *self,
+                                                          int object_id, int who,
+                                                          int tx, int ty);
+typedef int (__attribute__((thiscall)) *fn_was_seen)(const void *self,
+                                                      const int *x, const int *y,
+                                                      int who);
+typedef int (__attribute__((thiscall)) *fn_int0)(const void *self);
+typedef int (__attribute__((fastcall)) *fn_vector_dist_coords)(const int *x1,
+                                                               const int *y1,
+                                                               const int *x2,
+                                                               const int *y2);
 
 static void make_group(unsigned char group[GROUP_SIZE], const request_t *r) {
     int i;
@@ -808,6 +892,91 @@ static void make_group(unsigned char group[GROUP_SIZE], const request_t *r) {
     group[GROUP_WHO] = (unsigned char)r->arg[0];
     for (i = 0; i < r->num_ids; i++)
         *(short *)(group + GROUP_LIST + i * 2) = r->ids[i];
+}
+
+static unsigned build_type_ptr(int type) {
+    unsigned types = 0, list = 0, ptype = 0;
+    int length = -1, live_type = -1;
+    if (type < 414 || type > 542 ||
+        !rd32(g_base + RVA_BUILDTYPES_PTR, &types) || !types ||
+        !safe_read(types + 4u, &length, 4) || type >= length ||
+        !rd32(types + 0x10u, &list) || !list ||
+        !rd32(list + (unsigned)type * 4u, &ptype) || !ptype ||
+        !safe_read(ptype + 4u, &live_type, 4) || live_type != type)
+        return 0;
+    return ptype;
+}
+
+static int fcell_is_really_seen(unsigned world, int fx, int fy, int who) {
+    return ((fn_was_seen)(g_base + RVA_WORLD_IS_REALLY_SEEN))(
+        (const void *)world, &fx, &fy, who) != 0;
+}
+
+static int gather_candidate_is_visible(unsigned world, unsigned ptype,
+                                       int snap_x, int snap_y, int who) {
+    unsigned circle_x = g_base + RVA_CIRCLE_X;
+    unsigned circle_y = g_base + RVA_CIRCLE_Y;
+    unsigned circle_radius = g_base + RVA_CIRCLE_RADIUS;
+    int gather_radius, circle_index, circle_count = 0;
+    int world_xs = 0, world_ys = 0, tile_xs = 0, tile_ys = 0;
+    int center_wx = 0, center_wy = 0, center_tx = 0, center_ty = 0;
+    int i;
+    gather_radius = ((fn_int0)(g_base + RVA_BUILD_GATHER_RADIUS))(
+        (const void *)ptype);
+    circle_index = (gather_radius + 3) / 4;
+    if (!world || who < 0 || who >= 8 || gather_radius < 0 ||
+        gather_radius > 64 || circle_index < 0 || circle_index > 64 ||
+        !safe_read(world + 0x00u, &world_xs, 4) ||
+        !safe_read(world + 0x04u, &world_ys, 4) ||
+        !safe_read(world + 0x18u, &tile_xs, 4) ||
+        !safe_read(world + 0x1cu, &tile_ys, 4) ||
+        world_xs <= 0 || world_ys <= 0 ||
+        tile_xs != world_xs * 4 || tile_ys != world_ys * 4 ||
+        snap_x < 0 || snap_y < 0 || snap_x >= tile_xs * 192 ||
+        snap_y >= tile_ys * 192 ||
+        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_x >> 8) * 4u,
+                   &center_wx, 4) ||
+        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_y >> 8) * 4u,
+                   &center_wy, 4) ||
+        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_x >> 6) * 4u,
+                   &center_tx, 4) ||
+        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_y >> 6) * 4u,
+                   &center_ty, 4) ||
+        !safe_read(circle_radius + (unsigned)circle_index * 4u, &circle_count, 4) ||
+        circle_count < 1 || circle_count > 12873)
+        return -1;
+
+    /* Match calc_gather's exact W-block footprint before calling any oracle that
+       consumes it.  Each admitted 4x4-T block is exactly four 2x2-T fog cells. */
+    for (i = 0; i < circle_count; i++) {
+        signed char ox = 0, oy = 0;
+        int wx, wy, block_tx, block_ty, fx, fy;
+        if (!safe_read(circle_x + (unsigned)i, &ox, 1) ||
+            !safe_read(circle_y + (unsigned)i, &oy, 1))
+            return -1;
+        wx = center_wx + (int)ox;
+        wy = center_wy + (int)oy;
+        if (wx < 0 || wy < 0 || wx >= world_xs || wy >= world_ys)
+            continue;
+        block_tx = wx * 4 + 2;
+        block_ty = wy * 4 + 2;
+        if (((fn_vector_dist_coords)(g_base + RVA_VECTOR_DIST_COORDS))(
+                &center_tx, &center_ty, &block_tx, &block_ty) > gather_radius)
+            continue;
+        for (fy = wy * 2; fy <= wy * 2 + 1; fy++)
+            for (fx = wx * 2; fx <= wx * 2 + 1; fx++)
+                if (!fcell_is_really_seen(world, fx, fy, who)) return 0;
+    }
+    return 1;
+}
+
+static int candidate_gather_capacity(unsigned ptype, int snap_x, int snap_y,
+                                     int who) {
+    int tx = 0, ty = 0;
+    ((fn_tile_corner)(g_base + RVA_BUILD_TILE_CORNER))(
+        (const void *)ptype, snap_x, snap_y, &tx, &ty);
+    return ((fn_max_gatherers)(g_base + RVA_BUILD_MAX_GATHERERS))(
+        (const void *)ptype, -1, who, tx, ty);
 }
 
 static int package_length(void) {
@@ -887,6 +1056,74 @@ static int dispatch(const request_t *r, event_t *e) {
                             e->placement_y = (int)y;
                             break;
                         }
+                    }
+                }
+            }
+            return 1;
+        }
+        case V_FIND_GATHER_BUILD: {
+            fn_validate_build validate =
+                (fn_validate_build)(g_base + RVA_GROUP_VALIDATE_BUILD);
+            unsigned world = 0, ptype = build_type_ptr(r->arg[5]);
+            int first_ring = r->arg[3], last_ring = r->arg[4], ring, dx, dy;
+            make_group(group, r);
+            e->placement_x = -1;
+            e->placement_y = -1;
+            if (!ptype || !rd32(g_base + RVA_WORLD_PTR, &world) || !world) {
+                e->note = 18;
+                return 1;
+            }
+            /* This is a read-only placement preview: shipped geometry, local-slot
+               current-visibility fog, and shipped prospective max_gatherers.
+               Arena tile rings and stable enumeration are preserved. */
+            for (ring = first_ring; ring <= last_ring; ring++) {
+                for (dy = -ring; dy <= ring; dy++) {
+                    for (dx = -ring; dx <= ring; dx++) {
+                        long long x, y;
+                        int result, capacity, visible, snap_x = 0, snap_y = 0;
+                        if (ring && dx != -ring && dx != ring &&
+                            dy != -ring && dy != ring) continue;
+                        x = (long long)r->arg[1] + (long long)dx * 192ll;
+                        y = (long long)r->arg[2] + (long long)dy * 192ll;
+                        if (x < 0 || y < 0 || x > 0x3fffffffll || y > 0x3fffffffll)
+                            continue;
+                        e->placement_tested++;
+                        ((fn_snap_center)(g_base + RVA_BUILD_SNAP_CENTER))(
+                            (const void *)ptype, (int)x, (int)y,
+                            &snap_x, &snap_y, r->arg[0]);
+                        /* Visibility precedes even validate_build: its blocked_site
+                           path calls calc_gather and could otherwise leak fog state. */
+                        visible = gather_candidate_is_visible(
+                            world, ptype, snap_x, snap_y, r->arg[0]);
+                        if (visible < 0) {
+                            e->note = 19;
+                            return 1;
+                        }
+                        if (!visible)
+                            continue;
+                        e->placement_seen++;
+                        result = validate(group, (int)x, (int)y, -1, -1,
+                                          r->arg[5], 2);
+                        if (!result) continue;
+                        e->placement_legal++;
+                        capacity = candidate_gather_capacity(
+                            ptype, snap_x, snap_y, r->arg[0]);
+                        if (capacity <= 0) continue;
+                        /* Camp/Mine use Arena's capacity-first site policy. Farm
+                           and other ordinary gather buildings use site_near: the
+                           first legal currently-visible candidate, without a
+                           terrain-capacity ranking that their policy never reads. */
+                        if ((r->arg[5] == 418 || r->arg[5] == 419) &&
+                            capacity <= e->placement_capacity)
+                            continue;
+                        e->validation_result = result;
+                        e->placement_capacity = capacity;
+                        e->placement_x = (int)x;
+                        e->placement_y = (int)y;
+                        e->placement_snap_x = snap_x;
+                        e->placement_snap_y = snap_y;
+                        e->placement_ring = ring;
+                        if (r->arg[5] != 418 && r->arg[5] != 419) return 1;
                     }
                 }
             }
@@ -1062,7 +1299,8 @@ static void __cdecl on_turn_frame(void) {
     } else if (dispatch(&r, &e)) {
         e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
                    r.verb == V_OBSERVE_PLAYER || r.verb == V_VALIDATE_QUEUE ||
-                   r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD) ? 0 : 1;
+                   r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD ||
+                   r.verb == V_FIND_GATHER_BUILD) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK) {
@@ -1259,6 +1497,7 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq validate-queue WHO PRODUCER_ID TYPE
  * seq validate-build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
  * seq find-build WHO ORIGIN_X ORIGIN_Y RADIUS TYPE WORKER_ID
+ * seq find-gather-build WHO ORIGIN_X ORIGIN_Y FIRST_RING LAST_RING TYPE WORKER_ID
  * seq gather WHO TARGET_ID QUEUED ID...
  * seq queue WHO TYPE COUNT PRODUCER_ID...
  * seq build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
@@ -1350,6 +1589,23 @@ static int parse_request(char *line, request_t *r) {
             id < 0 || id > 32767) ok = 0;
         r->num_ids = 1;
         r->ids[0] = (short)id;
+    } else if (!strcmp(t[1], "find-gather-build") && n == 9) {
+        int id;
+        r->verb = V_FIND_GATHER_BUILD;
+        r->arg[0] = parse_int(t[2], &ok);
+        r->arg[1] = parse_int(t[3], &ok);
+        r->arg[2] = parse_int(t[4], &ok);
+        r->arg[3] = parse_int(t[5], &ok);
+        r->arg[4] = parse_int(t[6], &ok);
+        r->arg[5] = parse_int(t[7], &ok);
+        id = parse_int(t[8], &ok);
+        if (r->arg[3] < 2 || r->arg[3] > 23 ||
+            r->arg[4] < r->arg[3] || r->arg[4] > 23 ||
+            r->arg[4] - r->arg[3] > 1 ||
+            r->arg[5] < 414 || r->arg[5] > 542 ||
+            id < 0 || id > 32767) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
     } else if (!strcmp(t[1], "trace-move") && n == 7) {
         int id;
         r->verb = V_TRACE_MOVE;
@@ -1370,7 +1626,7 @@ static int parse_request(char *line, request_t *r) {
     if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
          r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS ||
          r->verb == V_VALIDATE_QUEUE || r->verb == V_VALIDATE_BUILD ||
-         r->verb == V_FIND_BUILD ||
+         r->verb == V_FIND_BUILD || r->verb == V_FIND_GATHER_BUILD ||
          r->verb == V_GATHER || r->verb == V_QUEUE_UP || r->verb == V_BUILD) &&
         (r->arg[0] < 0 || r->arg[0] >= 10)) return 0;
     if (first) {
@@ -1412,6 +1668,7 @@ static const char *verb_name(unsigned verb) {
         case V_VALIDATE_BUILD: return "validate-build";
         case V_RUN_FRAMES: return "run-frames";
         case V_FIND_BUILD: return "find-build";
+        case V_FIND_GATHER_BUILD: return "find-gather-build";
         default: return "unknown";
     }
 }
@@ -1510,6 +1767,9 @@ static void write_event(const event_t *e) {
             "\"player_object_count\":%d,\"player_object_truncated\":%d,"
             "\"validation_result\":%d,\"placement_x\":%d,"
             "\"placement_y\":%d,\"placement_tested\":%d,"
+            "\"placement_legal\":%d,\"placement_seen\":%d,"
+            "\"placement_capacity\":%d,\"placement_snap_x\":%d,"
+            "\"placement_snap_y\":%d,\"placement_ring\":%d,"
             "\"player_queued_types\":[",
             e->local_player, e->world_tile_xs, e->world_tile_ys,
             e->player_pop, e->player_pop_cap, e->player_leader_flags,
@@ -1527,7 +1787,9 @@ static void write_event(const event_t *e) {
             e->player_slots, e->player_unit_mark,
             e->player_build_mark, e->player_wall_mark, e->player_object_count,
             e->player_object_truncated, e->validation_result,
-            e->placement_x, e->placement_y, e->placement_tested);
+            e->placement_x, e->placement_y, e->placement_tested,
+            e->placement_legal, e->placement_seen, e->placement_capacity,
+            e->placement_snap_x, e->placement_snap_y, e->placement_ring);
         if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
     }
     for (i = 0; i < (unsigned)e->player_queued_type_count && i < MAX_QUEUED_TYPES; i++) {
@@ -1553,14 +1815,20 @@ static void write_event(const event_t *e) {
             "\"order_vtable\":\"0x%08x\",\"order_flags\":%u,"
             "\"order_metric\":%u,\"order_target_id\":%d,"
             "\"order_target_uid\":%u,\"order_target_valid\":%d,"
-            "\"guy_length\":%d,\"queue_logical\":%d,\"queue_size\":%d,"
+            "\"queued_build_target_id\":%d,\"queued_build_target_uid\":%u,"
+            "\"queued_build_target_valid\":%d,\"queued_build_order_seen\":%d,"
+            "\"guy_length\":%d,\"gather_max\":%d,"
+            "\"queue_logical\":%d,\"queue_size\":%d,"
             "\"queue_count\":%d,\"queue_truncated\":%d,\"queue\":[",
             i ? "," : "", o->id, o->pointer, o->category, o->flags, o->uid,
             o->type, o->type_valid, o->x, o->y, o->z, o->hits,
             o->class_vtable, o->angle, o->order_length, o->order_vtable,
             o->order_flags, o->order_metric, o->order_target_id,
-            o->order_target_uid, o->order_target_valid, o->guy_length,
-            o->queue_logical, o->queue_size, o->queue_count, o->queue_truncated);
+            o->order_target_uid, o->order_target_valid,
+            o->queued_build_target_id, o->queued_build_target_uid,
+            o->queued_build_target_valid, o->queued_build_order_seen, o->guy_length,
+            o->gather_max, o->queue_logical, o->queue_size,
+            o->queue_count, o->queue_truncated);
         if (n < 0 || (size_t)n >= sizeof(line) - used) break;
         used += (size_t)n;
         for (q = 0; q < (unsigned)o->queue_count && q < MAX_BUILD_QUEUE; q++) {

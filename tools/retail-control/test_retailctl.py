@@ -45,6 +45,7 @@ class RetailCtlTests(unittest.TestCase):
             ["queue", "0", "50", "1", "2000"],
             ["build", "0", "1", "2", "3", "4", "427", "2", "3"],
             ["find-build", "0", "1488", "32544", "8", "417", "3"],
+            ["find-gather-build", "0", "2496", "30144", "12", "12", "418", "3"],
             ["run-frames", "30"],
         ]:
             retailctl.validate_words(words)
@@ -327,6 +328,55 @@ class RetailCtlTests(unittest.TestCase):
                      (obj["object_id"], obj["id"]["uid"]) not in before_ids]
         self.assertEqual([(obj["object_id"], obj["id"]["uid"]) for obj in new_farms],
                          [(2007, 16)])
+
+    def test_v3_gather_state_uses_complete_cities_and_signed_retail_capacity(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        state = retailctl.marshal_gather_state(observation)
+        self.assertEqual(observation["protocol"], "don.retail-player.v3")
+        self.assertEqual(state["complete_city_count"], 1)
+        self.assertEqual(state["useful_slots"][:2], [9, 9])
+        self.assertEqual(state["seats"][:2], [4, 8])
+        self.assertEqual((state["food_gap"], state["wood_gap"]), (5, 1))
+        self.assertTrue(all("pointer" not in obj for obj in observation["objects"]))
+
+    def test_live_marshal_camp_plan_preserves_capacity_first_policy(self):
+        live = Path(__file__).parents[2] / "schema/live"
+        dry = json.loads((live / "retail-arena-marshal-camp-dry-run-v1.json").read_text())
+        action = dry["plan"]["selected_action"]
+        self.assertEqual(action["type_index"], 418)
+        self.assertEqual((action["x1"], action["y1"]), (4800, 32064))
+        self.assertEqual(action["placement_evidence"]["capacity"], 4)
+        self.assertEqual(action["placement_evidence"]["ring"], 12)
+        self.assertEqual(dry["plan"]["selected_don_env_heads"],
+                         [24, 25, 167, 0, 418, 0, 0, 0, 0, 0])
+        placement = next(t for t in dry["plan"]["trace"]
+                         if t["stage"] == "economy.placement")
+        self.assertEqual([w["type_index"] for w in placement["wants"]], [418, 414, 417])
+        self.assertEqual(placement["attempts"][0]["result"], "emit")
+
+    def test_live_marshal_camp_materialization_and_pending_worker_target_are_proven(self):
+        live = Path(__file__).parents[2] / "schema/live"
+        proof = json.loads(
+            (live / "retail-arena-marshal-camp-action-proof-v1.json").read_text()
+        )
+        self.assertEqual(proof["frame_boundary"], {"before": 687, "after": 717})
+        self.assertEqual(proof["pause_before_after"], [1, 1])
+        self.assertEqual(bytes.fromhex(proof["retail_command_hex"])[5], 0x19)
+        before_ids = {(obj["object_id"], obj["id"]["uid"])
+                      for obj in proof["before"]["objects"]}
+        new_camps = [obj for obj in proof["after"]["objects"]
+                     if obj["category"] == "build" and obj["type_index"] == 418 and
+                     (obj["object_id"], obj["id"]["uid"]) not in before_ids]
+        self.assertEqual([(obj["object_id"], obj["id"]["uid"],
+                           obj["gathering"]["capacity"]) for obj in new_camps],
+                         [(2008, 19, 4)])
+        worker = next(obj for obj in proof["after"]["objects"] if obj["object_id"] == 3)
+        self.assertEqual(worker["order"]["kind"], "MoveOrder")
+        self.assertEqual(worker["order"]["queued_build_target"],
+                         {"object_id": 2008, "uid": 19})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,59 @@
+{
+  "schema": "don.retail-player-protocol.v3",
+  "protocol": "don.retail-player.v3",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "observation_delta_from_v2": {
+    "own_buildings": [
+      "completion from ObjectData flags bit 2",
+      "signed BuildData::gather_max at +0x80, exposed as raw_signed_i8 and nonnegative capacity"
+    ],
+    "own_unit_orders": [
+      "canonical current UnitOrder",
+      "exact own BuildOrder target found in the bounded circular order queue"
+    ],
+    "fog_rule": "no enemy or neutral object list and no raw terrain/fog plane is published"
+  },
+  "marshal_gather_state": {
+    "resources": ["food", "timber", "wealth", "knowledge", "metal", "oil"],
+    "useful_slots": "max(0, trunc0((live commerce_cap_x16 - complete_cities * CITY_GATHER * 16) / (PEASANT_RATE * 16)))",
+    "seats": "sum positive signed gather_max for every live own gather building, including incomplete buildings",
+    "priority": "Camp is tested before Mine, City, and Farm when timber useful_slots - seats is positive"
+  },
+  "prospective_gather_build": {
+    "order": [
+      "BuildTypeData::snap_center",
+      "derive calc_gather's exact W-cell footprint",
+      "require WorldData::is_really_seen for all four F cells of every admitted W cell",
+      "GroupData::validate_build with (x,y,-1,-1,type,QUEUE_NEW)",
+      "BuildTypeData::tile_corner",
+      "BuildTypeData::max_gatherers(-1,who,tx,ty)"
+    ],
+    "camp_search": "capital-centred tile rings 2..23, 192 Coord per tile; capacity first and ring distance second; retain full retail capacity",
+    "marshal_threshold": "return early at capacity >= 5 only as the extracted Arena policy, never as a retail maximum",
+    "apply_replay": "repeat the selected ring's full fog/legality/capacity query and require identical click, snap, and capacity before BUILD_AT"
+  },
+  "proof": {
+    "command": "packed opcode 0x19 from GroupOut::issue_build",
+    "materialization": "new own Build identity {slot,o,uid} with requested TypeIndex",
+    "worker": "front BuildOrder or a queued BuildOrder resolves to the new own building and uid",
+    "boundary": "one supervised action; 1..30 frames per settlement slice; pause restored; STOP parks hook"
+  },
+  "excluded": [
+    "enemy and neutral owner lists",
+    "raw hidden terrain, ownership, blockers, or resource fields",
+    "validation or capacity calls before the exact current-visibility gate",
+    "unresolved order targets",
+    "direct state writes or guessed placement coordinates"
+  ],
+  "fail_closed": [
+    "wrong executable identity or call-site bytes",
+    "ambiguous local human",
+    "failed own gather_max read",
+    "torn object or circular order metadata",
+    "unknown type or order vtable",
+    "changed prospective site/capacity replay",
+    "wrong serialized opcode",
+    "missing new building or exact worker target",
+    "frame/pause/STOP mismatch"
+  ]
+}

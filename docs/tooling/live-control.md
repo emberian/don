@@ -302,6 +302,50 @@ accepted one Citizen at City 2000. The apply run issued exactly heads
 `[23,0,0,0,50,0,0,0,0,1]`; packet opcode `0x18` changed both the aggregate Citizen count and City
 queue from 1 to 2 at unchanged frame 357, with pause `[1,1]`. `economy-v10` was then STOP-parked.
 
+### Exact Camp-first Marshal placement (v3)
+
+`don.retail-player.v3` closes the Camp/Farm decision without publishing a terrain oracle. Each own
+building now carries its signed retail `BuildData::gather_max` byte (`+0x80`) and completion bit.
+Marshal seats are the sum of positive capacities for all live own gather buildings, including
+unfinished ones. Useful seats use the observed commerce cap and only complete cities:
+
+```text
+max(0, trunc0((cap_x16 - complete_cities * CITY_GATHER * 16)
+              / (PEASANT_RATE * 16)))
+```
+
+At frame 687 this yielded useful food/timber `[9,9]`, existing seats `[4,4]`, and positive gaps
+`[5,5]`. Marshal's placement wants were therefore Camp, City, Farm in that exact order. The Camp
+was not replaced by a Farm when its bank was initially short; the supervised match advanced in
+30-frame paused slices until retail accepted the count-adjusted price.
+
+Prospective Camp capacity remains private until its entire read footprint is currently visible.
+For every snapped candidate, the controller reproduces `calc_gather`'s W-cell enumeration using
+retail's `circle_x`, `circle_y`, and `circle_radius` tables. A W cell is admitted only when its
+centre passes shipped `vector_dist <= WOODCUTTER_RADIUS`. All four overlapping F cells must then
+pass `WorldData::is_really_seen` for the local player. This gate runs before
+`GroupData::validate_build`, because its `blocked_site` path can itself call `calc_gather`; it also
+runs before `BuildTypeData::max_gatherers(-1,who,corner)`. Raw forest, terrain, ownership,
+reservation, and blocker fields never leave retail.
+
+The adapter enumerated capital-centred tile rings 2 through 23 at 192 Coord per tile. No
+capacity-five site existed. It therefore preserved Arena's capacity-first score and selected the
+first capacity-four candidate on ring 12, click/snap `(4800,32064)`, retaining four as the full
+retail result rather than treating five as a retail maximum. Immediately before apply it replayed
+that ring and required the same click, snap, legality, and capacity.
+
+Retail serialized BUILD_AT as
+`000100030019c0120000407d0000ffffffffffffffffa201000002000000`. One exact 30-frame boundary
+materialized own Camp `{o:2008,uid:19}` with signed capacity four, and pause remained `[1,1]` from
+frame 687 to 717. Citizen 3 was distant, so retail correctly left a front `MoveOrder` and queued the
+`BuildOrder` behind it. Generation `economy-v15` walks the bounded circular order list and proved
+that pending BuildOrder resolves to the new Camp's exact own `{o,uid}`. It issued no second action,
+then STOP-parked with the original call bytes restored. The protocol, dry plan, command proof, and
+post-state are `schema/live/retail-player-protocol-v3.json`,
+`retail-arena-marshal-camp-dry-run-v1.json`,
+`retail-arena-marshal-camp-action-proof-v1.json`, and
+`retail-player-observation-v3-post-camp.json`.
+
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
 - module base `0x00D60000`, ASLR delta `0x00960000`;

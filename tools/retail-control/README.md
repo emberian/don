@@ -31,9 +31,11 @@ game:
   sites around one observed own Citizen, returning only retail's canonical `(x,y,-1,-1)` click.
 - `run-frames` is an internal supervised boundary: it starts only paused, advances exactly 1–30
   retail simulation frames, re-pauses on the retail main thread, and verifies the terminal frame.
-- `marshal-policy` adapts the source-ordered supported subsequence of Arena `Marshal::act` to v2.
-  It emits the same ten `don-env` heads, records unsupported fog/map branches as no-ops, dry-runs
-  by default, and applies at most the first retail-validated command.
+- `marshal-policy` adapts the source-ordered supported subsequence of Arena `Marshal::act` to the
+  fog-safe player protocol. v3 derives own Camp/Farm seat gaps from exact signed retail capacity,
+  gates every prospective gather footprint through current fog before retail validation/capacity,
+  and replays the selected site immediately before one bounded BUILD_AT. It emits the same ten
+  `don-env` heads, records unsupported branches as no-ops, and is dry-run by default.
 
 Build and attach:
 
@@ -61,6 +63,8 @@ python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v1
 python3 tools/retail-control/retailctl.py rearm --generation economy-v11
 python3 tools/retail-control/retailctl.py placement-query --generation economy-v11 \
   --worker-id 8 --type-index 417
+python3 tools/retail-control/retailctl.py rearm --generation economy-v15
+python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v15
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

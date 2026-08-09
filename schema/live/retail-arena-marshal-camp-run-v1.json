@@ -1,0 +1,886 @@
+{
+  "schema": "don.retail-arena-marshal-run.v1",
+  "protocol": "don.retail-player.v3",
+  "controller_generation": "economy-v14",
+  "mode": "apply",
+  "observation_summary": {
+    "frame": 687,
+    "paused": 1,
+    "population": {
+      "current": 11,
+      "cap": 25
+    },
+    "queued_types": [],
+    "owned_type_counts": {
+      "50": 8,
+      "62": 2,
+      "69": 1,
+      "414": 1,
+      "417": 4,
+      "418": 1,
+      "435": 1,
+      "436": 1
+    }
+  },
+  "plan": {
+    "schema": "don.retail-arena-marshal-plan.v1",
+    "protocol": "don.retail-player.v3",
+    "policy": "Arena Marshal faithful-supported-subsequence",
+    "source": "crates/don-ai/src/arena/bots/marshal.rs Marshal::act",
+    "observation_frame": 687,
+    "command_order": [
+      "sense",
+      "economy",
+      "scout",
+      "military",
+      "army_control",
+      "employ"
+    ],
+    "trace": [
+      {
+        "stage": "sense",
+        "source": "Marshal::sense",
+        "result": "Massing",
+        "reason": "don.retail-player.v3 contains no fog-approved enemy sightings or last-damaged field"
+      },
+      {
+        "stage": "economy.tech",
+        "type_index": 572,
+        "type_name": "The Art of War",
+        "producer_id": 2005,
+        "retail_can_queue": 0,
+        "result": "suppressed"
+      },
+      {
+        "stage": "economy.placement",
+        "source": "Marshal::economy/place_except",
+        "result": "emit",
+        "gather_state": {
+          "complete_city_count": 1,
+          "useful_slots": [
+            9,
+            9,
+            10,
+            99,
+            10,
+            10
+          ],
+          "seats": [
+            4,
+            4,
+            0,
+            0,
+            0,
+            0
+          ],
+          "food_gap": 5,
+          "wood_gap": 5,
+          "formula": "max(0,(cap_x16-complete_cities*CITY_GATHER*16)//(PEASANT_RATE*16)) - sum(positive signed gather_max)"
+        },
+        "food_locked": false,
+        "wants": [
+          {
+            "type_index": 418,
+            "type_name": "Woodcutter's Camp",
+            "reason": "positive timber seat gap; Camp precedes Mine/City/Farm"
+          },
+          {
+            "type_index": 414,
+            "type_name": "Small City",
+            "reason": "City State expansion while not defending/food-locked"
+          },
+          {
+            "type_index": 417,
+            "type_name": "Farm",
+            "reason": "positive food seat gap after higher placement priorities"
+          }
+        ],
+        "attempts": [
+          {
+            "type_index": 418,
+            "type_name": "Woodcutter's Camp",
+            "want_reason": "positive timber seat gap; Camp precedes Mine/City/Farm",
+            "public_gate": {
+              "accepted": true,
+              "reasons": [],
+              "type_name": "Woodcutter's Camp",
+              "prerequisites": [],
+              "base_cost_i32": [
+                50,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "cost_scope": "live table base cost times BUILD_COST_FACTOR; retail issue remains the authority for count ramping and civilization modifiers",
+              "resource_order": [
+                "food",
+                "timber",
+                "wealth",
+                "knowledge",
+                "metal",
+                "oil"
+              ]
+            },
+            "site_query": {
+              "accepted": true,
+              "queries": [
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    2,
+                    2
+                  ],
+                  "retail_note": 0,
+                  "tested": 16,
+                  "legal": 6,
+                  "seen_legal": 16,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 2,
+                  "site": {
+                    "x": 2688,
+                    "y": 29760,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28992
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    3,
+                    3
+                  ],
+                  "retail_note": 0,
+                  "tested": 24,
+                  "legal": 8,
+                  "seen_legal": 24,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 3,
+                  "site": {
+                    "x": 2688,
+                    "y": 29568,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28800
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    4,
+                    4
+                  ],
+                  "retail_note": 0,
+                  "tested": 32,
+                  "legal": 14,
+                  "seen_legal": 32,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 4,
+                  "site": {
+                    "x": 2688,
+                    "y": 29376,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28608
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    5,
+                    5
+                  ],
+                  "retail_note": 0,
+                  "tested": 40,
+                  "legal": 18,
+                  "seen_legal": 40,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 5,
+                  "site": {
+                    "x": 2688,
+                    "y": 29184,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28416
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    6,
+                    6
+                  ],
+                  "retail_note": 0,
+                  "tested": 48,
+                  "legal": 23,
+                  "seen_legal": 48,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 6,
+                  "site": {
+                    "x": 2688,
+                    "y": 28992,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28224
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    7,
+                    7
+                  ],
+                  "retail_note": 0,
+                  "tested": 56,
+                  "legal": 27,
+                  "seen_legal": 56,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 7,
+                  "site": {
+                    "x": 2688,
+                    "y": 28800,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28224
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    8,
+                    8
+                  ],
+                  "retail_note": 0,
+                  "tested": 64,
+                  "legal": 31,
+                  "seen_legal": 64,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 1,
+                  "ring": 8,
+                  "site": {
+                    "x": 2688,
+                    "y": 28608,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 3456,
+                    "snapped_y": 28224
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    9,
+                    9
+                  ],
+                  "retail_note": 0,
+                  "tested": 72,
+                  "legal": 35,
+                  "seen_legal": 72,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 3,
+                  "ring": 9,
+                  "site": {
+                    "x": 4224,
+                    "y": 28992,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 4224,
+                    "snapped_y": 28992
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    10,
+                    10
+                  ],
+                  "retail_note": 0,
+                  "tested": 80,
+                  "legal": 39,
+                  "seen_legal": 80,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 3,
+                  "ring": 10,
+                  "site": {
+                    "x": 4416,
+                    "y": 28608,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 4416,
+                    "snapped_y": 28608
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    11,
+                    11
+                  ],
+                  "retail_note": 0,
+                  "tested": 88,
+                  "legal": 43,
+                  "seen_legal": 88,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 3,
+                  "ring": 11,
+                  "site": {
+                    "x": 4608,
+                    "y": 28800,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 4416,
+                    "snapped_y": 28608
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    12,
+                    12
+                  ],
+                  "retail_note": 0,
+                  "tested": 96,
+                  "legal": 47,
+                  "seen_legal": 96,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 12,
+                  "site": {
+                    "x": 4800,
+                    "y": 32064,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 4800,
+                    "snapped_y": 32064
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    13,
+                    13
+                  ],
+                  "retail_note": 0,
+                  "tested": 104,
+                  "legal": 51,
+                  "seen_legal": 104,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 13,
+                  "site": {
+                    "x": 4992,
+                    "y": 32064,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 4992,
+                    "snapped_y": 32064
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    14,
+                    14
+                  ],
+                  "retail_note": 0,
+                  "tested": 83,
+                  "legal": 55,
+                  "seen_legal": 83,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 14,
+                  "site": {
+                    "x": 5184,
+                    "y": 31872,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 5184,
+                    "snapped_y": 31872
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    15,
+                    15
+                  ],
+                  "retail_note": 0,
+                  "tested": 87,
+                  "legal": 58,
+                  "seen_legal": 87,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 15,
+                  "site": {
+                    "x": 5376,
+                    "y": 31872,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 5376,
+                    "snapped_y": 31872
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    16,
+                    16
+                  ],
+                  "retail_note": 0,
+                  "tested": 91,
+                  "legal": 62,
+                  "seen_legal": 91,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 16,
+                  "site": {
+                    "x": 5568,
+                    "y": 31872,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 5568,
+                    "snapped_y": 31872
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    17,
+                    17
+                  ],
+                  "retail_note": 0,
+                  "tested": 95,
+                  "legal": 64,
+                  "seen_legal": 95,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 17,
+                  "site": {
+                    "x": 5760,
+                    "y": 32064,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 5760,
+                    "snapped_y": 32064
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    18,
+                    18
+                  ],
+                  "retail_note": 0,
+                  "tested": 99,
+                  "legal": 68,
+                  "seen_legal": 99,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 18,
+                  "site": {
+                    "x": 5952,
+                    "y": 32064,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 5952,
+                    "snapped_y": 32064
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    19,
+                    19
+                  ],
+                  "retail_note": 0,
+                  "tested": 103,
+                  "legal": 70,
+                  "seen_legal": 103,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 19,
+                  "site": {
+                    "x": 6144,
+                    "y": 32448,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 6144,
+                    "snapped_y": 32448
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    20,
+                    20
+                  ],
+                  "retail_note": 0,
+                  "tested": 107,
+                  "legal": 72,
+                  "seen_legal": 107,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 20,
+                  "site": {
+                    "x": 6336,
+                    "y": 32448,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 6336,
+                    "snapped_y": 32448
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    21,
+                    21
+                  ],
+                  "retail_note": 0,
+                  "tested": 111,
+                  "legal": 76,
+                  "seen_legal": 111,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 4,
+                  "ring": 21,
+                  "site": {
+                    "x": 6528,
+                    "y": 32832,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 6528,
+                    "snapped_y": 32832
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    22,
+                    22
+                  ],
+                  "retail_note": 0,
+                  "tested": 115,
+                  "legal": 80,
+                  "seen_legal": 115,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 2,
+                  "ring": 22,
+                  "site": {
+                    "x": 6720,
+                    "y": 28224,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 6720,
+                    "snapped_y": 28224
+                  }
+                },
+                {
+                  "origin": {
+                    "x": 2496,
+                    "y": 30144
+                  },
+                  "ring_range_tiles": [
+                    23,
+                    23
+                  ],
+                  "retail_note": 0,
+                  "tested": 119,
+                  "legal": 82,
+                  "seen_legal": 119,
+                  "accepted": true,
+                  "retail_result": 1,
+                  "capacity": 2,
+                  "ring": 23,
+                  "site": {
+                    "x": 6912,
+                    "y": 28416,
+                    "x2": -1,
+                    "y2": -1,
+                    "snapped_x": 6720,
+                    "snapped_y": 28224
+                  }
+                }
+              ],
+              "best": {
+                "origin": {
+                  "x": 2496,
+                  "y": 30144
+                },
+                "ring_range_tiles": [
+                  12,
+                  12
+                ],
+                "retail_note": 0,
+                "tested": 96,
+                "legal": 47,
+                "seen_legal": 96,
+                "accepted": true,
+                "retail_result": 1,
+                "capacity": 4,
+                "ring": 12,
+                "site": {
+                  "x": 4800,
+                  "y": 32064,
+                  "x2": -1,
+                  "y2": -1,
+                  "snapped_x": 4800,
+                  "snapped_y": 32064
+                }
+              },
+              "selection": "Arena capacity*1000-ring after exhausting rings 2..23"
+            },
+            "result": "emit",
+            "worker_id": 3
+          }
+        ],
+        "blocked_by": null,
+        "reason": "first supported placement emitted in exact Marshal priority"
+      },
+      {
+        "stage": "economy.citizen",
+        "source": "Marshal::economy/CapFirst",
+        "current_with_queued": 8,
+        "target": 21,
+        "producer_id": 2000,
+        "retail_can_queue": 1,
+        "result": "emit"
+      },
+      {
+        "stage": "scout",
+        "source": "Marshal::do_scout",
+        "result": "unsupported",
+        "reason": "nearest-unexplored waypoint requires a fog-safe explored map plane"
+      },
+      {
+        "stage": "military",
+        "source": "Marshal::military",
+        "result": "suppressed",
+        "reason": "before Marshal military_from horizon"
+      },
+      {
+        "stage": "army_control",
+        "source": "Marshal::army_control",
+        "result": "suppressed",
+        "reason": "no own live unit satisfies Arena TypeRow::is_military"
+      },
+      {
+        "stage": "employ",
+        "source": "Marshal::employ_except",
+        "result": "unsupported",
+        "reason": "v3 exposes capacity but not the complete exact free-seat chain"
+      }
+    ],
+    "supported_actions": [
+      {
+        "verb": "build",
+        "owner": 0,
+        "worker_ids": [
+          3
+        ],
+        "type_index": 418,
+        "type_name": "Woodcutter's Camp",
+        "x1": 4800,
+        "y1": 32064,
+        "x2": -1,
+        "y2": -1,
+        "queue": 2,
+        "placement_evidence": {
+          "origin": {
+            "x": 2496,
+            "y": 30144
+          },
+          "ring": 12,
+          "capacity": 4,
+          "snapped_x": 4800,
+          "snapped_y": 32064,
+          "visibility": "every exact calc_gather W block's four F cells were currently visible before validate_build/max_gatherers",
+          "selection": "Arena capacity*1000-ring after exhausting rings 2..23"
+        }
+      },
+      {
+        "verb": "queue",
+        "owner": 0,
+        "producer_id": 2000,
+        "type_index": 50,
+        "type_name": "Citizen",
+        "count": 1
+      }
+    ],
+    "selected_action": {
+      "verb": "build",
+      "owner": 0,
+      "worker_ids": [
+        3
+      ],
+      "type_index": 418,
+      "type_name": "Woodcutter's Camp",
+      "x1": 4800,
+      "y1": 32064,
+      "x2": -1,
+      "y2": -1,
+      "queue": 2,
+      "placement_evidence": {
+        "origin": {
+          "x": 2496,
+          "y": 30144
+        },
+        "ring": 12,
+        "capacity": 4,
+        "snapped_x": 4800,
+        "snapped_y": 32064,
+        "visibility": "every exact calc_gather W block's four F cells were currently visible before validate_build/max_gatherers",
+        "selection": "Arena capacity*1000-ring after exhausting rings 2..23"
+      }
+    },
+    "selected_don_env_heads": [
+      24,
+      25,
+      167,
+      0,
+      418,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "selection_rule": "first supported emitted command in Marshal source order; max one live action"
+  },
+  "proof": {
+    "artifact": "retail-arena-marshal-camp-action-proof-v1.json",
+    "schema": "don.retail-economy-action-proof.v1",
+    "action": {
+      "verb": "build",
+      "owner": 0,
+      "worker_ids": [
+        3
+      ],
+      "type_index": 418,
+      "type_name": "Woodcutter's Camp",
+      "x1": 4800,
+      "y1": 32064,
+      "x2": -1,
+      "y2": -1,
+      "queue": 2,
+      "placement_evidence": {
+        "origin": {
+          "x": 2496,
+          "y": 30144
+        },
+        "ring": 12,
+        "capacity": 4,
+        "snapped_x": 4800,
+        "snapped_y": 32064,
+        "visibility": "every exact calc_gather W block's four F cells were currently visible before validate_build/max_gatherers",
+        "selection": "Arena capacity*1000-ring after exhausting rings 2..23"
+      }
+    },
+    "retail_command_hex": "000100030019c0120000407d0000ffffffffffffffffa201000002000000",
+    "frame_boundary": {
+      "before": 687,
+      "after": 717
+    },
+    "pause_before_after": [
+      1,
+      1
+    ]
+  }
+}

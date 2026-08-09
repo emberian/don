@@ -161,7 +161,7 @@ def validate_words(words: list[str]) -> None:
     allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
                "move", "halt", "attack", "trace-move", "observe-guys",
                "observe-player", "validate-queue", "validate-build", "gather",
-               "queue", "build", "run-frames", "find-build"}
+               "queue", "build", "run-frames", "find-build", "find-gather-build"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
     for word in words:
@@ -369,7 +369,23 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
                     "object_id": item["order_target_id"],
                     "uid": item["order_target_uid"],
                 }
+            if item.get("queued_build_target_valid"):
+                public_object["order"]["queued_build_target"] = {
+                    "object_id": item["queued_build_target_id"],
+                    "uid": item["queued_build_target_uid"],
+                }
+            if item.get("queued_build_order_seen"):
+                public_object["order"]["queued_build_order_present"] = True
         elif category == "build":
+            gather_resource = {417: "food", 418: "timber", 419: "metal",
+                               420: "knowledge", 421: "oil", 422: "oil"}.get(
+                                   item["type"] if type_valid else -1)
+            public_object["complete"] = bool(item["flags"] & 4)
+            public_object["gathering"] = {
+                "capacity": max(0, item["gather_max"]),
+                "raw_signed_i8": item["gather_max"],
+                "resource": gather_resource,
+            }
             public_object["production_queue"] = {
                 "logical_length": item["queue_logical"],
                 "storage_length": item["queue_size"],
@@ -398,14 +414,14 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
         for item in event["player_queued_types"]
     ]
     return {
-        "schema": "don.retail-player-observation.v2",
-        "protocol": "don.retail-player.v2",
+        "schema": "don.retail-player-observation.v3",
+        "protocol": "don.retail-player.v3",
         "retail_executable_sha256": EXPECTED_SHA256,
         "controller_generation": generation,
         "public_scope": {
             "owner": event["local_player"],
             "includes": ["own active object bands", "own stockpile", "own commerce cap",
-                         "own population", "public game clock"],
+                         "own population", "own building gather capacity", "public game clock"],
             "excludes": ["enemy and neutral object tables", "enemy resources",
                          "fog-hidden map state", "target-object dereferences",
                          "visibility flags not proven local-slot-specific"],
@@ -475,6 +491,13 @@ def player_observation(root: str, generation: str) -> dict:
     if any(obj["order"]["kind"] == "GatherOrder" and "own_target" not in obj["order"]
            for obj in observation["objects"] if obj["category"] == "unit"):
         raise RuntimeError("retail player observation contains an unresolved own GatherOrder target")
+    if any(obj["order"]["kind"] == "BuildOrder" and "own_target" not in obj["order"]
+           for obj in observation["objects"] if obj["category"] == "unit"):
+        raise RuntimeError("retail player observation contains an unresolved own BuildOrder target")
+    if any(obj["order"].get("queued_build_order_present") and
+           "queued_build_target" not in obj["order"]
+           for obj in observation["objects"] if obj["category"] == "unit"):
+        raise RuntimeError("retail player observation contains an unresolved queued BuildOrder")
     if any(obj["production_queue"]["truncated"]
            for obj in observation["objects"] if obj["category"] == "build"):
         raise RuntimeError("retail player observation contains a truncated production queue")
@@ -605,6 +628,165 @@ def find_build_site(root: str, observation: dict, worker_id: int,
         if result["site"]["x"] % 48 or result["site"]["y"] % 48:
             raise RuntimeError("retail placement query escaped the exact UCoord lattice")
     return result
+
+
+def gather_build_query(root: str, observation: dict, worker_id: int,
+                       type_index: int, origin_x: int, origin_y: int,
+                       first_ring: int, last_ring: int) -> dict:
+    """Score one bounded Arena tile-ring chunk through exact retail queries."""
+    owned = {obj["object_id"]: obj for obj in observation["objects"]}
+    worker = owned.get(worker_id)
+    if (not worker or worker["category"] != "unit" or
+            worker.get("type_index") not in {50, 51}):
+        raise RuntimeError("gather placement query requires one observed own citizen")
+    if not (2 <= first_ring <= last_ring <= 23 and last_ring - first_ring <= 1):
+        raise RuntimeError("gather placement query exceeds the bounded Arena ring chunk")
+    origin_x = ((origin_x + 96) // 192) * 192
+    origin_y = ((origin_y + 96) // 192) * 192
+    event = exact_validation(root, ["find-gather-build",
+                                    str(observation["player"]["owner"]),
+                                    str(origin_x), str(origin_y), str(first_ring),
+                                    str(last_ring),
+                                    str(type_index), str(worker_id)])
+    accepted = bool(event["validation_result"] and event["placement_capacity"] > 0)
+    return {
+        "origin": {"x": origin_x, "y": origin_y},
+        "ring_range_tiles": [first_ring, last_ring],
+        "retail_note": event.get("note", 0),
+        "tested": event["placement_tested"],
+        "legal": event["placement_legal"],
+        "seen_legal": event["placement_seen"],
+        "accepted": accepted,
+        "retail_result": event["validation_result"],
+        "capacity": event["placement_capacity"],
+        "ring": event["placement_ring"],
+        "site": ({"x": event["placement_x"], "y": event["placement_y"],
+                  "x2": -1, "y2": -1,
+                  "snapped_x": event["placement_snap_x"],
+                  "snapped_y": event["placement_snap_y"]} if accepted else None),
+    }
+
+
+def marshal_gather_state(observation: dict) -> dict:
+    """Reproduce Marshal's exact useful-slot and seat-gap predicates from retail v3."""
+    if observation.get("protocol") != "don.retail-player.v3":
+        raise RuntimeError("gather-state planning requires retail-player.v3")
+    city_gather, peasant_rate, _ = arena_rule_ints()
+    complete_cities = sum(1 for obj in observation["objects"]
+                          if obj["category"] == "build" and obj.get("complete") and
+                          obj.get("type_index") in {414, 415, 416})
+    caps = observation["economy"]["commerce_cap_x16_i32"]
+    useful = [max(0, (caps[r] - complete_cities * city_gather[r] * 16) //
+                  (max(1, peasant_rate) * 16)) for r in range(6)]
+    seats = [0] * 6
+    resource_index = {name: i for i, name in
+                      enumerate(observation["economy"]["resource_order"])}
+    for obj in observation["objects"]:
+        gathering = obj.get("gathering")
+        if obj["category"] != "build" or not gathering or not gathering.get("resource"):
+            continue
+        seats[resource_index[gathering["resource"]]] += gathering["capacity"]
+    return {
+        "complete_city_count": complete_cities,
+        "useful_slots": useful,
+        "seats": seats,
+        "food_gap": useful[0] - seats[0],
+        "wood_gap": useful[1] - seats[1],
+        "formula": ("max(0,(cap_x16-complete_cities*CITY_GATHER*16)//"
+                    "(PEASANT_RATE*16)) - sum(positive signed gather_max)"),
+    }
+
+
+def marshal_builder_for(observation: dict, site: dict) -> int | None:
+    """Retail-v3 form of Arena builder_for_except with no active scout exclusion."""
+    by_id = {obj["object_id"]: obj for obj in observation["objects"]}
+    citizens = [obj for obj in observation["objects"]
+                if obj["category"] == "unit" and obj.get("type_index") in {50, 51}]
+    best: tuple[int, int] | None = None
+    tx, ty = site["snapped_x"] // 192, site["snapped_y"] // 192
+    for worker in citizens:
+        order = worker["order"]
+        if order["kind"] == "none":
+            busy = 0
+        elif order["kind"] == "GatherOrder" and order.get("own_target"):
+            target = by_id.get(order["own_target"]["object_id"])
+            capacity = (target or {}).get("gathering", {}).get("capacity", 0)
+            busy = 200 + 400 // max(1, capacity)
+        elif order["kind"] == "BuildOrder":
+            busy = 1200
+        else:
+            busy = 1500
+        wx, wy = worker["position"]["x"] // 192, worker["position"]["y"] // 192
+        score = busy + max(abs(wx - tx), abs(wy - ty))
+        candidate = (score, worker["object_id"])
+        if best is None or candidate < best:
+            best = candidate
+    return best[1] if best else None
+
+
+def find_visible_gather_site(root: str, observation: dict,
+                             type_index: int) -> dict:
+    """Run Arena best_gather_site rings using fog-safe exact retail capacity."""
+    citizens = sorted((obj for obj in observation["objects"]
+                       if obj["category"] == "unit" and obj.get("type_index") in {50, 51}),
+                      key=lambda obj: obj["object_id"])
+    if not citizens:
+        return {"accepted": False, "queries": [], "reason": "no own Citizen"}
+    cities = sorted((obj for obj in observation["objects"]
+                     if obj["category"] == "build" and obj.get("complete") and
+                     obj.get("type_index") in {414, 415, 416}),
+                    key=lambda obj: obj["object_id"])
+    if not cities:
+        return {"accepted": False, "queries": [], "reason": "no complete own capital"}
+    capital = cities[0]
+    origin_x, origin_y = capital["position"]["x"], capital["position"]["y"]
+    queries = []
+    candidates = []
+    for ring in range(2, 24):
+        query = gather_build_query(root, observation, citizens[0]["object_id"],
+                                   type_index, origin_x, origin_y, ring, ring)
+        queries.append(query)
+        if query["accepted"]:
+            candidates.append(query)
+            # Preserve Marshal's documented policy threshold. This is not a claim
+            # that five is retail's maximum; the exact retail capacity is retained.
+            if query["capacity"] >= 5:
+                return {"accepted": True, "queries": queries, "best": query,
+                        "selection": ("Arena first ring reaching policy threshold 5; "
+                                      "retail capacity is untruncated")}
+    if not candidates:
+        return {"accepted": False, "queries": queries,
+                "reason": "no fully-currently-visible retail-capacity site"}
+    best = min(candidates, key=lambda query: (-query["capacity"], query["ring"]))
+    return {"accepted": True, "queries": queries, "best": best,
+            "selection": "Arena capacity*1000-ring after exhausting rings 2..23"}
+
+
+def find_visible_ordinary_site(root: str, observation: dict,
+                               type_index: int) -> dict:
+    """Run Arena site_near rings with retail legality behind exact current fog."""
+    citizens = sorted((obj for obj in observation["objects"]
+                       if obj["category"] == "unit" and obj.get("type_index") in {50, 51}),
+                      key=lambda obj: obj["object_id"])
+    cities = sorted((obj for obj in observation["objects"]
+                     if obj["category"] == "build" and obj.get("complete") and
+                     obj.get("type_index") in {414, 415, 416}),
+                    key=lambda obj: obj["object_id"])
+    if not citizens or not cities:
+        return {"accepted": False, "queries": [],
+                "reason": "no own Citizen or complete own capital"}
+    origin_x, origin_y = cities[0]["position"]["x"], cities[0]["position"]["y"]
+    queries = []
+    # Arena site_near(capital, max_r=18) uses the half-open range 2..18.
+    for ring in range(2, 18):
+        query = gather_build_query(root, observation, citizens[0]["object_id"],
+                                   type_index, origin_x, origin_y, ring, ring)
+        queries.append(query)
+        if query["accepted"]:
+            return {"accepted": True, "queries": queries, "best": query,
+                    "selection": "Arena first legal site_near candidate on rings 2..17"}
+    return {"accepted": False, "queries": queries,
+            "reason": "no fully-currently-visible retail-legal site"}
 
 
 def building_row(type_index: int) -> dict[str, int | str]:
@@ -764,10 +946,13 @@ def live_tech_raw_food_cost(type_index: int) -> int:
 
 
 def arena_marshal_extracted_plan(observation: dict, root: str,
-                                 queue_query=queue_validation) -> dict:
+                                 queue_query=queue_validation,
+                                 gather_site_query=find_visible_gather_site,
+                                 ordinary_site_query=find_visible_ordinary_site) -> dict:
     """Faithful supported subsequence of Marshal::act, in its source command order."""
-    if observation.get("protocol") != "don.retail-player.v2":
-        raise RuntimeError("Arena Marshal adapter requires fog-safe retail-player.v2")
+    protocol = observation.get("protocol")
+    if protocol not in {"don.retail-player.v2", "don.retail-player.v3"}:
+        raise RuntimeError("Arena Marshal adapter requires fog-safe retail-player.v2/v3")
     owner = observation["player"]["owner"]
     objects = observation["objects"]
     by_type: dict[int, list[dict]] = {}
@@ -779,14 +964,14 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
     trace: list[dict] = []
     supported: list[dict] = []
 
-    # Marshal::sense cannot infer threat or an enemy base from v2: no enemy list and no
+    # Marshal::sense cannot infer threat or an enemy base: no enemy list and no
     # last-damaged timestamp are exposed.  Missing evidence means initial Massing, not a
     # fabricated peaceful enemy observation.
     trace.append({
         "stage": "sense",
         "source": "Marshal::sense",
         "result": "Massing",
-        "reason": "v2 contains no fog-approved enemy sightings or last-damaged field",
+        "reason": f"{protocol} contains no fog-approved enemy sightings or last-damaged field",
     })
 
     # Marshal::economy calls next_tech in this exact order. next_tech does not skip an
@@ -823,20 +1008,130 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
                               "type_index": next_tech,
                               "type_name": type_names().get(next_tech), "count": 1})
 
-    trace.append({
-        "stage": "economy.placement",
-        "source": "Marshal::economy/place_except",
-        "result": "unsupported",
-        "reason": ("BUILD_AT ingress and the retail simple-pick oracle are proven, but v2 lacks "
-                   "the terrain/gather-capacity inputs that make Marshal request Camp first; "
-                   "no Farm or other Build command is substituted"),
-    })
+    if protocol == "don.retail-player.v2":
+        trace.append({
+            "stage": "economy.placement",
+            "source": "Marshal::economy/place_except",
+            "result": "unsupported",
+            "reason": ("BUILD_AT ingress and the retail simple-pick oracle are proven, but v2 "
+                       "lacks exact own gather capacity and a fog-gated prospective terrain "
+                       "oracle; no Farm or other Build command is substituted"),
+        })
+        gather_state = None
+        placement_action = None
+    else:
+        gather_state = marshal_gather_state(observation)
+        city_gather, peasant_rate, tech_cost_factor = arena_rule_ints()
+        cap_first_want = next((t for t in MARSHAL_CAP_TECH_TYPES if t not in held), None)
+        classical_food_cost = live_tech_raw_food_cost(544) * tech_cost_factor
+        food_locked_for_placement = (
+            cap_first_want == 544 and 544 not in held and
+            observation["economy"]["stockpile_i32"][0] * 10 >= classical_food_cost * 6
+        )
+        type_count = lambda t: len(by_type.get(t, []))
+        wants: list[tuple[int, str]] = []
+        # A fresh adapter has no approved threat sighting, hence Massing: tower false.
+        if 572 in held and type_count(427) < 1:
+            wants.append((427, "Barracks after The Art of War"))
+        if gather_state["wood_gap"] > 0 and type_count(418) < 4:
+            wants.append((418, "positive timber seat gap; Camp precedes Mine/City/Farm"))
+        if (544 in held and gather_state["useful_slots"][4] > gather_state["seats"][4]
+                and type_count(419) < 3):
+            wants.append((419, "positive Classical metal seat gap"))
+        if (565 in held and type_count(414) + type_count(415) + type_count(416) < 2
+                and not food_locked_for_placement):
+            wants.append((414, "City State expansion while not defending/food-locked"))
+        if (gather_state["food_gap"] > 0 and not food_locked_for_placement
+                and type_count(417) < 9):
+            wants.append((417, "positive food seat gap after higher placement priorities"))
+
+        attempts: list[dict] = []
+        placement_action = None
+        blocked_by = None
+        for type_index, reason in wants:
+            public_gate = static_build_legality(type_index, observation)
+            attempt: dict = {
+                "type_index": type_index,
+                "type_name": type_names().get(type_index),
+                "want_reason": reason,
+                "public_gate": public_gate,
+            }
+            attempts.append(attempt)
+            if not public_gate["accepted"]:
+                attempt["result"] = "suppressed"
+                attempt["reason"] = "Arena legal/can_pay necessary public gate failed"
+                continue
+            # Cycle 8 proves the Camp/Farm branches. If an earlier wanted branch is not
+            # supported, fail closed: whether it emitted determines whether Marshal
+            # would break before reaching a lower priority.
+            if type_index not in {417, 418}:
+                attempt["result"] = "blocked"
+                attempt["reason"] = "publicly eligible higher branch lacks an exact adapter"
+                blocked_by = {"type_index": type_index,
+                              "type_name": type_names().get(type_index),
+                              "reason": "higher-priority Marshal placement is not yet adapted"}
+                break
+            if type_index != 417 and any(not obj.get("complete", False)
+                                         for obj in by_type.get(type_index, [])):
+                attempt["result"] = "suppressed"
+                attempt["reason"] = "place_except forbids duplicate incomplete non-Farm"
+                continue
+            site_result = (gather_site_query(root, observation, type_index)
+                           if type_index == 418 else
+                           ordinary_site_query(root, observation, type_index))
+            attempt["site_query"] = site_result
+            if not site_result["accepted"]:
+                attempt["result"] = "suppressed"
+                attempt["reason"] = "no exact currently-visible retail-legal site"
+                continue
+            chosen = site_result["best"]
+            worker_id = marshal_builder_for(observation, chosen["site"])
+            if worker_id is None:
+                attempt["result"] = "suppressed"
+                attempt["reason"] = "builder_for_except found no own Citizen"
+                continue
+            attempt["result"] = "emit"
+            attempt["worker_id"] = worker_id
+            placement_action = {
+                "verb": "build", "owner": owner, "worker_ids": [worker_id],
+                "type_index": type_index, "type_name": type_names().get(type_index),
+                "x1": chosen["site"]["x"], "y1": chosen["site"]["y"],
+                "x2": -1, "y2": -1, "queue": 2,
+                "placement_evidence": {
+                    "origin": chosen["origin"], "ring": chosen["ring"],
+                    "capacity": chosen["capacity"],
+                    "snapped_x": chosen["site"]["snapped_x"],
+                    "snapped_y": chosen["site"]["snapped_y"],
+                    "visibility": ("every exact calc_gather W block's four F cells were "
+                                   "currently visible before validate_build/max_gatherers"),
+                    "selection": site_result["selection"],
+                },
+            }
+            supported.append(placement_action)
+            break
+        trace.append({
+            "stage": "economy.placement",
+            "source": "Marshal::economy/place_except",
+            "result": ("emit" if placement_action else
+                       "blocked" if blocked_by else "suppressed"),
+            "gather_state": gather_state,
+            "food_locked": food_locked_for_placement,
+            "wants": [{"type_index": t, "type_name": type_names().get(t), "reason": why}
+                      for t, why in wants],
+            "attempts": attempts,
+            "blocked_by": blocked_by,
+            "reason": ("first supported placement emitted in exact Marshal priority"
+                       if placement_action else
+                       "a higher unsupported placement prevents lower-branch substitution"
+                       if blocked_by else "no supported placement emitted"),
+        })
 
     # CapFirst::target_citizens = useful food seats + useful timber seats + 3 builders.
     # Consume live commerce-cap x16 values, and shipped rule constants, preserving the
     # same integer division as useful_slots.
     city_gather, peasant_rate, tech_cost_factor = arena_rule_ints()
-    cities = sum(len(by_type.get(t, [])) for t in (414, 415, 416))
+    cities = sum(1 for t in (414, 415, 416) for obj in by_type.get(t, [])
+                 if protocol == "don.retail-player.v2" or obj.get("complete", False))
     caps = observation["economy"]["commerce_cap_x16_i32"]
     useful = [max(0, (caps[r] - cities * city_gather[r] * 16) //
                   max(1, peasant_rate * 16)) for r in (0, 1)]
@@ -883,12 +1178,20 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
         {"stage": "army_control", "source": "Marshal::army_control", "result": "suppressed",
          "reason": "no own live unit satisfies Arena TypeRow::is_military"},
         {"stage": "employ", "source": "Marshal::employ_except", "result": "unsupported",
-         "reason": "v2 omits exact gather_max/occupancy needed to allocate a free seat"},
+         "reason": ("v2 omits exact gather_max needed to allocate a free seat"
+                    if protocol.endswith(".v2") else
+                    "v3 exposes capacity but not the complete exact free-seat chain")},
     ])
 
     action = supported[0] if supported else None
-    heads = ([23, 0, 0, 0, action["type_index"], 0, 0, 0, 0, action["count"]]
-             if action and action["verb"] == "queue" else None)
+    if action and action["verb"] == "queue":
+        heads = [23, 0, 0, 0, action["type_index"], 0, 0, 0, 0, action["count"]]
+    elif action and action["verb"] == "build":
+        heads = [24, action["placement_evidence"]["snapped_x"] // 192,
+                 action["placement_evidence"]["snapped_y"] // 192, 0,
+                 action["type_index"], 0, 0, 0, 0, 0]
+    else:
+        heads = None
     return {
         "schema": "don.retail-arena-marshal-plan.v1",
         "protocol": observation["protocol"],
@@ -937,11 +1240,34 @@ def validate_economy_action(action: dict, observation: dict, root: str) -> dict:
         if not public_gate["accepted"]:
             return {"validation_result": 0, "public_gate": public_gate,
                     "validation": "necessary public tech/prerequisite/age/base-cost gate"}
+        evidence = action.get("placement_evidence")
+        revalidation = None
+        if evidence:
+            revalidation = gather_build_query(
+                root, observation, workers[0], action["type_index"],
+                evidence["origin"]["x"], evidence["origin"]["y"],
+                evidence["ring"], evidence["ring"],
+            )
+            site = revalidation.get("site") or {}
+            if (not revalidation["accepted"] or
+                    site.get("x") != action["x1"] or site.get("y") != action["y1"] or
+                    site.get("snapped_x") != evidence["snapped_x"] or
+                    site.get("snapped_y") != evidence["snapped_y"] or
+                    revalidation["capacity"] != evidence["capacity"]):
+                return {
+                    "validation_result": 0, "public_gate": public_gate,
+                    "placement_revalidation": revalidation,
+                    "validation": ("prospective full-current-visibility retail site/capacity "
+                                   "changed since planning"),
+                }
         result = build_validation(root, owner, workers[0], action["x1"], action["y1"],
                                   action["x2"], action["y2"], action["type_index"])
         result["public_gate"] = public_gate
+        if revalidation is not None:
+            result["placement_revalidation"] = revalidation
         result["validation"] = ("retail GroupData::validate_build plus necessary public "
-                                "tech/prerequisite/age/base-cost gate")
+                                "tech/prerequisite/age/base-cost gate and exact current-fog "
+                                "prospective capacity replay")
         return result
     raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
 
@@ -1020,10 +1346,19 @@ def prove_economy_action(root: str, generation: str, action: dict, output: Path)
                 worker["order"].get("own_target", {}).get("object_id") != action["target_id"]):
             raise RuntimeError("retail did not apply the GatherOrder to the own target")
     elif action["verb"] == "build":
-        if not any(obj["type_index"] == action["type_index"] and
-                   (obj["object_id"], obj["id"]["uid"]) not in before_ids
-                   for obj in after["objects"] if obj["category"] == "build"):
+        new_builds = [obj for obj in after["objects"] if obj["category"] == "build" and
+                      obj["type_index"] == action["type_index"] and
+                      (obj["object_id"], obj["id"]["uid"]) not in before_ids]
+        if not new_builds:
             raise RuntimeError("retail did not materialize the requested building")
+        worker = next(obj for obj in after["objects"]
+                      if obj["object_id"] == action["worker_ids"][0])
+        target = (worker["order"].get("own_target")
+                  if worker["order"]["kind"] == "BuildOrder" else
+                  worker["order"].get("queued_build_target", {}))
+        if not any(target.get("object_id") == build["object_id"] and
+                   target.get("uid") == build["id"]["uid"] for build in new_builds):
+            raise RuntimeError("retail did not transition the chosen worker to the new BuildOrder")
     artifact = {
         "schema": "don.retail-economy-action-proof.v1",
         "protocol": before["protocol"],
@@ -1035,6 +1370,110 @@ def prove_economy_action(root: str, generation: str, action: dict, output: Path)
         "frame_boundary": {"before": before["frame"], "after": after["frame"]},
         "pause_before_after": [before["paused"], after["paused"]],
         "bounded_settlement": settlements,
+        "before": before,
+        "after": after,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2) + "\n")
+    return artifact
+
+
+def recover_build_action_proof(root: str, generation: str, action: dict,
+                               after: dict, output: Path) -> dict:
+    """Recover a positive proof after an over-strict observer assertion, never reissue."""
+    if action.get("verb") != "build" or after.get("paused") != 1:
+        raise RuntimeError("recovery accepts only an already-applied paused build")
+    raw = guest_cmd(f'if exist "{root}\\events.ndjson" type "{root}\\events.ndjson"',
+                    check=False)
+    events = []
+    for line in raw.splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    build_rows = [(i, event) for i, event in enumerate(events)
+                  if event.get("verb") == "build" and event.get("phase") == "queued"]
+    if not build_rows:
+        raise RuntimeError("recovery found no serialized BUILD_AT")
+    build_index, queued_event = build_rows[-1]
+    command = bytes.fromhex(queued_event.get("command_hex", ""))
+    if len(command) < 25 or command[-25] != 0x19:
+        raise RuntimeError("recovery BUILD_AT lacks retail's packed 0x19 payload")
+    payload = command[-24:]
+    decoded = {
+        "x1": int.from_bytes(payload[0:4], "little", signed=True),
+        "y1": int.from_bytes(payload[4:8], "little", signed=True),
+        "x2": int.from_bytes(payload[8:12], "little", signed=True),
+        "y2": int.from_bytes(payload[12:16], "little", signed=True),
+        "type_index": int.from_bytes(payload[16:20], "little", signed=True),
+        "queue": int.from_bytes(payload[20:24], "little", signed=True),
+    }
+    expected = {key: action[key] for key in ["x1", "y1", "x2", "y2", "type_index"]}
+    expected["queue"] = action.get("queue", 2)
+    if decoded != expected:
+        raise RuntimeError(f"serialized BUILD_AT differs from planned action: {decoded}")
+    before_event = next((event for event in reversed(events[:build_index])
+                         if event.get("verb") == "observe-player" and
+                         event.get("phase") == "observed" and
+                         event.get("frame") == queued_event.get("frame")), None)
+    if not before_event:
+        raise RuntimeError("recovery found no coherent pre-command observation")
+    before = normalize_player_observation(before_event, generation, executable_base(root))
+    validation = next((event for event in reversed(events[:build_index])
+                       if event.get("verb") == "validate-build" and
+                       event.get("validation_result")), None)
+    evidence = action["placement_evidence"]
+    placement = next((event for event in reversed(events[:build_index])
+                      if event.get("verb") == "find-gather-build" and
+                      event.get("placement_ring") == evidence["ring"] and
+                      event.get("placement_x") == action["x1"] and
+                      event.get("placement_y") == action["y1"] and
+                      event.get("placement_capacity") == evidence["capacity"]), None)
+    if not validation or not placement:
+        raise RuntimeError("recovery lacks the same-frame retail validation/capacity replay")
+    terminal = next((event for event in events[build_index + 1:]
+                     if event.get("verb") == "run-frames" and
+                     event.get("phase") == "trace-complete" and
+                     event.get("frame") == after["frame"] and event.get("paused") == 1), None)
+    if not terminal or after["frame"] - before["frame"] != 30:
+        raise RuntimeError("recovery lacks the exact 30-frame paused settlement boundary")
+    before_ids = {(obj["object_id"], obj["id"]["uid"]) for obj in before["objects"]}
+    new_builds = [obj for obj in after["objects"] if obj["category"] == "build" and
+                  obj["type_index"] == action["type_index"] and
+                  (obj["object_id"], obj["id"]["uid"]) not in before_ids]
+    worker = next(obj for obj in after["objects"]
+                  if obj["object_id"] == action["worker_ids"][0])
+    target = worker["order"].get("queued_build_target", {})
+    if len(new_builds) != 1 or not (
+            target.get("object_id") == new_builds[0]["object_id"] and
+            target.get("uid") == new_builds[0]["id"]["uid"]):
+        raise RuntimeError("recovery did not prove the pending BuildOrder's exact own target")
+    artifact = {
+        "schema": "don.retail-economy-action-proof.v1",
+        "protocol": before["protocol"],
+        "controller_generation": generation,
+        "mode": "apply",
+        "action": action,
+        "retail_validation": {
+            "validation_result": validation["validation_result"],
+            "placement_revalidation": {
+                "retail_result": placement["validation_result"],
+                "capacity": placement["placement_capacity"],
+                "ring": placement["placement_ring"],
+                "site": {"x": placement["placement_x"], "y": placement["placement_y"],
+                         "snapped_x": placement["placement_snap_x"],
+                         "snapped_y": placement["placement_snap_y"]},
+            },
+        },
+        "retail_command_hex": queued_event["command_hex"],
+        "frame_boundary": {"before": before["frame"], "after": after["frame"]},
+        "pause_before_after": [before["paused"], after["paused"]],
+        "bounded_settlement": [{"verb": "run-frames", "requested": 30,
+                                "frame_before": before["frame"],
+                                "frame_after": after["frame"], "pause_after": 1}],
+        "observer_recovery": ("initial proof required BuildOrder at queue front; retail "
+                              "correctly retained a front MoveOrder for the distant site, "
+                              "then v15 proved the exact pending BuildOrder target"),
         "before": before,
         "after": after,
     }
@@ -1137,7 +1576,10 @@ def arena_marshal_policy_run(root: str, generation: str, output: Path, apply: bo
         plan = arena_marshal_extracted_plan(observation, root)
         proof_summary = None
         if apply and plan["selected_action"]:
-            proof_path = output.with_name("retail-arena-marshal-action-proof-v1.json")
+            proof_name = ("retail-arena-marshal-camp-action-proof-v1.json"
+                          if observation["protocol"] == "don.retail-player.v3" else
+                          "retail-arena-marshal-action-proof-v1.json")
+            proof_path = output.with_name(proof_name)
             proof = prove_economy_action(root, generation, plan["selected_action"], proof_path)
             proof_summary = {
                 "artifact": proof_path.name,
@@ -1473,7 +1915,7 @@ def main() -> None:
     add_generation(t)
     po = sub.add_parser("player-observe")
     po.add_argument("--output", type=Path,
-                    default=HERE.parents[1] / "schema/live/retail-player-observation-v2.json")
+                    default=HERE.parents[1] / "schema/live/retail-player-observation-v3.json")
     add_generation(po)
     pol = sub.add_parser("policy")
     pol.add_argument("--apply", action="store_true")
