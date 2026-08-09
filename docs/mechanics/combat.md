@@ -355,9 +355,15 @@ not mine.
   `combat::damage_world`. The adapter preflights typed object/type/diplomacy facts, then applies
   `buildings_razed`, the asymmetric `/10` combat-score mutation, optional `Build::plunder`, and
   the two `u16` current-frame rate counters in address order. A lethal non-building returns before
-  those reads, matching retail. `0x0064AA60…0x0064BA17` remains presentation-entangled, while the
-  special-hit containment/ejection/capture/stat arms after `0x0064BC17` remain unported; those
-  need their own bounded transactions rather than an invented catch-all world adapter.
+  those reads, matching retail. The immediately following flamethrower transaction
+  `0x0064BC17…0x0064BEB7` is also ported: entrenched units clear the exact three checksum-visible
+  mask bits before `GraphicEvents::remove_entrench`; non-air-carrying buildings synchronously eject
+  land occupants and synthesize/contain/release Citizens under the exact death-ring cap, then close
+  successful allocations in a deferred second loop. The replay adapter preflights the post-eject
+  spawn facts so missing state cannot leave a partially ejected simulation. `0x0064AA60…0x0064BA17`
+  remains presentation-entangled, while later post-hit/stat arms and the separate capture branch
+  remain unported; those need their own bounded transactions rather than an invented catch-all
+  world adapter.
 * **`attack_dist` `0x006488F0` is ported for resolved ordinary objects** in
   `systems::held_target`. The `0x00CAE5FC` read is the same measured divide-three table used
   by the movement lane: `T[coord >> 4] * 0x30 + 0x18` snaps to a 48-unit-cell centre. Retail

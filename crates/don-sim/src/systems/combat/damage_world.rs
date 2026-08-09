@@ -1,9 +1,9 @@
-//! `Object::do_damage`'s first post-`take_damage` world transaction.
+//! Address-bounded `Object::do_damage` post-`take_damage` world transactions.
 //!
 //! This is the address-bounded slice `0x0064BA18..0x0064BBFA` plus the adjacent
-//! survivor-only `Armies::emergency` gate at `0x0064BBFD..0x0064BC17`.  It deliberately
-//! stops before the special-hit, containment/ejection and capture arms beginning at
-//! `0x0064BC17`.
+//! survivor-only `Armies::emergency` gate at `0x0064BBFD..0x0064BC17`, followed by the
+//! flamethrower entrench/eject transaction at `0x0064BC17..0x0064BEB7`. Capture remains
+//! a separate later transaction.
 //!
 //! Retail reads infallible globals. A replay host resolves every fact needed by the selected
 //! branch into a [`PostDamagePlan`] before mutating leader state. Missing facts therefore
@@ -297,9 +297,340 @@ pub fn apply_post_damage<W: PlunderWorld + EmergencyWorld + ?Sized>(
     }
 }
 
+// ===========================================================================================
+// Flamethrower special hit: 0x0064BC17..0x0064BEB7
+// ===========================================================================================
+
+/// `FLAMETHROWER` in the shipped TypeIndex table.
+pub const FLAMETHROWER_TYPE: i32 = 0x83;
+/// The generic `CITIZENS` TypeIndex selected before nation/tribe specialization.
+pub const BASE_CITIZEN_TYPE: i32 = 0x32;
+/// `ObjectData::can_carry(2)` — air-domain cargo suppresses the building-ejection arm.
+pub const AIR_DOMAIN: i32 = 2;
+/// `ObjectData::num_inside(1)` — the saved land-occupant count.
+pub const LAND_DOMAIN: i32 = 1;
+
+/// Facts needed by the contiguous flamethrower special-hit branch.
+///
+/// The planner preserves all retail short circuits. A non-flamethrower needs no victim
+/// facts; a unit needs no containment/death-ring facts; an empty non-unit needs no spawn
+/// facts. Every fact required by the chosen executor path is resolved before ejection or
+/// mask mutation.
+pub trait SpecialHitFacts {
+    /// `attacker->is(FLAMETHROWER, 0)` at `0x0064BC17..0x0064BC3B`.
+    fn attacker_is_flamethrower(&self, attacker: ObjectKey) -> Option<bool>;
+    /// Target virtual `is_unit()` at `0x0064BC43..0x0064BC56`.
+    fn victim_is_unit(&self, victim: ObjectKey) -> Option<bool>;
+    /// The checksum-visible `UnitData +0x68` value, read before the entrenchment gate.
+    fn victim_unit_masks(&self, victim: ObjectKey) -> Option<u32>;
+    /// The checksum-visible `UnitData +0x6C` value, needed only for entrenched units.
+    fn victim_unit_masks2(&self, victim: ObjectKey) -> Option<u32>;
+    /// `ObjectData::can_carry(AIR_DOMAIN)`.
+    fn victim_can_carry_air(&self, victim: ObjectKey) -> Option<bool>;
+    /// `ObjectData::num_inside(LAND_DOMAIN)`, read before `eject_contents`.
+    fn victim_land_inside(&self, victim: ObjectKey) -> Option<i32>;
+    /// Victim type `x_size +0x234`; the spawn bound is signed `x_size >> 1`.
+    fn victim_type_x_size(&self, victim: ObjectKey) -> Option<i32>;
+    /// The exact current death-ring order plus the global gpiece threshold at
+    /// `[ObjectsOut+0xD48]`.
+    fn death_visual_scan(&self) -> Option<DeathVisualScan>;
+    /// Unmasked victim coordinates, reused for every synthesized Citizen.
+    fn victim_xy(&self, victim: ObjectKey) -> Option<(i32, i32)>;
+    /// `leaders[victim].tribe_can_type(types[CITIZENS])`.
+    fn victim_tribe_can_base_citizen(&self, victim_who: u8) -> Option<bool>;
+    /// `types[CITIZENS]->vt+0x68(leaders[victim].nation)` fallback.
+    fn victim_nation_citizen_type(&self, victim_who: u8) -> Option<i32>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingSpecialHitFact {
+    AttackerType,
+    VictimClass,
+    VictimUnitMasks,
+    VictimUnitMasks2,
+    VictimAirCarry,
+    VictimLandInside,
+    VictimTypeXSize,
+    DeathVisualScan,
+    VictimCoordinates,
+    VictimTribeCitizenGate,
+    VictimNationCitizenType,
+}
+
+/// Minimal death-ring projection consumed by `0x0064BD47..0x0064BD96`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeathVisual {
+    /// `DeathObjData +0x00`.
+    pub valid: i32,
+    /// `DeathObjData +0x20`.
+    pub gpiece: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeathVisualScan {
+    pub records: Vec<DeathVisual>,
+    pub gpiece_threshold: i32,
+}
+
+impl DeathVisualScan {
+    /// Count valid records whose `gpiece` is strictly greater than the global threshold.
+    /// The retail loop scans every slot in array order and uses a signed comparison.
+    pub fn qualifying_count(&self) -> i32 {
+        let mut count = 0i32;
+        for record in &self.records {
+            if record.valid != 0 && record.gpiece > self.gpiece_threshold {
+                count = count.wrapping_add(1);
+            }
+        }
+        count
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntrenchClearPlan {
+    pub victim: ObjectKey,
+    pub expected_unit_masks: u32,
+    pub expected_unit_masks2: u32,
+    pub unit_masks_after: u32,
+    pub unit_masks2_after: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CitizenBurnSpawnPlan {
+    pub victim: ObjectKey,
+    pub citizen_type: i32,
+    pub x: i32,
+    pub y: i32,
+    pub spawn_count: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildingEjectPlan {
+    pub victim: ObjectKey,
+    /// Saved before ejection. Retail only tests zero/non-zero after the call.
+    pub land_inside_before_eject: i32,
+    pub burn_spawns: Option<CitizenBurnSpawnPlan>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialHitPlan {
+    NotFlamethrower,
+    UnitNoEntrenchment,
+    ClearEntrenchment(EntrenchClearPlan),
+    NonUnitCanCarryAir,
+    EjectBuilding(BuildingEjectPlan),
+}
+
+/// Exact external operations used by the special-hit branch.
+pub trait SpecialHitWorld {
+    fn remove_entrench(&mut self, victim: ObjectKey);
+    /// `Object::eject_contents(1, -1, 0, 1)`.
+    fn eject_contents(&mut self, victim: ObjectKey);
+    /// `Objects::init_unit(victim.who, type, x, y, -1, -1, -1)`; negative means failure.
+    fn init_burning_citizen(&mut self, request: BurningCitizenRequest) -> i32;
+    /// `Unit::go_inside(victim.o, victim.who, 0)`.
+    fn burning_citizen_go_inside(&mut self, spawned_o: i32, victim: ObjectKey);
+    /// `Unit::come_out(0)`.
+    fn burning_citizen_come_out(&mut self, spawned_o: i32, spawned_who: u8);
+    /// Object virtual `close(4, -1, 0)`, issued in a second loop.
+    fn close_burning_citizen(&mut self, spawned_o: i32, spawned_who: u8);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BurningCitizenRequest {
+    pub who: u8,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialHitMutation {
+    ClearEntrenchMasks,
+    RemoveEntrenchGraphics,
+    EjectContents,
+    InitCitizen { iteration: i32, returned_o: i32 },
+    CitizenGoInside { o: i32 },
+    CitizenComeOut { o: i32 },
+    CloseCitizen { o: i32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecialHitReceipt {
+    pub mutations: Vec<SpecialHitMutation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialHitApplyError {
+    MissingUnitState,
+    StaleUnitMasks {
+        expected: (u32, u32),
+        actual: (u32, u32),
+    },
+}
+
+/// Pure, fail-closed recovery of `0x0064BC17..0x0064BEB7`.
+pub fn plan_special_hit<F: SpecialHitFacts + ?Sized>(
+    facts: &F,
+    attacker: ObjectKey,
+    victim: ObjectKey,
+) -> Result<SpecialHitPlan, MissingSpecialHitFact> {
+    if !facts
+        .attacker_is_flamethrower(attacker)
+        .ok_or(MissingSpecialHitFact::AttackerType)?
+    {
+        return Ok(SpecialHitPlan::NotFlamethrower);
+    }
+
+    if facts
+        .victim_is_unit(victim)
+        .ok_or(MissingSpecialHitFact::VictimClass)?
+    {
+        let unit_masks = facts
+            .victim_unit_masks(victim)
+            .ok_or(MissingSpecialHitFact::VictimUnitMasks)?;
+        if unit_masks & 0x0200_0000 == 0 {
+            return Ok(SpecialHitPlan::UnitNoEntrenchment);
+        }
+        let unit_masks2 = facts
+            .victim_unit_masks2(victim)
+            .ok_or(MissingSpecialHitFact::VictimUnitMasks2)?;
+        return Ok(SpecialHitPlan::ClearEntrenchment(EntrenchClearPlan {
+            victim,
+            expected_unit_masks: unit_masks,
+            expected_unit_masks2: unit_masks2,
+            unit_masks_after: unit_masks & !0x0200_0000,
+            unit_masks2_after: unit_masks2 & !0x0000_1000 & !0x0002_0000,
+        }));
+    }
+
+    if facts
+        .victim_can_carry_air(victim)
+        .ok_or(MissingSpecialHitFact::VictimAirCarry)?
+    {
+        return Ok(SpecialHitPlan::NonUnitCanCarryAir);
+    }
+
+    let land_inside = facts
+        .victim_land_inside(victim)
+        .ok_or(MissingSpecialHitFact::VictimLandInside)?;
+    if land_inside == 0 {
+        return Ok(SpecialHitPlan::EjectBuilding(BuildingEjectPlan {
+            victim,
+            land_inside_before_eject: 0,
+            burn_spawns: None,
+        }));
+    }
+
+    let x_size = facts
+        .victim_type_x_size(victim)
+        .ok_or(MissingSpecialHitFact::VictimTypeXSize)?;
+    let spawn_count = x_size >> 1;
+    let death_scan = facts
+        .death_visual_scan()
+        .ok_or(MissingSpecialHitFact::DeathVisualScan)?;
+    if death_scan.qualifying_count() >= spawn_count {
+        return Ok(SpecialHitPlan::EjectBuilding(BuildingEjectPlan {
+            victim,
+            land_inside_before_eject: land_inside,
+            burn_spawns: None,
+        }));
+    }
+
+    let (x, y) = facts
+        .victim_xy(victim)
+        .ok_or(MissingSpecialHitFact::VictimCoordinates)?;
+    let citizen_type = if facts
+        .victim_tribe_can_base_citizen(victim.who)
+        .ok_or(MissingSpecialHitFact::VictimTribeCitizenGate)?
+    {
+        BASE_CITIZEN_TYPE
+    } else {
+        facts
+            .victim_nation_citizen_type(victim.who)
+            .ok_or(MissingSpecialHitFact::VictimNationCitizenType)?
+    };
+
+    Ok(SpecialHitPlan::EjectBuilding(BuildingEjectPlan {
+        victim,
+        land_inside_before_eject: land_inside,
+        burn_spawns: Some(CitizenBurnSpawnPlan {
+            victim,
+            citizen_type,
+            x,
+            y,
+            spawn_count,
+        }),
+    }))
+}
+
+/// Execute the special-hit transaction with exact mutation and loop order.
+///
+/// Successful allocations are contained and released immediately, but all successful slots
+/// are closed only after the entire allocation loop finishes. Failed allocations still
+/// consume an iteration and never appear in the close loop.
+pub fn apply_special_hit<W: SpecialHitWorld + ?Sized>(
+    plan: SpecialHitPlan,
+    victim_unit: Option<&mut super::UnitCombatState>,
+    world: &mut W,
+) -> Result<SpecialHitReceipt, SpecialHitApplyError> {
+    let mut mutations = Vec::new();
+    match plan {
+        SpecialHitPlan::NotFlamethrower
+        | SpecialHitPlan::UnitNoEntrenchment
+        | SpecialHitPlan::NonUnitCanCarryAir => {}
+        SpecialHitPlan::ClearEntrenchment(clear) => {
+            let unit = victim_unit.ok_or(SpecialHitApplyError::MissingUnitState)?;
+            let actual = (unit.unit_masks, unit.unit_masks2);
+            let expected = (clear.expected_unit_masks, clear.expected_unit_masks2);
+            if actual != expected {
+                return Err(SpecialHitApplyError::StaleUnitMasks { expected, actual });
+            }
+            unit.unit_masks = clear.unit_masks_after;
+            unit.unit_masks2 = clear.unit_masks2_after;
+            mutations.push(SpecialHitMutation::ClearEntrenchMasks);
+            world.remove_entrench(clear.victim);
+            mutations.push(SpecialHitMutation::RemoveEntrenchGraphics);
+        }
+        SpecialHitPlan::EjectBuilding(eject) => {
+            world.eject_contents(eject.victim);
+            mutations.push(SpecialHitMutation::EjectContents);
+            if let Some(spawns) = eject.burn_spawns {
+                let mut successful = Vec::new();
+                for iteration in 0..spawns.spawn_count {
+                    let returned_o = world.init_burning_citizen(BurningCitizenRequest {
+                        who: spawns.victim.who,
+                        type_index: spawns.citizen_type,
+                        x: spawns.x,
+                        y: spawns.y,
+                    });
+                    mutations.push(SpecialHitMutation::InitCitizen {
+                        iteration,
+                        returned_o,
+                    });
+                    if returned_o < 0 {
+                        continue;
+                    }
+                    successful.push(returned_o);
+                    world.burning_citizen_go_inside(returned_o, spawns.victim);
+                    mutations.push(SpecialHitMutation::CitizenGoInside { o: returned_o });
+                    world.burning_citizen_come_out(returned_o, spawns.victim.who);
+                    mutations.push(SpecialHitMutation::CitizenComeOut { o: returned_o });
+                }
+                for o in successful {
+                    world.close_burning_citizen(o, spawns.victim.who);
+                    mutations.push(SpecialHitMutation::CloseCitizen { o });
+                }
+            }
+        }
+    }
+    Ok(SpecialHitReceipt { mutations })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[derive(Clone, Debug)]
     struct Facts {
@@ -630,5 +961,459 @@ mod tests {
         assert_eq!(leaders[1].kills_current_frame, 2);
         assert_eq!(leaders[1].deaths_current_frame, 2);
         assert!(world.plunders.is_empty());
+    }
+
+    #[derive(Debug)]
+    struct SpecialFacts {
+        flamethrower: Option<bool>,
+        unit: Option<bool>,
+        unit_masks: Option<u32>,
+        unit_masks2: Option<u32>,
+        can_carry_air: Option<bool>,
+        land_inside: Option<i32>,
+        x_size: Option<i32>,
+        death_scan: Option<DeathVisualScan>,
+        xy: Option<(i32, i32)>,
+        tribe_citizen: Option<bool>,
+        nation_citizen: Option<i32>,
+        calls: RefCell<Vec<&'static str>>,
+    }
+
+    impl Default for SpecialFacts {
+        fn default() -> Self {
+            Self {
+                flamethrower: Some(true),
+                unit: Some(false),
+                unit_masks: Some(0),
+                unit_masks2: Some(0),
+                can_carry_air: Some(false),
+                land_inside: Some(1),
+                x_size: Some(6),
+                death_scan: Some(DeathVisualScan {
+                    records: Vec::new(),
+                    gpiece_threshold: 40,
+                }),
+                xy: Some((123, -456)),
+                tribe_citizen: Some(true),
+                nation_citizen: Some(777),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl SpecialHitFacts for SpecialFacts {
+        fn attacker_is_flamethrower(&self, _: ObjectKey) -> Option<bool> {
+            self.calls.borrow_mut().push("attacker_type");
+            self.flamethrower
+        }
+        fn victim_is_unit(&self, _: ObjectKey) -> Option<bool> {
+            self.calls.borrow_mut().push("victim_is_unit");
+            self.unit
+        }
+        fn victim_unit_masks(&self, _: ObjectKey) -> Option<u32> {
+            self.calls.borrow_mut().push("unit_masks");
+            self.unit_masks
+        }
+        fn victim_unit_masks2(&self, _: ObjectKey) -> Option<u32> {
+            self.calls.borrow_mut().push("unit_masks2");
+            self.unit_masks2
+        }
+        fn victim_can_carry_air(&self, _: ObjectKey) -> Option<bool> {
+            self.calls.borrow_mut().push("can_carry_air");
+            self.can_carry_air
+        }
+        fn victim_land_inside(&self, _: ObjectKey) -> Option<i32> {
+            self.calls.borrow_mut().push("land_inside");
+            self.land_inside
+        }
+        fn victim_type_x_size(&self, _: ObjectKey) -> Option<i32> {
+            self.calls.borrow_mut().push("x_size");
+            self.x_size
+        }
+        fn death_visual_scan(&self) -> Option<DeathVisualScan> {
+            self.calls.borrow_mut().push("death_scan");
+            self.death_scan.clone()
+        }
+        fn victim_xy(&self, _: ObjectKey) -> Option<(i32, i32)> {
+            self.calls.borrow_mut().push("xy");
+            self.xy
+        }
+        fn victim_tribe_can_base_citizen(&self, _: u8) -> Option<bool> {
+            self.calls.borrow_mut().push("tribe_citizen");
+            self.tribe_citizen
+        }
+        fn victim_nation_citizen_type(&self, _: u8) -> Option<i32> {
+            self.calls.borrow_mut().push("nation_citizen");
+            self.nation_citizen
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum SpecialEvent {
+        RemoveEntrench(ObjectKey),
+        Eject(ObjectKey),
+        Init(BurningCitizenRequest, i32),
+        GoInside(i32, ObjectKey),
+        ComeOut(i32, u8),
+        Close(i32, u8),
+    }
+
+    #[derive(Default)]
+    struct SpecialWorld {
+        events: Vec<SpecialEvent>,
+        init_results: Vec<i32>,
+        next_init: usize,
+    }
+
+    impl SpecialHitWorld for SpecialWorld {
+        fn remove_entrench(&mut self, victim: ObjectKey) {
+            self.events.push(SpecialEvent::RemoveEntrench(victim));
+        }
+        fn eject_contents(&mut self, victim: ObjectKey) {
+            self.events.push(SpecialEvent::Eject(victim));
+        }
+        fn init_burning_citizen(&mut self, request: BurningCitizenRequest) -> i32 {
+            let result = self.init_results[self.next_init];
+            self.next_init += 1;
+            self.events.push(SpecialEvent::Init(request, result));
+            result
+        }
+        fn burning_citizen_go_inside(&mut self, spawned_o: i32, victim: ObjectKey) {
+            self.events.push(SpecialEvent::GoInside(spawned_o, victim));
+        }
+        fn burning_citizen_come_out(&mut self, spawned_o: i32, spawned_who: u8) {
+            self.events
+                .push(SpecialEvent::ComeOut(spawned_o, spawned_who));
+        }
+        fn close_burning_citizen(&mut self, spawned_o: i32, spawned_who: u8) {
+            self.events
+                .push(SpecialEvent::Close(spawned_o, spawned_who));
+        }
+    }
+
+    #[test]
+    fn special_hit_short_circuits_in_retail_fact_order() {
+        let facts = SpecialFacts {
+            flamethrower: Some(false),
+            unit: None,
+            ..SpecialFacts::default()
+        };
+        assert_eq!(
+            plan_special_hit(&facts, ATTACKER, VICTIM),
+            Ok(SpecialHitPlan::NotFlamethrower)
+        );
+        assert_eq!(*facts.calls.borrow(), vec!["attacker_type"]);
+
+        let facts = SpecialFacts {
+            unit: Some(true),
+            unit_masks: Some(0x10),
+            unit_masks2: None,
+            ..SpecialFacts::default()
+        };
+        assert_eq!(
+            plan_special_hit(&facts, ATTACKER, VICTIM),
+            Ok(SpecialHitPlan::UnitNoEntrenchment)
+        );
+        assert_eq!(
+            *facts.calls.borrow(),
+            vec!["attacker_type", "victim_is_unit", "unit_masks"]
+        );
+
+        let facts = SpecialFacts {
+            can_carry_air: Some(true),
+            land_inside: None,
+            ..SpecialFacts::default()
+        };
+        assert_eq!(
+            plan_special_hit(&facts, ATTACKER, VICTIM),
+            Ok(SpecialHitPlan::NonUnitCanCarryAir)
+        );
+        assert_eq!(
+            *facts.calls.borrow(),
+            vec!["attacker_type", "victim_is_unit", "can_carry_air"]
+        );
+    }
+
+    #[test]
+    fn entrench_clear_mutates_only_three_checksum_bits_then_removes_graphics() {
+        let before_masks = 0xA200_0005;
+        let before_masks2 = 0xF00A_1F0F;
+        let facts = SpecialFacts {
+            unit: Some(true),
+            unit_masks: Some(before_masks),
+            unit_masks2: Some(before_masks2),
+            ..SpecialFacts::default()
+        };
+        let SpecialHitPlan::ClearEntrenchment(plan) =
+            plan_special_hit(&facts, ATTACKER, VICTIM).unwrap()
+        else {
+            panic!("entrenched-unit plan");
+        };
+        assert_eq!(plan.unit_masks_after, before_masks & !0x0200_0000);
+        assert_eq!(
+            plan.unit_masks2_after,
+            before_masks2 & !0x0000_1000 & !0x0002_0000
+        );
+
+        let mut unit = super::super::UnitCombatState {
+            unit_masks: before_masks,
+            unit_masks2: before_masks2,
+            ..super::super::UnitCombatState::default()
+        };
+        let mut checksum_before = [0u8; super::super::UNIT_WALK_LEN];
+        unit.patch_unit_range(&mut checksum_before);
+        let mut world = SpecialWorld::default();
+        let receipt = apply_special_hit(
+            SpecialHitPlan::ClearEntrenchment(plan),
+            Some(&mut unit),
+            &mut world,
+        )
+        .unwrap();
+        let mut checksum_after = [0u8; super::super::UNIT_WALK_LEN];
+        unit.patch_unit_range(&mut checksum_after);
+
+        assert_eq!(
+            receipt.mutations,
+            vec![
+                SpecialHitMutation::ClearEntrenchMasks,
+                SpecialHitMutation::RemoveEntrenchGraphics,
+            ]
+        );
+        assert_eq!(world.events, vec![SpecialEvent::RemoveEntrench(VICTIM)]);
+        let mask_i = 0x68 - super::super::UNIT_WALK_BEGIN;
+        let mask2_i = 0x6C - super::super::UNIT_WALK_BEGIN;
+        for i in 0..super::super::UNIT_WALK_LEN {
+            if !(mask_i..mask_i + 4).contains(&i) && !(mask2_i..mask2_i + 4).contains(&i) {
+                assert_eq!(checksum_after[i], checksum_before[i], "walk byte {i:#x}");
+            }
+        }
+        assert_eq!(
+            &checksum_after[mask_i..mask_i + 4],
+            &plan.unit_masks_after.to_le_bytes()
+        );
+        assert_eq!(
+            &checksum_after[mask2_i..mask2_i + 4],
+            &plan.unit_masks2_after.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn entrench_apply_rejects_missing_or_stale_state_before_world_mutation() {
+        let plan = EntrenchClearPlan {
+            victim: VICTIM,
+            expected_unit_masks: 0x0200_0001,
+            expected_unit_masks2: 0x0002_1001,
+            unit_masks_after: 1,
+            unit_masks2_after: 1,
+        };
+        let mut world = SpecialWorld::default();
+        assert_eq!(
+            apply_special_hit(SpecialHitPlan::ClearEntrenchment(plan), None, &mut world),
+            Err(SpecialHitApplyError::MissingUnitState)
+        );
+        let mut unit = super::super::UnitCombatState {
+            unit_masks: 0x0200_0001,
+            unit_masks2: 0,
+            ..super::super::UnitCombatState::default()
+        };
+        assert_eq!(
+            apply_special_hit(
+                SpecialHitPlan::ClearEntrenchment(plan),
+                Some(&mut unit),
+                &mut world
+            ),
+            Err(SpecialHitApplyError::StaleUnitMasks {
+                expected: (0x0200_0001, 0x0002_1001),
+                actual: (0x0200_0001, 0),
+            })
+        );
+        assert!(world.events.is_empty());
+        assert_eq!(unit.unit_masks, 0x0200_0001);
+        assert_eq!(unit.unit_masks2, 0);
+    }
+
+    #[test]
+    fn empty_building_still_ejects_and_needs_no_spawn_facts() {
+        let facts = SpecialFacts {
+            land_inside: Some(0),
+            x_size: None,
+            death_scan: None,
+            xy: None,
+            tribe_citizen: None,
+            nation_citizen: None,
+            ..SpecialFacts::default()
+        };
+        let plan = plan_special_hit(&facts, ATTACKER, VICTIM).unwrap();
+        assert_eq!(
+            plan,
+            SpecialHitPlan::EjectBuilding(BuildingEjectPlan {
+                victim: VICTIM,
+                land_inside_before_eject: 0,
+                burn_spawns: None,
+            })
+        );
+        assert_eq!(
+            *facts.calls.borrow(),
+            vec![
+                "attacker_type",
+                "victim_is_unit",
+                "can_carry_air",
+                "land_inside"
+            ]
+        );
+        let mut world = SpecialWorld::default();
+        let receipt = apply_special_hit(plan, None, &mut world).unwrap();
+        assert_eq!(world.events, vec![SpecialEvent::Eject(VICTIM)]);
+        assert_eq!(receipt.mutations, vec![SpecialHitMutation::EjectContents]);
+    }
+
+    #[test]
+    fn death_ring_uses_valid_and_strict_greater_and_suppresses_at_spawn_bound() {
+        let scan = DeathVisualScan {
+            records: vec![
+                DeathVisual {
+                    valid: 0,
+                    gpiece: 99,
+                },
+                DeathVisual {
+                    valid: 1,
+                    gpiece: 40,
+                },
+                DeathVisual {
+                    valid: -1,
+                    gpiece: 41,
+                },
+                DeathVisual {
+                    valid: 2,
+                    gpiece: 42,
+                },
+            ],
+            gpiece_threshold: 40,
+        };
+        assert_eq!(scan.qualifying_count(), 2);
+        let facts = SpecialFacts {
+            x_size: Some(5),
+            death_scan: Some(scan),
+            xy: None,
+            tribe_citizen: None,
+            ..SpecialFacts::default()
+        };
+        let SpecialHitPlan::EjectBuilding(plan) =
+            plan_special_hit(&facts, ATTACKER, VICTIM).unwrap()
+        else {
+            panic!("building eject plan");
+        };
+        assert_eq!(plan.burn_spawns, None, "5 >> 1 is exactly two");
+        assert_eq!(
+            *facts.calls.borrow(),
+            vec![
+                "attacker_type",
+                "victim_is_unit",
+                "can_carry_air",
+                "land_inside",
+                "x_size",
+                "death_scan"
+            ]
+        );
+    }
+
+    #[test]
+    fn citizen_type_gate_and_signed_odd_spawn_bound_are_exact() {
+        let base = SpecialFacts {
+            x_size: Some(7),
+            tribe_citizen: Some(true),
+            nation_citizen: None,
+            ..SpecialFacts::default()
+        };
+        let SpecialHitPlan::EjectBuilding(base_plan) =
+            plan_special_hit(&base, ATTACKER, VICTIM).unwrap()
+        else {
+            panic!("building eject plan");
+        };
+        let spawn = base_plan.burn_spawns.unwrap();
+        assert_eq!(spawn.spawn_count, 3);
+        assert_eq!(spawn.citizen_type, BASE_CITIZEN_TYPE);
+        assert!(!base.calls.borrow().contains(&"nation_citizen"));
+
+        let fallback = SpecialFacts {
+            tribe_citizen: Some(false),
+            nation_citizen: Some(912),
+            ..SpecialFacts::default()
+        };
+        let SpecialHitPlan::EjectBuilding(fallback_plan) =
+            plan_special_hit(&fallback, ATTACKER, VICTIM).unwrap()
+        else {
+            panic!("building eject plan");
+        };
+        assert_eq!(fallback_plan.burn_spawns.unwrap().citizen_type, 912);
+        assert_eq!(
+            &fallback.calls.borrow()[7..],
+            &["tribe_citizen", "nation_citizen"]
+        );
+    }
+
+    #[test]
+    fn citizen_lifecycle_defers_successful_closes_until_all_allocations_finish() {
+        let plan = SpecialHitPlan::EjectBuilding(BuildingEjectPlan {
+            victim: VICTIM,
+            land_inside_before_eject: 9,
+            burn_spawns: Some(CitizenBurnSpawnPlan {
+                victim: VICTIM,
+                citizen_type: 912,
+                x: 12,
+                y: -34,
+                spawn_count: 3,
+            }),
+        });
+        let request = BurningCitizenRequest {
+            who: VICTIM.who,
+            type_index: 912,
+            x: 12,
+            y: -34,
+        };
+        let mut world = SpecialWorld {
+            init_results: vec![12, -1, 7],
+            ..SpecialWorld::default()
+        };
+        let receipt = apply_special_hit(plan, None, &mut world).unwrap();
+        assert_eq!(
+            world.events,
+            vec![
+                SpecialEvent::Eject(VICTIM),
+                SpecialEvent::Init(request, 12),
+                SpecialEvent::GoInside(12, VICTIM),
+                SpecialEvent::ComeOut(12, VICTIM.who),
+                SpecialEvent::Init(request, -1),
+                SpecialEvent::Init(request, 7),
+                SpecialEvent::GoInside(7, VICTIM),
+                SpecialEvent::ComeOut(7, VICTIM.who),
+                SpecialEvent::Close(12, VICTIM.who),
+                SpecialEvent::Close(7, VICTIM.who),
+            ]
+        );
+        assert_eq!(
+            receipt.mutations,
+            vec![
+                SpecialHitMutation::EjectContents,
+                SpecialHitMutation::InitCitizen {
+                    iteration: 0,
+                    returned_o: 12,
+                },
+                SpecialHitMutation::CitizenGoInside { o: 12 },
+                SpecialHitMutation::CitizenComeOut { o: 12 },
+                SpecialHitMutation::InitCitizen {
+                    iteration: 1,
+                    returned_o: -1,
+                },
+                SpecialHitMutation::InitCitizen {
+                    iteration: 2,
+                    returned_o: 7,
+                },
+                SpecialHitMutation::CitizenGoInside { o: 7 },
+                SpecialHitMutation::CitizenComeOut { o: 7 },
+                SpecialHitMutation::CloseCitizen { o: 12 },
+                SpecialHitMutation::CloseCitizen { o: 7 },
+            ]
+        );
     }
 }
