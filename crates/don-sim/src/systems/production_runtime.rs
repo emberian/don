@@ -14,6 +14,7 @@ use crate::systems::tech_cities::{
     TechOneShotMutationReceipt, TechState, NUM_RES, TECH_AUTO_UNLOCK_BUILD_FLAG,
     TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK, TECH_AUTO_UNLOCK_UNIT_FLAG, TECH_RESOURCE_SELL_FLOOR,
 };
+use crate::systems::tech_race::{self, TechRacePresentation, TechRaceReceipt};
 use crate::tick::Sim;
 use crate::world::OBJ_FLAG_ACTIVE;
 
@@ -273,6 +274,8 @@ pub struct LiveProductionRuntime {
     /// City-owned inputs and receipts required by captured building completion, keyed by
     /// the live `Sim::builds` row.
     pub captured_buildings: Vec<Option<LiveCapturedBuildingState>>,
+    /// Typed, presentation-only opponent progress notices emitted by Tech Race research.
+    pub tech_race_presentations: Vec<TechRacePresentation>,
 }
 
 impl Default for LiveProductionRuntime {
@@ -293,6 +296,7 @@ impl Default for LiveProductionRuntime {
             university_gather_checks: Vec::new(),
             carrier_payloads: Vec::new(),
             captured_buildings: Vec::new(),
+            tech_race_presentations: Vec::new(),
         }
     }
 }
@@ -888,6 +892,11 @@ struct SimFinishedHost<'a> {
     finishing_type: i32,
     live_tech: TechState,
     error: Option<LiveProductionError>,
+    /// Result produced at the exact pre-auto-unlock Tech Race position inside
+    /// `Leader::gain_tech`.
+    tech_race_receipt: Option<TechRaceReceipt>,
+    /// Concrete queue-cleanup request captured while the active producer row is moved out.
+    terminal_cleanup_owners: u8,
 }
 
 impl SimFinishedHost<'_> {
@@ -1629,6 +1638,32 @@ impl TechOneShotHost for SimFinishedHost<'_> {
                 let bucket = &mut self.runtime.leaders[owner].resources[resource];
                 *bucket = (*bucket).min(TECH_RESOURCE_SELL_FLOOR);
             }
+            TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(type_index)
+                if self
+                    .type_facts(type_index)
+                    .is_some_and(|facts| facts.tech_effects == LiveTechEffects::GenericOnly) =>
+            {
+                let receipt = tech_race::process_tech_race_gain(
+                    state,
+                    type_index,
+                    self.sim.vic_match.options.ending_technology,
+                    owner,
+                    self.runtime.local_player as usize,
+                    // `Build::finished` pushes literal 1 for both tail arguments before
+                    // calling `Leader::gain_tech` at `0x0062852C..0x00628548`.
+                    true,
+                    &mut self.sim.vic_leaders,
+                    &mut self.sim.vic_match,
+                );
+                if let Some(presentation) = receipt.presentation {
+                    self.runtime.tech_race_presentations.push(presentation);
+                }
+                if receipt.resolved {
+                    self.terminal_cleanup_owners |=
+                        self.sim.vic_leaders.take_terminal_queue_cleanup();
+                }
+                self.tech_race_receipt = Some(receipt);
+            }
             TechOneShotMutation::CompleteGainPreBitEffects(type_index)
             | TechOneShotMutation::CompleteGainAfterBitEffects(type_index)
             | TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(type_index)
@@ -1856,11 +1891,20 @@ pub fn process_sim_build_queue(
         producer_type,
         producer_snapshot: snapshot,
         error: None,
+        terminal_resolution: false,
+        terminal_cleanup_owners: 0,
     };
     let queue_result = execute_routed_queue_slots(&mut build, 0, ai_speed, &rules, &mut host);
     let callback_error = host.error;
+    let terminal_cleanup_owners = host.terminal_cleanup_owners;
     build.gather_down = host.producer_snapshot.gather_down;
     host.sim.builds[row] = build;
+    for owner in 0..crate::systems::victory_score::NUM_LEADERS {
+        if terminal_cleanup_owners & (1u8 << owner) != 0 {
+            host.runtime
+                .clean_terminal_build_queues(&mut host.sim.builds, owner);
+        }
+    }
     let queue = queue_result?;
     if let Some(error) = callback_error {
         return Err(error);
@@ -1879,6 +1923,12 @@ struct SimQueueHost<'a> {
     producer_type: i32,
     producer_snapshot: BuildData,
     error: Option<LiveProductionError>,
+    /// A successful synchronous Tech Race resolution stops any saved outer parallel-slot
+    /// completion from publishing after the terminal transaction.
+    terminal_resolution: bool,
+    /// Mask captured from `Leaders::victory` while the current producer is moved out of
+    /// `Sim::builds`; applied after that row is restored and before step 14 continues.
+    terminal_cleanup_owners: u8,
 }
 
 impl QueueCompletionHost for SimQueueHost<'_> {
@@ -1909,6 +1959,9 @@ impl QueueCompletionHost for SimQueueHost<'_> {
     }
 
     fn finished(&mut self, type_index: i32, _queue: &BuildQueue, _slot: usize) -> bool {
+        if self.terminal_resolution {
+            return false;
+        }
         let owner = self.producer_snapshot.who as usize;
         let mut tech = std::mem::take(&mut self.runtime.leaders[owner].tech);
         let mut host = SimFinishedHost {
@@ -1926,16 +1979,24 @@ impl QueueCompletionHost for SimQueueHost<'_> {
             finishing_type: type_index,
             live_tech: tech.clone(),
             error: None,
+            tech_race_receipt: None,
+            terminal_cleanup_owners: 0,
         };
         let result =
             execute_finished_effect(&mut tech, &self.producer_snapshot, type_index, &mut host);
         let nested_error = host.error;
+        let terminal_resolution = host
+            .tech_race_receipt
+            .is_some_and(|receipt| receipt.resolved);
+        let terminal_cleanup_owners = host.terminal_cleanup_owners;
         self.producer_snapshot.gather_down = host.producer_gather_down;
         host.runtime.leaders[owner].tech = tech;
         if let Some(error) = nested_error {
             self.error = Some(error);
             return false;
         }
+        self.terminal_resolution |= terminal_resolution;
+        self.terminal_cleanup_owners |= terminal_cleanup_owners;
         match result {
             Ok(effect) => {
                 if !effect.allows_unqueue() {
@@ -2112,6 +2173,122 @@ mod tests {
         assert_eq!(runtime.leaders[0].tech.counters.ages, 1);
         assert_eq!(runtime.leaders[0].tech.counters.discovered, 0);
         assert_eq!(runtime.leaders[0].age_stamp[0], 321);
+    }
+
+    #[test]
+    fn tech_race_completion_resolves_teams_and_cleans_all_build_queues_in_step14() {
+        let outer_research = 600;
+        let winning_age = crate::systems::tech_cities::ty::CLASSICAL_AGE;
+        let allied_queue_type = 601;
+        let enemy_queue_type = 602;
+        let (mut sim, mut runtime, row) = harness(&[outer_research, winning_age]);
+        sim.activate(1);
+        sim.activate(2);
+        sim.vic_leaders
+            .set_diplo(0, 1, crate::systems::victory_score::Diplo::Ally);
+        sim.vic_leaders
+            .set_diplo(1, 0, crate::systems::victory_score::Diplo::Ally);
+        sim.vic_match.options.victory = crate::systems::victory_score::Victory::TechRace as u8;
+        sim.vic_match.options.ending_technology = 1;
+        runtime.install_type(LiveProductionType::research(outer_research, 1));
+        runtime.install_type(LiveProductionType::research(winning_age, 1));
+        runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .parallel_slots = 2;
+        sim.builds[row].build_masks |= mask::REPEAT_QUEUE;
+
+        let mut allied_build = queue_build(&[allied_queue_type]);
+        allied_build.build_masks |= mask::REPEAT_QUEUE;
+        let allied_row = sim.spawn_build(1, allied_build);
+        let mut enemy_build = queue_build(&[enemy_queue_type]);
+        enemy_build.build_masks |= mask::REPEAT_QUEUE;
+        let enemy_row = sim.spawn_build(2, enemy_build);
+        runtime.leaders[1].queued_counts[allied_queue_type as usize] = 1;
+        runtime.leaders[2].queued_counts[enemy_queue_type as usize] = 1;
+
+        let receipt = process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(receipt.queue.slots.len(), 2);
+        assert_eq!(receipt.queue.slots[0].slot, 1);
+        assert!(matches!(
+            receipt.queue.slots[0].transaction,
+            QueueTransaction::Completed {
+                type_index,
+                repeat_attempted: false,
+                ..
+            } if type_index == winning_age
+        ));
+        assert_eq!(receipt.queue.slots[1].slot, 0);
+        assert!(matches!(
+            receipt.queue.slots[1].transaction,
+            QueueTransaction::FinishBlocked { type_index: 600, .. }
+        ));
+        assert!(runtime.leaders[0].tech.tech.get(winning_age));
+        assert!(!runtime.leaders[0].tech.tech.get(outer_research));
+        assert!(sim.vic_leaders.slots[0].flag(crate::systems::victory_score::leader_flag::WON));
+        assert_eq!(
+            sim.vic_leaders.slots[0].victory_type,
+            crate::systems::victory_score::VictoryType::ByTechRace as i32
+        );
+        assert!(sim.vic_leaders.slots[1].flag(crate::systems::victory_score::leader_flag::WON));
+        assert_eq!(
+            sim.vic_leaders.slots[1].victory_type,
+            crate::systems::victory_score::VictoryType::ByTechRace as i32
+        );
+        assert!(sim.vic_leaders.slots[2].flag(crate::systems::victory_score::leader_flag::DEFEATED));
+        assert!(sim
+            .vic_match
+            .sem(crate::systems::victory_score::game_sem::GAME_OVER));
+        assert!(sim
+            .vic_match
+            .sem(crate::systems::victory_score::game_sem::VICTORY_RESOLVED));
+        for build_row in [row, allied_row, enemy_row] {
+            assert_eq!(sim.builds[build_row].queue.queued, 0);
+            assert_eq!(sim.builds[build_row].build_masks & mask::REPEAT_QUEUE, 0);
+            assert!(sim.builds[build_row]
+                .queue
+                .entries
+                .iter()
+                .all(|entry| entry.elapsed == 0));
+        }
+        for (owner, type_index) in [
+            (0, outer_research),
+            (0, winning_age),
+            (1, allied_queue_type),
+            (2, enemy_queue_type),
+        ] {
+            assert_eq!(runtime.leaders[owner].queued_counts[type_index as usize], 0);
+        }
+        assert_eq!(sim.vic_leaders.take_terminal_queue_cleanup(), 0);
+    }
+
+    #[test]
+    fn all_epochs_live_completion_preserves_typed_opponent_notice() {
+        let final_epoch = crate::systems::tech_cities::ty::END_EPOCHTYPES - 1;
+        let (mut sim, mut runtime, row) = harness(&[final_epoch]);
+        sim.activate(1);
+        sim.vic_match.options.victory = crate::systems::victory_score::Victory::TechRace as u8;
+        sim.vic_match
+            .set_sem(tech_race::TECH_RACE_ALL_EPOCHS_SEMAPHORE);
+        runtime.local_player = 1;
+        runtime.leaders[0].tech.counters.epochs = tech_race::ALL_EPOCHS_GOAL - 1;
+        for held in crate::systems::tech_cities::ty::BASE_EPOCHTYPES..final_epoch {
+            runtime.leaders[0].tech.tech.set(held, true);
+        }
+        runtime.install_type(LiveProductionType::research(final_epoch, 1));
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(
+            runtime.tech_race_presentations,
+            vec![TechRacePresentation::OpponentEpochGained {
+                who: 0,
+                type_index: final_epoch,
+            }]
+        );
+        assert!(sim.vic_leaders.slots[0].flag(crate::systems::victory_score::leader_flag::WON));
+        assert_eq!(sim.vic_leaders.take_terminal_queue_cleanup(), 0);
     }
 
     #[test]

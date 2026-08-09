@@ -522,6 +522,8 @@ pub struct MatchOptions {
     pub game_rules: u8,
     /// `GameInfo+0x21` (`Game+0x2D`). Indexes `<CATEGORIES id="startingresources">`.
     pub starting_resources: u8,
+    /// `GameInfo+0x2A` (`Game+0x36`). Final age count used by the ordinary Tech Race arm.
+    pub ending_technology: u8,
     /// `GameInfo+0x2B` (`Game+0x37`). [`Elimination`].
     pub elimination: u8,
     /// `GameInfo+0x2C` (`Game+0x38`). [`Victory`].

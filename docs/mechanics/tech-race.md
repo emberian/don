@@ -37,24 +37,45 @@ The port returns `TechRacePresentation::OpponentEpochGained { who, type_index }`
 not construct strings or require a UI, and suppressing the presentation cannot suppress
 the victory mutation.
 
-## Frozen live seam
+## Live step-14 integration
 
-The executor is exported but is not yet called by `production_runtime`. The exact future
-adapter belongs at successful `Leader::gain_tech` completion, after the live `TechState`
-counter mutation and at the retail position represented by `0x006DE847`. It must supply:
+`production_runtime::SimFinishedHost::apply_tech_mutation` invokes the executor on
+`CompleteGainBeforeAutoUnlockEffects`. That callback is after the live `TechState` counter,
+bit, special-effect and resource cohorts but before the auto-unlock sweeps, matching Tech
+Race's retail position at `0x006DE847` before the first generic auto-unlock at
+`0x006DEBBE`. `Build::finished` supplies literal `1` for both integer tail arguments at
+`0x0062852C..0x00628548`; the first of those is the announcement gate read at
+`Leader::gain_tech`'s rebased `[ebp+0x68]`, and the adapter preserves that value.
 
-* `GameInfo::ending_technology` (`GameInfo+0x2A`, `Game+0x36`);
-* the gaining owner and gained `TypeIndex`;
-* `Game::my_player` and the final `gain_tech` announcement argument;
-* the shared live `Leaders` / `Match` terminal state.
+The call reads `MatchOptions::ending_technology`, the gained owner/type, the production
+runtime's local player, and the shared live `Leaders` / `Match`. Typed opponent notices are
+retained in `LiveProductionRuntime::tech_race_presentations`.
 
-Production completion currently runs during object processing (step 14), after the tick's
-step-11 and step-12 terminal-cleanup drains. Therefore the adapter must drain and apply the
-new owner cleanup mask to concrete Build rows in the same step-14 completion transaction;
-waiting for the existing next-frame drain would leave terminal queues live for the rest of
-the current frame, unlike retail.
+The active producer is temporarily moved out of `Sim::builds` while its routed queue
+transaction executes. A resolving Tech Race call therefore captures the terminal cleanup
+owner mask immediately, blocks any saved outer parallel-slot completion, restores the
+producer row, and applies `clean_terminal_build_queues` to every captured owner before
+returning from `process_sim_build_queue`. The completed winning slot performs its ordinary
+no-refund unqueue first; the same-transaction cleanup removes every remaining slot and
+clears `REPEAT_QUEUE`. No terminal queue survives into another step-14 object visit.
 
-No tick/world edit is part of this tranche. The remaining rule uncertainty is only the
-engine's missing symbolic name for semaphore bit 17; its position and both behaviors are
-measured. Network/UI delivery of the typed progress notice and defeated-player object
-razing remain separate presentation/object-store boundaries.
+Mutation-sensitive source tests are:
+
+* `tech_race_completion_resolves_teams_and_cleans_all_build_queues_in_step14` — a deep
+  parallel slot wins for an alliance, defeats an enemy, prevents the saved outer research
+  from completing, and cleans current/allied/enemy concrete queues and counters;
+* `all_epochs_live_completion_preserves_typed_opponent_notice` — the 28th epoch takes the
+  semaphore-17 branch and retains the typed non-local progress notice;
+* `step14_research_completion_reaches_tech_race_and_cleans_before_return` — the full
+  `Sim::do_frame` route reaches the production adapter and returns from the object visit
+  with the winner/enemy terminal state and current concrete queue already settled.
+
+This tranche was implemented under a token-only gate. The focused Cargo test and formatter
+were intentionally not executed; those are the exact pending validation actions for the
+two tests above and the existing `systems::tech_race` unit-test module.
+
+The remaining rule uncertainty is only the engine's missing symbolic name for semaphore
+bit 17; its position and both behaviors are measured. Setup/lobby ingestion must populate
+`MatchOptions::ending_technology` from `GameInfo+0x2A`. Network/UI delivery of the typed
+progress notice and defeated-player object razing remain separate presentation/object-store
+boundaries.

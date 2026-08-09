@@ -3420,6 +3420,52 @@ mod tests {
     }
 
     #[test]
+    fn step14_research_completion_reaches_tech_race_and_cleans_before_return() {
+        let mut sim = Sim::new(14, 8);
+        sim.activate(0);
+        sim.activate(1);
+        sim.vic_match.options.victory = victory_score::Victory::TechRace as u8;
+        sim.vic_match.options.ending_technology = 1;
+        let age = crate::systems::tech_cities::ty::CLASSICAL_AGE;
+        let producer_type = 430;
+        let row = sim.spawn_build(
+            0,
+            production::BuildData {
+                flags: production::flag::VALID | production::flag::ACTIVE,
+                queue: production::BuildQueue {
+                    queued: 1,
+                    entries: vec![production::BuildQueueEntry {
+                        elapsed: 1,
+                        type_index: age as i16,
+                        res: [-1; 3],
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        );
+        sim.production_runtime.register_build(row, producer_type);
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::in_place_building(producer_type, 1),
+        );
+        sim.production_runtime
+            .install_type(production::runtime::LiveProductionType::research(age, 1));
+
+        sim.do_frame();
+
+        assert!(sim.production_runtime.leaders[0].tech.tech.get(age));
+        assert!(sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+        assert_eq!(
+            sim.vic_leaders.slots[0].victory_type,
+            victory_score::VictoryType::ByTechRace as i32
+        );
+        assert!(sim.vic_leaders.slots[1].flag(victory_score::leader_flag::DEFEATED));
+        assert_eq!(sim.builds[row].queue.queued, 0);
+        assert_eq!(sim.builds[row].queue.entries[0].elapsed, 0);
+        assert_eq!(sim.vic_leaders.take_terminal_queue_cleanup(), 0);
+    }
+
+    #[test]
     fn active_wonder_without_world_blocks_the_victory_sweep_fail_closed() {
         let value = Arc::new(AtomicI32::new(1));
         let mut seed_world = TickWonderWorld {

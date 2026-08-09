@@ -59,8 +59,9 @@ pub struct TechRaceReceipt {
 /// [measured, `0x006DE847..0x006DE997`; vtable `TypeData +0x38` resolves to
 /// `TypeData::is_epoch_type` `0x00470870`]
 ///
-/// `ending_technology` is `GameInfo+0x2A` (`Game+0x36`). `announce` is the final integer
-/// argument of `Leader::gain_tech`; it gates only the opponent-progress presentation arm.
+/// `ending_technology` is `GameInfo+0x2A` (`Game+0x36`). `announce` is the first integer
+/// tail argument (the fourth formal) of `Leader::gain_tech`; it gates only the
+/// opponent-progress presentation arm.
 /// The counter checks intentionally use equality, not `>=`.
 pub fn process_tech_race_gain(
     state: &TechState,

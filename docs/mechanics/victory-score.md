@@ -26,7 +26,7 @@ line are named.
 | `Leader::victory` / `Leader::defeat` state transitions, queue cleanup, ally propagation, terminal `check_victory` | complete |
 | Map-scaled timers (`wonder_timer`, `popwin_timer`, `retake_capital`) | complete |
 | Checksum-channel byte emitters + `adler32` | complete |
-| Tech-race victory (`VICTORY_TECH_RACE`, `VICTORY_BY_TECH_RACE`) | exact post-research predicates and terminal transaction implemented in `systems::tech_race`; production completion adapter remains — see §8 |
+| Tech-race victory (`VICTORY_TECH_RACE`, `VICTORY_BY_TECH_RACE`) | exact predicates, terminal transaction, typed notice, and same-step concrete queue cleanup are production-wired — see §8 |
 
 **How it was measured.** Structure came from `re/decomp-all/<EA>.c` and was then
 re-read at the instruction level with capstone for every arithmetic step — every
@@ -624,12 +624,13 @@ lane-local regression hash until a full `LeaderData` layout exists.
 ## 8. Honest gaps
 
 * **Tech Race victory (`VICTORY_TECH_RACE` = 9, `VICTORY_BY_TECH_RACE` = 3) is
-  implemented but not production-wired.** Retail triggers it synchronously in
+  production-wired.** Retail triggers it synchronously in
   `Leader::gain_tech` at `0x006DE847..0x006DE997`, not in
   `GameDaemon::process_victory`. `systems::tech_race` owns both exact predicates,
   typed opponent-progress presentation, and the `Leaders::victory` terminal handoff.
-  The remaining step-14 adapter and same-transaction concrete queue drain are frozen in
-  `docs/mechanics/tech-race.md`.
+  `production_runtime` invokes it before generic auto-unlocks, then restores the active
+  producer and drains every requested concrete Build queue before step 14 continues. The
+  remaining setup/UI/object-store boundaries are frozen in `docs/mechanics/tech-race.md`.
 * **Musical chairs is the weakest block.** The interval, the 900-frame conversion,
   the free-for-all vs per-team split and the tie-skip are all read correctly, but the
   engine's team enumeration goes through `LeaderData::get_team` (`0x006EC040`) and
