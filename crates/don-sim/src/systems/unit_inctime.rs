@@ -122,7 +122,7 @@
 //!
 //! **Research-only Tier C.** Every function here is an instruction-level transcription
 //! with its own test; nothing here has been executed against retail, and the oracle has no
-//! case for it. The composite `Guy` / `Unit` / `Objects` drivers are crate-private and carry
+//! case for it. The composite `Guy` / `Unit` / `Objects` drivers are test-only and carry
 //! a `_research_partial` suffix, so this recovered module cannot be mistaken for the shipped
 //! step-15 runtime merely because it is declared. The machine-readable boundary is
 //! [`RUNTIME_FIDELITY_READY`] / [`RUNTIME_FIDELITY_BLOCKERS`]. The complete admission
@@ -145,7 +145,9 @@
 //!    *durations* are retail's missing-asset fallback rather than retail's real ones.
 
 use crate::objects::{Band, ObjectRegistry, BUILD_BAND_BASE, OWNER_SLOTS};
-use crate::systems::groups_guys::{GuyData, UnitGuys, UnitTypeStats};
+#[cfg(test)]
+use crate::systems::groups_guys::UnitGuys;
+use crate::systems::groups_guys::{GuyData, UnitTypeStats};
 
 /// Whether this module may serve step 15 on a fidelity or product surface.
 pub const RUNTIME_FIDELITY_READY: bool = false;
@@ -503,6 +505,8 @@ pub struct IncTimeGaps {
 }
 
 impl IncTimeGaps {
+    #[cfg(test)]
+    #[allow(dead_code)]
     fn add(&mut self, o: &IncTimeGaps) {
         self.set_anim_head += o.set_anim_head;
         self.graph_inc_frame += o.graph_inc_frame;
@@ -542,6 +546,8 @@ impl IncTimeStats {
         (0, self.gaps.set_anim_head * 3)
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     fn add(&mut self, o: &IncTimeStats) {
         self.units += o.units;
         self.units_gated_out += o.units_gated_out;
@@ -707,6 +713,7 @@ pub fn set_new_location_crew<T: TerrainZ>(
 ///   `CHAR_ATTACKSPECIAL` are reached.
 /// * the crew mirror repositions **before** copying the animation, and it copies
 ///   `cur_time` too, so crew bodies stay frame-locked to the squad leader mid-swing.
+#[cfg(test)]
 pub(crate) fn guy_inc_time_research_partial<A: AnimData, T: TerrainZ>(
     unit: &UnitAnimView,
     guys: &mut UnitGuys,
@@ -856,6 +863,7 @@ pub(crate) fn guy_inc_time_research_partial<A: AnimData, T: TerrainZ>(
 
 /// `cmp byte [esi+0xA1], 8; jge` at `0x005DA2D2` — owners 0..7 only.
 #[inline]
+#[cfg(test)]
 fn tail_graph_inc_frame(who: i8, st: &mut IncTimeStats) {
     if who < GRAPH_INC_FRAME_OWNERS {
         st.gaps.graph_inc_frame += 1;
@@ -887,6 +895,7 @@ fn tail_graph_inc_frame(who: i8, st: &mut IncTimeStats) {
 /// Both bounds are re-read from the object on every iteration in retail (`movsx eax,
 /// [esi+0xB5]` at `0x00610B7E`, `cmp edi, [esi+0xE8]` at `0x00610BAF`), so a guy that dies
 /// inside the pass shortens the pass. That is reproduced here rather than hoisted.
+#[cfg(test)]
 pub(crate) fn unit_inc_time_research_partial<A: AnimData, T: TerrainZ>(
     unit: &UnitAnimView,
     guys: &mut UnitGuys,
@@ -947,6 +956,8 @@ pub fn inc_time_traversal(reg: &ObjectRegistry, out: &mut Vec<(usize, Band, u32,
 /// `units` is indexed by the `row` [`inc_time_traversal`] yields; a row missing from the
 /// map is skipped rather than assumed. The `+0x154` `Unit::execute_events` call the unit
 /// band makes after every `inc_time` is counted, not performed.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn objects_inc_time_units_research_partial<A: AnimData, T: TerrainZ>(
     reg: &ObjectRegistry,
     order: &mut Vec<(usize, Band, u32, u32)>,

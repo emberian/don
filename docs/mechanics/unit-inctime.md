@@ -1,7 +1,7 @@
 # Unit and guy `inc_time` — recovered step-15 evidence
 
 Status: **research-only, Tier C, not wired**. The module declares the measured traversal and
-animation-clock structure, but its composite drivers are crate-private and named
+animation-clock structure, but its composite drivers are compiled only for tests and named
 `*_research_partial`; `RUNTIME_FIDELITY_READY` is `false`.
 
 ## Retail shape
@@ -38,4 +38,3 @@ Do not wire the partial drivers into the tick, replay validation, the RL environ
 playable edition. Admission requires shipped animation data, exact RNG consumption, all named
 step-15 children, and retail differential evidence. Green local tests establish control-flow
 consistency, not retail fidelity.
-

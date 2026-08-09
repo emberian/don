@@ -102,7 +102,7 @@
 //!
 //! **Research-only Tier C.** Instruction-level transcription with local tests; nothing here
 //! has been executed against retail and there is no oracle case for any `Army` entry point.
-//! The retail tick entry points are intentionally crate-private and carry a
+//! The recovered retail tick entry points are intentionally test-only and carry a
 //! `_research_partial` suffix: their gap ledgers are evidence tools, not runnable fidelity.
 //! Exact, self-contained data-layout and query primitives remain public. The machine-readable
 //! boundary is [`RUNTIME_FIDELITY_READY`] / [`RUNTIME_FIDELITY_BLOCKERS`], and the evidence
@@ -115,7 +115,8 @@ use crate::trig::find_angle;
 /// Whether this module may serve step 13 on a fidelity or product surface.
 ///
 /// This is deliberately `false` even though the recovered control-flow tests pass. The
-/// crate exposes no public army tick driver while any named retail body remains absent.
+/// production library contains no army tick driver while any named retail body remains
+/// absent.
 pub const RUNTIME_FIDELITY_READY: bool = false;
 
 /// Retail bodies reached by the recovered step-13 driver but not executed by it.
@@ -445,8 +446,8 @@ pub trait ArmyWorld {
     /// `Some(true)` = the current order's virtual `+0x14` is non-zero.
     fn unit_order_active(&self, who: usize, o: i32) -> Option<bool>;
     /// The sort key `Army::normalize`'s second phase uses: `unit->ptype` `+0x18`, then
-    /// `+0x14` of that `UnitType`.
-    fn unit_rank(&self, who: usize, o: i32) -> i32;
+    /// `TypeData::cat` at `+0x14` of that `UnitType` [measured, PDB layout].
+    fn unit_type_category(&self, who: usize, o: i32) -> i32;
 
     // --- groups, by global id ---------------------------------------------------------
     /// `GroupData::id` `+0x04`. `Army::add_group` stores *this*, not the argument.
@@ -936,10 +937,10 @@ impl ArmyData {
     ///               - count(0x13, 0x119)
     /// ```
     ///
-    /// **Phase 2** is an insertion sort over the group list, descending by the rank of each
-    /// group's leader unit (`unit->ptype->+0x14`), where a building group's "leader" is
-    /// `list[0]` and everyone else's is `GroupData::find_leader`. It is what makes
-    /// `list[0]` the army's strongest group, which is what `add_unit` then feeds.
+    /// **Phase 2** is an insertion sort over the group list, ascending by
+    /// `TypeData::cat` (`unit->ptype->+0x14`) of each group's leader unit, where a building
+    /// group's "leader" is `list[0]` and everyone else's is `GroupData::find_leader`.
+    /// The PDB names this field `cat`; it is not a combat-strength rank.
     pub fn normalize<W: ArmyWorld + ?Sized>(&mut self, w: &mut W) {
         self.role = 0;
         self.num_units = 0;
@@ -1002,10 +1003,9 @@ impl ArmyData {
                     continue;
                 }
                 let key_j = if gj < 0 { -1 } else { leader_of(w, gj) };
-                // Retail breaks when the preceding leader rank is <= the inserted rank
-                // (`jle` in the comparison at the tail of Army::normalize).  Larger
-                // ranks therefore move toward list[0].
-                if w.unit_rank(who, key_j) <= w.unit_rank(who, key_i) {
+                // Retail breaks when the preceding category is <= the inserted category
+                // (`jle` at the tail of Army::normalize), producing ascending order.
+                if w.unit_type_category(who, key_j) <= w.unit_type_category(who, key_i) {
                     break;
                 }
                 self.list.swap(j as usize, j as usize + 1);
@@ -1296,8 +1296,9 @@ impl Armies {
     /// `Armies::init_army` `0x006F36A0`.
     ///
     /// First invalid slot wins; otherwise **the live slot with the fewest `num_units`**,
-    /// with ties going to the lowest index and a starting bound of 9,999 that no real army
-    /// exceeds. Returns the slot.
+    /// with ties going to the highest index and a starting bound of 9,999 that no real army
+    /// exceeds. The retail compare is `<=`, so every equal-sized later slot replaces the
+    /// earlier candidate. Returns the slot.
     pub fn init_army<W: ArmyWorld + ?Sized>(&mut self, w: &W, who: usize, city: i32) -> i32 {
         let mut best = 0usize;
         let mut best_units = 0x270F;
@@ -1432,6 +1433,8 @@ impl Armies {
     /// `Unit::close_orders` / `Unit::clear_partial_path` / `Unit::update_action` and honours
     /// `ScenarioData::ignore_orders`; it is not ported. This entry point therefore only
     /// counts, and says so.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn leader_defeated_research_gap_count(&mut self, who: usize, stopped: &mut u64) {
         for a in &self.lists[who] {
             if a.valid != 0 {
@@ -1442,6 +1445,8 @@ impl Armies {
 
     /// `Armies::diplo_change` `0x006F30F0` — same owner gate as `process_all`, then a
     /// **forced** `Army::process(1)` for every valid army.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn diplo_change_research_partial<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
@@ -1465,6 +1470,7 @@ impl Armies {
     /// Called from `Object::do_damage`: taking a hit at home drops every army's current
     /// target and re-runs the state machine the same frame, which is why an AI reacts to a
     /// raid inside one tick rather than at its next 256-frame phase.
+    #[cfg(test)]
     pub(crate) fn emergency_research_partial<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
@@ -1547,6 +1553,7 @@ impl Armies {
     /// `valid`. And the owner loop is a **fixed 0..7 in index order**, with none of the
     /// `(frame + i) % 10` rotation `Objects::process_all` applies: army order is stable
     /// across frames, unit order is not.
+    #[cfg(test)]
     pub(crate) fn process_all_research_partial<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
@@ -1576,8 +1583,8 @@ impl Armies {
     /// Research transcription of `Army::process` `0x006F93D0`'s outer state machine.
     ///
     /// Every dispatched retail body listed in [`RUNTIME_FIDELITY_BLOCKERS`] is counted and
-    /// skipped. This method is therefore crate-private and explicitly named
-    /// `_research_partial`; it must not be wired into a product or fidelity tick.
+    /// skipped. This method is therefore test-only and explicitly named
+    /// `_research_partial`; it cannot be wired into a product or fidelity tick.
     ///
     /// It is a method on [`Armies`] rather than [`ArmyData`] because the merge branch scans
     /// this owner's other fifteen armies.
@@ -1607,6 +1614,7 @@ impl Armies {
     /// for artificial lag is *not* what staggers this; `off` is deterministic.
     ///
     /// Returns `true` if the heavy pass ran.
+    #[cfg(test)]
     pub(crate) fn process_one_research_partial<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
@@ -1801,6 +1809,7 @@ impl Armies {
     /// and `add_unit` appends to the destination's group 0, so the merged army's member
     /// order is the reverse of the source's. That ordering is visible in the `groups`
     /// checksum channel.
+    #[cfg(test)]
     fn try_merge<W: ArmyWorld + ?Sized>(&mut self, w: &mut W, who: usize, idx: usize) -> bool {
         let (num_standard, num_captains, num_decoys, reg) = {
             let a = &self.lists[who][idx];
@@ -1969,7 +1978,7 @@ mod tests {
         y: i32,
         action: i32,
         order: Option<bool>,
-        rank: i32,
+        type_category: i32,
     }
 
     impl TestWorld {
@@ -2019,7 +2028,7 @@ mod tests {
                     y: 2000 + m * 100,
                     action: 0,
                     order: None,
-                    rank: 10 + m,
+                    type_category: 10 + m,
                 });
             }
             id
@@ -2092,8 +2101,8 @@ mod tests {
         fn unit_order_active(&self, who: usize, o: i32) -> Option<bool> {
             self.obj(who, o).and_then(|t| t.order)
         }
-        fn unit_rank(&self, who: usize, o: i32) -> i32 {
-            self.obj(who, o).map(|t| t.rank).unwrap_or(0)
+        fn unit_type_category(&self, who: usize, o: i32) -> i32 {
+            self.obj(who, o).map(|t| t.type_category).unwrap_or(0)
         }
         fn group_id(&self, gid: i32) -> i32 {
             self.g(gid).id
@@ -2413,18 +2422,17 @@ mod tests {
     }
 
     #[test]
-    fn normalize_sorts_groups_by_leader_rank_descending() {
+    fn normalize_sorts_groups_by_leader_type_category_ascending() {
         let mut w = TestWorld::new();
-        let weak = w.push_group(0, &[1], 1);
-        let strong = w.push_group(0, &[2], 1);
-        // rank comes from the object table; make member 2 outrank member 1
+        let high_category = w.push_group(0, &[1], 1);
+        let low_category = w.push_group(0, &[2], 1);
         for o in w.objects.iter_mut() {
-            o.rank = if o.o == 2 { 500 } else { 5 };
+            o.type_category = if o.o == 2 { 5 } else { 500 };
         }
-        let mut ar = armies_with(&mut w, 0, &[weak, strong]);
+        let mut ar = armies_with(&mut w, 0, &[high_category, low_category]);
         ar.lists[0][0].normalize(&mut w);
-        assert_eq!(ar.lists[0][0].list[0], w.group_id(strong));
-        assert_eq!(ar.lists[0][0].list[1], w.group_id(weak));
+        assert_eq!(ar.lists[0][0].list[0], w.group_id(low_category));
+        assert_eq!(ar.lists[0][0].list[1], w.group_id(high_category));
     }
 
     // --- geometry ----------------------------------------------------------------------

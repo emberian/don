@@ -2,7 +2,8 @@
 
 Status: **research-only, Tier C, not wired**. The declared Rust module is an evidence-bearing
 transcription, not a runnable implementation of `Armies::process_all`. Its composite drivers
-are crate-private and named `*_research_partial`; `RUNTIME_FIDELITY_READY` is `false`.
+are compiled only for tests and named `*_research_partial`; `RUNTIME_FIDELITY_READY` is
+`false`.
 
 ## Retail shape
 
@@ -42,4 +43,3 @@ Do not wire the research drivers into `Game::do_frame`, replay validation, the R
 or the playable edition. Admission requires all machine-readable blockers to be removed and
 retail differential evidence for the completed entry points. Passing local control-flow tests
 only establishes internal consistency of the transcription.
-
