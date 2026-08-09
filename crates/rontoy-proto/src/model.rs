@@ -157,7 +157,6 @@ impl Snapshot {
             && self.scope == ObservationScope::OwnPlayerOnly
             && local.confirmed_local
             && local.active
-            && local.player_id != 0
             && !self.meta.partial
             && self.meta.game_frame.is_some()
             && self.meta.game_frame == self.meta.sampled_frame_start

@@ -74,7 +74,7 @@
     "human": {
       "type": "object",
       "required": ["player_id", "confirmed_local", "active", "identity_key"],
-      "properties": { "player_id": { "type": "integer", "minimum": 1, "maximum": 255 }, "confirmed_local": { "type": "boolean" }, "active": { "type": "boolean" }, "identity_key": { "type": "string", "minLength": 1, "maxLength": 65536 } },
+      "properties": { "player_id": { "type": "integer", "minimum": 0, "maximum": 255 }, "confirmed_local": { "type": "boolean" }, "active": { "type": "boolean" }, "identity_key": { "type": "string", "minLength": 1, "maxLength": 65536 } },
       "additionalProperties": true
     },
     "resource": {

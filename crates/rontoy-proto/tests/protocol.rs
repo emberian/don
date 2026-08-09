@@ -346,6 +346,20 @@ fn advice_rejects_paused_mismatched_or_unhealthy_capture() {
 }
 
 #[test]
+fn player_slot_zero_is_advice_eligible() {
+    let mut frame = sample_frame();
+    let Message::Snapshot(snapshot) = &mut frame.message else {
+        unreachable!()
+    };
+    snapshot.local_human.as_mut().unwrap().player_id = 0;
+    snapshot.players[0].player_id = 0;
+    snapshot.entities[0].owner_id = Some(0);
+    snapshot.warnings[0].player_id = Some(0);
+    assert!(snapshot.advice_allowed());
+    frame.validate(ValidationLimits::default()).unwrap();
+}
+
+#[test]
 fn retail_status_and_gather_cache_consistency_are_validated() {
     let mut bad_status = sample_frame();
     let Message::Snapshot(snapshot) = &mut bad_status.message else {
