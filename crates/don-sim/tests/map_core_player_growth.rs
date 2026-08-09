@@ -228,10 +228,8 @@ fn place_all_completes_nonmountain_clumps_player_inside_clump_with_one_pump_each
         panic!("unexpected place_all result: {error:?}")
     };
 
-    assert_eq!(
-        boundary,
-        TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
-    );
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0]);
     assert_eq!(
         preview.player_group_host_events,
         [

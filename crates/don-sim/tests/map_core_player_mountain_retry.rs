@@ -248,10 +248,8 @@ fn place_all_composes_initial_failure_all_retry_pumps_and_next_player_control() 
             continue;
         }
 
-        assert_eq!(
-            boundary,
-            TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
-        );
+        assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+        assert_eq!(preview.completed_placement_groups, [0]);
         let retries = &preview.player_group_mountain_retries;
         assert_eq!(retries.len(), 1);
         assert_eq!(retries[0].outcome, PlacePlayerGroupOutcome::Returned(1));

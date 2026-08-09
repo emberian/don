@@ -327,10 +327,8 @@ fn place_all_composes_pattern_loop_without_resolved_call_and_keeps_state_transac
         panic!("unexpected error: {error:?}");
     };
 
-    assert_eq!(
-        boundary,
-        TerrainPlacementBoundary::RegionGroupPatternComplete { group_index: 0 }
-    );
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0]);
     let pattern: RegionPatternReceipt = preview.region_pattern.unwrap();
     assert_eq!(pattern.calls.len(), 1);
     assert_eq!(pattern.calls[0].region_id, 1);

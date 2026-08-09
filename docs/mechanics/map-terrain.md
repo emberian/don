@@ -8,7 +8,7 @@ Every claim below is **[measured]** on this Mac against `ron-bin/riseofnations.e
 (sha256 `30478a44…625079`) and `ron-bin/sbl/rise.pdb`, unless marked **[reported]**.
 Nothing here comes from community documentation. Structural claims without an executable
 case remain fidelity tier **C** — behaviourally faithful, with structure and constants
-read off the binary. The seven world-generation slices in §7.1 additionally have
+read off the binary. The seven world-generation slices in §7.2 additionally have
 executable Tier-B retail differentials.
 
 ---
@@ -442,7 +442,26 @@ and blocked only on porting the generator logic, not on any numerical obstacle.*
 the difference between starting replay validation from a captured state and starting it
 from scratch.
 
-### 7.1 Executable world-generation oracle boundary
+### 7.1 Common terrain-group dispatcher continuation
+
+`TerrainGroups::place_all` (`0x006a70d0`) interleaves group preparation with each
+selected placement arm. After an arm's group-local arrays are destroyed, the common edge
+at `0x006a8ee5` increments the group index, compares it with `TerrainGroups::groups.length`,
+and jumps back to `0x006a7640`. The next iteration calls `NetDaemon::process_all`
+(`0x00951300`) before reading the group or its selection slot. An unselected group jumps
+straight back to the increment edge. A selected group reconstructs its clump-size arrays,
+emits the optional progress callback, and enters pattern 0 or patterns 1--3 in the same RNG
+state left by the completed prior arm.
+
+The Rust preview transaction now resumes this dispatcher after a complete player or region
+pattern. `completed_placement_groups` records only arms that reached `0x006a8ee5`; the
+existing preparation receipt appends every subsequently visited daemon/progress event and
+selected group's exact clump arrays. The transaction remains fail-closed at the next
+placement kernel because the current public adapters intentionally accept one typed external
+effect stream at a time. Executing a second heterogeneous selected arm, rather than merely
+preparing and surfacing it, is the exact remaining composition boundary.
+
+### 7.2 Executable world-generation oracle boundary
 
 The structural result above now has seven fork-isolated retail cases in
 `crates/oracle`; none substitutes simplified map logic.
@@ -652,7 +671,7 @@ Four tests cover these: `space_probes_tile_a_4x4_block`, `space_at_corner_grades
 ## 9. Honest gaps
 
 Most of the module remains **Tier C** — structure and constants read off the binary with
-behaviour reproduced. The seven §7.1 slices are Tier-B retail differentials, but they do
+behaviour reproduced. The seven §7.2 slices are Tier-B retail differentials, but they do
 not promote adjacent uncased behavior. Specifically:
 
 1. **Oracle coverage is sliced, not whole-world.** Seed installation, diagonal land

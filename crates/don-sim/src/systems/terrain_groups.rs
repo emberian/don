@@ -181,6 +181,9 @@ pub struct PlaceAllPreviewReceipt {
     pub player_group_placed_after: Vec<i32>,
     pub player_group_formation_x: Vec<i32>,
     pub player_group_formation_y: Vec<i32>,
+    /// Selected placement arms that reached their native group-local cleanup
+    /// and `group_index++` edge at `0x006a8ee5`.
+    pub completed_placement_groups: Vec<usize>,
 }
 
 /// Outputs of the still-upstream unit-catalog and region-selection block in
@@ -325,9 +328,7 @@ pub enum TerrainPlacementPreparationError {
 pub enum TerrainPlacementBoundary {
     /// Pattern 0 next enumerates players and calls `place_player_group`
     /// (`0x006a4190`).
-    PlayerRosterAndPlacementKernel {
-        group_index: usize,
-    },
+    PlayerRosterAndPlacementKernel { group_index: usize },
     PlayerGroupExternalSubsystem {
         group_index: usize,
         clump_index: usize,
@@ -345,32 +346,20 @@ pub enum TerrainPlacementBoundary {
         player_index: usize,
         return_value: i32,
     },
-    PlayerGroupPatternComplete {
-        group_index: usize,
-    },
     /// Patterns 1--3 first inspect the unit-type catalog and then call
     /// `place_region_group` (`0x006a2f60`).
-    UnitTypeCatalogAndRegionPlacementKernel {
-        group_index: usize,
-        pattern: i32,
-    },
+    UnitTypeCatalogAndRegionPlacementKernel { group_index: usize, pattern: i32 },
     /// The chosen `drop_tile` branch belongs to another gameplay subsystem and
     /// needs the exact typed resolution before local continuation can advance.
-    RegionGroupDropTileExternalSubsystem {
-        request: DropTileExternalRequest,
-    },
+    RegionGroupDropTileExternalSubsystem { request: DropTileExternalRequest },
     /// The selected `place_region_group` call returned exactly; the enclosing
     /// catalog/per-clump continuation is the next unrecovered row.
     RegionGroupReturnControl {
         group_index: usize,
         return_value: i32,
     },
-    /// The selected pattern-1/2/3 group completed every retail region/clump
-    /// attempt. The next group iteration is downstream.
-    RegionGroupPatternComplete {
-        group_index: usize,
-    },
-    /// All selected groups were branch-skipped; retail next calls
+    /// Every group was visited and either branch-skipped or completed; retail
+    /// next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
     /// Both `add_doobers` passes completed. Retail next reads `GameInfo::map_style`
@@ -828,7 +817,7 @@ impl TerrainGroups {
         let group_selection = self
             .select_groups(&mut preview_random)
             .map_err(PlaceAllError::InvalidTerrainGroupSelection)?;
-        let (placement_preparation, boundary) = self
+        let (mut placement_preparation, boundary) = self
             .prepare_placement_prefix(
                 &group_selection.groups,
                 &mut preview_random,
@@ -850,6 +839,7 @@ impl TerrainGroups {
         let mut player_group_placed_after = Vec::new();
         let mut player_group_formation_x = Vec::new();
         let mut player_group_formation_y = Vec::new();
+        let mut completed_placement_groups = Vec::new();
         let boundary = if let Some(externals) = player_group_externals {
             let TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } = boundary
             else {
@@ -868,13 +858,23 @@ impl TerrainGroups {
                 return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
             }
             if world.start_x.items.is_empty() {
-                TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index }
+                completed_placement_groups.push(group_index);
+                self.prepare_placement_continuation(
+                    &group_selection.groups,
+                    &mut preview_random,
+                    progress,
+                    place_players,
+                    group_index + 1,
+                    &mut placement_preparation,
+                    &mut *host,
+                )
+                .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
             } else {
                 let mut preview_world = world.clone();
                 let mut preview_group = self.groups[group_index].clone();
                 let mut calls = Vec::new();
                 let mut consumed = 0usize;
-                let mut next = TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index };
+                let mut next = TerrainPlacementBoundary::AddDoobers;
                 let mut complete = true;
                 'clumps: for (clump_index, (&target_tiles, &oil_deposits)) in prepared
                     .primary_sizes
@@ -1045,7 +1045,18 @@ impl TerrainGroups {
                     }
                 }
                 if complete {
-                    next = TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index };
+                    completed_placement_groups.push(group_index);
+                    next = self
+                        .prepare_placement_continuation(
+                            &group_selection.groups,
+                            &mut preview_random,
+                            progress,
+                            place_players,
+                            group_index + 1,
+                            &mut placement_preparation,
+                            &mut *host,
+                        )
+                        .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
                 }
                 player_group_placed_after = preview_group.placed.clone();
                 player_group_prefix = Some(calls);
@@ -1094,7 +1105,17 @@ impl TerrainGroups {
                     TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem { request }
                 }
                 RegionPatternOutcome::Complete => {
-                    TerrainPlacementBoundary::RegionGroupPatternComplete { group_index }
+                    completed_placement_groups.push(group_index);
+                    self.prepare_placement_continuation(
+                        &group_selection.groups,
+                        &mut preview_random,
+                        progress,
+                        place_players,
+                        group_index + 1,
+                        &mut placement_preparation,
+                        &mut *host,
+                    )
+                    .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
                 }
             };
             if let Some(first) = receipt.calls.first() {
@@ -1227,6 +1248,7 @@ impl TerrainGroups {
                 player_group_placed_after,
                 player_group_formation_x,
                 player_group_formation_y,
+                completed_placement_groups,
             },
             boundary,
         })
@@ -1251,7 +1273,6 @@ impl TerrainGroups {
         (TerrainPlacementPreparationReceipt, TerrainPlacementBoundary),
         TerrainPlacementPreparationError,
     > {
-        let normalized = self.validate_and_normalize_placement_inputs(selections, place_players)?;
         let mut receipt = TerrainPlacementPreparationReceipt {
             host_events: Vec::new(),
             prepared_groups: Vec::new(),
@@ -1259,6 +1280,34 @@ impl TerrainGroups {
             secondary_size_draws: 0,
             rng_state_after: random.state(),
         };
+        let boundary = self.prepare_placement_continuation(
+            selections,
+            random,
+            progress,
+            place_players,
+            0,
+            &mut receipt,
+            &mut host,
+        )?;
+        Ok((receipt, boundary))
+    }
+
+    /// Common `place_all` group-index dispatcher at `0x006a8ee5` ->
+    /// `0x006a7640`. The caller supplies the first group not yet visited and an
+    /// existing receipt/RNG state from the completed placement arm.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_placement_continuation(
+        &self,
+        selections: &[TerrainGroupSelection],
+        random: &mut Random,
+        progress: i32,
+        place_players: i32,
+        first_group: usize,
+        receipt: &mut TerrainPlacementPreparationReceipt,
+        host: &mut impl FnMut(PlaceAllHostEvent),
+    ) -> Result<TerrainPlacementBoundary, TerrainPlacementPreparationError> {
+        let normalized =
+            self.validate_and_normalize_placement_inputs(selections, place_players, first_group)?;
 
         for (group_index, ((group, selection), bounds)) in self
             .groups
@@ -1266,10 +1315,11 @@ impl TerrainGroups {
             .zip(selections)
             .zip(normalized)
             .enumerate()
+            .skip(first_group)
         {
             emit_host_event(
-                &mut receipt,
-                &mut host,
+                receipt,
+                host,
                 PlaceAllHostEvent::NetDaemonProcessAll { group_index },
             );
             if !selection.selected {
@@ -1335,8 +1385,8 @@ impl TerrainGroups {
                 0 if group.group_type != 7 => {
                     if progress != 0 {
                         emit_host_event(
-                            &mut receipt,
-                            &mut host,
+                            receipt,
+                            host,
                             PlaceAllHostEvent::ProgressDisplay {
                                 group_index,
                                 pattern: group.pattern,
@@ -1354,8 +1404,8 @@ impl TerrainGroups {
                 1..=3 => {
                     if progress != 0 {
                         emit_host_event(
-                            &mut receipt,
-                            &mut host,
+                            receipt,
+                            host,
                             PlaceAllHostEvent::ProgressDisplay {
                                 group_index,
                                 pattern: group.pattern,
@@ -1373,12 +1423,12 @@ impl TerrainGroups {
             };
             if let Some(boundary) = boundary {
                 receipt.rng_state_after = random.state();
-                return Ok((receipt, boundary));
+                return Ok(boundary);
             }
         }
 
         receipt.rng_state_after = random.state();
-        Ok((receipt, TerrainPlacementBoundary::AddDoobers))
+        Ok(TerrainPlacementBoundary::AddDoobers)
     }
 
     /// Exact terrain-group chance/clump-selection transaction from
@@ -1493,6 +1543,7 @@ impl TerrainGroups {
         &self,
         selections: &[TerrainGroupSelection],
         place_players: i32,
+        first_group: usize,
     ) -> Result<Vec<PlacementBounds>, TerrainPlacementPreparationError> {
         if selections.len() != self.groups.len() {
             return Err(TerrainPlacementPreparationError::SelectionLengthMismatch {
@@ -1507,6 +1558,7 @@ impl TerrainGroups {
             .zip(selections)
             .enumerate()
             .map(|(group_index, (group, selection))| {
+                let in_continuation = group_index >= first_group;
                 let primary_min = group.min_size.min(group.max_size);
                 let mut primary_max = group.min_size.max(group.max_size);
                 if group.group_type == 5 {
@@ -1522,7 +1574,8 @@ impl TerrainGroups {
                     secondary_min = secondary_min.max(0);
                 }
 
-                if reachable
+                if in_continuation
+                    && reachable
                     && selection.selected
                     && !positive_i32_inclusive_span(primary_min, primary_max)
                 {
@@ -1532,7 +1585,8 @@ impl TerrainGroups {
                         max_size: primary_max,
                     });
                 }
-                if reachable
+                if in_continuation
+                    && reachable
                     && selection.selected
                     && group.group_type == 6
                     && !positive_i32_inclusive_span(secondary_min, secondary_max)
@@ -1550,7 +1604,8 @@ impl TerrainGroups {
                     secondary_min,
                     secondary_max,
                 };
-                if selection.selected
+                if in_continuation
+                    && selection.selected
                     && (matches!(group.pattern, 1..=3)
                         || (group.pattern == 0
                             && group.group_type != 7

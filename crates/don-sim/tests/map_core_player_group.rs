@@ -255,10 +255,8 @@ fn pattern_zero_type_four_retries_without_strict_forest_probe_or_second_pump() {
     let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
         panic!("unexpected error: {error:?}")
     };
-    assert!(matches!(
-        boundary,
-        TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
-    ));
+    assert!(matches!(boundary, TerrainPlacementBoundary::AddDoobers));
+    assert_eq!(preview.completed_placement_groups, [0]);
     let calls = preview.player_group_prefix.unwrap();
     assert_eq!(calls.len(), 2);
     assert!(calls[0].attempts.iter().all(|attempt| matches!(
@@ -320,10 +318,8 @@ fn place_all_composes_player_entry_pump_and_keeps_growth_preview_transactional()
         panic!("unexpected error: {error:?}")
     };
 
-    assert_eq!(
-        boundary,
-        TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
-    );
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0]);
     assert_eq!(
         host.last(),
         Some(&PlaceAllHostEvent::NetDaemonProcessAllPlayer {
