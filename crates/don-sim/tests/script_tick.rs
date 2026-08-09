@@ -799,6 +799,131 @@ fn retail_chunk_executes_the_same_unit_status_reads() {
     );
 }
 
+fn configure_object_health_read_state(sim: &mut Sim) {
+    use don_sim::systems::{ammo, production};
+
+    sim.activate(0);
+
+    // A two-object formation. `object_health(1, 1)` must redirect the addressed
+    // subordinate to captain 0 and aggregate both objects' damage. In contrast,
+    // `object_max_health(1, 1)` reads the subordinate's own maximum directly.
+    let captain = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let subordinate = sim.spawn_unit(0, 7, 4 * 192, 5 * 192, 4).unwrap();
+    let captain_row = sim.world.row_of(captain).unwrap();
+    let subordinate_row = sim.world.row_of(subordinate).unwrap();
+    sim.world.units.o_up_mut()[captain_row] = -1;
+    sim.world.units.o_down_mut()[captain_row] = 1;
+    sim.world.units.o_up_mut()[subordinate_row] = 0;
+    sim.world.units.o_down_mut()[subordinate_row] = -1;
+    sim.world.units.myhits_mut()[captain_row] = 200;
+    sim.world.units.myhits_mut()[subordinate_row] = 120;
+    sim.world.units.damage_mut()[captain_row] = 10;
+    sim.world.units.damage_mut()[subordinate_row] = 20;
+    sim.shooter_rules.push((
+        7,
+        ammo::ShooterRules {
+            uber_size: 2,
+            ..Default::default()
+        },
+    ));
+
+    // A normal construction site exposes construct_hits, not its eventual myhits.
+    let mut construction = production::BuildData::default();
+    construction.flags = production::flag::VALID | production::flag::STARTED;
+    construction.myhits = 1_000;
+    construction.construct_hits = 250;
+    construction.damage = 50;
+    assert_eq!(sim.spawn_build(0, construction), 0);
+
+    // An active razing site runs the existing f32 queue-progress interpolation before
+    // both max-health and hits-left are observed.
+    let mut razing = production::BuildData::default();
+    razing.flags = production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE;
+    razing.myhits = 1_000;
+    razing.construct_hits = 800;
+    razing.damage = 100;
+    razing.queue.queued = 1;
+    razing.queue.entries.push(production::BuildQueueEntry {
+        elapsed: 500,
+        type_index: 0x29a,
+        ..Default::default()
+    });
+    assert_eq!(sim.spawn_build(0, razing), 1);
+    sim.production_runtime
+        .install_type(production::runtime::LiveProductionType::research(
+            0x29a, 1_000,
+        ));
+}
+
+#[test]
+fn ordinary_source_executes_captain_and_construction_health_reads() {
+    let program = compile_source_fixture("scenario_object_health.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "object_health_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x812d, 8);
+    configure_object_health_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [85, 120, 80, 250, 75, 400],
+        "health percent must use captain damage and each building's dynamic construction maximum"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_object_health_reads() {
+    let compiled = compile_source_fixture("scenario_object_health.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "object_health_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x812e, 12);
+    configure_object_health_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [85, 120, 80, 250, 75, 400],
+        "loaded chunks must retain exact captain, construction, and razing health semantics"
+    );
+}
+
+#[test]
+fn object_health_fails_closed_without_unit_type_uber_size() {
+    let mut scripts = game_runtime(one_builtin_program(
+        "object_health",
+        &[Value::Int(1), Value::Int(0)],
+    ));
+    let mut sim = Sim::new(0x812f, 8);
+    sim.activate(0);
+    let unit = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let row = sim.world.row_of(unit).unwrap();
+    sim.world.units.o_up_mut()[row] = -1;
+    sim.world.units.o_down_mut()[row] = -1;
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "object_health",
+            ..
+        })
+    ));
+}
+
 #[test]
 fn unsupported_scenario_builtin_stops_before_the_rest_of_the_tick() {
     let mut scripts = game_runtime(one_builtin_program("num_cities", &[Value::Int(1)]));

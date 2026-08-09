@@ -1,0 +1,10 @@
+int scenario object_health_tick()
+{
+    set_good(1, "Food", object_health(1, 1));
+    set_good(1, "Timber", object_max_health(1, 1));
+    set_good(1, "Wealth", object_health(1, 2000));
+    set_good(1, "Knowledge", object_max_health(1, 2000));
+    set_good(1, "Metal", object_health(1, 2001));
+    set_good(1, "Oil", object_max_health(1, 2001));
+    return 1;
+}

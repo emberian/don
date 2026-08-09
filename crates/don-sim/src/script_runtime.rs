@@ -19,7 +19,7 @@ use don_bhs::{
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
-use crate::systems::{economy, leaders, order_dispatch, victory_score};
+use crate::systems::{economy, leaders, order_dispatch, production, victory_score};
 use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
@@ -613,6 +613,202 @@ impl Sim {
         Ok(self.script_container(object)?.unwrap_or(object))
     }
 
+    /// The `BuildData::hits(0)` virtual used by both health readers. Ordinary construction
+    /// exposes `construct_hits`; the two razing pseudo-items scale that value by queue
+    /// progress. Their total train time is not present in `BuildData`, so the installed
+    /// production type row is mandatory whenever that branch is live.
+    fn script_build_max_health(&self, row: usize) -> Result<i32, HostError> {
+        let build = self.builds.get(row).ok_or(HostError::Unimplemented)?;
+        let razing = if build.is_active() && build.queue.queued != 0 {
+            match build.queue.entries.first() {
+                Some(entry) if matches!(i32::from(entry.type_index), 0x29a | 0x286) => {
+                    let type_index =
+                        usize::try_from(entry.type_index).map_err(|_| HostError::Unimplemented)?;
+                    let facts = self
+                        .production_runtime
+                        .types
+                        .get(type_index)
+                        .and_then(Option::as_ref)
+                        .filter(|facts| facts.type_index == i32::from(entry.type_index))
+                        .ok_or(HostError::Unimplemented)?;
+                    if facts.train_time <= 0 {
+                        return Err(HostError::Unimplemented);
+                    }
+                    Some((entry.elapsed, facts.train_time))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        Ok(production::build_hits(
+            false,
+            build.myhits,
+            build.construct_hits,
+            razing,
+        ))
+    }
+
+    /// The virtual `ObjectData::hits(0)` call shared by `object_health` and
+    /// `object_max_health`.
+    fn script_object_max_health(&self, object: ScriptObject) -> Result<i32, HostError> {
+        match object {
+            ScriptObject::Unit { row, .. } => self
+                .world
+                .units
+                .myhits()
+                .get(row)
+                .copied()
+                .ok_or(HostError::Unimplemented),
+            ScriptObject::Build { row, .. } => self.script_build_max_health(row),
+            // `valid_object_o` rejects the 3000 wall band before either handler reaches
+            // its virtual call. Retain a fail-closed arm for corrupt internal callers.
+            ScriptObject::Wall { .. } => Err(HostError::Unimplemented),
+        }
+    }
+
+    /// `UnitData::total_damage(0, nullptr)` for the ordinary `UnitData` layout represented
+    /// by the generated columns. It walks the live `o_down` formation chain, accumulates
+    /// whole and sixteenth damage, then charges absent squad members their share of the
+    /// captain's maximum health.
+    fn script_unit_total_damage(&self, object: ScriptObject) -> Result<i32, HostError> {
+        let ScriptObject::Unit {
+            who,
+            row: captain_row,
+            ..
+        } = object
+        else {
+            return Err(HostError::Unimplemented);
+        };
+        if self.world.units.get_who(captain_row) as usize != who
+            || self.world.units.o_up()[captain_row] >= 0
+        {
+            // The caller must have applied UnitData::get_captain first.
+            return Err(HostError::Unimplemented);
+        }
+
+        let type_id = *self
+            .unit_type
+            .get(captain_row)
+            .ok_or(HostError::Unimplemented)?;
+        let uber_size = self
+            .shooter_rules
+            .iter()
+            .find(|(candidate, _)| *candidate == type_id)
+            .map(|(_, rules)| rules.uber_size)
+            .filter(|&size| size > 0)
+            .ok_or(HostError::Unimplemented)?;
+
+        let mut row = captain_row;
+        let mut current_size = 0usize;
+        let mut damage = 0i32;
+        let mut damage_frac = 0i32;
+        let mut terminated = false;
+        let limit = self.world.objects.total_objects().saturating_add(1);
+        for _ in 0..limit {
+            current_size += 1;
+            damage = damage.wrapping_add(self.world.units.damage()[row]);
+            damage_frac = damage_frac.wrapping_add(i32::from(self.world.units.damage_frac()[row]));
+
+            let down = self.world.units.o_down()[row] as i32;
+            if down < 0 {
+                terminated = true;
+                break;
+            }
+            let next = self
+                .script_object(who, down)
+                .ok_or(HostError::Unimplemented)?;
+            let ScriptObject::Unit { row: next_row, .. } = next else {
+                return Err(HostError::Unimplemented);
+            };
+            if self.world.units.get_who(next_row) as usize != who {
+                return Err(HostError::Unimplemented);
+            }
+            if self.world.units.get_flags(next_row) & 1 == 0 {
+                terminated = true;
+                break;
+            }
+            row = next_row;
+        }
+        if !terminated || current_size > uber_size as usize {
+            return Err(HostError::Unimplemented);
+        }
+
+        let max = self.script_object_max_health(object)?;
+        let absent = uber_size.wrapping_sub(current_size as i32);
+        let absent_damage = absent
+            .wrapping_mul(max)
+            .checked_div(uber_size)
+            .ok_or(HostError::Unimplemented)?;
+        damage = damage.wrapping_add(absent_damage);
+        if damage_frac >= 16 {
+            damage = damage.wrapping_add((damage_frac as u32 >> 4) as i32);
+        }
+        Ok(damage)
+    }
+
+    /// `ObjectData::hits_left()` over the dynamic `hits(0)` answer.
+    fn script_nonunit_hits_left(&self, object: ScriptObject) -> Result<i32, HostError> {
+        let max = self.script_object_max_health(object)?;
+        let damage = match object {
+            ScriptObject::Build { row, .. } => self
+                .builds
+                .get(row)
+                .map(|build| build.damage)
+                .ok_or(HostError::Unimplemented)?,
+            ScriptObject::Wall { row, .. } => self
+                .walls
+                .get(row)
+                .map(|wall| wall.damage)
+                .ok_or(HostError::Unimplemented)?,
+            ScriptObject::Unit { .. } => return Err(HostError::Unimplemented),
+        };
+        let left = max.wrapping_sub(damage);
+        Ok(if left < 0 || max < 0 {
+            0
+        } else {
+            left.min(max)
+        })
+    }
+
+    /// SSE `cvttss2si`: unlike Rust's saturating float cast, NaN and every out-of-range
+    /// input produce the integer-indefinite value `0x80000000`.
+    fn script_cvttss2si(value: f32) -> i32 {
+        if value.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+            i32::MIN
+        } else {
+            value.trunc() as i32
+        }
+    }
+
+    /// `ScenarioFuncSet::object_health` `0x009f5910`.
+    fn script_object_health(&self, who: i32, o: i32) -> Result<i32, HostError> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(object) = self.valid_script_object(who, o) else {
+            return Ok(-1);
+        };
+        let object = self.script_captain(object)?;
+        let max = self.script_object_max_health(object)?;
+        let current = match object {
+            ScriptObject::Unit { .. } => max.wrapping_sub(self.script_unit_total_damage(object)?),
+            ScriptObject::Build { .. } | ScriptObject::Wall { .. } => {
+                self.script_nonunit_hits_left(object)?
+            }
+        };
+        let ratio = current as f32 / max as f32;
+        Ok(Self::script_cvttss2si(ratio * 100.0))
+    }
+
+    /// `ScenarioFuncSet::object_max_health` `0x009f5f60`. Unlike `object_health`, this
+    /// handler does not resolve a unit's captain before calling `hits(0)`.
+    fn script_object_max_health_read(&self, who: i32, o: i32) -> Result<i32, HostError> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(object) = self.valid_script_object(who, o) else {
+            return Ok(-1);
+        };
+        self.script_object_max_health(object)
+    }
+
     /// `ScenarioFuncSet::object_position_{x,y}` (`0x009f1360` / `0x009f1470`).
     fn script_object_position(&self, who: i32, o: i32, y_axis: bool) -> Result<i32, HostError> {
         let who = who.wrapping_sub(1) as u32 as usize;
@@ -900,6 +1096,18 @@ impl ScenarioHost for Sim {
                     Some(ScriptObject::Build { .. })
                 ) as i32))
             }
+            // `object_health` `0x009f5910`: exact `valid_object_o`, unit captain and
+            // `total_damage` resolution, dynamic construction maximum, then the retail
+            // f32 percentage and truncating SSE conversion.
+            525 => Ok(Value::Int(
+                self.script_object_health(args[0].as_int(), args[1].as_int())?,
+            )),
+            // `object_max_health` `0x009f5f60`: the same object gate followed directly
+            // by virtual `hits(0)`; notably, no unit-captain redirection occurs here.
+            530 => Ok(Value::Int(self.script_object_max_health_read(
+                args[0].as_int(),
+                args[1].as_int(),
+            )?)),
             // `is_idle` `0x009f9370`: an empty order list is not enough; retail calls
             // `is_captain` on the originally addressed unit, without resolving `o_up`.
             583 => {
