@@ -6,15 +6,15 @@
 //
 //   1. reads back pixels the *renderer itself* owns (`window.don.snapshot()`), and counts
 //      non-black pixels and distinct colours;
-//   2. plays a scripted opening through the same code path a human's clicks take — select,
-//      gather, build, train, advance an age — and checks the ledger moved;
+//   2. drives selection and MoveTo through real input, proves unsupported economy actions
+//      fail closed, and round-trips authoritative core save bytes without shadow state;
 //   3. measures frames per second over a fixed window at a stated unit count, and reports
 //      the browser, backend and viewport it measured on.
 //
 //     node web/serve.mjs &
 //     node web/tools/play-smoke.mjs [--backend canvas2d] [--json out.json] [--keep]
 //
-// Exit 0 only if the game played, the renderer drew, and nothing threw.
+// Exit 0 only if the playable boundary held, the renderer drew, and nothing threw.
 
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -217,7 +217,7 @@ try {
       sessionUrl: window.don.session.url(),
       sessionUnavailableDisabled: [
         'session-map', 'session-size', 'session-nation', 'session-team',
-        'session-ai-slots', 'session-ai-difficulty', 'session-victory',
+        'session-ai-slots', 'session-ai-difficulty', 'income', 'popset', 'session-victory',
       ].every(id => document.getElementById(id)?.disabled),
       sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
       objectiveTime: document.getElementById('objective-time')?.textContent ?? '',
@@ -239,8 +239,12 @@ try {
       replayTimeline: document.getElementById('replay-timeline')?.getAttribute('aria-label') ?? '',
       replayJournalActionsEnabled: ['replay-export', 'replay-import']
         .every(id => !document.getElementById(id)?.disabled),
-      replayUnavailableDisabled: [...document.querySelectorAll('#replay-capabilities button')]
+      coreSaveActionsEnabled: ['core-save', 'core-load']
+        .every(id => !document.getElementById(id)?.disabled),
+      retailReplayDisabled: [...document.querySelectorAll('#replay-capabilities button')]
+        .filter(button => !['core-save', 'core-load'].includes(button.id))
         .every(button => button.disabled),
+      coreSaveStatusLive: document.getElementById('core-save-status')?.getAttribute('aria-live') ?? '',
       replayCapabilities: document.getElementById('replay-capabilities')?.textContent ?? '',
       replayPauseWorked, replaySpeedWorked,
       controlGroupSlots: document.querySelectorAll('#group-slots .group-slot').length,
@@ -269,15 +273,16 @@ try {
     ['the initial order catalog is populated', out.ui.initialCatalog > 0],
     ['build commands require a selection', out.ui.initialCatalogDisabled],
     ['catalog filtering works', out.ui.filteredCatalog === 1],
-    ['a selected non-building object unlocks a known-age affordable building', out.ui.buildButtonEnabled],
+    ['a selected object still exposes catalog evidence while build stays disabled',
+      !out.ui.buildButtonEnabled],
     ['known future-age prerequisites disable building actions', out.ui.futureBuildDisabled],
     ['keyboard shortcuts open train and research modes', out.ui.keyboardTrain && out.ui.keyboardResearch],
-    ['research offers the implemented age action and disables unavailable technologies',
-      out.ui.researchHasEnabledAge && out.ui.unavailableResearchDisabled && out.ui.orderTabs === 3],
+    ['research data remains inspectable while every unavailable action is disabled',
+      !out.ui.researchHasEnabledAge && out.ui.unavailableResearchDisabled && out.ui.orderTabs === 3],
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
     ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
-    ['runtime identity says the web GameWorld is not Arena',
-      out.ui.runtimeLabel.includes('web::wasm::game::GameWorld') && out.ui.runtimeLabel.includes('connected: no')],
+    ['runtime identity says the authoritative Sim adapter is not Arena',
+      out.ui.runtimeLabel.includes('don_sim::tick::Sim') && out.ui.runtimeLabel.includes('connected: no')],
     ['the compiled playable gate is visibly blocked', out.ui.gateLabel.includes('BLOCKED')],
     ['the replay card reports non-empty walks and zero matches',
       out.ui.replayLabel.includes('world walks non-empty') && out.ui.replayLabel.includes('0 matches')],
@@ -287,7 +292,7 @@ try {
     ['session setup exposes the deterministic seed', out.ui.sessionSeed === '0x00c0ffee'],
     ['session setup exposes every player perspective', out.ui.sessionPlayers >= 2],
     ['session identity and seed boundary are visible', out.ui.sessionStatus.includes('0x00c0ffee') &&
-      out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('seed not yet consumed')],
+      out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('owned by don_sim::Sim')],
     ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
     ['session links are shareable', out.ui.sessionShare],
     ['unsupported setup choices stay disabled', out.ui.sessionUnavailableDisabled],
@@ -296,12 +301,12 @@ try {
       out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 'unavailable' &&
       out.ui.sessionSetup.aiSlots === 'unavailable' && out.ui.sessionSetup.aiDifficulty === 'unavailable' &&
       out.ui.sessionSetup.victory === 'unavailable'],
-    ['the two accepted rules are restored from the URL',
-      out.ui.sessionSetup.income === 'uncapped-experiment' && out.ui.sessionSetup.population === 150 &&
-      out.boot.player.popCap === 150],
+    ['unsupported rules are canonicalized instead of accepted from the URL',
+      out.ui.sessionSetup.income === 'unavailable' && out.ui.sessionSetup.population === 'unavailable' &&
+      out.boot.player.popCap === 0],
     ['the pregame summary exposes world, slots, rules, and unavailable systems',
       out.ui.sessionSummary.includes('128 × 128') && out.ui.sessionSummary.includes('manual') &&
-      out.ui.sessionSummary.includes('population 150') && out.ui.sessionSummary.includes('victory unavailable')],
+      out.ui.sessionSummary.includes('population unavailable') && out.ui.sessionSummary.includes('victory unavailable')],
     ['the objective panel reports real elapsed time but disables absent endgame facts',
       out.ui.objectiveTime.includes('frame') && out.ui.objectiveFactsDisabled &&
       out.ui.objectiveState.includes('unavailable') && out.ui.objectiveScore.includes('not a victory score') &&
@@ -319,9 +324,10 @@ try {
       out.ui.replayPauseWorked && out.ui.replaySpeedWorked],
     ['journal feedback is announced and does not claim to be a native save',
       out.ui.replayStatusLive === 'polite' && out.ui.replayStatus.includes('not a native save-state')],
-    ['unsupported native save/load and retail replay actions stay disabled with reasons',
-      out.ui.replayUnavailableDisabled && out.ui.replayCapabilities.includes('no state serializer') &&
-      out.ui.replayCapabilities.includes('no state deserializer') &&
+    ['core save/load is enabled and announced while retail replay stays disabled',
+      out.ui.coreSaveActionsEnabled && out.ui.retailReplayDisabled &&
+      out.ui.coreSaveStatusLive === 'polite' && out.ui.replayCapabilities.includes('deterministic authoritative') &&
+      out.ui.replayCapabilities.includes('malformed files leave the running session unchanged') &&
       out.ui.replayCapabilities.includes('no retail replay playback bridge')],
     ['nine touch control-group slots expose replace, add, remove, clear, and announced feedback',
       out.ui.controlGroupSlots === 9 && out.ui.controlGroupActions === 4 &&
@@ -648,13 +654,13 @@ try {
     ['new game replaced the Wasm world', out.session.restarted && out.session.frameAfterRestart === 0],
     ['the selected seed reached session state', out.session.seedAfterRestart === 0x1234abcd],
     ['restart retains the packed data tables', out.session.packsAfterRestart.every(Boolean)],
-    ['restart exposes the initial player ledger without advancing',
-      JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([200, 200, 100, 100, 100, 100])],
-    ['supported setup rules are applied to the replacement world',
-      out.session.configured.income === 'retail-cap' && out.session.configured.population === 75 &&
-      out.session.popCapAfterRuleTick === 75],
-    ['the current seed-invariant initializer is exposed honestly',
-      out.session.newDigest === out.session.oldDigest && out.session.status.includes('seed not yet consumed')],
+    ['restart exposes the core ledger without advancing',
+      JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([0, 0, 0, 0, 0, 0])],
+    ['unsupported setup rules are explicit and do not fabricate a core population cap',
+      out.session.configured.income === 'unavailable' && out.session.configured.population === 'unavailable' &&
+      out.session.popCapAfterRuleTick === 0],
+    ['the selected seed is consumed by the authoritative core initializer',
+      out.session.newDigest !== out.session.oldDigest && out.session.status.includes('owned by don_sim::Sim')],
     ['the share URL carries the canonical seed and player',
       out.session.urlSeed === '0x1234abcd' && out.session.urlPlayer === '0'],
     ['the share URL records the fixed world and missing player systems',
@@ -662,8 +668,8 @@ try {
       out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unavailable' &&
       out.session.urlSlots === '4-manual' && out.session.urlAiSlots === 'unavailable' &&
       out.session.urlAiDifficulty === 'unavailable'],
-    ['the share URL records only the live rule values and the absent victory host',
-      out.session.urlIncome === 'retail-cap' && out.session.urlPopulation === '75' &&
+    ['the share URL records unavailable rule hosts rather than frontend-only values',
+      out.session.urlIncome === 'unavailable' && out.session.urlPopulation === 'unavailable' &&
       out.session.urlVictory === 'unavailable'],
     ['a malformed seed preserves the live session', out.session.invalidPreserved],
     ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
@@ -672,8 +678,93 @@ try {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
 
-  // The current ABI cannot serialize the native world, but it can restart deterministically
-  // and accept exact command packets. Prove that the bounded command journal reconstructs
+  // The playable ABI owns `don_sim::Sim`: save bytes must be the core serializer's image,
+  // load must atomically restore frame/digest/RNG/handles, and malformed input must leave
+  // the live world and browser UI usable. The current central format deliberately refuses
+  // a post-step save while live step-8 state is outside its supported tranche.
+  out.coreSave = await c.eval(`(() => {
+    const d = window.don;
+    d.session.restart('0x5a17c0de');
+    d.replay.pause();
+    const m = d.state.mod;
+    const ids = [];
+    for (let row = 0; row < m.live; row++) {
+      const tag = m.views().tag[row];
+      if ((tag & 0x80000000) && (tag & 0xf) === 0) ids.push(m.idAtRow(row));
+    }
+    const before = {
+      frame: m.frame, digest: m.digest(), rngState: m.rngState,
+      live: m.live, first: m.info(ids[0]), selection: d.state.selection.length,
+    };
+    const bytes = d.save.export();
+    const magic = Array.from(bytes.slice(0, 8));
+    d.select(ids.slice(0, 2));
+    d.controlGroups.replace(1, ids.slice(0, 2));
+    m.moveTo(0, before.first.x + m.subtile * 8, before.first.y);
+    d.replay.step();
+    const advanced = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
+    let postStepRefused = false, postStepReason = '';
+    try { d.save.export(); } catch (error) {
+      postStepRefused = true; postStepReason = error.message;
+    }
+    const loaded = d.save.import(bytes);
+    const restored = {
+      frame: m.frame, digest: m.digest(), rngState: m.rngState,
+      live: m.live, first: m.info(ids[0]), selection: d.state.selection.length,
+      groups: d.controlGroups.snapshot().groups,
+    };
+    const stableBeforeMalformed = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
+    const corrupt = new Uint8Array(bytes);
+    corrupt[0] ^= 0xff;
+    let malformedRefused = false, malformedReason = '';
+    try { d.save.import(corrupt); } catch (error) {
+      malformedRefused = true; malformedReason = error.message;
+    }
+    const stableAfterMalformed = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
+    // The generation-aware handle bridge is usable after load: select the restored id,
+    // issue a real MoveTo order, and observe it drain and advance.
+    d.select([ids[0]]);
+    m.moveTo(0, before.first.x + m.subtile * 4, before.first.y);
+    d.replay.step();
+    const resumed = {
+      frame: m.frame, digest: m.digest(), transport: m.transport(), info: m.info(ids[0]),
+    };
+    d.session.restart('0x1234abcd');
+    d.replay.play();
+    return JSON.stringify({
+      before, bytes: bytes.length, magic, advanced, postStepRefused, postStepReason,
+      loaded, restored, malformedRefused, malformedReason,
+      stableBeforeMalformed, stableAfterMalformed, resumed,
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['core save exports the deterministic DoNSave image from a non-empty world',
+      out.coreSave.before.live > 0 && out.coreSave.bytes > 0 &&
+      String.fromCharCode(...out.coreSave.magic).startsWith('DoNSave')],
+    ['core load restores equal frame, digest, RNG, population, and object identity',
+      out.coreSave.restored.frame === out.coreSave.before.frame &&
+      out.coreSave.restored.digest === out.coreSave.before.digest &&
+      out.coreSave.restored.rngState === out.coreSave.before.rngState &&
+      out.coreSave.restored.live === out.coreSave.before.live &&
+      out.coreSave.restored.first.id === out.coreSave.before.first.id],
+    ['successful load resets browser-only selection and control groups and pauses safely',
+      out.coreSave.loaded.selection === 0 && out.coreSave.loaded.groups === 0 &&
+      out.coreSave.loaded.paused && out.coreSave.restored.selection === 0 &&
+      Object.values(out.coreSave.restored.groups).every(ids => ids.length === 0)],
+    ['live post-step state is refused until the central step-8 save tranche lands',
+      out.coreSave.advanced.frame === 1 && out.coreSave.postStepRefused &&
+      out.coreSave.postStepReason.includes('step-8')],
+    ['malformed core bytes fail closed without changing frame, digest, or RNG',
+      out.coreSave.malformedRefused && out.coreSave.malformedReason.includes('load refused') &&
+      JSON.stringify(out.coreSave.stableAfterMalformed) === JSON.stringify(out.coreSave.stableBeforeMalformed)],
+    ['post-load generational handles remain selectable and accept core orders',
+      out.coreSave.resumed.frame === 1 && out.coreSave.resumed.transport.ordersApplied > 0 &&
+      out.coreSave.resumed.info.id === out.coreSave.before.first.id],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // The bounded command journal remains a separate exact-packet tool. Prove it reconstructs
   // an intermediate tick bit-for-bit, survives export/import, rejects malformed input
   // without touching the live world, seeks, and resumes beyond its recorded head.
   out.journal = await c.eval(`(async () => {
@@ -945,15 +1036,16 @@ try {
     bad++;
   }
 
-  // ---- 2. play a scripted opening ------------------------------------------------------
-  // Every step below goes through the same functions the mouse and keyboard call.
+  // ---- 2. authoritative-core action boundary -------------------------------------------
+  // Move remains playable; gather/build/train/research must stay disabled until their
+  // exact state is owned by don_sim rather than a browser-only GameWorld.
   const script = `(async () => {
     const s = window.don.state, m = s.mod;
     const R = { steps: [] };
     const note = (k, v) => R.steps.push([k, v]);
 
     // select every citizen the way Ctrl+A does
-    window.don.key('KeyA');                       // no ctrl -> pans; harmless
+    window.don.key('KeyA');                       // complete key press cannot latch camera pan
     const v = m.views(), n = m.live, ids = [];
     for (let i = 0; i < n; i++) {
       const tag = v.tag[i];
@@ -1084,29 +1176,24 @@ try {
   })()`;
   out.script = JSON.parse(await c.eval(script));
   const S = Object.fromEntries(out.script.steps);
-  console.log(`scripted opening: ${S.selected} citizens, ${S.gatherOrders} gather orders, ` +
+  console.log(`core action boundary: ${S.selected} citizens, ${S.gatherOrders} gather orders, ` +
     `workers ${JSON.stringify(S.workers)}`);
   console.log(`  stock ${JSON.stringify(S.stockBefore)} -> ${JSON.stringify(S.stockAfter)}`);
   console.log(`  barracks at ${JSON.stringify(S.barracksAt)} built=${S.barracksBuilt} ` +
     `products=${S.barracksProducts} trained=${S.trained}  age ${JSON.stringify(S.age)}`);
-  const stockMoved = S.stockAfter.some((v, i) => v > S.stockBefore[i]);
+  const stockMoved = S.stockAfter.some((v, i) => v !== S.stockBefore[i]);
   for (const [name, ok] of [
     ['a citizen was selected', S.selected > 0],
-    ['gather orders were accepted', S.gatherOrders > 0],
-    ['the ledger moved', stockMoved],
-    ['selection-driven build palette armed the recovered Barracks action',
-      S.buildPaletteAction === true && S.buildPaletteArmed === true],
-    ['a building finished', S.barracksBuilt === true],
-    ['the producer menu is non-empty', S.barracksProducts > 0],
-    ['training used an enabled WHERE-edge action and disabled future-age actions',
-      S.trainPaletteAction === true && S.futureTrainDisabled === true],
-    ['palette queue feedback exposes both queued items',
-      S.queueAfterPalette === 2 && S.queueFeedback.includes('live queue') && S.queueFeedback.includes('(2/8)')],
-    ['a unit was trained', S.trained > 0],
-    ['research exposes age advance and disables unsupported technologies',
-      S.researchPaletteAction === true && S.otherTechDisabled === true && S.researchStarted === true &&
-      S.researchContext.includes('prerequisite hosts are unavailable')],
-    ['the age advanced', S.age[1] > S.age[0]],
+    ['gather is unavailable without a core resource-node command host', S.gatherOrders === 0],
+    ['the unsupported economy path does not mutate the core ledger', !stockMoved],
+    ['build data remains inspectable but the action is visibly disabled',
+      S.buildPaletteAction === false && S.buildPaletteArmed === false],
+    ['no shadow building state is created', S.barracksBuilt === false],
+    ['training is unavailable without an authoritative core producer',
+      S.barracksProducts === undefined && S.trained === 0],
+    ['research is visibly unavailable and does not mutate core age',
+      S.researchPaletteAction === false && S.otherTechDisabled === true &&
+      S.researchStarted === false && S.age[1] === S.age[0]],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -1130,8 +1217,8 @@ try {
     });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
-    ['the owner snapshot updates after real building and training',
-      out.objectivesAfterPlay.snapshot.owners[0].objects >= out.objectives.snapshot.owners[0].objects + 3 &&
+    ['the owner snapshot stays on the authoritative unit population',
+      out.objectivesAfterPlay.snapshot.owners[0].objects === out.objectives.snapshot.owners[0].objects &&
       out.objectivesAfterPlay.playerZeroText.includes(
         `${out.objectivesAfterPlay.snapshot.owners[0].objects} objects`)],
     ['post-play owner totals still equal the live world',
@@ -1201,16 +1288,44 @@ try {
     for (let i = 0; i < m.live; i++) {
       const tag = v.tag[i];
       if ((tag & 0x80000000) === 0 || (tag & 0xf) !== 0 || ((tag >>> 29) & 1)) continue;
+      // Earlier real-pointer layout checks can leave edge scroll armed at their last CDP
+      // coordinate. Freeze that input state before deriving the coordinate we will click.
+      window.don.state.edge = null;
       window.don.centreOn(v.x[i], v.y[i]);
       const s = window.don.worldToScreen(v.x[i], v.y[i]);
       const r = document.getElementById('gl').getBoundingClientRect();
-      return JSON.stringify({ id: m.pickAt(v.x[i], v.y[i]), sx: r.left + s[0], sy: r.top + s[1] });
+      const sx = r.left + s[0], sy = r.top + s[1];
+      const hit = document.elementFromPoint(sx, sy);
+      return JSON.stringify({
+        id: m.pickAt(v.x[i], v.y[i]), wx: v.x[i], wy: v.y[i], sx, sy,
+        canvasRect: [r.left, r.top, r.right, r.bottom],
+        hitId: hit?.id ?? '', hitTag: hit?.tagName ?? '',
+      });
     }
     return null;
   })()`).then((s) => (s ? JSON.parse(s) : null));
   if (!target) { console.error('FAIL: no unit to click'); bad++; }
   else {
     await c.eval('window.don.select([])');
+    // Deliver input against a presented camera/projection boundary.
+    await c.eval('new Promise(resolve => requestAnimationFrame(() => resolve()))');
+    // Observe delivery at the real canvas as well as the gameplay result. Registering the
+    // observer after the WebGPU benchmark also refreshes headless Chrome's compositor hit
+    // region before CDP sends its mouse event.
+    await c.eval(`(() => {
+      window.__donSmokePointerEvents = [];
+      const canvas = document.getElementById('gl');
+      for (const type of ['pointerdown', 'pointerup']) {
+        canvas.addEventListener(type, event => {
+          const world = window.don.screenToWorld(event.clientX, event.clientY);
+          window.__donSmokePointerEvents.push({
+            type, button: event.button, x: event.clientX, y: event.clientY,
+            world, picked: window.don.state.mod.pickAt(world[0], world[1]),
+            dragging: !!window.don.state.drag, selection: window.don.state.selection.slice(),
+          });
+        }, { once: true, passive: true });
+      }
+    })()`);
     for (const type of ['mousePressed', 'mouseReleased']) {
       await c.send('Input.dispatchMouseEvent', {
         type, x: Math.round(target.sx), y: Math.round(target.sy),
@@ -1219,6 +1334,7 @@ try {
     }
     await sleep(120);
     const selN = await c.eval('window.don.state.selection.length');
+    const pointerEvents = await c.eval('window.__donSmokePointerEvents');
     // right click 6 tiles away -> a MoveToCommand the unit must accept
     for (const type of ['mousePressed', 'mouseReleased']) {
       await c.send('Input.dispatchMouseEvent', {
@@ -1250,11 +1366,15 @@ try {
       return { modeCleared: window.don.state.commandMode === null, order: i ? i.order : -1 };
     })()`);
     out.mouse = {
-      clickedId: target.id, selectedAfterClick: selN, orderAfterRightClick: ordered,
+      clickedId: target.id, target, selectedAfterClick: selN, orderAfterRightClick: ordered,
+      pointerEvents,
       dockArmed, dockModeCleared: dockResult.modeCleared, orderAfterDockMove: dockResult.order,
     };
     console.log(`real mouse: click selected ${selN}, right click set order ${ordered} ` +
       `(1 = MOVE_TO)`);
+    if (pointerEvents.map(event => event.type).join(',') !== 'pointerdown,pointerup') {
+      console.error('FAIL: the canvas did not receive the real pointer event pair'); bad++;
+    }
     if (selN !== 1) { console.error('FAIL: a real click did not select the unit'); bad++; }
     if (ordered !== 1 && ordered !== 3) {
       console.error('FAIL: a real right click produced no order'); bad++;

@@ -1,4 +1,10 @@
-//! A **playable** world: terrain, buildings, workers, production and the derived economy.
+//! Legacy browser-world prototype plus the packed [`PlayData`] decoder.
+//!
+//! The playable ABI no longer instantiates [`GameWorld`]: `game_abi` owns the repository's
+//! authoritative `don_sim::tick::Sim` and uses this module only for immutable packed-data
+//! records and compatibility constants. The prototype remains temporarily as derivation
+//! history while its still-unported build/train/research hosts move into `don_sim`; it must
+//! not be reintroduced as browser gameplay state or given its own save format.
 //!
 //! # What is derived here and what is not — read this before believing anything on screen
 //!

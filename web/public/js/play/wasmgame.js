@@ -18,10 +18,13 @@ export const GAP_NAMES = [
   'tile not gatherable', 'wrong age', 'object capacity full', 'movement route failed',
 ];
 
-/** Tag bit layout — must match `GameWorld::refresh_tags`. */
+/** Tag bit layout — must match the authoritative-core projection in `game_abi`. */
 export const TAG = {
   occupied: 1 << 31, selected: 1 << 30, building: 1 << 29, underConstruction: 1 << 28,
 };
+export const CORE_CAP = Object.freeze({
+  save: 1 << 0, load: 1 << 1, move: 1 << 2, attack: 1 << 3, halt: 1 << 4,
+});
 
 export class GameModule {
   constructor(instance) {
@@ -36,6 +39,7 @@ export class GameModule {
     this.playerCount = this.x.game_players_count();
     this.playerFields = this.x.game_player_fields();
     this.gapCount = this.x.game_gap_count();
+    this.capabilityBits = this.x.game_capabilities() >>> 0;
     this._submitted = 0;
     this._commandObserver = null;
     this._readiness = this._loadReadiness();
@@ -48,7 +52,7 @@ export class GameModule {
     return new GameModule(instance);
   }
 
-  /** Stage the two data packs, then create the game. Nothing allocates after this. */
+  /** Stage the two data packs, then create the authoritative core and its projections. */
   create(gamedataBytes, playdataBytes, seed = 0xc0ffee) {
     if (gamedataBytes) {
       const p = this.x.game_gamedata_alloc(gamedataBytes.length);
@@ -145,10 +149,51 @@ export class GameModule {
   get terrainVersion() { return this.x.game_terrain_version(this.g); }
   get hasGameData() { return this.x.game_has_gamedata(this.g) === 1; }
   get hasPlayData() { return this.x.game_has_playdata(this.g) === 1; }
+  get rngState() { return this.x.game_rng_state(this.g) >>> 0; }
+  get coreSeed() { return this.x.game_seed(this.g) >>> 0; }
+  supports(name) {
+    const bit = CORE_CAP[name];
+    return Number.isInteger(bit) && (this.capabilityBits & bit) !== 0;
+  }
   digest() {
     const lo = this.x.game_digest_lo(this.g) >>> 0;
     const hi = this.x.game_digest_hi(this.g) >>> 0;
     return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
+  }
+
+  _lastError() {
+    return this._staticText(this.x.game_error_ptr(this.g), this.x.game_error_len(this.g)) ||
+      'core refused the operation';
+  }
+
+  /** Copy the deterministic `don_sim::systems::save_load` image out of wasm memory. */
+  saveCore() {
+    if (!this.supports('save')) throw new Error('core save export is unavailable');
+    if (this.x.game_save(this.g) !== 1) throw new Error(this._lastError());
+    const len = this.x.game_save_len(this.g) >>> 0;
+    const ptr = this.x.game_save_ptr(this.g) >>> 0;
+    // `game_save` may grow memory; read the current buffer only after it returns.
+    return new Uint8Array(new Uint8Array(this.mem.buffer, ptr, len));
+  }
+
+  /** Atomically replace the authoritative core from a bounded save image. */
+  loadCore(input) {
+    if (!this.supports('load')) throw new Error('core save import is unavailable');
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+    if (!bytes.length || bytes.length > (this.x.game_save_limit() >>> 0)) {
+      throw new Error(`load refused: invalid byte length ${bytes.length}`);
+    }
+    const ptr = this.x.game_load_alloc(this.g, bytes.length) >>> 0;
+    if (!ptr) throw new Error(this._lastError());
+    new Uint8Array(this.mem.buffer, ptr, bytes.length).set(bytes);
+    if (this.x.game_load_commit(this.g) !== 1) throw new Error(this._lastError());
+    this._submitted = 0;
+    this._buf = null;
+    this._v = {};
+    return {
+      frame: this.frame, digest: this.digest(), rngState: this.rngState,
+      live: this.live, bytes: bytes.length,
+    };
   }
   startOf(p) { return [this.x.game_start_x(this.g, p), this.x.game_start_y(this.g, p)]; }
   setIncomeMode(m) { this.x.game_set_income_mode(this.g, m); }
@@ -210,7 +255,7 @@ export class GameModule {
 
   gaps() { return Array.from(this.views().gaps); }
 
-  /** Repository product gate, not a claim that this local GameWorld is the Arena. */
+  /** Repository product gate for the Sim-backed playable adapter. */
   readiness() { return this._readiness; }
 
   /** Exact packet lifecycle at the browser/Wasm boundary. */

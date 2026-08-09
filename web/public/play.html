@@ -198,7 +198,7 @@
   .replay-capability { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px;
     align-items:center; color:var(--dim); font:9px/1.35 var(--mono); }
   .replay-capability button:disabled { opacity:.55; cursor:not-allowed; border-style:dashed; }
-  #replay-file { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  #replay-file, #core-load-file { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
   #group-slots { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:3px; margin:5px 0; }
   .group-slot { min-width:0; padding:5px 2px; font:600 9px var(--mono); }
   .group-slot.active { border-color:var(--accent); color:var(--accent); background:#14202b; }
@@ -405,14 +405,16 @@
       </label>
 
       <div class="setup-heading">supported rules</div>
-      <label>income
-        <select id="income" style="width:150px">
+      <label class="unavailable">income
+        <select id="income" style="width:150px" disabled
+          title="Unavailable: the authoritative Sim adapter has no browser income-rule setter">
           <option value="0" selected>retail cap step</option>
           <option value="1">DoN experiment — uncapped</option>
         </select>
       </label>
-      <label>population limit
-        <select id="popset" style="width:150px">
+      <label class="unavailable">population limit
+        <select id="popset" style="width:150px" disabled
+          title="Unavailable: the authoritative Sim adapter has no browser population-limit setter">
           <option value="0">25</option><option value="1">50</option>
           <option value="2">75</option><option value="3" selected>100</option>
           <option value="4">125</option><option value="5">150</option>
@@ -440,10 +442,10 @@
         session loading…
       </div>
       <div class="hint" style="margin-top:4px">
-        Only population limit and income mode have live core setters. The seed reaches
-        <code>GameWorld</code>, but its current initializer does not consume it for map/start
-        generation. Disabled choices are encoded as unavailable in the session URL; they are not
-        frontend-only rules pretending to affect play.
+        The seed reaches the authoritative <code>don_sim::Sim</code> initializer. Map style,
+        player setup, income, population, victory, nation, team, and AI options remain disabled
+        until the same core owns their exact state. Disabled choices are not frontend-only rules
+        pretending to affect play.
       </div>
     </fieldset>
 
@@ -501,8 +503,10 @@
       </div>
       <div id="replay-capabilities" aria-label="Save and replay capability boundaries">
         <div class="replay-capability"><span>Command journal: tick-boundary restart plus exact frame-stamped wire packets; seek and resume supported.</span><b>supported</b></div>
-        <div class="replay-capability"><span>Native save: unavailable because the WASM ABI exports no state serializer.</span><button type="button" disabled title="Unavailable: no game-state serialization ABI">save state</button></div>
-        <div class="replay-capability"><span>Native load: unavailable because the WASM ABI exports no state deserializer.</span><button type="button" disabled title="Unavailable: no game-state deserialization ABI">load state</button></div>
+        <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes. The current format refuses unsupported live step-8 state instead of dropping it.</span><button id="core-save" type="button">download save</button></div>
+        <div class="replay-capability"><span>DoN core load: bounded, validated, and atomic; malformed files leave the running session unchanged.</span><button id="core-load" type="button">load save</button></div>
+        <input id="core-load-file" type="file" accept="application/octet-stream,.donsave">
+        <div id="core-save-status" class="status-note" role="status" aria-live="polite">Core save/load ready. Save support is state-dependent.</div>
         <div class="replay-capability"><span>Retail .rcx replay: unavailable because no retail replay playback bridge is exported.</span><button type="button" disabled title="Unavailable: no retail replay playback bridge">open .rcx</button></div>
       </div>
     </fieldset>
@@ -604,20 +608,15 @@
     <fieldset>
       <legend>integration status</legend>
       <div class="keys">
-        Recovered primitives currently exercised here: the damage chain
-        (<code>ObjectData::get_damage</code>), the economy tick
-        (<code>Leader::gather</code> &rarr; <code>calc_gather</code> &rarr;
-        <code>do_gather</code>), building placement
-        (<code>WorldData::space_at_corner</code>), gather reachability
-        (<code>has_gather_access</code>), every cost, footprint, build time and the
-        312 <code>WHERE</code> producer edges, and every command on the wire.<br><br>
-        Open fidelity work: map generation, movement, target
-        acquisition, which resource a tile yields, construction progress, and the
-        composition of <code>object_income</code>. No fog, no line of sight, no market,
-        no techs but ages, and gather-enhancer buildings pay nothing because
-        <code>BuildData::calc_gather</code> is unported. The catalog also lacks nation,
-        age, and builder eligibility gates. None of those paths is presented as retail
-        fidelity.
+        This page now owns the repository's authoritative <code>don_sim::Sim</code> and
+        projects its unit columns, terrain, frame, checksum digest, and RNG state into the
+        existing renderer ABI. Move, attack, halt, deterministic core save, and atomic core
+        load use that same state.<br><br>
+        Build, train, research, gather-resource composition, live rule setters, fog, market,
+        diplomacy, AI, and victory remain unavailable in this adapter. The central save format
+        also refuses post-step live leader views until that owner joins its receipt-checked
+        transaction. These boundaries are disabled or reported as refusals;
+        the browser no longer carries a second gameplay world to make them appear complete.
       </div>
     </fieldset>
 

@@ -87,6 +87,7 @@ const state = {
   settings: null,
   bindingCapture: null,
   settingsStatus: 'loading browser settings',
+  coreSaveStatus: 'core save/load ready; support is state-dependent',
   replay: {
     events: [], baseline: null, headFrame: 0,
     applying: false, playback: false, restoring: false,
@@ -1317,8 +1318,8 @@ function sessionUrl() {
   url.searchParams.set('slots', `${state.mod.playerCount}-manual`);
   url.searchParams.set('ai_slots', 'unavailable');
   url.searchParams.set('ai_difficulty', 'unavailable');
-  url.searchParams.set('income', INCOME_MODES[state.sessionIncomeMode].slug);
-  url.searchParams.set('population', String(POPULATION_LIMITS[state.sessionPopSetting]));
+  url.searchParams.set('income', 'unavailable');
+  url.searchParams.set('population', 'unavailable');
   url.searchParams.set('victory', 'unavailable');
   if (state.settings.performance.renderer !== 'auto') {
     url.searchParams.set('backend', state.settings.performance.renderer);
@@ -1356,11 +1357,10 @@ function renderSessionStatus() {
   if (!$('session-status') || !state.mod) return;
   $('session-status').textContent =
     `${formatSeed(state.sessionSeed)} · player ${state.who} · frame ${state.mod.frame} · ` +
-    `initial digest ${state.sessionInitialDigest} · seed not yet consumed by world setup`;
+    `initial digest ${state.sessionInitialDigest} · seed is owned by don_sim::Sim`;
 }
 
 function sessionDescriptor() {
-  const income = INCOME_MODES[state.sessionIncomeMode];
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
     player: state.who,
@@ -1371,8 +1371,8 @@ function sessionDescriptor() {
     slots: state.mod.playerCount,
     aiSlots: 'unavailable',
     aiDifficulty: 'unavailable',
-    income: income.slug,
-    population: POPULATION_LIMITS[state.sessionPopSetting],
+    income: 'unavailable',
+    population: 'unavailable',
     victory: 'unavailable',
   });
 }
@@ -1387,7 +1387,7 @@ function renderSessionSummary() {
   $('summary-slots').textContent =
     `${setup.slots} manual command perspectives · AI unavailable`;
   $('summary-rules').textContent =
-    `population ${setup.population} · ${INCOME_MODES[state.sessionIncomeMode].label} · victory unavailable`;
+    'income unavailable · population unavailable · victory unavailable';
 }
 
 function initializeObjectivesPanel() {
@@ -2134,6 +2134,67 @@ function downloadReplayJournal() {
   renderReplayPanel();
 }
 
+function coreSaveSnapshot() {
+  return {
+    supported: state.mod.supports('save') && state.mod.supports('load'),
+    frame: state.mod.frame,
+    digest: state.mod.digest(),
+    rngState: state.mod.rngState,
+    status: state.coreSaveStatus,
+  };
+}
+
+function exportCoreSave() {
+  try {
+    const bytes = state.mod.saveCore();
+    state.coreSaveStatus = `saved ${bytes.length.toLocaleString()} authoritative bytes · ` +
+      `frame ${state.mod.frame} · digest ${state.mod.digest()} · RNG 0x${state.mod.rngState.toString(16).padStart(8, '0')}`;
+    $('core-save-status').textContent = state.coreSaveStatus;
+    return bytes;
+  } catch (error) {
+    state.coreSaveStatus = error.message;
+    $('core-save-status').textContent = state.coreSaveStatus;
+    throw error;
+  }
+}
+
+function downloadCoreSave() {
+  try {
+    const bytes = exportCoreSave();
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `don-core-frame-${state.mod.frame}.donsave`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    say(`core save downloaded — ${bytes.length.toLocaleString()} bytes`, 'ok');
+  } catch (error) {
+    say(`core save refused — ${error.message}`, 'warn');
+  }
+}
+
+function importCoreSave(input) {
+  try {
+    const result = state.mod.loadCore(input);
+    const seed = state.mod.coreSeed;
+    resetClientForWorld(seed, true, 'loaded core save');
+    startReplayJournal();
+    $('session-seed').value = formatSeed(seed);
+    syncSessionUrl();
+    state.coreSaveStatus = `loaded ${result.bytes.toLocaleString()} authoritative bytes · ` +
+      `frame ${result.frame} · digest ${result.digest} · RNG 0x${result.rngState.toString(16).padStart(8, '0')} · paused`;
+    $('core-save-status').textContent = state.coreSaveStatus;
+    say(`core save loaded — frame ${result.frame}; browser selection and command journal reset`, 'ok');
+    return { ...result, selection: state.selection.length, groups: state.groups.size, paused: state.paused };
+  } catch (error) {
+    state.coreSaveStatus = error.message;
+    $('core-save-status').textContent = state.coreSaveStatus;
+    say(`core load refused — ${error.message}`, 'warn');
+    throw error;
+  }
+}
+
 function initializeReplayPanel() {
   startReplayJournal();
   $('replay-play').addEventListener('click', () => setPaused(!state.paused));
@@ -2166,6 +2227,18 @@ function initializeReplayPanel() {
       say(`command journal refused — ${error.message}`, 'warn');
     }
   });
+  $('core-save').disabled = !state.mod.supports('save');
+  $('core-load').disabled = !state.mod.supports('load');
+  $('core-save').addEventListener('click', downloadCoreSave);
+  $('core-load').addEventListener('click', () => $('core-load-file').click());
+  $('core-load-file').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try { importCoreSave(new Uint8Array(await file.arrayBuffer())); }
+    catch { /* status and toast are set by importCoreSave */ }
+  });
+  $('core-save-status').textContent = state.coreSaveStatus;
   renderReplayPanel();
 }
 
@@ -2304,8 +2377,8 @@ function renderMenus() {
   if (mode === 'build') {
     $('palette-context').textContent = ctx.mobiles.length
       ? `${ctx.mobiles.length} selected non-building object(s) · age ${ctx.me.age} · ` +
-        'current core builder predicate is selection-only; builder-type and nation gates are unavailable'
-      : 'select a non-building object · builder-type and nation eligibility are not exported';
+        'catalog evidence only; the authoritative core build command is unavailable'
+      : 'select a non-building object to inspect costs · authoritative build is unavailable';
     if (!state.buildable) {
       paletteItems.push(unavailablePaletteItem('Building catalog unavailable', 'packed play data missing'));
     } else if (!ctx.mobiles.length) {
@@ -2317,8 +2390,8 @@ function renderMenus() {
     const producerNames = [...new Set(ctx.producers.map((p) => typeName(p.typeId)))];
     $('palette-context').textContent = ctx.producers.length
       ? `${ctx.producers.length} completed producer(s): ${producerNames.join(', ')} · ` +
-        'exact WHERE edges; nation-specific eligibility is unavailable'
-      : 'select a completed producer · products come only from exported WHERE edges';
+        'exact WHERE edges shown as evidence; authoritative training is unavailable'
+      : 'no authoritative core producer is selected; training is unavailable';
     const seen = new Set();
     for (const b of ctx.producers) {
       for (const t of m.products(b.typeId)) {
@@ -2335,8 +2408,8 @@ function renderMenus() {
     }
   } else {
     $('palette-context').textContent =
-      `player age ${ctx.me.age} · only the global age command is implemented; ` +
-      'library, ordinary technology, and prerequisite hosts are unavailable';
+      `player age ${ctx.me.age} · age costs are evidence only; ` +
+      'research and prerequisite hosts are unavailable in the authoritative core adapter';
     const age = state.play?.ages?.[ctx.me.age];
     if (age && ctx.me.age < 7) {
       paletteItems.push({
@@ -2392,6 +2465,9 @@ function missingCost(cost, stock) {
 function paletteGate(it, ctx = selectedPaletteContext()) {
   if (it.kind === 'unavailable') return { enabled: false, reasons: [it.reason], detail: '' };
   const reasons = [];
+  if (['build', 'train', 'research'].includes(it.kind)) {
+    reasons.push(`${it.kind} is unavailable in the authoritative don_sim browser adapter`);
+  }
   if (it.kind === 'build') {
     if (!ctx.mobiles.length) reasons.push('select a non-building object');
     if (it.age > ctx.me.age) reasons.push(`requires age ${it.age}`);
@@ -2415,7 +2491,7 @@ function paletteGate(it, ctx = selectedPaletteContext()) {
     const queues = ctx.producers.filter((p) => p.typeId === it.producerType).map((p) => p.queueN);
     detail = `${typeName(it.producerType)} · queue ${queues.length ? Math.min(...queues) : 0}/${QUEUE_CAPACITY}`;
   }
-  if (it.kind === 'research') detail = 'global age command · 600-frame integration duration';
+  if (it.kind === 'research') detail = 'age data record · command host unavailable';
   return { enabled: reasons.length === 0, reasons, detail };
 }
 
@@ -2530,7 +2606,7 @@ function renderReadinessStatic() {
 
   const runtime = $('readiness-runtime');
   runtime.textContent =
-    'web::wasm::game::GameWorld — local integration composition; don_ai::arena::World connected: no';
+    'don_sim::tick::Sim — authoritative local core projected through the playable WASM ABI; don_ai::arena::World connected: no';
   runtime.className = 'rv bad';
 
   const gate = $('readiness-gate');
@@ -2555,9 +2631,9 @@ function renderReadinessStatic() {
   list.replaceChildren();
   const local = document.createElement('li');
   const localSlug = document.createElement('code');
-  localSlug.textContent = 'web-gameworld-not-arena';
+  localSlug.textContent = 'web-core-adapter-incomplete';
   local.append(localSlug, document.createTextNode(
-    ' — command packets terminate in the standalone web GameWorld, not don-ai Arena'));
+    ' — the browser now owns don_sim::Sim, but build/train/research and live step-8 save coverage remain fail-closed'));
   list.appendChild(local);
   for (const blocker of registry.blockers) {
     const li = document.createElement('li');
@@ -2690,17 +2766,15 @@ function renderSelection() {
 
 function renderActionDock() {
   const selected = state.selection.length;
-  const infos = state.selection.map((id) => state.mod.info(id)).filter(Boolean);
-  const hasMobile = infos.some((info) => !info.isBuilding);
-  const hasProducer = infos.some((info) => info.isBuilding && info.buildProgress < 0 &&
-    Array.isArray(state.play?.edges?.[String(info.typeId)]));
   for (const mode of ['move', 'attack', 'gather']) {
     const el = $(`cmd-${mode}`);
     if (!el) continue;
     const active = state.commandMode === mode;
     el.classList.toggle('active', active);
     el.setAttribute('aria-pressed', String(active));
-    el.disabled = selected === 0;
+    const supported = mode !== 'gather' && state.mod.supports(mode);
+    el.disabled = selected === 0 || !supported;
+    if (!supported) el.title = `${mode} unavailable in the authoritative don_sim adapter`;
   }
   for (const id of ['cmd-halt']) if ($(id)) $(id).disabled = selected === 0;
   const build = $('cmd-build');
@@ -2708,10 +2782,14 @@ function renderActionDock() {
     const active = state.buildType !== null;
     build.classList.toggle('active', active);
     build.setAttribute('aria-pressed', String(active));
-    build.disabled = !hasMobile;
+    build.disabled = true;
+    build.title = 'Build unavailable in the authoritative don_sim adapter';
   }
   const train = $('cmd-train');
-  if (train) train.disabled = !hasProducer;
+  if (train) {
+    train.disabled = true;
+    train.title = 'Train unavailable in the authoritative don_sim adapter';
+  }
   const ds = $('dock-state');
   if (ds) ds.innerHTML = selected ? `<b>${selected}</b><br>selected` : 'no<br>selection';
 }
@@ -3058,6 +3136,11 @@ window.don = {
       persist: false, status: 'reloaded persisted browser settings',
     }),
   },
+  save: {
+    snapshot: () => coreSaveSnapshot(),
+    export: () => exportCoreSave(),
+    import: (bytes) => importCoreSave(bytes),
+  },
   replay: {
     snapshot: () => replaySnapshot(),
     export: () => exportReplayJournal(),
@@ -3078,7 +3161,7 @@ window.don = {
   player: (p = 0) => state.mod.player(p),
   gaps: () => state.mod.gaps(),
   readiness: () => ({
-    runtime: 'web::wasm::game::GameWorld',
+    runtime: 'don_sim::tick::Sim via web::wasm::game_abi',
     arenaConnected: false,
     registry: state.mod.readiness(),
     replay: REPLAY_EVIDENCE,
@@ -3098,6 +3181,7 @@ window.don = {
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
     sessionSetup: sessionDescriptor(),
     objectives: exportedWorldSnapshot(), camera: cameraSnapshot(), replay: replaySnapshot(),
+    save: coreSaveSnapshot(),
     controlGroups: controlGroupsSnapshot(), commands: commandFeedbackSnapshot(),
     settings: settingsSnapshot(),
     selection: state.selection.length, digest: state.mod.digest(),
@@ -3128,16 +3212,22 @@ window.don = {
     state.mod._buf = null;
     return { seed, frames, live, digest: hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
   },
-  key: (code, modifiers = {}) => onKeyDown({
-    code,
-    key: code.replace('Key', ''),
-    shiftKey: !!modifiers.shiftKey,
-    ctrlKey: !!modifiers.ctrlKey,
-    metaKey: !!modifiers.metaKey,
-    altKey: !!modifiers.altKey,
-    preventDefault() {},
-    target: {},
-  }),
+  key(code, modifiers = {}) {
+    onKeyDown({
+      code,
+      key: code.replace('Key', ''),
+      shiftKey: !!modifiers.shiftKey,
+      ctrlKey: !!modifiers.ctrlKey,
+      metaKey: !!modifiers.metaKey,
+      altKey: !!modifiers.altKey,
+      preventDefault() {},
+      target: {},
+    });
+    // This automation surface represents one complete keystroke. Keeping the key in the
+    // physical-key set after returning makes camera keys pan forever and diverges from what
+    // a human press/release does.
+    keys.delete(code);
+  },
 
   /**
    * Fill the world for a frame-rate measurement, then report the count actually live.

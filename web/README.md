@@ -8,7 +8,7 @@ Full write-up, architecture and measurements: **`docs/tracks/web-spectator.md`**
 node web/tools/pack-gamedata.mjs      # schema/live/* -> public/data/gamedata.bin (gitignored)
 node web/tools/gen-wire.mjs           # schema/command-wire.json -> the JS + Rust command codec
 node web/tools/gen-readiness.mjs      # replay scoreboard -> compact browser evidence
-web/build.sh                          # cargo -> wasm32 -> public/wasm/don_web.wasm  (~168 KB)
+web/build.sh                          # cargo -> wasm32 -> public/wasm/don_web.wasm
 node web/serve.mjs                    # http://127.0.0.1:8787/  with COOP/COEP set
 node web/bench.mjs --out results.json # launches Chrome, drives it over CDP, prints JSON
 ```
@@ -76,27 +76,32 @@ node web/tools/play-smoke.mjs --json web/play-results.json
 ```
 
 The playable page requires both packed data files; it will not fall back to synthetic data.
-It exposes every rejected command in the HUD and labels itself an integration build because
-map generation, nation/builder eligibility, movement/collision, acquisition, construction,
-fog/LOS, and parts of the economy are not yet retail-complete. The recovered primitives are
-real, but their present composition is not called Fidelity mode.
+Its authoritative state is `don_sim::tick::Sim`; the browser-facing position, tag, player,
+and query arrays are projections rebuilt from that core rather than a second gameplay world.
+Move, attack, halt, frame stepping, digest, RNG, and core save/load use that same state.
+Gather, build, train, research, live rule setters, fog/LOS, diplomacy, AI, and victory remain
+disabled until their exact core hosts are exposed.
 
-Its readiness panel has three independent inputs: the runtime identifies itself as the
-standalone `web::wasm::game::GameWorld` (not `don_ai::arena::World`), the playable blocker
-list is read from `don_sim::deviations` compiled into the Wasm module, and replay evidence is
-generated from the authoritative validation JSON. Packet counters show submitted, tick-drained,
-applied, pending, and fail-closed commands, so UI activity is not mistaken for engine activity.
+Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
+browser adapter (not `don_ai::arena::World`), the playable blocker list is read from
+`don_sim::deviations` compiled into the Wasm module, and replay evidence is generated from
+the authoritative validation JSON. Packet counters show submitted, tick-drained, applied,
+pending, and fail-closed commands, so UI activity is not mistaken for engine activity.
+
+The Save and Load controls exchange the bounded deterministic `DoNSave` byte image owned by
+`don_sim::systems::save_load`. Decode is atomic: malformed input leaves the current session
+unchanged. The present central format refuses post-step live step-8 state instead of silently
+dropping it; the page shows that refusal and retains the last successful save image.
 
 ## Playing
 
 Left click selects — that emits a real `GroupCommand` (`0x00`): `num`, `who`, then `num`
-two-byte object indices. Right click is contextual: an enemy emits `AttackCommand` (`0x04`,
-17 bytes), a resource tile emits `GatherCommand`, a friendly foundation emits build-assist,
-and open ground emits `MoveToCommand` (`0x07`, 22 bytes). The visible command dock exposes
-the same packet builders for touch users; it does not maintain a second input protocol. The
-halt button emits `HaltCommand` (`0x0c`, 1 byte). The bytes are laid out by `wire.gen.js` at the offsets
-`schema/command-wire.json` gives, posted to whichever worker owns that world, decoded in
-Rust by `wire_gen.rs`, and drained at a tick boundary in arrival order.
+two-byte object indices. Right click emits `AttackCommand` (`0x04`, 17 bytes) for an enemy
+or `MoveToCommand` (`0x07`, 22 bytes) for open ground. The visible command dock exposes the
+same supported packet builders for touch users; unavailable actions are disabled instead of
+mutating browser-only state. The halt button emits `HaltCommand` (`0x0c`, 1 byte). The bytes
+are laid out by `wire.gen.js` at the offsets `schema/command-wire.json` gives, decoded by the
+WASM adapter in `game_abi.rs`, and applied to `don_sim::Sim` at a tick boundary in arrival order.
 
 A selection is capped at **255** objects, because `GroupCommand.num` is an `unsigned char`.
 That is the packet's limit, not the page's, and the page says so when it truncates.
