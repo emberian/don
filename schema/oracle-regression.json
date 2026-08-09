@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786241058,
+  "generated_unix": 1786241674,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 61239,
+  "wall_ms": 60143,
   "exit_code": 0,
   "summary": {
-    "registered": 15,
-    "pass": 15,
+    "registered": 16,
+    "pass": 16,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 16973039
+    "total_trials": 17223055
   },
   "cases": [
     {
@@ -108,7 +108,7 @@
       "status": "pass",
       "trials": 243049,
       "mismatches": 0,
-      "wall_ms": 44,
+      "wall_ms": 43,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)"},
         {"kind": "grid", "count": 0, "distribution": "the guard band below the domain — GoodType ids, which have no balance row"},
@@ -137,7 +137,7 @@
       "status": "pass",
       "trials": 243578,
       "mismatches": 0,
-      "wall_ms": 508,
+      "wall_ms": 506,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries"},
         {"kind": "random", "count": 243562, "distribution": "branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries"}
@@ -164,7 +164,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 526,
+      "wall_ms": 514,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries"},
         {"kind": "random", "count": 250000, "distribution": "branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries"}
@@ -172,6 +172,31 @@
       "excluded": [],
       "extras": {
         "branch_counts": "snap=67997 half_turn_ties=26778 reverse=71320 forward=178696 half_step=124951"
+      },
+      "detail": null
+    },
+    {
+      "id": "guy_turn_towards",
+      "va": "0x005d9720",
+      "abi": "unsigned long __thiscall Guy::turn_towards(unsigned long desired, int unread, int animate); ECX=this, ret 0x0C. PDB plus the 116-byte body establish all three stack slots; the middle slot is unread",
+      "model": "don_sim::systems::groups_guys::GuyData::turn_towards plus GuyData::walk_bytes",
+      "subsystem": "movement / formation facing",
+      "ledger_entry": "docs/mechanics/groups-guys.md §2.6 — stateful Guy::turn_towards/do_turn",
+      "derivation": "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005d9720.c, 005d97a0.c, 005d9010.c; PDB Guy::turn_towards/Guy::do_turn/Guy::set_angle",
+      "reachability": "SELF-CALL chain turn_towards -> do_turn -> set_angle -> turn_speed. The fabricated unit sets total_guy_count == squad_size, so the precisely decoded crew-recursion loops are empty; animate=0 keeps the 4,723-byte Guy::set_anim branch closed",
+      "caveat": "This compares the return and every byte of GuyData's synchronized [this+8,this+0xA3) range, including the `guy_flags |= 2` side effect that the solver-only port previously omitted. Domain is exact and deliberate: owner 0..7, object index 0..3, nonnegative squad size, no extra crew, and animate=0. It does NOT cover pivot animation (`guy_flags & 8`, animate!=0) or recursive propagation into separately allocated crew Guys; those require the animation packet graph and a multi-Guy fixture, respectively.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 250016,
+      "mismatches": 0,
+      "wall_ms": 1441,
+      "phases": [
+        {"kind": "edges", "count": 16, "distribution": "hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared"},
+        {"kind": "random", "count": 250000, "distribution": "the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte"}
+      ],
+      "excluded": [],
+      "extras": {
+        "branch_counts": "unchanged=42016 changed=208000 leader=1970 crew=124849 unread_arg_zero=124641 unread_arg_nonzero=125375"
       },
       "detail": null
     },
@@ -233,7 +258,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 43967,
+      "wall_ms": 41638,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -268,7 +293,7 @@
       "status": "pass",
       "trials": 999950,
       "mismatches": 0,
-      "wall_ms": 24,
+      "wall_ms": 25,
       "phases": [
         {"kind": "chained-walk", "count": 999950, "distribution": "70 seeds x 14285 steps: six edge seeds (0 is what every statically-constructed Random starts at) plus 64 random seeds, each walked forward; compares the f32 bit pattern and the resulting state at every step"}
       ],
@@ -293,7 +318,7 @@
       "status": "pass",
       "trials": 1000012,
       "mismatches": 0,
-      "wall_ms": 43,
+      "wall_ms": 44,
       "phases": [
         {"kind": "edges", "count": 12, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 1000000, "distribution": "state uniform over u32; lo,hi uniform over ±0xFFFF; compares the return value and the resulting state"}
@@ -339,7 +364,7 @@
       "status": "pass",
       "trials": 4000026,
       "mismatches": 0,
-      "wall_ms": 104,
+      "wall_ms": 102,
       "phases": [
         {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
         {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
@@ -364,7 +389,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15451,
+      "wall_ms": 15259,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -388,7 +413,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 187,
+      "wall_ms": 183,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},

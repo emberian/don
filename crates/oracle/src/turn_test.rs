@@ -8,7 +8,8 @@
 //! does not call `turn_towards`, whose `do_turn` tail reaches pivot and animation state.
 
 use don_sim::systems::groups_guys::{
-    GuyData, GuyEnv, UnitTypeStats, GUY_FLAG_FAST_FACE, GUY_WALK_LO, UNIT_MASK_TURN_SCALE2,
+    GuyData, GuyEnv, UnitTypeStats, GUY_FLAG_FAST_FACE, GUY_WALK_LEN, GUY_WALK_LO,
+    UNIT_MASK_TURN_SCALE2,
 };
 
 /// `Objects::lists[0]`; seven list pointers per owner, four bytes each.
@@ -115,6 +116,14 @@ impl Scenario {
     /// call shape and deliberately has no damped-argument parameter.
     pub fn model_turn_angles(self) -> (u32, u32) {
         self.guy().turn_angles(self.desired, &self.env(), self.half)
+    }
+
+    /// The shipped stateful implementation under test: return value plus the complete
+    /// 155-byte synchronized `GuyData` range after turning.
+    pub fn model_turn_towards(self) -> (u32, [u8; GUY_WALK_LEN]) {
+        let mut guy = self.guy();
+        let rem = guy.turn_towards(self.desired, &self.env());
+        (rem, guy.walk_bytes())
     }
 
     /// Retail performs an unchecked unsigned divide. Signed `avg_speed/4 + 1` is zero
@@ -324,6 +333,10 @@ pub unsafe fn install(arena: *mut u8, s: Scenario, write_global: &impl Fn(u32, u
             0
         },
     );
+    // `Guy::set_angle` / `Guy::do_turn` recurse from squad_size to total guy count when
+    // this is the leader body. Equality means the fabricated unit has no extra crew: the
+    // side-effecting leader path is exercised without inventing secondary Guy objects.
+    std::ptr::write_unaligned(unit.add(0xE8) as *mut i32, s.squad_size.max(0));
     std::ptr::write_unaligned(ty.add(0x2C4) as *mut i32, s.type_turn_speed);
     std::ptr::write_unaligned(ty.add(0x304) as *mut i32, s.squad_size);
     std::ptr::write_unaligned(constants.add(8) as *mut i32, s.turn_scale);
@@ -388,6 +401,23 @@ mod tests {
             m.half = false;
             s.half && s.model_turn_angles() != m.model_turn_angles()
         }));
+    }
+
+    #[test]
+    fn edge_corpus_kills_do_turn_flag_side_effect_deletion() {
+        assert!(
+            edges().iter().any(|s| {
+                let before = s.guy().walk_bytes();
+                let (_, after) = s.model_turn_towards();
+                // Absolute +0x9A in a walk that starts at +8.
+                let flags = 0x9A - GUY_WALK_LO;
+                let before_flags = u16::from_le_bytes([before[flags], before[flags + 1]]);
+                let after_flags = u16::from_le_bytes([after[flags], after[flags + 1]]);
+                before_flags & don_sim::systems::groups_guys::GUY_FLAG_NO_IDLE_TURN == 0
+                    && after_flags & don_sim::systems::groups_guys::GUY_FLAG_NO_IDLE_TURN != 0
+            }),
+            "Guy::do_turn's `guy_flags |= 2` side effect is absent"
+        );
     }
 
     #[test]

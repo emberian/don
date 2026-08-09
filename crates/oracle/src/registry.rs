@@ -144,6 +144,12 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// Stateful `Guy::turn_towards`, with animation disabled and no extra crew bodies.
+    /// Compares the return and the entire 155-byte synchronized `GuyData` range.
+    GuyTurnTowards {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -432,6 +438,36 @@ pub static REGISTRY: &[Case] = &[
             distribution: "branch-biased xorshift64: exact snap neighbours; 0x80000000 \
                            direction tie; clockwise/counter-clockwise wrap; step equality \
                            and one-past; full/half step; the turn_speed rule boundaries",
+        },
+    },
+    Case {
+        id: "guy_turn_towards",
+        va: 0x005D_9720,
+        abi: "unsigned long __thiscall Guy::turn_towards(unsigned long desired, int unread, \
+              int animate); ECX=this, ret 0x0C. PDB plus the 116-byte body establish all \
+              three stack slots; the middle slot is unread",
+        model: "don_sim::systems::groups_guys::GuyData::turn_towards plus GuyData::walk_bytes",
+        subsystem: "movement / formation facing",
+        ledger: "docs/mechanics/groups-guys.md §2.6 — stateful Guy::turn_towards/do_turn",
+        derivation: "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005d9720.c, \
+                     005d97a0.c, 005d9010.c; PDB Guy::turn_towards/Guy::do_turn/Guy::set_angle",
+        reachability: "SELF-CALL chain turn_towards -> do_turn -> set_angle -> turn_speed. \
+                       The fabricated unit sets total_guy_count == squad_size, so the \
+                       precisely decoded crew-recursion loops are empty; animate=0 keeps \
+                       the 4,723-byte Guy::set_anim branch closed",
+        caveat: "This compares the return and every byte of GuyData's synchronized \
+                 [this+8,this+0xA3) range, including the `guy_flags |= 2` side effect that \
+                 the solver-only port previously omitted. Domain is exact and deliberate: \
+                 owner 0..7, object index 0..3, nonnegative squad size, no extra crew, and \
+                 animate=0. It does NOT cover pivot animation (`guy_flags & 8`, animate!=0) \
+                 or recursive propagation into separately allocated crew Guys; those \
+                 require the animation packet graph and a multi-Guy fixture, respectively.",
+        plan: Plan::GuyTurnTowards {
+            random: 250_000,
+            distribution: "the turn_angles boundary distribution plus leader/nonleader and \
+                           squad/crew bodies; the ABI's unread middle argument varies across \
+                           zero and arbitrary nonzero dwords; full post-call GuyData image \
+                           compared byte-for-byte",
         },
     },
     Case {
