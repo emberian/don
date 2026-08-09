@@ -1,5 +1,7 @@
 use don_sim::systems::combat::damage_world::{
-    apply_special_hit, plan_special_hit, BurningCitizenRequest, DeathVisual, DeathVisualScan,
+    apply_capture_attempt, apply_special_hit, plan_capture_attempt, plan_special_hit,
+    BurningCitizenRequest, CaptureAttemptFacts, CaptureAttemptPlan, CaptureAttemptReceipt,
+    CaptureAttemptWorld, CaptureCheckReceipt, CaptureCheckRequest, DeathVisual, DeathVisualScan,
     MissingSpecialHitFact, ObjectKey, SpecialHitFacts, SpecialHitMutation, SpecialHitPlan,
     SpecialHitWorld, BASE_CITIZEN_TYPE,
 };
@@ -10,12 +12,19 @@ const VICTIM: ObjectKey = ObjectKey { who: 3, o: 41 };
 
 #[derive(Default)]
 struct Facts {
+    city: bool,
     unit: bool,
     unit_masks: u32,
     unit_masks2: u32,
     land_inside: i32,
     x_size: i32,
     tribe_citizen: bool,
+}
+
+impl CaptureAttemptFacts for Facts {
+    fn victim_is_city(&self, _: ObjectKey) -> Option<bool> {
+        Some(self.city)
+    }
 }
 
 impl SpecialHitFacts for Facts {
@@ -239,4 +248,46 @@ fn missing_second_mask_is_a_typed_fail_closed_entrench_boundary() {
         plan_special_hit(&MissingMasks2, ATTACKER, VICTIM),
         Err(MissingSpecialHitFact::VictimUnitMasks2)
     );
+}
+
+#[derive(Default)]
+struct CaptureWorld {
+    calls: Vec<CaptureCheckRequest>,
+    returned_nonzero: bool,
+}
+
+impl CaptureAttemptWorld for CaptureWorld {
+    fn check_capture(&mut self, request: CaptureCheckRequest) -> Option<CaptureCheckReceipt> {
+        self.calls.push(request);
+        Some(CaptureCheckReceipt {
+            request,
+            returned_nonzero: self.returned_nonzero,
+        })
+    }
+}
+
+#[test]
+fn public_capture_attempt_calls_enemy_city_once_and_propagates_the_exit_edge() {
+    let facts = Facts {
+        city: true,
+        ..Facts::default()
+    };
+    let request = CaptureCheckRequest {
+        victim: VICTIM,
+        attacker: ATTACKER,
+    };
+    let plan = plan_capture_attempt(&facts, ATTACKER, VICTIM).unwrap();
+    assert_eq!(plan, CaptureAttemptPlan::CheckCapture(request));
+    let mut world = CaptureWorld {
+        returned_nonzero: true,
+        ..CaptureWorld::default()
+    };
+    assert_eq!(
+        apply_capture_attempt(plan, &mut world),
+        Ok(CaptureAttemptReceipt::Checked {
+            request,
+            stop_post_damage: true,
+        })
+    );
+    assert_eq!(world.calls, vec![request]);
 }

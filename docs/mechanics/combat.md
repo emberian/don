@@ -360,10 +360,16 @@ not mine.
   mask bits before `GraphicEvents::remove_entrench`; non-air-carrying buildings synchronously eject
   land occupants and synthesize/contain/release Citizens under the exact death-ring cap, then close
   successful allocations in a deferred second loop. The replay adapter preflights the post-eject
-  spawn facts so missing state cannot leave a partially ejected simulation. `0x0064AA60…0x0064BA17`
-  remains presentation-entangled, while later post-hit/stat arms and the separate capture branch
-  remain unported; those need their own bounded transactions rather than an invented catch-all
-  world adapter.
+  spawn facts so missing state cannot leave a partially ejected simulation. The post-splash
+  capture-attempt arm `0x0064C4E3…0x0064C558` is now bounded too: it tests
+  `BuildTypeData::is_city()` before the same-owner gate, calls
+  `Build::check_capture(attacker.o, attacker.who)` exactly once for an enemy city, and propagates
+  the non-zero return as retail's immediate `do_damage` exit edge. This adapter does not claim the
+  2,357-byte `Build::check_capture` body is generally implemented; only its Wonder success tail is
+  modeled separately in `systems::wonders`. `0x0064AA60…0x0064BA17` remains
+  presentation-entangled, while the fallthrough post-hit/stat arms after `0x0064BEB7` remain
+  unported; those need their own bounded transactions rather than an invented catch-all world
+  adapter.
 * **`attack_dist` `0x006488F0` is ported for resolved ordinary objects** in
   `systems::held_target`. The `0x00CAE5FC` read is the same measured divide-three table used
   by the movement lane: `T[coord >> 4] * 0x30 + 0x18` snaps to a 48-unit-cell centre. Retail

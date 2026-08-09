@@ -2,8 +2,8 @@
 //!
 //! This is the address-bounded slice `0x0064BA18..0x0064BBFA` plus the adjacent
 //! survivor-only `Armies::emergency` gate at `0x0064BBFD..0x0064BC17`, followed by the
-//! flamethrower entrench/eject transaction at `0x0064BC17..0x0064BEB7`. Capture remains
-//! a separate later transaction.
+//! flamethrower entrench/eject transaction at `0x0064BC17..0x0064BEB7`, and the bounded
+//! post-splash capture-attempt arm at `0x0064C4E3..0x0064C558`.
 //!
 //! Retail reads infallible globals. A replay host resolves every fact needed by the selected
 //! branch into a [`PostDamagePlan`] before mutating leader state. Missing facts therefore
@@ -625,6 +625,126 @@ pub fn apply_special_hit<W: SpecialHitWorld + ?Sized>(
         }
     }
     Ok(SpecialHitReceipt { mutations })
+}
+
+// ===========================================================================================
+// Post-splash capture attempt: 0x0064C4E3..0x0064C558
+// ===========================================================================================
+
+/// The one type fact read before `Object::do_damage` decides whether to call
+/// `Build::check_capture`.
+pub trait CaptureAttemptFacts {
+    /// Victim type virtual `BuildTypeData::is_city()` (`vt +0x64`) at
+    /// `0x0064C4F7..0x0064C51C`.
+    fn victim_is_city(&self, victim: ObjectKey) -> Option<bool>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingCaptureAttemptFact {
+    VictimCityClassification,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureCheckRequest {
+    /// `this`: the victim `BuildData` returned by the object virtual at `+0xAC`.
+    pub victim: ObjectKey,
+    /// `Build::check_capture(attacker.o, attacker.who)`.
+    pub attacker: ObjectKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureAttemptPlan {
+    VictimNotCity,
+    SameOwner,
+    CheckCapture(CaptureCheckRequest),
+}
+
+/// Identity-bound proof of the synchronous `Build::check_capture` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureCheckReceipt {
+    pub request: CaptureCheckRequest,
+    /// Retail tests `eax != 0` at `0x0064C550`; non-zero jumps directly to the
+    /// `Object::do_damage` epilogue at `0x0064C86B`.
+    pub returned_nonzero: bool,
+}
+
+/// Atomic adapter around the mutating `Build::check_capture` routine.
+///
+/// `None` means the adapter could not admit the call and guarantees that it performed no
+/// mutation. A returned receipt must identify the exact victim and attacker.
+pub trait CaptureAttemptWorld {
+    fn check_capture(&mut self, request: CaptureCheckRequest) -> Option<CaptureCheckReceipt>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureAttemptReceipt {
+    VictimNotCity,
+    SameOwner,
+    Checked {
+        request: CaptureCheckRequest,
+        /// Whether the caller must take retail's immediate function-exit edge.
+        stop_post_damage: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureAttemptApplyError {
+    MissingAtomicReceipt,
+    ReceiptIdentityMismatch {
+        expected: CaptureCheckRequest,
+        actual: CaptureCheckRequest,
+    },
+}
+
+/// Resolve retail's two gates in address order.
+///
+/// `BuildTypeData::is_city()` is evaluated before the same-owner comparison, so a non-city
+/// victim never needs a meaningful attacker owner and a missing city classification always
+/// fails closed.
+pub fn plan_capture_attempt<F: CaptureAttemptFacts + ?Sized>(
+    facts: &F,
+    attacker: ObjectKey,
+    victim: ObjectKey,
+) -> Result<CaptureAttemptPlan, MissingCaptureAttemptFact> {
+    if !facts
+        .victim_is_city(victim)
+        .ok_or(MissingCaptureAttemptFact::VictimCityClassification)?
+    {
+        return Ok(CaptureAttemptPlan::VictimNotCity);
+    }
+    if victim.who == attacker.who {
+        return Ok(CaptureAttemptPlan::SameOwner);
+    }
+    Ok(CaptureAttemptPlan::CheckCapture(CaptureCheckRequest {
+        victim,
+        attacker,
+    }))
+}
+
+/// Execute the bounded capture-attempt arm and expose retail's branch result.
+pub fn apply_capture_attempt<W: CaptureAttemptWorld + ?Sized>(
+    plan: CaptureAttemptPlan,
+    world: &mut W,
+) -> Result<CaptureAttemptReceipt, CaptureAttemptApplyError> {
+    match plan {
+        CaptureAttemptPlan::VictimNotCity => Ok(CaptureAttemptReceipt::VictimNotCity),
+        CaptureAttemptPlan::SameOwner => Ok(CaptureAttemptReceipt::SameOwner),
+        CaptureAttemptPlan::CheckCapture(request) => {
+            let receipt = world
+                .check_capture(request)
+                .ok_or(CaptureAttemptApplyError::MissingAtomicReceipt)?;
+            if receipt.request != request {
+                return Err(CaptureAttemptApplyError::ReceiptIdentityMismatch {
+                    expected: request,
+                    actual: receipt.request,
+                });
+            }
+            Ok(CaptureAttemptReceipt::Checked {
+                request,
+                stop_post_damage: receipt.returned_nonzero,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1414,6 +1534,147 @@ mod tests {
                 SpecialHitMutation::CloseCitizen { o: 12 },
                 SpecialHitMutation::CloseCitizen { o: 7 },
             ]
+        );
+    }
+
+    struct CaptureFacts {
+        is_city: Option<bool>,
+        calls: RefCell<Vec<ObjectKey>>,
+    }
+
+    impl CaptureAttemptFacts for CaptureFacts {
+        fn victim_is_city(&self, victim: ObjectKey) -> Option<bool> {
+            self.calls.borrow_mut().push(victim);
+            self.is_city
+        }
+    }
+
+    #[derive(Default)]
+    struct CaptureWorld {
+        calls: Vec<CaptureCheckRequest>,
+        response: Option<CaptureCheckReceipt>,
+    }
+
+    impl CaptureAttemptWorld for CaptureWorld {
+        fn check_capture(&mut self, request: CaptureCheckRequest) -> Option<CaptureCheckReceipt> {
+            self.calls.push(request);
+            self.response
+        }
+    }
+
+    #[test]
+    fn capture_city_classification_is_mandatory_even_for_same_owner() {
+        let facts = CaptureFacts {
+            is_city: None,
+            calls: RefCell::new(Vec::new()),
+        };
+        let same_owner = ObjectKey {
+            who: ATTACKER.who,
+            o: VICTIM.o,
+        };
+        assert_eq!(
+            plan_capture_attempt(&facts, ATTACKER, same_owner),
+            Err(MissingCaptureAttemptFact::VictimCityClassification)
+        );
+        assert_eq!(*facts.calls.borrow(), vec![same_owner]);
+    }
+
+    #[test]
+    fn capture_non_city_and_same_owner_arms_never_call_the_world() {
+        let non_city = CaptureFacts {
+            is_city: Some(false),
+            calls: RefCell::new(Vec::new()),
+        };
+        let mut world = CaptureWorld::default();
+        let plan = plan_capture_attempt(&non_city, ATTACKER, VICTIM).unwrap();
+        assert_eq!(plan, CaptureAttemptPlan::VictimNotCity);
+        assert_eq!(
+            apply_capture_attempt(plan, &mut world),
+            Ok(CaptureAttemptReceipt::VictimNotCity)
+        );
+
+        let same_owner_victim = ObjectKey {
+            who: ATTACKER.who,
+            o: VICTIM.o,
+        };
+        let city = CaptureFacts {
+            is_city: Some(true),
+            calls: RefCell::new(Vec::new()),
+        };
+        let plan = plan_capture_attempt(&city, ATTACKER, same_owner_victim).unwrap();
+        assert_eq!(plan, CaptureAttemptPlan::SameOwner);
+        assert_eq!(
+            apply_capture_attempt(plan, &mut world),
+            Ok(CaptureAttemptReceipt::SameOwner)
+        );
+        assert!(world.calls.is_empty());
+    }
+
+    #[test]
+    fn capture_check_receipt_preserves_exact_identity_and_exit_edge() {
+        let facts = CaptureFacts {
+            is_city: Some(true),
+            calls: RefCell::new(Vec::new()),
+        };
+        // `movsx eax, word ptr [attacker+0x0A]` at `0x0064C53C`: keep the signed
+        // attacker object id all the way into Build::check_capture's first argument.
+        let capture_attacker = ObjectKey { who: 1, o: -17 };
+        let request = CaptureCheckRequest {
+            victim: VICTIM,
+            attacker: capture_attacker,
+        };
+        let plan = plan_capture_attempt(&facts, capture_attacker, VICTIM).unwrap();
+        assert_eq!(plan, CaptureAttemptPlan::CheckCapture(request));
+
+        for returned_nonzero in [false, true] {
+            let mut world = CaptureWorld {
+                response: Some(CaptureCheckReceipt {
+                    request,
+                    returned_nonzero,
+                }),
+                ..CaptureWorld::default()
+            };
+            assert_eq!(
+                apply_capture_attempt(plan, &mut world),
+                Ok(CaptureAttemptReceipt::Checked {
+                    request,
+                    stop_post_damage: returned_nonzero,
+                })
+            );
+            assert_eq!(world.calls, vec![request]);
+        }
+    }
+
+    #[test]
+    fn capture_host_failure_and_identity_drift_are_typed_errors() {
+        let request = CaptureCheckRequest {
+            victim: VICTIM,
+            attacker: ATTACKER,
+        };
+        let plan = CaptureAttemptPlan::CheckCapture(request);
+        let mut missing = CaptureWorld::default();
+        assert_eq!(
+            apply_capture_attempt(plan, &mut missing),
+            Err(CaptureAttemptApplyError::MissingAtomicReceipt)
+        );
+
+        let actual = CaptureCheckRequest {
+            victim: VICTIM,
+            attacker: ObjectKey { who: 2, o: 99 },
+        };
+        let mut mismatch = CaptureWorld {
+            response: Some(CaptureCheckReceipt {
+                request: actual,
+                returned_nonzero: true,
+            }),
+            ..CaptureWorld::default()
+        };
+        assert_eq!(
+            apply_capture_attempt(plan, &mut mismatch),
+            Err(CaptureAttemptApplyError::ReceiptIdentityMismatch {
+                expected: request,
+                actual,
+            })
         );
     }
 }
