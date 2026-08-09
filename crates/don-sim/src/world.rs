@@ -578,6 +578,51 @@ impl World {
         })
     }
 
+    /// Allocate one live runtime unit at an exact caller-supplied position without
+    /// consuming `game_random`.
+    ///
+    /// Unlike [`World::spawn_typed`], this is not a scenario-population helper: it is the
+    /// storage boundary behind retail `Objects::init_unit` callers that already resolved
+    /// their coordinates. Motion starts at rest; later placement/order transactions own
+    /// stance, containment, launch, and movement initialization.
+    pub fn allocate_typed_at(&mut self, owner: u8, type_id: i32, x: i32, y: i32) -> Option<Handle> {
+        if self.live >= self.capacity || owner as usize >= OWNER_SLOTS {
+            return None;
+        }
+        let row = self.units.push_zeroed()?;
+        let id = self.handle_of_row[row];
+        let o = self.objects.insert(owner as usize, Band::Unit, row as u32);
+        let stats = self.type_stats(type_id).copied();
+
+        self.units.x_internal_mut()[row] = x;
+        self.units.y_internal_mut()[row] = y;
+        self.units.angle_mut()[row] = 0;
+        self.units.myspeed_mut()[row] = 0;
+        self.units.set_flags(row, OBJ_FLAG_ACTIVE);
+        self.units.set_who(row, owner);
+        self.units.o_mut()[row] = o as i16;
+        self.units.set_uid(row, (id & 0xffff) as u16);
+        self.units.o_up_mut()[row] = -1;
+        self.units.inside_up_mut()[row] = -1;
+        self.units.inside_up_who_mut()[row] = -1;
+        self.units.tolerance_mut()[row] = SUBTILE;
+        self.units.myhits_mut()[row] = stats.map_or(100, |s| s.hits.max(1));
+        self.units.myarmor_mut()[row] = stats.map_or(0, |s| {
+            s.armor.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        });
+
+        self.unit_orders.push(OrderList::new());
+        self.unit_type_id.push(type_id);
+        self.move_step_x.push(0);
+        self.move_step_y.push(0);
+        self.row_of_handle[id as usize] = row as u32;
+        self.live += 1;
+        Some(Handle {
+            id,
+            generation: self.generation[id as usize],
+        })
+    }
+
     fn type_stats(&self, type_id: i32) -> Option<&UnitTypeStats> {
         if type_id <= 0 {
             return None;
@@ -1642,6 +1687,71 @@ mod tests {
             "Normal pacing is 67 ms (TurnControl::timings[2])"
         );
         assert_eq!(COORD_PER_TILE, 768);
+    }
+
+    #[test]
+    fn runtime_allocation_uses_exact_coordinates_without_rng_or_setup_motion() {
+        let mut world = World::with_capacity(4, 0x1357_2468);
+        let rng_before = world.random.state();
+
+        let handle = world.allocate_typed_at(2, 77, 12_345, 54_321).unwrap();
+        let row = world.row_of(handle).unwrap();
+
+        assert_eq!(world.random.state(), rng_before);
+        assert_eq!(world.live_count(), 1);
+        assert_eq!(world.units.x_internal()[row], 12_345);
+        assert_eq!(world.units.y_internal()[row], 54_321);
+        assert_eq!(world.units.angle()[row], 0);
+        assert_eq!(world.units.myspeed()[row], 0);
+        assert_eq!(
+            world.units.get_flags(row) & OBJ_FLAG_ACTIVE,
+            OBJ_FLAG_ACTIVE
+        );
+        assert_eq!(world.units.get_who(row), 2);
+        assert_eq!(world.units.o()[row], 0);
+        assert_eq!(world.units.o_up()[row], -1);
+        assert_eq!(world.units.inside_up()[row], -1);
+        assert_eq!(world.units.inside_up_who()[row], -1);
+        assert_eq!(world.units.tolerance()[row], SUBTILE);
+        assert!(world.orders(row).is_empty());
+        assert_eq!(world.unit_type_id[row], 77);
+        assert_eq!(world.move_step_x[row], 0);
+        assert_eq!(world.move_step_y[row], 0);
+        assert_eq!(world.objects.slot(2).band(Band::Unit), &[row as u32]);
+    }
+
+    #[test]
+    fn failed_runtime_allocation_is_atomic_and_rng_free() {
+        let mut world = World::with_capacity(1, 0x2468_1357);
+        world.allocate_typed_at(0, 50, 100, 200).unwrap();
+        let rng_before = world.random.state();
+        let digest_before = world.digest();
+        let objects_before = world.objects.total_objects();
+
+        assert_eq!(world.allocate_typed_at(0, 51, 300, 400), None);
+        assert_eq!(
+            world.allocate_typed_at(OWNER_SLOTS as u8, 51, 300, 400),
+            None
+        );
+
+        assert_eq!(world.random.state(), rng_before);
+        assert_eq!(world.digest(), digest_before);
+        assert_eq!(world.live_count(), 1);
+        assert_eq!(world.objects.total_objects(), objects_before);
+        assert_eq!(world.unit_orders.len(), 1);
+        assert_eq!(world.unit_type_id.len(), 1);
+
+        let mut invalid_owner = World::with_capacity(1, 0x1122_3344);
+        let rng_before = invalid_owner.random.state();
+        let digest_before = invalid_owner.digest();
+        assert_eq!(
+            invalid_owner.allocate_typed_at(OWNER_SLOTS as u8, 51, 300, 400),
+            None
+        );
+        assert_eq!(invalid_owner.random.state(), rng_before);
+        assert_eq!(invalid_owner.digest(), digest_before);
+        assert_eq!(invalid_owner.live_count(), 0);
+        assert_eq!(invalid_owner.objects.total_objects(), 0);
     }
 
     /// Damage runs the derived pipeline against the real balance table when both are

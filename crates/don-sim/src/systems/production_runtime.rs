@@ -605,15 +605,25 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
     fn allocate_unit(&mut self, request: UnitAllocationRequest) -> UnitAllocationReceipt {
         let object_id = self
             .sim
-            .spawn_unit(
-                request.owner as usize,
-                request.type_index,
-                request.x,
-                request.y,
-                0,
-            )
+            .world
+            .allocate_typed_at(request.owner, request.type_index, request.x, request.y)
             .and_then(|handle| self.sim.world.row_of(handle))
-            .map_or(-1, |row| self.sim.world.units.o()[row] as i32);
+            .map_or(-1, |row| {
+                self.sim.world.units.mylos_mut()[row] = 0;
+                self.sim.world.units.guy_mark_mut()[row] = 1;
+                while self.sim.unit_type.len() <= row {
+                    self.sim.unit_type.push(0);
+                    self.sim
+                        .paths
+                        .push(crate::systems::movement::PathStack::new());
+                    self.sim
+                        .path_unit
+                        .push(crate::systems::movement::PathUnit::default());
+                    self.sim.crash_units.push(None);
+                }
+                self.sim.unit_type[row] = request.type_index;
+                self.sim.world.units.o()[row] as i32
+            });
         if object_id >= 0 {
             let owner = request.owner as usize;
             let control = self
@@ -1478,10 +1488,12 @@ mod tests {
         let (mut sim, mut runtime, row) = harness(&[unit_type]);
         runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 2));
         let before = sim.world.live_count();
+        let rng_before = sim.world.random.state();
 
         process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
 
         assert_eq!(sim.world.live_count(), before + 1);
+        assert_eq!(sim.world.random.state(), rng_before);
         let unit_row = sim.world.objects.slot(0).band(Band::Unit)[0] as usize;
         assert_eq!(sim.unit_type[unit_row], unit_type);
         assert_eq!(sim.world.units.inside_up()[unit_row], -1);
