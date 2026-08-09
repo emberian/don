@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 159,
+  "red": 135,
   "summary": {
     "tick": {
       "total": 29,
@@ -13,18 +13,18 @@
     },
     "orders": {
       "total": 28,
-      "complete": 14,
-      "red": 14
+      "complete": 17,
+      "red": 11
     },
     "group_actions": {
       "total": 42,
-      "complete": 3,
-      "red": 39
+      "complete": 7,
+      "red": 35
     },
     "opcodes": {
       "total": 82,
-      "complete": 26,
-      "red": 56
+      "complete": 43,
+      "red": 39
     },
     "checksums": {
       "total": 15,
@@ -339,9 +339,9 @@
         "name": "EXPLORE_TO",
         "retail_va": "0x005F24A0",
         "symbol": "Unit::do_explore_to",
-        "status": "unimplemented",
-        "note": "calls through to do_move",
-        "complete": false
+        "status": "implemented",
+        "note": "exact do_move then 15-frame identity/on-map explore tail; mandatory typed host receipt",
+        "complete": true
       },
       {
         "id": 4,
@@ -519,18 +519,18 @@
         "name": "ATTACK_GROUND",
         "retail_va": "0x005F1410",
         "symbol": "Unit::do_attack_ground",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact range/facing/recharge/fire/reposition transaction; mandatory typed host receipt",
+        "complete": true
       },
       {
         "id": 24,
         "name": "AIR_ATTACK_GROUND",
         "retail_va": "0x005EA420",
         "symbol": "Unit::do_air_attack_ground",
-        "status": "unimplemented",
-        "note": "aircraft",
-        "complete": false
+        "status": "implemented",
+        "note": "exact post-air-physics angle/fire/recharge/mana transaction; mandatory typed host receipt",
+        "complete": true
       },
       {
         "id": 25,
@@ -632,8 +632,8 @@
         "call_sites": 2,
         "installs": [],
         "delegates": [],
-        "status": "state_wired",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "unitmask",
@@ -642,8 +642,8 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "state_wired",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "guard",
@@ -819,8 +819,8 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "state_wired",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "transport",
@@ -977,8 +977,8 @@
         "call_sites": 8,
         "installs": [],
         "delegates": [],
-        "status": "state_partial",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "siege_attack_to",
@@ -1136,8 +1136,8 @@
         "action": "stance",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "state_partial",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 3,
@@ -1280,8 +1280,8 @@
         "action": "set_transport",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 15,
@@ -1496,8 +1496,8 @@
         "action": "unitmask",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 33,
@@ -1508,8 +1508,8 @@
         "action": "buildmask",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 34,
@@ -1556,8 +1556,8 @@
         "action": "treaty",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 38,
@@ -1568,7 +1568,7 @@
         "action": "declare",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1580,8 +1580,8 @@
         "action": "clear_tributes",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 40,
@@ -1592,8 +1592,8 @@
         "action": "clear_all",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 41,
@@ -1604,7 +1604,7 @@
         "action": "respond",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1616,7 +1616,7 @@
         "action": "respond",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1628,8 +1628,8 @@
         "action": "offer",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 44,
@@ -1640,8 +1640,8 @@
         "action": "offer",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 45,
@@ -1652,8 +1652,8 @@
         "action": "propose_attack",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 46,
@@ -1664,8 +1664,8 @@
         "action": "buy",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 47,
@@ -1676,8 +1676,8 @@
         "action": null,
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 48,
@@ -1688,7 +1688,7 @@
         "action": "unqueue",
         "wire_bytes": "15",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1700,7 +1700,7 @@
         "action": "come_out",
         "wire_bytes": "11",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1712,8 +1712,8 @@
         "action": "ping",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 51,
@@ -1724,8 +1724,8 @@
         "action": null,
         "wire_bytes": "variable",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 52,
@@ -1928,7 +1928,7 @@
         "action": null,
         "wire_bytes": "variable",
         "class": "presentation",
-        "bridge_status": "inert",
+        "bridge_status": "complete",
         "complete": true
       },
       {
@@ -1952,7 +1952,7 @@
         "action": null,
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1964,7 +1964,7 @@
         "action": null,
         "wire_bytes": "7",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1988,7 +1988,7 @@
         "action": null,
         "wire_bytes": "33",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -2012,8 +2012,8 @@
         "action": null,
         "wire_bytes": "53",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 76,
@@ -2024,8 +2024,8 @@
         "action": null,
         "wire_bytes": "2",
         "class": "sim",
-        "bridge_status": "state_wired",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 77,
@@ -2036,8 +2036,8 @@
         "action": null,
         "wire_bytes": "2",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 78,
@@ -2048,7 +2048,7 @@
         "action": null,
         "wire_bytes": "521",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -2072,7 +2072,7 @@
         "action": null,
         "wire_bytes": "3",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
