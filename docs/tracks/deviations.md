@@ -281,7 +281,7 @@ playable surface while their runtime path remains incomplete:
 
 | registry slug | declared model | literal remaining system |
 |---|---:|---|
-| `arena-construction-schedule-model` | 2a | persistent `BuildData`, `(who,o,uid)` BuildAt identity, building-first scheduling and retail builder traversal |
+| `arena-construction-schedule-model` | 2a | **resolved**: persistent `BuildData`, `(who,o,uid)` identity, rotated unit-first then fixed build traversal |
 | `arena-construction-placement-model` | 2b | complete `blocked_site` terrain/territory/city/dock admission transaction |
 | `arena-construction-lifecycle-model` | 2c | `start`, `activate`, rejection/disband, `build_done` and reassignment transactions |
 | `arena-construction-interruption-model` | 2d | builder death/cancel and target close/disband transactions |

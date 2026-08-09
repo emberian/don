@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use don_ai::arena::match_run::{load_world, MatchConfig};
-use don_ai::arena::world::{ConstructionMode, ConstructionRefusal, Job};
+use don_ai::arena::world::{ConstructionMode, ConstructionRefusal, Job, World};
 use don_ai::arena::{Cmd, EntId};
 use don_ai::OrderResult;
+use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BASE};
 use don_sim::systems::production::{flag, mask};
 
 fn world(mode: ConstructionMode) -> Option<don_ai::arena::World> {
@@ -65,7 +66,7 @@ fn site_and_order_keep_builddata_and_the_full_generational_target() {
     let build = building.build.as_ref().unwrap();
 
     assert_eq!(target.who, i32::from(building.who));
-    assert_eq!(target.o, site.index().unwrap() as i32);
+    assert_eq!(target.o, i32::from(building.object_o));
     assert_eq!(target.uid, building.object_uid);
     assert_eq!(build.uid, target.uid);
     assert_eq!(build.who, building.who);
@@ -87,7 +88,128 @@ fn site_and_order_keep_builddata_and_the_full_generational_target() {
 }
 
 #[test]
-fn building_band_resets_helpers_before_units_and_cancel_keeps_credited_work() {
+fn owner_local_bands_and_uid_stream_reach_every_installed_object_view() {
+    let Some(mut w) = world(ConstructionMode::ResearchModel) else {
+        return;
+    };
+    let worker = citizen(&w);
+    let site = place_farm(&mut w, worker);
+
+    for who in 0..w.players.len() {
+        let objects: Vec<_> = w
+            .ents
+            .iter()
+            .filter(|e| usize::from(e.who) == who)
+            .collect();
+        assert!(!objects.is_empty());
+        for (expected_uid, e) in objects.iter().enumerate() {
+            assert_eq!(e.object_uid, expected_uid as u16);
+            if let Some(motion) = &e.motion {
+                assert_eq!(motion.o, e.object_o);
+                assert_eq!(motion.uid, e.object_uid);
+            }
+            for guy in e.guys.guys.iter().flatten() {
+                assert_eq!(guy.o, e.object_o);
+            }
+            if let Some(build) = &e.build {
+                assert_eq!(build.uid, e.object_uid);
+                assert_eq!(build.who, e.who);
+                assert_eq!(build.city, w.ent(e.city).map_or(-1, |city| city.object_o));
+            }
+        }
+
+        let mut units: Vec<_> = objects.iter().filter(|e| !e.building).collect();
+        units.sort_unstable_by_key(|e| e.object_o);
+        assert_eq!(
+            units.iter().map(|e| e.object_o).collect::<Vec<_>>(),
+            (0..units.len()).map(|o| o as i16).collect::<Vec<_>>()
+        );
+
+        let mut buildings: Vec<_> = objects.iter().filter(|e| e.building).collect();
+        buildings.sort_unstable_by_key(|e| e.object_o);
+        assert_eq!(
+            buildings.iter().map(|e| e.object_o).collect::<Vec<_>>(),
+            (BUILD_BAND_BASE..BUILD_BAND_BASE + buildings.len() as u32)
+                .map(|o| o as i16)
+                .collect::<Vec<_>>()
+        );
+        assert!(buildings
+            .iter()
+            .all(|e| u32::try_from(e.object_o).unwrap() < WALL_BAND_BASE));
+    }
+
+    let site = w.ent(site).unwrap();
+    let target = w.ent(worker).unwrap().build_order.unwrap().target;
+    assert_eq!(target.who, i32::from(site.who));
+    assert_eq!(target.o, i32::from(site.object_o));
+    assert_eq!(target.uid, site.object_uid);
+}
+
+fn band_ids(w: &World, who: usize, buildings: bool) -> Vec<EntId> {
+    let mut rows: Vec<_> = w
+        .ents
+        .iter()
+        .filter(|e| e.alive && usize::from(e.who) == who && e.building == buildings)
+        .collect();
+    rows.sort_unstable_by_key(|e| e.object_o);
+    rows.into_iter().map(|e| e.id).collect()
+}
+
+#[test]
+fn object_pass_uses_preincrement_ten_slot_unit_rotation_then_fixed_build_bands() {
+    let Some(mut w) = world(ConstructionMode::ResearchModel) else {
+        return;
+    };
+    assert_eq!(w.players.len(), 2, "default arena fixture has two leaders");
+
+    for object_frame in 0i64..12 {
+        let unit_owners: Vec<_> = (0..OWNER_SLOTS)
+            .map(|i| (object_frame.rem_euclid(OWNER_SLOTS as i64) as usize + i) % OWNER_SLOTS)
+            .filter(|&who| who < w.players.len() && w.players[who].alive)
+            .collect();
+        let mut expected = Vec::new();
+        for who in unit_owners {
+            expected.extend(band_ids(&w, who, false));
+        }
+        for who in 0..w.players.len().min(BANDED_SLOTS) {
+            if w.players[who].alive {
+                expected.extend(band_ids(&w, who, true));
+            }
+        }
+
+        w.step();
+        assert_eq!(w.frame, object_frame + 1);
+        assert_eq!(w.last_object_process_order, expected);
+    }
+}
+
+#[test]
+fn site_frame_consumes_live_unit_contribution_in_the_same_object_pass() {
+    let Some(mut w) = world(ConstructionMode::ResearchModel) else {
+        return;
+    };
+    let worker = citizen(&w);
+    let site = place_farm(&mut w, worker);
+
+    for _ in 0..600 {
+        w.step();
+        let build = w.ent(site).unwrap().build.as_ref().unwrap();
+        if build.job_counter > 0 {
+            assert_eq!(build.helpers, 0);
+            assert_ne!(build.build_masks & mask::WORKED_LAST_FRAME, 0);
+            assert_eq!(build.build_masks & mask::HELPER_COUNTED, 0);
+            assert!(matches!(
+                w.ent(worker).unwrap().job,
+                Job::Work { target } if target == site
+            ));
+            return;
+        }
+    }
+    panic!("builder never contributed to the paid construction site");
+}
+
+#[test]
+fn site_frame_reset_and_cancel_keep_already_credited_work() {
     let Some(mut w) = world(ConstructionMode::ResearchModel) else {
         return;
     };

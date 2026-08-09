@@ -733,25 +733,29 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     Entry {
         id: Deviation::ArenaConstructionScheduleModel,
         slug: "arena-construction-schedule-model",
-        title: "Arena lacks retail construction state, identity and scheduler order",
-        kind: Kind::Drift,
-        retail: "A persistent BuildData site is processed before live builders, whose BuildAt \
-                 orders retain (who,o,uid) and execute in retail object traversal order.",
-        ours: "The construction state machine and fail-closed adapter exist, but Arena does not \
-               persist their full site/order state or call them from the retail scheduler.",
-        why: "Builder order is load-bearing because each contributor receives the next harmonic \
-              share; a timer, set, or EntId-only target changes progress and slot-reuse behavior.",
+        title: "Arena construction identity and scheduler order now match retail",
+        kind: Kind::Rejected,
+        retail: "Owner-local unit slots occupy [0,2000), building slots [2000,3000), identities \
+                 are (who,o,uid), and each frame walks rotated unit bands before fixed build bands.",
+        ours: "Arena persists the same owner-local bands and wrapping UIDs, resolves (who,o,uid), \
+               and executes the same pre-increment unit-first then build traversal.",
+        why: "This historical blocker is retained as a resolved candidate so the previously \
+              load-bearing identity and scheduling error cannot be reintroduced unnoticed.",
         derived_from: &[
+            "Objects::process_all 0x0065DCE0",
+            "Object::init 0x00647750",
+            "Objects::init 0x0065EA80",
+            "Objects::init_build 0x0065D190",
             "Unit::add_build_order 0x005E5210",
-            "Unit::do_build 0x005EEBF0",
-            "crates/don-sim/src/systems/construction.rs",
+            "crates/don-ai/src/arena/world.rs",
         ],
-        evidence: "docs/mechanics/construction.md §§4-5; Tier C instruction/PDB recovery.",
+        evidence: "crates/don-ai/tests/arena_construction_runtime.rs; mutation-sensitive \
+                   owner-band, UID, twelve-frame rotation and same-pass helper tests.",
         default_in_improved: false,
-        affects_checksum: true,
+        affects_checksum: false,
         seam: "",
-        surfaces: &[Surface::PlayableEdition],
-        implementation: ImplementationStatus::KnownDrift,
+        surfaces: &[],
+        implementation: ImplementationStatus::NotApplicable,
     },
     // ---------------------------------------------------------------------------------
     Entry {

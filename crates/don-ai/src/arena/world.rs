@@ -43,7 +43,7 @@
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
-//! `don-sim`, and runs the building band before the unit band.  The first missing retail
+//! `don-sim`, and runs the retail unit-then-building object bands. The first missing retail
 //! world transaction is recorded on the site and stops progress before any state is
 //! guessed. This is integration of recovered Tier-C
 //! structure, not a promotion of its fidelity tier.
@@ -58,6 +58,7 @@ use don_sim::mechanics::{
     resource_tick, CommerceCapGates, DamageInput, DamagePredicates, EconomyRules,
     ResourceTickInput,
 };
+use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BASE};
 use don_sim::rng::Random;
 use don_sim::systems::casters_animals::{
     CLOAK_OBJECT_FLAG, CLOAK_SECONDARY_OBJECT_FLAG, CLOAK_TYPE_FLAG, CLOAK_WHILE_IDLE_TYPE_FLAG,
@@ -179,10 +180,11 @@ fn ordinary_gather_kind(ids: &Ids, type_id: i32) -> Option<OrdinaryGatherKind> {
     }
 }
 
-fn gather_key(owner: u8, id: EntId) -> Option<GatherObjectKey> {
-    ArenaGatherRuntime::object_index(id.index()?)
-        .ok()
-        .map(|o| GatherObjectKey { owner, o })
+fn gather_key(e: &Ent) -> GatherObjectKey {
+    GatherObjectKey {
+        owner: e.who,
+        o: e.object_o,
+    }
 }
 
 /// Why a placement is illegal. Returned rather than a bool because a bot that cannot tell
@@ -247,6 +249,10 @@ pub struct QueueItem {
 pub struct Ent {
     pub id: EntId,
     pub who: u8,
+    /// `ObjectData::o`: the owner-local index in retail's banded object array. Units
+    /// occupy `[0, 2000)` and buildings `[2000, 3000)` (`Objects::init` 0x0065EA80).
+    /// `EntId` remains Arena's dense storage handle and must never substitute for this.
+    pub object_o: i16,
     pub type_id: i32,
     /// World units (tile * 192 + 96).
     pub x: i32,
@@ -260,9 +266,9 @@ pub struct Ent {
     /// Compatibility observation derived from `BuildData::{constr_time,job_counter}`.
     /// It is never decremented as an independent construction model.
     pub build_left: i32,
-    /// Arena's stable object-generation token. Object slots do not recycle in this host;
-    /// retaining the token independently still makes every construction order carry the
-    /// retail `(who,o,uid)` identity and prevents an `EntId`-only adapter from returning.
+    /// `ObjectData::uid` (`+0x30`): `Object::init` 0x00647750 copies and increments the
+    /// owner's wrapping 16-bit counter at `Objects +0x1D4`. Object slots do not recycle
+    /// in this host, but the token remains independent from both `EntId` and `object_o`.
     pub object_uid: u16,
     /// The full recovered construction record for buildings. Units store `None`.
     pub build: Option<BuildData>,
@@ -434,6 +440,10 @@ pub struct World {
     /// Flank levels observed, indexed 0..=2. A measurement, not a control.
     pub flank_hist: [u64; 3],
     pub shots: u64,
+    /// Diagnostic trace of the most recent `Objects::process_all` pass. It records dense
+    /// Arena handles in the exact order their owner-local slots were processed and is not
+    /// checksummed simulation state.
+    pub last_object_process_order: Vec<EntId>,
     /// `(player, verb, result)` -> count. A bot that spends half its commands on orders
     /// the world refuses is broken in a way no score line shows, so the arena counts them
     /// by verb rather than in one bucket.
@@ -454,14 +464,18 @@ pub struct World {
     target_world: TargetWorld,
     target_circle: CircleTable,
     age_techs: Vec<i32>,
+    /// Per-owner source for `ObjectData::uid`. `Objects::clear`/`Objects::init` zero the
+    /// ten counters and `Object::init` 0x00647750 increments the selected `u16` counter.
+    next_object_uid: Vec<u16>,
 }
 
 fn target_ref(e: &Ent) -> ObjRef {
-    ObjRef::new(
-        i16::try_from(e.id.index().expect("live Ent has a nonzero id"))
-            .expect("arena object slot fits retail i16"),
-        e.who as i16,
-    )
+    ObjRef::new(e.object_o, e.who as i16)
+}
+
+fn object_ref_index(ents: &[Ent], r: ObjRef) -> Option<usize> {
+    ents.iter()
+        .position(|e| e.alive && e.object_o == r.o && i16::from(e.who) == r.who)
 }
 
 fn target_row(e: &Ent, t: &TypeRow, ids: &Ids) -> TargetRow {
@@ -552,8 +566,7 @@ struct ArenaTargetAdapter<'a> {
 
 impl ArenaTargetAdapter<'_> {
     fn ent(&self, r: ObjRef) -> Option<&Ent> {
-        let e = self.ents.get(r.o as usize)?;
-        (e.alive && e.who as i16 == r.who).then_some(e)
+        object_ref_index(self.ents, r).map(|i| &self.ents[i])
     }
 
     fn region(&self, e: &Ent) -> i32 {
@@ -910,6 +923,12 @@ impl World {
                 map.starts.len()
             ));
         }
+        if tribes.len() > BANDED_SLOTS {
+            return Err(format!(
+                "{} players but retail has only {BANDED_SLOTS} leader building bands",
+                tribes.len()
+            ));
+        }
         let n = (map.w * map.h) as usize;
         let sim_seed = map.seed as i32;
         let econ = EconomyRules {
@@ -971,6 +990,7 @@ impl World {
             logging: true,
             flank_hist: [0; 3],
             shots: 0,
+            last_object_process_order: Vec::new(),
             rejects: BTreeMap::new(),
             pathfinder: PathFinder::new(),
             game_random: Random::new(sim_seed),
@@ -982,6 +1002,7 @@ impl World {
             target_world,
             target_circle: circle_table(),
             age_techs,
+            next_object_uid: vec![0; tribes.len()],
         };
         for i in 0..w.players.len() {
             w.seed_start(i);
@@ -1034,9 +1055,37 @@ impl World {
             Some(t) => t.clone(),
             None => return EntId::NONE,
         };
+        assert!(
+            t.kind_unit ^ t.kind_building,
+            "Arena can only install retail Unit or Build object bands"
+        );
+        let owner = usize::from(who);
+        assert!(
+            owner < self.players.len(),
+            "object owner has no Arena leader"
+        );
+        let band_len = self
+            .ents
+            .iter()
+            .filter(|e| e.who == who && e.building == t.kind_building)
+            .count();
+        let (band_base, band_limit) = if t.kind_building {
+            (BUILD_BAND_BASE as usize, WALL_BAND_BASE as usize)
+        } else {
+            (0, BUILD_BAND_BASE as usize)
+        };
+        let object_index = band_base
+            .checked_add(band_len)
+            .expect("Arena owner-local object index overflow");
+        assert!(
+            object_index < band_limit,
+            "Arena's non-recycling owner-local object band is full"
+        );
+        let object_o =
+            i16::try_from(object_index).expect("retail unit/build object bands fit ObjectData::o");
         let id = EntId::from_index(self.ents.len());
-        let object_uid = u16::try_from(id.0)
-            .expect("Arena's non-recycling object table exhausted its construction UID domain");
+        let object_uid = self.next_object_uid[owner];
+        self.next_object_uid[owner] = object_uid.wrapping_add(1);
         let (worker_cap, gather_res) = self.gather_capacity(&t, tx, ty);
         let city = if t.kind_building {
             self.nearest_own_city(who, tx, ty).unwrap_or(EntId::NONE)
@@ -1057,10 +1106,7 @@ impl World {
                 &self.prod_rules,
             );
             let is_wonder = (0x20E..0x21F).contains(&type_id);
-            let city_o = city
-                .index()
-                .map(|i| i16::try_from(i).expect("Arena city object slot fits retail i16"))
-                .unwrap_or(-1);
+            let city_o = self.ent(city).map_or(-1, |city| city.object_o);
             let mut b = BuildData {
                 flags: production::flag::VALID
                     | if complete {
@@ -1100,7 +1146,8 @@ impl World {
         const INITIAL_UNIT_ANGLE: i32 = 0x5555_5555;
         let type_stats = unit_type_stats(&t);
         let mut motion = if t.kind_unit {
-            let mut u = UnitWork::at(who, self.ents.len() as i16, x, y);
+            let mut u = UnitWork::at(who, object_o, x, y);
+            u.uid = object_uid;
             u.body.angle = INITIAL_UNIT_ANGLE;
             u.ptype = type_id;
             u.myspeed = t.moves.clamp(0, i16::MAX as i32) as i16;
@@ -1134,7 +1181,7 @@ impl World {
             None
         };
         let mut guys = if t.kind_unit {
-            UnitGuys::spawn_full(type_id, who as i8, self.ents.len() as i16, &type_stats)
+            UnitGuys::spawn_full(type_id, who as i8, object_o, &type_stats)
         } else {
             UnitGuys::default()
         };
@@ -1158,6 +1205,7 @@ impl World {
         self.ents.push(Ent {
             id,
             who,
+            object_o,
             type_id,
             x,
             y,
@@ -1217,14 +1265,7 @@ impl World {
                 .place_at(target_ref(ent), target_row(ent, &t, &self.ids)),
             "every arena object must occupy its stable retail target slot"
         );
-        let key = GatherObjectKey {
-            owner: who,
-            o: ArenaGatherRuntime::object_index(
-                id.index()
-                    .expect("a spawned Arena entity has a stable slot"),
-            )
-            .expect("Arena object slots must fit retail's signed object identity"),
-        };
+        let key = gather_key(self.ents.last().expect("object was just pushed"));
         if type_id == self.ids.citizen {
             self.gather_runtime
                 .register_worker(key, type_id)
@@ -1237,7 +1278,7 @@ impl World {
                 GatherCapacityAuthority::MissingRetailTerrainSource
             };
             self.gather_runtime
-                .register_site(key, 1, kind, capacity)
+                .register_site(key, object_uid, kind, capacity)
                 .expect("Arena entity slots never recycle within a World");
         }
         id
@@ -1538,6 +1579,7 @@ impl World {
                 let Some(b) = self.ent(target) else {
                     return OrderResult::Invalid;
                 };
+                let site_key = gather_key(b);
                 let (target_owner, target_type, building, complete, workers, worker_cap) = (
                     b.who,
                     b.type_id,
@@ -1558,11 +1600,10 @@ impl World {
                 let Some(kind) = ordinary_gather_kind(&self.ids, target_type) else {
                     return OrderResult::Invalid;
                 };
-                let (Some(worker_key), Some(site_key)) =
-                    (gather_key(who, unit), gather_key(target_owner, target))
-                else {
+                let Some(worker) = self.ent(unit) else {
                     return OrderResult::Invalid;
                 };
+                let worker_key = gather_key(worker);
                 let Ok(refusal) = self
                     .gather_runtime
                     .generated_map_preflight(worker_key, site_key, kind)
@@ -1658,7 +1699,7 @@ impl World {
         }
         let target_key = ObjectKey {
             who: i32::from(site.who),
-            o: target.index().expect("live construction target has a slot") as i32,
+            o: i32::from(site.object_o),
             uid: site.object_uid,
         };
         let builder_region = self
@@ -1699,9 +1740,11 @@ impl World {
     }
 
     fn retire_exact_gather(&mut self, owner: u8, unit: EntId) {
-        let Some(worker_key) = gather_key(owner, unit) else {
+        let Some(worker) = self.ent(unit) else {
             return;
         };
+        debug_assert_eq!(worker.who, owner);
+        let worker_key = gather_key(worker);
         if !self.gather_runtime.has_exact_order(worker_key) {
             return;
         }
@@ -1825,24 +1868,31 @@ impl World {
     // -----------------------------------------------------------------------
 
     pub fn step(&mut self) {
-        self.frame += 1;
+        // `Objects::process_all` 0x0065DCE0 reads `GameData::frame` before
+        // `Game::do_frame` increments it at 0x005924BF. Its first loop always rotates
+        // across ten owner slots, even though Arena materialises only player slots 0..7.
+        let object_frame = self.frame;
         let n = self.players.len();
-        // `Objects::process_all` rotates owner order every frame as `(frame + i) % 10`
-        // [measured]. Within that rotation the build band runs before the unit band;
-        // `helpers` is therefore reset for every site before any builder can contribute.
-        let owners: Vec<usize> = (0..n)
-            .map(|k| ((self.frame as usize) + k) % n)
-            .filter(|&pi| self.players[pi].alive)
+        let unit_owners: Vec<usize> = (0..OWNER_SLOTS)
+            .map(|k| (object_frame.rem_euclid(OWNER_SLOTS as i64) as usize + k) % OWNER_SLOTS)
+            .filter(|&pi| pi < n && self.players[pi].alive)
             .collect();
-        for &pi in &owners {
+        for &pi in &unit_owners {
             self.tick_economy(pi);
         }
-        for &pi in &owners {
-            self.tick_band(pi, true);
+        self.last_object_process_order.clear();
+        // The decompiled loops are unequivocal: all rotating unit bands run first, then
+        // building bands in fixed leader order 0..7. A site's frame transaction therefore
+        // consumes and clears helper contributions made earlier in this same object pass.
+        for &pi in &unit_owners {
+            self.tick_band(pi, false, object_frame);
         }
-        for &pi in &owners {
-            self.tick_band(pi, false);
+        for pi in 0..n.min(BANDED_SLOTS) {
+            if self.players[pi].alive {
+                self.tick_band(pi, true, object_frame);
+            }
         }
+        self.frame += 1;
         self.reap();
         if self.frame % self.params.fog_period == 0 {
             self.update_fog();
@@ -1864,12 +1914,9 @@ impl World {
         for e in self.own_ents(pi) {
             if e.building {
                 let active_workers = if ordinary_gather_kind(&self.ids, e.type_id).is_some() {
-                    gather_key(e.who, e.id)
-                        .and_then(|key| {
-                            self.gather_runtime
-                                .exact_active_workers(key)
-                                .expect("registered gather site keeps a valid exact chain")
-                        })
+                    self.gather_runtime
+                        .exact_active_workers(gather_key(e))
+                        .expect("registered gather site keeps a valid exact chain")
                         .unwrap_or(e.workers)
                 } else {
                     e.workers
@@ -1921,24 +1968,26 @@ impl World {
         }
     }
 
-    fn tick_band(&mut self, pi: usize, buildings: bool) {
-        let idxs: Vec<usize> = (0..self.ents.len())
+    fn tick_band(&mut self, pi: usize, buildings: bool, object_frame: i64) {
+        let mut idxs: Vec<usize> = (0..self.ents.len())
             .filter(|&i| {
                 self.ents[i].alive
                     && self.ents[i].who as usize == pi
                     && self.ents[i].building == buildings
             })
             .collect();
+        idxs.sort_unstable_by_key(|&i| self.ents[i].object_o);
         for i in idxs {
             if !self.ents[i].alive {
                 continue;
             }
+            self.last_object_process_order.push(self.ents[i].id);
             if buildings {
                 self.begin_construction_site_frame(i);
             }
             target::decay_targeted(
                 &mut self.target_world,
-                self.frame as i32,
+                object_frame as i32,
                 target_ref(&self.ents[i]),
             );
             self.tick_queue(i);
@@ -2130,7 +2179,7 @@ impl World {
         let builder = &self.ents[i];
         let builder_key = ObjectKey {
             who: i32::from(builder.who),
-            o: i as i32,
+            o: i32::from(builder.object_o),
             uid: builder.object_uid,
         };
         let (btx, bty) = builder.tile();
@@ -2663,9 +2712,10 @@ impl World {
             return;
         };
         let Some(best) = result.best else { return };
-        let Some(target_ent) = self.ents.get(best.o as usize) else {
+        let Some(target_index) = object_ref_index(&self.ents, best) else {
             return;
         };
+        let target_ent = &self.ents[target_index];
         assert_eq!(target_ent.who as i16, best.who, "target slot owner drift");
         self.ents[i].job = Job::Attack {
             target: target_ent.id,
@@ -2798,12 +2848,10 @@ impl World {
                 u.lead_guy = g;
             }
         }
-        let (who, o, masks) = self.ents[i]
-            .motion
-            .as_ref()
-            .map_or((self.ents[i].who as i32, i as i32, 0), |u| {
-                (u.who as i32, u.o as i32, u.unit_masks)
-            });
+        let (who, o, masks) = self.ents[i].motion.as_ref().map_or(
+            (self.ents[i].who as i32, i32::from(self.ents[i].object_o), 0),
+            |u| (u.who as i32, u.o as i32, u.unit_masks),
+        );
         if let Some(ci) = self.collision_units.find(who, o) {
             let row = &mut self.collision_units.rows[ci];
             row.angle = plan.unit_facing;
@@ -3145,15 +3193,7 @@ fn collision_row(e: &Ent, t: &TypeRow) -> CollisionUnit {
                 u.path.peek().map_or(0, |p| p.flags as u8),
             )
         })
-        .unwrap_or((
-            e.id.index().unwrap_or_default() as i32,
-            0,
-            0,
-            false,
-            0,
-            false,
-            0,
-        ));
+        .unwrap_or((i32::from(e.object_o), 0, 0, false, 0, false, 0));
     CollisionUnit {
         who: e.who as i32,
         o,
@@ -3739,8 +3779,7 @@ mod gather_integration {
             .find(|ent| ent.type_id == w.ids.citizen)
             .expect("Small Town start has a Citizen")
             .id;
-        let wi = worker.index().unwrap();
-        let worker_o = i32::try_from(wi).unwrap();
+        let worker_o = i32::from(w.ent(worker).unwrap().object_o);
         let before_runtime = w.gather_runtime.clone();
         let before_collision = w
             .collision_units
@@ -3791,8 +3830,8 @@ mod target_integration {
             .id
     }
 
-    fn due_frame(object_slot: usize) -> i64 {
-        ((32 - (object_slot as i64 & 31)) & 31) as i64
+    fn due_frame(object_o: i16) -> i64 {
+        (32 - (i64::from(object_o) & 31)) & 31
     }
 
     fn remember(w: &mut World, observer: usize, id: EntId, tx: i32, ty: i32) {
@@ -3833,7 +3872,7 @@ mod target_integration {
         let ai = attacker.index().expect("spawned attacker");
         w.players[0].visible.fill(false);
         w.players[0].memory.clear();
-        w.frame = due_frame(ai);
+        w.frame = due_frame(w.ents[ai].object_o);
 
         w.auto_acquire(ai);
         assert_eq!(
@@ -3878,7 +3917,7 @@ mod target_integration {
         w.players[0].visible.fill(false);
         w.players[0].memory.clear();
         remember(&mut w, 0, target, cx + 4, cy);
-        w.frame = due_frame(ai);
+        w.frame = due_frame(w.ents[ai].object_o);
 
         w.auto_acquire(ai);
 
@@ -3905,7 +3944,7 @@ mod target_integration {
             .row_mut(target_ref(w.ent(near).unwrap()))
             .unwrap()
             .targeted = target::TARGETED_MAX;
-        w.frame = due_frame(ai);
+        w.frame = due_frame(w.ents[ai].object_o);
 
         w.auto_acquire(ai);
 
@@ -3931,7 +3970,7 @@ mod target_integration {
         w.players[0].memory.clear();
         remember(&mut w, 0, target, cx + 10, cy);
 
-        let due = due_frame(ai);
+        let due = due_frame(w.ents[ai].object_o);
         w.frame = due + 1;
         w.auto_acquire(ai);
         assert_eq!(w.ents[ai].job, Job::Idle, "off-phase think is deferred");
@@ -3964,7 +4003,7 @@ mod target_integration {
         w.players[0].visible.fill(false);
         w.players[0].memory.clear();
         remember(&mut w, 0, target, cx + 3, cy);
-        w.frame = due_frame(ai);
+        w.frame = due_frame(w.ents[ai].object_o);
         w.types.rows.get_mut(&w.ids.citizen).unwrap().unit_flags |= CLOAK_WHILE_IDLE_TYPE_FLAG;
 
         w.auto_acquire(ai);
@@ -4038,7 +4077,10 @@ mod target_integration {
         let motion = w.ents[ai].motion.as_ref().unwrap();
         assert_eq!(motion.safe, 0);
         assert!(motion.orders.is_empty());
-        let ci = w.collision_units.find(0, ai as i32).unwrap();
+        let ci = w
+            .collision_units
+            .find(0, i32::from(w.ents[ai].object_o))
+            .unwrap();
         assert_eq!(w.collision_units.rows[ci].safe, 0);
     }
 
@@ -4404,7 +4446,8 @@ mod movement_integration {
             let blocker = w.spawn(0, w.ids.citizen, blocker_tile.0, blocker_tile.1, true);
             assert!(!blocker.is_none());
             let blocker_i = blocker.index().expect("spawned blocker");
-            let blocker_o = blocker_i as i16;
+            let blocker_o = w.ents[blocker_i].object_o;
+            let actor_o = w.ents[i].object_o;
             let old = (w.ents[blocker_i].x, w.ents[blocker_i].y);
             let exact = candidate;
             collision::guy_set_new_location(&mut w.collision_world, old, exact, 0, 0, 1, 1);
@@ -4427,7 +4470,7 @@ mod movement_integration {
             }
             let blocker_row_i = w
                 .collision_units
-                .find(0, blocker_i as i32)
+                .find(0, i32::from(blocker_o))
                 .expect("blocker collision row");
             w.collision_units.rows[blocker_row_i].x = exact.0;
             w.collision_units.rows[blocker_row_i].y = exact.1;
@@ -4435,14 +4478,14 @@ mod movement_integration {
                 .collision_units
                 .guys
                 .iter_mut()
-                .filter(|g| g.who == 0 && g.o == blocker_i as i32)
+                .filter(|g| g.who == 0 && g.o == i32::from(blocker_o))
             {
                 guy.body.x = exact.0;
                 guy.body.y = exact.1;
             }
             let actor_row = w.collision_units.rows[w
                 .collision_units
-                .find(0, i as i32)
+                .find(0, i32::from(actor_o))
                 .expect("actor collision row")];
             assert!(collision::unit_collides(
                 &mut w.collision_world,
@@ -4460,7 +4503,7 @@ mod movement_integration {
                 w.frame += 1;
                 detected_blocker |= w
                     .collision_units
-                    .find(0, i as i32)
+                    .find(0, i32::from(actor_o))
                     .is_some_and(|ci| w.collision_units.rows[ci].collide_o == blocker_o);
                 if outcome != MoveProgress::Working {
                     break;

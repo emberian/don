@@ -106,7 +106,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         cfg.assert_ready(Surface::PlayableEdition),
         Err(ModeError::KnownDrift(
             Surface::PlayableEdition,
-            Deviation::ArenaConstructionScheduleModel,
+            Deviation::ArenaConstructionPlacementModel,
         ))
     );
     assert_eq!(
@@ -124,7 +124,6 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
             ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolPhysics),
             ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolUnitTargetSearch),
             ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolBuildingTargetSearch),
-            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionScheduleModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionPlacementModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionLifecycleModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionInterruptionModel),
@@ -155,7 +154,6 @@ fn wired_improvements_leave_only_known_product_drift() {
     assert_eq!(
         playable,
         vec![
-            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionScheduleModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionPlacementModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionLifecycleModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionInterruptionModel),

@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 194,
+  "red": 191,
   "summary": {
     "tick": {
       "total": 29,
@@ -13,8 +13,8 @@
     },
     "orders": {
       "total": 28,
-      "complete": 7,
-      "red": 21
+      "complete": 9,
+      "red": 19
     },
     "group_actions": {
       "total": 42,
@@ -32,9 +32,9 @@
       "red": 14
     },
     "product_blockers": {
-      "total": 19,
+      "total": 18,
       "complete": 0,
-      "red": 19
+      "red": 18
     },
     "global_stages": {
       "total": 9,
@@ -384,18 +384,18 @@
         "name": "BOARD_SHIP",
         "retail_va": "0x005ED1F0",
         "symbol": "Unit::do_board",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact rendezvous/retire/can_carry/go_inside transaction; world effects are mandatory callbacks",
+        "complete": true
       },
       {
         "id": 9,
         "name": "AWAIT_BOARD",
         "retail_va": "0x005ED040",
         "symbol": "Unit::do_await_board",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact two-pass reverse-link validation and asymmetric passenger cancellation",
+        "complete": true
       },
       {
         "id": 10,
@@ -945,7 +945,7 @@
           "halt",
           "move_to"
         ],
-        "status": "unimplemented",
+        "status": "orders_partial",
         "complete": false
       },
       {
@@ -1148,7 +1148,7 @@
         "action": "form",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "orders_partial",
         "complete": false
       },
       {
@@ -2293,14 +2293,6 @@
         "status": "KnownDrift",
         "seam": null,
         "retail_evidence": "Unit::do_air_patrol 0x005EA84C; ObjectsData::find_building_at; crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
-        "complete": false
-      },
-      {
-        "slug": "arena-construction-schedule-model",
-        "title": "Arena lacks retail construction state, identity and scheduler order",
-        "status": "KnownDrift",
-        "seam": null,
-        "retail_evidence": "Unit::add_build_order 0x005E5210; Unit::do_build 0x005EEBF0; crates/don-sim/src/systems/construction.rs",
         "complete": false
       },
       {

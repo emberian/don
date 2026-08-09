@@ -119,7 +119,7 @@ form:
 | `env-air-patrol-unit-target-search` | mod-16 air/bomber primary search and option fallback | *drift*: cadence/origin/insertion exact, spatial search absent | — |
 | `env-air-patrol-building-target-search` | mod-32 ordered building scan and owner-target bit | *drift*: cadence/origin/insertion exact, spatial search absent | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
-| `arena-construction-schedule-model` | persistent site/order identity and retail traversal | *drift*: MODEL 2 has no Arena schedule/state host | — |
+| `arena-construction-schedule-model` | owner-local bands, `(who,o,uid)`, unit-first traversal | **resolved**: exact Arena schedule/state host | — |
 | `arena-construction-placement-model` | complete `blocked_site` transaction | *drift*: MODEL 2 has no authoritative placement host | — |
 | `arena-construction-lifecycle-model` | start/activate/reject/complete world transactions | *drift*: MODEL 2 has only a local lifecycle core | — |
 | `arena-construction-interruption-model` | builder/target death and cancellation transactions | *drift*: MODEL 2 lacks close/order integration | — |
