@@ -1,0 +1,50 @@
+{
+  "crossplay": {
+    "current_session_present": true,
+    "flags": 23,
+    "lobby_launched": false
+  },
+  "modules": {
+    "crossplaynetlib.dll": {
+      "image_size": 1257472,
+      "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60"
+    },
+    "crossplayproxy.dll": {
+      "image_size": 847872,
+      "sha256": "ec7a6c18f03c6d7463fc3d36b7f663ec23c1477225d46b202b29756ef7554abc"
+    },
+    "partywin.dll": {
+      "image_size": 2408448,
+      "sha256": "2f88d21fd95f5fc87b75bcf85f9fc905c9feec1dbcc5ef415613a6fa0a46ae2a"
+    },
+    "playfabmultiplayerwin.dll": {
+      "image_size": 3534848,
+      "sha256": "3a6e7a0fadce8c9ddb5da8a571de4c58fb9f040faf6a5f68c9962d93e4c4fad8"
+    },
+    "riseofnations.exe": {
+      "image_size": 12271616,
+      "sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
+    }
+  },
+  "mutation": "none; bounded read-only module/hash/scalar/title-id snapshot",
+  "netsys": {
+    "host_player_pointer_present": true,
+    "local_player_pointer_present": true,
+    "player_count": 1,
+    "player_pointer_present_mask": 1
+  },
+  "pid": 13876,
+  "playfab_title_id": "84214",
+  "ready": true,
+  "redacted_by_design": [
+    "developer_secret",
+    "tickets",
+    "tokens",
+    "lobby_ids",
+    "descriptors",
+    "platform_ids",
+    "player_ids",
+    "player_names"
+  ],
+  "schema": "don.retail-netstate.v1"
+}
