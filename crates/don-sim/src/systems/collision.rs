@@ -31,7 +31,7 @@
 //! | `CollBlock::get` | `0x00681E30` | 74 | ported exact |
 //! | `CollBlock::set` | `0x00682070` | 103 | ported exact |
 //! | `BitMask<768>::empty` | `0x00479150` | 70 | ported exact (it mutates `flags`) |
-//! | `CollCheck::fill_slots` | `0x006820E0` | 1109 | ported minus the pathfinder overlay |
+//! | `CollCheck::fill_slots` | `0x006820E0` | 1109 | ported, including scratch clones |
 //! | `CollCheck::collide_here` | `0x00682540` | 1419 | ported, all three arms |
 //! | `CollCheck::move_unit` | `0x00682AD0` | 1077 | ported |
 //! | `GameDaemon::process_coll_blocks` | `0x00731F90` | 204 | ported exact |
@@ -47,7 +47,7 @@
 //! | `WorldData::get_coll_block` | `0x006B5350` | 65 | reused from `map_terrain` |
 //! | `World::new_coll_block` | `0x0046D250` | 179 | reused from `map_terrain` |
 //! | `Objects::find_collision` | `0x00682110` | — | **not ported** (the other `collide_here` caller) |
-//! | `Unit::detect_boat_collision` | `0x005FA8B0` | 1655 | **not ported**, trait hook |
+//! | `Unit::detect_boat_collision` | `0x005FA8B0` | 1655 | required side-effecting trait hook |
 //!
 //! Data tables, read out of `.rdata` [measured]: `RING_X` `0x00ADCAF0`, `RING_Y` `0x00ADC400`
 //! (441 `int` each), `RING_COUNT` `0x00ADD1E0` (11 `int`), the 2x2 block offsets
@@ -224,6 +224,11 @@ pub struct CollCheck {
     pub valid: [bool; 4],
     /// `collcheck+0x10` — the `WData` row holding the block, when one exists.
     pub slot: [Option<usize>; 4],
+    /// The four temporary `CollBlock` copies installed in PathFinder's scratch tree while
+    /// `overlay` is active. Retail keys a persistent tree by WData index; no routine other
+    /// than `fill_slots` observes it, so retaining the four value copies for this query is
+    /// behaviour-equivalent (the only mutation is `BitMask::empty`'s memoised `flags`).
+    pub scratch: [Option<CollBlock>; 4],
     /// Not a retail field. Counts `collide_here` calls, for the coverage report.
     pub queries: u64,
 }
@@ -249,10 +254,12 @@ impl CollCheck {
     /// 5. `WData.block` of `0` or `-1` leaves the slot empty.
     ///
     /// `overlay` is retail's `param_4`, which consults the pathfinder's scratch
-    /// `Tree<CollBlock*,int>` at `PathFinder+0x4C` (`0x00E85E8C`) and clones real blocks into
-    /// it. **Not ported** — see the gap list. With no scratch tree installed the retail arm
-    /// is a no-op, which is what this reproduces.
-    pub fn fill_slots(&mut self, w: &World, ux: i32, uy: i32, size: i32, _overlay: bool) {
+    /// `Tree<CollBlock*,int>` at `PathFinder+0x4C` (`0x00E85E8C`) and clones each selected
+    /// real block (or a new empty block) into it. This port keeps the query's four cloned
+    /// values in [`CollCheck::scratch`]; only `fill_slots` uses the retail tree and its key
+    /// lookup changes no bit-level answer [measured, sole references `0x006820E0` and
+    /// `0x00689EC0`].
+    pub fn fill_slots(&mut self, w: &World, ux: i32, uy: i32, size: i32, overlay: bool) {
         let bx0 = (ux - size) >> 4;
         let by0 = (uy - size) >> 4;
 
@@ -260,6 +267,7 @@ impl CollCheck {
         let spans_y = ((uy + size) >> 4) != by0;
         self.valid = [true, spans_y, spans_x, spans_x && spans_y];
         self.slot = [None; 4];
+        self.scratch = [None; 4];
 
         // Step 3 — bounds. Retail folds this into a `skip[]` array that also suppresses the
         // block lookup below.
@@ -305,6 +313,26 @@ impl CollCheck {
             let idx = w.w_index(bx, by);
             let rec = &w.wdata[idx];
             if (region < 0 || rec.region as i32 == region) && rec.block.is_some() {
+                self.slot[i] = Some(idx);
+            }
+        }
+
+        if overlay {
+            // With PathFinder's scratch tree installed, retail inserts one clone for every
+            // valid candidate not already in the tree. A candidate rejected by the normal
+            // region/block lookup receives a newly constructed empty CollBlock.
+            for i in 0..4 {
+                if !self.valid[i] {
+                    continue;
+                }
+                let bx = bx0 + BLOCK_DX[i];
+                let by = by0 + BLOCK_DY[i];
+                let idx = w.w_index(bx, by);
+                self.scratch[i] = Some(
+                    self.slot[i]
+                        .and_then(|wi| w.wdata[wi].block.as_deref().copied())
+                        .unwrap_or_default(),
+                );
                 self.slot[i] = Some(idx);
             }
         }
@@ -364,13 +392,17 @@ impl CollCheck {
         for i in 0..4 {
             dead[i] = match (self.valid[i], self.slot[i]) {
                 (false, _) | (_, None) => true,
-                (true, Some(idx)) => {
-                    let b = w.wdata[idx]
-                        .block
-                        .as_deref_mut()
-                        .expect("slot implies a block");
-                    block_empty(b)
-                }
+                (true, Some(idx)) => match (overlay, self.scratch[i].as_mut()) {
+                    (true, Some(b)) => block_empty(b),
+                    (true, None) => true,
+                    (false, _) => {
+                        let b = w.wdata[idx]
+                            .block
+                            .as_deref_mut()
+                            .expect("slot implies a block");
+                        block_empty(b)
+                    }
+                },
             };
         }
         // Only the low block can contribute -> take the single-block fast reads.
@@ -413,7 +445,11 @@ impl CollCheck {
                                 match probe {
                                     Some(s) => {
                                         let idx = self.slot[s].expect("live slot");
-                                        let b = w.wdata[idx].block.as_deref().unwrap();
+                                        let b = if overlay {
+                                            self.scratch[s].as_ref().expect("live scratch slot")
+                                        } else {
+                                            w.wdata[idx].block.as_deref().unwrap()
+                                        };
                                         if block_get(b, cx, cy) {
                                             return Some((cx, cy));
                                         }
@@ -452,7 +488,11 @@ impl CollCheck {
                                 match probe {
                                     Some(s) => {
                                         let idx = self.slot[s].expect("live slot");
-                                        let b = w.wdata[idx].block.as_deref().unwrap();
+                                        let b = if overlay {
+                                            self.scratch[s].as_ref().expect("live scratch slot")
+                                        } else {
+                                            w.wdata[idx].block.as_deref().unwrap()
+                                        };
                                         if block_get(b, cx, cy) {
                                             return Some((cx, cy));
                                         }
@@ -502,7 +542,11 @@ impl CollCheck {
             };
             if let Some(s) = probe {
                 let idx = self.slot[s].expect("live slot");
-                let b = w.wdata[idx].block.as_deref().unwrap();
+                let b = if overlay {
+                    self.scratch[s].as_ref().expect("live scratch slot")
+                } else {
+                    w.wdata[idx].block.as_deref().unwrap()
+                };
                 if block_get(b, cx, cy) {
                     return Some((cx, cy));
                 }
@@ -792,11 +836,20 @@ pub struct UnitRow {
     pub has_orders: bool,
     /// `UnitData+0x104 openlist` — a suspended pathfinder search is parked on this unit.
     pub searching: bool,
+    /// Flags on the top `PathData` record, or zero with no path. Bit 3 suppresses collision
+    /// exactly as the `UnitData+0xC0`/top-record gate at `0x00617119` does.
+    pub path_top_flags: u8,
     /// `UnitTypeData+0x2B4 unit_flags`.
     pub unit_flags: u32,
     /// `SpellType` id when [`UnitRow::order`] is `CastSpell`, else `-1`.
     pub spell_id: i32,
-    /// `UnitData::is_captain` `0x0046CEB0`.
+    /// `UnitData::is_hero` / `is_supply`, used by the boat-collision pre-check.
+    pub hero: bool,
+    pub supply: bool,
+    /// `UnitTypeData::is_siege` (type vtable `+0x10C`), also used by that pre-check.
+    pub siege: bool,
+    /// `UnitData::is_captain` `0x0046CEB0`; retained for the object-side adapter even though
+    /// the retail collision functions in this module do not branch on it.
     pub captain: bool,
 }
 
@@ -825,6 +878,17 @@ pub trait CollUnits {
     /// non-null squad guys in pointer-array order and use each guy type's
     /// `new_block_radius`; [`unit_corner`] is the shared exact implementation.
     fn unit_corner(&self, who: i32, o: i32, cx: i32, cy: i32) -> i32;
+    /// `Unit::detect_boat_collision` `0x005FA8B0`. This is intentionally a required hook:
+    /// retail may relocate the other unit and update its collision partner while answering,
+    /// so reducing it to a geometry predicate would lose simulation state.
+    fn detect_boat_collision(
+        &mut self,
+        who: i32,
+        o: i32,
+        nx: i32,
+        ny: i32,
+        move_other: bool,
+    ) -> bool;
     /// Write back a row mutated by [`Detect::apply`] / [`Resolve::apply`].
     fn write(&mut self, who: i32, o: i32, r: &UnitRow);
     /// `LeaderData::is_enemy` `0x006EBAA0`.
@@ -1046,7 +1110,7 @@ impl Detect {
 pub fn detect_unit_collision<U: CollUnits>(
     w: &mut World,
     cc: &mut CollCheck,
-    units: &U,
+    units: &mut U,
     me: &UnitRow,
     nx: i32,
     ny: i32,
@@ -1061,21 +1125,22 @@ pub fn detect_unit_collision<U: CollUnits>(
         };
     }
 
-    // 2. pre-checks. `detect_boat_collision` is a hook this lane does not own; the retail
-    // arm returns 0 (no boat collision) for a land unit on land, which is what a `false`
-    // answer models. Named in the gap list.
+    // 2. pre-checks. Regular land units bypass the specialised boat-body solver. Water,
+    // siege, hero and supply units enter it only on the non-probe/non-overlay move-step arm.
     if !args.skip_pre
-        && me.domain != DOMAIN_WATER
-        && !me.captain
+        && (me.domain == DOMAIN_WATER || me.siege || me.hero || me.supply)
         && !args.overlay
-        && !args.probe
-        && !args.boat
     {
-        return Detect::ClearAndReset { yielded: false };
+        if args.probe || !args.boat {
+            return Detect::ClearAndReset { yielded: false };
+        }
+        if units.detect_boat_collision(me.who, me.o, nx, ny, true) {
+            return Detect::ClearAndReset { yielded: false };
+        }
     }
 
     // 3. suppressions
-    let suppressed = false; // path-top flag 8; the caller supplies it via `path_blocked`
+    let suppressed = me.path_top_flags & 8 != 0;
     if suppressed || me.safe != 0 {
         return if args.probe {
             Detect::Clear
@@ -1577,7 +1642,7 @@ pub fn turn_toward(desired: i32, current: i32, rate: u32) -> (i32, u32) {
 pub fn unit_collides<U: CollUnits>(
     w: &mut World,
     cc: &mut CollCheck,
-    units: &U,
+    units: &mut U,
     me: &UnitRow,
     x: i32,
     y: i32,
@@ -1594,6 +1659,8 @@ pub struct UnitTable {
     pub rows: Vec<UnitRow>,
     /// Live, non-null squad guys, kept in each unit's pointer-array order.
     pub guys: Vec<TableGuy>,
+    pub boat_calls: Vec<BoatCall>,
+    pub boat_result: bool,
     pub frame: i32,
     pub budget: [i32; 10],
 }
@@ -1603,6 +1670,15 @@ pub struct TableGuy {
     pub who: i32,
     pub o: i32,
     pub body: CollGuy,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoatCall {
+    pub who: i32,
+    pub o: i32,
+    pub nx: i32,
+    pub ny: i32,
+    pub move_other: bool,
 }
 
 impl UnitTable {
@@ -1630,6 +1706,23 @@ impl CollUnits for UnitTable {
                 .filter(|g| g.who == who && g.o == o)
                 .map(|g| g.body),
         )
+    }
+    fn detect_boat_collision(
+        &mut self,
+        who: i32,
+        o: i32,
+        nx: i32,
+        ny: i32,
+        move_other: bool,
+    ) -> bool {
+        self.boat_calls.push(BoatCall {
+            who,
+            o,
+            nx,
+            ny,
+            move_other,
+        });
+        self.boat_result
     }
     fn write(&mut self, who: i32, o: i32, r: &UnitRow) {
         if let Some(i) = self.find(who, o) {
@@ -1723,4 +1816,359 @@ pub fn place(
 /// have to reach into `movement`. `GuyData`'s coordinates are **not** obfuscated.
 pub const OBJECT_COORD_XOR: i32 = COORD_XOR;
 
-// @@TESTS@@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn world(xs: i32, ys: i32) -> World {
+        World::init(xs, ys, 44, 4, 4)
+    }
+
+    fn row(who: i32, o: i32, ux: i32, uy: i32, radius: i32) -> UnitRow {
+        UnitRow {
+            who,
+            o,
+            x: ucell_centre(ux),
+            y: ucell_centre(uy),
+            down: -1,
+            down_who: -1,
+            domain: DOMAIN_LAND,
+            block_radius: radius,
+            group: -1,
+            collide_o: -1,
+            collide_who: -1,
+            on_map: true,
+            active: true,
+            ..UnitRow::default()
+        }
+    }
+
+    fn guy(ux: i32, uy: i32, radius: i32) -> CollGuy {
+        CollGuy {
+            x: ucell_centre(ux),
+            y: ucell_centre(uy),
+            block_radius: radius,
+        }
+    }
+
+    fn table_bytes(a: &[i32]) -> Vec<u8> {
+        a.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn retail_ring_tables_match_binary_byte_digests() {
+        // Raw bytes at .rdata VAs 0x00ADCAF0 and 0x00ADC400 in
+        // ron-bin/riseofnations.exe. These fail if any literal, order, or sign changes.
+        assert_eq!(
+            crate::checksum::adler32(1, &table_bytes(&RING_X)),
+            0x6c7b45b8
+        );
+        assert_eq!(
+            crate::checksum::adler32(1, &table_bytes(&RING_Y)),
+            0x98df41bb
+        );
+        let mut both = table_bytes(&RING_X);
+        both.extend(table_bytes(&RING_Y));
+        assert_eq!(crate::checksum::adler32(1, &both), 0x82858772);
+        assert_eq!(RING_COUNT, [1, 9, 25, 49, 81, 121, 169, 225, 289, 361, 441]);
+        assert_eq!(BLOCK_DX, [0, 0, 1, 1]);
+        assert_eq!(BLOCK_DY, [0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn retail_rings_zero_through_seven_are_complete_in_ordered_prefixes() {
+        let mut start = 0usize;
+        for radius in 0..=7i32 {
+            let end = RING_COUNT[radius as usize] as usize;
+            let got: BTreeSet<_> = (start..end).map(|i| (RING_X[i], RING_Y[i])).collect();
+            let want: BTreeSet<_> = (-radius..=radius)
+                .flat_map(|x| (-radius..=radius).map(move |y| (x, y)))
+                .filter(|&(x, y)| radius == 0 || x.abs().max(y.abs()) == radius)
+                .collect();
+            assert_eq!(got, want, "radius {radius}");
+            assert_eq!(end - start, got.len(), "radius {radius} has a duplicate");
+            start = end;
+        }
+    }
+
+    #[test]
+    fn retail_ring_suffix_anomalies_are_preserved_not_repaired() {
+        let expected = [(288, (-8, -16)), (360, (-9, -10)), (440, (-10, 0))];
+        for (i, pair) in expected {
+            assert_eq!((RING_X[i], RING_Y[i]), pair);
+        }
+        let ring9: Vec<_> = (289..361).map(|i| (RING_X[i], RING_Y[i])).collect();
+        let ring10: Vec<_> = (361..441).map(|i| (RING_X[i], RING_Y[i])).collect();
+        assert_eq!(ring9.iter().filter(|&&p| p == (9, 9)).count(), 2);
+        assert!(!ring9.contains(&(-9, 9)) && !ring9.contains(&(9, -9)));
+        assert_eq!(ring10.iter().filter(|&&p| p == (10, 10)).count(), 2);
+        assert_eq!(ring10.iter().filter(|&&p| p == (-10, 0)).count(), 2);
+        assert!(!ring10.contains(&(-10, 10)) && !ring10.contains(&(10, -10)));
+    }
+
+    #[test]
+    fn collblock_negative_coordinates_and_flag_tristate_match_retail() {
+        let mut b = CollBlock::default();
+        assert_eq!(coll_bit(-1, -1), 255);
+        assert!(block_empty(&mut b));
+        assert_eq!(b.flags, 1);
+        block_set(&mut b, -1, -1, true);
+        assert!(block_get(&b, 15, 15));
+        assert_eq!(b.flags, 0);
+        assert!(!block_empty(&mut b));
+        block_set(&mut b, 15, 15, false);
+        assert_eq!(b.flags, 2);
+        assert!(block_empty(&mut b));
+        assert_eq!(b.flags, 1);
+    }
+
+    #[test]
+    fn place_stamps_every_live_guy_not_a_unit_anchor_approximation() {
+        let mut w = world(3, 3);
+        let mut units = UnitTable::default();
+        place(
+            &mut w,
+            &mut units,
+            row(0, 7, 10, 10, 1),
+            [guy(10, 10, 1), guy(14, 10, 1)],
+        );
+        let b = w.wdata(0, 0).block.as_deref().unwrap();
+        for x in 9..=11 {
+            for y in 9..=11 {
+                assert!(block_get(b, x, y), "first guy ({x},{y})");
+            }
+        }
+        for x in 13..=15 {
+            for y in 9..=11 {
+                assert!(block_get(b, x, y), "second guy ({x},{y})");
+            }
+        }
+        assert!(
+            !block_get(b, 12, 10),
+            "the gap is not filled by a unit-wide square"
+        );
+        assert_eq!(units.guys.len(), 2);
+    }
+
+    #[test]
+    fn unit_corner_walks_live_guys_in_pointer_array_order() {
+        assert_eq!(
+            unit_corner(13, 9, [guy(10, 10, 1), guy(14, 10, 1)]),
+            1,
+            "NW corner belongs to the second guy, not the unit anchor"
+        );
+        assert_eq!(unit_corner(11, 11, [guy(10, 10, 1), guy(12, 12, 1)]), 5);
+        assert_eq!(unit_corner(40, 40, std::iter::empty()), 0);
+    }
+
+    #[test]
+    fn overlay_uses_private_collblock_clones() {
+        let mut w = world(2, 2);
+        let b = w.new_coll_block(0, 0);
+        block_set(b, 3, 4, true);
+        let mut cc = CollCheck::new();
+        cc.fill_slots(&w, 3, 4, 1, true);
+        assert!(block_get(cc.scratch[0].as_ref().unwrap(), 3, 4));
+        block_set(cc.scratch[0].as_mut().unwrap(), 3, 4, false);
+        assert!(block_get(w.wdata(0, 0).block.as_deref().unwrap(), 3, 4));
+    }
+
+    #[test]
+    fn astar_probe_sees_a_per_guy_stamp_without_mutating_order_state() {
+        let mut w = world(3, 3);
+        let mut units = UnitTable::default();
+        place(&mut w, &mut units, row(0, 1, 7, 10, 1), [guy(7, 10, 1)]);
+        place(&mut w, &mut units, row(1, 2, 12, 10, 1), [guy(12, 10, 1)]);
+        let me = units.row(0, 1).unwrap();
+        let mut cc = CollCheck::new();
+        let d = detect_unit_collision(
+            &mut w,
+            &mut cc,
+            &mut units,
+            &me,
+            ucell_centre(10),
+            ucell_centre(10),
+            DetectArgs::VALID_UCOORD,
+        );
+        assert_eq!(d, Detect::HitProbe);
+        assert_eq!(units.row(0, 1).unwrap().collide_o, -1);
+    }
+
+    #[test]
+    fn path_top_flag_eight_and_safe_byte_suppress_collision() {
+        let mut w = world(3, 3);
+        let mut units = UnitTable::default();
+        place(&mut w, &mut units, row(0, 1, 7, 10, 1), [guy(7, 10, 1)]);
+        place(&mut w, &mut units, row(1, 2, 12, 10, 1), [guy(12, 10, 1)]);
+        let mut cc = CollCheck::new();
+        for me in [
+            UnitRow {
+                path_top_flags: 8,
+                ..units.row(0, 1).unwrap()
+            },
+            UnitRow {
+                safe: 1,
+                ..units.row(0, 1).unwrap()
+            },
+        ] {
+            assert_eq!(
+                detect_unit_collision(
+                    &mut w,
+                    &mut cc,
+                    &mut units,
+                    &me,
+                    ucell_centre(10),
+                    ucell_centre(10),
+                    DetectArgs::VALID_UCOORD,
+                ),
+                Detect::Clear
+            );
+        }
+    }
+
+    #[test]
+    fn boat_solver_gate_matches_domain_siege_hero_supply_and_overlay_rules() {
+        let mut w = world(2, 2);
+        let mut cc = CollCheck::new();
+        for me in [
+            UnitRow {
+                domain: DOMAIN_WATER,
+                ..row(0, 1, 4, 4, 1)
+            },
+            UnitRow {
+                siege: true,
+                ..row(0, 1, 4, 4, 1)
+            },
+            UnitRow {
+                hero: true,
+                ..row(0, 1, 4, 4, 1)
+            },
+            UnitRow {
+                supply: true,
+                ..row(0, 1, 4, 4, 1)
+            },
+        ] {
+            let mut units = UnitTable {
+                boat_result: true,
+                ..UnitTable::default()
+            };
+            assert_eq!(
+                detect_unit_collision(
+                    &mut w,
+                    &mut cc,
+                    &mut units,
+                    &me,
+                    ucell_centre(5),
+                    ucell_centre(4),
+                    DetectArgs::MOVE_STEP,
+                ),
+                Detect::ClearAndReset { yielded: false }
+            );
+            assert_eq!(units.boat_calls.len(), 1);
+            assert!(units.boat_calls[0].move_other);
+        }
+
+        let me = row(0, 1, 4, 4, 1);
+        let mut units = UnitTable {
+            boat_result: true,
+            ..UnitTable::default()
+        };
+        let _ = detect_unit_collision(
+            &mut w,
+            &mut cc,
+            &mut units,
+            &me,
+            ucell_centre(5),
+            ucell_centre(4),
+            DetectArgs::MOVE_STEP,
+        );
+        assert!(
+            units.boat_calls.is_empty(),
+            "ordinary land units bypass the boat solver"
+        );
+
+        let water = UnitRow {
+            domain: DOMAIN_WATER,
+            ..me
+        };
+        let _ = detect_unit_collision(
+            &mut w,
+            &mut cc,
+            &mut units,
+            &water,
+            ucell_centre(5),
+            ucell_centre(4),
+            DetectArgs::VALID_UCOORD,
+        );
+        assert!(
+            units.boat_calls.is_empty(),
+            "overlay probes bypass the boat solver"
+        );
+    }
+
+    #[test]
+    fn move_unit_repaints_only_the_changed_edges() {
+        let mut w = world(2, 2);
+        w.new_coll_block(0, 0);
+        for x in 2..=4 {
+            for y in 2..=4 {
+                block_set(w.wdata[0].block.as_deref_mut().unwrap(), x, y, true);
+            }
+        }
+        move_unit(&mut w, (3, 3), (5, 3), 1);
+        let b = w.wdata(0, 0).block.as_deref().unwrap();
+        for x in 4..=6 {
+            for y in 2..=4 {
+                assert!(block_get(b, x, y));
+            }
+        }
+        for y in 2..=4 {
+            assert!(!block_get(b, 2, y));
+        }
+    }
+
+    #[test]
+    fn collision_block_reaper_honours_persistent_cursor_and_budget() {
+        let mut w = world(8, 2);
+        for x in 0..5 {
+            w.new_coll_block(x, 0);
+        }
+        block_set(w.wdata[0].block.as_deref_mut().unwrap(), 0, 0, true);
+        let mut cursor = 0;
+        assert_eq!(process_coll_blocks(&mut w, &mut cursor), 4);
+        assert_eq!(cursor, 5);
+        assert!(w.wdata[0].block.is_some());
+        assert!(w.wdata[1..5].iter().all(|r| r.block.is_none()));
+    }
+
+    #[test]
+    fn turn_rate_and_heading_edges_are_integer_exact() {
+        let guy = TurnGuy {
+            guy_num: 0,
+            avg_speed: 0,
+            ..TurnGuy::default()
+        };
+        assert_eq!(turn_speed(&guy, 0x0100_0000, 1, 0, true), 0x0100_0000);
+        assert_eq!(turn_speed(&guy, 0x0100_0000, 1, 0, false), 0x0100_0000);
+        assert_eq!(turn_toward(0x0222_221f, 0, 1), (0x0222_221f, 0));
+        assert_eq!(
+            turn_toward(0x1000_0000, 0, 0x0100_0000),
+            (0x0100_0000, 0x0f00_0000)
+        );
+    }
+
+    #[test]
+    fn retail_constants_have_no_accidental_duplicate_keys() {
+        let constants = BTreeMap::from([
+            ("unit_turn_speed", UNIT_TURN_SPEED),
+            ("unit_pack_turn_bonus", UNIT_PACK_TURN_BONUS),
+            ("turn_floor_mul", TURN_SPEED_FLOOR_MUL),
+            ("ucell", UCELL),
+            ("block_ucells", BLOCK_UCELLS),
+        ]);
+        assert_eq!(constants.len(), 5);
+        assert_eq!(constants["unit_turn_speed"], 256);
+        assert_eq!(constants["unit_pack_turn_bonus"], 2);
+    }
+}
