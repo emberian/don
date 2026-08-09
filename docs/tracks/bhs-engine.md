@@ -193,6 +193,18 @@ chunk header is 8 bytes, since `load_bytecode` is handed `*(int*)chunk - 8`.
 | 8 | `load_variable` `0x009c4e30` | a variable name record |
 | 9 | `load_struct_types` `0x009c4d70` | one process-global struct type name |
 
+Tag 3 has no aggregate form. `ConstType::write` (`0x009db920`) writes only int/enum,
+float, and String payloads; `ScriptFile::load_const` (`0x009c4fb0`) compares those same
+three tags and executes `int3` for every other value. Arrays and structs are constructed
+by `OP_CREATE_ARRAY*`/`OP_CREATE_STRUCT` at runtime, not deserialized from the constant
+pool. An actual supported-image capture of the synthetic `array_runtime.bhs` fixture
+confirms the compiler side: `[1, 2, 3]` emits `OP_CREATE_ARRAY_INITER`, while its constant
+pool is four scalar `ScriptInt`s (`1, 2, 3, 0`), each with `scope=VM_CONST` and
+`ref_count=0`. Those scalar ownership fields are sufficient for the normal compiler
+producer and channel 15. A custom-struct version returned compile status 2 with no
+`ScriptFile` in the bounded oracle environment, so it is retained only as a negative
+harness boundary—not evidence for a struct constant encoding.
+
 `don_bhs::chunk` now parses the exact pointer-free subset: the tag-0 root and tags
 2–9, including UTF-16 Strings and loader-created channel-15 metadata.
 `load_program_files` resolves non-empty tag-6 links by scanning already-loaded source
@@ -544,13 +556,14 @@ non-empty directory argument rather than by hosting the compiler at all.
 2. **String and aggregate operator differentials.** Integer and float operators are
    Tier B after 6,993 retail cases with zero mismatches. Retail comparisons for
    strings and aggregates, including `ScriptObject::get_string`, remain open.
-3. **Extend compiled-constant coverage only when the writer emits it.** The tag-0
-   container, scalar constants, include graph, and tag-9 global name registration now
-   load without a compiler. Aggregate constant payloads and non-ASCII locale aliases
-   remain explicit errors; no layout or alias relation is inferred from tag 9 because
-   the retail chunk contains neither.
-4. **Register game script qualifiers in the hbox compiler environment.** This is now the
+3. **Register game script qualifiers in the hbox compiler environment.** This is now the
    direct blocker to compiling a body and extracting reference bytecode.
+
+The compiled-constant question is closed rather than deferred: the shipped tag-3
+writer/reader pair has no aggregate arm, and the supported-image array capture constructs
+the aggregate in bytecode from scalar constants. Non-scalar tag-3 leaves therefore remain
+an exact retail assertion boundary. Tag 9 still supplies only a global type name, so no
+layout or alias relation is inferred from it.
 
 Two formerly open fields are decoded from the retail writer/loader pair. Despite its name,
 `LocalScriptType::write` (`0x009da900`, store at `0x009daa91`) serializes literal zero to

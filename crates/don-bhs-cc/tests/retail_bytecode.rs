@@ -105,9 +105,19 @@ fn static_script() -> NScript {
     s
 }
 
+fn array_script() -> NScript {
+    script("array_runtime", &["values", "value"])
+}
+
 const EMPTY_CONSTS: &[NValue] = &[];
 const ONE: &[NValue] = &[NValue::Int(1)];
 const ONE_TWO: &[NValue] = &[NValue::Int(1), NValue::Int(2)];
+const ONE_TWO_THREE_ZERO: &[NValue] = &[
+    NValue::Int(1),
+    NValue::Int(2),
+    NValue::Int(3),
+    NValue::Int(0),
+];
 
 const FIXTURES: &[RetailFixture] = &[
     RetailFixture {
@@ -139,6 +149,15 @@ const FIXTURES: &[RetailFixture] = &[
         code_hex: "47000000004400000040180000002600000020320000004028ad7b05003e",
         const_pool: ONE,
         script: static_script,
+    },
+    RetailFixture {
+        id: "array_runtime",
+        code_hex: concat!(
+            "47000000002602000020260100002026000000202b03000000ad7b05003200000000",
+            "260000000026030000202d260000000026010000202d04320100000028ad7b05003e"
+        ),
+        const_pool: ONE_TWO_THREE_ZERO,
+        script: array_script,
     },
 ];
 
@@ -294,6 +313,14 @@ fn retail_lowering_answers_the_first_open_compiler_questions() {
     assert!(static_int.code.contains(&0x44)); // OP_JUMP_IF_INITED
     assert_eq!(static_int.scripts[0].static_var_names, ["value"]);
     assert!(static_int.scripts[0].statics.is_empty());
+
+    let array = retail(&FIXTURES[5]);
+    assert!(array.code.contains(&0x2b)); // OP_CREATE_ARRAY_INITER
+    assert_eq!(array.const_pool, ONE_TWO_THREE_ZERO);
+    assert!(array
+        .const_pool
+        .iter()
+        .all(|value| matches!(value, NValue::Int(_))));
 }
 
 #[test]
@@ -306,7 +333,16 @@ fn all_measured_fixtures_are_byte_identical() {
         if changed.is_empty() {
             byte_identical += 1;
         } else {
-            eprintln!("{} differs in {}", fixture.id, changed.join(", "));
+            eprintln!(
+                "{} differs in {}; local code={}",
+                fixture.id,
+                changed.join(", "),
+                actual
+                    .code
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            );
         }
         assert!(
             changed.is_empty(),
@@ -316,7 +352,7 @@ fn all_measured_fixtures_are_byte_identical() {
         );
     }
     assert_eq!(
-        byte_identical, 5,
+        byte_identical, 6,
         "the measured local/retail identity count drifted"
     );
 }
@@ -380,6 +416,28 @@ fn successful_compile_populates_the_captured_walk_sidecar() {
     assert_eq!(meta.const_pool, [Some(ValueWalkMeta::scalar(2, 0))]);
     assert_eq!(meta.script_meta[0].statics, []);
     assert_eq!(meta.script_meta[0].static_var_names, shape(1));
+
+    // The supported-image aggregate capture constructs the array at runtime. Its
+    // tag-3 constant leaves remain four independent VM_CONST ScriptInts; no object
+    // constant or recursive ownership record is emitted by Compiler::compile.
+    let mut array = compile_program(&fixture_path("array_runtime"));
+    let file = &array.files[0];
+    assert!(file
+        .const_pool
+        .iter()
+        .all(|value| matches!(value, Value::Int(_))));
+    assert_eq!(
+        array.walk_meta().unwrap().files[0].const_pool,
+        vec![Some(ValueWalkMeta::scalar(2, 0)); 4]
+    );
+    let mut host = NullHost;
+    assert_eq!(
+        Vm::new(&mut array, &mut host)
+            .run_script(0, "array_runtime")
+            .unwrap()
+            .returned,
+        Some(Value::Int(0))
+    );
 }
 
 #[test]

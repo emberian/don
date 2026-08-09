@@ -3,6 +3,118 @@
   "fixtures": [
     {
       "compile_return": 0,
+      "id": "array_runtime",
+      "retail": {
+        "code_hex": "47000000002602000020260100002026000000202b03000000ad7b05003200000000260000000026030000202d260000000026010000202d04320100000028ad7b05003e",
+        "const_pool": [
+          {
+            "tag": 359341,
+            "type": "int",
+            "value": 1,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
+          },
+          {
+            "tag": 359341,
+            "type": "int",
+            "value": 2,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
+          },
+          {
+            "tag": 359341,
+            "type": "int",
+            "value": 3,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
+          },
+          {
+            "tag": 359341,
+            "type": "int",
+            "value": 0,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
+          }
+        ],
+        "linked_files": [],
+        "scripts": [
+          {
+            "name": "array_runtime",
+            "offset": 0,
+            "params": [],
+            "refs": [],
+            "return_type": 359341,
+            "script_type": 0,
+            "static_var_names": [],
+            "statics": [],
+            "trigger_bits": [],
+            "trigger_count": 0,
+            "trigger_names": [],
+            "var_names": [
+              "values",
+              "value"
+            ],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 2,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
+          }
+        ],
+        "source_file": "fixtures\\array_runtime.bhs",
+        "walk": {
+          "code": {
+            "capacity": 68,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
+      },
+      "source_path": "crates/don-bhs/oracle/fixtures/array_runtime.bhs",
+      "source_sha256": "cb7e7eab1443bd0136eb94e71ef77919df0dd0cf8a071c9535bffaf3c03e4122"
+    },
+    {
+      "compile_return": 0,
       "id": "assign_int",
       "retail": {
         "code_hex": "47000000002600000020320000000028ad7b05003e",
@@ -10,9 +122,14 @@
           {
             "tag": 359341,
             "type": "int",
-            "value": 1
+            "value": 1,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
           }
         ],
+        "linked_files": [],
         "scripts": [
           {
             "name": "assign_int",
@@ -28,10 +145,54 @@
             "trigger_names": [],
             "var_names": [
               "value"
-            ]
+            ],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 1,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
           }
         ],
-        "source_file": "fixtures\\assign_int.bhs"
+        "source_file": "fixtures\\assign_int.bhs",
+        "walk": {
+          "code": {
+            "capacity": 21,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
       },
       "source_path": "crates/don-bhs/oracle/fixtures/assign_int.bhs",
       "source_sha256": "3306be9e65dea7c86f345ea090e92ac01b80d212e2fba1cbddb76f1c9e1cb294"
@@ -42,6 +203,7 @@
       "retail": {
         "code_hex": "470000000028ad7b05003e",
         "const_pool": [],
+        "linked_files": [],
         "scripts": [
           {
             "name": "empty_main",
@@ -55,10 +217,54 @@
             "trigger_bits": [],
             "trigger_count": 0,
             "trigger_names": [],
-            "var_names": []
+            "var_names": [],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
           }
         ],
-        "source_file": "fixtures\\empty_main.bhs"
+        "source_file": "fixtures\\empty_main.bhs",
+        "walk": {
+          "code": {
+            "capacity": 11,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
       },
       "source_path": "crates/don-bhs/oracle/fixtures/empty_main.bhs",
       "source_sha256": "1d073e667a9858e509be207921e8b6ca6cb55e8200863c2b18789c509dc0a6d2"
@@ -72,14 +278,23 @@
           {
             "tag": 359341,
             "type": "int",
-            "value": 1
+            "value": 1,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
           },
           {
             "tag": 359341,
             "type": "int",
-            "value": 2
+            "value": 2,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
           }
         ],
+        "linked_files": [],
         "scripts": [
           {
             "name": "logical_and",
@@ -95,10 +310,54 @@
             "trigger_names": [],
             "var_names": [
               "value"
-            ]
+            ],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 1,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
           }
         ],
-        "source_file": "fixtures\\logical_and.bhs"
+        "source_file": "fixtures\\logical_and.bhs",
+        "walk": {
+          "code": {
+            "capacity": 32,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
       },
       "source_path": "crates/don-bhs/oracle/fixtures/logical_and.bhs",
       "source_sha256": "acb4d089bf78d23fa8e41972d6b58a61ad3cf84c5e34fbb878d24c2ff15b2281"
@@ -112,9 +371,14 @@
           {
             "tag": 359341,
             "type": "int",
-            "value": 1
+            "value": 1,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
           }
         ],
+        "linked_files": [],
         "scripts": [
           {
             "name": "run_once",
@@ -134,10 +398,54 @@
             ],
             "var_names": [
               "value"
-            ]
+            ],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 1,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 1,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
           }
         ],
-        "source_file": "fixtures\\run_once.bhs"
+        "source_file": "fixtures\\run_once.bhs",
+        "walk": {
+          "code": {
+            "capacity": 35,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
       },
       "source_path": "crates/don-bhs/oracle/fixtures/run_once.bhs",
       "source_sha256": "9f1d02e7da3024bfb6fba44c5800820c39e98c76a7111f8fc04728f26c1c3161"
@@ -151,9 +459,14 @@
           {
             "tag": 359341,
             "type": "int",
-            "value": 1
+            "value": 1,
+            "walk": {
+              "ref_count": 0,
+              "scope": 2
+            }
           }
         ],
+        "linked_files": [],
         "scripts": [
           {
             "name": "static_int",
@@ -169,16 +482,60 @@
             "trigger_bits": [],
             "trigger_count": 0,
             "trigger_names": [],
-            "var_names": []
+            "var_names": [],
+            "walk": {
+              "params": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "refs": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "static_var_names": {
+                "capacity": 1,
+                "flags": 0,
+                "grow": 65535
+              },
+              "trigger_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              },
+              "var_names": {
+                "capacity": 0,
+                "flags": 0,
+                "grow": 65535
+              }
+            }
           }
         ],
-        "source_file": "fixtures\\static_int.bhs"
+        "source_file": "fixtures\\static_int.bhs",
+        "walk": {
+          "code": {
+            "capacity": 30,
+            "flags": 0,
+            "grow": 65535
+          },
+          "linked_files": {
+            "capacity": 0,
+            "flags": 0,
+            "grow": 65535
+          },
+          "scripts": {
+            "capacity": 1,
+            "flags": 0,
+            "grow": 65535
+          }
+        }
       },
       "source_path": "crates/don-bhs/oracle/fixtures/static_int.bhs",
       "source_sha256": "425f03610c1e4d8e07cf39089bac949bccfc58dbb3d625ad62c35110e7a1355e"
     }
   ],
-  "generated_unix": 1786261676,
+  "generated_unix": 1786279069,
   "host": "hbox",
   "image": {
     "compiler_root_va": "0x00eb6a90",

@@ -925,12 +925,19 @@ impl<'a> FileGen<'a> {
     /// should be used instead of `OP_INIT`.
     ///
     /// The two opcodes share `set_value`; the difference is whether the stored value
-    /// keeps aliasing the source. A pushed constant or storage reference is an alias and
-    /// therefore needs `OP_INIT_COPY`; aggregate constructors and other fresh computed
-    /// temporaries may be transferred with `OP_INIT`. [measured for scalar constants]
+    /// keeps aliasing the source. Pushed constants and storage references use
+    /// `OP_INIT_COPY`. The supported-image `array_runtime` capture proves that a fresh
+    /// `CREATE_ARRAY_INITER` result does too; this capture does not generalize that
+    /// choice to other aggregate constructors. [measured for scalar and array literals]
     fn init_value(&mut self, g: &mut ScriptGen, ty: &Ty, d: &Declarator) -> bool {
         match (&d.init, &d.array) {
             (Some(Expr::ArrayLit(items, pos)), _) => {
+                // The supported-image array_runtime capture keeps constants in
+                // lexical order (1,2,3) while pushing their slots in reverse
+                // (2,1,0) for CREATE_ARRAY_INITER's pop order.
+                for item in items {
+                    self.preintern_expr_constants(g, item);
+                }
                 // Retail's constructor pops into values[0..], so source element 0
                 // must be on top: emit the source list in reverse.
                 for it in items.iter().rev() {
@@ -950,7 +957,7 @@ impl<'a> FileGen<'a> {
                     element_tag,
                     *pos,
                 );
-                false
+                true
             }
             (Some(e), _) => {
                 self.expr(g, e);
@@ -1186,6 +1193,9 @@ impl<'a> FileGen<'a> {
                 self.emit1(op::PUSH, slot.encode(), pos);
             }
             Expr::ArrayLit(items, _) => {
+                for item in items {
+                    self.preintern_expr_constants(g, item);
+                }
                 for it in items.iter().rev() {
                     self.expr(g, it);
                 }
@@ -1655,9 +1665,9 @@ impl<'a> FileGen<'a> {
 
     /// Intern literals in lexical expression order without emitting code.
     ///
-    /// This is intentionally tied to call arguments, the measured place where source
-    /// order and evaluation order differ. Existing `intern` deduplication makes the
-    /// later normal expression lowering idempotent.
+    /// This is intentionally tied to calls and aggregate initializers, the two measured
+    /// places where source order and stack-push order differ. Existing `intern`
+    /// deduplication makes the later normal expression lowering idempotent.
     fn preintern_expr_constants(&mut self, g: &ScriptGen, e: &Expr) {
         match e {
             Expr::Int(v, _) => {

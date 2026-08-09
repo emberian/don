@@ -302,6 +302,12 @@ impl Loader {
     }
 
     fn load_const(&mut self, cursor: &mut Cursor<'_>) -> Result<(), ChunkError> {
+        // ConstType::write (0x009db920) emits a tag-3 leaf only for int/enum,
+        // float, and String payloads. ScriptFile::load_const (0x009c4fb0) makes
+        // the same three comparisons and executes `int3` for every other tag.
+        // Arrays and structs are CREATE_* bytecode products, not serialized
+        // constants; accepting an object-shaped extension here would invent a
+        // chunk format the shipped reader cannot consume.
         let tag = cursor.u32()?;
         let value = match ScriptTy::from_tag(tag) {
             Some(ScriptTy::Int) => Value::Int(cursor.u32()? as i32),
@@ -901,6 +907,34 @@ mod tests {
             load_program(&undersized_leaf, "static_int.bhs"),
             Err(ChunkError::InvalidChunkSize { at: 8, size: 7 })
         ));
+    }
+
+    #[test]
+    fn tag3_aggregate_mutations_stop_at_the_retail_int3_boundary() {
+        let mut scalar = Vec::new();
+        push_u32(&mut scalar, ScriptTy::Int.tag());
+        push_u32(&mut scalar, 7);
+        let valid = root(&[chunk(3, scalar)]);
+        assert_eq!(
+            load_program(&valid, "scalar.bhs").unwrap().files[0].const_pool,
+            [Value::Int(7)]
+        );
+
+        // Mutate only the constant's type word. The remaining bytes deliberately
+        // stay scalar-shaped: retail traps immediately after reading this tag and
+        // never interprets an aggregate ownership/refcount payload.
+        for tag in [
+            ScriptTy::Array.tag(),
+            ScriptTy::StringArray.tag(),
+            0x000b_40e8, // a representative StructType schema token
+        ] {
+            let mut aggregate = valid.clone();
+            aggregate[16..20].copy_from_slice(&tag.to_le_bytes());
+            assert!(matches!(
+                load_program(&aggregate, "aggregate.bhs"),
+                Err(ChunkError::UnsupportedConstantType(actual)) if actual == tag
+            ));
+        }
     }
 
     #[test]

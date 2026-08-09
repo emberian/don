@@ -916,7 +916,12 @@ pub fn checksum_program(program: &BhsProgram) -> Result<ScriptChannelChecksum, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    use don_bhs::host::NullHost;
     use don_bhs::program::{ProgramWalkMeta, ScriptFileWalkMeta, ScriptWalkMeta};
+    use don_bhs::vm::Vm;
+    use don_bhs_cc::sema::{self, Severity};
 
     #[derive(Default)]
     struct Bytes(Vec<u8>);
@@ -1348,6 +1353,46 @@ mod tests {
         let after = checksum_program(&program).unwrap();
         assert_ne!(before.checksum, after.checksum);
         assert_eq!(before.bytes_walked, after.bytes_walked);
+    }
+
+    #[test]
+    fn retail_array_lowering_executes_with_scalar_channel15_constants() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../don-bhs/oracle/fixtures/array_runtime.bhs");
+        let includes = sema::IncludePath::with_roots([path.parent().unwrap().to_path_buf()]);
+        let unit = sema::analyze(&path, &includes).unwrap();
+        let (mut program, diags, _) = don_bhs_cc::codegen::compile(&unit);
+        assert!(unit
+            .diags
+            .iter()
+            .chain(&diags)
+            .all(|diag| diag.severity != Severity::Error));
+        assert_eq!(
+            program.files[0].const_pool,
+            [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(0)]
+        );
+        assert_eq!(
+            program.walk_meta().unwrap().files[0].const_pool,
+            vec![Some(ValueWalkMeta::scalar(2, 0)); 4]
+        );
+
+        let before = checksum_program(&program).unwrap();
+        assert!(before.bytes_walked > 200, "non-vacuous compiled image");
+        let mut host = NullHost;
+        assert_eq!(
+            Vm::new(&mut program, &mut host)
+                .run_script(0, "array_runtime")
+                .unwrap()
+                .returned,
+            Some(Value::Int(0))
+        );
+        // Runtime-created locals do not enter ScriptFile::walk_data. The compiled
+        // scalar pool does, and a same-shape mutation must move channel 15.
+        assert_eq!(checksum_program(&program).unwrap(), before);
+        program.files[0].const_pool[0] = Value::Int(4);
+        let mutated = checksum_program(&program).unwrap();
+        assert_ne!(mutated.checksum, before.checksum);
+        assert_eq!(mutated.bytes_walked, before.bytes_walked);
     }
 
     #[test]

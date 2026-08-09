@@ -1,0 +1,5 @@
+scenario
+{
+    int values[] = [1, 2, 3];
+    value = values[0] + values[2];
+}
