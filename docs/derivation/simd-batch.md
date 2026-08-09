@@ -373,7 +373,7 @@ ssh hbox 'cd ~/don-sim-simd-lane && nice -n 15 taskset -c 0-3 ./target/release/d
 
 Baseline crate, state dumps, RSS harness and the raw benchmark rounds are in this session's
 scratchpad at
-`/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/`
+`<local-recovery-scratchpad>/`
 (`baseline-crate/`, `dumpbase/`, `dumpnew/`, `rss/`, `ship-base-*.txt`, `ship-after-*.txt`,
 `hbox-*.txt`).
 

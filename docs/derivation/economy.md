@@ -648,7 +648,7 @@ ssh hbox 'cd ~/don-oracle-econ && ./target/i686-unknown-linux-musl/debug/oracle 
 ```
 
 Scripts used are in this session's scratchpad
-(`/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/`):
+(`<local-recovery-scratchpad>/`):
 `pe.py`, `rebind2.py`, `rebind3.py`, `rebind4.py`, `disp.py`, `readers.py`, `allreaders.py`,
 `econ_main.rs`. They are throwaway analysis tools, not repo code; if the project wants them
 kept they belong under `re/scripts/`.

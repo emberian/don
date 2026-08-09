@@ -628,7 +628,7 @@ PY
 ```
 
 Live side: the guest scripts are
-`/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/`
+`<local-recovery-scratchpad>/`
 → `pstools.py` (transfer), `dump_types.ps1`, `dumpnames.ps1`, `dumpbal.ps1`; the parsers
 are `parse_dump.py`, `validate.py`, `validate2.py`.
 

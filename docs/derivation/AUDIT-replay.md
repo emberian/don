@@ -208,7 +208,7 @@ header field, and tested the header value directly. Result, using
 | | | | **total** | **25,279 / 25,279, zero residue** [measured] |
 
 98,117 commands decoded, zero undecodable. Reproduce:
-`/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/{gi4test.py,final.py}`
+`<local-recovery-scratchpad>/{gi4test.py,final.py}`
 (specimens `rc/h1.rcx`, `rcx/mp2024.rcx`, `rcx/mp2020.rcx`, `mp2024a.rcx` in that scratchpad).
 
 **Consequences:**

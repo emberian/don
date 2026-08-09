@@ -14,6 +14,14 @@ target/
 __pycache__/
 *.py[cod]
 
+# Local agent/session handoff material. These files can contain private conversation context
+# and machine-specific recovery data; they must never enter repository history.
+.revive/
+STATUS.md
+RESUME.md
+docs/RECOVERY.md
+docs/DESIGN-INTENT.md
+
 # Live captures are game data (copyrighted); reproduce with the probes in docs/.
 schema/live/*.bin
 schema/live/*.txt

@@ -494,8 +494,8 @@ Length-prefixed UTF-16LE records near the head of the payload, in slot order:
 
 | specimen | slot 0 | slot 1 | slot 2 | … |
 |---|---|---|---|---|
-| `today.rcx` | `cmr` @ `0x00AC` | `Player 2` @ `0x00F2` | `Player 3` @ `0x0142` | |
-| MP 2017 | `Arke` @ `0x00AC` | `ember` @ `0x00F4` | `Player 3` @ `0x013E` | `Player 4`, `Player 5`, `Player 6` |
+| solo specimen | `Player 1` @ `0x00AC` | `Player 2` @ `0x00F2` | `Player 3` @ `0x0142` | |
+| multiplayer specimen | `Player 1` @ `0x00AC` | `Player 2` @ `0x00F4` | `Player 3` @ `0x013E` | `Player 4`, `Player 5`, `Player 6` |
 
 Record shape, with `L` the offset of the `u32` character-count that precedes the name:
 `L-2 … L-1` is a `u16` equal to the **slot index** (0,1,2,… in both files), `L-1` is a

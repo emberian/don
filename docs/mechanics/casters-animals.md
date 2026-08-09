@@ -25,18 +25,10 @@ retail measurements, so every behavioural claim remains Tier C.
 
 ## Recovery provenance
 
-The original Claude workflow agent was `aaa5073c047dfb20c`, under top-level session
-`62b78482-846c-4ffd-a44c-2199d3744a8e`. Its transcript was recovered with:
-
-```sh
-cv show 62b78482-846c-4ffd-a44c-2199d3744a8e --agent aaa5073c
-```
-
-That agent had completed its PDB/type/XML/decompilation pass and ended immediately after: “I
-have a solid derivation. Now let me write the Rust module.” No source or report had been
-written. This recovery used its persisted scratch artifacts (`craft.txt`, `types2.txt`,
-`t5.txt`, and the PDB type dump) and re-read the named functions it had selected. It did not
-expand into unrelated caster or animal behaviour.
+The interrupted mechanics lane had completed its PDB/type/XML/decompilation pass but had not
+written source or a report. Recovery used its local scratch artifacts and re-read the named
+functions it had selected. It did not expand into unrelated caster or animal behaviour. Raw
+agent/session identifiers and local transcript paths are intentionally not repository data.
 
 Ground truth is the shipped `riseofnations.exe` (sha256 `30478a44…625079`), matching
 `ron-bin/sbl/rise.pdb`, `schema/pdb-types.json`, the PDB `TypeIndex` enumeration, and the

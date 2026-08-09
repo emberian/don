@@ -20,7 +20,7 @@ for line in open("/Users/ember/dev/don/schema/islands.jsonl"):
     funcs.append((int(d["ea"], 16), d["size"], d["name"]))
 funcs.sort()
 
-vt = json.load(open("/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/chk/vtables.json"))
+vt = json.load(open("<local-recovery-scratchpad>/chk/vtables.json"))
 # map function ea -> list of (class, slot)
 slot_of = {}
 for vft, (nm, slots) in vt.items():
@@ -137,7 +137,7 @@ for ea, size, name in funcs:
                          calls=[{k: (v if not isinstance(v, tuple) else list(v))
                                  for k, v in r.items()} for r in res])
 
-json.dump(results, open("/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/chk/walkranges.json", "w"), indent=0)
+json.dump(results, open("<local-recovery-scratchpad>/chk/walkranges.json", "w"), indent=0)
 print("functions with >=1 clean this-relative range:", len(results))
 nr = sum(len([c for c in v['calls'] if c['kind'] == 'range']) for v in results.values())
 print("total clean ranges:", nr)

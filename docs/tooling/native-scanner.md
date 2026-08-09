@@ -409,8 +409,8 @@ itself until someone reads a name out of a type object and correlates it with a 
   0.66–0.92 GiB reads taking roughly 0.37–0.97 s can perturb scheduling and caches.
 - Recovery later found `crates/donscan/src/live.rs`, an unexported draft that the deployed
   binary does not contain. Its targeted snapshot path is not runnable yet (4/6 isolated live
-  tests fail) and has no torn-frame guard. See `docs/RECOVERY.md`; do not advertise it as a
-  per-frame feed until it is repaired and measured on a disposable game.
+  tests fail) and has no torn-frame guard. Do not advertise it as a per-frame feed until it
+  is repaired and measured on a disposable game.
 - Root `Cargo.toml` gained `crates/donscan` in its `exclude` list. That is the only file
   outside this lane's own paths that was touched.
 

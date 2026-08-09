@@ -1,8 +1,7 @@
 //! Tier-C caster, stealth, and Gaia/animal primitives.
 //!
-//! This is a bounded recovery of Claude lane `aaa5073c047dfb20c` from session
-//! `62b78482-846c-4ffd-a44c-2199d3744a8e`.  It deliberately stops at the seams the
-//! interrupted lane had actually derived: active-spell expiry, mana capacity, cloak and
+//! This is a bounded recovery from an interrupted mechanics lane. It deliberately stops at
+//! the seams that lane had actually derived: active-spell expiry, mana capacity, cloak and
 //! detection predicates, the first sixteen ability records, herd scheduling/migration,
 //! herd spawn counts/angle draws, and farm-animal spawn plans.
 //!

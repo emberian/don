@@ -79,7 +79,7 @@ print(f"{len(mine)} slots, {len(bad)} mismatches", bad)
 PY
 
 # standalone, before lib.rs declared `mod systems` -- kept because it also exercises rng.rs
-S=/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad
+S=<local-recovery-scratchpad>
 mkdir -p $S/econcheck && cd $S
 cp /Users/ember/dev/don/crates/don-sim/src/rng.rs econcheck/rng.rs
 cp /Users/ember/dev/don/crates/don-sim/src/systems/economy.rs econcheck/economy.rs

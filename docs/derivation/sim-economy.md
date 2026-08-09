@@ -43,7 +43,7 @@ taken and hbox is not needed.
 
 ```sh
 # the disassembly helper this lane used (throwaway; scratchpad, not repo code)
-S=/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad
+S=<local-recovery-scratchpad>
 cd /Users/ember/dev/don/ron-bin
 uv run --quiet --with capstone --with pefile python $S/econ_disp.py 0x6ce450 0x6ce8b0   # TickResource
 uv run --quiet --with capstone --with pefile python $S/econ_disp.py 0x6ce900 0x6ceac0   # UpdateCommerceCaps

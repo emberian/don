@@ -518,7 +518,7 @@ uv run --with pefile --with capstone python -   # scripts inline in this lane's 
 ```
 
 The three artefacts the analysis built, in
-`/private/tmp/claude-501/-Users-ember-dev-don/…/scratchpad/`:
+`<local-recovery-scratchpad>/`:
 `xref.pkl` (call graph + immediate/displacement xrefs over 46 564 functions from
 `schema/islands.jsonl`, 1 540 059 instructions, 104 625 call sites),
 `rtti.pkl` (1 871 type descriptors → 1 750 vtables → 4 000 virtual functions),

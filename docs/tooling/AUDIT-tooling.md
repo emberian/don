@@ -32,7 +32,7 @@ The four things that must land:
 
 `cargo test` at `/Users/ember/dev/don`: **PASSES. 115 passed, 0 failed, 0 ignored, exit 0.**
 [measured] (`cargo test --workspace`, log at
-`/private/tmp/claude-501/-Users-ember-dev-don/62b78482-846c-4ffd-a44c-2199d3744a8e/scratchpad/aud-cargotest.log`.)
+`<local-recovery-scratchpad>/aud-cargotest.log`.)
 The two `don-sim` attrition tests `native-scanner.md` reports red at 12:59 are **green**; that
 was a transient mid-write by the concurrent economy lane, exactly as the lane guessed. Its
 paragraph is now stale and should be deleted rather than left as a standing warning.
@@ -363,7 +363,7 @@ counts and distributions *are* stated in the ledger, which is what the charter r
 
 | lane | code referenced | where it is |
 |---|---|---|
-| live-tables | `pstools.py`, `dump_types.ps1`, `dumpnames.ps1`, `dumpbal.ps1`, `parse_dump.py`, `validate.py`, `validate2.py` | `/private/tmp/claude-501/…/scratchpad/` — cited *by that path* in `live-tables.md` §8 "Reproduction" |
+| live-tables | `pstools.py`, `dump_types.ps1`, `dumpnames.ps1`, `dumpbal.ps1`, `parse_dump.py`, `validate.py`, `validate2.py` | `<local-recovery-scratchpad>/` — cited *by that path* in `live-tables.md` §8 "Reproduction" |
 | hook-dll | the script that generated `analysis-snap2.txt` (every number in §4) | not in `tools/damage-hook/`, not named anywhere |
 | native-tools | `srv.py` (PUT server), `uprecv.py` | "script in the scratchpad; ~20 lines" |
 
