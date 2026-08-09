@@ -9,7 +9,9 @@
 //! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
 //! from the authoritative `.rcx` initial setup. Everything else the fifteen
 //! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
-//! items, goods, and scenario — has no producer in `don-sim` at all. Script state has
+//! goods and scenario — has no producer in `don-sim` at all. Items are projected from
+//! the optional authoritative `World::item_runtime`; unavailable and initialized-empty
+//! are distinct bridge states. Script state has
 //! an explicit optional producer from `don-sim::script_runtime::ScriptRuntime`; it
 //! installs channel 15 only when the compiled program carries a complete retail walk
 //! sidecar, and otherwise fails closed.
@@ -129,6 +131,9 @@ pub struct SimState {
     /// therefore left zero. Written by [`SimBridge::populate`].
     unsourced_walked: [u64; NUM_WALKED],
     direct: [Option<DirectChannel>; NUM_WALKED],
+    /// A producer can be installed while walking zero elements. This distinguishes a
+    /// modelled empty registry from a missing subsystem.
+    installed: [bool; NUM_WALKED],
 }
 
 impl SimState {
@@ -152,6 +157,7 @@ impl SimState {
         let i = c as usize;
         self.direct[i] = None;
         self.unsourced_walked[i] = 0;
+        self.installed[i] = true;
         &mut self.channels[i]
     }
 
@@ -175,6 +181,17 @@ impl SimState {
                 .map_or(0, |d| d.elements)
     }
 
+    /// True when this channel has an authoritative producer, including an initialized
+    /// producer whose current traversal is empty.
+    pub fn channel_is_installed(&self, i: usize) -> bool {
+        self.installed.get(i).copied().unwrap_or(false)
+    }
+
+    /// Installation state for the fifteen walked channels.
+    pub fn installed_channels(&self) -> [bool; NUM_WALKED] {
+        self.installed
+    }
+
     fn set_direct_channel(
         &mut self,
         c: Channel,
@@ -182,14 +199,34 @@ impl SimState {
         bytes_walked: u64,
         unsourced_walked: u64,
     ) {
+        self.set_direct_channel_elements(c, checksum, bytes_walked, unsourced_walked, 1);
+    }
+
+    fn set_direct_channel_elements(
+        &mut self,
+        c: Channel,
+        checksum: u32,
+        bytes_walked: u64,
+        unsourced_walked: u64,
+        elements: u32,
+    ) {
         let i = c as usize;
         self.channels[i].objects.clear();
         self.direct[i] = Some(DirectChannel {
             checksum,
             bytes_walked,
-            elements: 1,
+            elements,
         });
         self.unsourced_walked[i] = unsourced_walked;
+        self.installed[i] = true;
+    }
+
+    fn clear_channel(&mut self, c: Channel) {
+        let i = c as usize;
+        self.channels[i].objects.clear();
+        self.direct[i] = None;
+        self.unsourced_walked[i] = 0;
+        self.installed[i] = false;
     }
 
     /// Walked bytes on channel `i` that the bridge left zero because no column
@@ -219,6 +256,9 @@ impl SimState {
                 for img in &self.channels[i].objects {
                     out.merge(walk_class(cls, img, &mut cs, 8));
                 }
+                if self.installed[i] && self.channels[i].objects.is_empty() {
+                    out.ops_executed = 1;
+                }
             } else if !self.channels[i].objects.is_empty() {
                 // We have objects but no derived walker for their class: refuse
                 // to produce a number that looks like agreement.
@@ -244,6 +284,7 @@ impl SimState {
             Some(n) if n > 0 => {
                 self.direct[i] = None;
                 self.unsourced_walked[i] = 0;
+                self.installed[i] = true;
                 self.channels[i].objects.push(vec![0u8; n]);
                 true
             }
@@ -279,6 +320,27 @@ pub struct BridgeReport {
     pub skipped_inactive_object: u32,
     /// Units in owner slots `>= 9`, which `check_units` never reaches.
     pub skipped_outside_walk: u32,
+    /// Conditional channel-10 projection outcome.
+    pub items: ItemProjection,
+}
+
+/// Whether the optional authoritative item registry was admitted into channel 10.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ItemProjection {
+    /// The world has no initialized item registry; this is absent, not empty.
+    #[default]
+    Unavailable,
+    /// A real initialized registry walked zero live elements.
+    Empty,
+    /// A real initialized registry walked at least one live element.
+    Live,
+    /// The registry was attached to different terrain dimensions and was refused.
+    MapMismatch {
+        item_xs: i32,
+        item_ys: i32,
+        map_xs: i32,
+        map_ys: i32,
+    },
 }
 
 impl BridgeReport {
@@ -297,10 +359,10 @@ impl SimBridge {
     /// Channels this bridge produces. Everything else is
     /// `ChannelSource::Absent`: not "we think it is empty", but "nothing in
     /// `don-sim` can say".
-    pub const PRODUCES: &'static [Channel] = &[Channel::Units, Channel::World];
+    pub const PRODUCES: &'static [Channel] = &[Channel::Units, Channel::Items, Channel::World];
 
     /// What the engine's checksum walks that `don-sim` has no producer for.
-    /// This is the worklist, and it is the reason thirteen of fifteen channels
+    /// This is the worklist, and it is the reason twelve of fifteen channels
     /// still agree with retail only by walking nothing.
     pub const MISSING: &'static [&'static str] = &[
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
@@ -310,7 +372,7 @@ impl SimBridge {
         "GuyData columns (guys)",
         "LeaderData records, 27,182 walked bytes each (leaders)",
         "City records (cities)",
-        "Item / Good flat lists (items, goods)",
+        "Good flat list (goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
         "ScenarioData (scenario_data) — no derived walker either",
         "RunTimeEnv / BHS (script_run_time) — runtime exists; retail container/value walk metadata is not yet produced for shipped programs",
@@ -347,6 +409,7 @@ impl SimBridge {
         let per_unit_unsourced =
             class_coverage::<don_sim::generated::state::UnitCols>().unsourced_walked as u64;
 
+        state.installed[ui] = true;
         let ch = &mut state.channels[ui];
         ch.objects.clear();
         for who in 0..don_sim::objects::OWNER_SLOTS {
@@ -371,7 +434,57 @@ impl SimBridge {
         rep.elements[ui] = ch.objects.len() as u32;
         rep.unsourced_walked[ui] = rep.elements[ui] as u64 * per_unit_unsourced;
         state.unsourced_walked[ui] = rep.unsourced_walked[ui];
+        Self::populate_items(world, state, &mut rep);
         rep
+    }
+
+    fn populate_items(world: &don_sim::World, state: &mut SimState, rep: &mut BridgeReport) {
+        let ii = Channel::Items as usize;
+        match world.items_channel() {
+            Ok(items) => {
+                state.set_direct_channel_elements(
+                    Channel::Items,
+                    items.checksum,
+                    u64::from(items.bytes_walked),
+                    0,
+                    items.elements,
+                );
+                rep.elements[ii] = items.elements;
+                rep.items = if items.elements == 0 {
+                    ItemProjection::Empty
+                } else {
+                    ItemProjection::Live
+                };
+            }
+            Err(don_sim::item_runtime::ItemRuntimeError::Unavailable) => {
+                state.clear_channel(Channel::Items);
+                rep.items = ItemProjection::Unavailable;
+            }
+            Err(_) => unreachable!("items_channel has no map-dependent failure mode"),
+        }
+    }
+
+    fn validate_item_map_shape(
+        world: &don_sim::World,
+        map_shape: (i32, i32),
+        state: &mut SimState,
+        rep: &mut BridgeReport,
+    ) {
+        let Some(runtime) = world.item_runtime.as_ref() else {
+            return;
+        };
+        let item_shape = runtime.map_shape();
+        if item_shape == map_shape {
+            return;
+        }
+        state.clear_channel(Channel::Items);
+        rep.elements[Channel::Items as usize] = 0;
+        rep.items = ItemProjection::MapMismatch {
+            item_xs: item_shape.0,
+            item_ys: item_shape.1,
+            map_xs: map_shape.0,
+            map_ys: map_shape.1,
+        };
     }
 
     /// Populate both the object-backed channels and the dynamic `world`
@@ -384,7 +497,13 @@ impl SimBridge {
         state: &mut SimState,
     ) -> BridgeReport {
         let checksum = map.checksum_sections();
-        Self::populate_with_map_checksum(world, &checksum, map_unsourced_walked, state)
+        Self::populate_with_map_checksum(
+            world,
+            &checksum,
+            (map.xs, map.ys),
+            map_unsourced_walked,
+            state,
+        )
     }
 
     /// As [`SimBridge::populate_with_map`], using a cached walk result. Initial
@@ -394,10 +513,12 @@ impl SimBridge {
     pub fn populate_with_map_checksum(
         world: &don_sim::World,
         checksum: &don_sim::systems::map_terrain::WorldChecksum,
+        map_shape: (i32, i32),
         map_unsourced_walked: u64,
         state: &mut SimState,
     ) -> BridgeReport {
         let mut rep = Self::populate(world, state);
+        Self::validate_item_map_shape(world, map_shape, state, &mut rep);
         let wi = Channel::World as usize;
         state.set_direct_channel(
             Channel::World,

@@ -64,10 +64,11 @@ pub struct ChannelResult {
     pub matches: u32,
     /// Compares where our walker touched zero bytes (both sides empty).
     pub trivial_matches: u32,
-    /// Matches on a channel `don-sim` has **no producer for at all**
-    /// (`ChannelSource::Absent`). A subset of `trivial_matches`, and the honest
-    /// name for it: not "our empty model was right", but "we have not written
-    /// this channel". `walls` surviving 25,442 turns is entirely this.
+    /// Matches on a channel this world has **no installed producer for**
+    /// (`ChannelSource::Absent`, or an uninitialized conditional producer). A subset of
+    /// `trivial_matches`, and the honest name for it: not "our empty model was right",
+    /// but "this world did not produce this channel". `walls` surviving 25,442 turns is
+    /// entirely this.
     pub unmodelled_matches: u32,
     /// Compares where our walker touched at least one byte. The only compares
     /// that are evidence about our mechanics.
@@ -171,6 +172,13 @@ pub trait Simulation {
     fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
         [0; NUM_WALKED]
     }
+    /// Per-world producer admission. Conditional channels such as `items` are absent
+    /// until their runtime owner is initialized, even though the bridge supports them.
+    fn installed_channels(&self) -> [bool; NUM_WALKED] {
+        std::array::from_fn(|i| {
+            crate::check_all::CHANNEL_SOURCE[i] == crate::check_all::ChannelSource::Modelled
+        })
+    }
 }
 
 /// The null simulation: correct empty state, no mechanics.
@@ -216,6 +224,13 @@ impl Simulation for NullSim {
     }
     fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
         std::array::from_fn(|i| self.state.unsourced_walked_bytes(i))
+    }
+    fn installed_channels(&self) -> [bool; NUM_WALKED] {
+        let dynamic = self.state.installed_channels();
+        std::array::from_fn(|i| {
+            dynamic[i]
+                || crate::check_all::CHANNEL_SOURCE[i] == crate::check_all::ChannelSource::Modelled
+        })
     }
 }
 
@@ -283,6 +298,7 @@ impl WorldSim {
             crate::state::SimBridge::populate_with_map_checksum(
                 &self.world,
                 &map.checksum,
+                (map.world.xs, map.world.ys),
                 map.unsourced_walked_bytes(),
                 &mut self.state,
             );
@@ -329,6 +345,9 @@ impl Simulation for WorldSim {
     }
     fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
         std::array::from_fn(|i| self.state.unsourced_walked_bytes(i))
+    }
+    fn installed_channels(&self) -> [bool; NUM_WALKED] {
+        self.state.installed_channels()
     }
 }
 
@@ -477,6 +496,7 @@ fn compare<S: Simulation>(
 ) {
     let (ours, bytes) = sim.check_all();
     let unsourced = sim.unsourced_walked();
+    let installed = sim.installed_channels();
 
     // Which channels do retail's own clients disagree on this turn? Those
     // carry no ground truth and are excluded.
@@ -529,7 +549,7 @@ fn compare<S: Simulation>(
             r.matches += 1;
             if c < NUM_WALKED && bytes[c] == 0 {
                 r.trivial_matches += 1;
-                if crate::check_all::CHANNEL_SOURCE[c] == crate::check_all::ChannelSource::Absent {
+                if !installed[c] {
                     r.unmodelled_matches += 1;
                 }
             }

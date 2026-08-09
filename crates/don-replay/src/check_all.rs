@@ -222,31 +222,34 @@ pub enum ChannelSource {
     /// `don-sim` holds this channel's elements and the bridge images them, so
     /// "empty" is a claim that can be wrong.
     Modelled,
+    /// A producer exists, but a particular world may not have initialized it. The
+    /// per-state `installed` bit decides whether an empty agreement is substantive.
+    Conditional,
     /// Nothing produces this channel's elements yet. It reads 1 because there is
     /// nothing to walk, and any agreement is vacuous.
     Absent,
 }
 
 /// Per channel, whether the `don-sim` → engine-layout bridge can produce it.
-/// Kept beside the bridge it describes: `populate` supplies units and
-/// `populate_with_map` supplies world; the test at the bottom exercises both
-/// and fails if the capability table disagrees.
+/// Kept beside the bridge it describes: `populate` supplies units and conditional
+/// items, while `populate_with_map` also supplies world; the test at the bottom
+/// exercises all three and fails if the capability table disagrees.
 pub const CHANNEL_SOURCE: [ChannelSource; NUM_WALKED] = [
-    ChannelSource::Modelled, // units   — World::units + the unit band
-    ChannelSource::Absent,   // builds  — no BuildData columns in World
-    ChannelSource::Absent,   // walls
-    ChannelSource::Absent,   // ammo
-    ChannelSource::Absent,   // deaths
-    ChannelSource::Absent,   // groups
-    ChannelSource::Absent,   // guys
-    ChannelSource::Absent,   // leaders
-    ChannelSource::Absent,   // cities
-    ChannelSource::Absent,   // items
-    ChannelSource::Absent,   // goods
-    ChannelSource::Modelled, // world   — exact dynamic World::walk_data bridge
-    ChannelSource::Absent,   // rules
-    ChannelSource::Absent,   // scenario_data
-    ChannelSource::Absent,   // script_run_time
+    ChannelSource::Modelled,    // units   — World::units + the unit band
+    ChannelSource::Absent,      // builds  — no BuildData columns in World
+    ChannelSource::Absent,      // walls
+    ChannelSource::Absent,      // ammo
+    ChannelSource::Absent,      // deaths
+    ChannelSource::Absent,      // groups
+    ChannelSource::Absent,      // guys
+    ChannelSource::Absent,      // leaders
+    ChannelSource::Absent,      // cities
+    ChannelSource::Conditional, // items — optional World::item_runtime
+    ChannelSource::Absent,      // goods
+    ChannelSource::Modelled,    // world   — exact dynamic World::walk_data bridge
+    ChannelSource::Absent,      // rules
+    ChannelSource::Absent,      // scenario_data
+    ChannelSource::Absent,      // script_run_time
 ];
 
 /// One channel's result, with everything needed to judge it.
@@ -261,6 +264,8 @@ pub struct ChannelReport {
     /// ceiling on this channel's fidelity: every one is a byte retail hashes and
     /// we hash a zero for.
     pub unsourced_walked_bytes: u64,
+    /// An authoritative producer was installed even if it currently walked zero bytes.
+    pub installed: bool,
     pub outcome: WalkOutcome,
 }
 
@@ -293,6 +298,7 @@ impl CheckAll {
                 elements: state.channel_element_count(i),
                 bytes: outcomes[i].bytes_walked,
                 unsourced_walked_bytes: state.unsourced_walked_bytes(i),
+                installed: state.channel_is_installed(i),
                 outcome: outcomes[i],
             };
         }
@@ -353,9 +359,12 @@ impl CheckAll {
                 c.elements,
                 c.bytes,
                 c.unsourced_walked_bytes,
-                match CHANNEL_SOURCE[i] {
-                    ChannelSource::Modelled => "modelled",
-                    ChannelSource::Absent => "ABSENT",
+                match (CHANNEL_SOURCE[i], c.installed) {
+                    (ChannelSource::Modelled, true) => "modelled",
+                    (ChannelSource::Modelled, false) => "MISSING",
+                    (ChannelSource::Conditional, true) => "modelled",
+                    (ChannelSource::Conditional, false) => "MISSING",
+                    (ChannelSource::Absent, _) => "ABSENT",
                 },
                 if c.complete() {
                     "complete".to_string()
@@ -584,13 +593,19 @@ mod tests {
         }
         let mut st = SimState::new();
         let map = don_sim::systems::map_terrain::World::init_default_rules(40, 40);
+        w.configure_items(&map);
         SimBridge::populate_with_map(&w, &map, 0, &mut st);
         for i in 0..NUM_WALKED {
-            let filled = st.channel_element_count(i) != 0;
+            let filled = st.channel_is_installed(i);
             match CHANNEL_SOURCE[i] {
                 ChannelSource::Modelled => assert!(
                     filled,
                     "{} is declared modelled but the bridge produced nothing",
+                    CHANNEL_NAMES[i]
+                ),
+                ChannelSource::Conditional => assert!(
+                    filled,
+                    "{} was initialized but its conditional bridge produced nothing",
                     CHANNEL_NAMES[i]
                 ),
                 ChannelSource::Absent => assert!(

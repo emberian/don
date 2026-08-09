@@ -73,6 +73,13 @@ impl ItemRuntime {
         &self.items
     }
 
+    /// Dimensions of the terrain plane this registry was attached to. Checksum bridges
+    /// use this to refuse pairing channel 10 with a different channel-12 owner.
+    #[inline]
+    pub fn map_shape(&self) -> (i32, i32) {
+        (self.xs, self.ys)
+    }
+
     /// Exact current channel evidence. Unlike a bare checksum word, `bytes_walked`
     /// exposes whether the result is substantive.
     pub fn channel_report(&self) -> ItemChannelReport {
