@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::objects::Band;
+use crate::order::{Order, OrderIndex};
 use crate::systems::tech_cities::{
     GainTechCohortContext, TechAutoUnlockHost, TechAutoUnlockMutation,
     TechAutoUnlockMutationReceipt, TechOneShotHost, TechOneShotMutation,
@@ -29,8 +30,12 @@ pub enum LiveUnitPlacement {
     /// A normal ground unit leaves a non-air, non-University producer through
     /// `come_out(0)`, then reaches the common launching-bit tail.
     OrdinaryGround,
-    /// Air, carrier, University/gather-inside, patrol, and strafe effects require facts
-    /// not present in the ordinary Sim stores and must block before allocation.
+    /// A true plane trained by a Holds-Air producer. Multi-point rally installs one live
+    /// AirPatrol order and its exact dynamic waypoint payload; empty rally remains inside
+    /// or executes the recovered capacity-destruction tail.
+    HostedAir,
+    /// Carrier payload, University Scholar, missile/Helicopter single-rally, and strafe
+    /// effects still require facts outside the bounded runtime cohort.
     Unsupported,
 }
 
@@ -128,6 +133,13 @@ impl LiveProductionType {
         }
     }
 
+    pub fn hosted_air_unit(type_index: i32, train_time: i32, control_cost: i32) -> Self {
+        Self {
+            unit_placement: LiveUnitPlacement::HostedAir,
+            ..Self::ordinary_unit(type_index, train_time, control_cost)
+        }
+    }
+
     pub fn in_place_building(type_index: i32, train_time: i32) -> Self {
         Self {
             class: LiveTypeClass::Building,
@@ -196,6 +208,13 @@ pub struct LiveProductionRuntime {
     pub game_tech_dirty: bool,
     pub world_population: i32,
     pub mask_effects: u64,
+    /// Dynamic payloads behind generic `OrderIndex::AirPatrol` records installed by
+    /// `Build::train`. One record is created for the first valid rally point; later
+    /// points mutate it in place.
+    pub air_patrol_orders: Vec<LiveAirPatrolOrder>,
+    /// Concrete simulation-side receipts for the UI/event boundary. The deterministic
+    /// stage and placement identity remain available even when no product UI is attached.
+    pub unit_presentations: Vec<LiveUnitPresentation>,
 }
 
 impl Default for LiveProductionRuntime {
@@ -211,8 +230,22 @@ impl Default for LiveProductionRuntime {
             game_tech_dirty: false,
             world_population: 0,
             mask_effects: 0,
+            air_patrol_orders: Vec::new(),
+            unit_presentations: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveAirPatrolOrder {
+    pub unit: UnitIdentity,
+    pub order: crate::systems::patrol::AirPatrolOrder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveUnitPresentation {
+    pub placement: UnitPlacementRequest,
+    pub stage: UnitPresentationStage,
 }
 
 impl LiveProductionRuntime {
@@ -450,15 +483,27 @@ fn preflight(
             .ok_or(LiveProductionError::MissingType(type_index))?;
         match facts.class {
             LiveTypeClass::Unit if facts.can_make => {
-                if facts.unit_placement != LiveUnitPlacement::OrdinaryGround
-                    || facts.is_aircraft_carrier
+                let carrier_unit = facts.is_aircraft_carrier
                     || facts.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER
-                    || producer.holds_air
-                    || producer.is_university
-                    || producer.type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY
-                    || producer.gather_inside
-                    || runtime.scenario_presentation_count != 0
-                {
+                    || producer.is_aircraft_carrier
+                    || producer.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
+                let university =
+                    producer.is_university || producer.type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY;
+                let placement_supported = match facts.unit_placement {
+                    LiveUnitPlacement::OrdinaryGround => !producer.holds_air,
+                    LiveUnitPlacement::HostedAir => {
+                        if !producer.holds_air {
+                            false
+                        } else if build.gather.is_empty() {
+                            true
+                        } else {
+                            facts.object_masks & UNIT_PLACEMENT_OBJ_MISSILE == 0
+                                && facts.unit_flags & UNIT_PLACEMENT_FLAG_HELICOPTER == 0
+                        }
+                    }
+                    LiveUnitPlacement::Unsupported => false,
+                };
+                if carrier_unit || university || !placement_supported {
                     return Err(LiveProductionError::UnsupportedUnitPlacement(type_index));
                 }
             }
@@ -501,6 +546,7 @@ struct SimFinishedHost<'a> {
     owner: usize,
     producer_row: usize,
     producer_type: i32,
+    producer_position: (i32, i32),
     finishing_type: i32,
     live_tech: TechState,
     error: Option<LiveProductionError>,
@@ -539,6 +585,46 @@ impl SimFinishedHost<'_> {
     ) -> UnitPlacementMutationReceipt {
         self.unsupported(callback);
         UnitPlacementMutationReceipt { mutation }
+    }
+
+    fn destroy_just_allocated_unit(
+        &mut self,
+        placement: UnitPlacementRequest,
+        callback: &'static str,
+    ) {
+        let unit = UnitIdentity {
+            owner: placement.owner,
+            object_id: placement.object_id,
+        };
+        let Some(row) = self.unit_row(unit) else {
+            self.unsupported(callback);
+            return;
+        };
+        if row + 1 != self.sim.world.live_count() as usize {
+            self.unsupported("capacity destruction target is not the new tail unit");
+            return;
+        }
+        let Some(handle) = self.sim.world.handle_at_row(row) else {
+            self.unsupported(callback);
+            return;
+        };
+        if !self.sim.world.despawn(handle) {
+            self.unsupported(callback);
+            return;
+        }
+        self.sim.unit_type.pop();
+        self.sim.paths.pop();
+        self.sim.path_unit.pop();
+        self.sim.crash_units.pop();
+
+        let control = self
+            .type_facts(placement.type_index)
+            .map_or(0, |facts| facts.control_cost);
+        let leader = &mut self.runtime.leaders[placement.owner as usize];
+        leader.control = leader.control.wrapping_sub(control);
+        if let Some(count) = leader.unit_counts.get_mut(placement.type_index as usize) {
+            *count = count.wrapping_sub(1);
+        }
     }
 }
 
@@ -810,20 +896,50 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         &mut self,
         request: UnitAirPatrolOrderRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "air patrol placement",
-            UnitPlacementMutation::AddAirPatrol(request),
-        )
+        let mutation = UnitPlacementMutation::AddAirPatrol(request);
+        let Some(row) = self.unit_row(request.unit) else {
+            self.unsupported("air patrol for missing allocated unit");
+            return UnitPlacementMutationReceipt { mutation };
+        };
+        let order = crate::systems::patrol::new_air_patrol(
+            request.point.x,
+            request.point.y,
+            request.producer.object_id,
+            request.producer.owner as i32,
+            Some(self.producer_position),
+        );
+        self.sim.world.orders_mut(row).push(Order {
+            kind: OrderIndex::AirPatrol,
+            x: request.point.x,
+            y: request.point.y,
+            target_who: request.producer.owner as i8,
+            target_o: request.producer.object_id as i16,
+            ..Order::default()
+        });
+        self.runtime.air_patrol_orders.push(LiveAirPatrolOrder {
+            unit: request.unit,
+            order,
+        });
+        UnitPlacementMutationReceipt { mutation }
     }
 
     fn append_air_patrol_waypoint(
         &mut self,
         request: UnitAppendPatrolWaypointRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "air patrol waypoint append",
-            UnitPlacementMutation::AppendAirPatrolWaypoint(request),
-        )
+        let mutation = UnitPlacementMutation::AppendAirPatrolWaypoint(request);
+        if let Some(order) = self
+            .runtime
+            .air_patrol_orders
+            .iter_mut()
+            .rev()
+            .find(|order| order.unit == request.unit)
+        {
+            order.order.points.push(request.point.x, request.point.y);
+        } else {
+            self.unsupported("air patrol waypoint without live patrol order");
+        }
+        UnitPlacementMutationReceipt { mutation }
     }
 
     fn add_strafe_order(
@@ -865,20 +981,20 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         &mut self,
         request: UnitPlacementRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "air-capacity destruction",
-            UnitPlacementMutation::DestroyAtAirCapacity(request),
-        )
+        self.destroy_just_allocated_unit(request, "air-capacity destruction");
+        UnitPlacementMutationReceipt {
+            mutation: UnitPlacementMutation::DestroyAtAirCapacity(request),
+        }
     }
 
     fn destroy_after_garrison_overflow(
         &mut self,
         request: UnitPlacementRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "garrison-overflow destruction",
-            UnitPlacementMutation::DestroyAfterGarrisonOverflow(request),
-        )
+        self.destroy_just_allocated_unit(request, "garrison-overflow destruction");
+        UnitPlacementMutationReceipt {
+            mutation: UnitPlacementMutation::DestroyAfterGarrisonOverflow(request),
+        }
     }
 
     fn clear_unit_launching(
@@ -913,13 +1029,16 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         request: UnitPlacementRequest,
         stage: UnitPresentationStage,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "trained-unit presentation",
-            UnitPlacementMutation::Present {
+        self.runtime.unit_presentations.push(LiveUnitPresentation {
+            placement: request,
+            stage,
+        });
+        UnitPlacementMutationReceipt {
+            mutation: UnitPlacementMutation::Present {
                 placement: request,
                 stage,
             },
-        )
+        }
     }
 }
 
@@ -1182,9 +1301,11 @@ pub struct LiveProductionReceipt {
 /// Execute the recovered routed queue and completion transactions against an ordinary
 /// [`Sim`] building row. The caller is the `Build::process` arm at retail step 14.
 ///
-/// Every installed queue type is preflighted before progress changes. Unsupported air,
-/// carrier, University, spell, captured-building, recursive-tech, or opaque special-tech
-/// effects return an error with the queue and RNG untouched.
+/// Every installed queue type is preflighted before progress changes. Hosted true-plane
+/// patrol and held-inside/gather-inside routes, including their capacity-destruction tails,
+/// are executable. Carrier payload, University Scholar, single-rally missile/Helicopter,
+/// spell, captured-building, recursive-tech, or opaque special-tech effects return an
+/// error with the queue and RNG untouched.
 pub fn process_sim_build_queue(
     sim: &mut Sim,
     runtime: &mut LiveProductionRuntime,
@@ -1283,6 +1404,7 @@ impl QueueCompletionHost for SimQueueHost<'_> {
             owner,
             producer_row: self.producer_row,
             producer_type: self.producer_type,
+            producer_position: self.producer_snapshot.position(),
             finishing_type: type_index,
             live_tech: tech.clone(),
             error: None,
@@ -1504,6 +1626,169 @@ mod tests {
         assert_eq!(runtime.leaders[0].last_unit_built, 0);
         assert_eq!(runtime.leaders[0].last_unit_finished[unit_type as usize], 0);
         assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn hosted_air_completion_installs_one_live_patrol_and_appends_valid_waypoints() {
+        let unit_type = 100;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::hosted_air_unit(unit_type, 1, 1));
+        runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .holds_air = true;
+        sim.builds[row].gather = vec![
+            GatherPoint {
+                x: 1_536,
+                y: 1_920,
+                ..GatherPoint::default()
+            },
+            GatherPoint {
+                x: 2_304,
+                y: 2_688,
+                ..GatherPoint::default()
+            },
+        ];
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        let unit_row = sim.world.objects.slot(0).band(Band::Unit)[0] as usize;
+        let generic = sim.world.orders(unit_row).current().unwrap();
+        assert_eq!(sim.world.orders(unit_row).len(), 1);
+        assert_eq!(generic.kind, OrderIndex::AirPatrol);
+        assert_eq!((generic.x, generic.y), (1_536, 1_920));
+        assert_eq!((generic.target_who, generic.target_o), (0, 2_000));
+        assert_eq!(runtime.air_patrol_orders.len(), 1);
+        assert_eq!(
+            runtime.air_patrol_orders[0].order.points.x,
+            vec![768, 2_304]
+        );
+        assert_eq!(
+            runtime.air_patrol_orders[0].order.points.y,
+            vec![960, 2_688]
+        );
+        assert_eq!(sim.world.units.inside_up()[unit_row], 2_000);
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn hosted_helicopter_remains_inside_or_is_destroyed_at_live_capacity() {
+        let unit_type = UNIT_PLACEMENT_TYPE_HELICOPTER;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::hosted_air_unit(unit_type, 1, 1));
+        runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .holds_air = true;
+        runtime.leaders[0].aircraft_limit = 1;
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        let unit_row = sim.world.objects.slot(0).band(Band::Unit)[0] as usize;
+        assert_eq!(sim.world.units.inside_up()[unit_row], 2_000);
+        assert!(sim.world.orders(unit_row).is_empty());
+
+        let (mut blocked_sim, mut blocked_runtime, blocked_row) = harness(&[unit_type]);
+        blocked_runtime.install_type(LiveProductionType::hosted_air_unit(unit_type, 1, 1));
+        blocked_runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .holds_air = true;
+        blocked_runtime.leaders[0].aircraft_limit = 0;
+        let rng_before = blocked_sim.world.random.state();
+        process_sim_build_queue(&mut blocked_sim, &mut blocked_runtime, blocked_row).unwrap();
+        assert_eq!(blocked_sim.world.random.state(), rng_before);
+        assert_eq!(blocked_sim.world.live_count(), 0);
+        assert_eq!(blocked_sim.builds[blocked_row].queue.queued, 0);
+        assert_eq!(blocked_runtime.leaders[0].control, 0);
+        assert_eq!(
+            blocked_runtime.leaders[0].unit_counts[unit_type as usize],
+            0
+        );
+    }
+
+    #[test]
+    fn gather_inside_keeps_the_unit_contained_and_pins_both_presentation_stages() {
+        let unit_type = 101;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 1));
+        runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .gather_inside = true;
+        runtime.local_player = 0;
+        runtime.scenario_presentation_count = 1;
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        let unit_row = sim.world.objects.slot(0).band(Band::Unit)[0] as usize;
+        assert_eq!(sim.world.units.inside_up()[unit_row], 2_000);
+        assert!(sim.world.orders(unit_row).is_empty());
+        assert_eq!(
+            runtime
+                .unit_presentations
+                .iter()
+                .map(|presentation| presentation.stage)
+                .collect::<Vec<_>>(),
+            vec![
+                UnitPresentationStage::HeldInside,
+                UnitPresentationStage::Completed
+            ]
+        );
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn gather_inside_overflow_destroys_only_the_new_tail_unit_and_unqueues() {
+        let unit_type = 103;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        runtime.install_type(LiveProductionType::ordinary_unit(unit_type, 1, 2));
+        let producer = runtime.types[PRODUCER_TYPE as usize].as_mut().unwrap();
+        producer.gather_inside = true;
+        producer.garrison_limit = 1;
+        for _ in 0..2 {
+            let handle = sim.spawn_unit(0, 0, 500, 500, 0).unwrap();
+            let existing_row = sim.world.row_of(handle).unwrap();
+            sim.world.units.inside_up_mut()[existing_row] = 2_000;
+            sim.world.units.inside_up_who_mut()[existing_row] = 0;
+        }
+        let rng_before = sim.world.random.state();
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.world.live_count(), 2);
+        assert_eq!(sim.unit_type.len(), 2);
+        assert_eq!(runtime.leaders[0].control, 0);
+        assert_eq!(runtime.leaders[0].unit_counts[unit_type as usize], 0);
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn single_rally_air_profiles_still_fail_before_allocation_or_rng() {
+        let unit_type = 102;
+        let (mut sim, mut runtime, row) = harness(&[unit_type]);
+        let mut air = LiveProductionType::hosted_air_unit(unit_type, 1, 1);
+        air.unit_flags |= UNIT_PLACEMENT_FLAG_HELICOPTER;
+        runtime.install_type(air);
+        runtime.types[PRODUCER_TYPE as usize]
+            .as_mut()
+            .unwrap()
+            .holds_air = true;
+        sim.builds[row].gather.push(GatherPoint {
+            x: 1_536,
+            y: 1_920,
+            ..GatherPoint::default()
+        });
+        let rng_before = sim.world.random.state();
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::UnsupportedUnitPlacement(unit_type))
+        );
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.world.live_count(), 0);
+        assert_eq!(sim.builds[row].queue.queued, 1);
     }
 
     #[test]
