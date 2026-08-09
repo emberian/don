@@ -287,6 +287,12 @@ impl RareMask {
 /// hand-computed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Step8Rules {
+    /// `RULES + 0x04` = 4, `UNIT_MOVE_SPEED`, shipped 1. Master multiplier applied near
+    /// the top of `Unit::update_speed`.
+    pub unit_move_speed: i32,
+    /// `RULES + 0x3C` = 60, `MILITARY_TRANSPORT_BONUS`, shipped 0. Added per Military
+    /// library tech to domain-1 types carrying `unit_flags & 0x10`.
+    pub military_transport_bonus: i32,
     /// `RULES + 0xD00` = 3328, `TIMER_REFRESH_RATIO`, shipped 5. Divisor of `Game::frame`
     /// at `0x006ED37B`; **zero disables the whole timer block** (`0x006ED370`).
     pub timer_refresh_ratio: i32,
@@ -317,11 +323,29 @@ pub struct Step8Rules {
     /// `RULES + 0x8B8` = 2232, `DUTCH_ATTACK_BONUS`, shipped 1. Despite the historical
     /// name, `ObjectData::armor` also adds it once per age to qualifying Dutch units.
     pub dutch_attack_bonus: i32,
+    /// `RULES + 0x4E0` = 1248, `VERSAILLES_UNITS_MOVE`, shipped 25.
+    pub versailles_units_move: i32,
+    /// `RULES + 0x574` = 1396, PDB member `aztec_move_speed`. The field is absent from
+    /// shipped `rules.xml` and from all scalar stores in `Constants::init`, so static-zero
+    /// initialization leaves it at 0; captured/modded blocks can still populate it.
+    pub aztec_move_speed: i32,
+    /// `RULES + 0x5B4` = 1460, `BANTU_UNITS_MOVE`, shipped 25.
+    pub bantu_units_move: i32,
+    /// `RULES + 0x6BC` = 1724, `FRENCH_SIEGE_MOVE`, shipped 20.
+    pub french_siege_move: i32,
+    /// `RULES + 0x86C` = 2156, `AMERICANS_MARINE_SPEED_BONUS`, shipped 2.
+    pub americans_marine_speed_bonus: i32,
+    /// `RULES + 0x938` = 2360, `ALUMINUM_AIR_SPEED`, shipped 25.
+    pub aluminum_air_speed: i32,
+    /// `RULES + 0x93C` = 2364, `WHALES_SHIPS_MOVE`, shipped 20.
+    pub whales_ships_move: i32,
 }
 
 /// Byte offsets of every [`Step8Rules`] field, so [`Step8Rules::from_block`] and a
 /// disassembly listing can be diffed by eye.
 pub mod rule_offsets {
+    pub const UNIT_MOVE_SPEED: usize = 4;
+    pub const MILITARY_TRANSPORT_BONUS: usize = 60;
     pub const TIMER_REFRESH_RATIO: usize = 3328;
     pub const ATTRITION_UPGRADE: usize = 456;
     pub const ATTRITION_IMPROVED: usize = 472;
@@ -331,6 +355,13 @@ pub mod rule_offsets {
     pub const RUSSIAN_ATTRITION: usize = 1868;
     pub const MONGOL_ATTRITION: usize = 2032;
     pub const DUTCH_ATTACK_BONUS: usize = 2232;
+    pub const VERSAILLES_UNITS_MOVE: usize = 1248;
+    pub const AZTEC_MOVE_SPEED: usize = 1396;
+    pub const BANTU_UNITS_MOVE: usize = 1460;
+    pub const FRENCH_SIEGE_MOVE: usize = 1724;
+    pub const AMERICANS_MARINE_SPEED_BONUS: usize = 2156;
+    pub const ALUMINUM_AIR_SPEED: usize = 2360;
+    pub const WHALES_SHIPS_MOVE: usize = 2364;
     pub const TITANIUM_ATTRITION: usize = 2396;
     pub const CATTLE_CITIZEN_ARMOR: usize = 2400;
     pub const CTW_ATTRITION: usize = 2572;
@@ -346,6 +377,8 @@ impl Step8Rules {
     /// The shipped `rules.xml` values.
     pub const fn shipped() -> Step8Rules {
         Step8Rules {
+            unit_move_speed: 1,
+            military_transport_bonus: 0,
             timer_refresh_ratio: 5,
             attrition_improved: [1, 2, 4, 8],
             attrition_upgrade: [25, 50, 75, 100],
@@ -358,6 +391,13 @@ impl Step8Rules {
             titanium_attrition: 50,
             cattle_citizen_armor: 1,
             dutch_attack_bonus: 1,
+            versailles_units_move: 25,
+            aztec_move_speed: 0,
+            bantu_units_move: 25,
+            french_siege_move: 20,
+            americans_marine_speed_bonus: 2,
+            aluminum_air_speed: 25,
+            whales_ships_move: 20,
         }
     }
 
@@ -365,6 +405,8 @@ impl Step8Rules {
     /// divisor. For tests that want the timer block provably off.
     pub const fn zeroed() -> Step8Rules {
         Step8Rules {
+            unit_move_speed: 0,
+            military_transport_bonus: 0,
             timer_refresh_ratio: 0,
             attrition_improved: [0; 4],
             attrition_upgrade: [0; 4],
@@ -377,6 +419,13 @@ impl Step8Rules {
             titanium_attrition: 0,
             cattle_citizen_armor: 0,
             dutch_attack_bonus: 0,
+            versailles_units_move: 0,
+            aztec_move_speed: 0,
+            bantu_units_move: 0,
+            french_siege_move: 0,
+            americans_marine_speed_bonus: 0,
+            aluminum_air_speed: 0,
+            whales_ships_move: 0,
         }
     }
 
@@ -393,6 +442,8 @@ impl Step8Rules {
             ]
         };
         Step8Rules {
+            unit_move_speed: at(rule_offsets::UNIT_MOVE_SPEED),
+            military_transport_bonus: at(rule_offsets::MILITARY_TRANSPORT_BONUS),
             timer_refresh_ratio: at(rule_offsets::TIMER_REFRESH_RATIO),
             attrition_improved: arr4(rule_offsets::ATTRITION_IMPROVED),
             attrition_upgrade: arr4(rule_offsets::ATTRITION_UPGRADE),
@@ -405,6 +456,13 @@ impl Step8Rules {
             titanium_attrition: at(rule_offsets::TITANIUM_ATTRITION),
             cattle_citizen_armor: at(rule_offsets::CATTLE_CITIZEN_ARMOR),
             dutch_attack_bonus: at(rule_offsets::DUTCH_ATTACK_BONUS),
+            versailles_units_move: at(rule_offsets::VERSAILLES_UNITS_MOVE),
+            aztec_move_speed: at(rule_offsets::AZTEC_MOVE_SPEED),
+            bantu_units_move: at(rule_offsets::BANTU_UNITS_MOVE),
+            french_siege_move: at(rule_offsets::FRENCH_SIEGE_MOVE),
+            americans_marine_speed_bonus: at(rule_offsets::AMERICANS_MARINE_SPEED_BONUS),
+            aluminum_air_speed: at(rule_offsets::ALUMINUM_AIR_SPEED),
+            whales_ships_move: at(rule_offsets::WHALES_SHIPS_MOVE),
         }
     }
 }
@@ -773,6 +831,54 @@ pub struct UnitArmorInputs {
     pub special_family_32_33: bool,
 }
 
+/// Direct-field and virtual-query answers consumed by `Unit::update_speed` `0x006055C0`.
+///
+/// The function body is recovered here in full; this package is the honest boundary to the
+/// global type table and leader tech/tribe/wonder queries it calls. `military_epoch` is the
+/// decoded `LeaderDataEncrypt::epoch[Military]` at encrypted-block `+0xE8` (`^ 0x63187`),
+/// not the leader's age.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UnitSpeedInputs {
+    /// `UnitTypeData::moves` at `type + 0x2C0`.
+    pub type_moves: i32,
+    /// `ObjectTypeData::domain` at `type + 0x218`: 1 water, 2 air in these branches.
+    pub domain: i32,
+    /// `UnitTypeData::unit_flags` at `type + 0x2B4`.
+    pub unit_flags: u32,
+    /// `UnitData` flags at unit `+0x6C`; bit `0x200` is the marine-transport bonus gate.
+    pub unit_data_flags: u32,
+    pub military_epoch: i32,
+    /// Result of vtable `+0x148`, `ObjectData::has_objmask(0x2000)`.
+    pub has_objmask_2000: bool,
+    /// Results of `ObjectData::is(type, 0)` in retail's precedence order.
+    pub is_68: bool,
+    pub is_66: bool,
+    pub is_64: bool,
+    pub is_62: bool,
+    pub is_42: bool,
+    pub is_3a: bool,
+    /// The direct type-table dword at `type + 0x40`.
+    pub type_line: i32,
+    /// `TypeData::type` at `type + 0x04`.
+    pub type_id: i32,
+    /// `LeaderData::has_tribe_bonus(3)`.
+    pub bantu: bool,
+    /// `LeaderData::has_tribe_bonus(10)`.
+    pub french: bool,
+    /// `LeaderData::has_wonder(0x218)`.
+    pub versailles: bool,
+    /// `LeaderData::get_spy_upgrade()`; only read for `is_3a`.
+    pub spy_upgrade: i32,
+    /// Result of vtable `+0xC4`, `UnitData::is_hero`, and its upgrade query.
+    pub hero: bool,
+    pub general_upgrade: i32,
+    /// Result of vtable `+0xCC`, `UnitData::is_supply`, and its upgrade query.
+    pub supply: bool,
+    pub supply_upgrade: i32,
+    /// `LeaderData::has_tribe_bonus(0)`.
+    pub aztec: bool,
+}
+
 /// One entry of an `Objects` band, as the two stat passes observe it through the vtable.
 ///
 /// `hit_inputs` and `type_los` are resolved type-table inputs, not invented answers. `None`
@@ -800,14 +906,20 @@ pub struct StatObject {
     pub mylos: i8,
     /// Type/tribe gate package consumed by the exact `ObjectData::armor()` body.
     pub armor_inputs: Option<UnitArmorInputs>,
+    /// Type/tech/tribe gate package consumed by the exact `Unit::update_speed` body.
+    pub speed_inputs: Option<UnitSpeedInputs>,
     /// Resolved `UnitData::o_down` (`+0x90`). Retail stores a signed object index and uses
     /// every negative value as the end sentinel; `None` is that sentinel here.
     pub o_down: Option<usize>,
     /// `UnitData::myarmor` (`+0x9C`).
     pub myarmor: i16,
+    /// `UnitData::myspeed` (`+0x9A`).
+    pub myspeed: i16,
     /// Per-pass write marker, reset by the tick adapter before dispatch. Unlike the call
     /// counters this must not persist, or a clean frame would replay an old derivation.
     pub armor_written: bool,
+    /// Same edge-local write marker for `myspeed`.
+    pub speed_written: bool,
     /// How many times `vtbl + 0x160` was invoked on this object.
     pub v160_calls: u32,
     /// How many times `vtbl + 0x15C` was invoked on this object.
@@ -824,6 +936,8 @@ pub struct StatObject {
     pub object_los_updates: u32,
     /// Resolved `Unit::update_armor` calls (one per captain, not per propagated member).
     pub unit_armor_updates: u32,
+    /// Resolved `Unit::update_speed` calls (one per captain, not per propagated member).
+    pub unit_speed_updates: u32,
 }
 
 /// What one stat pass did, so "it ran" is a number instead of an assertion.
@@ -837,6 +951,7 @@ pub struct StatPassCounts {
     pub object_hits_updates: u32,
     pub object_los_updates: u32,
     pub unit_armor_updates: u32,
+    pub unit_speed_updates: u32,
     /// Calls whose body or global type-table input remains unavailable.
     pub unresolved_calls: u32,
 }
@@ -851,6 +966,7 @@ impl StatPassCounts {
         self.object_hits_updates += other.object_hits_updates;
         self.object_los_updates += other.object_los_updates;
         self.unit_armor_updates += other.unit_armor_updates;
+        self.unit_speed_updates += other.unit_speed_updates;
         self.unresolved_calls += other.unresolved_calls;
     }
 }
@@ -911,6 +1027,132 @@ pub fn object_data_armor(input: &UnitArmorInputs, leader: &Leader, rules: &Step8
         .age
         .wrapping_mul(rules.dutch_attack_bonus)
         .wrapping_add(base)
+}
+
+#[inline]
+fn speed_percent(value: i32, bonus: i32) -> i32 {
+    bonus
+        .wrapping_add(100)
+        .wrapping_mul(value)
+        .wrapping_div(100)
+}
+
+#[inline]
+fn speed_quarter_upgrade(value: i32, upgrade: i32) -> i32 {
+    let product = upgrade.wrapping_mul(value);
+    let delta = product.wrapping_add((product >> 31) & 3) >> 2;
+    value.wrapping_add(delta)
+}
+
+/// Arithmetic body of `Unit::update_speed` `0x006055C0` after its standalone `o_up`
+/// captain climb. Branch order and signed rounding match the retail instructions.
+pub fn unit_speed(input: &UnitSpeedInputs, leader: &Leader, rules: &Step8Rules) -> i32 {
+    let mut speed = input.type_moves;
+
+    if input.domain == 1 && input.unit_flags & 0x10 != 0 {
+        speed = speed.wrapping_add(
+            input
+                .military_epoch
+                .wrapping_mul(rules.military_transport_bonus),
+        );
+    }
+    if input.unit_data_flags & 0x200 != 0 {
+        speed = speed.wrapping_add(
+            input
+                .military_epoch
+                .wrapping_mul(rules.americans_marine_speed_bonus),
+        );
+    }
+    speed = rules.unit_move_speed.wrapping_mul(speed);
+
+    if input.has_objmask_2000 && (leader.rare_effective.get(25) || leader.rare_b.get(25)) {
+        speed = speed_percent(speed, rules.whales_ships_move);
+    }
+
+    // The four ObjectData::is calls are an else-if ladder. The emitted signed division
+    // fixups are intentionally retained rather than simplified to positive-only ratios.
+    speed = if input.is_68 {
+        let product = speed.wrapping_mul(36);
+        product.wrapping_add((product >> 31) & 31) >> 5
+    } else if input.is_66 {
+        let product = speed.wrapping_mul(34);
+        product.wrapping_add((product >> 31) & 31) >> 5
+    } else if input.is_64 {
+        let product = speed.wrapping_shl(5);
+        let divided = (product / 27).wrapping_add(product >> 31);
+        divided.wrapping_sub(divided >> 31)
+    } else if input.is_62 {
+        let product = speed.wrapping_mul(30);
+        let divided = (product / 24).wrapping_add(product >> 31);
+        divided.wrapping_sub(divided >> 31)
+    } else {
+        speed
+    };
+
+    if (input.type_line == 0x1ab || input.type_id == 0x32 || input.type_id == 0x33 || input.is_42)
+        && input.bantu
+    {
+        speed = speed_percent(speed, rules.bantu_units_move);
+    }
+    if input.type_line == 0x1ae || input.type_line == 0x1af {
+        if input.french {
+            speed = speed_percent(speed, rules.french_siege_move);
+        }
+        if input.versailles {
+            speed = speed_percent(speed, rules.versailles_units_move);
+        }
+    }
+    if input.domain == 2 && (leader.rare_effective.get(24) || leader.rare_b.get(24)) {
+        speed = speed_percent(speed, rules.aluminum_air_speed);
+    }
+    if input.is_3a {
+        speed = speed_quarter_upgrade(speed, input.spy_upgrade);
+    }
+    if input.hero {
+        speed = speed_quarter_upgrade(speed, input.general_upgrade);
+    }
+    if input.supply {
+        speed = speed_quarter_upgrade(speed, input.supply_upgrade);
+    }
+    if (input.type_id == 0x32 || input.type_id == 0x33) && input.aztec {
+        speed = speed_percent(speed, rules.aztec_move_speed);
+    }
+    speed
+}
+
+/// Complete executed suffix of `Unit::update_speed` from the captain selected by
+/// `Leader::calc_unit_stats`: derive and store signed `myspeed`, then copy it through the
+/// captain's `o_down` chain.
+pub fn unit_update_speed(
+    units: &mut [StatObject],
+    captain: usize,
+    leader: &Leader,
+    rules: &Step8Rules,
+) -> Option<i32> {
+    let input = units.get(captain)?.speed_inputs?;
+    let stored = unit_speed(&input, leader, rules) as i16;
+
+    let first_down = {
+        let u = &mut units[captain];
+        u.myspeed = stored;
+        u.speed_written = true;
+        u.unit_speed_updates = u.unit_speed_updates.wrapping_add(1);
+        u.o_down
+    };
+
+    let mut next = first_down;
+    let mut remaining = units.len();
+    while let Some(index) = next {
+        if remaining == 0 {
+            return None;
+        }
+        remaining -= 1;
+        let u = units.get_mut(index)?;
+        u.myspeed = stored;
+        u.speed_written = true;
+        next = u.o_down;
+    }
+    Some(stored as i32)
 }
 
 /// `Unit::update_armor` `0x006054C0`, as reached by `Leader::calc_unit_stats` after its
@@ -1083,8 +1325,11 @@ pub fn calc_unit_stats(
             u.armor_updates += 1;
             c.speed_updates += 1;
             c.armor_updates += 1;
-            // Unit::update_speed remains red. Unit::update_armor is the next direct call.
-            c.unresolved_calls += 1;
+            if unit_update_speed(&mut objs.units, i, leader, rules).is_some() {
+                c.unit_speed_updates += 1;
+            } else {
+                c.unresolved_calls += 1;
+            }
             if unit_update_armor(&mut objs.units, i, leader, rules).is_some() {
                 c.unit_armor_updates += 1;
             } else {
@@ -1592,6 +1837,10 @@ mod tests {
                 ..Default::default()
             }),
             type_los: Some(4),
+            speed_inputs: Some(UnitSpeedInputs {
+                type_moves: 25,
+                ..Default::default()
+            }),
             armor_inputs: Some(UnitArmorInputs {
                 type_armor: 5,
                 special_family_32_33: false,
@@ -1618,9 +1867,11 @@ mod tests {
         assert_eq!(t.unit_pass[0].armor_updates, 1);
         assert_eq!(t.unit_pass[0].object_hits_updates, 1);
         assert_eq!(t.unit_pass[0].object_los_updates, 1);
+        assert_eq!(t.unit_pass[0].unit_speed_updates, 1);
         assert_eq!(t.unit_pass[0].unit_armor_updates, 1);
         assert_eq!(d.env.leaders[0].objects.units[0].myhits, 200);
         assert_eq!(d.env.leaders[0].objects.units[0].mylos, 4);
+        assert_eq!(d.env.leaders[0].objects.units[0].myspeed, 25);
         assert_eq!(d.env.leaders[0].objects.units[0].myarmor, 5);
 
         // Steady state: no change, no passes. Edge-triggered, not level-triggered.
@@ -1715,6 +1966,151 @@ mod tests {
         }
         assert_eq!(unit_update_armor(&mut units, 0, &leader, &rules), Some(12));
         assert_eq!(units.iter().map(|u| u.myarmor).collect::<Vec<_>>(), [12; 3]);
+    }
+
+    #[test]
+    fn unit_speed_executes_the_retail_modifier_order() {
+        let mut leader = Leader::new(0);
+        leader.rare_effective.set(25, true); // whales
+        let mut rules = Step8Rules::zeroed();
+        rules.unit_move_speed = 2;
+        rules.military_transport_bonus = 3;
+        rules.americans_marine_speed_bonus = 2;
+        rules.whales_ships_move = 20;
+        rules.bantu_units_move = 25;
+        rules.aztec_move_speed = 10;
+        let input = UnitSpeedInputs {
+            type_moves: 80,
+            domain: 1,
+            unit_flags: 0x10,
+            unit_data_flags: 0x200,
+            military_epoch: 2,
+            has_objmask_2000: true,
+            is_68: true,
+            is_3a: true,
+            type_id: 0x32,
+            bantu: true,
+            spy_upgrade: 1,
+            hero: true,
+            general_upgrade: 2,
+            supply: true,
+            supply_upgrade: 1,
+            aztec: true,
+            ..Default::default()
+        };
+
+        // ((80 + 2*3 + 2*2)*2) * whales -> type 0x68 -> Bantu -> spy -> general
+        // -> supply -> Aztec, truncating at every retail IDIV/shift boundary.
+        assert_eq!(unit_speed(&input, &leader, &rules), 778);
+
+        // Mutation pins both rare-mask operands and the has_objmask gate. With neither
+        // source carrying Whales, exactly the 20% step disappears.
+        leader.rare_effective.set(25, false);
+        assert_eq!(unit_speed(&input, &leader, &rules), 649);
+        leader.rare_b.set(25, true);
+        assert_eq!(unit_speed(&input, &leader, &rules), 778);
+        let no_mask = UnitSpeedInputs {
+            has_objmask_2000: false,
+            ..input
+        };
+        assert_eq!(unit_speed(&no_mask, &leader, &rules), 649);
+    }
+
+    #[test]
+    fn unit_speed_pins_type_precedence_signed_rounding_and_siege_air_order() {
+        let leader = Leader::new(0);
+        let rules = Step8Rules::shipped();
+        let all = UnitSpeedInputs {
+            type_moves: -32,
+            is_68: true,
+            is_66: true,
+            is_64: true,
+            is_62: true,
+            ..Default::default()
+        };
+        assert_eq!(unit_speed(&all, &leader, &rules), -36);
+        assert_eq!(
+            unit_speed(
+                &UnitSpeedInputs {
+                    is_68: false,
+                    ..all
+                },
+                &leader,
+                &rules
+            ),
+            -34
+        );
+        assert_eq!(
+            unit_speed(
+                &UnitSpeedInputs {
+                    is_68: false,
+                    is_66: false,
+                    ..all
+                },
+                &leader,
+                &rules
+            ),
+            -37
+        );
+        assert_eq!(
+            unit_speed(
+                &UnitSpeedInputs {
+                    is_68: false,
+                    is_66: false,
+                    is_64: false,
+                    ..all
+                },
+                &leader,
+                &rules,
+            ),
+            -40
+        );
+
+        let mut air_leader = Leader::new(0);
+        air_leader.rare_b.set(24, true); // aluminum
+        let siege_air = UnitSpeedInputs {
+            type_moves: 100,
+            domain: 2,
+            type_line: 0x1ae,
+            french: true,
+            versailles: true,
+            ..Default::default()
+        };
+        // French 120 -> Versailles 150 -> Aluminum 187.
+        assert_eq!(unit_speed(&siege_air, &air_leader, &rules), 187);
+    }
+
+    #[test]
+    fn unit_speed_stores_i16_and_propagates_down_the_captain_chain() {
+        let leader = Leader::new(0);
+        let rules = Step8Rules::shipped();
+        let mut units = vec![
+            StatObject {
+                speed_inputs: Some(UnitSpeedInputs {
+                    type_moves: 40_000,
+                    ..Default::default()
+                }),
+                o_down: Some(1),
+                ..Default::default()
+            },
+            StatObject {
+                o_down: Some(2),
+                ..Default::default()
+            },
+            StatObject::default(),
+        ];
+        let stored = 40_000i32 as i16;
+        assert_eq!(
+            unit_update_speed(&mut units, 0, &leader, &rules),
+            Some(stored as i32)
+        );
+        assert_eq!(
+            units.iter().map(|u| u.myspeed).collect::<Vec<_>>(),
+            [stored; 3]
+        );
+        assert!(units.iter().all(|u| u.speed_written));
+        assert_eq!(units[0].unit_speed_updates, 1);
+        assert_eq!(units[1].unit_speed_updates, 0);
     }
 
     #[test]
@@ -2206,6 +2602,8 @@ mod tests {
         block[rule_offsets::TITANIUM_ATTRITION / 4] = 50;
         block[rule_offsets::CATTLE_CITIZEN_ARMOR / 4] = 1;
         block[rule_offsets::DUTCH_ATTACK_BONUS / 4] = 1;
+        block[rule_offsets::UNIT_MOVE_SPEED / 4] = 1;
+        block[rule_offsets::AZTEC_MOVE_SPEED / 4] = 17;
         let r = Step8Rules::from_block(&block);
         assert_eq!(r.timer_refresh_ratio, 5);
         assert_eq!(r.attrition_improved[0], 1);
@@ -2213,6 +2611,8 @@ mod tests {
         assert_eq!(r.titanium_attrition, 50);
         assert_eq!(r.cattle_citizen_armor, 1);
         assert_eq!(r.dutch_attack_bonus, 1);
+        assert_eq!(r.unit_move_speed, 1);
+        assert_eq!(r.aztec_move_speed, 17);
         // A short block zero-extends rather than panicking.
         assert_eq!(Step8Rules::from_block(&[]).timer_refresh_ratio, 0);
     }
@@ -2237,6 +2637,15 @@ mod tests {
         block[rule_offsets::CATTLE_CITIZEN_ARMOR / 4] = s.cattle_citizen_armor;
         block[rule_offsets::DUTCH_ATTACK_BONUS / 4] = s.dutch_attack_bonus;
         block[rule_offsets::CTW_ATTRITION / 4] = s.ctw_attrition;
+        block[rule_offsets::UNIT_MOVE_SPEED / 4] = s.unit_move_speed;
+        block[rule_offsets::MILITARY_TRANSPORT_BONUS / 4] = s.military_transport_bonus;
+        block[rule_offsets::VERSAILLES_UNITS_MOVE / 4] = s.versailles_units_move;
+        block[rule_offsets::AZTEC_MOVE_SPEED / 4] = s.aztec_move_speed;
+        block[rule_offsets::BANTU_UNITS_MOVE / 4] = s.bantu_units_move;
+        block[rule_offsets::FRENCH_SIEGE_MOVE / 4] = s.french_siege_move;
+        block[rule_offsets::AMERICANS_MARINE_SPEED_BONUS / 4] = s.americans_marine_speed_bonus;
+        block[rule_offsets::ALUMINUM_AIR_SPEED / 4] = s.aluminum_air_speed;
+        block[rule_offsets::WHALES_SHIPS_MOVE / 4] = s.whales_ships_move;
         assert_eq!(Step8Rules::from_block(&block), s);
     }
 }

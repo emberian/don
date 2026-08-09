@@ -26,7 +26,7 @@ Concretely, these execute today and did not this morning:
 | the diplomacy / hostile scan | `0x006ED2E0`..`0x006ED321` | absent | ported |
 | `Leader::gather`'s `BitMask<44>` union | `0x006CE35F`..`0x006CE3D0` | absent | ported — **this is what arms the stat passes** |
 | `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal plus `is_active` and plain-wall base hit/LOS bodies execute; building overrides remain |
-| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, `ObjectData::armor`, and `Unit::update_armor` suffix execute; speed and armor gate population remain |
+| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, full `Unit::update_speed`, `ObjectData::armor`, and `Unit::update_armor` suffix execute when their query packages are supplied; automatic gate population remains |
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
 | the three grace timers | `0x006ED35F`..`0x006ED3CE` | absent | ported |
@@ -359,7 +359,11 @@ Corrections, two sentences each:
   `Object::update_los` (42 bytes). Those base bodies now write real Unit/Wall state when
   their global type-table inputs are supplied. The building band overrides the last pair
   with `Wall::update_hits/update_los`; those overrides, `Wall::update_construct_time`, and
-  `Unit::update_speed` and automatic armor type/tribe gate population remain red. The
+  automatic speed/armor type, tech, tribe, and wonder gate population remain red. The
+  1,341-byte `Unit::update_speed` body now executes its exact modifier order and signed
+  rounding — military-epoch transport bonuses, Whales, type-family ratios, Bantu/French/
+  Versailles, Aluminum, spy/general/supply upgrades, and Aztec — then stores signed
+  `myspeed` and propagates it through the captain's `o_down` chain. The
   215-byte `ObjectData::armor` body executes the Dutch per-age branch and its post-patch
   government-hero exclusion; the 249-byte `Unit::update_armor` suffix executes its rare-31
   `CATTLE_CITIZEN_ARMOR` addition and propagates the signed 16-bit result through the

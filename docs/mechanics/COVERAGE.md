@@ -415,8 +415,10 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    taunt-table scan. The four slots are resolved: `+0x4C` is `WallData::is_active`, `+0xE8`
    is `UnitData::is_captain`, and base `+0x15C/+0x160` run
    `Object::update_hits/update_los` and commit into real Unit/Wall state. Remaining are the
-   building `Wall` override pair, construction-time recompute, unit speed, automatic
-   armor type/tribe gate population, and `Leader::process_taunt` AI chat. The 215-byte
+   building `Wall` override pair, construction-time recompute, automatic speed/armor
+   type/tech/tribe/wonder gate population, and `Leader::process_taunt` AI chat. The
+   1,341-byte `Unit::update_speed` body now executes when its exact query package is
+   supplied, including retail's signed rounding and `o_down` propagation. The 215-byte
    `ObjectData::armor` body and 249-byte `Unit::update_armor` suffix now run, including
    Dutch age armor, the rare-31 cattle bonus, and `o_down` propagation. Coverage charges
    only unresolved calls or input packages actually reached.

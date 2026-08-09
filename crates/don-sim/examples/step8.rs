@@ -80,6 +80,10 @@ fn main() {
                     ..Default::default()
                 }),
                 type_los: Some(4),
+                speed_inputs: Some(don_sim::systems::leaders::UnitSpeedInputs {
+                    type_moves: 25,
+                    ..Default::default()
+                }),
                 armor_inputs: Some(don_sim::systems::leaders::UnitArmorInputs {
                     type_armor: 2,
                     special_family_32_33: false,

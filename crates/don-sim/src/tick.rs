@@ -1127,6 +1127,8 @@ impl Sim {
                 view.mylos = self.world.units.mylos()[row];
                 let down = self.world.units.o_down()[row];
                 view.o_down = (down >= 0).then_some(down as usize);
+                view.myspeed = self.world.units.myspeed()[row];
+                view.speed_written = false;
                 view.myarmor = self.world.units.myarmor()[row];
                 view.armor_written = false;
             }
@@ -1186,6 +1188,9 @@ impl Sim {
                     if view.armor_written {
                         self.world.units.myarmor_mut()[row] = view.myarmor;
                     }
+                    if view.speed_written {
+                        self.world.units.myspeed_mut()[row] = view.myspeed;
+                    }
                 }
             }
             if trace.wall_stats_ran[who] {
@@ -1207,7 +1212,7 @@ impl Sim {
     /// `flags & 2` gate, per-frame resets, hostile scan, gather, edge-triggered wall/unit
     /// stat traversals, elimination, grace timers, taunt-table dispatch, and tail-bit clear.
     /// The base Object virtual bodies execute when their type rows are present. The Wall
-    /// override pair, construction-time update, unit speed, armor gate population, and
+    /// override pair, construction-time update, automatic speed/armor gate population, and
     /// `Leader::process_taunt` AI-chat body remain call-site-counted gaps.
     fn leaders_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;

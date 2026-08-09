@@ -47,6 +47,10 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
             ..Default::default()
         }),
         type_los: Some(7),
+        speed_inputs: Some(leaders::UnitSpeedInputs {
+            type_moves: 27,
+            ..Default::default()
+        }),
         armor_inputs: Some(leaders::UnitArmorInputs {
             type_armor: 15,
             special_family_32_33: false,
@@ -84,19 +88,21 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.leader_taunt_dispatches, 0);
     assert_eq!(sim.world.units.myhits()[unit_row], 333);
     assert_eq!(sim.world.units.mylos()[unit_row], 7);
+    assert_eq!(sim.world.units.myspeed()[unit_row], 27);
     assert_eq!(sim.world.units.myarmor()[unit_row], 15);
     assert_eq!(sim.walls[0].myhits, 444);
     assert_eq!(sim.walls[0].mylos, 9);
-    // Only the building's Wall override pair and the unit's direct speed body remain red;
-    // all four virtual slots and Unit::update_armor itself executed.
+    // Only the building's Wall override pair remains red; all four virtual slots and the
+    // supplied Unit::update_speed / Unit::update_armor bodies executed.
     assert_eq!(sim.cover.gaps[Gap::LeaderCalcWallStats.index()], 2);
-    assert_eq!(sim.cover.gaps[Gap::LeaderCalcUnitStats.index()], 1);
+    assert_eq!(sim.cover.gaps[Gap::LeaderCalcUnitStats.index()], 0);
 
     // The exact taunt-table scan reads the pre-increment frame. Step 20 made it 1.
     // Change the derived fields between passes: cumulative counters must not replay the
     // old edge-triggered result on an ordinary frame where neither dirty bit was armed.
     sim.world.units.myhits_mut()[unit_row] = 555;
     sim.world.units.mylos_mut()[unit_row] = 5;
+    sim.world.units.myspeed_mut()[unit_row] = 45;
     sim.world.units.myarmor_mut()[unit_row] = 55;
     sim.walls[0].myhits = 666;
     sim.walls[0].mylos = 6;
@@ -108,6 +114,7 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.gaps[Gap::LeaderProcessTaunt.index()], 1);
     assert_eq!(sim.world.units.myhits()[unit_row], 555);
     assert_eq!(sim.world.units.mylos()[unit_row], 5);
+    assert_eq!(sim.world.units.myspeed()[unit_row], 45);
     assert_eq!(sim.world.units.myarmor()[unit_row], 55);
     assert_eq!(sim.walls[0].myhits, 666);
     assert_eq!(sim.walls[0].mylos, 6);
