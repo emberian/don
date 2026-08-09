@@ -18,6 +18,8 @@ cargo test -p don-sim --lib systems::ammo
 # test result: ok. 53 passed; 0 failed
 cargo test -p don-sim --test ammo_splash_transaction
 # test result: ok. 2 passed; 0 failed
+cargo test -p don-sim --test ammo_spline_transaction
+# test result: ok. 6 passed; 0 failed
 ```
 
 The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
@@ -41,6 +43,7 @@ gate in `systems::air`; it is referenced by the real tick driver.
 | Impact + miss behaviour | `ammo_do_damage_single` | `Ammo::do_damage` `0x00678060` | hit costs 0 draws, miss costs exactly 2 |
 | Splash falloff | `splash_scale`, `splash_ring` | `0x006788E0`–`0x0067892D` | linear from the bounding box; negative skips |
 | Live splash transaction | `ammo_do_damage_splash_execute` | `Ammo::do_damage` `0x00678629`–`0x00678B56` | damage is interleaved with the exact table/down-chain cursor; mutation can change later admissions; projectile closes last |
+| Cruise B-spline transaction | `ammo_init_cruise_spline`, `ammo_step_cruise_spline`, `RetailSpline::walk_checksum` | `0x00913960`, `0x00912F00`, `0x00911820`, `0x00911F60`, `0x009132B0`, spline arm of `0x0067D380` | exact constructed-empty array growth, knots, Cox–de Boor samples, tangent normals, nested checksum walk and indexed flight sample |
 | `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
 
 **Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
@@ -442,6 +445,30 @@ The function returns `None` without mutation for `splash_area <= 0`, preventing 
 accidentally closing a projectile that belongs to the distinct single-target branch. The splash
 walk itself consumes no RNG; all ordering sensitivity here is world and checksum mutation order.
 
+### Cruise splines are generated and walked, not approximated
+
+`ammo_init_cruise_spline` reproduces the complete non-nuke constructor transaction. A recycled
+`Spline` is cleared, its `flags` becomes `0x10`, and `calc_from_dir` installs start/control,
+optional fourth control (only when its vector length is nonzero), and end. `set_min_seg_length`
+stores the raw `u16` depth, while `calc_spline` temporarily clamps generation depth to
+`control_verts.length * 4` and restores the raw value afterward. That distinction is visible:
+the raw depth is checksummed even though the temporary depth determines sample count.
+
+All six nested arrays begin exactly as `SplineData::SplineData` constructs them: length and
+capacity zero, growth increment `-1`. Their first append therefore grows capacity to 4, followed
+by 8, 16, 32—not the ordinary `SimpleArray` capacity 5 and not Rust `Vec` growth. The shipped
+clamped-knot builder and recursive Cox–de Boor basis generate `spline_verts`; the cruise flag
+makes `build_normals` use tangent vectors and its measured smoothing/final-normal rules. The
+focused fixture pins control `(4,4)`, generated knots `(8,8)`, vertices `(17,32)`, normals
+`(17,32)`, raw depth 95, total-length float bits, and complete checksum digests.
+
+`AmmoPool::checksum_with_splines` walks the slot's non-null byte and its `RetailSpline`
+immediately afterward. It returns `MissingSpline` rather than silently substituting an empty
+path. `ammo_step_cruise_spline` is the isolated live arm after `cur_time` increments: it reads
+`spline_verts[cur_time]` only while `length > cur_time + 1`, then applies three `cvttss2si`
+coordinate truncations. The last sample is deliberately retained for the impact boundary. The
+constructor and step consume no RNG.
+
 ---
 
 ## 7. Honest gaps
@@ -457,17 +484,15 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **`TRAJ_SPLINE` is not modelled.** Nukes and cruise missiles go through
-   `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`). The isolated
-   constructor boundary is now known: `calc_from_dir` clears/appends control vertices, derives
-   degree 2 or 3, calls `set_min_seg_length` (`0x009125E0`), then immediately enters
-   `calc_spline` (`0x00912F00`), `generate_bspline` (`0x00911820`), and `build_normals`
-   (`0x00911F60`). `SplineData::walk_data` (`0x009132B0`) hashes the control vertices, knots,
-   weights, generated knots, generated vertices, and generated normals including array headers;
-   a control-point-only port would therefore be checksum-wrong. Aircraft crashes were
-   previously misclassified here; `Ammo::init_crash` writes an ordinary arc and is executable.
-   `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`,
-   which is worth confirming independently.
+3. **The terrain-aware nuke constructor is the remaining `TRAJ_SPLINE` gap.** Cruise missiles'
+   `Spline::calc_from_dir` (`0x00913960`) chain is now complete: `set_min_seg_length`
+   (`0x009125E0`), `calc_spline` (`0x00912F00`), `generate_bspline` (`0x00911820`),
+   `build_normals` (`0x00911F60`), indexed `Ammo::inc_time` sampling, and every nested array
+   header/payload in `SplineData::walk_data` (`0x009132B0`). `calc_nuke_spline` (`0x00913AD0`)
+   remains because its alternate arm queries terrain for every interpolated control point and
+   installs a distinct weighted-knot profile. Aircraft crashes were previously misclassified
+   here; `Ammo::init_crash` writes an ordinary arc and is executable. `Ammo::init` only ever
+   writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`.
 4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved
    executor is implemented and mutation-pinned in `ammo_do_damage_splash_execute`; the remaining
    seam is to expose the live WData/down-chain/diplomacy reads and `Object::do_damage` mutation

@@ -61,11 +61,10 @@
 //!
 //! ## What is NOT here
 //!
-//! * `TRAJ_SPLINE` (nukes and cruise missiles) — `Spline::calc_from_dir` /
-//!   `calc_nuke_spline` are not modelled.  The former immediately enters `calc_spline`,
-//!   `generate_bspline`, and `build_normals`; all generated arrays are walked, so porting only
-//!   its control points would still desynchronise. Aircraft wrecks actually use `TRAJ_ARC`;
-//!   their separate [`ammo_init_crash`] constructor is implemented below.
+//! * `TRAJ_SPLINE` cruise paths — `calc_from_dir` → `calc_spline` → `generate_bspline` →
+//!   `build_normals`, the six nested array walks, and the indexed flight step are implemented
+//!   below. `calc_nuke_spline`'s terrain-aware constructor is still separate. Aircraft wrecks
+//!   actually use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -249,6 +248,461 @@ impl Rng {
 pub use crate::checksum::{adler32, ADLER_BASE, ADLER_NMAX};
 
 // ============================================================================
+// `Spline` — cruise/nuke path state and its nested checksum walk
+// ============================================================================
+
+/// Retail's three-float `Vector<float>` payload.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SplineVec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl SplineVec3 {
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+
+    fn finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+
+    fn add(self, rhs: Self) -> Self {
+        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+    }
+
+    fn scale(self, s: f32) -> Self {
+        Self::new(self.x * s, self.y * s, self.z * s)
+    }
+
+    fn squared_length(self) -> f32 {
+        (self.x * self.x + self.y * self.y) + self.z * self.z
+    }
+
+    /// `Vector<float>::get_length` / `0x00420830`: three `mulss`, two `addss`, then
+    /// double-precision sqrt rounded back to f32.
+    fn length(self) -> f32 {
+        (self.squared_length() as f64).sqrt() as f32
+    }
+
+    fn normalized(self) -> Self {
+        let square = self.squared_length();
+        if square == 0.0 || square == 1.0 {
+            return self;
+        }
+        let inverse = 1.0 / ((square as f64).sqrt() as f32);
+        self.scale(inverse)
+    }
+}
+
+/// A checksum-complete `SplineData` for the B-spline arm used by cruise projectiles.
+///
+/// All six arrays use the engine's constructed-empty header (`size=0`, `increment=-1`),
+/// hence grow 0→4→8→16 rather than Rust `Vec`'s policy. `SplineData::walk_data`
+/// (`0x009132B0`) hashes each non-empty array's length, size, increment, flags and elements.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetailSpline {
+    pub spline_type: i32,
+    pub flags: i32,
+    pub max_control_depth_ratio: f32,
+    pub total_spline_length: f32,
+    pub last_knot: i32,
+    pub curr_dist: f32,
+    pub next_search_dist: f32,
+    pub search_scan: i32,
+    pub degree: u16,
+    pub depth: u16,
+    pub control_verts: crate::container::EngineArray<SplineVec3>,
+    pub knots: crate::container::EngineArray<f32>,
+    pub weights: crate::container::EngineArray<f32>,
+    pub spline_knots: crate::container::EngineArray<f32>,
+    pub spline_verts: crate::container::EngineArray<SplineVec3>,
+    pub spline_normals: crate::container::EngineArray<SplineVec3>,
+}
+
+impl Default for RetailSpline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RetailSpline {
+    /// `SplineData::SplineData` `0x004AFEA0`, `Spline::Spline` `0x00914530`, then
+    /// `Spline::clear` `0x00914410`.
+    pub fn new() -> Self {
+        Self {
+            spline_type: 3,
+            flags: 0,
+            max_control_depth_ratio: 0.0,
+            total_spline_length: 0.0,
+            last_knot: 0,
+            curr_dist: -1.0,
+            next_search_dist: -1.0,
+            search_scan: -1,
+            degree: 4,
+            depth: 16,
+            control_verts: crate::container::EngineArray::with_size(0, -1),
+            knots: crate::container::EngineArray::with_size(0, -1),
+            weights: crate::container::EngineArray::with_size(0, -1),
+            spline_knots: crate::container::EngineArray::with_size(0, -1),
+            spline_verts: crate::container::EngineArray::with_size(0, -1),
+            spline_normals: crate::container::EngineArray::with_size(0, -1),
+        }
+    }
+
+    /// Retail `clear`: logical lengths and scalar walk state reset; array capacities and
+    /// growth hints survive recycler reuse.
+    pub fn clear(&mut self) {
+        self.degree = 4;
+        self.depth = 16;
+        self.spline_type = 3;
+        self.max_control_depth_ratio = 0.0;
+        self.flags = 0;
+        self.total_spline_length = 0.0;
+        self.last_knot = 0;
+        self.curr_dist = -1.0;
+        self.next_search_dist = -1.0;
+        self.search_scan = -1;
+        self.control_verts.clear();
+        self.knots.clear();
+        self.weights.clear();
+        self.spline_knots.clear();
+        self.spline_verts.clear();
+        self.spline_normals.clear();
+    }
+
+    fn set_min_seg_length(&mut self, min_segment_length: f32) {
+        let mut total = 0.0_f32;
+        for pair in self.control_verts.as_slice().windows(2) {
+            total = pair[1].sub(pair[0]).length() + total;
+        }
+        self.depth = ((total / min_segment_length) as i32) as u16;
+    }
+
+    fn generate_knots(&mut self) {
+        let control_len = self.control_verts.len() as i32;
+        let mut degree = self.degree as i32;
+        let mut last = degree + control_len;
+        while control_len < degree {
+            degree -= 1;
+            last -= 1;
+        }
+        self.degree = degree as u16;
+        self.spline_knots.clear();
+        let mut value = 0.0_f32;
+        let mut weight_index = 0usize;
+        for i in 0..=last {
+            let knot = if i <= degree {
+                value
+            } else if i <= control_len {
+                if self.weights.is_empty() {
+                    value += 1.0;
+                } else {
+                    for weight in
+                        &self.weights.as_slice()[weight_index..weight_index + degree as usize]
+                    {
+                        value += *weight;
+                    }
+                    weight_index += 1;
+                }
+                value
+            } else if weight_index == 0 && !self.weights.is_empty() {
+                self.weights[0]
+            } else {
+                value
+            };
+            self.spline_knots.add(knot);
+        }
+    }
+
+    /// Cox–de Boor basis, instruction-for-instruction arithmetic order from `0x009116E0`.
+    fn basis(&self, t: f32, index: usize, degree: usize) -> f32 {
+        if index + degree >= self.spline_knots.len() {
+            return 0.0;
+        }
+        if degree == 0 {
+            return if self.spline_knots[index] <= t && t < self.spline_knots[index + 1] {
+                1.0
+            } else {
+                0.0
+            };
+        }
+
+        let mut out = 0.0_f32;
+        let left_num = t - self.spline_knots[index];
+        let left_den = self.spline_knots[index + degree] - self.spline_knots[index];
+        if left_num > 0.0 && left_den > 0.0 {
+            let child = self.basis(t, index, degree - 1);
+            out = child * (left_num / left_den);
+        }
+        let right_num = self.spline_knots[index + degree + 1] - t;
+        let right_den = self.spline_knots[index + degree + 1] - self.spline_knots[index + 1];
+        if right_num > 0.0 && right_den > 0.0 {
+            let child = self.basis(t, index + 1, degree - 1);
+            out += child * (right_num / right_den);
+        }
+        out
+    }
+
+    /// `Spline::generate_bspline` `0x00911820`.
+    fn generate_bspline(&mut self) {
+        if self.flags & 0x80 == 0 {
+            self.generate_knots();
+        }
+        let last_index = self.spline_knots.len() - 1;
+        let first_knot = self.spline_knots[0];
+        let last_knot = self.spline_knots[last_index];
+        let mut delta = (last_knot - first_knot) / self.depth as f32;
+        if delta == 0.0 {
+            delta = 1.0;
+        }
+        let mut segment = 0usize;
+        let mut t = first_knot + delta;
+        self.spline_verts.add(self.control_verts[0]);
+        while t < last_knot {
+            while segment + 1 < self.spline_knots.len() {
+                let next = self.spline_knots[segment + 1];
+                if t <= next && self.spline_knots[segment] < next {
+                    break;
+                }
+                segment += 1;
+            }
+            if last_index < segment {
+                break;
+            }
+            let first_control = segment.saturating_sub(self.degree as usize);
+            let mut vertex = SplineVec3::default();
+            for control in first_control..=segment {
+                let weight = self.basis(t, control, self.degree as usize);
+                vertex.x += self.control_verts[control].x * weight;
+                vertex.y += self.control_verts[control].y * weight;
+                vertex.z += self.control_verts[control].z * weight;
+            }
+            self.spline_verts.add(vertex);
+            t += delta;
+        }
+        if last_knot - (t - delta) > 0.001 {
+            self.spline_verts
+                .add(self.control_verts[self.control_verts.len() - 1]);
+        }
+        if self.spline_verts.is_empty() {
+            let controls = self.control_verts.as_slice().to_vec();
+            for vertex in controls {
+                self.spline_verts.add(vertex);
+            }
+        }
+    }
+
+    /// `Spline::build_normals` `0x00911F60`. Cruise splines use flag `0x10`, making the
+    /// per-segment vector the raw tangent; the default-axis arm is retained for nuke paths.
+    fn build_normals(&mut self) {
+        let mut prior = SplineVec3::default();
+        let mut previous = self.spline_verts[0];
+        self.total_spline_length = 0.0;
+        self.spline_normals.clear();
+        for current in &self.spline_verts.as_slice()[1..] {
+            let direction = current.sub(previous);
+            self.total_spline_length = direction.length() + self.total_spline_length;
+            let normal = if self.flags & 0x10 != 0 {
+                direction
+            } else {
+                let axis = if self.flags & 0x20 != 0 {
+                    SplineVec3::new(0.0, 0.0, 1.0)
+                } else {
+                    SplineVec3::new(1.0, 1.0, 1.732_050_8)
+                };
+                SplineVec3::new(
+                    direction.y * axis.z - direction.z * axis.y,
+                    direction.z * axis.x - direction.x * axis.z,
+                    direction.x * axis.y - direction.y * axis.x,
+                )
+                .normalized()
+            };
+            self.spline_normals.add(prior.add(normal).normalized());
+            prior = normal;
+            previous = *current;
+        }
+
+        let mut last = prior;
+        if self.flags & 4 != 0 {
+            if let Some(first) = self.spline_normals.get_mut(0) {
+                *first = first.add(last).normalized();
+                last = *first;
+            }
+        } else if self.flags & 0x10 != 0 && self.control_verts.len() >= 2 {
+            let n = self.control_verts.len();
+            last = self.control_verts[n - 1]
+                .sub(self.control_verts[n - 2])
+                .normalized();
+        }
+        self.spline_normals.add(last);
+    }
+
+    fn calc_spline(&mut self) {
+        let saved_degree = self.degree;
+        let saved_depth = self.depth;
+        let len = self.control_verts.len() as i32;
+        if len <= self.degree as i32 {
+            self.degree = (len - 1) as u16;
+        }
+        let ratio_depth = (len as f32 * self.max_control_depth_ratio) as i32;
+        if ratio_depth != 0 && ratio_depth < self.depth as i32 {
+            self.depth = ratio_depth as u16;
+        }
+        if self.depth < self.degree {
+            self.depth = self.degree;
+        }
+        self.spline_verts.clear();
+        self.generate_bspline();
+        if !self.spline_verts.is_empty() && self.flags & 0x40 == 0 {
+            self.build_normals();
+        }
+        self.depth = saved_depth;
+        self.degree = saved_degree;
+    }
+
+    fn calc_from_dir(
+        &mut self,
+        min_segment_length: f32,
+        start: SplineVec3,
+        control: SplineVec3,
+        end: SplineVec3,
+        optional_control: SplineVec3,
+    ) {
+        self.knots.clear();
+        self.control_verts.clear();
+        self.control_verts.add(start);
+        self.control_verts.add(control);
+        if optional_control.length() == 0.0 {
+            self.degree = 2;
+        } else {
+            self.control_verts.add(optional_control);
+            self.degree = 3;
+        }
+        self.control_verts.add(end);
+        self.set_min_seg_length(min_segment_length);
+        self.max_control_depth_ratio = 4.0;
+        self.calc_spline();
+    }
+
+    /// `SplineData::walk_data` appended to the ammo checksum. This mutates nested array flags
+    /// exactly as the writer does (`flags &= ~0x40`) before hashing them.
+    pub fn walk_checksum(&mut self, mut adler: u32) -> u32 {
+        macro_rules! scalar {
+            ($value:expr) => {
+                adler = adler32(adler, &$value.to_le_bytes())
+            };
+        }
+        scalar!(self.spline_type);
+        scalar!(self.flags);
+        scalar!(self.max_control_depth_ratio.to_bits());
+        scalar!(self.total_spline_length.to_bits());
+        scalar!(self.last_knot);
+        scalar!(self.curr_dist.to_bits());
+        scalar!(self.next_search_dist.to_bits());
+        scalar!(self.search_scan);
+        scalar!(self.degree);
+        scalar!(self.depth);
+        adler = walk_vec3_array(adler, &mut self.control_verts);
+        adler = walk_float_array(adler, &mut self.knots);
+        adler = walk_float_array(adler, &mut self.weights);
+        adler = walk_float_array(adler, &mut self.spline_knots);
+        adler = walk_vec3_array(adler, &mut self.spline_verts);
+        walk_vec3_array(adler, &mut self.spline_normals)
+    }
+}
+
+fn walk_array_header<T: Clone + Default>(
+    mut adler: u32,
+    array: &mut crate::container::EngineArray<T>,
+) -> u32 {
+    adler = adler32(adler, &(array.len() as i32).to_le_bytes());
+    if array.is_empty() {
+        return adler;
+    }
+    adler = adler32(adler, &array.size().to_le_bytes());
+    adler = adler32(adler, &array.increment().to_le_bytes());
+    let flags = array.flags() & !0x40;
+    array.set_flags(flags);
+    adler32(adler, &[flags])
+}
+
+fn walk_float_array(mut adler: u32, array: &mut crate::container::EngineArray<f32>) -> u32 {
+    adler = walk_array_header(adler, array);
+    for value in array.as_slice() {
+        adler = adler32(adler, &value.to_bits().to_le_bytes());
+    }
+    adler
+}
+
+fn walk_vec3_array(mut adler: u32, array: &mut crate::container::EngineArray<SplineVec3>) -> u32 {
+    adler = walk_array_header(adler, array);
+    for value in array.as_slice() {
+        adler = adler32(adler, &value.x.to_bits().to_le_bytes());
+        adler = adler32(adler, &value.y.to_bits().to_le_bytes());
+        adler = adler32(adler, &value.z.to_bits().to_le_bytes());
+    }
+    adler
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplineBuildError {
+    NonFiniteInput,
+    NonPositiveSegmentLength,
+}
+
+/// Complete cruise-path transaction: recycler-clear, retail flag `0x10`,
+/// `calc_from_dir`→`calc_spline`→B-spline generation→normals, then the Ammo pointer/trajectory
+/// fields and `total_time = spline_verts.length` write from `Ammo::init`.
+pub fn ammo_init_cruise_spline(
+    ammo: &mut Ammo,
+    min_segment_length: f32,
+    start: SplineVec3,
+    control: SplineVec3,
+    end: SplineVec3,
+    optional_control: SplineVec3,
+) -> Result<RetailSpline, SplineBuildError> {
+    if !min_segment_length.is_finite()
+        || !start.finite()
+        || !control.finite()
+        || !end.finite()
+        || !optional_control.finite()
+    {
+        return Err(SplineBuildError::NonFiniteInput);
+    }
+    if min_segment_length <= 0.0 {
+        return Err(SplineBuildError::NonPositiveSegmentLength);
+    }
+    let mut spline = RetailSpline::new();
+    spline.flags = 0x10;
+    spline.calc_from_dir(min_segment_length, start, control, end, optional_control);
+    ammo.w.traj = TRAJ_SPLINE;
+    ammo.w.total_time = spline.spline_verts.len() as u32;
+    ammo.has_spline = true;
+    Ok(spline)
+}
+
+/// The isolated spline arm of `Ammo::inc_time` after `cur_time` has already incremented.
+/// Retail reads `spline_verts[cur_time]` only while `length > cur_time + 1` and truncates all
+/// three f32 coordinates with `cvttss2si`.
+pub fn ammo_step_cruise_spline(ammo: &mut AmmoWalk, spline: &RetailSpline) -> Option<SplineVec3> {
+    if spline.spline_verts.len() as u32 <= ammo.cur_time.wrapping_add(1) {
+        return None;
+    }
+    let point = spline.spline_verts[ammo.cur_time as usize];
+    ammo.ex = point.x as i32;
+    ammo.ey = point.y as i32;
+    ammo.ez = point.z as i32;
+    Some(point)
+}
+
+// ============================================================================
 // `AmmoData` — the walked state, laid out to match the engine byte-for-byte
 // ============================================================================
 
@@ -331,7 +785,8 @@ pub struct Ammo {
     /// Engine `AmmoData + 0x04 .. + 0x68`, hashed verbatim.
     pub w: AmmoWalk,
     /// Stands in for `ammo_path != nullptr` (engine `+0x68`). The walk hashes exactly one
-    /// byte for this. Spline geometry itself is not modelled here.
+    /// byte for this. Geometry lives in the slot-aligned [`RetailSpline`] sidecar consumed by
+    /// [`AmmoPool::checksum_with_splines`].
     pub has_spline: bool,
 }
 
@@ -481,15 +936,51 @@ impl AmmoPool {
             a = adler32(a, &b[0..1]); // walk(+0x04, +0x05)  -- flags
             a = adler32(a, &b[1..100]); // walk(+0x05, +0x68)  -- gated on flags & 3
             a = adler32(a, &[s.has_spline as u8]); // walk(stack bool)
-                                                   // Spline::walk_data would follow here.
+                                                   // Compatibility channel for arc-only callers. Spline-aware owners must use
+                                                   // `checksum_with_splines` so the immediately-following nested walk is included.
         }
         a
+    }
+
+    /// The complete ammo channel when live spline sidecars are present.
+    ///
+    /// Retail walks the non-null byte and immediately enters `SplineData::walk_data` for the
+    /// same slot.  A missing sidecar is therefore an error, never an empty-path substitution.
+    /// Free slots still contribute nothing even if the sidecar slice contains stale recycler
+    /// data at that index.
+    pub fn checksum_with_splines(
+        &self,
+        splines: &mut [Option<RetailSpline>],
+    ) -> Result<u32, AmmoSplineChecksumError> {
+        let mut a = 1;
+        for (slot, ammo) in self.slots.iter().enumerate() {
+            if !ammo.occupied() {
+                continue;
+            }
+            let bytes = ammo.w.as_bytes();
+            a = adler32(a, &bytes[0..1]);
+            a = adler32(a, &bytes[1..100]);
+            a = adler32(a, &[ammo.has_spline as u8]);
+            if ammo.has_spline {
+                let spline = splines
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+                a = spline.walk_checksum(a);
+            }
+        }
+        Ok(a)
     }
 
     /// Live projectile count — diagnostics only, not part of any channel.
     pub fn live(&self) -> usize {
         self.slots.iter().filter(|s| s.occupied()).count()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmmoSplineChecksumError {
+    MissingSpline { slot: usize },
 }
 
 // ============================================================================
@@ -1462,7 +1953,8 @@ pub fn ammo_inc_time<E: AmmoEnv>(
         }
 
         if a.w.traj != TRAJ_ARC {
-            // Spline flight is driven by `ammo_path`; not modelled.
+            // Spline flight is driven by the slot sidecar; live owners call
+            // ammo_step_cruise_spline after this common increment boundary.
             return Step::Flying;
         }
 
