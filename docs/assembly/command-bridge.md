@@ -30,8 +30,9 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Five inline state handlers** — speed set/up/down and all eight player-speed
-  accumulators are complete; pause's common state path is wired but remains partial.
+* **Seven inline state handlers** — control-group save/camera, MP-log toggle, speed
+  set/up/down, and all eight player-speed accumulators are complete; pause's common state
+  path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -48,10 +49,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,273 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 5 `InlineDef` + 82 `OpDef` | 148 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,376 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 7 `InlineDef` + 82 `OpDef` | 157 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 52/53/54/76/79, 2 tests | 94 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52/53/54/55/76/79, 3 tests | 181 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -59,9 +60,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-47 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+48 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 2/2,
+`cargo test -p don-sim --test command_speed_state` 3/3,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -187,6 +188,26 @@ unpause gate, ten-pause network allowance, and per-player pause-count increment 
 the network restart tail (`Game+0x821` bits, callback frontier, and leader resumption) is
 not represented in this bridge. The metadata therefore says `state_wired`, never
 `complete`.
+
+### Control-group and MP-log tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 34 | `process_hotkey` `0x009474D0` | one of 162 `HotKeyGroups` slots: selection subset or raw camera bookmark | `complete` |
+| 55 | `process_mp_log` `0x00946080` | `Game+0x820` bit `0x20` and restart delay `Game+0x81C` | `complete` |
+
+HOTKEY decodes `group/clear/valid` as signed dwords at `+1/+5/+9`, preserves the raw
+IEEE-754 x/y bits at `+13/+17`, and reads zoom at `+21`. The selection arm reproduces
+`HotKeyGroups::copy_group` `0x00715120`: it copies the measured scalar subset and only
+the live prefixes of the six parallel arrays, preserves destination identity/unlisted
+fields, stamps the current frame, and clears the camera bookmark. The clear arm writes
+only `GroupData::num = 0`, then optionally installs x/y/zoom. The subsequent
+`HotKeyGroups::update` call computes local UI labels/sounds and is presentation-only.
+
+MP_LOG has no payload fields. On the first command it sets bit `0x20` and zeroes the
+restart delay; on the second it clears the bit and changes a zero delay to two. There is
+no `EndCommand` row in the 82-entry `CommandTypes` dispatch: `CommandPackage::end_process`
+`0x0094C800` is a package finalizer, not a wire opcode, so the bridge does not invent one.
 
 ## Five things worth keeping
 

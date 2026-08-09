@@ -3,7 +3,9 @@
 //! Each assertion enters through wire bytes and `Bridge::process_all`; private helpers
 //! are never called directly.
 
-use don_sim::command::{Bridge, InlineDef, InlinePort, ObjectTable, Package, PLAYER_SPEED_FIELDS};
+use don_sim::command::{
+    Bridge, InlineDef, InlinePort, ObjectTable, Package, Slot, PLAYER_SPEED_FIELDS,
+};
 
 fn fixed_i32(op: u8, value: i32) -> Vec<u8> {
     let mut bytes = vec![op];
@@ -15,6 +17,17 @@ fn issue(bridge: &mut Bridge, package: &mut Package, bytes: &[u8]) {
     bridge
         .process_all(package, bytes, &mut ObjectTable::new(0))
         .unwrap();
+}
+
+fn hotkey(group: i32, clear: i32, valid: i32, x_bits: u32, y_bits: u32, zoom: i32) -> Vec<u8> {
+    let mut bytes = vec![34];
+    for word in [group, clear, valid] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.extend_from_slice(&x_bits.to_le_bytes());
+    bytes.extend_from_slice(&y_bits.to_le_bytes());
+    bytes.extend_from_slice(&zoom.to_le_bytes());
+    bytes
 }
 
 #[test]
@@ -91,4 +104,78 @@ fn pause_pins_raw_state_comparison_solo_edges_and_network_allowance() {
         "immediate-process gate refuses unpause"
     );
     assert_eq!(bridge.stats.inline_state, 6);
+}
+
+#[test]
+fn hotkey_copy_camera_clear_and_mp_log_toggle_are_exact_inline_state() {
+    assert_eq!(InlineDef::find(34).unwrap().port, InlinePort::Complete);
+    assert_eq!(InlineDef::find(55).unwrap().port, InlinePort::Complete);
+
+    let mut bridge = Bridge::new();
+    bridge.frame = 321;
+    let mut package = Package::new(3, 0);
+    let mut fleet = ObjectTable::new(4);
+    fleet.put(3, 0, Slot::unit(10, 7, 9));
+    fleet.put(3, 1, Slot::unit(11, 13, 15));
+    let mut selection = vec![0, 2, 3];
+    selection.extend_from_slice(&0i16.to_le_bytes());
+    selection.extend_from_slice(&1i16.to_le_bytes());
+    bridge
+        .process_all(&mut package, &selection, &mut fleet)
+        .unwrap();
+    let current = bridge.groups.get_mut(package.group).unwrap();
+    current.ox = 100;
+    current.oy = -200;
+    current.o_dist = 17;
+    current.o_angle = 29;
+    current.speed = 41;
+
+    bridge.inline.hotkeys[5].group.disband = 77;
+    bridge
+        .process_all(
+            &mut package,
+            &hotkey(5, 0, 1, 0x7fc0_1234, 0x8000_0000, 88),
+            &mut fleet,
+        )
+        .unwrap();
+    let saved = &bridge.inline.hotkeys[5];
+    assert_eq!(
+        saved.group.id, 5,
+        "copy_group preserves destination identity"
+    );
+    assert_eq!(
+        saved.group.disband, 77,
+        "copy_group preserves unlisted fields"
+    );
+    assert_eq!((saved.group.who, saved.group.num), (3, 2));
+    assert_eq!((saved.group.ox, saved.group.oy), (100, -200));
+    assert_eq!((saved.group.o_dist, saved.group.o_angle), (17, 29));
+    assert_eq!(saved.group.speed, 41);
+    assert_eq!(saved.group.stamp, 321);
+    assert_eq!(&saved.group.list[..2], &[0, 1]);
+    assert_eq!(saved.camera, None, "selection copy always clears camera");
+
+    issue(
+        &mut bridge,
+        &mut package,
+        &hotkey(5, 1, 1, 0x7fc0_1234, 0x8000_0000, 88),
+    );
+    let saved = &bridge.inline.hotkeys[5];
+    assert_eq!(saved.group.num, 0);
+    let camera = saved.camera.unwrap();
+    assert_eq!(camera.x_bits, 0x7fc0_1234, "NaN payload bits survive");
+    assert_eq!(camera.y_bits, 0x8000_0000, "negative-zero bits survive");
+    assert_eq!(camera.zoom, 88);
+
+    issue(&mut bridge, &mut package, &hotkey(5, 1, 0, 1, 2, 3));
+    assert_eq!(bridge.inline.hotkeys[5].camera, None);
+
+    bridge.inline.restart_delay = 9;
+    issue(&mut bridge, &mut package, &[55]);
+    assert!(bridge.inline.mp_log);
+    assert_eq!(bridge.inline.restart_delay, 0);
+    issue(&mut bridge, &mut package, &[55]);
+    assert!(!bridge.inline.mp_log);
+    assert_eq!(bridge.inline.restart_delay, 2);
+    assert_eq!(bridge.stats.inline_state, 5);
 }

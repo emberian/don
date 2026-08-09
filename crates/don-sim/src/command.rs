@@ -1125,13 +1125,28 @@ impl BridgeStats {
 }
 
 pub const PLAYER_SPEED_FIELDS: usize = 8;
+pub const HOTKEY_GROUP_SLOTS: usize = 162;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HotKeyCamera {
+    /// Raw IEEE-754 bits from `HotKeyCommand::x/y`; retaining bits preserves NaN payloads.
+    pub x_bits: u32,
+    pub y_bits: u32,
+    pub zoom: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HotKeySlot {
+    pub group: GroupData,
+    pub camera: Option<HotKeyCamera>,
+}
 
 /// State written inline by the speed/pause command family.
 ///
 /// `speed` is `TurnControl+0x30`. `network`, `speed_locked`, and `immediate_process`
 /// name the exact `Game+0x820/0x20/0x821` gates read by the handlers. The eight player
 /// counters are the `u32` fields at `PlayerData+0x48..+0x68` [measured].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InlineCommandState {
     pub speed: i32,
     pub network: bool,
@@ -1142,6 +1157,9 @@ pub struct InlineCommandState {
     pub pause_override: bool,
     pub pauses: [u8; NUM_OWNER_SLOTS],
     pub player_speed: [[u32; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+    pub mp_log: bool,
+    pub restart_delay: i32,
+    pub hotkeys: Vec<HotKeySlot>,
 }
 
 impl Default for InlineCommandState {
@@ -1156,8 +1174,40 @@ impl Default for InlineCommandState {
             pause_override: false,
             pauses: [0; NUM_OWNER_SLOTS],
             player_speed: [[0; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+            mp_log: false,
+            restart_delay: 0,
+            hotkeys: (0..HOTKEY_GROUP_SLOTS)
+                .map(|id| HotKeySlot {
+                    group: GroupData {
+                        id: id as i32,
+                        ..GroupData::default()
+                    },
+                    camera: None,
+                })
+                .collect(),
         }
     }
+}
+
+/// `HotKeyGroups::copy_group` `0x00715120`. Retail copies only these scalar fields and
+/// the live prefixes of six parallel arrays; every other destination field survives.
+fn copy_hotkey_group(dst: &mut GroupData, src: &GroupData, frame: i32) {
+    dst.who = src.who;
+    dst.num = src.num;
+    dst.ox = src.ox;
+    dst.oy = src.oy;
+    dst.o_dist = src.o_dist;
+    dst.o_angle = src.o_angle;
+    dst.buildings = src.buildings;
+    dst.speed = src.speed;
+    dst.stamp = frame;
+    let n = src.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    dst.list[..n].copy_from_slice(&src.list[..n]);
+    dst.angles[..n].copy_from_slice(&src.angles[..n]);
+    dst.off_x[..n].copy_from_slice(&src.off_x[..n]);
+    dst.off_y[..n].copy_from_slice(&src.off_y[..n]);
+    dst.curr_x[..n].copy_from_slice(&src.curr_x[..n]);
+    dst.curr_y[..n].copy_from_slice(&src.curr_y[..n]);
 }
 
 /// The command→order bridge.
@@ -1277,6 +1327,7 @@ impl Bridge {
     /// `action_*` receiver.
     fn process_inline(&mut self, pkg: &Package, cmd: &[u8]) {
         match cmd[0] {
+            34 => self.process_hotkey(pkg, cmd),
             // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
             // wall-clock pacing, but `TurnControl+0x30` is the only deterministic state.
             52 => {
@@ -1294,6 +1345,19 @@ impl Bridge {
             54 => {
                 if self.inline.speed != 0 && self.speed_change_allowed() {
                     self.inline.speed = self.inline.speed.wrapping_sub(1);
+                }
+            }
+            // MPLogCommand toggles Game semaphore bit 0x20 and the restart delay at
+            // Game+0x81C. Its logging call is presentation-only.
+            55 => {
+                if !self.inline.mp_log {
+                    self.inline.mp_log = true;
+                    self.inline.restart_delay = 0;
+                } else {
+                    self.inline.mp_log = false;
+                    if self.inline.restart_delay == 0 {
+                        self.inline.restart_delay = 2;
+                    }
                 }
             }
             76 => {
@@ -1317,6 +1381,45 @@ impl Bridge {
             }
             _ => unreachable!("inline command table and dispatcher disagree"),
         }
+    }
+
+    /// `CommandPackage::process_hotkey` `0x009474D0`.
+    ///
+    /// The command indexes the 162-entry `HotKeyGroups` array directly. `clear == 0`
+    /// copies the current selection's recovered `GroupData` subset and clears its camera
+    /// bookmark; nonzero clear empties the group and optionally installs raw x/y/zoom.
+    fn process_hotkey(&mut self, pkg: &Package, cmd: &[u8]) {
+        let (Some(group), Some(clear), Some(valid), Some(x), Some(y), Some(zoom)) = (
+            i32_at(cmd, 1),
+            i32_at(cmd, 5),
+            i32_at(cmd, 9),
+            i32_at(cmd, 13),
+            i32_at(cmd, 17),
+            i32_at(cmd, 21),
+        ) else {
+            return;
+        };
+        let Ok(slot) = usize::try_from(group) else {
+            return;
+        };
+        if slot >= self.inline.hotkeys.len() {
+            return;
+        }
+        if clear == 0 {
+            let Some(source) = self.groups.get(pkg.group).cloned() else {
+                return;
+            };
+            copy_hotkey_group(&mut self.inline.hotkeys[slot].group, &source, self.frame);
+            self.inline.hotkeys[slot].camera = None;
+            return;
+        }
+        let hotkey = &mut self.inline.hotkeys[slot];
+        hotkey.group.num = 0;
+        hotkey.camera = (valid != 0).then_some(HotKeyCamera {
+            x_bits: x as u32,
+            y_bits: y as u32,
+            zoom,
+        });
     }
 
     #[inline]
