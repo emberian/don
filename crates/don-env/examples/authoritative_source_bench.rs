@@ -93,6 +93,7 @@ fn main() {
         actor,
         target_x: 3 * COORD_PER_TILE,
         target_y: 2 * COORD_PER_TILE,
+        target_entity: 0,
         queue: QueuePosition::Replace,
         order_flags: 0,
     };

@@ -8,7 +8,16 @@ end to end including masked action sampling, on this M2 Max, measured by
 
 The additive `AuthoritativeBackend` instead owns `don_sim::tick::Sim` directly. It is a
 bounded migration surface, not yet a full-game vector environment: currently only NOOP and
-fully hosted MOVE_TO are admitted, and the other policy verbs fail with typed boundaries.
+fully hosted MOVE_TO are admitted. ATTACK's production Sim issue/execution route is now
+classified separately, but remains masked and returns a target identity/visibility refusal;
+the other policy verbs fail at their typed owner boundaries.
+
+Root convergence validated the target-identity tranche in persvati job
+`rl-target-entity-v2-20260809T232312Z-24206-11858-b8a284f806b0`: 22/22 focused backend, head,
+scenario-source, target, and backend-selector tests passed. The first run exposed one older test
+still expecting the generic `Unhosted` refusal; it was narrowed to the new exact visibility
+refusal without weakening its digest/no-fallback assertion. No action-coverage increase is
+claimed.
 
 ### Side-by-side authoritative migration contract
 
@@ -34,6 +43,13 @@ The authoritative contract is frozen at this boundary:
   contains own units and leader state only; `external_entities_complete` remains false until
   cloak/detection-aware visibility has an authoritative host. Reward deltas use Sim-owned
   score, economy, alive, and won state.
+* Strict ten-head decoding preserves `TargetEntity` instead of dropping it. ATTACK can only
+  bind that ordinal against the exact external observation image shown to the policy. Because
+  that image is not yet cloak/detection complete, both its conditional verb mask and apply
+  path remain red: zero is `MissingTargetEntity`, a non-zero ordinal is
+  `TargetIdentityVisibilityUnavailable`, and neither route changes orders, paths, digest, or
+  reset determinism. Scenario allocation order and omniscient World traversal are forbidden
+  substitutes. This tranche adds **zero** authoritative action coverage by design.
 * `AuthoritativeScenarioSpec` captures movement sources by deterministic scenario-unit
   ordinal and reinstalls them atomically on reset. `install_movement_source()` remains an
   explicitly out-of-band setup escape hatch and is not silently persisted. Masks read the
@@ -360,8 +376,10 @@ modified.
 1. **Host group/command decoding over the authoritative backend.** Decode the existing
    generated factored heads into fail-closed typed transactions; do not route unsupported
    verbs through compact `action.rs` behavior.
-2. **Cloak/detection-aware external observations.** Only then may
-   `external_entities_complete` become true or the authoritative backend expose opponents.
+2. **Cloak/detection-aware external observations.** Bind policy target ordinals to
+   identity-stable rows from that exact observation image. Only then may
+   `external_entities_complete` become true, the authoritative backend expose opponents, or
+   ATTACK leave its dedicated refusal boundary.
 3. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).

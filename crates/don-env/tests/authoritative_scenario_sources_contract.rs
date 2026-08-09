@@ -90,6 +90,7 @@ fn move_request(backend: &AuthoritativeBackend) -> UnitActionRequest {
         actor,
         target_x: COORD_PER_WCELL + 240,
         target_y: COORD_PER_WCELL,
+        target_entity: 0,
         queue: QueuePosition::Replace,
         order_flags: 0,
     }

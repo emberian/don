@@ -99,13 +99,17 @@ fn unhosted_and_unready_actions_refuse_without_mutating_the_core() {
         actor,
         target_x: 0,
         target_y: 0,
+        target_entity: 2,
         queue: QueuePosition::Replace,
         order_flags: 0,
     };
-    assert!(matches!(
+    assert_eq!(
         backend.apply_unit(0, attack),
-        Err(ApplyRefusal::Unhosted { .. })
-    ));
+        Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+            verb_index: generated::uv::ATTACK,
+            target_entity: 2,
+        })
+    );
     assert_eq!(backend.sim().world.digest(), before);
 
     let movement = UnitActionRequest {
@@ -113,6 +117,7 @@ fn unhosted_and_unready_actions_refuse_without_mutating_the_core() {
         actor,
         target_x: COORD_PER_WCELL + 240,
         target_y: COORD_PER_WCELL,
+        target_entity: 0,
         queue: QueuePosition::Replace,
         order_flags: 0,
     };
@@ -151,6 +156,7 @@ fn admitted_move_installs_into_sim_and_executes_in_the_retail_tick() {
         actor,
         target_x: start.0 + 240,
         target_y: start.1,
+        target_entity: 0,
         queue: QueuePosition::Replace,
         order_flags: 0,
     };
@@ -212,6 +218,7 @@ fn unsupported_queue_refuses_and_flee_transitions_the_same_source_atomically() {
         actor,
         target_x: start.0 + 240,
         target_y: start.1,
+        target_entity: 0,
         queue: QueuePosition::Last,
         order_flags: 0,
     };
@@ -270,6 +277,7 @@ fn stale_prepared_move_refuses_before_source_order_or_path_mutation() {
         actor,
         target_x: start.0 + 240,
         target_y: start.1,
+        target_entity: 0,
         queue: QueuePosition::Replace,
         order_flags: 0,
     };

@@ -75,17 +75,23 @@ fn malformed_heads_refuse_before_mutating_the_authoritative_owner() {
 }
 
 #[test]
-fn unsupported_generated_verbs_keep_their_typed_refusal_and_do_not_fall_back() {
+fn attack_target_projection_keeps_its_typed_refusal_and_does_not_fall_back() {
     let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
     let actor = backend.sim().world.handle_at_row(0).unwrap();
     let before = backend.sim().world.digest();
     let mut heads = [0; don_env::generated::N_UNIT_HEADS];
     heads[don_env::generated::UnitHead::Verb as usize] = don_env::generated::uv::ATTACK as i32 + 1;
+    heads[don_env::generated::UnitHead::TargetEntity as usize] = 1;
 
-    assert!(matches!(
+    assert_eq!(
         backend.apply_unit_heads(0, actor, &heads, space()),
-        Err(FactoredApplyRefusal::Apply(ApplyRefusal::Unhosted { .. }))
-    ));
+        Err(FactoredApplyRefusal::Apply(
+            ApplyRefusal::TargetIdentityVisibilityUnavailable {
+                verb_index: don_env::generated::uv::ATTACK,
+                target_entity: 1,
+            }
+        ))
+    );
     assert_eq!(backend.sim().world.digest(), before);
 }
 

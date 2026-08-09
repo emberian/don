@@ -4,7 +4,9 @@
 //! observations, rewards, and ticks can share one [`don_sim::tick::Sim`] owner without
 //! replacing the compact high-throughput backend in the same change. Every generated verb
 //! has a frozen route below. Only `MOVE_TO` is admitted today, and only when the live
-//! collision host proves every active object needed by the transaction. Unsupported verbs
+//! collision host proves every active object needed by the transaction. `ATTACK` has a
+//! production Sim issue/execution route, but remains masked and refused until a policy target
+//! ordinal can be bound to a cloak/detection-aware external observation. Unsupported verbs
 //! fail before mutation; there is no accepted-no-effect result.
 
 use crate::authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, StepReceipt};
@@ -47,6 +49,9 @@ pub enum VerbRoute {
     /// Single selected unit -> Sim-owned action-state CAS -> `Sim::issue` -> retail-ordered
     /// `Sim::do_frame`.
     SimIssue,
+    /// The production Sim owns attack order installation and execution. Policy entry remains
+    /// fail-closed at the target identity/visibility projection boundary.
+    SimAttackIssue,
     Refused(IntegrationBoundary),
 }
 
@@ -71,7 +76,11 @@ macro_rules! refused {
 pub const UNIT_INTEGRATION: [VerbIntegration; UNIT_VERB_COUNT] = [
     refused!("STANCE", 2, GroupCommandHost),
     refused!("FORM", 3, FormationHost),
-    refused!("ATTACK", 4, CombatTargetHost),
+    VerbIntegration {
+        name: "ATTACK",
+        opcode: 4,
+        route: VerbRoute::SimAttackIssue,
+    },
     refused!("SIEGE_ATTACK", 5, CombatTargetHost),
     refused!("SWARM_AROUND", 6, FormationHost),
     VerbIntegration {
@@ -259,6 +268,9 @@ pub struct UnitActionRequest {
     pub actor: Handle,
     pub target_x: i32,
     pub target_y: i32,
+    /// Generated `TargetEntity` head. Zero means no target; `n + 1` must eventually bind to
+    /// row `n` of the same authoritative observation image used by the policy.
+    pub target_entity: u16,
     pub queue: QueuePosition,
     pub order_flags: u8,
 }
@@ -373,6 +385,7 @@ pub fn decode_unit_heads(
         actor,
         target_x: coord(crate::generated::UnitHead::TargetX as usize)?,
         target_y: coord(crate::generated::UnitHead::TargetY as usize)?,
+        target_entity: heads[crate::generated::UnitHead::TargetEntity as usize] as u16,
         queue,
         order_flags: heads[crate::generated::UnitHead::OrderMods as usize] as u8,
     })
@@ -407,6 +420,15 @@ pub enum ApplyRefusal {
         actual: u8,
     },
     InactiveActor(Handle),
+    MissingTargetEntity {
+        verb_index: usize,
+    },
+    /// The target head named an observation ordinal, but the authoritative backend exposes no
+    /// external row image whose identity and cloak/detection visibility are both complete.
+    TargetIdentityVisibilityUnavailable {
+        verb_index: usize,
+        target_entity: u16,
+    },
     InvalidDestination {
         x: i32,
         y: i32,
@@ -729,7 +751,9 @@ impl AuthoritativeBackend {
                 verb_index,
                 boundary,
             }),
-            VerbRoute::SimIssue => Err(ApplyRefusal::CoreRejectedAfterPreflight),
+            VerbRoute::SimIssue | VerbRoute::SimAttackIssue => {
+                Err(ApplyRefusal::CoreRejectedAfterPreflight)
+            }
         }
     }
 
@@ -929,6 +953,21 @@ fn preflight_unit(
     if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
         return Err(ApplyRefusal::InactiveActor(request.actor));
     }
+    if integration.route == VerbRoute::SimAttackIssue {
+        if request.target_entity == 0 {
+            return Err(ApplyRefusal::MissingTargetEntity { verb_index });
+        }
+        // `observe()` currently exposes own rows only. An ATTACK target must be external, and
+        // fog alone cannot prove it policy-visible: retail additionally evaluates dynamic
+        // object cloak flags, type cloak flags and the dedicated detection plane. Preserve the
+        // ordinal for the future binding transaction, but never resolve it through scenario
+        // allocation order or an omniscient World walk.
+        return Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+            verb_index,
+            target_entity: request.target_entity,
+        });
+    }
+    debug_assert_eq!(integration.route, VerbRoute::SimIssue);
     if request.queue != QueuePosition::Replace {
         return Err(ApplyRefusal::UnsupportedQueue(request.queue));
     }

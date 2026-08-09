@@ -1,8 +1,7 @@
 //! The public selector keeps compact and authoritative ownership explicit and deterministic.
 
 use don_env::authoritative_backend::{
-    ApplyReceipt, ApplyRefusal, IntegrationBoundary, QueuePosition, UnitActionRequest,
-    UNIT_INTEGRATION,
+    ApplyReceipt, ApplyRefusal, QueuePosition, UnitActionRequest, UNIT_INTEGRATION,
 };
 use don_env::{
     BackendCreateError, BackendKind, EnvConfig, EnvironmentBackend, EpisodeError, ScenarioSpec,
@@ -72,6 +71,7 @@ fn authoritative_constructor_exposes_only_the_typed_sim_surface() {
                 actor,
                 target_x: 0,
                 target_y: 0,
+                target_entity: 0,
                 queue: QueuePosition::Replace,
                 order_flags: 0,
             }
@@ -92,14 +92,16 @@ fn authoritative_constructor_exposes_only_the_typed_sim_surface() {
                 actor,
                 target_x: 2 * COORD_PER_WCELL,
                 target_y: 2 * COORD_PER_WCELL,
+                target_entity: 2,
                 queue: QueuePosition::Replace,
                 order_flags: 0,
             }
         ),
-        Err(ApplyRefusal::Unhosted {
-            boundary: IntegrationBoundary::CombatTargetHost,
-            ..
+        Err(ApplyRefusal::TargetIdentityVisibilityUnavailable {
+            verb_index,
+            target_entity: 2,
         })
+        if verb_index == attack
     ));
     assert_eq!(backend.sim().world.digest(), initial_digest);
 
