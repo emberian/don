@@ -30,9 +30,14 @@ The first supported tranche contains:
   counters/HP/masks/helpers, exact `(who,o,uid)` identity, logical and allocated queue
   lengths, every live or stale queue record, elapsed progress, repeat latch, and the
   per-player band-2000 traversal rows.
+- constructor-empty and exact post-sync step-8 adapter views. The latter are admitted only
+  when their leader economy tuple exactly mirrors the serialized `LeaderSlot` and every
+  unit/build view exactly mirrors the serialized `World`/`BuildData` row. They are derived
+  again before step 8 after load; no second object or leader owner is written.
 
 The save call rejects a live section before returning bytes when that section cannot yet
-be restored exactly. Current explicit refusals include active leader/step-8 hosts, walls,
+be restored exactly. Current explicit refusals include active leaders, independent step-8
+query packages/counters/hosts, walls,
 herds, groups, Wonders, projectiles, death records, crash hosts,
 unsupported static-world rules, modified economy/territory rules, and modified circle
 tables. Heterogeneous item/object occupancy and captured, Wonder, gather, garrison,
@@ -172,6 +177,9 @@ leader economy/market values, terrain/fog bytes, a collision block, and nontrivi
    repeat state, and byte-for-byte resave output agree;
 9. corrupt band identity, impossible queue lengths, and unsupported special building
    families are rejected.
+10. an otherwise-supported simulation can save immediately after a complete frame even
+    though step 8 materialized leader/unit/build mirrors; loading drops those derived views,
+    the next step rebuilds them, and any non-derived package, counter, or stale row refuses.
 
 ## Next ownership cuts
 

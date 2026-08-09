@@ -16,11 +16,11 @@ use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
 };
 use crate::order::{Order, OrderIndex, OrderList};
-use crate::systems::{
-    borders_fog, economy, items::Item, leaders as step8, map_terrain, movement, production,
-};
+use crate::systems::{borders_fog, economy, items::Item, map_terrain, movement, production};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
+
+mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
 const FORMAT_VERSION: u32 = 2;
@@ -1608,56 +1608,8 @@ fn leader_is_supported(l: &LeaderSlot) -> bool {
         && border_input_is_default(&l.border)
 }
 
-fn step8_leader_is_new(actual: &step8::Leader, expected: &step8::Leader) -> bool {
-    actual.flags == expected.flags
-        && actual.slot == expected.slot
-        && actual.diplo == expected.diplo
-        && actual.taunt_kind == expected.taunt_kind
-        && actual.taunt_arg == expected.taunt_arg
-        && actual.taunt_frame == expected.taunt_frame
-        && actual.timers == expected.timers
-        && actual.retake_scale == expected.retake_scale
-        && actual.pop_cap == expected.pop_cap
-        && actual.pop_issues == expected.pop_issues
-        && actual.frame_counter_b == expected.frame_counter_b
-        && actual.attrition == expected.attrition
-        && actual.anti_attrition.to_bits() == expected.anti_attrition.to_bits()
-        && actual.attrition_off == expected.attrition_off
-        && actual.anti_attrition_off == expected.anti_attrition_off
-        && actual.explored == expected.explored
-        && actual.conquest_byte == expected.conquest_byte
-        && actual.rare_effective == expected.rare_effective
-        && actual.rare_a == expected.rare_a
-        && actual.rare_b == expected.rare_b
-        && actual.econ == expected.econ
-        && actual.last_calc_frame == expected.last_calc_frame
-        && actual.econ_dirty == expected.econ_dirty
-        && actual.unit_stats == expected.unit_stats
-}
-
 fn step8_state_is_pristine(sim: &Sim) -> bool {
-    let expected = step8::Leaders::new();
-    if !sim
-        .step8
-        .leaders
-        .iter()
-        .zip(expected.leaders.iter())
-        .all(|(actual, expected)| step8_leader_is_new(actual, expected))
-    {
-        return false;
-    }
-    if sim.step8_rules != step8::Step8Rules::shipped() {
-        return false;
-    }
-    sim.step8_env.leaders.iter().all(|env| {
-        gather_inputs_are_default(&env.gather)
-            && env.caps == economy::CapGates::default()
-            && env.payout == economy::DoGatherContext::default()
-            && env.attrition == step8::AttritionGates::default()
-            && env.objects.band_2000.is_empty()
-            && env.objects.band_3000.is_empty()
-            && env.objects.units.is_empty()
-    })
+    step8_views::is_supported_derived_snapshot(sim)
 }
 
 fn write_econ(w: &mut Writer, e: &economy::LeaderEcon) {
