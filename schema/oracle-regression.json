@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786250824,
+  "generated_unix": 1786251830,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 63336,
+  "wall_ms": 85495,
   "exit_code": 0,
   "summary": {
-    "registered": 21,
-    "pass": 21,
+    "registered": 22,
+    "pass": 22,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 18522549
+    "total_trials": 18622556
   },
   "cases": [
     {
@@ -108,7 +108,7 @@
       "status": "pass",
       "trials": 243049,
       "mismatches": 0,
-      "wall_ms": 44,
+      "wall_ms": 43,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)"},
         {"kind": "grid", "count": 0, "distribution": "the guard band below the domain — GoodType ids, which have no balance row"},
@@ -189,7 +189,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 1420,
+      "wall_ms": 1428,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared"},
         {"kind": "random", "count": 250000, "distribution": "the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte"}
@@ -240,7 +240,7 @@
       "status": "pass",
       "trials": 250011,
       "mismatches": 0,
-      "wall_ms": 10,
+      "wall_ms": 11,
       "phases": [
         {"kind": "edges", "count": 11, "distribution": "LSB/MSB and byte, row, non-byte-width, and maximum-domain boundaries"},
         {"kind": "random", "count": 250000, "distribution": "byte/row boundary edges plus xorshift64 widths 1..512, heights 1..128, valid coordinates, and uniform selected-byte patterns"}
@@ -265,7 +265,7 @@
       "status": "pass",
       "trials": 449463,
       "mismatches": 0,
-      "wall_ms": 812,
+      "wall_ms": 809,
       "phases": [
         {"kind": "edges", "count": 13, "distribution": "LSB/MSB, byte/row crossings, and append return indices 0..7"},
         {"kind": "random", "count": 449450, "distribution": "byte/row-boundary coordinate sequences plus xorshift64 worlds 2..128 cells per axis, 1..8 valid appended starts per fixture; return index, walked array metadata/elements, and full bit plane compared after every append"}
@@ -290,7 +290,7 @@
       "status": "pass",
       "trials": 250008,
       "mismatches": 0,
-      "wall_ms": 172,
+      "wall_ms": 168,
       "phases": [
         {"kind": "edges", "count": 8, "distribution": "empty and multiple arrays; exact zero, factor-four, minus-one, and strict-threshold boundaries"},
         {"kind": "random", "count": 250000, "distribution": "empty/one/many array edges and exact threshold neighbours, then xorshift64 parallel arrays of 0..32 coordinates in 0..127, query coordinates 0..127, city_center_radius 0..1024"}
@@ -313,7 +313,7 @@
       "status": "pass",
       "trials": 250005,
       "mismatches": 0,
-      "wall_ms": 823,
+      "wall_ms": 835,
       "phases": [
         {"kind": "edges", "count": 5, "distribution": "empty preservation, zero distance/scale, strict tie, and shuffled-team writes"},
         {"kind": "random", "count": 250000, "distribution": "empty/tie/zero extrema edges plus xorshift64 0..8 start arrays, shuffled valid team indices, 0..127 coordinates, and finite nonnegative f32 scales drawn across exponent/mantissa bits"}
@@ -321,6 +321,36 @@
       "excluded": [],
       "extras": {
         "compared_writes": "full 120-byte MapFairness image; all 8 dists by f32 bits plus extrema, with every other byte patterned and required unchanged"
+      },
+      "detail": null
+    },
+    {
+      "id": "place_start_in_region",
+      "va": "0x0068ac00",
+      "abi": "int __thiscall Map::place_start_in_region(int region, WCoord* out_x, WCoord* out_y, int min_dist, int unread, SimpleArray<WCoord>* prior_x, SimpleArray<WCoord>* prior_y), ret 0x1c",
+      "model": "don_sim::systems::map_terrain::place_start_in_region",
+      "subsystem": "world generation / concrete starting-position selection",
+      "ledger_entry": "docs/mechanics/map-terrain.md §7.1 — executable region-start selector",
+      "derivation": "docs/mechanics/map-terrain.md §7.1; PDB Map::place_start_in_region; retail 0x0068ac00..0x0068ae49 plus Map::is_near_ocean 0x0068b0a0..0x0068b1dc",
+      "reachability": "Called by map-style start-placement loops. The fixture executes retail circle_init first, then installs a measured Regions -> ObjectArray<Region> -> WCoordList graph, World WData/start arrays, and game_random. No allocator or substituted call is entered",
+      "caveat": "Valid generator-domain claim: one non-empty Region coordinate list, parallel prior-start arrays, worlds 16..32 cells per axis, and WData.land values 0..2. The full 592-byte selector and its complete 317-byte is_near_ocean callee execute. The case compares return/out coordinates, final RNG state, and every byte of the patterned fabricated object arena. It proves selection from supplied region/world inputs, not how Map::make generated those inputs.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 100007,
+      "mismatches": 0,
+      "wall_ms": 22087,
+      "phases": [
+        {"kind": "retail-table", "count": 1, "distribution": "execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends"},
+        {"kind": "edges", "count": 5, "distribution": "single/no-draw fallback, exact coastal band, inner-ocean rejection, pass-specific margin, and optional-prior total rejection"},
+        {"kind": "random", "count": 100000, "distribution": "dry/ocean/exact coastal-band and margin/spacing edges, then xorshift64 worlds 16..32, 1..16 valid Region coordinates, sparse or dense WData.land, 0..8 default or optional prior starts, min_dist 0..24, arbitrary unread argument and RNG seed"},
+        {"kind": "preservation", "count": 1, "distribution": "all retail-generated circle table bytes unchanged after every placement call"}
+      ],
+      "excluded": [],
+      "extras": {
+        "placement_successes": "31351",
+        "placement_failures": "68654",
+        "rng_draw_counts": "zero=6405 one=1188 two=92412",
+        "compared_state": "return/out coordinates, final game_random state, and every patterned byte through Map, World, Regions/Region, both array sources, and the complete WData fixture"
       },
       "detail": null
     },
@@ -382,7 +412,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 42737,
+      "wall_ms": 42647,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -417,7 +447,7 @@
       "status": "pass",
       "trials": 999950,
       "mismatches": 0,
-      "wall_ms": 24,
+      "wall_ms": 25,
       "phases": [
         {"kind": "chained-walk", "count": 999950, "distribution": "70 seeds x 14285 steps: six edge seeds (0 is what every statically-constructed Random starts at) plus 64 random seeds, each walked forward; compares the f32 bit pattern and the resulting state at every step"}
       ],
@@ -465,7 +495,7 @@
       "status": "pass",
       "trials": 500003,
       "mismatches": 0,
-      "wall_ms": 22,
+      "wall_ms": 23,
       "phases": [
         {"kind": "edges", "count": 3, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 500000, "distribution": "state uniform over u32; lo,hi uniform over ±2^29"}
@@ -488,7 +518,7 @@
       "status": "pass",
       "trials": 4000026,
       "mismatches": 0,
-      "wall_ms": 103,
+      "wall_ms": 104,
       "phases": [
         {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
         {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
@@ -513,7 +543,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15540,
+      "wall_ms": 15691,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -537,7 +567,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 191,
+      "wall_ms": 184,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},
@@ -549,7 +579,7 @@
     }
   ],
   "known_gaps": [
-    {"claim": "Full seeded Map::make terrain and start-position equivalence", "why": "Map::make is a 3,021-byte virtual orchestration routine that immediately needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, RString leaves, engine arrays and allocators. The registry executes and proves its exact seed prefix and the independent start-city bit accessor, but deliberately does not substitute approximate continent, fairness, region, ring or start-placement logic. docs/mechanics/map-terrain.md §7.1 records the executable dependency plan for extending this boundary."},
+    {"claim": "Full seeded Map::make terrain and start-position equivalence", "why": "Map::make is a 3,021-byte virtual orchestration routine that immediately needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, RString leaves, engine arrays and allocators. The registry executes and proves its seed prefix, start-city representation/writer/radius, fairness scorer, and complete Region-start selector. The selector still receives a fabricated Region coordinate list and WData land plane; the registry does not substitute approximate continent or Region construction. docs/mechanics/map-terrain.md §7.1 records the executable dependency plan for extending this boundary."},
     {"claim": "§1.4 entrench_dir_level — the entrenchment direction classifier", "why": "Inlined at 0x00644E0E–0x00644E2D inside ObjectData::get_damage; there is no standalone function to call. It runs only indirectly, inside damage_pipeline (642,609 of 7,986,695 trials), and its boundaries are pinned by mutation rather than by a direct differential."},
     {"claim": "§1.6 get_attack / get_armor — upgrade branches, and live dispatch", "why": "The base paths run as real retail code inside damage_pipeline. The upgrade branches need LeaderData::has_tribe_bonus(0x16) to return true, and the fabricated world sets game[+0x20] |= 4 to force it false — never executed. Worse (ledger §4.4): over 56,789 live damage calls the vtable dispatched to these two base-class leaves ZERO times, so even the tested path is not the one live combat takes."},
     {"claim": "§1.8 Rules — the typed rules block (828/834 constants matched live memory)", "why": "Validated against a running process on the Parallels VM, not against the oracle. Re-running it needs the live game, so it is outside this harness by construction."},

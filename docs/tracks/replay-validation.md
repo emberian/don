@@ -85,6 +85,13 @@ leaves in the oracle. Neither is called by `SimBridge`: `.rcx` still supplies no
 coordinates, and exact predicates over invented coordinates would not make the initial
 world sourced.
 
+`Map::place_start_in_region` is now exact as well: both passes, the canonical retail-built
+circle table, prior-start spacing, concrete output coordinate and final RNG word are
+differentially compared against the shipped 592-byte selector and its complete
+`is_near_ocean` callee. This still does not authorize replay wiring. The recording prefix
+contains neither the selector's `Region::coords` list nor its generated `WData.land` plane;
+fabricating either would merely move the first unsourced byte behind an exact function.
+
 ---
 
 ## The correction this lane paid for: the cross-player floor is zero, not 21

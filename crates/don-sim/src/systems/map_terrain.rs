@@ -695,6 +695,74 @@ impl MapFairness {
     }
 }
 
+/// Complete port of `Map::place_start_in_region` `0x0068ac00`–`0x0068ae49`.
+///
+/// `region_coords` is the selected `Region::coords` list. When `existing` is
+/// `None`, retail reads the World's normal `start_x` / `start_y` arrays; the
+/// optional pair is the PDB method's final two `SimpleArray<WCoord>*` arguments.
+/// Its intervening integer argument is never read by the shipped instructions,
+/// so it remains explicit as `_unread` rather than being assigned invented
+/// semantics.
+///
+/// Candidate iteration deliberately starts *after* the randomly chosen index,
+/// wraps, and tests the chosen index last. Retail makes a coastal pass first
+/// (margins 5/6, separation `min_dist`, dry radius 3 with ocean in the canonical
+/// circle-table band `[radius[8], radius[10])`), then a fallback pass (margins
+/// 3/4, separation capped at 6, dry radius 2). Each pass consumes one
+/// `game_random` draw when the region has more than one coordinate.
+pub fn place_start_in_region(
+    world: &World,
+    circle: &crate::systems::combat::CircleTable,
+    rng: &mut crate::rng::Random,
+    region_coords: &[(WCoord, WCoord)],
+    min_dist: i32,
+    _unread: i32,
+    existing: Option<(&[i32], &[i32])>,
+) -> Option<(WCoord, WCoord)> {
+    debug_assert!(!region_coords.is_empty());
+    let (existing_x, existing_y) = existing.unwrap_or((&world.start_x.items, &world.start_y.items));
+    debug_assert_eq!(existing_x.len(), existing_y.len());
+
+    let count = region_coords.len() as i32;
+    for pass in 0..2 {
+        let (low_margin, high_margin, inner_dry, outer_ocean) = if pass == 0 {
+            (5, 6, 3, 9)
+        } else {
+            (3, 4, 2, 0)
+        };
+        let separation = if pass == 0 { min_dist } else { min_dist.min(6) };
+        let anchor = if count <= 1 {
+            0
+        } else {
+            rng.get(0, 0xffff) % count
+        };
+        let mut index = if anchor + 1 < count { anchor + 1 } else { 0 };
+
+        loop {
+            let (x, y) = region_coords[index as usize];
+            let inside_margins = x.0 >= low_margin
+                && y.0 >= low_margin
+                && x.0 <= world.xs.wrapping_sub(high_margin)
+                && y.0 <= world.ys.wrapping_sub(high_margin);
+            if inside_margins {
+                let separated = existing_x.iter().zip(existing_y).all(|(&sx, &sy)| {
+                    crate::systems::combat::vector_dist(x.0.wrapping_sub(sx), y.0.wrapping_sub(sy))
+                        >= separation
+                });
+                if separated && world.is_near_ocean(circle, x, y, inner_dry, outer_ocean) {
+                    return Some((x, y));
+                }
+            }
+
+            if index == anchor {
+                break;
+            }
+            index = if index + 1 < count { index + 1 } else { 0 };
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------------------
 // 5. The World
 // ---------------------------------------------------------------------------------------
@@ -1029,6 +1097,56 @@ impl World {
                 crate::systems::combat::vector_dist(dx, dy).wrapping_mul(4)
                     < city_center_radius.wrapping_sub(1)
             })
+    }
+
+    /// `Map::is_near_ocean` `0x0068b0a0`–`0x0068b1dc`.
+    ///
+    /// Despite its name this is a two-sided placement predicate. A non-zero
+    /// `outer_ocean` first requires at least one non-land cell in the canonical
+    /// circle-table band `[radius[outer-1], radius[outer+1])`. A non-zero
+    /// `inner_dry` then rejects any non-land cell in
+    /// `[radius[0], radius[inner])`; index zero (the candidate itself) is not
+    /// inspected. Off-map offsets are skipped, while an off-map candidate is
+    /// rejected before either scan.
+    pub fn is_near_ocean(
+        &self,
+        circle: &crate::systems::combat::CircleTable,
+        x: WCoord,
+        y: WCoord,
+        inner_dry: usize,
+        outer_ocean: usize,
+    ) -> bool {
+        if x.0 < 0 || y.0 < 0 || x.0 >= self.xs || y.0 >= self.ys {
+            return false;
+        }
+        debug_assert!(inner_dry <= crate::systems::combat::CIRCLE_MAX_RING);
+        debug_assert!(outer_ocean == 0 || outer_ocean < crate::systems::combat::CIRCLE_MAX_RING);
+
+        let ocean_at = |index: usize| {
+            let wx = x.0.wrapping_add(circle.x[index] as i32);
+            let wy = y.0.wrapping_add(circle.y[index] as i32);
+            wx >= 0
+                && wy >= 0
+                && wx < self.xs
+                && wy < self.ys
+                && self.wdata[self.w_index(wx, wy)].land != 0
+        };
+
+        if outer_ocean != 0 {
+            let begin = circle.ring_end[outer_ocean - 1] as usize;
+            let end = circle.ring_end[outer_ocean + 1] as usize;
+            if !(begin..end).any(&ocean_at) {
+                return false;
+            }
+        }
+        if inner_dry != 0 {
+            let begin = circle.ring_end[0] as usize;
+            let end = circle.ring_end[inner_dry] as usize;
+            if (begin..end).any(ocean_at) {
+                return false;
+            }
+        }
+        true
     }
 
     // -- indexing ------------------------------------------------------------------------
@@ -2329,6 +2447,63 @@ mod tests {
         assert_eq!(f.dists[2], 3.0);
         assert_eq!(f.lowest_dist, 0);
         assert_eq!(f.highest_dist, 2);
+    }
+
+    #[test]
+    fn near_ocean_uses_retail_circle_bands_and_excludes_the_origin_from_dry_scan() {
+        let circle = crate::systems::combat::circle_table();
+        let mut w = World::init_default_rules(32, 32);
+        for cell in &mut w.wdata {
+            cell.land = land::FERTILE;
+        }
+        let (x, y) = (WCoord(16), WCoord(16));
+
+        // The dry scan begins at radius[0] == 1, so it deliberately excludes
+        // the candidate cell itself.
+        let origin = w.w_index(x.0, y.0);
+        w.wdata[origin].land = land::OCEAN;
+        assert!(w.is_near_ocean(&circle, x, y, 2, 0));
+        w.wdata[origin].land = land::FERTILE;
+
+        let near = circle.ring_end[0] as usize;
+        let nx = x.0 + circle.x[near] as i32;
+        let ny = y.0 + circle.y[near] as i32;
+        let near_index = w.w_index(nx, ny);
+        w.wdata[near_index].land = land::OCEAN;
+        assert!(!w.is_near_ocean(&circle, x, y, 2, 0));
+        w.wdata[near_index].land = land::FERTILE;
+
+        let outer = circle.ring_end[8] as usize;
+        let ox = x.0 + circle.x[outer] as i32;
+        let oy = y.0 + circle.y[outer] as i32;
+        let outer_index = w.w_index(ox, oy);
+        w.wdata[outer_index].land = land::OCEAN;
+        assert!(w.is_near_ocean(&circle, x, y, 3, 9));
+    }
+
+    #[test]
+    fn place_start_retries_in_wrapped_rng_order_and_consumes_one_draw_per_pass() {
+        let circle = crate::systems::combat::circle_table();
+        let mut w = World::init_default_rules(32, 32);
+        for cell in &mut w.wdata {
+            cell.land = land::FERTILE;
+        }
+        let coords = [
+            (WCoord(8), WCoord(8)),
+            (WCoord(16), WCoord(8)),
+            (WCoord(16), WCoord(16)),
+        ];
+        let mut rng = crate::rng::Random::new(0x1234_5678);
+        let mut expected_rng = rng;
+        let _coastal_anchor = expected_rng.get(0, 0xffff) % coords.len() as i32;
+        let fallback_anchor = expected_rng.get(0, 0xffff) % coords.len() as i32;
+        let expected_index = (fallback_anchor as usize + 1) % coords.len();
+
+        // An all-dry world makes the coastal pass fail its required outer-ocean
+        // band. The fallback pass accepts its first candidate.
+        let placed = place_start_in_region(&w, &circle, &mut rng, &coords, 12, 0x5a5a, None);
+        assert_eq!(placed, Some(coords[expected_index]));
+        assert_eq!(rng.state(), expected_rng.state());
     }
 
     /// `World::wipe` leaves every cell in the state the disassembly writes.

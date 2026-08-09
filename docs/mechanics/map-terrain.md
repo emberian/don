@@ -443,7 +443,7 @@ from scratch.
 
 ### 7.1 Executable world-generation oracle boundary
 
-The structural result above now has five fork-isolated retail cases in
+The structural result above now has six fork-isolated retail cases in
 `crates/oracle`; none substitutes simplified map logic.
 
 | case | retail bytes executed | exact claim | deliberately not claimed |
@@ -453,6 +453,7 @@ The structural result above now has five fork-isolated retail cases in
 | `add_starting_location` | complete writer `0x006b2de0`–`0x006b3019` | returned start index; all four walked-array append sequences; the exact 2×2 row-major LSB-first occupancy writes | coordinate selection, map-style placement, or allocator execution (fixture supplies measured spare capacity) |
 | `start_city_rad_wcoord` | complete call-free leaf `0x006b3850`–`0x006b3952` | scans the parallel footprint arrays; applies integer `vector_dist * 4`; compares strictly below PDB `Constants::city_center_radius - 1` (`+0x12c`) | choosing candidates or any map-style placement policy |
 | `map_fairness_calc_distances` | complete call-free leaf `0x0068a1c0`–`0x0068a2da` | team-indexed binary32 distance writes plus strict, first-wins `lowest_dist`/`highest_dist` updates | interpreting the score, choosing a candidate, or generating terrain |
+| `place_start_in_region` | complete selector `0x0068ac00`–`0x0068ae49` plus complete `Map::is_near_ocean` `0x0068b0a0`–`0x0068b1dc` and retail `circle_init` | two-pass wrapped candidate order, exact RNG consumption, margins, prior-start separation, canonical ocean bands, return/output writes, and preservation of the complete fabricated state | generating the Region coordinates, WData land plane, or prior starts supplied to the selector |
 
 The seed-prefix case isolates an exact instruction boundary rather than invoking a fake
 constructor. In its already-forked case process it replaces the first instruction *after*
@@ -493,6 +494,23 @@ untouched slots, both extrema, and every other patterned byte unchanged. Its cor
 empty, zero-distance, zero-scale, exact-tie and shuffled-team cases, then finite
 nonnegative binary32 scales across exponent and mantissa bits.
 
+`Map::place_start_in_region` is the first landed routine that chooses a concrete candidate.
+The fixture executes retail `circle_init` rather than installing a convenient ring: all
+12,873 signed X/Y offsets and 65 cumulative ends are compared to the shipped sim table
+before placement starts. The selector then runs over a measured
+`Regions → ObjectArray<Region> → WCoordList` graph, real `World` start arrays or the PDB's
+optional override arrays, patterned `WData`, and the real `game_random` leaf. The oracle
+compares the return, output coordinates, final RNG word, and every fabricated byte; it also
+requires the retail-generated circle tables to remain unchanged.
+
+The name `is_near_ocean` hides a precise two-sided predicate. Its outer argument requires
+water in `[circle_radius[outer-1], circle_radius[outer+1])`; its inner argument rejects
+water in `[circle_radius[0], circle_radius[inner])`, deliberately excluding the origin.
+`place_start_in_region` first tries margins 5/6, the caller's full separation, inner 3 and
+outer 9. It then retries with margins 3/4, separation capped at 6, inner 2 and no outer-water
+requirement. A multi-coordinate Region consumes one RNG draw per attempted pass and tests
+the randomly selected index last, after wrapping through every other candidate.
+
 This establishes the following evidence ladder for a pinned-seed world oracle:
 
 1. **Landed:** prove seed installation and negative-seed preservation without entering
@@ -505,19 +523,22 @@ This establishes the following evidence ladder for a pinned-seed world oracle:
    footprint-coordinate arrays and applies the exact integer exclusion threshold;
    `MapFairness::calc_distances` `0x0068a1c0` writes the team-indexed binary32 distance
    table and strict extrema.
-5. **Next placement boundary:** expand into
-   `Map::place_start_in_region` and the per-style continent hooks, recording the consumed
-   RNG state and complete integer terrain/start arrays after each stage.
-6. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
+5. **Landed:** `Map::place_start_in_region` selects a concrete coordinate from a supplied
+   Region through both retail passes, including canonical circle-table ocean tests and the
+   exact `game_random` draw count.
+6. **Next construction boundary:** expand into Region construction and the per-style
+   continent hooks, recording the consumed RNG state and complete integer terrain/start
+   arrays after each stage.
+7. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
    21 map-style objects, `GameInfo`, Rules/Constants, `RString` leaves, engine arrays and
    allocators. Until those dependencies are real or exactly substituted, the full seeded
    terrain/start comparison remains a machine-readable `known_gap` in
    `schema/oracle-regression.json`.
 
-No annulus, ring, continent or start-position policy is inferred from a convenient shape
-in this plan. The landed fairness leaf is only the exact scorer; no candidate-selection
-meaning is attached to it. A stage advances only when its retail inputs and side effects
-can be executed and compared.
+No annulus, ring or continent policy is inferred from a convenient shape in this plan. The
+landed selector proves what retail does with supplied Region/world inputs; it does not
+promote those fabricated inputs into a generated map. A stage advances only when its retail
+inputs and side effects can be executed and compared.
 
 ---
 

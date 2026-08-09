@@ -209,6 +209,51 @@ unsafe fn call_map_fairness_calc_distances(
     );
 }
 
+/// Cdecl no-argument call used for retail `circle_init`.
+unsafe fn call_cdecl0(f: *const u8) {
+    std::arch::asm!("call {f}", f = in(reg) f, clobber_abi("C"));
+}
+
+/// `Map::place_start_in_region`: seven callee-cleaned dword arguments.
+unsafe fn call_place_start_in_region(
+    f: *const u8,
+    this: *mut u8,
+    region: i32,
+    out_x: *mut i32,
+    out_y: *mut i32,
+    min_dist: i32,
+    unread: i32,
+    prior_x: *mut u8,
+    prior_y: *mut u8,
+) -> i32 {
+    let args = [
+        region as u32,
+        out_x as usize as u32,
+        out_y as usize as u32,
+        min_dist as u32,
+        unread as u32,
+        prior_x as usize as u32,
+        prior_y as usize as u32,
+    ];
+    let result: i32;
+    std::arch::asm!(
+        "push dword ptr [{args} + 24]",
+        "push dword ptr [{args} + 20]",
+        "push dword ptr [{args} + 16]",
+        "push dword ptr [{args} + 12]",
+        "push dword ptr [{args} + 8]",
+        "push dword ptr [{args} + 4]",
+        "push dword ptr [{args}]",
+        "call {f}",
+        args = in(reg) args.as_ptr(),
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") result,
+        clobber_abi("C"),
+    );
+    result
+}
+
 /// `Random::next_float` — result in xmm0, state updated through ECX.
 unsafe fn call_next_float(f: *const u8, p: *mut u32) -> (u32, f32) {
     let out_f: f32;
@@ -1856,6 +1901,498 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 "compared_writes".into(),
                 "full 120-byte MapFairness image; all 8 dists by f32 bits plus extrema, with every other byte patterned and required unchanged".into(),
             ));
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
+        Plan::PlaceStartInRegion {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 16;
+            const O_MAP: usize = 0x100;
+            const O_WORLD: usize = 0x500;
+            const O_REGIONS: usize = 0x800;
+            const O_REGION_LIST: usize = 0x1000;
+            const O_REGION_COORDS: usize = 0x1300;
+            const O_DEFAULT_X_ITEMS: usize = 0x1800;
+            const O_DEFAULT_Y_ITEMS: usize = 0x1900;
+            const O_ALT_X_ARRAY: usize = 0x1a00;
+            const O_ALT_Y_ARRAY: usize = 0x1a40;
+            const O_ALT_X_ITEMS: usize = 0x1b00;
+            const O_ALT_Y_ITEMS: usize = 0x1c00;
+            const O_RNG: usize = 0x1d00;
+            const O_OUT_X: usize = 0x1d10;
+            const O_OUT_Y: usize = 0x1d20;
+            const O_WDATA: usize = 0x2000;
+            const REGION_BYTES: usize = 136;
+            const REGION_SLOTS: usize = 3;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const VA_RNG_PTR: u32 = 0x00C0_6184;
+            const VA_REGIONS_PTR: u32 = 0x00C0_61B8;
+            const VA_CIRCLE_INIT: u32 = 0x0068_17F0;
+            const VA_CIRCLE_COUNT: u32 = 0x00CA_B3A8;
+            const VA_CIRCLE_X: u32 = 0x00CB_7E90;
+            const VA_CIRCLE_Y: u32 = 0x00CB_B0E0;
+            const VA_CIRCLE_END: u32 = 0x00CB_E330;
+
+            if let Err(e) = image::install_fake_teb() {
+                a.skip = Some(format!("fake TEB for Map placement RNG: {e}"));
+                return a;
+            }
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("place-start fixture scratch mmap failed".into());
+                return a;
+            };
+            let required = [
+                VA_WORLD_PTR,
+                VA_RNG_PTR,
+                VA_REGIONS_PTR,
+                VA_CIRCLE_INIT,
+                VA_CIRCLE_COUNT,
+                VA_CIRCLE_X,
+                VA_CIRCLE_Y,
+                VA_CIRCLE_END,
+            ];
+            let Some(slots) = required
+                .iter()
+                .map(|&va| ctx.at(va))
+                .collect::<Option<Vec<_>>>()
+            else {
+                a.skip = Some("place-start global/function VA is outside mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            let [world_slot, rng_slot, regions_slot, circle_init, circle_count, circle_x, circle_y, circle_end]: [*mut u8; 8] =
+                slots.try_into().unwrap();
+
+            let sim_circle = don_sim::systems::combat::circle_table();
+            unsafe { call_cdecl0(circle_init as *const u8) };
+            let retail_count = unsafe { std::ptr::read_unaligned(circle_count as *const i32) };
+            let retail_x =
+                unsafe { std::slice::from_raw_parts(circle_x as *const i8, sim_circle.x.len()) };
+            let retail_y =
+                unsafe { std::slice::from_raw_parts(circle_y as *const i8, sim_circle.y.len()) };
+            let retail_end = unsafe {
+                std::slice::from_raw_parts(circle_end as *const i32, sim_circle.ring_end.len())
+            };
+            a.trials += 1;
+            if retail_count != sim_circle.x.len() as i32
+                || retail_x != sim_circle.x
+                || retail_y != sim_circle.y
+                || retail_end != sim_circle.ring_end
+            {
+                a.mismatches += 1;
+                a.first_detail(format!(
+                    "retail circle_init table differs: count={retail_count} model_count={}",
+                    sim_circle.x.len()
+                ));
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            }
+            a.phase(
+                "retail-table",
+                1,
+                "execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends",
+            );
+
+            let map = unsafe { arena.add(O_MAP) };
+            let world = unsafe { arena.add(O_WORLD) };
+            let regions = unsafe { arena.add(O_REGIONS) };
+            let region_list = unsafe { arena.add(O_REGION_LIST) };
+            let region_coords = unsafe { arena.add(O_REGION_COORDS) };
+            let alt_x_array = unsafe { arena.add(O_ALT_X_ARRAY) };
+            let alt_y_array = unsafe { arena.add(O_ALT_Y_ARRAY) };
+            let rng_ptr = unsafe { arena.add(O_RNG) as *mut i32 };
+            let out_x = unsafe { arena.add(O_OUT_X) as *mut i32 };
+            let out_y = unsafe { arena.add(O_OUT_Y) as *mut i32 };
+            let wdata = unsafe { arena.add(O_WDATA) };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(rng_slot as *mut u32, rng_ptr as usize as u32);
+                std::ptr::write_unaligned(regions_slot as *mut u32, regions as usize as u32);
+            }
+
+            let mut expected = vec![0u8; ARENA_BYTES];
+            let mut model_world = don_sim::systems::map_terrain::World::init_default_rules(32, 32);
+            let mut successes = 0u64;
+            let mut failures = 0u64;
+            let mut draws = [0u64; 3];
+            let f = f as *const u8;
+            let mut check = |width: i32,
+                             height: i32,
+                             coords: &[(i32, i32)],
+                             lands: &[i8],
+                             prior: &[(i32, i32)],
+                             optional_prior: bool,
+                             region_index: usize,
+                             min_dist: i32,
+                             unread: i32,
+                             seed: i32,
+                             initial_out: (i32, i32),
+                             label: &str,
+                             a: &mut Acc| {
+                debug_assert!((1..=16).contains(&coords.len()));
+                debug_assert_eq!(lands.len(), (width * height) as usize);
+                debug_assert!(region_index < REGION_SLOTS);
+                let used_end = O_WDATA + lands.len() * 28;
+                debug_assert!(used_end <= ARENA_BYTES);
+
+                unsafe {
+                    for i in 0..used_end {
+                        let pattern = (i as u32).wrapping_mul(73).wrapping_add(seed as u32)
+                            ^ (unread as u32).rotate_left(9);
+                        std::ptr::write(arena.add(i), pattern as u8);
+                    }
+                    std::ptr::write_unaligned(world as *mut i32, width);
+                    std::ptr::write_unaligned(world.add(4) as *mut i32, height);
+                    std::ptr::write_unaligned(world.add(0x134) as *mut u32, wdata as usize as u32);
+                    std::ptr::write_unaligned(
+                        regions.add(0x10) as *mut u32,
+                        region_list as usize as u32,
+                    );
+
+                    let region = region_list.add(region_index * REGION_BYTES);
+                    std::ptr::write_unaligned(region.add(0x14) as *mut i32, coords.len() as i32);
+                    std::ptr::write_unaligned(
+                        region.add(0x7c) as *mut u32,
+                        region_coords as usize as u32,
+                    );
+                    for (i, &(x, y)) in coords.iter().enumerate() {
+                        std::ptr::write_unaligned(region_coords.add(i * 8) as *mut i32, x);
+                        std::ptr::write_unaligned(region_coords.add(i * 8 + 4) as *mut i32, y);
+                    }
+
+                    let default_x_array = world.add(0x80);
+                    let default_y_array = world.add(0x9c);
+                    let write_array =
+                        |array: *mut u8, items_ptr: *mut u8, items: &[(i32, i32)], take_x: bool| {
+                            std::ptr::write_unaligned(array.add(4) as *mut i32, items.len() as i32);
+                            std::ptr::write_unaligned(
+                                array.add(0x10) as *mut u32,
+                                items_ptr as usize as u32,
+                            );
+                            for (i, &(x, y)) in items.iter().enumerate() {
+                                std::ptr::write_unaligned(
+                                    items_ptr.add(i * 4) as *mut i32,
+                                    if take_x { x } else { y },
+                                );
+                            }
+                        };
+                    let decoy: Vec<(i32, i32)> = if optional_prior {
+                        prior
+                            .iter()
+                            .map(|&(x, y)| ((x + 7) % width, (y + 11) % height))
+                            .collect()
+                    } else {
+                        prior.to_vec()
+                    };
+                    write_array(default_x_array, arena.add(O_DEFAULT_X_ITEMS), &decoy, true);
+                    write_array(default_y_array, arena.add(O_DEFAULT_Y_ITEMS), &decoy, false);
+                    write_array(alt_x_array, arena.add(O_ALT_X_ITEMS), prior, true);
+                    write_array(alt_y_array, arena.add(O_ALT_Y_ITEMS), prior, false);
+
+                    for (i, &land) in lands.iter().enumerate() {
+                        std::ptr::write(wdata.add(i * 28 + 2) as *mut i8, land);
+                    }
+                    std::ptr::write_unaligned(rng_ptr, seed);
+                    std::ptr::write_unaligned(out_x, initial_out.0);
+                    std::ptr::write_unaligned(out_y, initial_out.1);
+                    std::ptr::copy_nonoverlapping(arena, expected.as_mut_ptr(), used_end);
+                }
+
+                model_world.xs = width;
+                model_world.ys = height;
+                model_world
+                    .wdata
+                    .resize_with(lands.len(), don_sim::systems::map_terrain::WData::default);
+                model_world.wdata.truncate(lands.len());
+                for (cell, &land) in model_world.wdata.iter_mut().zip(lands) {
+                    cell.land = land;
+                }
+                let decoy_x: Vec<i32> = if optional_prior {
+                    prior.iter().map(|&(x, _)| (x + 7) % width).collect()
+                } else {
+                    prior.iter().map(|&(x, _)| x).collect()
+                };
+                let decoy_y: Vec<i32> = if optional_prior {
+                    prior.iter().map(|&(_, y)| (y + 11) % height).collect()
+                } else {
+                    prior.iter().map(|&(_, y)| y).collect()
+                };
+                model_world.start_x.items = decoy_x;
+                model_world.start_y.items = decoy_y;
+                let model_coords: Vec<_> = coords
+                    .iter()
+                    .map(|&(x, y)| {
+                        (
+                            don_sim::systems::map_terrain::WCoord(x),
+                            don_sim::systems::map_terrain::WCoord(y),
+                        )
+                    })
+                    .collect();
+                let prior_x: Vec<i32> = prior.iter().map(|&(x, _)| x).collect();
+                let prior_y: Vec<i32> = prior.iter().map(|&(_, y)| y).collect();
+                let mut model_rng = don_sim::rng::Random::new(seed);
+                let model_result = don_sim::systems::map_terrain::place_start_in_region(
+                    &model_world,
+                    &sim_circle,
+                    &mut model_rng,
+                    &model_coords,
+                    min_dist,
+                    unread,
+                    optional_prior.then_some((&prior_x, &prior_y)),
+                );
+                expected[O_RNG..O_RNG + 4].copy_from_slice(&model_rng.state().to_le_bytes());
+                if let Some((x, y)) = model_result {
+                    expected[O_OUT_X..O_OUT_X + 4].copy_from_slice(&x.0.to_le_bytes());
+                    expected[O_OUT_Y..O_OUT_Y + 4].copy_from_slice(&y.0.to_le_bytes());
+                }
+
+                let got_result = unsafe {
+                    call_place_start_in_region(
+                        f,
+                        map,
+                        region_index as i32,
+                        out_x,
+                        out_y,
+                        min_dist,
+                        unread,
+                        if optional_prior {
+                            alt_x_array
+                        } else {
+                            std::ptr::null_mut()
+                        },
+                        if optional_prior {
+                            alt_y_array
+                        } else {
+                            std::ptr::null_mut()
+                        },
+                    )
+                };
+                let got = unsafe { std::slice::from_raw_parts(arena, used_end) };
+                let want_result = i32::from(model_result.is_some());
+                a.trials += 1;
+                if got_result != want_result || got != &expected[..used_end] {
+                    a.mismatches += 1;
+                    let first_byte = got
+                        .iter()
+                        .zip(&expected[..used_end])
+                        .position(|(got, want)| got != want);
+                    let got_out = unsafe {
+                        (
+                            std::ptr::read_unaligned(out_x),
+                            std::ptr::read_unaligned(out_y),
+                        )
+                    };
+                    a.first_detail(format!(
+                        "{label} {width}x{height} region={region_index} coords={coords:?} \
+                         prior={prior:?} optional={optional_prior} min_dist={min_dist} \
+                         unread={unread:#x} seed={seed:#x} model={model_result:?}/{} \
+                         retail={got_result}/{got_out:?} first_arena_byte={first_byte:?}",
+                        model_rng.state(),
+                    ));
+                }
+                if model_result.is_some() {
+                    successes += 1;
+                } else {
+                    failures += 1;
+                }
+                let step1 = seed
+                    .wrapping_mul(don_sim::rng::Random::MUL)
+                    .wrapping_add(don_sim::rng::Random::ADD);
+                let step2 = step1
+                    .wrapping_mul(don_sim::rng::Random::MUL)
+                    .wrapping_add(don_sim::rng::Random::ADD);
+                let draw_count = if model_rng.state() == seed {
+                    0
+                } else if model_rng.state() == step1 {
+                    1
+                } else if model_rng.state() == step2 {
+                    2
+                } else {
+                    unreachable!("place_start consumes at most two draws")
+                };
+                draws[draw_count] += 1;
+            };
+
+            let mut dry32 = vec![0i8; 32 * 32];
+            check(
+                32,
+                32,
+                &[(16, 16)],
+                &dry32,
+                &[],
+                false,
+                0,
+                12,
+                0x1234,
+                7,
+                (-11, -12),
+                "single-dry-fallback",
+                &mut a,
+            );
+            let outer = sim_circle.ring_end[8] as usize;
+            let ox = 16 + sim_circle.x[outer] as i32;
+            let oy = 16 + sim_circle.y[outer] as i32;
+            dry32[(oy * 32 + ox) as usize] = 1;
+            check(
+                32,
+                32,
+                &[(16, 16)],
+                &dry32,
+                &[],
+                false,
+                1,
+                12,
+                -1,
+                9,
+                (-21, -22),
+                "exact-coastal-band",
+                &mut a,
+            );
+            let ocean24 = vec![2i8; 24 * 24];
+            check(
+                24,
+                24,
+                &[(12, 12)],
+                &ocean24,
+                &[],
+                false,
+                2,
+                0,
+                i32::MIN,
+                11,
+                (101, 102),
+                "inner-ocean-reject",
+                &mut a,
+            );
+            let dry20 = vec![0i8; 20 * 20];
+            check(
+                20,
+                20,
+                &[(4, 10)],
+                &dry20,
+                &[],
+                false,
+                0,
+                20,
+                i32::MAX,
+                13,
+                (201, 202),
+                "fallback-margin",
+                &mut a,
+            );
+            check(
+                24,
+                24,
+                &[(8, 8), (16, 8), (8, 16), (16, 16)],
+                &vec![0i8; 24 * 24],
+                &[(8, 8), (16, 8), (8, 16), (16, 16)],
+                true,
+                2,
+                24,
+                0x55aa_33cc,
+                0x1234_5678,
+                (301, 302),
+                "optional-prior-total-reject",
+                &mut a,
+            );
+            a.phase(
+                "edges",
+                5,
+                "single/no-draw fallback, exact coastal band, inner-ocean rejection, pass-specific margin, and optional-prior total rejection",
+            );
+
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x504c_4143_4553_5441);
+            for _ in 0..n {
+                let width = 16 + (rng.next() % 17) as i32;
+                let height = 16 + (rng.next() % 17) as i32;
+                let count = 1 + (rng.next() % 16) as usize;
+                let mut coords = Vec::with_capacity(count);
+                for _ in 0..count {
+                    coords.push((
+                        (rng.next() % width as u64) as i32,
+                        (rng.next() % height as u64) as i32,
+                    ));
+                }
+                let land_mode = (rng.next() & 3) as u8;
+                let mut lands = vec![0i8; (width * height) as usize];
+                for land in &mut lands {
+                    let r = rng.next();
+                    *land = match land_mode {
+                        0 => 0,
+                        1 => i8::from((r & 15) == 0),
+                        2 => i8::from((r & 3) == 0) * 2,
+                        _ => i8::from((r & 1) == 0),
+                    };
+                }
+                let prior_count = (rng.next() % 9) as usize;
+                let mut prior = Vec::with_capacity(prior_count);
+                for _ in 0..prior_count {
+                    prior.push((
+                        (rng.next() % width as u64) as i32,
+                        (rng.next() % height as u64) as i32,
+                    ));
+                }
+                let optional_prior = rng.next() & 1 != 0;
+                let region_index = (rng.next() % REGION_SLOTS as u64) as usize;
+                let min_dist = (rng.next() % 25) as i32;
+                let unread = rng.next() as i32;
+                let seed = rng.next() as i32;
+                let initial_out = (rng.next() as i32, rng.next() as i32);
+                check(
+                    width,
+                    height,
+                    &coords,
+                    &lands,
+                    &prior,
+                    optional_prior,
+                    region_index,
+                    min_dist,
+                    unread,
+                    seed,
+                    initial_out,
+                    "random",
+                    &mut a,
+                );
+            }
+            a.phase("random", n as u64, distribution);
+            a.extras
+                .push(("placement_successes".into(), successes.to_string()));
+            a.extras
+                .push(("placement_failures".into(), failures.to_string()));
+            a.extras.push((
+                "rng_draw_counts".into(),
+                format!("zero={} one={} two={}", draws[0], draws[1], draws[2]),
+            ));
+            a.extras.push((
+                "compared_state".into(),
+                "return/out coordinates, final game_random state, and every patterned byte through Map, World, Regions/Region, both array sources, and the complete WData fixture"
+                    .into(),
+            ));
+
+            // Placement must leave the retail-generated canonical tables unchanged.
+            a.trials += 1;
+            let preserved = unsafe {
+                std::slice::from_raw_parts(circle_x as *const i8, sim_circle.x.len())
+                    == sim_circle.x
+                    && std::slice::from_raw_parts(circle_y as *const i8, sim_circle.y.len())
+                        == sim_circle.y
+                    && std::slice::from_raw_parts(
+                        circle_end as *const i32,
+                        sim_circle.ring_end.len(),
+                    ) == sim_circle.ring_end
+            };
+            if !preserved {
+                a.mismatches += 1;
+                a.first_detail("place_start_in_region mutated the canonical circle tables".into());
+            }
+            a.phase(
+                "preservation",
+                1,
+                "all retail-generated circle table bytes unchanged after every placement call",
+            );
             unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }
 

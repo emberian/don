@@ -180,6 +180,12 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// Complete `Map::place_start_in_region`, with retail-built circle tables,
+    /// fabricated Region/World arrays, and the real game RNG leaf.
+    PlaceStartInRegion {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -626,6 +632,37 @@ pub static REGISTRY: &[Case] = &[
         },
     },
     Case {
+        id: "place_start_in_region",
+        va: 0x0068_AC00,
+        abi: "int __thiscall Map::place_start_in_region(int region, WCoord* out_x, \
+              WCoord* out_y, int min_dist, int unread, SimpleArray<WCoord>* prior_x, \
+              SimpleArray<WCoord>* prior_y), ret 0x1c",
+        model: "don_sim::systems::map_terrain::place_start_in_region",
+        subsystem: "world generation / concrete starting-position selection",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable region-start selector",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
+                     Map::place_start_in_region; retail 0x0068ac00..0x0068ae49 plus \
+                     Map::is_near_ocean 0x0068b0a0..0x0068b1dc",
+        reachability: "Called by map-style start-placement loops. The fixture executes \
+                       retail circle_init first, then installs a measured Regions -> \
+                       ObjectArray<Region> -> WCoordList graph, World WData/start arrays, \
+                       and game_random. No allocator or substituted call is entered",
+        caveat: "Valid generator-domain claim: one non-empty Region coordinate list, \
+                 parallel prior-start arrays, worlds 16..32 cells per axis, and WData.land \
+                 values 0..2. The full 592-byte selector and its complete 317-byte \
+                 is_near_ocean callee execute. The case compares return/out coordinates, \
+                 final RNG state, and every byte of the patterned fabricated object arena. \
+                 It proves selection from supplied region/world inputs, not how Map::make \
+                 generated those inputs.",
+        plan: Plan::PlaceStartInRegion {
+            random: 100_000,
+            distribution: "dry/ocean/exact coastal-band and margin/spacing edges, then \
+                           xorshift64 worlds 16..32, 1..16 valid Region coordinates, sparse \
+                           or dense WData.land, 0..8 default or optional prior starts, \
+                           min_dist 0..24, arbitrary unread argument and RNG seed",
+        },
+    },
+    Case {
         id: "accessor_movsx_word_0xa",
         va: 0x0047_2400,
         abi: "__thiscall, no stack args (movsx eax, word ptr [ecx+0xA])",
@@ -959,10 +996,12 @@ pub static KNOWN_GAPS: &[Gap] = &[
         why: "Map::make is a 3,021-byte virtual orchestration routine that immediately \
               needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, \
               RString leaves, engine arrays and allocators. The registry executes and \
-              proves its exact seed prefix and the independent start-city bit accessor, \
-              but deliberately does not substitute approximate continent, fairness, \
-              region, ring or start-placement logic. docs/mechanics/map-terrain.md §7.1 \
-              records the executable dependency plan for extending this boundary.",
+              proves its seed prefix, start-city representation/writer/radius, fairness \
+              scorer, and complete Region-start selector. The selector still receives a \
+              fabricated Region coordinate list and WData land plane; the registry does \
+              not substitute approximate continent or Region construction. \
+              docs/mechanics/map-terrain.md §7.1 records the executable dependency plan \
+              for extending this boundary.",
     },
     Gap {
         claim: "§1.4 entrench_dir_level — the entrenchment direction classifier",
