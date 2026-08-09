@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# Run clean-HEAD Cargo shards asynchronously on the project's Linux executors.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  tools/swarm-cargo-remote [--plan] submit HOST LANE [OPTIONS] -- CARGO_ARGS...
+  tools/swarm-cargo-remote status HOST JOB_ID
+  tools/swarm-cargo-remote log HOST JOB_ID [LINES]
+  tools/swarm-cargo-remote wait HOST JOB_ID [SECONDS]
+
+Submit options:
+  --path FILE   Overlay one explicit local file on the clean HEAD baseline (repeatable)
+  --jobs N      Cargo jobs in this lane (default: 6, maximum: 12)
+  --nice N      Linux nice level (default: 10, range: 0-19)
+
+HOST is persvati or hbox. Lanes are persistent build caches; jobs are asynchronous.
+Only regular, non-ignored files may be overlaid. Directories and deletion overlays are
+intentionally unsupported so a lane can never copy the shared dirty tree accidentally.
+EOF
+}
+
+die() {
+  printf 'swarm-cargo-remote: %s\n' "$*" >&2
+  exit 64
+}
+
+valid_host() {
+  [[ "$1" == persvati || "$1" == hbox ]]
+}
+
+valid_token() {
+  [[ "$1" =~ ^[A-Za-z0-9_./:=,+@%-]+$ ]] &&
+    [[ "$1" != /* ]] && [[ "$1" != *..* ]]
+}
+
+script_dir=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel)
+remote_base='.cache/don-swarm'
+plan=0
+if [[ "${1:-}" == --plan ]]; then
+  plan=1
+  shift
+fi
+
+command=${1:-}
+[[ -n "$command" ]] || { usage >&2; exit 64; }
+shift
+
+case "$command" in
+  submit)
+    [[ $# -ge 3 ]] || die 'submit requires HOST LANE -- CARGO_ARGS...'
+    host=$1
+    lane=$2
+    shift 2
+    valid_host "$host" || die 'HOST must be persvati or hbox'
+    [[ "$lane" =~ ^[a-z0-9][a-z0-9_.-]{0,63}$ ]] || die 'invalid lowercase lane name'
+
+    jobs=6
+    nice_level=10
+    paths=()
+    while [[ $# -gt 0 && "$1" != -- ]]; do
+      case "$1" in
+        --path)
+          [[ $# -ge 2 ]] || die '--path requires a file'
+          paths+=("$2")
+          shift 2
+          ;;
+        --jobs)
+          [[ $# -ge 2 ]] || die '--jobs requires a number'
+          jobs=$2
+          shift 2
+          ;;
+        --nice)
+          [[ $# -ge 2 ]] || die '--nice requires a number'
+          nice_level=$2
+          shift 2
+          ;;
+        *) die "unknown submit option: $1" ;;
+      esac
+    done
+    [[ "${1:-}" == -- ]] || die 'separate Cargo arguments with --'
+    shift
+    [[ $# -gt 0 ]] || die 'missing Cargo arguments'
+    if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]] || (( 10#$jobs > 12 )); then
+      die '--jobs must be 1 through 12'
+    fi
+    if [[ ! "$nice_level" =~ ^[0-9]+$ ]] || (( 10#$nice_level > 19 )); then
+      die '--nice must be 0 through 19'
+    fi
+
+    cargo_args=("$@")
+    for arg in "${cargo_args[@]}"; do
+      valid_token "$arg" || die "unsafe Cargo argument: $arg"
+      [[ "$arg" != --target-dir && "$arg" != --target-dir=* ]] || die '--target-dir is owned by the lane harness'
+    done
+
+    cd -- "$repo_root"
+    for path in "${paths[@]}"; do
+      valid_token "$path" || die "unsafe overlay path: $path"
+      [[ -f "$path" && ! -L "$path" ]] || die "overlay must be a regular file: $path"
+      [[ "$(realpath -- "$path")" == "$repo_root/$path" ]] || die "overlay crosses a symlink or is non-canonical: $path"
+      if git check-ignore -q -- "$path"; then
+        die "refusing ignored overlay: $path"
+      fi
+    done
+
+    commit=$(git rev-parse HEAD)
+    short_commit=${commit:0:12}
+    origin=$(git remote get-url origin)
+    case "$origin" in
+      git@github.com:*) origin="https://github.com/${origin#git@github.com:}" ;;
+      https://github.com/*) ;;
+      *) die "origin cannot be converted to public GitHub HTTPS: $origin" ;;
+    esac
+    job_id="$lane-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM-$short_commit"
+
+    if (( plan )); then
+      printf 'HOST=%s\nLANE=%s\nJOB_ID=%s\nCOMMIT=%s\nORIGIN=%s\nJOBS=%s\nNICE=%s\n' \
+        "$host" "$lane" "$job_id" "$commit" "$origin" "$jobs" "$nice_level"
+      for path in "${paths[@]}"; do printf 'OVERLAY=%s\n' "$path"; done
+      for arg in "${cargo_args[@]}"; do printf 'CARGO_ARG=%s\n' "$arg"; done
+      exit 0
+    fi
+
+    # Reserve the stable source/target lane before touching it. Different lanes
+    # remain fully concurrent; a duplicate lane fails immediately rather than waits.
+    ssh "$host" bash -s -- "$lane" "$job_id" <<'REMOTE_SETUP'
+set -euo pipefail
+lane=$1
+job=$2
+base="$HOME/.cache/don-swarm"
+reservation="$base/reservations/$lane"
+job_dir="$base/jobs/$job"
+source_dir="$base/sources/$lane"
+mkdir -p -- "$base/reservations" "$base/jobs" "$base/sources" "$base/targets" "$base/locks"
+if ! mkdir -- "$reservation" 2>/dev/null; then
+  printf 'lane %s is already reserved\n' "$lane" >&2
+  exit 75
+fi
+if [[ -e "$job_dir" ]]; then
+  rmdir -- "$reservation"
+  printf 'job id collision: %s\n' "$job" >&2
+  exit 73
+fi
+mkdir -p -- "$job_dir/overlay"
+printf 'preparing\n' >"$job_dir/status"
+REMOTE_SETUP
+
+    abort_remote() {
+      ssh "$host" bash -s -- "$lane" "$job_id" <<'REMOTE_ABORT' >/dev/null 2>&1 || true
+lane=$1
+job=$2
+base="$HOME/.cache/don-swarm"
+printf 'submit-failed\n' >"$base/jobs/$job/status" 2>/dev/null || true
+rmdir -- "$base/reservations/$lane" 2>/dev/null || true
+REMOTE_ABORT
+    }
+
+    if (( ${#paths[@]} > 0 )); then
+      if ! rsync -aR --checksum --protect-args -- "${paths[@]}" "$host:$remote_base/jobs/$job_id/overlay/"; then
+        abort_remote
+        die 'failed to sync explicit overlays'
+      fi
+    fi
+    if ! rsync -a -- "$script_dir/swarm-cargo-remote-runner" "$host:$remote_base/jobs/$job_id/runner"; then
+      abort_remote
+      die 'failed to upload remote runner'
+    fi
+
+    if ! ssh "$host" bash -s -- "$job_id" "$lane" "$jobs" "$nice_level" "$commit" "$origin" "${cargo_args[@]}" <<'REMOTE_START'
+set -euo pipefail
+job=$1
+lane=$2
+jobs=$3
+nice_level=$4
+commit=$5
+origin=$6
+shift 6
+base="$HOME/.cache/don-swarm"
+job_dir="$base/jobs/$job"
+chmod 755 "$job_dir/runner"
+nohup "$job_dir/runner" "$job_dir" "$lane" "$jobs" "$nice_level" "$commit" "$origin" "$@" \
+  >"$job_dir/log" 2>&1 </dev/null &
+pid=$!
+printf '%s\n' "$pid" >"$job_dir/pid"
+REMOTE_START
+    then
+      abort_remote
+      die 'failed to start remote job'
+    fi
+
+    printf 'HOST=%s\nJOB_ID=%s\nSTATUS=submitted\n' "$host" "$job_id"
+    ;;
+
+  status)
+    [[ $# -eq 2 ]] || die 'status requires HOST JOB_ID'
+    host=$1
+    job_id=$2
+    valid_host "$host" || die 'HOST must be persvati or hbox'
+    [[ "$job_id" =~ ^[a-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || die 'invalid job id'
+    ssh "$host" bash -s -- "$job_id" <<'REMOTE_STATUS'
+set -euo pipefail
+job=$1
+job_dir="$HOME/.cache/don-swarm/jobs/$job"
+[[ -f "$job_dir/status" ]] || { printf 'unknown job: %s\n' "$job" >&2; exit 66; }
+printf 'JOB_ID=%s\n' "$job"
+printf 'STATUS=%s\n' "$(tr -d '\r\n' <"$job_dir/status")"
+[[ ! -f "$job_dir/pid" ]] || printf 'PID=%s\n' "$(tr -d '\r\n' <"$job_dir/pid")"
+[[ ! -f "$job_dir/exit-code" ]] || printf 'EXIT_CODE=%s\n' "$(tr -d '\r\n' <"$job_dir/exit-code")"
+REMOTE_STATUS
+    ;;
+
+  log)
+    [[ $# -ge 2 && $# -le 3 ]] || die 'log requires HOST JOB_ID [LINES]'
+    host=$1
+    job_id=$2
+    lines=${3:-200}
+    valid_host "$host" || die 'HOST must be persvati or hbox'
+    [[ "$job_id" =~ ^[a-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || die 'invalid job id'
+    if [[ ! "$lines" =~ ^[1-9][0-9]*$ ]] || (( 10#$lines > 5000 )); then
+      die 'LINES must be 1 through 5000'
+    fi
+    ssh "$host" bash -s -- "$job_id" "$lines" <<'REMOTE_LOG'
+set -euo pipefail
+job=$1
+lines=$2
+log="$HOME/.cache/don-swarm/jobs/$job/log"
+[[ -f "$log" ]] || { printf 'no log for job: %s\n' "$job" >&2; exit 66; }
+tail -n "$lines" "$log"
+REMOTE_LOG
+    ;;
+
+  wait)
+    [[ $# -ge 2 && $# -le 3 ]] || die 'wait requires HOST JOB_ID [SECONDS]'
+    host=$1
+    job_id=$2
+    timeout=${3:-60}
+    valid_host "$host" || die 'HOST must be persvati or hbox'
+    [[ "$job_id" =~ ^[a-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || die 'invalid job id'
+    if [[ ! "$timeout" =~ ^[0-9]+$ ]] || (( 10#$timeout > 300 )); then
+      die 'SECONDS must be 0 through 300'
+    fi
+    ssh "$host" bash -s -- "$job_id" "$timeout" <<'REMOTE_WAIT'
+set -euo pipefail
+job=$1
+timeout=$2
+job_dir="$HOME/.cache/don-swarm/jobs/$job"
+[[ -f "$job_dir/status" ]] || { printf 'unknown job: %s\n' "$job" >&2; exit 66; }
+deadline=$((SECONDS + timeout))
+while [[ "$(tr -d '\r\n' <"$job_dir/status")" != complete ]]; do
+  if (( SECONDS >= deadline )); then
+    printf 'JOB_ID=%s\nSTATUS=%s\n' "$job" "$(tr -d '\r\n' <"$job_dir/status")"
+    exit 124
+  fi
+  sleep 1
+done
+result=$(tr -d '\r\n' <"$job_dir/exit-code")
+printf 'JOB_ID=%s\nSTATUS=complete\nEXIT_CODE=%s\n' "$job" "$result"
+exit "$result"
+REMOTE_WAIT
+    ;;
+
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 64
+    ;;
+esac

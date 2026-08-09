@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Internal worker uploaded by swarm-cargo-remote. Do not invoke directly.
+set -euo pipefail
+
+if [[ $# -lt 7 ]]; then
+  printf 'remote runner: expected JOB_DIR LANE JOBS NICE COMMIT ORIGIN CARGO_ARGS...\n' >&2
+  exit 64
+fi
+
+job_dir=$1
+lane=$2
+jobs=$3
+nice_level=$4
+commit=$5
+origin=$6
+shift 6
+
+base="$HOME/.cache/don-swarm"
+source_dir="$base/sources/$lane"
+target_dir="$base/targets/$lane"
+mirror="$base/git-cache/$lane.git"
+reservation="$base/reservations/$lane"
+lock_file="$base/locks/$lane.lock"
+result=1
+
+# shellcheck disable=SC2329 # invoked by the EXIT trap
+finish() {
+  printf '%s\n' "$result" >"$job_dir/exit-code"
+  printf 'complete\n' >"$job_dir/status"
+  rmdir -- "$reservation" 2>/dev/null || true
+}
+trap finish EXIT
+
+printf 'preparing\n' >"$job_dir/status"
+mkdir -p -- "$target_dir" "$base/locks" "$base/git-cache" "$base/sources"
+
+if [[ ! -f "$mirror/.don-swarm-mirror" ]]; then
+  if [[ -e "$mirror" ]]; then
+    printf 'remote runner: refusing unowned mirror: %s\n' "$mirror" >&2
+    exit 73
+  fi
+  git clone --quiet --mirror "$origin" "$mirror"
+  touch "$mirror/.don-swarm-mirror"
+fi
+git --git-dir="$mirror" fetch --quiet --force "$origin" "$commit"
+
+mkdir -p -- "$source_dir"
+if [[ -f "$source_dir/.don-swarm-source" ]]; then
+  find "$source_dir" -mindepth 1 -depth -delete
+elif [[ -n "$(find "$source_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  printf 'remote runner: refusing unowned source: %s\n' "$source_dir" >&2
+  exit 73
+fi
+touch "$source_dir/.don-swarm-source"
+(
+  cd -- "$source_dir"
+  # A full tracked checkout is intentional: git archive honors export-ignore,
+  # but some compile-time fixtures are tracked while excluded from release archives.
+  git --git-dir="$mirror" --work-tree="$source_dir" checkout --force "$commit" -- .
+)
+if [[ -d "$job_dir/overlay" ]]; then
+  rsync -a -- "$job_dir/overlay/" "$source_dir/"
+fi
+
+printf 'running\n' >"$job_dir/status"
+set +e
+(
+  if ! flock -n 9; then
+    printf 'remote runner: lane %s still holds its build lock\n' "$lane" >&2
+    exit 75
+  fi
+  cd -- "$source_dir" || exit 1
+  nice -n "$nice_level" env \
+    CARGO_TARGET_DIR="$target_dir" \
+    CARGO_BUILD_JOBS="$jobs" \
+    cargo "$@"
+) 9>"$lock_file"
+result=$?
+set -e
+
+exit "$result"

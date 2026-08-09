@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Give concurrent agent lanes independent Cargo locks while sharing compiled objects.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  tools/swarm-cargo [--print-env] LANE [--] CARGO_ARGS...
+
+Examples:
+  tools/swarm-cargo sim-orders check -p don-sim --lib
+  tools/swarm-cargo --print-env sim-orders
+
+Each lane receives a persistent target directory below target/swarm/lanes.  The
+default is two Cargo jobs per lane.  When sccache is installed, all lanes share
+the normal sccache server while retaining independent Cargo artifact locks.
+
+Environment overrides:
+  DON_SWARM_BUILD_JOBS    Jobs for this lane (default: 2)
+  DON_SWARM_TARGET_ROOT   Parent directory for lane targets
+  DON_SWARM_SCCACHE       Set to 0 to disable automatic sccache configuration
+  DON_SWARM_SCCACHE_DIR   Optional override for the shared sccache directory
+EOF
+}
+
+print_env=0
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  --print-env)
+    print_env=1
+    shift
+    ;;
+esac
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 64
+fi
+
+lane=$1
+shift
+if [[ ! "$lane" =~ ^[a-z0-9][a-z0-9_.-]{0,63}$ ]]; then
+  printf 'swarm-cargo: invalid lane name %q (use 1-64 lowercase letters, digits, dot, underscore, or hyphen)\n' "$lane" >&2
+  exit 64
+fi
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+script_dir=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel)
+target_root=${DON_SWARM_TARGET_ROOT:-"$repo_root/target/swarm/lanes"}
+mkdir -p -- "$target_root"
+target_root=$(unset CDPATH; cd -- "$target_root" && pwd -P)
+
+jobs=${DON_SWARM_BUILD_JOBS:-2}
+if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]] || (( 10#$jobs > 64 )); then
+  printf 'swarm-cargo: DON_SWARM_BUILD_JOBS must be an integer from 1 through 64\n' >&2
+  exit 64
+fi
+
+export CARGO_TARGET_DIR="$target_root/$lane"
+export CARGO_BUILD_JOBS="$jobs"
+
+if [[ "${DON_SWARM_SCCACHE:-1}" != 0 ]] && command -v sccache >/dev/null 2>&1; then
+  export RUSTC_WRAPPER=${RUSTC_WRAPPER:-"$(command -v sccache)"}
+  if [[ -n "${DON_SWARM_SCCACHE_DIR:-}" ]]; then
+    export SCCACHE_DIR="$DON_SWARM_SCCACHE_DIR"
+  elif [[ -n "${SCCACHE_DIR:-}" ]]; then
+    export SCCACHE_DIR
+  fi
+  # Rust incremental artifacts cannot be shared by sccache. Prefer cross-lane
+  # reuse; a lane may explicitly opt back in for a long local edit loop.
+  export CARGO_INCREMENTAL=${CARGO_INCREMENTAL:-0}
+  mkdir -p -- "$CARGO_TARGET_DIR"
+  if [[ -n "${SCCACHE_DIR:-}" ]]; then
+    mkdir -p -- "$SCCACHE_DIR"
+  fi
+else
+  mkdir -p -- "$CARGO_TARGET_DIR"
+fi
+
+if (( print_env )); then
+  printf 'CARGO_TARGET_DIR=%s\n' "$CARGO_TARGET_DIR"
+  printf 'CARGO_BUILD_JOBS=%s\n' "$CARGO_BUILD_JOBS"
+  printf 'CARGO_INCREMENTAL=%s\n' "${CARGO_INCREMENTAL-<unset>}"
+  printf 'RUSTC_WRAPPER=%s\n' "${RUSTC_WRAPPER-<unset>}"
+  printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-<unset>}"
+  exit 0
+fi
+
+if [[ $# -eq 0 ]]; then
+  printf 'swarm-cargo: missing Cargo arguments (or use --print-env)\n' >&2
+  exit 64
+fi
+
+exec cargo "$@"

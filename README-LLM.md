@@ -172,6 +172,49 @@ contain a complete initial save image.
 Run the narrow gate while iterating and the broad gate before handing off a shared-structure
 change.
 
+Concurrent agents must not invoke Cargo against the default shared `target/` directory. Give
+each implementation lane a stable name and use `tools/swarm-cargo`; this places the lane in
+its own persistent target directory (and therefore behind its own Cargo artifact lock) while
+sharing compiler objects through `sccache` when available:
+
+```sh
+tools/swarm-cargo sim-orders check -p don-sim --lib
+tools/swarm-cargo replay-growth nextest run -p don-replay
+tools/swarm-cargo --print-env sim-orders
+```
+
+On this 12-core Mac, keep the default two build jobs per lane and run at most four compiling
+lanes concurrently. Research, decompilation, test-design, documentation, and implementation
+lanes that are not compiling do not count against that limit. A single integration lane owns
+broad workspace gates; implementation lanes run only their narrow crate or test target. This
+keeps eight cores available to compilation and four to the Windows VM, linking, shell tools,
+and orchestration. When the retail VM is stopped, five two-job compiling lanes are a safe
+short burst, but not the normal steady state. Prefer up to eight persistent build lanes at a
+time because the disk is already 95% allocated even though roughly 400 GiB remains; reuse
+lane names by subsystem instead of creating a fresh target directory for every prompt.
+
+Ordinary Linux-native checks can leave the Mac entirely. Both `persvati` and `hbox` have 24
+cores and passwordless SSH; use up to four lanes per host at the remote default of six jobs
+per lane (`nice -n 10` lets co-tenants preempt them). Remote jobs start from a full tracked
+checkout of local `HEAD` fetched from the public origin, then overlay only files named with repeated
+`--path` options. Push `HEAD` before submitting a gate:
+
+```sh
+tools/swarm-cargo-remote submit persvati sim-orders \
+  --path crates/don-sim/src/orders.rs -- test -p don-sim --lib orders::tests
+# Keep researching or authoring while the remote CPU works, then inspect it:
+tools/swarm-cargo-remote status persvati JOB_ID
+tools/swarm-cargo-remote log persvati JOB_ID
+tools/swarm-cargo-remote wait persvati JOB_ID 60
+```
+
+Never pass a directory as an overlay. The harness rejects directories, ignored files, unsafe
+paths, and target-directory overrides. Reuse a lane name for the same crate/configuration so
+its remote target stays warm; choose a different lane name for concurrent work. `hbox` is the
+only executor that can run the mapped i686 retail oracle cases, but it is also available for
+ordinary builds and tests. A detached build is a verification worker: the authoring agent
+should spend its latency on the next disassembly/spec/test-design tranche instead of polling.
+
 ```sh
 cargo check --workspace
 cargo test --workspace --all-targets
@@ -211,7 +254,8 @@ provenance and reproducibility are documented.
 | Machine | Role |
 |---|---|
 | This Mac (arm64, 12 cores, 96 GB) | Rust workspace, orchestration, Ghidra/Capstone, web/browser work. It cannot execute 32-bit x86. |
-| `hbox` (x86_64 Linux) | Maps and executes the 32-bit retail code for differential cases. It is a co-tenant: use `nice -n 15 taskset -c 0-3`; never install packages or launch unbounded builds. |
+| `hbox` (x86_64 Linux, 24 cores, 123 GB) | General remote build/test executor and the only mapped 32-bit retail oracle host. Use four six-job lanes at `nice -n 10`; an oracle run may preempt one lane. |
+| `persvati` (x86_64 Linux, 24 cores, 83 GB) | General remote build/test executor. Use four six-job lanes at `nice -n 10`. |
 | Parallels VM `Windows 11` (ARM64 Windows, x86 emulation) | Supported retail game, live memory, RoNtoy, reversible command ingress. |
 
 ### Reverse-engineering tools
