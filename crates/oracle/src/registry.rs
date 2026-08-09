@@ -169,6 +169,17 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// `WorldData::start_city_rad_wcoord`, with parallel city-coordinate arrays
+    /// and `Constants::city_center_radius` installed in a private arena.
+    StartCityRadWcoord {
+        random: u32,
+        distribution: &'static str,
+    },
+    /// `MapFairness::calc_distances`, including its binary32 output and extrema.
+    MapFairnessCalcDistances {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -563,6 +574,55 @@ pub static REGISTRY: &[Case] = &[
                            2..128 cells per axis, 1..8 valid appended starts per fixture; \
                            return index, walked array metadata/elements, and full bit plane \
                            compared after every append",
+        },
+    },
+    Case {
+        id: "start_city_rad_wcoord",
+        va: 0x006B_3850,
+        abi: "int __thiscall WorldData::start_city_rad_wcoord(WCoord const& x, \
+              WCoord const& y), ret 8; ECX is unread",
+        model: "don_sim::systems::map_terrain::World::start_city_rad_wcoord",
+        subsystem: "world generation / starting-position exclusion radius",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable start-placement radius",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
+                     WorldData::start_city_rad_wcoord; retail 0x006b3850..0x006b3952",
+        reachability: "Common world query used by map placement and resource-location \
+                       searches. The fixture installs only World start-city arrays and \
+                       Constants::city_center_radius; the 259-byte routine is call-free",
+        caveat: "Valid generated-map domain: parallel start-city arrays, coordinates \
+                 0..127, and city_center_radius 0..1024. This proves the complete scan, integer \
+                 distance, WCoord-to-tile factor four, minus-one adjustment and strict \
+                 comparison. It does not choose starts or place terrain/resources.",
+        plan: Plan::StartCityRadWcoord {
+            random: 250_000,
+            distribution: "empty/one/many array edges and exact threshold neighbours, \
+                           then xorshift64 parallel arrays of 0..32 coordinates in \
+                           0..127, query coordinates 0..127, city_center_radius 0..1024",
+        },
+    },
+    Case {
+        id: "map_fairness_calc_distances",
+        va: 0x0068_A1C0,
+        abi: "void __thiscall MapFairness::calc_distances(WCoord const& x, \
+              WCoord const& y, float scale), ret 8; scale is passed in XMM3",
+        model: "don_sim::systems::map_terrain::MapFairness::calc_distances",
+        subsystem: "world generation / starting-position fairness",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable start fairness scorer",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
+                     MapFairness::calc_distances; retail 0x0068a1c0..0x0068a2da",
+        reachability: "Called by map-style placement loops after candidates exist. The \
+                       fixture installs World start arrays; the complete routine is \
+                       call-free and writes only MapFairness::dists/lowest_dist/highest_dist",
+        caveat: "Valid generated-map domain: 0..8 players, valid team/start indices, \
+                 coordinates 0..127, and finite nonnegative binary32 scales. This proves \
+                 the full 120-byte post-call object: exact float output bits, strict \
+                 extrema updates, and preservation of every other patterned byte. It does \
+                 not select a candidate or generate terrain.",
+        plan: Plan::MapFairnessCalcDistances {
+            random: 250_000,
+            distribution: "empty/tie/zero extrema edges plus xorshift64 0..8 start arrays, \
+                           shuffled valid team indices, 0..127 coordinates, and finite \
+                           nonnegative f32 scales drawn across exponent/mantissa bits",
         },
     },
     Case {

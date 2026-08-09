@@ -76,6 +76,15 @@ decoded save snapshot. Until the map-style generator supplies the actual
 coordinates for a replay seed, invoking the exact writer would still require
 invented inputs and is therefore deliberately not done.
 
+The next two start-placement leaves are now exact without changing that source boundary.
+`WorldData::start_city_rad_wcoord` scans the writer's footprint arrays using retail's
+integer `vector_dist * 4 < Constants::city_center_radius - 1` predicate, and
+`MapFairness::calc_distances` writes the team-indexed binary32 distance table and strict
+first-wins extrema. Both production sim methods execute against their complete retail
+leaves in the oracle. Neither is called by `SimBridge`: `.rcx` still supplies no candidate
+coordinates, and exact predicates over invented coordinates would not make the initial
+world sourced.
+
 ---
 
 ## The correction this lane paid for: the cross-player floor is zero, not 21

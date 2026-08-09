@@ -637,6 +637,64 @@ pub struct TerrainSync {
     pub nuke_hits: WalkedArray<i32>,
 }
 
+/// `MapFairness` (PDB size 120), the shared start-distance scorer used by map
+/// styles after candidate coordinates have been selected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapFairness {
+    pub fairness: [f32; 8],
+    pub dists: [f32; 8],
+    pub lowest_player: i32,
+    pub highest_player: i32,
+    pub lowest_dist: i32,
+    pub highest_dist: i32,
+    pub teams: [i32; 8],
+    pub num_players: i32,
+}
+
+impl Default for MapFairness {
+    fn default() -> Self {
+        Self {
+            fairness: [0.0; 8],
+            dists: [0.0; 8],
+            lowest_player: 0,
+            highest_player: 0,
+            lowest_dist: 0,
+            highest_dist: 0,
+            teams: [0; 8],
+            num_players: 0,
+        }
+    }
+}
+
+impl MapFairness {
+    /// `MapFairness::calc_distances(WCoord const&, WCoord const&, float)`
+    /// `0x0068a1c0`–`0x0068a2da`.
+    ///
+    /// Each active fairness slot names a start-array index through `teams`.
+    /// Retail stores the binary32-scaled integer distance at that same index,
+    /// then records the indices of the smallest value below `1e12f` and the
+    /// largest value above zero. Ties retain the earlier index.
+    pub fn calc_distances(&mut self, world: &World, x: WCoord, y: WCoord, scale: f32) {
+        let mut lowest = 1.0e12_f32;
+        let mut highest = 0.0_f32;
+        for i in 0..self.num_players.max(0) as usize {
+            let player = self.teams[i] as usize;
+            let dx = world.start_x.items[player].wrapping_sub(x.0);
+            let dy = world.start_y.items[player].wrapping_sub(y.0);
+            let value = (crate::systems::combat::vector_dist(dx, dy) as f32) * scale;
+            self.dists[player] = value;
+            if value < lowest {
+                self.lowest_dist = self.teams[i];
+                lowest = value;
+            }
+            if value > highest {
+                self.highest_dist = self.teams[i];
+                highest = value;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // 5. The World
 // ---------------------------------------------------------------------------------------
@@ -949,6 +1007,28 @@ impl World {
     pub fn start_city_wcoord(&self, x: WCoord, y: WCoord) -> bool {
         let index = y.0 * self.xs + x.0;
         self.start_city_locs[(index >> 3) as usize] & (1u8 << ((index & 7) as u32)) != 0
+    }
+
+    /// `WorldData::start_city_rad_wcoord(WCoord const&, WCoord const&)`
+    /// `0x006b3850`–`0x006b3952`.
+    ///
+    /// Tests the query against every recorded city-footprint coordinate using
+    /// retail's integer `vector_dist`, converts the WCoord distance to tiles by
+    /// multiplying by four, and compares strictly below
+    /// `Constants::city_center_radius - 1` (PDB offset `+0x12c`).
+    /// The shipped routine uses `start_city_x.length` and assumes the Y array is
+    /// parallel; the writer maintains that invariant.
+    pub fn start_city_rad_wcoord(&self, x: WCoord, y: WCoord, city_center_radius: i32) -> bool {
+        self.start_city_x
+            .items
+            .iter()
+            .zip(&self.start_city_y.items)
+            .any(|(&sx, &sy)| {
+                let dx = sx.wrapping_sub(x.0);
+                let dy = sy.wrapping_sub(y.0);
+                crate::systems::combat::vector_dist(dx, dy).wrapping_mul(4)
+                    < city_center_radius.wrapping_sub(1)
+            })
     }
 
     // -- indexing ------------------------------------------------------------------------
@@ -2212,6 +2292,43 @@ mod tests {
         }
         assert_eq!((w.start_x.capacity, w.start_y.capacity), (8, 8));
         assert_eq!((w.start_city_x.capacity, w.start_city_y.capacity), (32, 32));
+    }
+
+    #[test]
+    fn start_city_radius_uses_tile_scaled_vector_distance_and_strict_limit() {
+        let mut w = World::init_default_rules(16, 16);
+        w.add_starting_location(WCoord(5), WCoord(5));
+        // Exact footprint cell: distance 0, so city_center_radius must exceed 1.
+        assert!(!w.start_city_rad_wcoord(WCoord(5), WCoord(5), 1));
+        assert!(w.start_city_rad_wcoord(WCoord(5), WCoord(5), 2));
+        // Query (7,5) is two W cells from (5,5); that is the nearest recorded
+        // footprint coordinate, so the scaled distance is 2*4=8.
+        assert!(!w.start_city_rad_wcoord(WCoord(7), WCoord(5), 9));
+        assert!(w.start_city_rad_wcoord(WCoord(7), WCoord(5), 10));
+        // Empty arrays never exclude a coordinate, irrespective of the rule.
+        let blank = World::init_default_rules(16, 16);
+        assert!(!blank.start_city_rad_wcoord(WCoord(5), WCoord(5), i32::MAX));
+    }
+
+    #[test]
+    fn fairness_distances_write_team_slots_and_keep_first_ties() {
+        let mut w = World::init_default_rules(16, 16);
+        w.add_starting_location(WCoord(2), WCoord(2));
+        w.add_starting_location(WCoord(8), WCoord(2));
+        w.add_starting_location(WCoord(5), WCoord(8));
+        let mut f = MapFairness {
+            teams: [2, 0, 1, 0, 0, 0, 0, 0],
+            num_players: 3,
+            lowest_dist: -1,
+            highest_dist: -1,
+            ..Default::default()
+        };
+        f.calc_distances(&w, WCoord(5), WCoord(2), 0.5);
+        assert_eq!(f.dists[0], 1.5);
+        assert_eq!(f.dists[1], 1.5);
+        assert_eq!(f.dists[2], 3.0);
+        assert_eq!(f.lowest_dist, 0);
+        assert_eq!(f.highest_dist, 2);
     }
 
     /// `World::wipe` leaves every cell in the state the disassembly writes.

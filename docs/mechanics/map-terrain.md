@@ -443,14 +443,16 @@ from scratch.
 
 ### 7.1 Executable world-generation oracle boundary
 
-The structural result above now has three fork-isolated retail cases in
-`crates/oracle`; neither case substitutes simplified map logic.
+The structural result above now has five fork-isolated retail cases in
+`crates/oracle`; none substitutes simplified map logic.
 
 | case | retail bytes executed | exact claim | deliberately not claimed |
 |---|---|---|---|
 | `map_make_seed_prefix` | `Map::make` entry `0x0068bc90` through the seed write at `0x0068bcd0` | the signed-negative preserve gate; `Map+0x110 = map_arg`; and identical nonnegative seed writes to `World+0x7c` and `game_random+0` | terrain construction, RNG consumption, orientation, continents, fairness or starts |
 | `start_city_wcoord` | complete leaf `0x006b30e0`–`0x006b311d` | valid coordinates flatten as `y * world_xs + x`; `start_city_locs` is LSB-first | coordinate selection, radius tests, or placement policy |
 | `add_starting_location` | complete writer `0x006b2de0`–`0x006b3019` | returned start index; all four walked-array append sequences; the exact 2×2 row-major LSB-first occupancy writes | coordinate selection, map-style placement, or allocator execution (fixture supplies measured spare capacity) |
+| `start_city_rad_wcoord` | complete call-free leaf `0x006b3850`–`0x006b3952` | scans the parallel footprint arrays; applies integer `vector_dist * 4`; compares strictly below PDB `Constants::city_center_radius - 1` (`+0x12c`) | choosing candidates or any map-style placement policy |
+| `map_fairness_calc_distances` | complete call-free leaf `0x0068a1c0`–`0x0068a2da` | team-indexed binary32 distance writes plus strict, first-wins `lowest_dist`/`highest_dist` updates | interpreting the score, choosing a candidate, or generating terrain |
 
 The seed-prefix case isolates an exact instruction boundary rather than invoking a fake
 constructor. In its already-forked case process it replaces the first instruction *after*
@@ -476,6 +478,21 @@ World arrays start at capacity 0 with `increment == -1`, then grow 0→4→8→1
 also now mirrors `DynamicBitMask::init` (`0x00a3a3c0`) by allocating and zeroing
 `ceil(xs*ys/8)` bytes instead of leaving a convenient empty plane.
 
+`start_city_rad_wcoord` installs the PDB-named `Constants::city_center_radius` field at
+`+0x12c`, not the unrelated `UnitData::start_dist` binding at `+0x130`. The entire retail
+leaf is executed: it walks `start_city_x.length`, reads the parallel X/Y element buffers,
+uses the same integer `vector_dist`, multiplies the result by four, subtracts one from the
+radius and uses a strict comparison. Empty arrays and both neighbours of the threshold are
+in the differential corpus.
+
+`MapFairness::calc_distances` consumes the already-recorded player-start arrays. Its PDB
+layout is represented directly by `MapFairness`: `dists[8]` at `+0x24`, extrema at
+`+0x4c/+0x50`, `teams[8]` at `+0x54`, and `num_players` at `+0x74`. The harness compares
+the full 120-byte post-call object: all eight output slots by float bits, including
+untouched slots, both extrema, and every other patterned byte unchanged. Its corpus covers
+empty, zero-distance, zero-scale, exact-tie and shuffled-team cases, then finite
+nonnegative binary32 scales across exponent and mantissa bits.
+
 This establishes the following evidence ladder for a pinned-seed world oracle:
 
 1. **Landed:** prove seed installation and negative-seed preservation without entering
@@ -484,12 +501,11 @@ This establishes the following evidence ladder for a pinned-seed world oracle:
 3. **Landed:** `World::add_starting_location` appends the player coordinate, the ordered
    city-footprint coordinates `(x,y)`, `(x-1,y)`, `(x,y-1)`, `(x-1,y-1)`, and the matching
    occupancy bits, returning the original player-start index.
-4. **Next distance/exclusion leaves:** `WorldData::start_city_rad_wcoord` `0x006b3850`
-   walks the recorded start-city coordinate arrays and applies the engine's integer
-   `vector_dist` threshold; `MapFairness::calc_distances` `0x0068a1c0` writes its binary32
-   distance table and extrema. These require exact array/count and Constants fields, but
-   no guessed ring geometry.
-5. **Only after those fixtures are executable:** expand into
+4. **Landed:** `WorldData::start_city_rad_wcoord` `0x006b3850` walks the recorded
+   footprint-coordinate arrays and applies the exact integer exclusion threshold;
+   `MapFairness::calc_distances` `0x0068a1c0` writes the team-indexed binary32 distance
+   table and strict extrema.
+5. **Next placement boundary:** expand into
    `Map::place_start_in_region` and the per-style continent hooks, recording the consumed
    RNG state and complete integer terrain/start arrays after each stage.
 6. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
@@ -498,9 +514,10 @@ This establishes the following evidence ladder for a pinned-seed world oracle:
    terrain/start comparison remains a machine-readable `known_gap` in
    `schema/oracle-regression.json`.
 
-No annulus, ring, fairness, continent or start-position rule is inferred from a convenient
-shape in this plan. A stage advances only when its retail inputs and side effects can be
-executed and compared.
+No annulus, ring, continent or start-position policy is inferred from a convenient shape
+in this plan. The landed fairness leaf is only the exact scorer; no candidate-selection
+meaning is attached to it. A stage advances only when its retail inputs and side effects
+can be executed and compared.
 
 ---
 

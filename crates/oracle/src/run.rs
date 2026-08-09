@@ -186,6 +186,29 @@ unsafe fn call_add_starting_location(
     r
 }
 
+/// `MapFairness::calc_distances`: two pointer stack arguments and scale in XMM3.
+unsafe fn call_map_fairness_calc_distances(
+    f: *const u8,
+    this: *mut u8,
+    x: *const i32,
+    y: *const i32,
+    scale: f32,
+) {
+    std::arch::asm!(
+        "push {y:e}",
+        "push {x:e}",
+        "call {f}",
+        y = in(reg) y,
+        x = in(reg) x,
+        f = in(reg) f,
+        in("ecx") this,
+        in("xmm3") scale,
+        out("eax") _, out("edx") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        clobber_abi("C"),
+    );
+}
+
 /// `Random::next_float` — result in xmm0, state updated through ECX.
 unsafe fn call_next_float(f: *const u8, p: *mut u32) -> (u32, f32) {
     let out_f: f32;
@@ -1422,6 +1445,416 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 "fixture_boundary".into(),
                 "all four arrays preallocated to 64 WCoord entries; allocator branch untaken"
                     .into(),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
+        Plan::StartCityRadWcoord {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 2;
+            const O_WORLD: usize = 0x100;
+            const O_CONSTANTS: usize = 0x300;
+            const O_X_LIST: usize = 0x1000;
+            const O_Y_LIST: usize = 0x1200;
+            const O_X: usize = 0x1400;
+            const O_Y: usize = 0x1410;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const VA_CONSTANTS_PTR: u32 = 0x00C0_61E4;
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("start-city-radius fixture scratch mmap failed".into());
+                return a;
+            };
+            let world = unsafe { arena.add(O_WORLD) };
+            let constants = unsafe { arena.add(O_CONSTANTS) };
+            let x_list = unsafe { arena.add(O_X_LIST) as *mut i32 };
+            let y_list = unsafe { arena.add(O_Y_LIST) as *mut i32 };
+            let x_ptr = unsafe { arena.add(O_X) as *mut i32 };
+            let y_ptr = unsafe { arena.add(O_Y) as *mut i32 };
+            let (Some(world_slot), Some(constants_slot)) =
+                (ctx.at(VA_WORLD_PTR), ctx.at(VA_CONSTANTS_PTR))
+            else {
+                a.skip = Some("World/Constants access pointer VA is outside mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(constants_slot as *mut u32, constants as usize as u32);
+                std::ptr::write_unaligned(world.add(0xc8) as *mut u32, x_list as usize as u32);
+                std::ptr::write_unaligned(world.add(0xe4) as *mut u32, y_list as usize as u32);
+            }
+            let f = f as *const u8;
+            let mut model = don_sim::systems::map_terrain::World::init_default_rules(2, 2);
+            let mut check = |starts: &[(i32, i32)],
+                             x: i32,
+                             y: i32,
+                             city_center_radius: i32,
+                             label: &str,
+                             a: &mut Acc| {
+                debug_assert!(starts.len() <= 32);
+                unsafe {
+                    std::ptr::write_unaligned(world.add(0xbc) as *mut i32, starts.len() as i32);
+                    for (i, &(sx, sy)) in starts.iter().enumerate() {
+                        std::ptr::write_unaligned(x_list.add(i), sx);
+                        std::ptr::write_unaligned(y_list.add(i), sy);
+                    }
+                    std::ptr::write_unaligned(constants.add(0x12c) as *mut i32, city_center_radius);
+                    std::ptr::write_unaligned(x_ptr, x);
+                    std::ptr::write_unaligned(y_ptr, y);
+                }
+                model.start_city_x.items.clear();
+                model.start_city_y.items.clear();
+                model
+                    .start_city_x
+                    .items
+                    .extend(starts.iter().map(|&(sx, _)| sx));
+                model
+                    .start_city_y
+                    .items
+                    .extend(starts.iter().map(|&(_, sy)| sy));
+                let want = model.start_city_rad_wcoord(
+                    don_sim::systems::map_terrain::WCoord(x),
+                    don_sim::systems::map_terrain::WCoord(y),
+                    city_center_radius,
+                ) as i32;
+                let got = unsafe { call_start_city_wcoord(f, world, x_ptr, y_ptr) };
+                a.trials += 1;
+                if got != want {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "{label} starts={starts:?} query=({x},{y}) \
+                         city_center_radius={city_center_radius} \
+                         model={want} retail={got}"
+                    ));
+                }
+            };
+            let edge_cases: &[(&[(i32, i32)], i32, i32, i32)] = &[
+                (&[], 5, 5, 1_024),
+                (&[(5, 5)], 5, 5, 1),
+                (&[(5, 5)], 5, 5, 2),
+                (&[(5, 5)], 7, 5, 9),
+                (&[(5, 5)], 7, 5, 10),
+                (&[(5, 5), (100, 100)], 99, 100, 5),
+                (&[(5, 5), (100, 100)], 99, 100, 6),
+                (&[(0, 0), (127, 127)], 64, 64, 0),
+            ];
+            for &(starts, x, y, city_center_radius) in edge_cases {
+                check(starts, x, y, city_center_radius, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edge_cases.len() as u64,
+                "empty and multiple arrays; exact zero, factor-four, minus-one, and strict-threshold boundaries",
+            );
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x5354_4152_5452_4144);
+            for _ in 0..n {
+                let count = (rng.next() as usize) & 31;
+                let mut starts = [(0i32, 0i32); 32];
+                for start in &mut starts[..count] {
+                    let r = rng.next();
+                    *start = ((r as i32) & 127, ((r >> 8) as i32) & 127);
+                }
+                let r = rng.next();
+                let x = (r as i32) & 127;
+                let y = ((r >> 8) as i32) & 127;
+                let city_center_radius = ((r >> 16) as i32) & 1023;
+                check(&starts[..count], x, y, city_center_radius, "random", &mut a);
+            }
+            a.phase("random", n as u64, distribution);
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
+        Plan::MapFairnessCalcDistances {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 2;
+            const O_FAIRNESS: usize = 0x100;
+            const O_WORLD: usize = 0x300;
+            const O_START_X: usize = 0x1000;
+            const O_START_Y: usize = 0x1100;
+            const O_X: usize = 0x1200;
+            const O_Y: usize = 0x1210;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const FAIRNESS_DISTS: usize = 0x24;
+            const FAIRNESS_LOWEST_DIST: usize = 0x4c;
+            const FAIRNESS_HIGHEST_DIST: usize = 0x50;
+            const FAIRNESS_TEAMS: usize = 0x54;
+            const FAIRNESS_NUM_PLAYERS: usize = 0x74;
+
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("map-fairness fixture scratch mmap failed".into());
+                return a;
+            };
+            let fairness = unsafe { arena.add(O_FAIRNESS) };
+            let world = unsafe { arena.add(O_WORLD) };
+            let start_x = unsafe { arena.add(O_START_X) as *mut i32 };
+            let start_y = unsafe { arena.add(O_START_Y) as *mut i32 };
+            let x_ptr = unsafe { arena.add(O_X) as *mut i32 };
+            let y_ptr = unsafe { arena.add(O_Y) as *mut i32 };
+            let Some(world_slot) = ctx.at(VA_WORLD_PTR) else {
+                a.skip = Some("World access pointer VA is outside mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(world.add(0x90) as *mut u32, start_x as usize as u32);
+                std::ptr::write_unaligned(world.add(0xac) as *mut u32, start_y as usize as u32);
+            }
+
+            let f = f as *const u8;
+            let mut model_world = don_sim::systems::map_terrain::World::init_default_rules(2, 2);
+            let mut check = |starts: &[(i32, i32)],
+                             teams: &[i32],
+                             x: i32,
+                             y: i32,
+                             scale: f32,
+                             initial_dists: [u32; 8],
+                             initial_lowest: i32,
+                             initial_highest: i32,
+                             label: &str,
+                             a: &mut Acc| {
+                debug_assert!(starts.len() <= 8);
+                debug_assert!(teams.len() <= 8);
+                debug_assert!(teams
+                    .iter()
+                    .all(|&player| player >= 0 && (player as usize) < starts.len()));
+                let mut expected_image = [0u8; 120];
+                unsafe {
+                    // Pattern the entire PDB-sized object so the case proves that
+                    // calc_distances preserves every field outside its documented writes.
+                    for i in 0..120 {
+                        let pattern = (i as u32).wrapping_mul(37).wrapping_add(x as u32)
+                            ^ (y as u32).rotate_left(11)
+                            ^ scale.to_bits().rotate_left(19);
+                        std::ptr::write(fairness.add(i), pattern as u8);
+                    }
+                    for (i, &(sx, sy)) in starts.iter().enumerate() {
+                        std::ptr::write_unaligned(start_x.add(i), sx);
+                        std::ptr::write_unaligned(start_y.add(i), sy);
+                    }
+                    for (i, bits) in initial_dists.iter().copied().enumerate() {
+                        std::ptr::write_unaligned(
+                            fairness.add(FAIRNESS_DISTS + i * 4) as *mut u32,
+                            bits,
+                        );
+                    }
+                    std::ptr::write_unaligned(
+                        fairness.add(FAIRNESS_LOWEST_DIST) as *mut i32,
+                        initial_lowest,
+                    );
+                    std::ptr::write_unaligned(
+                        fairness.add(FAIRNESS_HIGHEST_DIST) as *mut i32,
+                        initial_highest,
+                    );
+                    for (i, team) in teams.iter().copied().enumerate() {
+                        std::ptr::write_unaligned(
+                            fairness.add(FAIRNESS_TEAMS + i * 4) as *mut i32,
+                            team,
+                        );
+                    }
+                    std::ptr::write_unaligned(
+                        fairness.add(FAIRNESS_NUM_PLAYERS) as *mut i32,
+                        teams.len() as i32,
+                    );
+                    std::ptr::write_unaligned(x_ptr, x);
+                    std::ptr::write_unaligned(y_ptr, y);
+                    std::ptr::copy_nonoverlapping(
+                        fairness,
+                        expected_image.as_mut_ptr(),
+                        expected_image.len(),
+                    );
+                }
+
+                model_world.start_x.items.clear();
+                model_world.start_y.items.clear();
+                model_world
+                    .start_x
+                    .items
+                    .extend(starts.iter().map(|&(sx, _)| sx));
+                model_world
+                    .start_y
+                    .items
+                    .extend(starts.iter().map(|&(_, sy)| sy));
+                let mut model = don_sim::systems::map_terrain::MapFairness {
+                    dists: initial_dists.map(f32::from_bits),
+                    lowest_dist: initial_lowest,
+                    highest_dist: initial_highest,
+                    num_players: teams.len() as i32,
+                    ..Default::default()
+                };
+                model.teams[..teams.len()].copy_from_slice(teams);
+                model.calc_distances(
+                    &model_world,
+                    don_sim::systems::map_terrain::WCoord(x),
+                    don_sim::systems::map_terrain::WCoord(y),
+                    scale,
+                );
+                for (i, value) in model.dists.iter().enumerate() {
+                    expected_image[FAIRNESS_DISTS + i * 4..FAIRNESS_DISTS + (i + 1) * 4]
+                        .copy_from_slice(&value.to_bits().to_le_bytes());
+                }
+                expected_image[FAIRNESS_LOWEST_DIST..FAIRNESS_LOWEST_DIST + 4]
+                    .copy_from_slice(&model.lowest_dist.to_le_bytes());
+                expected_image[FAIRNESS_HIGHEST_DIST..FAIRNESS_HIGHEST_DIST + 4]
+                    .copy_from_slice(&model.highest_dist.to_le_bytes());
+
+                unsafe {
+                    call_map_fairness_calc_distances(f, fairness, x_ptr, y_ptr, scale);
+                }
+                let got_dists: [u32; 8] = std::array::from_fn(|i| unsafe {
+                    std::ptr::read_unaligned(fairness.add(FAIRNESS_DISTS + i * 4) as *const u32)
+                });
+                let got_lowest = unsafe {
+                    std::ptr::read_unaligned(fairness.add(FAIRNESS_LOWEST_DIST) as *const i32)
+                };
+                let got_highest = unsafe {
+                    std::ptr::read_unaligned(fairness.add(FAIRNESS_HIGHEST_DIST) as *const i32)
+                };
+                let want_dists = model.dists.map(f32::to_bits);
+                let mut got_image = [0u8; 120];
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        fairness,
+                        got_image.as_mut_ptr(),
+                        got_image.len(),
+                    );
+                }
+                a.trials += 1;
+                if got_image != expected_image {
+                    a.mismatches += 1;
+                    let first_byte = got_image
+                        .iter()
+                        .zip(&expected_image)
+                        .position(|(got, want)| got != want);
+                    a.first_detail(format!(
+                        "{label} starts={starts:?} teams={teams:?} query=({x},{y}) \
+                         scale={scale:?}/{:#010x} initial_dists={initial_dists:08x?} \
+                         model=({want_dists:08x?},{},{}) \
+                         retail=({got_dists:08x?},{got_lowest},{got_highest}) \
+                         first_object_byte={first_byte:?}",
+                        scale.to_bits(),
+                        model.lowest_dist,
+                        model.highest_dist,
+                    ));
+                }
+            };
+
+            let clean = [0u32; 8];
+            check(
+                &[],
+                &[],
+                5,
+                5,
+                1.0,
+                [0x7fc0_0001; 8],
+                -7,
+                19,
+                "empty",
+                &mut a,
+            );
+            check(
+                &[(5, 5)],
+                &[0],
+                5,
+                5,
+                1.0,
+                clean,
+                -7,
+                19,
+                "zero-distance",
+                &mut a,
+            );
+            check(
+                &[(2, 2), (8, 2)],
+                &[0, 1],
+                5,
+                2,
+                1.0,
+                clean,
+                -7,
+                19,
+                "tie",
+                &mut a,
+            );
+            check(
+                &[(1, 1), (7, 1), (3, 6)],
+                &[2, 0, 1],
+                3,
+                1,
+                0.5,
+                [0x3f80_0000; 8],
+                -7,
+                19,
+                "team-order",
+                &mut a,
+            );
+            check(
+                &[(1, 1), (127, 127)],
+                &[1, 0],
+                64,
+                64,
+                0.0,
+                [0x8000_0000; 8],
+                -7,
+                19,
+                "zero-scale",
+                &mut a,
+            );
+            a.phase(
+                "edges",
+                5,
+                "empty preservation, zero distance/scale, strict tie, and shuffled-team writes",
+            );
+
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x4641_4952_4449_5354);
+            for _ in 0..n {
+                let count = (rng.next() % 9) as usize;
+                let mut starts = [(0i32, 0i32); 8];
+                for start in &mut starts[..count] {
+                    let r = rng.next();
+                    *start = ((r as i32) & 127, ((r >> 8) as i32) & 127);
+                }
+                let mut teams = [0i32; 8];
+                for (i, team) in teams[..count].iter_mut().enumerate() {
+                    *team = i as i32;
+                }
+                for i in (1..count).rev() {
+                    let j = (rng.next() as usize) % (i + 1);
+                    teams.swap(i, j);
+                }
+                let mut initial_dists = [0u32; 8];
+                for bits in &mut initial_dists {
+                    *bits = rng.next() as u32;
+                }
+                let r = rng.next();
+                let x = (r as i32) & 127;
+                let y = ((r >> 8) as i32) & 127;
+                // Clear the sign bit and exclude exponent 0xff. Subnormal, zero,
+                // normal and maximum-finite scales all remain in the corpus.
+                let scale = f32::from_bits((rng.next() as u32) & 0x7f7f_ffff);
+                check(
+                    &starts[..count],
+                    &teams[..count],
+                    x,
+                    y,
+                    scale,
+                    initial_dists,
+                    rng.next() as i32,
+                    rng.next() as i32,
+                    "random",
+                    &mut a,
+                );
+            }
+            a.phase("random", n as u64, distribution);
+            a.extras.push((
+                "compared_writes".into(),
+                "full 120-byte MapFairness image; all 8 dists by f32 bits plus extrema, with every other byte patterned and required unchanged".into(),
             ));
             unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }
