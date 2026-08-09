@@ -1,13 +1,18 @@
+   Compiling memchr v2.8.3
+   Compiling libc v0.2.189
    Compiling don-rules v0.1.0 (/home/hbox/don-oracle/crates/don-rules)
+   Compiling don-pe v0.1.0 (/home/hbox/don-oracle/crates/don-pe)
+   Compiling quick-xml v0.38.4
+   Compiling don-sim v0.1.0 (/home/hbox/don-oracle/crates/don-sim)
    Compiling oracle v0.1.0 (/home/hbox/don-oracle/crates/oracle)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s
-[oracle] mapped at 0xeb73d000, 315865 relocations applied
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.14s
+[oracle] mapped at 0xee3ff000, 315865 relocations applied
 oracle regression suite — 23 registered cases
   selftest      OK (hand-written cdecl add returned 42 through fork isolation)
   image         data/riseofnations.exe  sha256 30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079  9925120 bytes
   scale 1   seed 0x2545f4914f6cdd1d
 
-  PASS  hash_into_range            0x00846450      500008 trials       0 mismatches      13 ms
+  PASS  hash_into_range            0x00846450      500008 trials       0 mismatches      12 ms
         model  don_sim::mechanics::hash_into_range
         phase  edges                     8  hand-chosen edge tuples
         phase  random               500000  xorshift64 (seed per --seed): a,b uniform over i32; lo,hi uniform over ±2^15
@@ -19,7 +24,7 @@ oracle regression suite — 23 registered cases
         model  don_sim::mechanics::balance_index + sign-extending i16 load
         phase  grid                 243049  exhaustive over the 493x493 defined type domain
         phase  grid                   4000  rows past the type domain, exercising the multiply/add with no bounds check
-  PASS  balance_final_table        0x00581ca0      243049 trials       0 mismatches      43 ms
+  PASS  balance_final_table        0x00581ca0      243049 trials       0 mismatches      52 ms
         model  don_sim::balance::BalanceTable::get (via don_sim::balance_path::table_index)
         phase  grid                 243049  exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)
         phase  grid                      0  the guard band below the domain — GoodType ids, which have no balance row
@@ -27,18 +32,18 @@ oracle regression suite — 23 registered cases
         excl          321  TypeIndex outside 50..=542, where the shipped accessor refuses and retail reads adjacent .data
         injected_bytes: 486098 at 0x00c12bf4
         injected_shape: min=5 max=2574 distinct=367 nonzero=243049
-  PASS  guy_turn_speed             0x005de340      243578 trials       0 mismatches     503 ms
+  PASS  guy_turn_speed             0x005de340      243578 trials       0 mismatches     512 ms
         model  don_sim::systems::groups_guys::GuyData::turn_speed
         phase  edges                    16  hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries
         phase  random               243562  branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries
         excl         6438  retail #DE: damped avg_speed/4 + 1 is zero
         branch_counts: squad=119670 crew=123908 damped=118259 raw=125319 tracking=183551 fast_face=62520 scale2=121521 signed_or_wrapping_rules=70344
-  PASS  guy_turn_angles            0x005d98c0      250016 trials       0 mismatches     505 ms
+  PASS  guy_turn_angles            0x005d98c0      250016 trials       0 mismatches     510 ms
         model  don_sim::systems::groups_guys::GuyData::turn_angles
         phase  edges                    16  hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries
         phase  random               250000  branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries
         branch_counts: snap=67997 half_turn_ties=26778 reverse=71320 forward=178696 half_step=124951
-  PASS  guy_turn_towards           0x005d9720      250016 trials       0 mismatches    1419 ms
+  PASS  guy_turn_towards           0x005d9720      250016 trials       0 mismatches    1424 ms
         model  don_sim::systems::groups_guys::GuyData::turn_towards plus GuyData::walk_bytes
         phase  edges                    16  hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared
         phase  random               250000  the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte
@@ -49,7 +54,7 @@ oracle regression suite — 23 registered cases
         phase  random               100000  seven signed-gate/map-argument edges, then xorshift64: seed and initial World/RNG/map words uniform over all 32-bit patterns; exact positive/negative branch counts reported
         branch_counts: negative_preserve=50074 nonnegative_seed=49933
         isolation_boundary: retail entry..0x0068bcd0; case-local jmp at 0x0068bcd2 -> original epilogue 0x0068c84a
-  PASS  fix_diag_land              0x0069c250      100009 trials       0 mismatches   19348 ms
+  PASS  fix_diag_land              0x0069c250      100009 trials       0 mismatches   19160 ms
         model  don_sim::systems::map_terrain::World::fix_diag_land
         phase  retail-table              1  compare all four shipped corner_x/corner_y offsets in NW, NE, SE, SW order
         phase  edges                     7  single/all-dry preservation, all four corner orientations, and an order-sensitive x-major in-place cascade
@@ -57,26 +62,26 @@ oracle regression suite — 23 registered cases
         phase  preservation              1  all eight shipped corner-offset words unchanged after every repair call
         repair_counts: cells=669856 changed_trials=50304 unchanged_trials=49703
         compared_state: every patterned byte through the complete 372-byte World, intervening arena, and all 28-byte WData records; only model-predicted land/land_sub writes allowed
-  PASS  start_city_wcoord          0x006b30e0      250011 trials       0 mismatches      11 ms
+  PASS  start_city_wcoord          0x006b30e0      250011 trials       0 mismatches      10 ms
         model  don_sim::systems::map_terrain::World::start_city_wcoord
         phase  edges                    11  LSB/MSB and byte, row, non-byte-width, and maximum-domain boundaries
         phase  random               250000  byte/row boundary edges plus xorshift64 widths 1..512, heights 1..128, valid coordinates, and uniform selected-byte patterns
         boundary_counts: byte_edge=62360 row_edge=6562
-  PASS  add_starting_location      0x006b2de0      449463 trials       0 mismatches     824 ms
+  PASS  add_starting_location      0x006b2de0      449463 trials       0 mismatches     809 ms
         model  don_sim::systems::map_terrain::World::add_starting_location
         phase  edges                    13  LSB/MSB, byte/row crossings, and append return indices 0..7
         phase  random               449450  byte/row-boundary coordinate sequences plus xorshift64 worlds 2..128 cells per axis, 1..8 valid appended starts per fixture; return index, walked array metadata/elements, and full bit plane compared after every append
         fixture_boundary: all four arrays preallocated to 64 WCoord entries; allocator branch untaken
-  PASS  start_city_rad_wcoord      0x006b3850      250008 trials       0 mismatches     172 ms
+  PASS  start_city_rad_wcoord      0x006b3850      250008 trials       0 mismatches     164 ms
         model  don_sim::systems::map_terrain::World::start_city_rad_wcoord
         phase  edges                     8  empty and multiple arrays; exact zero, factor-four, minus-one, and strict-threshold boundaries
         phase  random               250000  empty/one/many array edges and exact threshold neighbours, then xorshift64 parallel arrays of 0..32 coordinates in 0..127, query coordinates 0..127, city_center_radius 0..1024
-  PASS  map_fairness_calc_distances 0x0068a1c0      250005 trials       0 mismatches     845 ms
+  PASS  map_fairness_calc_distances 0x0068a1c0      250005 trials       0 mismatches     814 ms
         model  don_sim::systems::map_terrain::MapFairness::calc_distances
         phase  edges                     5  empty preservation, zero distance/scale, strict tie, and shuffled-team writes
         phase  random               250000  empty/tie/zero extrema edges plus xorshift64 0..8 start arrays, shuffled valid team indices, 0..127 coordinates, and finite nonnegative f32 scales drawn across exponent/mantissa bits
         compared_writes: full 120-byte MapFairness image; all 8 dists by f32 bits plus extrema, with every other byte patterned and required unchanged
-  PASS  place_start_in_region      0x0068ac00      100007 trials       0 mismatches   21650 ms
+  PASS  place_start_in_region      0x0068ac00      100007 trials       0 mismatches   21711 ms
         model  don_sim::systems::map_terrain::place_start_in_region
         phase  retail-table              1  execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends
         phase  edges                     5  single/no-draw fallback, exact coastal band, inner-ocean rejection, pass-specific margin, and optional-prior total rejection
@@ -92,7 +97,7 @@ oracle regression suite — 23 registered cases
   PASS  accessor_diff_0x12c_0x12a  0x0048f770      100000 trials       0 mismatches       1 ms
         model  oracle::models::accessor_diff_12c_12a — shape probe, no don-sim counterpart
         phase  random               100000  xorshift64; two independent uniform u16 fields
-  PASS  damage_pipeline            0x00644130     7986675 trials       0 mismatches   43427 ms
+  PASS  damage_pipeline            0x00644130     7986675 trials       0 mismatches   41425 ms
         model  don_sim::mechanics::damage_traced
         phase  random               998276  seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins
         phase  random               998371  seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins
@@ -114,7 +119,7 @@ oracle regression suite — 23 registered cases
         model  oracle::models::rng::in_range — NO don-sim implementation exists
         phase  edges                    12  empty/inverted ranges, negatives, the 16-bit boundary
         phase  random              1000000  state uniform over u32; lo,hi uniform over ±0xFFFF; compares the return value and the resulting state
-  PASS  rng_in_range_wide          0x00a39d70      500003 trials       0 mismatches      22 ms
+  PASS  rng_in_range_wide          0x00a39d70      500003 trials       0 mismatches      23 ms
         model  oracle::models::rng::in_range — NO don-sim implementation exists
         phase  edges                     3  empty/inverted ranges, negatives, the 16-bit boundary
         phase  random               500000  state uniform over u32; lo,hi uniform over ±2^29
@@ -124,12 +129,12 @@ oracle regression suite — 23 registered cases
         phase  random              2000000  uniform 32-bit pairs — stresses the overflow guard and the wrapping abs
         phase  random              1000000  realistic map deltas: RoN world coords step 192 per A* cell and a big map is a few hundred cells across, so |d| ≲ 40k
         phase  random              1000000  straddling the 0xEA60 guard exactly, both signs
-  PASS  adler32                    0x00a46830      100013 trials       0 mismatches   15648 ms
+  PASS  adler32                    0x00a46830      100013 trials       0 mismatches   15934 ms
         model  don_sim::checksum::adler32 — the shipped primitive, not a copy
         phase  boundary-lengths         12  lengths straddling the 16-byte unrolled block and NMAX = 5552
         phase  random               100000  12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1
         phase  edges                     1  buf == NULL, which the disassembly says returns 1
-  PASS  rules_as_scaled            0x00a1d110      202643 trials       0 mismatches     188 ms
+  PASS  rules_as_scaled            0x00a1d110      202643 trials       0 mismatches     189 ms
         model  don_rules::value::as_scaled
         phase  shipped-corpus         2550  850 value/entry strings from data/rules.xml x 3 scales
         phase  edges                    93  hand-chosen tokenizer edges x every scale
@@ -137,7 +142,7 @@ oracle regression suite — 23 registered cases
 
 summary
   23 pass   0 fail   0 skipped   0 crashed   0 error
-  18722565 trials in 105156 ms
+  18722565 trials in 103279 ms
 
   8 Tier-B claims are outside this suite entirely (see known_gaps in the JSON):
     - Full seeded Map::make terrain and start-position equivalence

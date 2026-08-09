@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786253736,
+  "generated_unix": 1786258627,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,7 +13,7 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 105156,
+  "wall_ms": 103279,
   "exit_code": 0,
   "summary": {
     "registered": 23,
@@ -39,7 +39,7 @@
       "status": "pass",
       "trials": 500008,
       "mismatches": 0,
-      "wall_ms": 13,
+      "wall_ms": 12,
       "phases": [
         {"kind": "edges", "count": 8, "distribution": "hand-chosen edge tuples"},
         {"kind": "random", "count": 500000, "distribution": "xorshift64 (seed per --seed): a,b uniform over i32; lo,hi uniform over ±2^15"}
@@ -108,7 +108,7 @@
       "status": "pass",
       "trials": 243049,
       "mismatches": 0,
-      "wall_ms": 43,
+      "wall_ms": 52,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)"},
         {"kind": "grid", "count": 0, "distribution": "the guard band below the domain — GoodType ids, which have no balance row"},
@@ -137,7 +137,7 @@
       "status": "pass",
       "trials": 243578,
       "mismatches": 0,
-      "wall_ms": 503,
+      "wall_ms": 512,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries"},
         {"kind": "random", "count": 243562, "distribution": "branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries"}
@@ -164,7 +164,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 505,
+      "wall_ms": 510,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries"},
         {"kind": "random", "count": 250000, "distribution": "branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries"}
@@ -189,7 +189,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 1419,
+      "wall_ms": 1424,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared"},
         {"kind": "random", "count": 250000, "distribution": "the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte"}
@@ -240,7 +240,7 @@
       "status": "pass",
       "trials": 100009,
       "mismatches": 0,
-      "wall_ms": 19348,
+      "wall_ms": 19160,
       "phases": [
         {"kind": "retail-table", "count": 1, "distribution": "compare all four shipped corner_x/corner_y offsets in NW, NE, SE, SW order"},
         {"kind": "edges", "count": 7, "distribution": "single/all-dry preservation, all four corner orientations, and an order-sensitive x-major in-place cascade"},
@@ -268,7 +268,7 @@
       "status": "pass",
       "trials": 250011,
       "mismatches": 0,
-      "wall_ms": 11,
+      "wall_ms": 10,
       "phases": [
         {"kind": "edges", "count": 11, "distribution": "LSB/MSB and byte, row, non-byte-width, and maximum-domain boundaries"},
         {"kind": "random", "count": 250000, "distribution": "byte/row boundary edges plus xorshift64 widths 1..512, heights 1..128, valid coordinates, and uniform selected-byte patterns"}
@@ -293,7 +293,7 @@
       "status": "pass",
       "trials": 449463,
       "mismatches": 0,
-      "wall_ms": 824,
+      "wall_ms": 809,
       "phases": [
         {"kind": "edges", "count": 13, "distribution": "LSB/MSB, byte/row crossings, and append return indices 0..7"},
         {"kind": "random", "count": 449450, "distribution": "byte/row-boundary coordinate sequences plus xorshift64 worlds 2..128 cells per axis, 1..8 valid appended starts per fixture; return index, walked array metadata/elements, and full bit plane compared after every append"}
@@ -318,7 +318,7 @@
       "status": "pass",
       "trials": 250008,
       "mismatches": 0,
-      "wall_ms": 172,
+      "wall_ms": 164,
       "phases": [
         {"kind": "edges", "count": 8, "distribution": "empty and multiple arrays; exact zero, factor-four, minus-one, and strict-threshold boundaries"},
         {"kind": "random", "count": 250000, "distribution": "empty/one/many array edges and exact threshold neighbours, then xorshift64 parallel arrays of 0..32 coordinates in 0..127, query coordinates 0..127, city_center_radius 0..1024"}
@@ -341,7 +341,7 @@
       "status": "pass",
       "trials": 250005,
       "mismatches": 0,
-      "wall_ms": 845,
+      "wall_ms": 814,
       "phases": [
         {"kind": "edges", "count": 5, "distribution": "empty preservation, zero distance/scale, strict tie, and shuffled-team writes"},
         {"kind": "random", "count": 250000, "distribution": "empty/tie/zero extrema edges plus xorshift64 0..8 start arrays, shuffled valid team indices, 0..127 coordinates, and finite nonnegative f32 scales drawn across exponent/mantissa bits"}
@@ -366,7 +366,7 @@
       "status": "pass",
       "trials": 100007,
       "mismatches": 0,
-      "wall_ms": 21650,
+      "wall_ms": 21711,
       "phases": [
         {"kind": "retail-table", "count": 1, "distribution": "execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends"},
         {"kind": "edges", "count": 5, "distribution": "single/no-draw fallback, exact coastal band, inner-ocean rejection, pass-specific margin, and optional-prior total rejection"},
@@ -440,7 +440,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 43427,
+      "wall_ms": 41425,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -523,7 +523,7 @@
       "status": "pass",
       "trials": 500003,
       "mismatches": 0,
-      "wall_ms": 22,
+      "wall_ms": 23,
       "phases": [
         {"kind": "edges", "count": 3, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 500000, "distribution": "state uniform over u32; lo,hi uniform over ±2^29"}
@@ -571,7 +571,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15648,
+      "wall_ms": 15934,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -595,7 +595,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 188,
+      "wall_ms": 189,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},
