@@ -157,6 +157,12 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// Complete call-free `Map::fix_diag_land`, with a patterned World/WData
+    /// arena and byte-for-byte post-call comparison.
+    FixDiagLand {
+        random: u32,
+        distribution: &'static str,
+    },
     /// `WorldData::start_city_wcoord`, with the two World references and its bit plane
     /// installed in a private arena.
     StartCityWcoord {
@@ -530,6 +536,33 @@ pub static REGISTRY: &[Case] = &[
             distribution: "seven signed-gate/map-argument edges, then xorshift64: seed and \
                            initial World/RNG/map words uniform over all 32-bit patterns; \
                            exact positive/negative branch counts reported",
+        },
+    },
+    Case {
+        id: "fix_diag_land",
+        va: 0x0069_C250,
+        abi: "void __cdecl Map::fix_diag_land(); no arguments",
+        model: "don_sim::systems::map_terrain::World::fix_diag_land",
+        subsystem: "world generation / post-continent diagonal repair",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable terrain mutation",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB Map::fix_diag_land; \
+                     retail 0x0069c250..0x0069c457",
+        reachability: "Map::make calls this common static routine immediately after the \
+                       selected map-style make_continents hook, except for map style 23. \
+                       The complete 536-byte routine is call-free and touches only the \
+                       World dimensions and WData land/land_sub bytes",
+        caveat: "Valid generated-map domain: positive dimensions 1..32 and WData.land \
+                 values 0..2. The fixture patterns the complete 372-byte World and every \
+                 28-byte WData record, installs only xs/ys and the measured +0x134 WData \
+                 pointer, then compares every fabricated byte. This proves the in-place \
+                 x-major NW/NE/SE/SW repair, including the 16-bit land/subtype store. It \
+                 does not generate the continent plane supplied to the routine.",
+        plan: Plan::FixDiagLand {
+            random: 100_000,
+            distribution: "four corner orientations, off-map/single-cell and x-major \
+                           cascade edges, then xorshift64 worlds 1..32 with dry, sparse-water, \
+                           dense-water, and uniform 0..2 land planes; complete patterned \
+                           World/WData post-state compared byte-for-byte",
         },
     },
     Case {
@@ -996,9 +1029,11 @@ pub static KNOWN_GAPS: &[Gap] = &[
         why: "Map::make is a 3,021-byte virtual orchestration routine that immediately \
               needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, \
               RString leaves, engine arrays and allocators. The registry executes and \
-              proves its seed prefix, start-city representation/writer/radius, fairness \
-              scorer, and complete Region-start selector. The selector still receives a \
-              fabricated Region coordinate list and WData land plane; the registry does \
+              proves its seed prefix, common post-continent diagonal repair, start-city \
+              representation/writer/radius, fairness scorer, and complete Region-start \
+              selector. The terrain repair still receives a fabricated WData land \
+              plane, and the selector also receives a fabricated Region coordinate \
+              list; the registry does \
               not substitute approximate continent or Region construction. \
               docs/mechanics/map-terrain.md §7.1 records the executable dependency plan \
               for extending this boundary.",

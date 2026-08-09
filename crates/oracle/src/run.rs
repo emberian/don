@@ -1172,6 +1172,232 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             unsafe { libc::munmap(arena as *mut c_void, PAGE) };
         }
 
+        Plan::FixDiagLand {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 8;
+            const O_WORLD: usize = 0x100;
+            const O_WDATA: usize = 0x1000;
+            const WORLD_BYTES: usize = 372;
+            const WDATA_BYTES: usize = 28;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const VA_CORNER_X: u32 = 0x00AD_C3E4;
+            const VA_CORNER_Y: u32 = 0x00AD_C3C4;
+
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("fix-diagonal-land fixture scratch mmap failed".into());
+                return a;
+            };
+            let Some(world_slot) = ctx.at(VA_WORLD_PTR) else {
+                a.skip = Some("fix-diagonal-land World global is outside mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            let (Some(corner_x), Some(corner_y)) = (ctx.at(VA_CORNER_X), ctx.at(VA_CORNER_Y))
+            else {
+                a.skip = Some("fix-diagonal-land corner tables are outside mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            let expected_corner_x = [-1i32, 1, 1, -1];
+            let expected_corner_y = [-1i32, -1, 1, 1];
+            let read_corners = || unsafe {
+                (
+                    std::slice::from_raw_parts(corner_x as *const i32, 4).to_vec(),
+                    std::slice::from_raw_parts(corner_y as *const i32, 4).to_vec(),
+                )
+            };
+            let original_corners = read_corners();
+            a.trials += 1;
+            if original_corners.0 != expected_corner_x || original_corners.1 != expected_corner_y {
+                a.mismatches += 1;
+                a.first_detail(format!(
+                    "retail corner tables differ: x={:?} y={:?}",
+                    original_corners.0, original_corners.1
+                ));
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            }
+            a.phase(
+                "retail-table",
+                1,
+                "compare all four shipped corner_x/corner_y offsets in NW, NE, SE, SW order",
+            );
+
+            let world = unsafe { arena.add(O_WORLD) };
+            let wdata = unsafe { arena.add(O_WDATA) };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+            }
+            let f = f as *const u8;
+            let mut expected = vec![0u8; ARENA_BYTES];
+            // `fix_diag_land` reads only xs/ys and the WData vector. Reuse one
+            // maximum-size production World so the 100k-case differential does
+            // not allocate unrelated tile/fog/danger planes on every trial.
+            let mut model = don_sim::systems::map_terrain::World::init_default_rules(32, 32);
+            let mut total_repairs = 0u64;
+            let mut changed_trials = 0u64;
+            let mut unchanged_trials = 0u64;
+
+            let mut check =
+                |width: i32, height: i32, lands: &[i8], salt: u8, label: &str, a: &mut Acc| {
+                    debug_assert!((1..=32).contains(&width));
+                    debug_assert!((1..=32).contains(&height));
+                    debug_assert_eq!(lands.len(), (width * height) as usize);
+                    let used_end = O_WDATA + lands.len() * WDATA_BYTES;
+                    debug_assert!(O_WORLD + WORLD_BYTES <= O_WDATA);
+                    debug_assert!(used_end <= ARENA_BYTES);
+
+                    for i in 0..used_end {
+                        let value = (i as u8)
+                            .wrapping_mul(0x5d)
+                            .wrapping_add(salt.rotate_left((i & 7) as u32));
+                        unsafe { std::ptr::write(arena.add(i), value) };
+                        expected[i] = value;
+                    }
+                    unsafe {
+                        std::ptr::write_unaligned(world as *mut i32, width);
+                        std::ptr::write_unaligned(world.add(4) as *mut i32, height);
+                        std::ptr::write_unaligned(
+                            world.add(0x134) as *mut u32,
+                            wdata as usize as u32,
+                        );
+                    }
+                    expected[O_WORLD..O_WORLD + 4].copy_from_slice(&width.to_le_bytes());
+                    expected[O_WORLD + 4..O_WORLD + 8].copy_from_slice(&height.to_le_bytes());
+                    expected[O_WORLD + 0x134..O_WORLD + 0x138]
+                        .copy_from_slice(&(wdata as usize as u32).to_le_bytes());
+
+                    model.xs = width;
+                    model.ys = height;
+                    for (i, &land) in lands.iter().enumerate() {
+                        let offset = O_WDATA + i * WDATA_BYTES;
+                        unsafe { std::ptr::write(wdata.add(i * WDATA_BYTES + 2), land as u8) };
+                        expected[offset + 2] = land as u8;
+                        model.wdata[i].land = land;
+                        model.wdata[i].land_sub = expected[offset + 3];
+                    }
+                    model.fix_diag_land();
+                    let repairs = lands
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, land)| {
+                            let offset = O_WDATA + *i * WDATA_BYTES;
+                            model.wdata[*i].land != **land
+                                || model.wdata[*i].land_sub != expected[offset + 3]
+                        })
+                        .count() as u64;
+                    total_repairs += repairs;
+                    if repairs == 0 {
+                        unchanged_trials += 1;
+                    } else {
+                        changed_trials += 1;
+                    }
+                    for (i, cell) in model.wdata.iter().enumerate() {
+                        let offset = O_WDATA + i * WDATA_BYTES;
+                        expected[offset + 2] = cell.land as u8;
+                        expected[offset + 3] = cell.land_sub;
+                    }
+
+                    unsafe { call_cdecl0(f) };
+                    a.trials += 1;
+                    let got = unsafe { std::slice::from_raw_parts(arena, used_end) };
+                    if got != &expected[..used_end] {
+                        a.mismatches += 1;
+                        let byte = got
+                            .iter()
+                            .zip(&expected[..used_end])
+                            .position(|(got, want)| got != want);
+                        a.first_detail(one_line(&format!(
+                            "{label} {width}x{height} repairs={repairs} first_state_byte={byte:?} \
+                         model_byte={:?} retail_byte={:?} lands={lands:?}",
+                            byte.map(|i| expected[i]),
+                            byte.map(|i| got[i]),
+                        )));
+                    }
+                };
+
+            check(1, 1, &[0], 0x11, "single-dry", &mut a);
+            check(2, 2, &[0; 4], 0x22, "all-dry", &mut a);
+            for (name, diagonal) in [("nw", 0usize), ("ne", 2), ("se", 8), ("sw", 6)] {
+                let mut lands = [1i8; 9];
+                lands[4] = 0;
+                lands[diagonal] = 0;
+                check(3, 3, &lands, 0x30 + diagonal as u8, name, &mut a);
+            }
+            check(
+                3,
+                3,
+                &[1, 0, 0, 0, 1, 0, 0, 0, 0],
+                0x77,
+                "x-major-cascade",
+                &mut a,
+            );
+            a.phase(
+                "edges",
+                7,
+                "single/all-dry preservation, all four corner orientations, and an order-sensitive x-major in-place cascade",
+            );
+
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x4449_4147_4c41_4e44);
+            for _ in 0..n {
+                let width = (rng.next() % 32 + 1) as i32;
+                let height = (rng.next() % 32 + 1) as i32;
+                let mode = rng.next() % 5;
+                let mut lands = Vec::with_capacity((width * height) as usize);
+                for _ in 0..width * height {
+                    let r = rng.next();
+                    lands.push(match mode {
+                        0 => 0,
+                        1 => 1 + (r as i8 & 1),
+                        2 => {
+                            if r & 7 == 0 {
+                                1 + ((r >> 3) as i8 & 1)
+                            } else {
+                                0
+                            }
+                        }
+                        3 => {
+                            if r & 7 == 0 {
+                                0
+                            } else {
+                                1 + ((r >> 3) as i8 & 1)
+                            }
+                        }
+                        _ => (r % 3) as i8,
+                    });
+                }
+                check(width, height, &lands, rng.next() as u8, "random", &mut a);
+            }
+            a.phase("random", n as u64, distribution);
+            a.extras.push((
+                "repair_counts".into(),
+                format!(
+                    "cells={} changed_trials={} unchanged_trials={}",
+                    total_repairs, changed_trials, unchanged_trials
+                ),
+            ));
+            a.extras.push((
+                "compared_state".into(),
+                "every patterned byte through the complete 372-byte World, intervening arena, and all 28-byte WData records; only model-predicted land/land_sub writes allowed"
+                    .into(),
+            ));
+
+            a.trials += 1;
+            if read_corners() != original_corners {
+                a.mismatches += 1;
+                a.first_detail("fix_diag_land mutated the shipped corner tables".into());
+            }
+            a.phase(
+                "preservation",
+                1,
+                "all eight shipped corner-offset words unchanged after every repair call",
+            );
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
         Plan::StartCityWcoord {
             random,
             distribution,

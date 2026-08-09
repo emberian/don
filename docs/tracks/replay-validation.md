@@ -76,6 +76,14 @@ decoded save snapshot. Until the map-style generator supplies the actual
 coordinates for a replay seed, invoking the exact writer would still require
 invented inputs and is therefore deliberately not done.
 
+The first common post-continent terrain writer is now exact too.
+`Map::fix_diag_land` executes the complete shipped 536-byte routine after checking the
+retail NW/NE/SE/SW corner tables, and compares the full patterned World/WData arena after
+each call. Its X-major scan and 16-bit `land = 2, land_sub = 0` write agreed over 100,009
+trials. This does not reduce the replay's unsourced terrain count: `.rcx` contains no
+generated WData land plane on which to run the exact repair, and using a fabricated plane
+would still be fabricated initial state.
+
 The next two start-placement leaves are now exact without changing that source boundary.
 `WorldData::start_city_rad_wcoord` scans the writer's footprint arrays using retail's
 integer `vector_dist * 4 < Constants::city_center_radius - 1` predicate, and

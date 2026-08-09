@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786251830,
+  "generated_unix": 1786253736,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 85495,
+  "wall_ms": 105156,
   "exit_code": 0,
   "summary": {
-    "registered": 22,
-    "pass": 22,
+    "registered": 23,
+    "pass": 23,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 18622556
+    "total_trials": 18722565
   },
   "cases": [
     {
@@ -39,7 +39,7 @@
       "status": "pass",
       "trials": 500008,
       "mismatches": 0,
-      "wall_ms": 12,
+      "wall_ms": 13,
       "phases": [
         {"kind": "edges", "count": 8, "distribution": "hand-chosen edge tuples"},
         {"kind": "random", "count": 500000, "distribution": "xorshift64 (seed per --seed): a,b uniform over i32; lo,hi uniform over ±2^15"}
@@ -137,7 +137,7 @@
       "status": "pass",
       "trials": 243578,
       "mismatches": 0,
-      "wall_ms": 505,
+      "wall_ms": 503,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries"},
         {"kind": "random", "count": 243562, "distribution": "branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries"}
@@ -164,7 +164,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 514,
+      "wall_ms": 505,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries"},
         {"kind": "random", "count": 250000, "distribution": "branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries"}
@@ -189,7 +189,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 1428,
+      "wall_ms": 1419,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared"},
         {"kind": "random", "count": 250000, "distribution": "the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte"}
@@ -214,7 +214,7 @@
       "status": "pass",
       "trials": 100007,
       "mismatches": 0,
-      "wall_ms": 4,
+      "wall_ms": 3,
       "phases": [
         {"kind": "edges", "count": 7, "distribution": "signed seed gate boundaries plus independent prior World/RNG/map words"},
         {"kind": "random", "count": 100000, "distribution": "seven signed-gate/map-argument edges, then xorshift64: seed and initial World/RNG/map words uniform over all 32-bit patterns; exact positive/negative branch counts reported"}
@@ -223,6 +223,34 @@
       "extras": {
         "branch_counts": "negative_preserve=50074 nonnegative_seed=49933",
         "isolation_boundary": "retail entry..0x0068bcd0; case-local jmp at 0x0068bcd2 -> original epilogue 0x0068c84a"
+      },
+      "detail": null
+    },
+    {
+      "id": "fix_diag_land",
+      "va": "0x0069c250",
+      "abi": "void __cdecl Map::fix_diag_land(); no arguments",
+      "model": "don_sim::systems::map_terrain::World::fix_diag_land",
+      "subsystem": "world generation / post-continent diagonal repair",
+      "ledger_entry": "docs/mechanics/map-terrain.md §7.1 — executable terrain mutation",
+      "derivation": "docs/mechanics/map-terrain.md §7.1; PDB Map::fix_diag_land; retail 0x0069c250..0x0069c457",
+      "reachability": "Map::make calls this common static routine immediately after the selected map-style make_continents hook, except for map style 23. The complete 536-byte routine is call-free and touches only the World dimensions and WData land/land_sub bytes",
+      "caveat": "Valid generated-map domain: positive dimensions 1..32 and WData.land values 0..2. The fixture patterns the complete 372-byte World and every 28-byte WData record, installs only xs/ys and the measured +0x134 WData pointer, then compares every fabricated byte. This proves the in-place x-major NW/NE/SE/SW repair, including the 16-bit land/subtype store. It does not generate the continent plane supplied to the routine.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 100009,
+      "mismatches": 0,
+      "wall_ms": 19348,
+      "phases": [
+        {"kind": "retail-table", "count": 1, "distribution": "compare all four shipped corner_x/corner_y offsets in NW, NE, SE, SW order"},
+        {"kind": "edges", "count": 7, "distribution": "single/all-dry preservation, all four corner orientations, and an order-sensitive x-major in-place cascade"},
+        {"kind": "random", "count": 100000, "distribution": "four corner orientations, off-map/single-cell and x-major cascade edges, then xorshift64 worlds 1..32 with dry, sparse-water, dense-water, and uniform 0..2 land planes; complete patterned World/WData post-state compared byte-for-byte"},
+        {"kind": "preservation", "count": 1, "distribution": "all eight shipped corner-offset words unchanged after every repair call"}
+      ],
+      "excluded": [],
+      "extras": {
+        "repair_counts": "cells=669856 changed_trials=50304 unchanged_trials=49703",
+        "compared_state": "every patterned byte through the complete 372-byte World, intervening arena, and all 28-byte WData records; only model-predicted land/land_sub writes allowed"
       },
       "detail": null
     },
@@ -265,7 +293,7 @@
       "status": "pass",
       "trials": 449463,
       "mismatches": 0,
-      "wall_ms": 809,
+      "wall_ms": 824,
       "phases": [
         {"kind": "edges", "count": 13, "distribution": "LSB/MSB, byte/row crossings, and append return indices 0..7"},
         {"kind": "random", "count": 449450, "distribution": "byte/row-boundary coordinate sequences plus xorshift64 worlds 2..128 cells per axis, 1..8 valid appended starts per fixture; return index, walked array metadata/elements, and full bit plane compared after every append"}
@@ -290,7 +318,7 @@
       "status": "pass",
       "trials": 250008,
       "mismatches": 0,
-      "wall_ms": 168,
+      "wall_ms": 172,
       "phases": [
         {"kind": "edges", "count": 8, "distribution": "empty and multiple arrays; exact zero, factor-four, minus-one, and strict-threshold boundaries"},
         {"kind": "random", "count": 250000, "distribution": "empty/one/many array edges and exact threshold neighbours, then xorshift64 parallel arrays of 0..32 coordinates in 0..127, query coordinates 0..127, city_center_radius 0..1024"}
@@ -313,7 +341,7 @@
       "status": "pass",
       "trials": 250005,
       "mismatches": 0,
-      "wall_ms": 835,
+      "wall_ms": 845,
       "phases": [
         {"kind": "edges", "count": 5, "distribution": "empty preservation, zero distance/scale, strict tie, and shuffled-team writes"},
         {"kind": "random", "count": 250000, "distribution": "empty/tie/zero extrema edges plus xorshift64 0..8 start arrays, shuffled valid team indices, 0..127 coordinates, and finite nonnegative f32 scales drawn across exponent/mantissa bits"}
@@ -338,7 +366,7 @@
       "status": "pass",
       "trials": 100007,
       "mismatches": 0,
-      "wall_ms": 22087,
+      "wall_ms": 21650,
       "phases": [
         {"kind": "retail-table", "count": 1, "distribution": "execute circle_init 0x006817f0 and compare all 12,873 x/y entries plus 65 cumulative ring ends"},
         {"kind": "edges", "count": 5, "distribution": "single/no-draw fallback, exact coastal band, inner-ocean rejection, pass-specific margin, and optional-prior total rejection"},
@@ -412,7 +440,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 42647,
+      "wall_ms": 43427,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -495,7 +523,7 @@
       "status": "pass",
       "trials": 500003,
       "mismatches": 0,
-      "wall_ms": 23,
+      "wall_ms": 22,
       "phases": [
         {"kind": "edges", "count": 3, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 500000, "distribution": "state uniform over u32; lo,hi uniform over ±2^29"}
@@ -518,7 +546,7 @@
       "status": "pass",
       "trials": 4000026,
       "mismatches": 0,
-      "wall_ms": 104,
+      "wall_ms": 103,
       "phases": [
         {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
         {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
@@ -543,7 +571,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15691,
+      "wall_ms": 15648,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -567,7 +595,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 184,
+      "wall_ms": 188,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},
@@ -579,7 +607,7 @@
     }
   ],
   "known_gaps": [
-    {"claim": "Full seeded Map::make terrain and start-position equivalence", "why": "Map::make is a 3,021-byte virtual orchestration routine that immediately needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, RString leaves, engine arrays and allocators. The registry executes and proves its seed prefix, start-city representation/writer/radius, fairness scorer, and complete Region-start selector. The selector still receives a fabricated Region coordinate list and WData land plane; the registry does not substitute approximate continent or Region construction. docs/mechanics/map-terrain.md §7.1 records the executable dependency plan for extending this boundary."},
+    {"claim": "Full seeded Map::make terrain and start-position equivalence", "why": "Map::make is a 3,021-byte virtual orchestration routine that immediately needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, RString leaves, engine arrays and allocators. The registry executes and proves its seed prefix, common post-continent diagonal repair, start-city representation/writer/radius, fairness scorer, and complete Region-start selector. The terrain repair still receives a fabricated WData land plane, and the selector also receives a fabricated Region coordinate list; the registry does not substitute approximate continent or Region construction. docs/mechanics/map-terrain.md §7.1 records the executable dependency plan for extending this boundary."},
     {"claim": "§1.4 entrench_dir_level — the entrenchment direction classifier", "why": "Inlined at 0x00644E0E–0x00644E2D inside ObjectData::get_damage; there is no standalone function to call. It runs only indirectly, inside damage_pipeline (642,609 of 7,986,695 trials), and its boundaries are pinned by mutation rather than by a direct differential."},
     {"claim": "§1.6 get_attack / get_armor — upgrade branches, and live dispatch", "why": "The base paths run as real retail code inside damage_pipeline. The upgrade branches need LeaderData::has_tribe_bonus(0x16) to return true, and the fabricated world sets game[+0x20] |= 4 to force it false — never executed. Worse (ledger §4.4): over 56,789 live damage calls the vtable dispatched to these two base-class leaves ZERO times, so even the tested path is not the one live combat takes."},
     {"claim": "§1.8 Rules — the typed rules block (828/834 constants matched live memory)", "why": "Validated against a running process on the Parallels VM, not against the oracle. Re-running it needs the live game, so it is outside this harness by construction."},

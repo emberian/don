@@ -6,9 +6,10 @@ packet offset `+0x2d`.
 
 Every claim below is **[measured]** on this Mac against `ron-bin/riseofnations.exe`
 (sha256 `30478a44…625079`) and `ron-bin/sbl/rise.pdb`, unless marked **[reported]**.
-Nothing here comes from community documentation. Fidelity tier is **C** throughout —
-behaviourally faithful, structure and constants read off the binary — with **no oracle
-differential yet**; see §9.
+Nothing here comes from community documentation. Structural claims without an executable
+case remain fidelity tier **C** — behaviourally faithful, with structure and constants
+read off the binary. The seven world-generation slices in §7.1 additionally have
+executable Tier-B retail differentials.
 
 ---
 
@@ -26,7 +27,7 @@ sim's terrain is **two integer arrays and four byte planes**.
 | **There is no sim-side heightmap.** | `Terrain::master_land_heights : SimpleArray<float>` lives in the render class and never enters the checksum. The sim's only vertical structure is the discrete cliff/mountain bits. |
 | **But four `Terrain` fields *are* lockstep-critical.** | `World::walk_data` sections 10–13 checksum `Terrain::{halfland_locs, halfland_types, halfland_subtypes, nuke_hits}`. New finding; see §6. |
 
-23 unit tests, all passing (§8).
+33 focused unit tests, all passing (§8).
 
 ---
 
@@ -443,12 +444,13 @@ from scratch.
 
 ### 7.1 Executable world-generation oracle boundary
 
-The structural result above now has six fork-isolated retail cases in
+The structural result above now has seven fork-isolated retail cases in
 `crates/oracle`; none substitutes simplified map logic.
 
 | case | retail bytes executed | exact claim | deliberately not claimed |
 |---|---|---|---|
 | `map_make_seed_prefix` | `Map::make` entry `0x0068bc90` through the seed write at `0x0068bcd0` | the signed-negative preserve gate; `Map+0x110 = map_arg`; and identical nonnegative seed writes to `World+0x7c` and `game_random+0` | terrain construction, RNG consumption, orientation, continents, fairness or starts |
+| `fix_diag_land` | complete call-free terrain mutation `0x0069c250`–`0x0069c457` plus the shipped `corner_x/corner_y` tables | exact X-major in-place diagonal repair; 16-bit `land = 2, land_sub = 0` writes; preservation of every other fabricated byte | generating the continent/WData plane supplied to the repair |
 | `start_city_wcoord` | complete leaf `0x006b30e0`–`0x006b311d` | valid coordinates flatten as `y * world_xs + x`; `start_city_locs` is LSB-first | coordinate selection, radius tests, or placement policy |
 | `add_starting_location` | complete writer `0x006b2de0`–`0x006b3019` | returned start index; all four walked-array append sequences; the exact 2×2 row-major LSB-first occupancy writes | coordinate selection, map-style placement, or allocator execution (fixture supplies measured spare capacity) |
 | `start_city_rad_wcoord` | complete call-free leaf `0x006b3850`–`0x006b3952` | scans the parallel footprint arrays; applies integer `vector_dist * 4`; compares strictly below PDB `Constants::city_center_radius - 1` (`+0x12c`) | choosing candidates or any map-style placement policy |
@@ -462,6 +464,16 @@ the two writes (`0x0068bcd2`) with a five-byte jump to `Map::make`'s original ep
 the relocated retail instructions. The boundary bytes are checked before patching, and
 the case record states the patch and limitation. The Rust side is the shipped
 `World::seed_map_generation`, not another transcription in the harness.
+
+`Map::fix_diag_land` is the first landed common terrain mutation after the selected
+map-style `make_continents` hook. `Map::make` calls it directly for every style except 23.
+It scans X first and Y second, testing the shipped NW, NE, SE, SW corner order. A dry
+centre and dry diagonal with both intervening orthogonal cells in water causes a 16-bit
+store of `2` at `WData+2`: `land` becomes deep water and `land_sub` becomes zero. The scan
+is deliberately in-place, so an earlier repair can prevent or create a later match. The
+oracle compares all eight retail corner-table words, then every byte of a patterned
+372-byte World and every 28-byte WData record over 100,009 trials; 669,856 cells changed,
+with zero mismatches.
 
 `start_city_wcoord` needs only the two retail World reference globals and an owned bit
 plane. Its Rust model is now the shipped
@@ -515,21 +527,23 @@ This establishes the following evidence ladder for a pinned-seed world oracle:
 
 1. **Landed:** prove seed installation and negative-seed preservation without entering
    the unconstructed map body.
-2. **Landed:** prove the final start-city occupancy representation and indexing.
-3. **Landed:** `World::add_starting_location` appends the player coordinate, the ordered
+2. **Landed:** execute the common post-continent `Map::fix_diag_land` mutation over the
+   complete supplied WData plane, including order-sensitive in-place writes.
+3. **Landed:** prove the final start-city occupancy representation and indexing.
+4. **Landed:** `World::add_starting_location` appends the player coordinate, the ordered
    city-footprint coordinates `(x,y)`, `(x-1,y)`, `(x,y-1)`, `(x-1,y-1)`, and the matching
    occupancy bits, returning the original player-start index.
-4. **Landed:** `WorldData::start_city_rad_wcoord` `0x006b3850` walks the recorded
+5. **Landed:** `WorldData::start_city_rad_wcoord` `0x006b3850` walks the recorded
    footprint-coordinate arrays and applies the exact integer exclusion threshold;
    `MapFairness::calc_distances` `0x0068a1c0` writes the team-indexed binary32 distance
    table and strict extrema.
-5. **Landed:** `Map::place_start_in_region` selects a concrete coordinate from a supplied
+6. **Landed:** `Map::place_start_in_region` selects a concrete coordinate from a supplied
    Region through both retail passes, including canonical circle-table ocean tests and the
    exact `game_random` draw count.
-6. **Next construction boundary:** expand into Region construction and the per-style
+7. **Next construction boundary:** expand into Region construction and the per-style
    continent hooks, recording the consumed RNG state and complete integer terrain/start
    arrays after each stage.
-7. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
+8. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
    21 map-style objects, `GameInfo`, Rules/Constants, `RString` leaves, engine arrays and
    allocators. Until those dependencies are real or exactly substituted, the full seeded
    terrain/start comparison remains a machine-readable `known_gap` in
@@ -544,7 +558,7 @@ inputs and side effects can be executed and compared.
 
 ## 8. What the Rust module does, and how it was measured
 
-`crates/don-sim/src/systems/map_terrain.rs`, **28 focused tests, all passing**:
+`crates/don-sim/src/systems/map_terrain.rs`, **33 focused tests, all passing**:
 
 ```
 rustc --edition 2021 --test crates/don-sim/src/systems/map_terrain.rs -o /tmp/mt && /tmp/mt
@@ -637,25 +651,24 @@ Four tests cover these: `space_probes_tile_a_4x4_block`, `space_at_corner_grades
 
 ## 9. Honest gaps
 
-The module is **Tier C** — structure and constants read off the binary, behaviour
-reproduced, **no differential test against retail**. Specifically:
+Most of the module remains **Tier C** — structure and constants read off the binary with
+behaviour reproduced. The seven §7.1 slices are Tier-B retail differentials, but they do
+not promote adjacent uncased behavior. Specifically:
 
-1. **No oracle run.** Nothing here has been executed against retail machine code. The
-   highest-value next step is an `oracle` case for `World::init` (pure, 5 scalar outputs
-   from 2 inputs) and one for `space_at_corner` over a synthesised `tdata`/`wdata` pair —
-   both are self-contained enough to call directly.
+1. **Oracle coverage is sliced, not whole-world.** Seed installation, diagonal land
+   repair, the start writer/accessors, fairness and regional placement execute retail
+   code. `World::init`, `space_at_corner`, most terrain setters and the per-style
+   continent hooks still have no differential case.
 2. **`WData::flags 0x0040` has no identified writer.** It is measured in four readers
    (`is_flat`, `is_passable`, `is_impassable`, `get_land`) and is impassable, but nothing
    was found that sets it. Do not assume it is dead.
 3. **`WData::solid`'s sign convention is measured but unexplained** — blocking increments,
    trees decrement. Reproduced faithfully; not understood.
-4. **`WalkedArray::capacity` / `increment` / `flags` are checksummed and we do not model
-   the engine's growth policy.** For the six `SimpleArray<WCoord>` members plus the four
-   `Terrain` arrays, a non-empty array's checksum depends on the *capacity* the engine's
-   `increase_size` happened to land on, not just the contents. Empty arrays (the common
-   case at init) walk only their 4-byte length, so this does not bite until start
-   positions are populated. **This is the single biggest known obstacle to a bit-exact
-   `world` channel** and it belongs to whoever ports `basic/arraybase.h`.
+4. **`WalkedArray::capacity` / `increment` / `flags` are checksummed.** The WCoord arrays'
+   `-1` growth policy is modeled and the start writer's contents/metadata are oracle-backed
+   with preallocated retail fixtures. The allocator-taking retail growth branch and the
+   four separate `Terrain` arrays still lack executable coverage; a non-empty array's
+   checksum depends on capacity metadata, not just contents.
 5. **The `DataWalk+0x0c` section mask.** `check_all` passes `-1` for the world channel, so
    all 13 sections run; other callers may pass a single section index. Only the `-1` path
    is implemented.
@@ -666,9 +679,10 @@ reproduced, **no differential test against retail**. Specifically:
    bit-exact in a live game without it. The sibling borders lane has the caps (44 plain /
    96 fully teched, 256 cells/frame budget); this module supplies the storage and the
    `get_who`/`get_region` accessors it needs.
-8. **The generator itself is not ported** — only the proof that porting it is worthwhile.
-   `Map::make`'s subsystem order and the 21 per-style `make_continents` overrides are
-   mapped but not implemented.
+8. **The generator itself is not ported.** `Map::make`'s subsystem order and the 21
+   per-style `make_continents` overrides are mapped but not implemented. The common
+   post-continent `fix_diag_land` stage is now exact and oracle-backed; its input land
+   plane is still supplied rather than generated.
 9. **`land` values 0/1/2 are named from behaviour**, not from a definition. `is_ocean`
    accepts 1 and 2, `wipe` and `offmap_world` use 2. The PDB's `TileSetLandTypes`
    (`eTILE_FERTILE=0, eTILE_COASTAL=1, eTILE_OCEAN=2`) is a *tileset* enum and is only a
@@ -676,19 +690,9 @@ reproduced, **no differential test against retail**. Specifically:
 
 ## 10. Wiring
 
-The module is **not** referenced from `lib.rs` — `crates/don-sim/src/lib.rs` and
-`world.rs` are owned by a parallel wave, so I did not touch them, and I did not create
-`systems/mod.rs` in case a sibling lane is creating it too. To wire it up:
-
-```rust
-// crates/don-sim/src/systems/mod.rs
-pub mod map_terrain;
-
-// crates/don-sim/src/lib.rs
-pub mod systems;
-```
-
-Until then it compiles and tests standalone with the `rustc --test` line in §8.
+The module is wired through `crates/don-sim/src/systems/mod.rs`. Production replay/world
+code uses the same `World` implementation exercised by the focused tests and oracle
+models; there is no parallel standalone terrain representation.
 
 ## 11. Ledger entries to add to `docs/provenance-ledger.md`
 

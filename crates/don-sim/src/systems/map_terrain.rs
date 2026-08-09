@@ -1149,6 +1149,51 @@ impl World {
         true
     }
 
+    /// `Map::fix_diag_land` `0x0069c250`–`0x0069c457`.
+    ///
+    /// This is the first common terrain mutation after the selected map-style
+    /// `make_continents` hook in `Map::make`. Retail scans **X first, then Y**.
+    /// For each dry cell it visits the diagonal corners NW, NE, SE, SW. When
+    /// the diagonal is dry but both intervening orthogonal cells are water,
+    /// the centre is changed to deep water. The 16-bit store at `WData+2`
+    /// writes `land = 2` and clears `land_sub` together. The scan is deliberately
+    /// in-place, so an earlier repair can affect a later candidate.
+    pub fn fix_diag_land(&mut self) {
+        const CORNERS: [(i32, i32); 4] = [(-1, -1), (1, -1), (1, 1), (-1, 1)];
+
+        for x in 0..self.xs {
+            for y in 0..self.ys {
+                let center = self.w_index(x, y);
+                if self.wdata[center].land != 0 {
+                    continue;
+                }
+
+                for (dx, dy) in CORNERS {
+                    let diag_x = x + dx;
+                    let diag_y = y + dy;
+                    if diag_x < 0
+                        || diag_y < 0
+                        || diag_x >= self.xs
+                        || diag_y >= self.ys
+                        || self.wdata[self.w_index(diag_x, diag_y)].land != 0
+                    {
+                        continue;
+                    }
+
+                    let side_x = x + dx;
+                    let side_y = y + dy;
+                    if self.wdata[self.w_index(side_x, y)].land != 0
+                        && self.wdata[self.w_index(x, side_y)].land != 0
+                    {
+                        self.wdata[center].land = 2;
+                        self.wdata[center].land_sub = 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // -- indexing ------------------------------------------------------------------------
 
     /// `World::get_wdata` `0x0046d220`: `wdata[wy * xs + wx]`, stride 28.
@@ -2504,6 +2549,29 @@ mod tests {
         let placed = place_start_in_region(&w, &circle, &mut rng, &coords, 12, 0x5a5a, None);
         assert_eq!(placed, Some(coords[expected_index]));
         assert_eq!(rng.state(), expected_rng.state());
+    }
+
+    #[test]
+    fn fix_diag_land_is_in_place_x_major_and_clears_the_subtype() {
+        let mut w = World::init_default_rules(3, 3);
+        for cell in &mut w.wdata {
+            cell.land = 0;
+            cell.land_sub = 0x7b;
+        }
+        // Both (0,1) and (1,0) initially satisfy a diagonal dry/dry,
+        // orthogonal water/water pattern. Retail's x-major scan repairs (0,1)
+        // first; that in-place write prevents (1,0) from matching afterwards.
+        w.wdata_mut(0, 0).land = 1;
+        w.wdata_mut(1, 1).land = 1;
+
+        w.fix_diag_land();
+
+        assert_eq!(w.wdata(0, 1).land, 2);
+        assert_eq!(w.wdata(0, 1).land_sub, 0);
+        assert_eq!(w.wdata(1, 0).land, 0);
+        assert_eq!(w.wdata(1, 0).land_sub, 0x7b);
+        assert_eq!(w.wdata(0, 0).land, 1);
+        assert_eq!(w.wdata(0, 0).land_sub, 0x7b);
     }
 
     /// `World::wipe` leaves every cell in the state the disassembly writes.
