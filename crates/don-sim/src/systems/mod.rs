@@ -141,6 +141,10 @@ pub mod target;
 /// the shared order dispatcher integration.
 pub mod targeted_order_plans;
 pub mod tech_cities;
+/// Exact Tech Race tail of `Leader::gain_tech`: end-age/all-epoch predicates,
+/// typed opponent progress notices, and synchronous handoff to the terminal victory
+/// transaction. The step-14 production adapter remains an explicit live seam.
+pub mod tech_race;
 /// Exact first (bush-fringe) pass of `TerrainGroups::add_doobers`, through the
 /// second pass's external doober-occupancy query.
 pub mod terrain_doobers;
