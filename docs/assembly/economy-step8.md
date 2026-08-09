@@ -25,8 +25,8 @@ Concretely, these execute today and did not this morning:
 | `Leaders::process_all` | `0x006ED2A0` | uncited; step 8 approximated by a per-leader `for` | ported whole, 387 B disassembled |
 | the diplomacy / hostile scan | `0x006ED2E0`..`0x006ED321` | absent | ported |
 | `Leader::gather`'s `BitMask<44>` union | `0x006CE35F`..`0x006CE3D0` | absent | ported — **this is what arms the stat passes** |
-| `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal ported, vtable bodies are inputs |
-| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal ported |
+| `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal plus `is_active` and plain-wall base hit/LOS bodies execute; building overrides remain |
+| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal plus `is_captain` and base hit/LOS bodies execute; direct speed/armor remain |
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
 | the three grace timers | `0x006ED35F`..`0x006ED3CE` | absent | ported |
@@ -290,13 +290,13 @@ fn leaders_process_all(&mut self) -> (StepRun, u32) {
 ```
 
 The landed adapter also synchronizes `LeaderSlot`'s economy inputs/outputs at this boundary
-and rebuilds each `OwnerObjects` band from the live `ObjectRegistry`, preserving the
-unresolved virtual answers and their counters.
+and rebuilds each `OwnerObjects` band from the live `ObjectRegistry`, preserving resolved
+type-table inputs and call counters.
 
 Three integration facts remain load-bearing.
 
 * `Gap::LeaderCalcWallStats` and `Gap::LeaderCalcUnitStats` are no longer unconditional.
-  They now count active objects whose unresolved virtual bodies were reached by a stat pass,
+  They now count only unresolved bodies or missing type-table inputs reached by a stat pass,
   not frames on which retail correctly skipped the edge-triggered traversal.
 * `Gap::LeaderProcessTaunt` becomes accurate rather than per-frame: it should count actual
   dispatches, which with a zeroed taunt table is zero.
@@ -353,11 +353,14 @@ Corrections, two sentences each:
   `victory_score::Leaders::process_elimination` already has it, over `Game::retake_capital`
   `0x00594530`. Two copies of one retail function in one tick is the failure mode
   `COVERAGE.md` §1 names about `adler32`.
-* **Four virtual slots inside the two stat passes are unresolved**: `+0x4C`, `+0xE8`, `+0x15C`
-  and `+0x160` on the object's data. `StatObject` carries their observable answers and counts
-  the calls; it does not invent bodies. Also unpreserved-because-unobservable: the first
-  `calc_wall_stats` loop fetches its guard through vtable `+0xAC` and the second through
-  `+0xB0`, which is flagged in the source so nobody "tidies" it.
+* **The four virtual slots are resolved from retail vtables**: `+0x4C` is the 8-byte
+  `WallData::is_active`, `+0xE8` is the 13-byte `UnitData::is_captain`, and the base
+  `+0x15C/+0x160` implementations are `Object::update_hits` (98 bytes) and
+  `Object::update_los` (42 bytes). Those base bodies now write real Unit/Wall state when
+  their global type-table inputs are supplied. The building band overrides the last pair
+  with `Wall::update_hits/update_los`; those overrides, `Wall::update_construct_time`, and
+  direct `Unit::update_speed/update_armor` remain red. The first wall-stat loop fetches its
+  guard through vtable `+0xAC`, the second through `+0xB0`; that asymmetry remains recorded.
 * **`Game::retake_capital` `0x00594530` is read but not ported here.** Its rescale is
   `max(1, (world[0] * RETAKE_CAPITAL + S/2) / S)` with `S = [[0x00E7FCA8] + 0x144]`, then
   `(leader[0x41C] * that) >> 8` with a toward-zero bias, and a CTW branch behind

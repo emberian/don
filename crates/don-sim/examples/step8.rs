@@ -58,7 +58,6 @@ fn main() {
         e.objects.band_2000 = vec![
             StatObject {
                 active: true,
-                construct_time_resolved: false,
                 ..Default::default()
             };
             6
@@ -66,7 +65,7 @@ fn main() {
         e.objects.band_3000 = vec![
             StatObject {
                 active: true,
-                construct_time_resolved: true,
+                wall_active: true,
                 ..Default::default()
             };
             10
@@ -74,7 +73,13 @@ fn main() {
         e.objects.units = vec![
             StatObject {
                 active: true,
-                stats_stale: true,
+                captain: true,
+                owner_in_game: true,
+                hit_inputs: Some(don_sim::systems::leaders::ObjectHitInputs {
+                    base_hits: 100,
+                    ..Default::default()
+                }),
+                type_los: Some(4),
                 ..Default::default()
             };
             24

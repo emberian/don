@@ -21,8 +21,8 @@
 //! | [`StepRun::OutOfScope`] | presentation, telemetry or session management: correctly absent from a headless core |
 //!
 //! Sub-calls inside a step are counted the same way. `Leaders::process_all` now executes
-//! its recovered dispatcher and object-band traversals; unresolved object virtual bodies
-//! and actual taunt-body dispatches are charged at the call sites, so "step 8 executed"
+//! its recovered dispatcher and object-band traversals; resolved base Object virtuals
+//! write real state and remaining bodies are charged at the call sites, so "step 8 executed"
 //! does not silently mean "every second-level body exists". [`Coverage::gaps`] is that
 //! ledger.
 //!
@@ -122,8 +122,8 @@ impl Gap {
 /// One line per [`Gap`], in enum order: the retail function and why it is absent.
 pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 4  RunTimeEnv::run_script 0x0043D0E0 - runtime is wired; unrecovered ScenarioFuncSet builtins fail the tick closed",
-    "step 8  calc_wall_stats object vtable bodies +0x4c/+0x15c/+0x160 - traversal executes; bodies unresolved",
-    "step 8  calc_unit_stats object vtable bodies +0xe8/+0x15c/+0x160 - traversal executes; bodies unresolved",
+    "step 8  calc_wall_stats - +0x4c and plain-wall +0x15c/+0x160 execute; Wall override pair and update_construct_time remain",
+    "step 8  calc_unit_stats - +0xe8/+0x15c/+0x160 execute; direct Unit::update_speed/update_armor remain",
     "step 8  Leader::process_taunt 0x006b8cc0 - exact table dispatch executes; AI-chat body absent",
     "step 11 Leader::check_explore leaders.cpp:26413 - uncited",
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
@@ -1119,7 +1119,12 @@ impl Sim {
                 .units
                 .resize(unit_rows.len(), leaders::StatObject::default());
             for (view, &row) in objects.units.iter_mut().zip(unit_rows) {
-                view.active = self.world.units.get_flags(row as usize) & OBJ_FLAG_ACTIVE != 0;
+                let row = row as usize;
+                view.active = self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0;
+                view.captain = self.world.units.o_up()[row] < 0;
+                view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+                view.myhits = self.world.units.myhits()[row];
+                view.mylos = self.world.units.mylos()[row];
             }
 
             let build_rows = slot.band(Band::Build);
@@ -1127,10 +1132,15 @@ impl Sim {
                 .band_2000
                 .resize(build_rows.len(), leaders::StatObject::default());
             for (view, &row) in objects.band_2000.iter_mut().zip(build_rows) {
-                view.active = self
-                    .builds
-                    .get(row as usize)
-                    .is_some_and(production::BuildData::is_valid);
+                if let Some(build) = self.builds.get(row as usize) {
+                    view.active = build.is_valid();
+                    view.wall_active = build.is_active();
+                    view.owner_in_game =
+                        self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+                    view.myhits = build.myhits;
+                } else {
+                    view.active = false;
+                }
             }
 
             let wall_rows = slot.band(Band::Wall);
@@ -1138,10 +1148,50 @@ impl Sim {
                 .band_3000
                 .resize(wall_rows.len(), leaders::StatObject::default());
             for (view, &row) in objects.band_3000.iter_mut().zip(wall_rows) {
-                view.active = self
-                    .walls
-                    .get(row as usize)
-                    .is_some_and(walls::WallState::is_alive);
+                if let Some(wall) = self.walls.get(row as usize) {
+                    view.active = wall.is_alive();
+                    view.wall_active = wall.is_active();
+                    view.owner_in_game =
+                        self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+                    view.myhits = wall.myhits;
+                    view.mylos = wall.mylos;
+                } else {
+                    view.active = false;
+                }
+            }
+        }
+    }
+
+    /// Commit the two resolved base-Object virtual bodies back into walked object state.
+    /// Building-band entries are deliberately absent: their vtable overrides this pair
+    /// with `Wall::update_hits/update_los`, which remains red.
+    fn sync_step8_stat_outputs(&mut self, trace: &leaders::Step8Trace) {
+        for who in 0..NUM_LEADERS {
+            let slot = self.world.objects.slot(who);
+            let objects = &self.step8_env.leaders[who].objects;
+
+            if trace.unit_stats_ran[who] {
+                for (view, &row) in objects.units.iter().zip(slot.band(Band::Unit)) {
+                    let row = row as usize;
+                    if view.active && view.captain && view.hit_inputs.is_some() {
+                        self.world.units.myhits_mut()[row] = view.myhits;
+                    }
+                    if view.active && view.type_los.is_some() {
+                        self.world.units.mylos_mut()[row] = view.mylos;
+                    }
+                }
+            }
+            if trace.wall_stats_ran[who] {
+                for (view, &row) in objects.band_3000.iter().zip(slot.band(Band::Wall)) {
+                    if let Some(wall) = self.walls.get_mut(row as usize) {
+                        if view.active && view.hit_inputs.is_some() {
+                            wall.myhits = view.myhits;
+                        }
+                        if view.active && view.type_los.is_some() {
+                            wall.mylos = view.mylos;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1149,8 +1199,9 @@ impl Sim {
     /// `Leaders::process_all` `0x006ED2A0`, the recovered 387-byte dispatcher: outer
     /// `flags & 2` gate, per-frame resets, hostile scan, gather, edge-triggered wall/unit
     /// stat traversals, elimination, grace timers, taunt-table dispatch, and tail-bit clear.
-    /// The four object virtual bodies and `Leader::process_taunt`'s AI-chat body remain
-    /// explicit gaps; their actual call sites are counted rather than charged once per tick.
+    /// The base Object virtual bodies execute when their type rows are present. The Wall
+    /// override pair, construction-time update, direct unit speed/armor derivations, and
+    /// `Leader::process_taunt` AI-chat body remain call-site-counted gaps.
     fn leaders_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
         self.sync_step8_inputs();
@@ -1161,6 +1212,7 @@ impl Sim {
             &self.econ_rules,
             &mut self.step8_env,
         );
+        self.sync_step8_stat_outputs(&trace);
 
         // `process_all` records this boundary instead of duplicating the already-ported
         // elimination function. Invoke it here, at its exact place and in retail slot order.
@@ -1200,17 +1252,18 @@ impl Sim {
             .sum::<u64>();
         self.cover.leader_taunt_dispatches += trace.taunts.len() as u64;
 
-        // The traversals now execute against the real owner bands. What remains missing is
-        // the object data's virtual work, so charge only active objects on a pass that ran.
+        // Charge only genuinely unresolved calls. The four slot addresses are resolved;
+        // plain Object hit/LOS bodies run when their type rows are supplied, while the
+        // building overrides and direct unit speed/armor derivations remain explicit.
         self.cover.gaps[Gap::LeaderCalcWallStats.index()] += trace
             .wall_pass
             .iter()
-            .map(|pass| pass.active as u64)
+            .map(|pass| pass.unresolved_calls as u64)
             .sum::<u64>();
         self.cover.gaps[Gap::LeaderCalcUnitStats.index()] += trace
             .unit_pass
             .iter()
-            .map(|pass| pass.active as u64)
+            .map(|pass| pass.unresolved_calls as u64)
             .sum::<u64>();
         self.cover.gaps[Gap::LeaderProcessTaunt.index()] += trace.taunts.len() as u64;
 

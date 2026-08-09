@@ -67,10 +67,11 @@
 //!   drive the existing port from here.
 //! * **`Leader::process_taunt` `0x006B8CC0`** (2,340 B) is AI chat. Dispatches are recorded
 //!   in [`Step8Trace::taunts`] and the body is not ported.
-//! * The bodies behind the four unresolved virtual slots that `calc_wall_stats` /
-//!   `calc_unit_stats` call (`+0x4C`, `+0xE8`, `+0x15C`, `+0x160` on the object's data) are
-//!   the object graph's, not the leader's. They are represented by [`StatObject`]'s
-//!   observable booleans and counted, never invented.
+//! * The four virtual slots are now resolved from the retail vtables. `+0x4C` is
+//!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
+//!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band overrides
+//!   the latter pair with the much larger `Wall::update_hits/update_los`; those overrides,
+//!   plus the direct `Unit::update_speed/update_armor` calls, remain explicit gaps.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
 //!
@@ -717,24 +718,47 @@ pub fn calc_anti_attrition(leader: &mut Leader, rules: &Step8Rules, gates: &Attr
 // Leader::calc_wall_stats 0x006CF7C0 / Leader::calc_unit_stats 0x006CF970
 // ===========================================================================================
 
+/// Inputs to `Object::update_hits` `0x00647010` after resolving the object's type-table
+/// rows. The three alternate values are only used by the special type families `0x32/0x33`.
+///
+/// Retail selects type `0x44`, `0x43`, then `0x42` for owner policy bits `0x10`, `0x08`,
+/// then `0x04`; with none set it keeps the base type. Carrying all four lookup results here
+/// keeps the function exact without making the leader scheduler own the global type table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ObjectHitInputs {
+    pub base_hits: i32,
+    pub special_family_32_33: bool,
+    pub type_42_hits: i32,
+    pub type_43_hits: i32,
+    pub type_44_hits: i32,
+    pub owner_policy: u8,
+}
+
 /// One entry of an `Objects` band, as the two stat passes observe it through the vtable.
 ///
-/// Both functions are pure object-graph traversal — every decision they make is a virtual
-/// call on the object's data — so this type carries the *observable answers* rather than
-/// inventing bodies for slots we have not resolved. The counters make the pass measurable:
-/// a caller can prove the loop ran and how far it got, which is the whole point of wiring
-/// it in at all.
+/// `hit_inputs` and `type_los` are resolved type-table inputs, not invented answers. `None`
+/// means the caller has not supplied that global table row; the traversal still executes,
+/// but records an unresolved call and leaves walked state untouched.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct StatObject {
     /// `data->byte[8] & 1` — the active bit both band loops test
     /// (`0x006CF7EC`, `0x006CF9A5`).
     pub active: bool,
-    /// `vtbl + 0x4C` on the wall data. Zero routes through `Wall::update_construct_time`
-    /// `0x0063D560` (`0x006CF80B`).
-    pub construct_time_resolved: bool,
-    /// `vtbl + 0xE8` on the unit data — the guard `calc_unit_stats` tests before
-    /// re-deriving speed and armor (`0x006CF9CD`).
-    pub stats_stale: bool,
+    /// `WallData::is_active`, vtable `+0x4C`: `flags & 4` (`0x00472350`, 8 bytes).
+    pub wall_active: bool,
+    /// `UnitData::is_captain`, vtable `+0xE8`: `o_up >> 15` (`0x0046CEB0`, 13 bytes).
+    pub captain: bool,
+    /// The type-table rows consumed by `Object::update_hits`.
+    pub hit_inputs: Option<ObjectHitInputs>,
+    /// `ObjectTypeData::los` (`type + 0x21C`) for `Object::update_los`.
+    pub type_los: Option<i8>,
+    /// Whether the owning leader has its `flags & 1` bit set. An out-of-game owner forces
+    /// `Object::update_los` to store zero.
+    pub owner_in_game: bool,
+    /// `ObjectData::myhits` (`+0x20`), written by `Object::update_hits`.
+    pub myhits: i32,
+    /// `ObjectData::mylos` (`+0x3C`), written by `Object::update_los`.
+    pub mylos: i8,
     /// How many times `vtbl + 0x160` was invoked on this object.
     pub v160_calls: u32,
     /// How many times `vtbl + 0x15C` was invoked on this object.
@@ -745,6 +769,10 @@ pub struct StatObject {
     pub speed_updates: u32,
     /// `Unit::update_armor` `0x006054C0`.
     pub armor_updates: u32,
+    /// Resolved base `Object::update_hits` calls that wrote `myhits`.
+    pub object_hits_updates: u32,
+    /// Resolved base `Object::update_los` calls that wrote `mylos`.
+    pub object_los_updates: u32,
 }
 
 /// What one stat pass did, so "it ran" is a number instead of an assertion.
@@ -755,6 +783,10 @@ pub struct StatPassCounts {
     pub construct_time_updates: u32,
     pub speed_updates: u32,
     pub armor_updates: u32,
+    pub object_hits_updates: u32,
+    pub object_los_updates: u32,
+    /// Calls whose body or global type-table input remains unavailable.
+    pub unresolved_calls: u32,
 }
 
 impl StatPassCounts {
@@ -764,7 +796,43 @@ impl StatPassCounts {
         self.construct_time_updates += other.construct_time_updates;
         self.speed_updates += other.speed_updates;
         self.armor_updates += other.armor_updates;
+        self.object_hits_updates += other.object_hits_updates;
+        self.object_los_updates += other.object_los_updates;
+        self.unresolved_calls += other.unresolved_calls;
     }
+}
+
+/// `Object::update_hits(int full)` `0x00647010` (98 bytes), the base implementation at
+/// vtable `+0x15C` for units and plain walls.
+///
+/// The `full` argument only selects the return value in the `Wall` override. Base Object
+/// always writes and returns `myhits`; retaining it in the signature documents why the
+/// dispatcher passes zero without creating a false branch here.
+pub fn object_update_hits(o: &mut StatObject, _full: bool) -> Option<i32> {
+    let i = o.hit_inputs?;
+    let hits = if !i.special_family_32_33 {
+        i.base_hits
+    } else if i.owner_policy & 0x10 != 0 {
+        i.type_44_hits
+    } else if i.owner_policy & 0x08 != 0 {
+        i.type_43_hits
+    } else if i.owner_policy & 0x04 != 0 {
+        i.type_42_hits
+    } else {
+        i.base_hits
+    };
+    o.myhits = hits;
+    o.object_hits_updates = o.object_hits_updates.wrapping_add(1);
+    Some(hits)
+}
+
+/// `Object::update_los()` `0x00646FE0` (42 bytes), the base implementation at vtable
+/// `+0x160`: out-of-game owners store zero; otherwise store `ObjectTypeData::los`.
+pub fn object_update_los(o: &mut StatObject) -> Option<i32> {
+    let base = o.type_los?;
+    o.mylos = if o.owner_in_game { base } else { 0 };
+    o.object_los_updates = o.object_los_updates.wrapping_add(1);
+    Some(o.mylos as i32)
 }
 
 /// The two `Objects` bands `Leader::calc_wall_stats` walks, and the unit band
@@ -786,6 +854,33 @@ pub struct OwnerObjects {
 }
 
 /// The body both of `calc_wall_stats`'s loops share (`0x006CF7D8` and `0x006CF88E`).
+fn build_band_pass(band: &mut [StatObject]) -> StatPassCounts {
+    let mut c = StatPassCounts::default();
+    for o in band.iter_mut() {
+        c.visited += 1;
+        if !o.active {
+            continue;
+        }
+        c.active += 1;
+        if !o.wall_active {
+            // `Wall::update_construct_time` 0x0063D560 — the only non-virtual call in the
+            // loop, and the one thing here that is a named retail function rather than a
+            // vtable slot.
+            o.construct_time_updates += 1;
+            c.construct_time_updates += 1;
+            c.unresolved_calls += 1;
+        }
+        // BuildData's vtable overrides the base pair. These are Wall::update_hits
+        // (1,509 bytes) and Wall::update_los (544 bytes), not the 98/42-byte Object bodies.
+        o.v15c_calls += 1;
+        o.v160_calls += 1;
+        c.unresolved_calls += 2;
+    }
+    c
+}
+
+/// The 3000 band is a plain `WallData` vtable: `+0x15C/+0x160` resolve to the base Object
+/// implementations, unlike the building band's `Wall` overrides.
 fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
     let mut c = StatPassCounts::default();
     for o in band.iter_mut() {
@@ -794,15 +889,23 @@ fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
             continue;
         }
         c.active += 1;
-        if !o.construct_time_resolved {
-            // `Wall::update_construct_time` 0x0063D560 — the only non-virtual call in the
-            // loop, and the one thing here that is a named retail function rather than a
-            // vtable slot.
+        if !o.wall_active {
             o.construct_time_updates += 1;
             c.construct_time_updates += 1;
+            c.unresolved_calls += 1;
         }
         o.v15c_calls += 1;
+        if object_update_hits(o, false).is_some() {
+            c.object_hits_updates += 1;
+        } else {
+            c.unresolved_calls += 1;
+        }
         o.v160_calls += 1;
+        if object_update_los(o).is_some() {
+            c.object_los_updates += 1;
+        } else {
+            c.unresolved_calls += 1;
+        }
     }
     c
 }
@@ -812,10 +915,10 @@ fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
 /// Two loops with identical bodies over the 2000 and 3000 bands. The one asymmetry is real
 /// and is preserved as a comment rather than as behaviour: the first loop fetches its guard
 /// object through vtable slot `+0xAC` and the second through `+0xB0`, while both then use
-/// `+0xB0` for the work. With the slot bodies unresolved that distinction has no observable
-/// effect here, and it is flagged so nobody "tidies" it later.
+/// `+0xB0` for the work. The distinction still matters after resolving the work object's
+/// vtable, so it is recorded here rather than "tidied" away.
 pub fn calc_wall_stats(objs: &mut OwnerObjects) -> StatPassCounts {
-    let mut c = wall_band_pass(&mut objs.band_2000);
+    let mut c = build_band_pass(&mut objs.band_2000);
     c.add(wall_band_pass(&mut objs.band_3000));
     c
 }
@@ -842,12 +945,24 @@ pub fn calc_unit_stats(
         }
         c.active += 1;
         u.v160_calls += 1;
-        if u.stats_stale {
+        if object_update_los(u).is_some() {
+            c.object_los_updates += 1;
+        } else {
+            c.unresolved_calls += 1;
+        }
+        if u.captain {
             u.v15c_calls += 1;
+            if object_update_hits(u, false).is_some() {
+                c.object_hits_updates += 1;
+            } else {
+                c.unresolved_calls += 1;
+            }
             u.speed_updates += 1;
             u.armor_updates += 1;
             c.speed_updates += 1;
             c.armor_updates += 1;
+            // Direct calls after the two resolved virtuals. Their large bodies remain red.
+            c.unresolved_calls += 2;
         }
     }
     c
@@ -1343,7 +1458,13 @@ mod tests {
         }];
         d.env.leaders[0].objects.units = vec![StatObject {
             active: true,
-            stats_stale: true,
+            captain: true,
+            owner_in_game: true,
+            hit_inputs: Some(ObjectHitInputs {
+                base_hits: 200,
+                ..Default::default()
+            }),
+            type_los: Some(4),
             ..Default::default()
         }];
 
@@ -1362,6 +1483,10 @@ mod tests {
         assert_eq!(t.wall_pass[0].active, 1);
         assert_eq!(t.unit_pass[0].speed_updates, 1);
         assert_eq!(t.unit_pass[0].armor_updates, 1);
+        assert_eq!(t.unit_pass[0].object_hits_updates, 1);
+        assert_eq!(t.unit_pass[0].object_los_updates, 1);
+        assert_eq!(d.env.leaders[0].objects.units[0].myhits, 200);
+        assert_eq!(d.env.leaders[0].objects.units[0].mylos, 4);
 
         // Steady state: no change, no passes. Edge-triggered, not level-triggered.
         let t = d.frame();
@@ -1374,6 +1499,45 @@ mod tests {
         d.frame();
         assert!(d.leaders.leaders[0].rare_effective.get(3));
         assert!(d.leaders.leaders[0].rare_effective.get(9));
+    }
+
+    #[test]
+    fn object_hit_update_uses_retail_special_family_priority() {
+        let mut o = StatObject {
+            hit_inputs: Some(ObjectHitInputs {
+                base_hits: 100,
+                special_family_32_33: true,
+                type_42_hits: 420,
+                type_43_hits: 430,
+                type_44_hits: 440,
+                owner_policy: 0x1c,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(object_update_hits(&mut o, false), Some(440));
+        assert_eq!(o.myhits, 440);
+
+        o.hit_inputs.as_mut().unwrap().owner_policy = 0x0c;
+        assert_eq!(object_update_hits(&mut o, false), Some(430));
+        o.hit_inputs.as_mut().unwrap().owner_policy = 0x04;
+        assert_eq!(object_update_hits(&mut o, false), Some(420));
+        o.hit_inputs.as_mut().unwrap().owner_policy = 0;
+        assert_eq!(object_update_hits(&mut o, false), Some(100));
+    }
+
+    #[test]
+    fn object_los_update_zeros_an_out_of_game_owner() {
+        let mut o = StatObject {
+            type_los: Some(7),
+            owner_in_game: false,
+            mylos: 99,
+            ..Default::default()
+        };
+        assert_eq!(object_update_los(&mut o), Some(0));
+        assert_eq!(o.mylos, 0);
+        o.owner_in_game = true;
+        assert_eq!(object_update_los(&mut o), Some(7));
+        assert_eq!(o.mylos, 7);
     }
 
     /// An externally-set dirty bit is honoured and consumed, which is how any other
