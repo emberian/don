@@ -107,8 +107,9 @@ pub struct IncrementCaptureCounterRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
 pub enum PlatformAchievement {
-    Conqueror = CONQUEROR_ACHIEVEMENT_ID as isize,
+    Conqueror = CONQUEROR_ACHIEVEMENT_ID,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -8,10 +8,9 @@ use don_sim::systems::combat::cities_capture_prefix::{
     ClearCaptureDiplomacyRequest, IncrementCaptureCounterRequest, MarkCaptureTouchedLeaderRequest,
     PersianCapitalLookup, PlatformAchievement, SwapCityCenterReceipt, SwapCityCenterRequest,
     SwapCityCenterResult, UnlockCityCaptureAchievementRequest, CAPITAL_CITY_FLAG,
-    CAPTURE_TOUCHED_LEADER_FLAG,
-    CITIES_CAPTURE_CITY_END, CITIES_CAPTURE_CITY_SIZE, CITIES_CAPTURE_CITY_START,
-    CITIES_CAPTURE_PREFIX_END, CITIES_CAPTURE_PREFIX_SIZE, CITY_NAME_FIELD_OFFSET,
-    CONQUEROR_ACHIEVEMENT_ID,
+    CAPTURE_TOUCHED_LEADER_FLAG, CITIES_CAPTURE_CITY_END, CITIES_CAPTURE_CITY_SIZE,
+    CITIES_CAPTURE_CITY_START, CITIES_CAPTURE_PREFIX_END, CITIES_CAPTURE_PREFIX_SIZE,
+    CITY_NAME_FIELD_OFFSET, CONQUEROR_ACHIEVEMENT_ID,
 };
 use don_sim::systems::combat::damage_world::ObjectKey;
 
@@ -122,6 +121,10 @@ fn address_receipt_freezes_the_exact_prefix_and_residual() {
     assert_eq!(CITIES_CAPTURE_CITY_SIZE, 7_998);
     assert_eq!(CITIES_CAPTURE_PREFIX_END, CITIES_CAPTURE_CITY_START + 0x3C9);
     assert_eq!(CITIES_CAPTURE_CITY_END, CITIES_CAPTURE_CITY_START + 7_998);
+    assert_eq!(
+        PlatformAchievement::Conqueror as i32,
+        CONQUEROR_ACHIEVEMENT_ID
+    );
 }
 
 #[test]
