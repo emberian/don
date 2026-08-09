@@ -72,7 +72,17 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
-use crate::systems::tech_cities::{TechSetHost, TechState};
+use crate::systems::tech_cities::{
+    execute_gain_tech_cohort, GainTechCohortContext, TechAutoUnlockHost, TechOneShotError,
+    TechOneShotHost, TechState,
+};
+#[cfg(test)]
+use crate::systems::tech_cities::{
+    TechAutoUnlockClass, TechAutoUnlockMutation, TechAutoUnlockMutationReceipt,
+    TechOneShotMutation, TechOneShotMutationReceipt, TECH_AUTO_UNLOCK_BUILD_FLAG,
+    TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK, TECH_AUTO_UNLOCK_UNIT_FLAG, TECH_EFFECTS_FINAL_DIRTY,
+    TECH_GAIN_ENTER_DIRTY, TECH_GAIN_RESOURCES_DIRTY,
+};
 
 // =======================================================================================
 // Pool geometry
@@ -2461,13 +2471,38 @@ impl FinishedEffectTransaction {
     }
 }
 
+/// Fail-closed adapter errors from either completion arm. Queue ownership remains
+/// unchanged: an error means `Build::finished` did not produce a successful receipt, so
+/// the caller must not unqueue or attempt a paid repeat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinishedEffectError {
+    Unit(UnitCompletionError),
+    Tech(TechOneShotError),
+}
+
+impl From<UnitCompletionError> for FinishedEffectError {
+    fn from(value: UnitCompletionError) -> Self {
+        Self::Unit(value)
+    }
+}
+
+impl From<TechOneShotError> for FinishedEffectError {
+    fn from(value: TechOneShotError) -> Self {
+        Self::Tech(value)
+    }
+}
+
 /// Mandatory world/type boundary for the body of `Build::finished` (`0x00628490`).
 ///
 /// The predicate methods remain separate because retail evaluates them in order and a
 /// false unit-availability or spell-ownership test falls through to the later classes.
-/// [`TechSetHost::gained_tech`] owns the 15,001-byte `Leader::gain_tech` one-shot body;
-/// [`TechState`] owns the checksum-visible bit and counter mutation that precedes it.
-pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost + UnitCompletionHost {
+/// The tech supertraits are mandatory: the executor owns the exact counter/bit/resource
+/// transaction and generic auto-unlock sweeps, while the host owns every typed world and
+/// tech-specific callback. There is no legacy callback that can silently skip those
+/// effects.
+pub trait FinishedEffectHost:
+    BuildingCompletionHost + UnitCompletionHost + TechOneShotHost + TechAutoUnlockHost
+{
     fn is_unit_type(&mut self, type_index: i32) -> bool;
     fn can_make_unit(&mut self, type_index: i32) -> bool;
 
@@ -2479,6 +2514,9 @@ pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost + UnitComplet
     /// `BuildTypeData::flags +0x2C0 & 4`: set means this queued building-shaped type
     /// falls through to `Leader::gain_tech` instead of changing the producer's type.
     fn building_completion_gains_tech(&mut self, type_index: i32) -> bool;
+    /// Snapshot the game/rules inputs consumed by the one-shot gain transaction. Retail
+    /// reads these after effect routing and before the first gain mutation.
+    fn gain_tech_context(&mut self, build: &BuildData, type_index: i32) -> GainTechCohortContext;
     /// Producer `is(0x1B6)` query, made only after the tech gain transaction.
     fn producer_is_capitol(&mut self, build: &BuildData) -> bool;
     /// `LeaderData::get_gov_hero(0)` after a Capitol completes a tech.
@@ -2493,17 +2531,17 @@ pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost + UnitComplet
 ///
 /// Routing order is unit -> owned spell -> ordinary building -> tech. A unit type the
 /// player cannot currently make, an unowned spell, or a building-shaped type carrying
-/// `flags & 4` falls through rather than returning. The tech arm sets the TechState bit
-/// and counters before invoking `gained_tech`, then performs the Capitol government-hero
-/// follow-up. `Leader::gain_tech` does not call `set_age`/`set_epoch`; completed age and
-/// epoch type indices therefore use the exact single-tech [`TechState::gain`] transaction,
-/// not the bulk scenario/editor ladder setters.
+/// `flags & 4` falls through rather than returning. The tech arm executes
+/// [`execute_gain_tech_cohort`] while the bit is still absent, including the generic live
+/// building/unit auto-unlock sweeps, then performs the Capitol government-hero follow-up.
+/// `Leader::gain_tech` does not call `set_age`/`set_epoch`; completed age and epoch type
+/// indices therefore take one exact gain transaction, not the bulk scenario/editor ladder.
 pub fn execute_finished_effect<H: FinishedEffectHost>(
     tech: &mut TechState,
     build: &BuildData,
     type_index: i32,
     host: &mut H,
-) -> Result<FinishedEffectTransaction, UnitCompletionError> {
+) -> Result<FinishedEffectTransaction, FinishedEffectError> {
     if host.is_unit_type(type_index) && host.can_make_unit(type_index) {
         return Ok(FinishedEffectTransaction::Unit(execute_unit_completion(
             build, type_index, host,
@@ -2520,9 +2558,8 @@ pub fn execute_finished_effect<H: FinishedEffectHost>(
         return Ok(FinishedEffectTransaction::BuildingCompleted(transaction));
     }
 
-    let was_new = !tech.tech.get(type_index);
-    tech.gain(type_index);
-    host.gained_tech(tech, type_index);
+    let context = host.gain_tech_context(build, type_index);
+    let gain = execute_gain_tech_cohort(tech, type_index, context, host)?;
 
     let government_hero = if host.producer_is_capitol(build) {
         let hero = host.government_hero_type();
@@ -2536,7 +2573,7 @@ pub fn execute_finished_effect<H: FinishedEffectHost>(
 
     Ok(FinishedEffectTransaction::TechGained {
         type_index,
-        was_new,
+        was_new: gain.was_new,
         government_hero,
     })
 }
@@ -4497,13 +4534,9 @@ mod tests {
         AdjustRegionPopulation(i32, i16),
         CalcPopulationCap,
         FixRegionBorders,
-        GainedTech {
-            type_index: i32,
-            held: bool,
-            epochs: i32,
-            science_epochs: i32,
-            discovered: i32,
-        },
+        GainTechContext(i32),
+        TechMutation(TechOneShotMutation),
+        AutoUnlock(TechAutoUnlockMutation),
         ProducerIsCapitol(bool),
         GovernmentHeroType(Option<i32>),
         CompleteGovernmentHero(i32),
@@ -4554,6 +4587,15 @@ mod tests {
         tech_build_types: Vec<i32>,
         city_pop_values: Vec<i32>,
         region_index: i32,
+        gain_context: GainTechCohortContext,
+        auto_has_prerequisite: Vec<i32>,
+        auto_prerequisites: Vec<(i32, Vec<i32>)>,
+        auto_towns: Vec<i32>,
+        auto_build_flags: Vec<i32>,
+        auto_eligible: Vec<i32>,
+        auto_held: Vec<i32>,
+        auto_unit_flags: Vec<i32>,
+        auto_excluded_objects: Vec<i32>,
         capitol: bool,
         government_hero: Option<i32>,
         events: Vec<FinishedEvent>,
@@ -4606,6 +4648,15 @@ mod tests {
                 tech_build_types: vec![415],
                 city_pop_values: vec![1],
                 region_index: 64,
+                gain_context: GainTechCohortContext::default(),
+                auto_has_prerequisite: Vec::new(),
+                auto_prerequisites: Vec::new(),
+                auto_towns: Vec::new(),
+                auto_build_flags: Vec::new(),
+                auto_eligible: Vec::new(),
+                auto_held: Vec::new(),
+                auto_unit_flags: Vec::new(),
+                auto_excluded_objects: Vec::new(),
                 capitol: false,
                 government_hero: Some(77),
                 events: Vec::new(),
@@ -4613,39 +4664,109 @@ mod tests {
         }
     }
 
-    impl TechSetHost for FinishedProbe {
-        fn has_preq(&mut self, _state: &TechState, _type_index: i32) -> bool {
-            panic!("finished effect must not enter the set-age/set-epoch prerequisite sweep")
+    impl TechOneShotHost for FinishedProbe {
+        fn apply_tech_mutation(
+            &mut self,
+            _state: &TechState,
+            mutation: TechOneShotMutation,
+        ) -> TechOneShotMutationReceipt {
+            self.events.push(FinishedEvent::TechMutation(mutation));
+            TechOneShotMutationReceipt { mutation }
         }
 
-        fn gained_tech(&mut self, state: &TechState, type_index: i32) {
-            self.events.push(FinishedEvent::GainedTech {
-                type_index,
-                held: state.tech.get(type_index),
-                epochs: state.counters.epochs,
-                science_epochs: state.counters.epoch[3],
-                discovered: state.counters.discovered,
-            });
+        fn resource_prerequisite_held(&mut self, _resource: usize) -> bool {
+            false
         }
 
-        fn lost_tech(&mut self, _state: &TechState, _type_index: i32) {
-            panic!("finished effect must not remove a tech")
+        fn resource_unlock_tech(&mut self, _resource: usize) -> i32 {
+            -1
         }
 
-        fn reset_obs_flags(&mut self, _state: &TechState) {
-            panic!("finished effect must not run the bulk tech-set tail")
+        fn resource_unlock_amount(&mut self, _resource: usize) -> i32 {
+            0
         }
 
-        fn calc_unit_stats(&mut self, _state: &TechState) {
-            panic!("finished effect must not run the bulk tech-set tail")
+        fn resource_sell_tech(&mut self, _resource: usize) -> i32 {
+            -1
         }
 
-        fn calc_wall_stats(&mut self, _state: &TechState) {
-            panic!("finished effect must not run the bulk tech-set tail")
+        fn resource_amount(&mut self, _resource: usize) -> i32 {
+            0
         }
 
-        fn outdate_camera(&mut self, _state: &TechState) {
-            panic!("finished effect must not run the bulk tech-set tail")
+        fn lose_type_is_resource(&mut self, _type_index: i32) -> bool {
+            false
+        }
+
+        fn lose_type_is_removable(&mut self, _type_index: i32) -> bool {
+            false
+        }
+    }
+
+    impl TechAutoUnlockHost for FinishedProbe {
+        fn has_prerequisite(&mut self, type_index: i32) -> bool {
+            self.auto_has_prerequisite.contains(&type_index)
+        }
+
+        fn effective_prerequisite_count(&mut self, type_index: i32) -> i32 {
+            self.auto_prerequisites
+                .iter()
+                .find(|(candidate, _)| *candidate == type_index)
+                .map_or(0, |(_, preqs)| preqs.len() as i32)
+        }
+
+        fn effective_prerequisite(&mut self, type_index: i32, slot: i32) -> i32 {
+            self.auto_prerequisites
+                .iter()
+                .find(|(candidate, _)| *candidate == type_index)
+                .and_then(|(_, preqs)| preqs.get(slot as usize))
+                .copied()
+                .unwrap_or(-1)
+        }
+
+        fn candidate_is_town(&mut self, type_index: i32) -> bool {
+            self.auto_towns.contains(&type_index)
+        }
+
+        fn building_flags(&mut self, type_index: i32) -> u32 {
+            if self.auto_build_flags.contains(&type_index) {
+                TECH_AUTO_UNLOCK_BUILD_FLAG
+            } else {
+                0
+            }
+        }
+
+        fn type_eligible(&mut self, type_index: i32, strict: i32) -> bool {
+            assert_eq!(strict, 1);
+            self.auto_eligible.contains(&type_index)
+        }
+
+        fn has_tech_live(&mut self, type_index: i32) -> bool {
+            self.auto_held.contains(&type_index)
+        }
+
+        fn unit_flags(&mut self, type_index: i32) -> u32 {
+            if self.auto_unit_flags.contains(&type_index) {
+                TECH_AUTO_UNLOCK_UNIT_FLAG
+            } else {
+                0
+            }
+        }
+
+        fn unit_object_masks(&mut self, type_index: i32) -> u32 {
+            if self.auto_excluded_objects.contains(&type_index) {
+                TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK
+            } else {
+                0
+            }
+        }
+
+        fn apply_auto_unlock(
+            &mut self,
+            mutation: TechAutoUnlockMutation,
+        ) -> TechAutoUnlockMutationReceipt {
+            self.events.push(FinishedEvent::AutoUnlock(mutation));
+            TechAutoUnlockMutationReceipt { mutation }
         }
     }
 
@@ -5122,6 +5243,15 @@ mod tests {
             self.events
                 .push(FinishedEvent::BuildingGainsTech(type_index));
             self.tech_build_types.contains(&type_index)
+        }
+
+        fn gain_tech_context(
+            &mut self,
+            _build: &BuildData,
+            type_index: i32,
+        ) -> GainTechCohortContext {
+            self.events.push(FinishedEvent::GainTechContext(type_index));
+            self.gain_context
         }
 
         fn producer_is_capitol(&mut self, _build: &BuildData) -> bool {
@@ -6151,11 +6281,17 @@ mod tests {
             ]
         );
 
-        // A building-shaped type with flags&4 takes the same single gain_tech path as
-        // ordinary research. It is not a bulk age/epoch setter and has no revalidation
-        // tail; the TechSetHost implementation above panics if that tail is entered.
+        // A building-shaped type with flags&4 takes the same exact single gain transaction
+        // as ordinary research. Configure one dependent building to pin the generic
+        // auto-unlock callback between the two mandatory tech-specific boundaries.
         host.events.clear();
+        host.auto_has_prerequisite.push(420);
+        host.auto_prerequisites.push((420, vec![415]));
+        host.auto_build_flags.push(420);
+        host.auto_eligible.push(420);
+        let building_before = tech.counters;
         let building_tech = execute_finished_effect(&mut tech, &build, 415, &mut host).unwrap();
+        let building_after = tech.counters;
         assert_eq!(
             building_tech,
             FinishedEffectTransaction::TechGained {
@@ -6173,13 +6309,41 @@ mod tests {
                 FinishedEvent::IsSpell(415),
                 FinishedEvent::IsBuild(415),
                 FinishedEvent::BuildingGainsTech(415),
-                FinishedEvent::GainedTech {
+                FinishedEvent::GainTechContext(415),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_ENTER_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::MarkGameTechDirty),
+                FinishedEvent::TechMutation(TechOneShotMutation::CounterChanged {
+                    type_index: 415,
+                    before: building_before,
+                    after: building_after,
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainPreBitEffects(415)),
+                FinishedEvent::TechMutation(TechOneShotMutation::SetTechBit {
                     type_index: 415,
                     held: true,
-                    epochs: 0,
-                    science_epochs: 0,
-                    discovered: 1,
-                },
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainAfterBitEffects(415)),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_RESOURCES_DIRTY,
+                )),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(415)
+                ),
+                FinishedEvent::AutoUnlock(TechAutoUnlockMutation::RecursivelyGain {
+                    type_index: 420,
+                    class: TechAutoUnlockClass::Building,
+                    coords: [0, 0],
+                    tail: [0, 1],
+                }),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(415)
+                ),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_EFFECTS_FINAL_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::TerrainOilGain(415)),
                 FinishedEvent::ProducerIsCapitol(false),
             ]
         );
@@ -6188,7 +6352,9 @@ mod tests {
         // mandatory one-shot callback, then runs the Capitol hero follow-up.
         host.events.clear();
         host.capitol = true;
+        let epoch_before = tech.counters;
         let epoch = execute_finished_effect(&mut tech, &build, 551, &mut host).unwrap();
+        let epoch_after = tech.counters;
         assert_eq!(
             epoch,
             FinishedEffectTransaction::TechGained {
@@ -6206,13 +6372,35 @@ mod tests {
                 FinishedEvent::IsUnit(551),
                 FinishedEvent::IsSpell(551),
                 FinishedEvent::IsBuild(551),
-                FinishedEvent::GainedTech {
+                FinishedEvent::GainTechContext(551),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_ENTER_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::MarkGameTechDirty),
+                FinishedEvent::TechMutation(TechOneShotMutation::CounterChanged {
+                    type_index: 551,
+                    before: epoch_before,
+                    after: epoch_after,
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainPreBitEffects(551)),
+                FinishedEvent::TechMutation(TechOneShotMutation::SetTechBit {
                     type_index: 551,
                     held: true,
-                    epochs: 1,
-                    science_epochs: 1,
-                    discovered: 1,
-                },
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainAfterBitEffects(551)),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_RESOURCES_DIRTY,
+                )),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(551)
+                ),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(551)
+                ),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_EFFECTS_FINAL_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::TerrainOilGain(551)),
                 FinishedEvent::ProducerIsCapitol(true),
                 FinishedEvent::GovernmentHeroType(Some(77)),
                 FinishedEvent::CompleteGovernmentHero(77),
@@ -6220,10 +6408,13 @@ mod tests {
         );
 
         // Age completion is likewise one gain_tech call: it sets only the requested age
-        // bit and does not enter set_age's ladder or bump any TechCounters field.
+        // bit without entering set_age's ladder, but retail does increment the age counter
+        // and records the frame before committing that bit.
         host.events.clear();
         host.capitol = false;
+        let age_before = tech.counters;
         let age = execute_finished_effect(&mut tech, &build, 544, &mut host).unwrap();
+        let age_after = tech.counters;
         assert_eq!(
             age,
             FinishedEffectTransaction::TechGained {
@@ -6234,7 +6425,7 @@ mod tests {
         );
         assert!(tech.tech.get(544));
         assert!(!tech.tech.get(545));
-        assert_eq!(tech.counters.ages, 0);
+        assert_eq!(tech.counters.ages, 1);
         assert_eq!(tech.counters.epochs, 1);
         assert_eq!(tech.counters.discovered, 1);
         assert_eq!(
@@ -6243,13 +6434,41 @@ mod tests {
                 FinishedEvent::IsUnit(544),
                 FinishedEvent::IsSpell(544),
                 FinishedEvent::IsBuild(544),
-                FinishedEvent::GainedTech {
+                FinishedEvent::GainTechContext(544),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_ENTER_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::MarkGameTechDirty),
+                FinishedEvent::TechMutation(TechOneShotMutation::CounterChanged {
+                    type_index: 544,
+                    before: age_before,
+                    after: age_after,
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::RecordAgeStamp {
+                    type_index: 544,
+                    slot: 0,
+                    frame: 0,
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainPreBitEffects(544)),
+                FinishedEvent::TechMutation(TechOneShotMutation::SetTechBit {
                     type_index: 544,
                     held: true,
-                    epochs: 1,
-                    science_epochs: 1,
-                    discovered: 1,
-                },
+                }),
+                FinishedEvent::TechMutation(TechOneShotMutation::CompleteGainAfterBitEffects(544)),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_GAIN_RESOURCES_DIRTY,
+                )),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(544)
+                ),
+                FinishedEvent::TechMutation(
+                    TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(544)
+                ),
+                FinishedEvent::TechMutation(TechOneShotMutation::OrDirtyFlags(
+                    TECH_EFFECTS_FINAL_DIRTY,
+                )),
+                FinishedEvent::TechMutation(TechOneShotMutation::RefreshAgeConsumers(544)),
+                FinishedEvent::TechMutation(TechOneShotMutation::TerrainOilGain(544)),
                 FinishedEvent::ProducerIsCapitol(false),
             ]
         );
@@ -6357,6 +6576,17 @@ mod tests {
         );
         assert_eq!(build.queue.entries[2].type_index, 553);
         assert_eq!(build.queue.entries[2].elapsed, 88);
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(551),
+                QueueEvent::Classify(551),
+                QueueEvent::Finished(551, 1000),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(551, 0),
+            ],
+            "research completion finishes before paid-state removal and never enters the unit-only repeat path"
+        );
     }
 
     #[test]

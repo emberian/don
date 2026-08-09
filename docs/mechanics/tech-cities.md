@@ -487,12 +487,14 @@ spine around the 45 special branches. `execute_gain_tech_cohort` now owns this o
    and Knowledge. The executor re-reads after every callback and fails closed if an adapter
    claims success without reducing the amount.
 6. Classical Age may grant the Greek delayed Knowledge award, through the same scale rule.
-7. Complete the mandatory post-resource special boundary, OR `0x0c000000`, refresh age
-   consumers for age types, then call `TerrainOil::gain_tech`.
+7. Complete the mandatory pre-propagation special boundary; run the live building/wonder
+   and unit auto-unlock sweeps; complete the mandatory post-propagation boundary; then OR
+   `0x0c000000`, refresh age consumers for age types, and call `TerrainOil::gain_tech`.
 
-Every world write is receipt-checked. The two explicit completion callbacks are not no-ops:
-they are mandatory ownership boundaries for the still-unported special branches, so an
-adapter cannot silently treat this generic cohort as the complete 15,001-byte function.
+Every world write is receipt-checked. The four explicit completion callbacks are not no-ops:
+they are mandatory ownership boundaries for the still-unported special regions, so an
+adapter cannot silently treat this generic cohort as the complete 15,001-byte function or
+move the recovered propagation sweeps inside an opaque callback.
 
 The later generic propagation phase is also executable as
 `execute_gain_tech_auto_unlocks` (`0x006DEBBE..0x006DED7F`). It performs live ascending
@@ -585,14 +587,14 @@ CARGO_TARGET_DIR=/tmp/don-tech-target \
 47 tests, all passing. Two of them read `ron-data/techrules.xml` and skip cleanly if it is
 absent (it is gitignored).
 
-One cross-module seam remains deliberately unwired in this lane:
-`production::execute_finished_effect` still calls the legacy low-level `TechState::gain`
-and then `TechSetHost::gained_tech`. It must instead enter `execute_gain_tech_cohort` while
-the bit is still absent, with its post-resource adapter invoking
-`execute_gain_tech_auto_unlocks` at the recovered location. Calling the new transaction
-after the legacy helper would be wrong: it would observe `was_new == false` and miss the
-retail age increment/stamp. The existing production age-completion assertion that
-`counters.ages == 0` therefore identifies the next integration change, not retail truth.
+The production seam is now closed: `production::execute_finished_effect` enters
+`execute_gain_tech_cohort` while the bit is still absent. The transaction itself invokes
+`execute_gain_tech_auto_unlocks` between its two post-resource mandatory boundaries, then
+returns to the Capitol government-hero follow-up. Its host must implement both receipt
+interfaces plus the game/rules context query; there is no legacy `gained_tech` callback
+that can silently skip the exact state transaction. The production regression now pins an
+age completion to `counters.ages == 1`, its frame stamp before the bit write, and the final
+age-consumer/TerrainOil order.
 
 ## 10. Reproducing the derivation
 

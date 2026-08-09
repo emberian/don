@@ -1681,7 +1681,12 @@ pub enum TechOneShotMutation {
         resource: usize,
         mode: i32,
     },
-    CompleteGainPostResourceEffects(i32),
+    /// Tech-specific effects after the resource block and before the generic auto-unlock
+    /// sweeps at `0x006DEBBE`. This boundary is mandatory and cannot absorb the sweeps.
+    CompleteGainBeforeAutoUnlockEffects(i32),
+    /// Remaining tech-specific effects after the building/unit propagation sweeps and
+    /// before the final invalidation/stat tail at `0x006E0315`.
+    CompleteGainAfterAutoUnlockEffects(i32),
     OutdateCamera,
     RefreshAgeConsumers(i32),
     TerrainOilGain(i32),
@@ -1707,6 +1712,13 @@ pub enum TechOneShotError {
         before: i32,
         after: i32,
     },
+    AutoUnlock(TechAutoUnlockError),
+}
+
+impl From<TechAutoUnlockError> for TechOneShotError {
+    fn from(value: TechAutoUnlockError) -> Self {
+        Self::AutoUnlock(value)
+    }
 }
 
 /// Typed object/rules boundary for the recovered generic one-shot cohort.
@@ -1860,11 +1872,12 @@ pub struct GainTechCohortReceipt {
 /// [measured, `0x006DCB60..0x006E05D9`; resource block
 /// `0x006DD02D..0x006DD268`]
 ///
-/// The two mandatory completion mutations bracket the unported tech-specific body. This
-/// function therefore closes a real cohort without pretending the 45 special branches are
-/// absent. State mutation is deliberately not rolled back after a divergent host receipt:
-/// retail's callbacks are infallible and may already have published world effects.
-pub fn execute_gain_tech_cohort<H: TechOneShotHost>(
+/// Four mandatory completion mutations retain the unported tech-specific regions, with the
+/// generic auto-unlock sweeps fixed between the post-resource pair. This function therefore
+/// closes a real cohort without pretending the 45 special branches are absent. State
+/// mutation is deliberately not rolled back after a divergent host receipt: retail's
+/// callbacks are infallible and may already have published world effects.
+pub fn execute_gain_tech_cohort<H: TechOneShotHost + TechAutoUnlockHost>(
     state: &mut TechState,
     type_index: i32,
     context: GainTechCohortContext,
@@ -1944,7 +1957,13 @@ pub fn execute_gain_tech_cohort<H: TechOneShotHost>(
     require_tech_mutation(
         state,
         host,
-        TechOneShotMutation::CompleteGainPostResourceEffects(type_index),
+        TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(type_index),
+    )?;
+    execute_gain_tech_auto_unlocks(type_index, host)?;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(type_index),
     )?;
 
     state.dirty_flags |= TECH_EFFECTS_FINAL_DIRTY;
@@ -3169,6 +3188,51 @@ mod tests {
         }
     }
 
+    impl TechAutoUnlockHost for OneShotProbe {
+        fn has_prerequisite(&mut self, _type_index: i32) -> bool {
+            false
+        }
+
+        fn effective_prerequisite_count(&mut self, _type_index: i32) -> i32 {
+            0
+        }
+
+        fn effective_prerequisite(&mut self, _type_index: i32, _slot: i32) -> i32 {
+            -1
+        }
+
+        fn candidate_is_town(&mut self, _type_index: i32) -> bool {
+            false
+        }
+
+        fn building_flags(&mut self, _type_index: i32) -> u32 {
+            0
+        }
+
+        fn type_eligible(&mut self, _type_index: i32, _strict: i32) -> bool {
+            false
+        }
+
+        fn has_tech_live(&mut self, _type_index: i32) -> bool {
+            false
+        }
+
+        fn unit_flags(&mut self, _type_index: i32) -> u32 {
+            0
+        }
+
+        fn unit_object_masks(&mut self, _type_index: i32) -> u32 {
+            0
+        }
+
+        fn apply_auto_unlock(
+            &mut self,
+            mutation: TechAutoUnlockMutation,
+        ) -> TechAutoUnlockMutationReceipt {
+            TechAutoUnlockMutationReceipt { mutation }
+        }
+    }
+
     struct AutoUnlockProbe {
         has_prerequisite: Vec<bool>,
         prerequisites: Vec<Vec<i32>>,
@@ -3437,7 +3501,8 @@ mod tests {
                     resource: RES_KNOWLEDGE,
                     amount: 14,
                 },
-                TechOneShotMutation::CompleteGainPostResourceEffects(ty::CLASSICAL_AGE),
+                TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(ty::CLASSICAL_AGE),
+                TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(ty::CLASSICAL_AGE),
                 TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY),
                 TechOneShotMutation::RefreshAgeConsumers(ty::CLASSICAL_AGE),
                 TechOneShotMutation::TerrainOilGain(ty::CLASSICAL_AGE),
@@ -3559,7 +3624,10 @@ mod tests {
         assert!(!host.events.iter().any(|event| {
             matches!(
                 event,
-                OneShotEvent::Mutation(TechOneShotMutation::CompleteGainPostResourceEffects(_))
+                OneShotEvent::Mutation(
+                    TechOneShotMutation::CompleteGainBeforeAutoUnlockEffects(_)
+                        | TechOneShotMutation::CompleteGainAfterAutoUnlockEffects(_)
+                )
             )
         }));
     }
