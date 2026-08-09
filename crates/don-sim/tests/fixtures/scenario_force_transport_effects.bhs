@@ -1,0 +1,8 @@
+int scenario force_transport_effects_tick()
+{
+    if (force_transport_ability(0) == -1 &&
+        force_transport_ability(9) == -1) {
+        force_transport_ability(1);
+    }
+    return 1;
+}

@@ -19,7 +19,7 @@ use don_bhs::{
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
-use crate::systems::{economy, leaders, order_dispatch, production, victory_score};
+use crate::systems::{economy, leaders, naval, order_dispatch, production, victory_score};
 use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
@@ -481,6 +481,8 @@ const SCRIPT_UNIT_AI_OFF: i32 = 0x02;
 const SCRIPT_PRODUCTION_AI_OFF: i32 = 0x04;
 const SCRIPT_COMBAT_AI_OFF: i32 = 0x08;
 const SCRIPT_NO_EXPANSION: i32 = 0x10;
+const SCRIPT_FORCE_TRANSPORT: i32 = 0x20;
+const SCRIPT_LEADER_TRANSPORT_FLAGS: i32 = 0x700;
 const SCRIPT_UNIT_MASK_AI_OFF: u32 = 0x0100_0000;
 
 impl Sim {
@@ -714,6 +716,65 @@ impl Sim {
             self.vic_leaders.slots[slot].leader_flags2 &= !SCRIPT_UNIT_AI_OFF;
         } else {
             self.vic_leaders.slots[slot].leader_flags2 |= SCRIPT_UNIT_AI_OFF;
+        }
+        Ok(1)
+    }
+
+    /// `ScenarioFuncSet::force_transport_ability` `0x009ffb00`.
+    ///
+    /// Retail first grants all three Leader transport tiers and the separate forced
+    /// policy bit, then scans the owner's Unit band in ascending object-id order. Only
+    /// active units for which `UnitData::can_ever_transport()` succeeds receive the
+    /// instance `CAN_TRANSPORT` bit. We preflight every active unit's type projection so
+    /// a missing domain/carry fact cannot partially commit this three-store transaction.
+    fn script_force_transport_ability(&mut self, who: i32) -> Result<i32, HostError> {
+        let Some(who) = self.in_game_script_leader(who) else {
+            return Ok(-1);
+        };
+
+        let mut eligible_rows = Vec::new();
+        for &row in self.world.objects.slot(who).band(Band::Unit) {
+            let row = row as usize;
+            if row >= self.world.units.len() || self.world.units.get_who(row) as usize != who {
+                return Err(HostError::Unimplemented);
+            }
+            if self.world.units.get_flags(row) & 1 == 0 {
+                continue;
+            }
+            let type_id = *self.unit_type.get(row).ok_or(HostError::Unimplemented)?;
+            let type_rules = self
+                .shooter_rules
+                .iter()
+                .find(|(candidate, _)| *candidate == type_id)
+                .map(|(_, rules)| rules)
+                .ok_or(HostError::Unimplemented)?;
+            let domain =
+                naval::Domain::from_i32(type_rules.domain).ok_or(HostError::Unimplemented)?;
+            let eligible = match domain {
+                naval::Domain::Ground => true,
+                naval::Domain::Sea => {
+                    let roster = naval::naval_roster(type_id).ok_or(HostError::Unimplemented)?;
+                    roster.carry != 0 && type_id != 351
+                }
+                // Sim does not yet own the carry/type-line facts needed to prove the
+                // non-ground fallback for arbitrary air or custom types.
+                naval::Domain::BothOrAir | naval::Domain::RealAir => {
+                    return Err(HostError::Unimplemented);
+                }
+            };
+            if eligible {
+                eligible_rows.push(row);
+            }
+        }
+
+        let leader = &mut self.vic_leaders.slots[who];
+        leader.leader_flags |= SCRIPT_LEADER_TRANSPORT_FLAGS;
+        leader.leader_flags2 |= SCRIPT_FORCE_TRANSPORT;
+        for row in eligible_rows {
+            let masks = self.world.units.get_unit_masks(row);
+            self.world
+                .units
+                .set_unit_masks(row, masks | naval::unit_mask::CAN_TRANSPORT);
         }
         Ok(1)
     }
@@ -1672,6 +1733,9 @@ impl ScenarioHost for Sim {
                 args[1].as_int(),
                 decl.index == 793,
             )?)),
+            795 => Ok(Value::Int(
+                self.script_force_transport_ability(args[0].as_int())?,
+            )),
             _ => Err(HostError::Unimplemented),
         }
     }

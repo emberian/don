@@ -818,6 +818,137 @@ fn unit_ai_effect_fails_closed_before_a_malformed_formation_write() {
     assert_eq!(sim.world.units.get_unit_masks(row), 0x0040_0000);
 }
 
+const SCRIPT_CAN_TRANSPORT: u32 = 0x0080_0000;
+
+fn configure_force_transport_effect_state(sim: &mut Sim) -> [usize; 6] {
+    use don_sim::systems::ammo::ShooterRules;
+
+    sim.activate(0);
+    sim.activate(1);
+    // The handler's Leader gate is only VALID, not VALID|ACTIVE.
+    sim.step8.leaders[0].flags &= !leaders::flag::PROCESS;
+    sim.vic_leaders.slots[0].leader_flags &= !victory_score::leader_flag::ACTIVE;
+    sim.vic_leaders.slots[0].leader_flags |= 0x4000;
+    sim.vic_leaders.slots[0].leader_flags2 = 0x8000;
+
+    let ground = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let inactive = sim.spawn_unit(0, 8, 4 * 192, 5 * 192, 4).unwrap();
+    let transport = sim.spawn_unit(0, 320, 6 * 192, 7 * 192, 4).unwrap();
+    let warship = sim.spawn_unit(0, 323, 8 * 192, 9 * 192, 4).unwrap();
+    let carrier = sim.spawn_unit(0, 351, 10 * 192, 11 * 192, 4).unwrap();
+    let foreign = sim.spawn_unit(1, 7, 12 * 192, 13 * 192, 4).unwrap();
+    let rows = [ground, inactive, transport, warship, carrier, foreign]
+        .map(|handle| sim.world.row_of(handle).unwrap());
+
+    let inactive_flags = sim.world.units.get_flags(rows[1]);
+    sim.world.units.set_flags(rows[1], inactive_flags & !1);
+    for (row, masks) in rows
+        .into_iter()
+        .zip([0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000])
+    {
+        sim.world.units.set_unit_masks(row, masks);
+    }
+
+    // `ShooterRules::domain` is the installed ObjectTypeData+0x218 projection.
+    // The inactive type intentionally has no row: retail skips it before type access.
+    sim.shooter_rules.push((
+        7,
+        ShooterRules {
+            domain: 0,
+            ..Default::default()
+        },
+    ));
+    for type_id in [320, 323, 351] {
+        sim.shooter_rules.push((
+            type_id,
+            ShooterRules {
+                domain: 1,
+                ..Default::default()
+            },
+        ));
+    }
+    rows
+}
+
+fn execute_force_transport_effect(sim: &mut Sim, scripts: &mut ScriptRuntime, rows: [usize; 6]) {
+    let trace = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags, 0x4701);
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x8020);
+    assert_eq!(
+        rows.map(|row| sim.world.units.get_unit_masks(row)),
+        [
+            0x100 | SCRIPT_CAN_TRANSPORT,
+            0x200,
+            0x400 | SCRIPT_CAN_TRANSPORT,
+            0x800,
+            0x1000,
+            0x2000,
+        ],
+        "only active ground units and non-carrier sea transports owned by the player mutate"
+    );
+}
+
+#[test]
+fn ordinary_source_executes_force_transport_effects() {
+    let program = compile_source_fixture("scenario_force_transport_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "force_transport_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x813d, 8);
+    let rows = configure_force_transport_effect_state(&mut sim);
+
+    execute_force_transport_effect(&mut sim, &mut scripts, rows);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_force_transport_effects() {
+    let compiled = compile_source_fixture("scenario_force_transport_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "force_transport_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x813e, 8);
+    let rows = configure_force_transport_effect_state(&mut sim);
+
+    execute_force_transport_effect(&mut sim, &mut scripts, rows);
+}
+
+#[test]
+fn force_transport_fails_closed_before_missing_type_facts_write() {
+    let mut scripts = game_runtime(one_builtin_program(
+        "force_transport_ability",
+        &[Value::Int(1)],
+    ));
+    let mut sim = Sim::new(0x813f, 8);
+    sim.activate(0);
+    sim.vic_leaders.slots[0].leader_flags |= 0x4000;
+    sim.vic_leaders.slots[0].leader_flags2 = 0x8000;
+    let unit = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let row = sim.world.row_of(unit).unwrap();
+    sim.world.units.set_unit_masks(row, 0x100);
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "force_transport_ability",
+            ..
+        })
+    ));
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags, 0x4003);
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x8000);
+    assert_eq!(sim.world.units.get_unit_masks(row), 0x100);
+}
+
 fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
     use victory_score::Victory;
 

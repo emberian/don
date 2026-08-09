@@ -527,14 +527,15 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 792 | `disable_all_unit_ai` | valid Leader, then set `leader_flags2` bit `0x02` (`0x009ff8e0`) |
 | 793 | `enable_unit_ai` | active addressed formation clears `UnitData+0x68` bit `0x01000000`, or negative sentinel clears Leader bit `0x02` (`0x009ff920`) |
 | 794 | `disable_unit_ai` | active addressed formation sets `UnitData+0x68` bit `0x01000000`, or negative sentinel sets Leader bit `0x02` (`0x009ffa10`) |
+| 795 | `force_transport_ability` | valid Leader gains transport flags; every active, eligible owned unit gains `UnitData+0x68` bit `0x00800000` (`0x009ffb00`) |
 | 796 | `enable_city_ai` | active non-human Leader, then clear `leader_flags2` bit `0x10` (`0x009ffba0`) |
 | 797 | `disable_city_ai` | active non-human Leader, then set `leader_flags2` bit `0x10` (`0x009ffbf0`) |
 | 798 | `enable_city_defeat` | active Leader, then clear `leader_flags2` bit `0x01` (`0x009ffc40`) |
 | 799 | `disable_city_defeat` | active Leader, then set `leader_flags2` bit `0x01` (`0x009ffc80`) |
 
-The current 363-file census contains 8,384 calls to those seventy-two registrations. Together
+The current 363-file census contains 8,465 calls to those seventy-three registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-9,175 of 39,957 measured shipped-corpus call sites (**22.96%**, up from **1.98%**).
+9,256 of 39,957 measured shipped-corpus call sites (**23.16%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
@@ -593,8 +594,22 @@ invalid players return -1. Both targets are canonical walked state: generated Un
 column `unit_masks` and checksum-channel-8 LeaderFlag2. Source and loaded-chunk fixtures
 mutation-test subordinate redirection, an inactive subordinate, the complete formation,
 unrelated-bit preservation, the negative sentinel, and invalid player/object rejection.
-#795 `force_transport_ability` remains excluded: it changes two Leader fields and scans
-every owned unit to set a third bit, so it is not approximated as a single Leader flag write.
+
+Global #795 adds 81 shipped calls in 61 files. It accepts the same one-bit valid Leader
+gate, then ORs `0x700` into `leader_flags` (civilian, military, and scout transport tiers),
+ORs `0x20` into `leader_flags2`, and scans the player's Unit band in ascending object-id
+order. Inactive units are skipped before type access. Every active unit runs the exact
+`can_ever_transport` predicate: Ground-domain units qualify immediately; non-ground units
+qualify only with nonzero `UnitTypeData::carry` and not the Aircraft Carrier type 351. Each
+qualifying unit then gains `UnitMask::CAN_TRANSPORT` (`0x00800000`). The handler preflights
+the full scan before its first write, preserving atomic fail-closed behavior when installed
+type facts are absent. Current exact non-ground coverage uses the shipped 43-row naval
+roster for carry/type identity; an arbitrary Air or custom non-ground type still fails closed
+because `Sim` does not own its carry/type-line projection. Source and loaded-chunk fixtures
+mutation-test a valid-but-non-processing Leader, an active Ground unit, inactive skip, sea
+transport inclusion, ordinary warship and Aircraft Carrier exclusion, foreign-owner
+isolation, unrelated bits, and invalid player sentinels. A separate test removes an active
+unit's type projection and proves that neither Leader field nor UnitData changes.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
@@ -712,7 +727,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-783 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+782 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 
