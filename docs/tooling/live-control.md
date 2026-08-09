@@ -1,6 +1,7 @@
 # Bidirectional live retail control
 
-Status: **live-validated for pause and unit movement against a retail solo skirmish.**
+Status: **live-validated for pause, unit movement, exact own-state observation, and a
+bounded supervised scout policy against a retail solo skirmish.**
 Target: the one supported `riseofnations.exe`, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
 
@@ -162,6 +163,64 @@ the distinct two-body lattice `(0,0),(-48,-96)`. Therefore the scalar type spaci
 complete formation rule. Also, `guy_mark` was 1 on both three-body arrays while a live body had
 `guy_num=2`: `+0xB5` must not be renamed or used as a live-body count. The authoritative count is
 the `PtrArray` length at `+0xE8`. v5 was parked without a simulation write.
+
+### Supervised public-state player protocol
+
+Generation `player-v7` implements `don.retail-player.v1`. `observe-player` runs entirely in the
+retail main-thread callback and publishes only the human slot's own public state. It identifies
+that slot by requiring exactly one `Leader` with `(flags & 7) == 7`, then cross-checks
+`Leader.who/tribe` against the inline `GameInfo::Player`. There is deliberately no slot-zero
+fallback. The observer brackets the sample with the same `Game` pointer/frame, `Objects` root and
+array metadata, Leader flags, and encrypted-economy pointer; a match load or torn root fails the
+whole observation closed.
+
+Owned objects are followed only through retail's exact bands: units `[0, unit_mark)`, buildings
+`[2000, build_mark)`, and walls `[3000, wall_mark)`. Each emitted object must be active and have
+matching embedded `who` and `o` fields. The host artifact strips heap pointers and uses stable
+identity `{slot, band, o, uid}`. Object coordinates decode all three stored axes with XOR
+`0x00063637`; type and runtime class are independently validated. Unit orders use the canonical
+`OrderList head->prev->data` link and a fixed shipped-vtable-to-`OrderIndex` table. An unknown live
+type, runtime class, or current unit order rejects the observation instead of inventing a label.
+
+Economy fields preserve their retail meanings:
+
+- whole stockpiles are `LeaderDataEncrypt.bucket[6]`, XOR `0x8221`, in resource order food,
+  timber, wealth, knowledge, metal, oil;
+- `resource_cap[0..6)`, XOR `0x1281`, is exposed as `commerce_cap_x16_i32`, an income clamp in
+  sixteenths—not maximum stored stock;
+- `over_cap[6]`, XOR `0x8932`, is preserved as the retail cap state;
+- current population is `LeaderData.control +0x940`; `LeaderData.pop +0x95c` is an AI counter and
+  is intentionally excluded.
+
+Enemy/neutral object lists, enemy economy/orders/targets, target-object dereferences, hidden map
+tables, goods/rares/items, and visibility bits whose local-slot LOS semantics are not yet proven
+are never read into this protocol. The complete contract is
+[`schema/live/retail-player-protocol-v1.json`](../../schema/live/retail-player-protocol-v1.json).
+
+The first policy is intentionally narrow but uses retail semantics, not a simplified simulation:
+it deterministically selects the lowest object-index live idle owned `Scout`, proposes one
+world-tile step, and leaves citizens, merchants, and buildings untouched. Dry-run is the default.
+The v1 executor accepts at most four actions and currently executes only one-owned-unit `move`
+actions within observed world bounds; every command uses the shipped main-thread ingress and a
+bounded trajectory recorder.
+
+```sh
+python3 tools/retail-control/retailctl.py player-observe --generation player-v7
+python3 tools/retail-control/retailctl.py rearm --generation player-v7
+python3 tools/retail-control/retailctl.py policy --generation player-v7 \
+  --output schema/live/retail-player-policy-dry-run-v1.json
+python3 tools/retail-control/retailctl.py rearm --generation player-v7
+python3 tools/retail-control/retailctl.py policy --apply --generation player-v7
+```
+
+The corrected live run began paused at frame 169. It observed 8 units and 7 buildings, population
+`8/25`, stockpile `[214,210,103,0,0,0]`, and five exact `GatherOrder` citizen fronts. The policy
+moved only owner-0 object 0 from `(3288,31896)` to `(3480,31896)`. Retail serialized the command,
+the normalized `MoveOrder` advanced through X positions `3322,3356,3390,3424,3458,3480` at frames
+170–175, the order retired, and the fail-safe restored pause `1`. A coherent after-observation
+confirmed the scout at the requested destination while citizen orders remained `GatherOrder`.
+The hook then reported `state=parked`; the live/dry observations and trace are preserved under
+`schema/live/retail-player-*.json`.
 
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 

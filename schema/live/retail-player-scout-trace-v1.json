@@ -1,0 +1,378 @@
+{
+  "schema": "don.retail-move-trajectory.v1",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "controller_generation": "player-v7",
+  "coordinate_units_per_tile": 192,
+  "simulation_frames_per_game_second": 15,
+  "angle_encoding": "u32 binary angle; 2^32 is one turn; 0 points north/-y",
+  "object_coordinate_encoding": "decoded from stored_u32 XOR 0x00063637",
+  "subject": {
+    "owner": 0,
+    "object_id": 0
+  },
+  "request": {
+    "x": 3480,
+    "y": 31896,
+    "max_frames": 60
+  },
+  "initial": {
+    "frame": 169,
+    "frame_delta": 0,
+    "seconds": 11,
+    "pause": 1,
+    "speed": 1,
+    "position": {
+      "x": 3288,
+      "y": 31896
+    },
+    "heading_u32": 1073741824,
+    "queued_action_heading_u32": 1073741824,
+    "queued_action_position": {
+      "x": 3288,
+      "y": 31896
+    },
+    "order": {
+      "kind": "none",
+      "length": 0,
+      "preferred_vtable": "0x00000000",
+      "flags": 0,
+      "metric": 0
+    }
+  },
+  "retail_command_hex": "00000007980d0000987c000000000000000000000102ffff004c00",
+  "termination": "trace-complete",
+  "terminal": {
+    "frame": 175,
+    "frame_delta": 6,
+    "seconds": 11,
+    "pause": 1,
+    "speed": 1,
+    "position": {
+      "x": 3480,
+      "y": 31896
+    },
+    "heading_u32": 1073741824,
+    "queued_action_heading_u32": 1073741824,
+    "queued_action_position": {
+      "x": 3480,
+      "y": 31896
+    },
+    "order": {
+      "kind": "none",
+      "length": 0,
+      "preferred_vtable": "0x00000000",
+      "flags": 0,
+      "metric": 0
+    }
+  },
+  "checksum": {
+    "available": false,
+    "reason": "retail network flag was 0; solo intentionally emits no checksum packet"
+  },
+  "samples": [
+    {
+      "frame": 170,
+      "frame_delta": 1,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3322,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "MoveOrder",
+        "length": 1,
+        "preferred_vtable": "0x00b4a12c",
+        "flags": 5,
+        "metric": 0
+      },
+      "move_order": {
+        "x": 3480,
+        "y": 31896,
+        "arrival_angle": 1073741824,
+        "dest_latch": 1,
+        "tolerance": 0,
+        "pause": 0,
+        "retry": 0,
+        "attempts": 0,
+        "timer": 0,
+        "facing": 0,
+        "active_destination": {
+          "x": 3480,
+          "y": 31896
+        },
+        "last": {
+          "x": -1,
+          "y": -1
+        },
+        "collision": {
+          "x": 0,
+          "y": 0
+        },
+        "origin": {
+          "x": 3480,
+          "y": 31896
+        },
+        "offset": {
+          "x": 408,
+          "y": 408
+        }
+      }
+    },
+    {
+      "frame": 171,
+      "frame_delta": 2,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3356,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "MoveOrder",
+        "length": 1,
+        "preferred_vtable": "0x00b4a12c",
+        "flags": 5,
+        "metric": 0
+      },
+      "move_order": {
+        "x": 3480,
+        "y": 31896,
+        "arrival_angle": 1073741824,
+        "dest_latch": 1,
+        "tolerance": 0,
+        "pause": 0,
+        "retry": 0,
+        "attempts": 0,
+        "timer": 0,
+        "facing": 0,
+        "active_destination": {
+          "x": 3480,
+          "y": 31896
+        },
+        "last": {
+          "x": -1,
+          "y": -1
+        },
+        "collision": {
+          "x": 0,
+          "y": 0
+        },
+        "origin": {
+          "x": 3480,
+          "y": 31896
+        },
+        "offset": {
+          "x": 408,
+          "y": 408
+        }
+      }
+    },
+    {
+      "frame": 172,
+      "frame_delta": 3,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3390,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "MoveOrder",
+        "length": 1,
+        "preferred_vtable": "0x00b4a12c",
+        "flags": 5,
+        "metric": 0
+      },
+      "move_order": {
+        "x": 3480,
+        "y": 31896,
+        "arrival_angle": 1073741824,
+        "dest_latch": 1,
+        "tolerance": 0,
+        "pause": 0,
+        "retry": 0,
+        "attempts": 0,
+        "timer": 0,
+        "facing": 0,
+        "active_destination": {
+          "x": 3480,
+          "y": 31896
+        },
+        "last": {
+          "x": -1,
+          "y": -1
+        },
+        "collision": {
+          "x": 0,
+          "y": 0
+        },
+        "origin": {
+          "x": 3480,
+          "y": 31896
+        },
+        "offset": {
+          "x": 408,
+          "y": 408
+        }
+      }
+    },
+    {
+      "frame": 173,
+      "frame_delta": 4,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3424,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "MoveOrder",
+        "length": 1,
+        "preferred_vtable": "0x00b4a12c",
+        "flags": 5,
+        "metric": 0
+      },
+      "move_order": {
+        "x": 3480,
+        "y": 31896,
+        "arrival_angle": 1073741824,
+        "dest_latch": 1,
+        "tolerance": 0,
+        "pause": 0,
+        "retry": 0,
+        "attempts": 0,
+        "timer": 0,
+        "facing": 0,
+        "active_destination": {
+          "x": 3480,
+          "y": 31896
+        },
+        "last": {
+          "x": -1,
+          "y": -1
+        },
+        "collision": {
+          "x": 0,
+          "y": 0
+        },
+        "origin": {
+          "x": 3480,
+          "y": 31896
+        },
+        "offset": {
+          "x": 408,
+          "y": 408
+        }
+      }
+    },
+    {
+      "frame": 174,
+      "frame_delta": 5,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3458,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "MoveOrder",
+        "length": 1,
+        "preferred_vtable": "0x00b4a12c",
+        "flags": 5,
+        "metric": 0
+      },
+      "move_order": {
+        "x": 3480,
+        "y": 31896,
+        "arrival_angle": 1073741824,
+        "dest_latch": 1,
+        "tolerance": 0,
+        "pause": 0,
+        "retry": 0,
+        "attempts": 0,
+        "timer": 0,
+        "facing": 0,
+        "active_destination": {
+          "x": 3480,
+          "y": 31896
+        },
+        "last": {
+          "x": -1,
+          "y": -1
+        },
+        "collision": {
+          "x": 0,
+          "y": 0
+        },
+        "origin": {
+          "x": 3480,
+          "y": 31896
+        },
+        "offset": {
+          "x": 408,
+          "y": 408
+        }
+      }
+    },
+    {
+      "frame": 175,
+      "frame_delta": 6,
+      "seconds": 11,
+      "pause": 0,
+      "speed": 1,
+      "position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "heading_u32": 1073741824,
+      "queued_action_heading_u32": 1073741824,
+      "queued_action_position": {
+        "x": 3480,
+        "y": 31896
+      },
+      "order": {
+        "kind": "none",
+        "length": 0,
+        "preferred_vtable": "0x00000000",
+        "flags": 0,
+        "metric": 0
+      }
+    }
+  ]
+}

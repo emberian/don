@@ -1,0 +1,74 @@
+{
+  "schema": "don.retail-player-protocol.v1",
+  "protocol": "don.retail-player.v1",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "coordinate_units_per_tile": 192,
+  "simulation_frames_per_game_second": 15,
+  "observation": {
+    "schema": "don.retail-player-observation.v1",
+    "coherence": "one retail-main-thread callback; identical Game pointer/frame, Objects pointer/array metadata, Leader flags, and encrypted-economy pointer before and after",
+    "identity": {
+      "local_slot": "exactly one Leader slot whose flags & 7 equals 7",
+      "cross_checks": [
+        "Leader.who equals slot",
+        "GameInfo.Player.who equals slot",
+        "Leader.tribe equals GameInfo.Player.tribe"
+      ],
+      "stable_object_id": ["slot", "band", "o", "uid"]
+    },
+    "economy": {
+      "resource_order": ["food", "timber", "wealth", "knowledge", "metal", "oil"],
+      "stockpile_i32": "LeaderDataEncrypt.bucket[6], XOR 0x8221",
+      "commerce_cap_x16_i32": "first six resource_cap entries, XOR 0x1281; income clamp in x16 units, not stored-resource capacity",
+      "capped_state_i32": "over_cap[6], XOR 0x8932",
+      "population_current": "LeaderData.control +0x940",
+      "population_cap": "LeaderData.pop_cap +0x7e4"
+    },
+    "objects": {
+      "scope": "selected local slot only",
+      "bands": {
+        "unit": "[0, unit_mark)",
+        "build": "[2000, build_mark)",
+        "wall": "[3000, wall_mark)"
+      },
+      "required_gates": [
+        "SubObject.flags bit 0 is set",
+        "SubObject.who equals local slot",
+        "SubObject.o equals band index",
+        "type pointer and TypeIndex are readable",
+        "runtime class vtable is recognized"
+      ],
+      "unit_order": "canonical OrderList head->prev->data; empty head never uses stale current_data cache",
+      "angles": "u32 binary angle modulo 2^32; 0 is north/-y"
+    },
+    "excluded": [
+      "all enemy and neutral owner lists",
+      "enemy economy, orders, targets, and target coordinates",
+      "fog-hidden map, goods, rare resources, items, ammo, and death arrays",
+      "Object.visible and WData.was_seen until per-local-slot LOS semantics are proven"
+    ]
+  },
+  "action_batch": {
+    "schema": "don.retail-player-action-batch.v1",
+    "max_actions": 4,
+    "supervision": "the observed match must begin paused; every live run restores pause and STOP-parks the hook",
+    "supported": {
+      "move": {
+        "owner": "must equal observed local slot",
+        "object_ids": "exactly one active unit from the same observation",
+        "target": "x/y must lie within observed public world bounds",
+        "queue": "new",
+        "order": "MOVE_TO",
+        "max_frames": "1..180"
+      }
+    },
+    "reserved_not_yet_executable": ["queue", "build", "attack", "gather", "work", "halt"],
+    "retail_ingress": "shipped CommandManager issue method on the retail main thread; no raw CommandPackage writes"
+  },
+  "reference_artifacts": {
+    "observation": "schema/live/retail-player-observation-v1.json",
+    "dry_run": "schema/live/retail-player-policy-dry-run-v1.json",
+    "live_run": "schema/live/retail-player-policy-run-v1.json",
+    "trajectory": "schema/live/retail-player-scout-trace-v1.json"
+  }
+}

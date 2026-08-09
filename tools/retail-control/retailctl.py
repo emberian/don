@@ -158,7 +158,8 @@ def validate_words(words: list[str]) -> None:
     if not words:
         raise SystemExit("a retail command is required")
     allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
-               "move", "halt", "attack", "trace-move", "observe-guys"}
+               "move", "halt", "attack", "trace-move", "observe-guys",
+               "observe-player"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
     for word in words:
@@ -246,6 +247,254 @@ def normalized_trace_event(event: dict, start_frame: int, base: int) -> dict:
             "offset": {"x": event["move_off_x"], "y": event["move_off_y"]},
         }
     return out
+
+
+def executable_base(root: str) -> int:
+    ready = guest_cmd(f'type "{root}\\ready.txt"')
+    for line in ready.splitlines():
+        if line.startswith("base="):
+            return int(line.split("=", 1)[1], 16)
+    raise RuntimeError("controller ready record has no executable base")
+
+
+def type_names() -> dict[int, str]:
+    names: dict[int, str] = {}
+    path = HERE.parents[1] / "schema/live/type-names.txt"
+    for line in path.read_text().splitlines():
+        fields = line.split("\t")
+        if (len(fields) >= 4 and fields[0] in {"UnitType", "BuildType", "ObjectType"}
+                and fields[2].isdigit() and fields[3] and int(fields[2]) not in names):
+            names[int(fields[2])] = fields[3]
+    return names
+
+
+def vtable_names() -> dict[int, str]:
+    raw = json.loads((HERE.parents[1] / "schema/vtables.json").read_text())
+    return {int(address, 16): name for address, name in raw.items()}
+
+
+PUBLIC_OBJECT_VTABLES = {
+    0x00B417D0: "unit",
+    0x00B4145C: "animal",
+    0x00B42174: "build",
+    0x00B42CF8: "wall",
+}
+
+# Concrete UnitOrder-subobject vtables and the exact value returned by their
+# shipped get_type virtual.  PatrolOrder really returns NONE (0) in this build;
+# it is intentionally not relabeled as PATROL (5).
+PUBLIC_ORDER_VTABLES = {
+    0x00B47628: ("AttackOrder", 10),
+    0x00B47B08: ("StrafeOrder", 16),
+    0x00B47E34: ("GroupAttackToOrder", 21),
+    0x00B47F74: ("RepairOrder", 13),
+    0x00B480BC: ("AwaitBoardOrder", 9),
+    0x00B48208: ("BoardOrder", 8),
+    0x00B4834C: ("BuildOrder", 6),
+    0x00B48498: ("GroupPatrolOrder", 22),
+    0x00B485D8: ("FleeToOrder", 4),
+    0x00B48714: ("ExploreToOrder", 3),
+    0x00B48850: ("AttackToOrder", 2),
+    0x00B489B8: ("TradeOrder", 15),
+    0x00B48AEC: ("PatrolOrder", 0),
+    0x00B48C50: ("AirPatrolOrder", 17),
+    0x00B48D88: ("ThinkOrder", 27),
+    0x00B48EE8: ("GarrisonOrder", 26),
+    0x00B49078: ("SpecialAnimOrder", 25),
+    0x00B491FC: ("GroupAttackOrder", 20),
+    0x00B494B4: ("GroupMoveOrder", 19),
+    0x00B49608: ("FormOrder", 18),
+    0x00B4976C: ("CastOrder", 14),
+    0x00B498F4: ("GuardOrder", 12),
+    0x00B49A40: ("FollowOrder", 11),
+    0x00B49C1C: ("GatherOrder", 7),
+    0x00B49D90: ("AirAttackGroundOrder", 24),
+    0x00B49F1C: ("AttackGroundOrder", 23),
+    0x00B4A12C: ("MoveOrder", 1),
+}
+
+
+def normalize_player_observation(event: dict, generation: str, base: int) -> dict:
+    names = type_names()
+    categories = {1: "unit", 2: "build", 3: "wall"}
+    objects = []
+    for item in event["player_objects"]:
+        runtime_order_vtable = int(item["order_vtable"], 16)
+        order_vtable = (runtime_order_vtable - base + 0x00400000
+                        if runtime_order_vtable else 0)
+        runtime_class_vtable = int(item["class_vtable"], 16)
+        class_vtable = (runtime_class_vtable - base + 0x00400000
+                        if runtime_class_vtable else 0)
+        if item["order_length"] == 0 and not order_vtable:
+            order_kind, order_index, order_valid = "none", 0, True
+        elif order_vtable in PUBLIC_ORDER_VTABLES:
+            order_kind, order_index = PUBLIC_ORDER_VTABLES[order_vtable]
+            order_valid = True
+        else:
+            order_kind, order_index, order_valid = "unresolved", None, False
+        type_valid = bool(item["type_valid"])
+        category = categories.get(item["category"], "unknown")
+        public_object = {
+            "id": {
+                "slot": event["local_player"],
+                "band": category,
+                "o": item["id"],
+                "uid": item["uid"],
+            },
+            "object_id": item["id"],
+            "category": category,
+            "runtime_class": PUBLIC_OBJECT_VTABLES.get(class_vtable, "unknown"),
+            "preferred_class_vtable": f"0x{class_vtable:08x}",
+            "type_index": item["type"] if type_valid else None,
+            "type_valid": type_valid,
+            "type_name": (names.get(item["type"], f"TypeIndex({item['type']})")
+                          if type_valid else "unresolved"),
+            "position": {"x": item["x"], "y": item["y"], "z": item["z"]},
+            "hits": item["hits"],
+            "flags": item["flags"],
+        }
+        if category == "unit":
+            public_object.update({
+                "heading_u32": item["angle"],
+                "physical_body_count": item["guy_length"],
+                "order": {
+                    "length": item["order_length"],
+                    "kind": order_kind,
+                    "index": order_index,
+                    "index_valid": order_valid,
+                    "preferred_vtable": f"0x{order_vtable:08x}",
+                    "flags": item["order_flags"],
+                    "metric": item["order_metric"],
+                },
+            })
+        objects.append(public_object)
+    resources = ["food", "timber", "wealth", "knowledge", "metal", "oil"]
+    return {
+        "schema": "don.retail-player-observation.v1",
+        "protocol": "don.retail-player.v1",
+        "retail_executable_sha256": EXPECTED_SHA256,
+        "controller_generation": generation,
+        "public_scope": {
+            "owner": event["local_player"],
+            "includes": ["own active object bands", "own stockpile", "own commerce cap",
+                         "own population", "public game clock"],
+            "excludes": ["enemy and neutral object tables", "enemy resources",
+                         "fog-hidden map state", "target-object dereferences",
+                         "visibility flags not proven local-slot-specific"],
+        },
+        "frame": event["frame"],
+        "seconds": event["seconds"],
+        "paused": event["paused"],
+        "speed": event["speed"],
+        "world": {
+            "tile_xs": event["world_tile_xs"],
+            "tile_ys": event["world_tile_ys"],
+            "coordinate_units_per_tile": 192,
+        },
+        "player": {
+            "owner": event["local_player"],
+            "slot": event["local_player"],
+            "who": event["local_player"],
+            "tribe": event["player_tribe"],
+            "team": event["player_team"],
+            "leader_flags": event["player_leader_flags"],
+            "game_info_flags": event["player_identity_flags"],
+        },
+        "economy": {
+            "resource_order": resources,
+            "stockpile_i32": event["player_resources"],
+            "commerce_cap_x16_i32": event["player_resource_caps"][:6],
+            "capped_state_i32": event["player_over_cap"],
+        },
+        "population": {"current": event["player_pop"], "cap": event["player_pop_cap"]},
+        "object_slots": event["player_slots"],
+        "object_marks": {
+            "unit": event["player_unit_mark"],
+            "building": event["player_build_mark"],
+            "wall": event["player_wall_mark"],
+        },
+        "objects": sorted(objects, key=lambda item: item["object_id"]),
+    }
+
+
+def player_observation(root: str, generation: str) -> dict:
+    events = send(["observe-player"], 8.0, root)
+    event = next((e for e in events if e.get("phase") == "observed"), None)
+    if not event:
+        raise RuntimeError("retail did not publish a player observation")
+    if event.get("note"):
+        raise RuntimeError(f"retail player observation failed closed (note={event['note']})")
+    if event.get("player_object_truncated"):
+        raise RuntimeError("retail player observation exceeded MAX_PUBLIC_OBJECTS")
+    if event.get("paused") != 1:
+        raise RuntimeError("REFUSING player observation unless the supervised match is paused")
+    observation = normalize_player_observation(event, generation, executable_base(root))
+    if any(not obj["type_valid"] or obj["runtime_class"] == "unknown"
+           for obj in observation["objects"]):
+        raise RuntimeError("retail player observation contains an unresolved own object")
+    if any(obj["order"]["length"] < 0 or not obj["order"]["index_valid"]
+           for obj in observation["objects"] if obj["category"] == "unit"):
+        raise RuntimeError("retail player observation contains an unresolved own-unit order")
+    return observation
+
+
+def scout_policy(observation: dict) -> dict:
+    owner = observation["player"]["owner"]
+    candidates = [
+        obj for obj in observation["objects"]
+        if obj["category"] == "unit" and obj["type_name"] == "Scout"
+        and obj["order"]["length"] == 0 and obj["hits"] > 0
+    ]
+    actions = []
+    reason = "no live idle owned Scout; preserve economy and issue no command"
+    if candidates:
+        scout = min(candidates, key=lambda obj: obj["object_id"])
+        x = scout["position"]["x"]
+        y = scout["position"]["y"]
+        max_x = observation["world"]["tile_xs"] * 192
+        target_x = x + 192 if x + 192 < max_x else x - 192
+        actions.append({
+            "id": "scout-step-0",
+            "verb": "move",
+            "owner": owner,
+            "object_ids": [scout["object_id"]],
+            "target": {"x": target_x, "y": y},
+            "queue": "new",
+            "order": "MOVE_TO",
+            "max_frames": 60,
+            "reason": "lowest object-id live idle owned Scout; one-tile bounded east/west step",
+        })
+        reason = "deterministic scout step; citizens, merchants, and buildings are untouched"
+    return {
+        "schema": "don.retail-player-action-batch.v1",
+        "protocol": "don.retail-player.v1",
+        "policy": "deterministic-scout-economy-safe.v1",
+        "observation_frame": observation["frame"],
+        "max_actions": 4,
+        "reason": reason,
+        "actions": actions,
+    }
+
+
+def validate_action_batch(batch: dict, observation: dict) -> None:
+    actions = batch.get("actions", [])
+    if len(actions) > 4:
+        raise RuntimeError("REFUSING action batch larger than four")
+    owned = {obj["object_id"]: obj for obj in observation["objects"]}
+    owner = observation["player"]["owner"]
+    max_x = observation["world"]["tile_xs"] * 192
+    max_y = observation["world"]["tile_ys"] * 192
+    for action in actions:
+        if action.get("verb") != "move" or action.get("owner") != owner:
+            raise RuntimeError("v1 executor accepts only own-player move actions")
+        ids = action.get("object_ids", [])
+        if len(ids) != 1 or ids[0] not in owned or owned[ids[0]]["category"] != "unit":
+            raise RuntimeError("v1 move must select exactly one observed owned live unit")
+        target = action.get("target", {})
+        if not (0 <= target.get("x", -1) < max_x and 0 <= target.get("y", -1) < max_y):
+            raise RuntimeError("v1 move target lies outside observed public world bounds")
+        if not (1 <= action.get("max_frames", 0) <= 180):
+            raise RuntimeError("v1 move exceeds the bounded trace frame limit")
 
 
 def trajectory(owner: int, unit_id: int, x: int, y: int, max_frames: int,
@@ -351,6 +600,79 @@ def trajectory(owner: int, unit_id: int, x: int, y: int, max_frames: int,
         raise failure
 
 
+def player_observe_command(root: str, generation: str, output: Path) -> None:
+    failure: BaseException | None = None
+    try:
+        observation = player_observation(root, generation)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(observation, indent=2) + "\n")
+        print(f"wrote {len(observation['objects'])} own public objects to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+def policy_run(root: str, generation: str, output: Path, trace_output: Path,
+               apply: bool) -> None:
+    failure: BaseException | None = None
+    observation: dict | None = None
+    batch: dict | None = None
+    traces: list[dict] = []
+    after: dict | None = None
+    try:
+        observation = player_observation(root, generation)
+        batch = scout_policy(observation)
+        validate_action_batch(batch, observation)
+        print(json.dumps(batch, indent=2))
+        if apply:
+            for index, action in enumerate(batch["actions"]):
+                if index:
+                    rearm(root)
+                action_trace = trace_output if len(batch["actions"]) == 1 else trace_output.with_name(
+                    f"{trace_output.stem}-{index}{trace_output.suffix}"
+                )
+                trajectory(
+                    action["owner"], action["object_ids"][0],
+                    action["target"]["x"], action["target"]["y"],
+                    action["max_frames"], 45.0, root, generation, action_trace,
+                )
+                traces.append(json.loads(action_trace.read_text()))
+            if batch["actions"]:
+                rearm(root)
+                after = player_observation(root, generation)
+            else:
+                after = observation
+        artifact = {
+            "schema": "don.retail-player-policy-run.v1",
+            "protocol": "don.retail-player.v1",
+            "mode": "apply" if apply else "dry-run",
+            "before": observation,
+            "action_batch": batch,
+            "traces": traces,
+            "after": after,
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(artifact, indent=2) + "\n")
+        print(f"wrote supervised policy run to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
 def status(root: str) -> None:
     target_pid = pid()
     print(f"pid={target_pid}")
@@ -415,6 +737,17 @@ def main() -> None:
     t.add_argument("--output", type=Path,
                    default=HERE.parents[1] / "schema/live/retail-move-trajectory-v1.json")
     add_generation(t)
+    po = sub.add_parser("player-observe")
+    po.add_argument("--output", type=Path,
+                    default=HERE.parents[1] / "schema/live/retail-player-observation-v1.json")
+    add_generation(po)
+    pol = sub.add_parser("policy")
+    pol.add_argument("--apply", action="store_true")
+    pol.add_argument("--output", type=Path,
+                     default=HERE.parents[1] / "schema/live/retail-player-policy-run-v1.json")
+    pol.add_argument("--trace-output", type=Path,
+                     default=HERE.parents[1] / "schema/live/retail-player-scout-trace-v1.json")
+    add_generation(pol)
     stop_parser = sub.add_parser("stop")
     add_generation(stop_parser)
     rearm_parser = sub.add_parser("rearm")
@@ -431,6 +764,12 @@ def main() -> None:
     elif a.action == "trajectory":
         trajectory(a.owner, a.unit_id, a.x, a.y, a.max_frames, a.timeout,
                    generation_root(a.generation), a.generation, a.output.resolve())
+    elif a.action == "player-observe":
+        player_observe_command(generation_root(a.generation), a.generation,
+                               a.output.resolve())
+    elif a.action == "policy":
+        policy_run(generation_root(a.generation), a.generation, a.output.resolve(),
+                   a.trace_output.resolve(), a.apply)
     elif a.action == "stop": stop(generation_root(a.generation))
     elif a.action == "rearm": rearm(generation_root(a.generation))
 

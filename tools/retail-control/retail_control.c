@@ -29,6 +29,8 @@
 #define RVA_GAME_PTR       (0x00c061ecu - PREFERRED_BASE)
 #define RVA_TURN_PTR       (0x00c06180u - PREFERRED_BASE)
 #define RVA_OBJECTS_PTR    (0x00c0618cu - PREFERRED_BASE)
+#define RVA_WORLD_PTR      (0x00c061d0u - PREFERRED_BASE)
+#define RVA_LEADERS_PTR    (0x00c061e0u - PREFERRED_BASE)
 #define RVA_COMMAND_MANAGER (0x00e8ff60u - PREFERRED_BASE)
 #define RVA_COMMAND_PACKAGE (0x00e8ff88u - PREFERRED_BASE)
 #define RVA_ISSUE_CHECKSUM (0x00940770u - PREFERRED_BASE)
@@ -69,6 +71,7 @@
 
 #define MAX_IDS 128
 #define MAX_GUYS 32
+#define MAX_PUBLIC_OBJECTS 256
 #define MAX_COMMAND_CAPTURE 160
 #define EVENT_CAP 256
 
@@ -84,7 +87,8 @@ enum Verb {
     V_HALT,
     V_ATTACK,
     V_TRACE_MOVE,
-    V_OBSERVE_GUYS
+    V_OBSERVE_GUYS,
+    V_OBSERVE_PLAYER
 };
 
 typedef struct {
@@ -103,6 +107,27 @@ typedef struct {
     short off_y;
     unsigned guy_num;
 } guy_sample_t;
+
+typedef struct {
+    int id;
+    unsigned pointer;
+    unsigned category;          /* 1 unit, 2 building, 3 wall */
+    unsigned flags;
+    unsigned uid;
+    int type;
+    int type_valid;
+    int x;
+    int y;
+    int z;
+    int hits;
+    unsigned class_vtable;
+    unsigned angle;
+    int order_length;
+    unsigned order_vtable;
+    unsigned order_flags;
+    unsigned order_metric;
+    int guy_length;
+} public_object_t;
 
 typedef struct {
     unsigned seq;
@@ -173,6 +198,28 @@ typedef struct {
     int guy_count;
     int guy_truncated;
     guy_sample_t guys[MAX_GUYS];
+    int local_player;
+    int world_tile_xs;
+    int world_tile_ys;
+    int player_pop;
+    int player_pop_cap;
+    unsigned player_leader_flags;
+    unsigned player_identity_flags;
+    int player_tribe;
+    int player_team;
+    int player_peasants;
+    int player_free_peasants;
+    int player_scouts;
+    int player_resources[6];
+    int player_resource_caps[7];
+    int player_over_cap[6];
+    int player_slots;
+    int player_unit_mark;
+    int player_build_mark;
+    int player_wall_mark;
+    int player_object_count;
+    int player_object_truncated;
+    public_object_t player_objects[MAX_PUBLIC_OBJECTS];
     unsigned note;
 } event_t;
 
@@ -279,6 +326,193 @@ static unsigned object_ptr(unsigned who, int id, int *is_unit) {
         if (is_unit) *is_unit = 1;
     }
     return object;
+}
+
+static void observe_public_order(unsigned unit, public_object_t *out) {
+    int length = -1;
+    unsigned head = 0, node = 0, order = 0, vtable = 0;
+    unsigned char b = 0;
+    out->order_length = -1;
+    if (!safe_read(unit + OFF_UNIT_ORDER_LENGTH, &length, 4)) return;
+    out->order_length = length;
+    if (length <= 0 || !rd32(unit + 0xdcu, &head) || !head ||
+        !rd32(head + 4u, &node) || !node || !rd32(node + 8u, &order) || !order)
+        return;
+    if (rd32(order, &vtable)) out->order_vtable = vtable;
+    if (safe_read(order + 4u, &b, 1)) out->order_flags = b;
+    if (safe_read(node + 0xcu, &b, 1)) out->order_metric = b;
+}
+
+static void observe_player_public(event_t *e) {
+    unsigned world = 0, leaders = 0, leader = 0, encrypted = 0;
+    unsigned objects = 0, array = 0, list = 0, game_after = 0;
+    unsigned flags = 0, flags_after = 0, encrypted_after = 0;
+    unsigned frame_after = 0, objects_after = 0, list_after = 0;
+    unsigned short player_flags = 0;
+    unsigned char player_who = 0, player_tribe = 0;
+    signed char player_team = 0;
+    int leader_who = -1, leader_tribe = -1;
+    int who = -1, human_count = 0, length = -1, capacity = -1, unit_mark = -1;
+    int length_after = -1, capacity_after = -1, unit_after = -1;
+    int build_mark = -1, wall_mark = -1, build_after = -1, wall_after = -1;
+    int band_start[3], band_end[3], band_category[3];
+    int band, i, r;
+    e->local_player = -1;
+    if (!rd32(g_base + RVA_LEADERS_PTR, &leaders) || !leaders) {
+        e->note = 10;
+        return;
+    }
+    /* Retail's exact local-console discriminator is Leader::is_human (flags bit 2).
+       Require one and only one in-game, playing human; never fall back to slot zero. */
+    for (i = 0; i < 8; i++) {
+        unsigned candidate = leaders + (unsigned)i * 0x6eecu;
+        unsigned candidate_flags = 0;
+        if (!rd32(candidate, &candidate_flags)) {
+            e->note = 10;
+            return;
+        }
+        if ((candidate_flags & 7u) == 7u) {
+            who = i;
+            human_count++;
+        }
+    }
+    if (human_count != 1) {
+        e->note = 10;
+        return;
+    }
+    e->local_player = who;
+    leader = leaders + (unsigned)who * 0x6eecu;
+    if (!rd32(leader, &flags) || !safe_read(leader + 8u, &leader_who, 4) ||
+        !safe_read(leader + 0x0cu, &leader_tribe, 4) || leader_who != who ||
+        !e->game) {
+        e->note = 13;
+        return;
+    }
+    {
+        /* Game::info is inline at +0x0c; GameInfo::player starts at +0x38. */
+        unsigned player = e->game + 0x44u + (unsigned)who * 0x8cu;
+        if (!safe_read(player + 0x30u, &player_flags, 2) ||
+            !safe_read(player + 0x32u, &player_tribe, 1) ||
+            !safe_read(player + 0x33u, &player_who, 1) ||
+            !safe_read(player + 0x34u, &player_team, 1) ||
+            player_who != (unsigned char)who || (int)player_tribe != leader_tribe) {
+            e->note = 13;
+            return;
+        }
+    }
+    e->player_leader_flags = flags;
+    e->player_identity_flags = player_flags;
+    e->player_tribe = leader_tribe;
+    e->player_team = player_team;
+    if (rd32(g_base + RVA_WORLD_PTR, &world) && world) {
+        safe_read(world + 0x18u, &e->world_tile_xs, 4);
+        safe_read(world + 0x1cu, &e->world_tile_ys, 4);
+    }
+    if (!safe_read(leader + 0x940u, &e->player_pop, 4) ||
+        !safe_read(leader + 0x7e4u, &e->player_pop_cap, 4) ||
+        !rd32(leader + 0x6eb8u, &encrypted) || !encrypted) {
+        e->note = 14;
+        return;
+    }
+    for (r = 0; r < 6; r++) {
+        unsigned v = 0;
+        if (!rd32(encrypted + (unsigned)r * 4u, &v)) {
+            e->note = 14;
+            return;
+        }
+        e->player_resources[r] = (int)(v ^ 0x00008221u);
+        if (!rd32(encrypted + 0x30u + (unsigned)r * 4u, &v)) {
+            e->note = 14;
+            return;
+        }
+        e->player_resource_caps[r] = (int)(v ^ 0x00001281u);
+        if (!rd32(encrypted + 0x4cu + (unsigned)r * 4u, &v)) {
+            e->note = 14;
+            return;
+        }
+        e->player_over_cap[r] = (int)(v ^ 0x00008932u);
+    }
+    if (!rd32(g_base + RVA_OBJECTS_PTR, &objects) || !objects) {
+        e->note = 11;
+        return;
+    }
+    array = objects + OFF_OBJECTS_LISTS + (unsigned)who * OBJECTS_ARRAY_STRIDE;
+    safe_read(array + 4u, &length, 4);
+    safe_read(array + 8u, &capacity, 4);
+    rd32(array + OFF_ARRAY_LIST, &list);
+    safe_read(objects + 0x15cu + (unsigned)who * 4u, &unit_mark, 4);
+    safe_read(objects + 0x184u + (unsigned)who * 4u, &build_mark, 4);
+    safe_read(objects + 0x1acu + (unsigned)who * 4u, &wall_mark, 4);
+    e->player_slots = length;
+    e->player_unit_mark = unit_mark;
+    e->player_build_mark = build_mark;
+    e->player_wall_mark = wall_mark;
+    if (length < 0 || length > 32768 || capacity < length || capacity > 32768 ||
+        (length && !list) || unit_mark < 0 || unit_mark > length ||
+        build_mark < 2000 || build_mark > length || wall_mark < 3000 ||
+        wall_mark > length) {
+        e->note = 12;
+        return;
+    }
+    band_start[0] = 0; band_end[0] = unit_mark; band_category[0] = 1;
+    band_start[1] = 2000; band_end[1] = build_mark; band_category[1] = 2;
+    band_start[2] = 3000; band_end[2] = wall_mark; band_category[2] = 3;
+    for (band = 0; band < 3; band++) {
+        for (i = band_start[band]; i < band_end[band]; i++) {
+            public_object_t *out;
+            unsigned p = 0, ptype = 0, raw = 0, vtable = 0;
+            unsigned char object_flags = 0, owner = 0;
+            unsigned short uid = 0;
+            short object_index = -1;
+            if (!rd32(list + (unsigned)i * 4u, &p) || !p ||
+                !safe_read(p + OFF_OBJ_FLAGS, &object_flags, 1) || !(object_flags & 1u) ||
+                !safe_read(p + 9u, &owner, 1) || owner != (unsigned char)who ||
+                !rd16(p + 0x0au, &object_index) || object_index != (short)i)
+                continue;
+            if (e->player_object_count >= MAX_PUBLIC_OBJECTS) {
+                e->player_object_truncated = 1;
+                continue;
+            }
+            out = &e->player_objects[e->player_object_count++];
+            out->id = i;
+            out->pointer = p;
+            out->category = (unsigned)band_category[band];
+            out->flags = object_flags;
+            safe_read(p + 0x30u, &uid, 2);
+            out->uid = uid;
+            if (rd32(p, &vtable)) out->class_vtable = vtable;
+            if (rd32(p + 0x18u, &ptype) && ptype &&
+                safe_read(ptype + 4u, &out->type, 4)) out->type_valid = 1;
+            if (rd32(p + 0x0cu, &raw)) out->z = (int)(raw ^ OBJECT_COORD_XOR);
+            if (rd32(p + 0x10u, &raw)) out->x = (int)(raw ^ OBJECT_COORD_XOR);
+            if (rd32(p + 0x14u, &raw)) out->y = (int)(raw ^ OBJECT_COORD_XOR);
+            safe_read(p + 0x20u, &out->hits, 4);
+            if (out->category == 1u) {
+                rd32(p + OFF_UNIT_ANGLE, &out->angle);
+                safe_read(p + 0xe8u, &out->guy_length, 4);
+                observe_public_order(p, out);
+            }
+        }
+    }
+    /* Although this callback is on the main thread, reject any load-transition or
+       torn root/metadata sample instead of publishing a best-effort observation. */
+    if (!rd32(g_base + RVA_GAME_PTR, &game_after) || game_after != e->game ||
+        !rd32(game_after + OFF_GAME_FRAME, &frame_after) || frame_after != e->frame ||
+        !rd32(g_base + RVA_OBJECTS_PTR, &objects_after) || objects_after != objects ||
+        !safe_read(array + 4u, &length_after, 4) || length_after != length ||
+        !safe_read(array + 8u, &capacity_after, 4) || capacity_after != capacity ||
+        !rd32(array + OFF_ARRAY_LIST, &list_after) || list_after != list ||
+        !safe_read(objects + 0x15cu + (unsigned)who * 4u, &unit_after, 4) ||
+        unit_after != unit_mark ||
+        !safe_read(objects + 0x184u + (unsigned)who * 4u, &build_after, 4) ||
+        build_after != build_mark ||
+        !safe_read(objects + 0x1acu + (unsigned)who * 4u, &wall_after, 4) ||
+        wall_after != wall_mark || !rd32(leader, &flags_after) || flags_after != flags ||
+        !rd32(leader + 0x6eb8u, &encrypted_after) || encrypted_after != encrypted) {
+        e->note = 15;
+        e->player_object_count = 0;
+        return;
+    }
 }
 
 static void observe_unit(event_t *e, const request_t *r) {
@@ -406,6 +640,7 @@ static void snapshot(event_t *e, const request_t *r) {
         safe_read(turn + 0x30u, &e->speed, 4);
     }
     observe_unit(e, r);
+    if (r && r->verb == V_OBSERVE_PLAYER) observe_player_public(e);
 }
 
 static void push_event(const event_t *event) {
@@ -461,6 +696,7 @@ static int dispatch(const request_t *r, event_t *e) {
     switch (r->verb) {
         case V_OBSERVE:
         case V_OBSERVE_GUYS:
+        case V_OBSERVE_PLAYER:
             return 1;
         case V_PAUSE:
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, r->arg[0]);
@@ -604,7 +840,8 @@ static void __cdecl on_turn_frame(void) {
         e.note = g_trace.active ? 3 : (e.paused != 1 ? 2 : 4);
         push_event(&e);
     } else if (dispatch(&r, &e)) {
-        e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS) ? 0 : 1;
+        e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
+                   r.verb == V_OBSERVE_PLAYER) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK) {
@@ -796,6 +1033,7 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED ID...
  * seq trace-move WHO ID X Y MAX_FRAMES
  * seq observe-guys WHO ID
+ * seq observe-player
  */
 static int parse_request(char *line, request_t *r) {
     char *t[160];
@@ -805,6 +1043,7 @@ static int parse_request(char *line, request_t *r) {
     r->seq = parse_uint(t[0], &ok);
     if (!ok || !r->seq) return 0;
     if (!strcmp(t[1], "observe") && n == 2) r->verb = V_OBSERVE;
+    else if (!strcmp(t[1], "observe-player") && n == 2) r->verb = V_OBSERVE_PLAYER;
     else if (!strcmp(t[1], "observe-guys") && n == 4) {
         int id;
         r->verb = V_OBSERVE_GUYS;
@@ -885,6 +1124,7 @@ static const char *verb_name(unsigned verb) {
         case V_MOVE: return "move"; case V_HALT: return "halt";
         case V_ATTACK: return "attack"; case V_TRACE_MOVE: return "trace-move";
         case V_OBSERVE_GUYS: return "observe-guys";
+        case V_OBSERVE_PLAYER: return "observe-player";
         default: return "unknown";
     }
 }
@@ -899,7 +1139,7 @@ static const char *phase_name(unsigned phase) {
 }
 
 static void write_event(const event_t *e) {
-    char line[16384], hex[MAX_COMMAND_CAPTURE * 2 + 1];
+    char line[131072], hex[MAX_COMMAND_CAPTURE * 2 + 1];
     unsigned i;
     size_t used;
     HANDLE h;
@@ -959,6 +1199,55 @@ static void write_event(const event_t *e) {
             i ? "," : "", i, g->pointer, g->type, g->x, g->y, g->z, g->angle,
             g->des_x, g->des_y, g->des_angle, g->last_x, g->last_y,
             g->off_x, g->off_y, g->guy_num);
+        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+        used += (size_t)n;
+    }
+    {
+        int n = _snprintf(line + used, sizeof(line) - used,
+            "],\"local_player\":%d,\"world_tile_xs\":%d,\"world_tile_ys\":%d,"
+            "\"player_pop\":%d,\"player_pop_cap\":%d,"
+            "\"player_leader_flags\":%u,\"player_identity_flags\":%u,"
+            "\"player_tribe\":%d,\"player_team\":%d,"
+            "\"player_peasants\":%d,\"player_free_peasants\":%d,"
+            "\"player_scouts\":%d,"
+            "\"player_resources\":[%d,%d,%d,%d,%d,%d],"
+            "\"player_resource_caps\":[%d,%d,%d,%d,%d,%d,%d],"
+            "\"player_over_cap\":[%d,%d,%d,%d,%d,%d],"
+            "\"player_slots\":%d,\"player_unit_mark\":%d,"
+            "\"player_build_mark\":%d,\"player_wall_mark\":%d,"
+            "\"player_object_count\":%d,\"player_object_truncated\":%d,"
+            "\"player_objects\":[",
+            e->local_player, e->world_tile_xs, e->world_tile_ys,
+            e->player_pop, e->player_pop_cap, e->player_leader_flags,
+            e->player_identity_flags, e->player_tribe, e->player_team,
+            e->player_peasants,
+            e->player_free_peasants, e->player_scouts,
+            e->player_resources[0], e->player_resources[1], e->player_resources[2],
+            e->player_resources[3], e->player_resources[4], e->player_resources[5],
+            e->player_resource_caps[0], e->player_resource_caps[1],
+            e->player_resource_caps[2], e->player_resource_caps[3],
+            e->player_resource_caps[4], e->player_resource_caps[5],
+            e->player_resource_caps[6], e->player_over_cap[0],
+            e->player_over_cap[1], e->player_over_cap[2],
+            e->player_over_cap[3], e->player_over_cap[4],
+            e->player_over_cap[5], e->player_slots, e->player_unit_mark,
+            e->player_build_mark, e->player_wall_mark, e->player_object_count,
+            e->player_object_truncated);
+        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
+    }
+    for (i = 0; i < (unsigned)e->player_object_count && i < MAX_PUBLIC_OBJECTS; i++) {
+        const public_object_t *o = &e->player_objects[i];
+        int n = _snprintf(line + used, sizeof(line) - used,
+            "%s{\"id\":%d,\"pointer\":\"0x%08x\",\"category\":%u,"
+            "\"flags\":%u,\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
+            "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
+            "\"class_vtable\":\"0x%08x\",\"angle\":%u,\"order_length\":%d,"
+            "\"order_vtable\":\"0x%08x\",\"order_flags\":%u,"
+            "\"order_metric\":%u,\"guy_length\":%d}",
+            i ? "," : "", o->id, o->pointer, o->category, o->flags, o->uid,
+            o->type, o->type_valid, o->x, o->y, o->z, o->hits,
+            o->class_vtable, o->angle, o->order_length, o->order_vtable,
+            o->order_flags, o->order_metric, o->guy_length);
         if (n < 0 || (size_t)n >= sizeof(line) - used) break;
         used += (size_t)n;
     }

@@ -18,6 +18,10 @@ game:
   named next generation with an independent request/event/STOP directory in the same live PID.
 - `trajectory` drives one bounded retail move, records every distinct simulation frame, restores
   the initial paused state, writes normalized JSON, and parks its hook on every exit path.
+- `observe-player` publishes a coherence-gated, fog-safe observation of only the unique human
+  slot's exact own object bands, current unit orders, stockpile, commerce cap, and population.
+- `policy` is dry-run by default; `policy --apply` validates and executes a bounded deterministic
+  Scout move, re-observes the result, restores pause, and STOP-parks the generation.
 
 Build and attach:
 
@@ -34,6 +38,10 @@ python3 tools/retail-control/retailctl.py upgrade --pid 12324 \
   --from-generation v2 --generation trajectory-v3
 python3 tools/retail-control/retailctl.py trajectory 0 0 3096 31896 \
   --generation trajectory-v3 --output schema/live/retail-move-trajectory-v1.json
+python3 tools/retail-control/retailctl.py rearm --generation player-v7
+python3 tools/retail-control/retailctl.py player-observe --generation player-v7
+python3 tools/retail-control/retailctl.py rearm --generation player-v7
+python3 tools/retail-control/retailctl.py policy --apply --generation player-v7
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before
