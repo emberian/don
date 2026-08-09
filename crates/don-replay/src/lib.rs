@@ -47,6 +47,7 @@
 pub mod check_all;
 pub mod checksum;
 pub mod continent;
+pub mod growth;
 pub mod harness;
 pub mod image;
 pub mod initial;
@@ -67,8 +68,10 @@ pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError,
-    ContinentReceipt, ContinentStop, GrowRegionCall, LandDistanceCall, RegionSeedCall,
-    RegionSeedReceipt,
+    ContinentReceipt, ContinentStop, LandDistanceCall, RegionSeedCall, RegionSeedReceipt,
+};
+pub use growth::{
+    execute_grow_region, GrowRegionCall, GrowRegionError, GrowRegionReceipt, MapGrowthConfig,
 };
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use initial::{

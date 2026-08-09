@@ -3,7 +3,8 @@
 
 use don_replay::continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError, ContinentStop,
-    MAP_FILL_CONT_VA, MAP_GROW_REGION_VA, MAP_LAND_DIST_VA, REGIONS_FIND_ALL_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA, MAP_MAKE_COASTLINES_VA,
+    REGIONS_FIND_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
 use don_replay::map_style::{
@@ -68,6 +69,7 @@ fn style(ordinal: u8) -> MapStyleStaticData {
         ));
     }
     if ordinal == 18 {
+        selected_map_entries.push(entry("AVOID_CENTER", "scalevalue", "3"));
         for tag in [
             "AVOID_EDGE_0",
             "AVOID_EDGE_1",
@@ -91,6 +93,12 @@ fn style(ordinal: u8) -> MapStyleStaticData {
             entry("BASE_EDGE", "value", "-1"),
             entry("COMMON_RESOURCES", "value", "4"),
             entry("GOODY_BOXES", "value", "8"),
+            entry("AVOID_CENTER", "scalevalue", "4 SCALE"),
+            entry("AVOID_CONTINENT", "scalevalue", "4"),
+            entry("AVOID_EDGE_0", "scalevalue", "0"),
+            entry("AVOID_EDGE_1", "scalevalue", "0"),
+            entry("AVOID_EDGE_2", "scalevalue", "0"),
+            entry("AVOID_EDGE_3", "scalevalue", "0"),
         ],
         selected_map_entries,
         selected_map_section_present: true,
@@ -160,19 +168,26 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         &mut med_regions,
     )
     .unwrap();
-    assert_eq!(med.direct_rng_sites.len(), 5);
-    assert_eq!(med.rng_final, lcg_after(seed as i32, 5));
+    assert!(med.direct_rng_sites.len() > 5);
+    assert_eq!(med.region_growths.len(), 1);
+    assert_eq!(med.rng_final, med.region_growths[0].rng_final);
     match med.stop {
-        ContinentStop::GrowRegion { primitive_va, call } => {
-            assert_eq!(primitive_va, MAP_GROW_REGION_VA);
-            assert_eq!((call.region, call.target_area), (1, 1_587));
-            assert_eq!(
-                (call.max_distance, call.anchor_x, call.anchor_y),
-                (23, -1, -1)
-            );
+        ContinentStop::MakeCoastlines {
+            primitive_va,
+            passes,
+        } => {
+            assert_eq!(primitive_va, MAP_MAKE_COASTLINES_VA);
+            assert_eq!(passes, 2);
         }
         other => panic!("Mediterranean stopped at {other:?}"),
     }
+    let med_growth = &med.region_growths[0];
+    assert_eq!(
+        (med_growth.call.region, med_growth.call.target_area),
+        (1, 1_587)
+    );
+    assert_eq!(med_growth.call.max_distance, 23);
+    assert!(med_growth.completed && med_growth.points_added > 1_500);
     let med_seed = &med.region_seeds[0];
     assert_eq!((med_seed.call.region, med_seed.call.area), (1, 1_587));
     assert_eq!(
@@ -190,26 +205,18 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         ),
         (4, 8, 0)
     );
+    assert!(med_regions.list[1].coords.items.len() >= 1_587);
     assert_eq!(
-        med_regions.list[1].coords.items,
-        [(med_seed.call.x, med_seed.call.y)]
+        med_regions.list[1].size as usize,
+        med_regions.list[1].coords.items.len()
     );
-    assert_eq!(med_regions.list[1].size, 1);
-    assert_eq!(med_regions.land, 1);
+    assert_eq!(med_regions.get_num_land(), 1);
     let med_cell = med_world.wdata(med_seed.call.x, med_seed.call.y);
     assert_eq!(
         (med_cell.land, med_cell.land_sub, med_cell.region),
         (land::FERTILE, 0, 1)
     );
-    assert_eq!(
-        med_world
-            .wdata
-            .iter()
-            .filter(|cell| cell.region == 0)
-            .count(),
-        med_world.wdata.len() - 1,
-        "Regions::clear_all must run before the one seed-cell mutation"
-    );
+    assert!(med_world.wdata.iter().all(|cell| cell.region != 0));
 
     let mut lakes_world = seeded_world(100, seed);
     let lakes =
@@ -236,20 +243,17 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         &mut indies_regions,
     )
     .unwrap();
-    assert_eq!(indies.direct_rng_sites.len(), 3); // orientation + angle pair
-    assert_eq!(indies.rng_final, lcg_after(seed as i32, 3));
+    assert!(indies.direct_rng_sites.len() > 3);
+    assert_eq!(indies.region_growths.len(), 12);
+    assert_eq!(
+        indies.rng_final,
+        indies.region_growths.last().unwrap().rng_final
+    );
     assert_eq!(indies.starts_added, 6);
     assert_eq!(indies.region_seeds.len(), 6);
     match indies.stop {
-        ContinentStop::GrowRegion { primitive_va, call } => {
-            assert_eq!(primitive_va, MAP_GROW_REGION_VA);
-            // Six players on the two-player map-size baseline exercises
-            // Map::get_player_overage and its f32 scaling path: 250 / (4 / 2).
-            assert_eq!((call.region, call.target_area), (1, 41));
-            assert_eq!(
-                (call.max_distance, call.anchor_x, call.anchor_y),
-                (19, -1, -1)
-            );
+        ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => {
+            assert_eq!(next_rng_va, EAST_INDIES_NONPLAYER_ISLANDS_VA);
         }
         other => panic!("East Indies stopped at {other:?}"),
     }
@@ -260,9 +264,10 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
             (seed.common_factor, seed.goody_factor, seed.flags),
             (8, 8, 2)
         );
+        assert!(indies_regions.list[region].size >= 125);
         assert_eq!(
-            indies_regions.list[region].coords.items,
-            [(seed.call.x, seed.call.y)]
+            indies_regions.list[region].coords.items.len(),
+            indies_regions.list[region].size as usize
         );
         assert_eq!(indies_world.start_x.items[index], seed.call.x);
         assert_eq!(indies_world.start_y.items[index], seed.call.y);
@@ -358,7 +363,7 @@ fn fail_closed_validation_is_transactional_and_seed_mutation_changes_projection(
     )
     .unwrap();
     assert_eq!(altered.region_seeds[0].common_factor, 5);
-    assert_eq!(altered_regions.list[1].common_factor, 5);
+    assert_eq!(altered_regions.list[1].common_factor, 8);
 
     let mut corrupt_world = seeded_world(70, seed);
     let corrupt_world_before = corrupt_world.clone();

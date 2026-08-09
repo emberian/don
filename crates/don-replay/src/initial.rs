@@ -568,6 +568,30 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
+            crate::continent::ContinentStop::MakeCoastlines { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_coastline_carving",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+            crate::continent::ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_east_indies_nonplayer_islands",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *next_rng_va,
+                }
+            }
+            crate::continent::ContinentStop::RetryGeneration { .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_continent_retry",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: crate::continent::MAP_GROW_REGION_VA,
+                }
+            }
             crate::continent::ContinentStop::LandDistance { primitive_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
                     boundary: "map_land_distance",

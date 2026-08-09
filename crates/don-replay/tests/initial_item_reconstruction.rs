@@ -137,7 +137,7 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     assert_eq!(executed.style, plan.style);
     assert_eq!(
         executed.boundary.name(),
-        "map_region_growth",
+        "map_coastline_carving",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -146,8 +146,12 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
         .as_ref()
         .expect("Mediterranean must execute through its first make_region call");
     assert_eq!(continent.map_style, 12);
-    assert_eq!(continent.direct_rng_sites.len(), 5);
+    assert_eq!(continent.direct_rng_sites.len(), 20_728);
+    assert_eq!(continent.rng_final as u32, 0x3e25_9e29);
     assert_eq!(continent.region_seeds.len(), 1);
+    assert_eq!(continent.region_growths.len(), 1);
+    assert!(continent.region_growths[0].completed);
+    assert_eq!(continent.region_growths[0].retail_return, 0);
     assert_eq!(sim.initial_item_style_error, None);
     assert_eq!(
         sim.initial_item_error,
@@ -221,7 +225,7 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     assert_eq!(sim.initial_item_style_error, None);
     assert_eq!(
         sim.initial_items.as_ref().unwrap().boundary.name(),
-        "map_region_growth",
+        "map_east_indies_nonplayer_islands",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -229,6 +233,13 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     assert_eq!(continent.map_style, 18);
     assert_eq!(continent.starts_added, 6);
     assert_eq!(continent.region_seeds.len(), 6);
+    assert_eq!(continent.region_growths.len(), 12);
+    assert_eq!(continent.direct_rng_sites.len(), 8_517);
+    assert_eq!(continent.rng_final as u32, 0x950f_a373);
+    assert!(continent
+        .region_growths
+        .iter()
+        .all(|growth| growth.completed && growth.retail_return == 0));
     assert_ne!(sim.initial_items.as_ref().unwrap().boundary, plan.boundary);
     assert_eq!(
         sim.world.items_channel(),

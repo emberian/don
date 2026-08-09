@@ -7,6 +7,9 @@
 //! It stops at the first unported geometry/region primitive and returns that
 //! call as data; it never skips the primitive and consumes later RNG draws.
 
+use crate::growth::{
+    execute_grow_region, GrowRegionCall, GrowRegionError, GrowRegionReceipt, MapGrowthConfig,
+};
 use crate::initial::InitialWorldgenInputs;
 use crate::map_style::{MapStyleStaticData, StaticXmlEntry, MAP_MAKE_ORIENTATION_RNG_VA};
 use don_sim::rng::Random;
@@ -19,6 +22,8 @@ pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
+pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0068_b890;
+pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionSeedCall {
@@ -34,16 +39,6 @@ pub struct LandDistanceCall {
     pub y: i32,
     pub region: i32,
     pub required_distance: i32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrowRegionCall {
-    pub region: i32,
-    pub target_area: i32,
-    pub max_distance: i32,
-    pub anchor_x: i32,
-    pub anchor_y: i32,
-    pub return_partial_size: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +65,17 @@ pub enum ContinentStop {
     GrowRegion {
         primitive_va: u32,
         call: GrowRegionCall,
+    },
+    /// Mediterranean has rebuilt its first connected-region pass; coastline
+    /// carving is the next unported map mutation.
+    MakeCoastlines { primitive_va: u32, passes: i32 },
+    /// East Indies completed both player-region growth passes. The next stage
+    /// chooses and grows non-player islands.
+    EastIndiesNonplayerIslands { next_rng_va: u32 },
+    /// Retail abandons this generation pass and restarts the style virtual.
+    RetryGeneration {
+        failed_region: i32,
+        retail_return: i32,
     },
     /// Great Lakes needs the current generated-land distance before its retry
     /// branch can be selected.
@@ -101,6 +107,7 @@ pub struct ContinentReceipt {
     pub world_inverted: bool,
     pub regions_cleared: u32,
     pub region_seeds: Vec<RegionSeedReceipt>,
+    pub region_growths: Vec<GrowRegionReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -151,6 +158,8 @@ pub enum ContinentError {
         attribute: &'static str,
         value: String,
     },
+    RegionGrowth(GrowRegionError),
+    RegionRebuild(don_sim::systems::regions::RegionsError),
 }
 
 /// Execute the largest deterministic prefix of one admitted style virtual.
@@ -281,6 +290,7 @@ pub fn execute_continent_prefix_with_regions(
         ),
         12 => mediterranean(
             inputs,
+            orientation,
             &mut next_world,
             &mut next_regions,
             &mut rng,
@@ -300,6 +310,7 @@ pub fn execute_continent_prefix_with_regions(
         18 => east_indies(
             players,
             inputs.map_size,
+            orientation,
             &mut next_world,
             &mut next_regions,
             &mut rng,
@@ -326,6 +337,7 @@ pub fn execute_continent_prefix_with_regions(
         world_inverted: partial.world_inverted,
         regions_cleared: partial.regions_cleared,
         region_seeds: partial.region_seeds,
+        region_growths: partial.region_growths,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -336,6 +348,7 @@ struct PartialReceipt {
     world_inverted: bool,
     regions_cleared: u32,
     region_seeds: Vec<RegionSeedReceipt>,
+    region_growths: Vec<GrowRegionReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
@@ -386,6 +399,7 @@ fn old_world_or_himalayas(
         world_inverted: true,
         regions_cleared: 2,
         region_seeds: Vec::new(),
+        region_growths: Vec::new(),
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
@@ -395,12 +409,13 @@ fn old_world_or_himalayas(
 }
 
 fn mediterranean(
-    _inputs: &InitialWorldgenInputs,
+    inputs: &InitialWorldgenInputs,
+    orientation: i32,
     world: &mut World,
     regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
-    _style: &MapStyleStaticData,
+    style: &MapStyleStaticData,
     defaults: RegionSeedDefaults,
 ) -> Result<PartialReceipt, ContinentError> {
     world.wipe();
@@ -420,22 +435,51 @@ fn mediterranean(
         area,
     };
     let seed_receipt = apply_make_region(world, regions, &seed, defaults)?;
+    let mut growth_config = map_growth_config(
+        style,
+        world,
+        inputs.active_slots.len() as u8,
+        inputs.map_size,
+        orientation,
+    )?;
+    let growth_call = GrowRegionCall {
+        region: 1,
+        target_area: area,
+        max_distance: min_dim,
+        anchor_x: -1,
+        anchor_y: -1,
+        return_partial_size: 0,
+    };
+    let growth = execute_grow_region(world, regions, rng, &mut growth_config, &growth_call)
+        .map_err(ContinentError::RegionGrowth)?;
+    sites.extend_from_slice(&growth.rng_sites);
+    if growth.retail_return != 0 {
+        return Ok(PartialReceipt {
+            world_inverted: false,
+            regions_cleared: 1,
+            region_seeds: vec![seed_receipt],
+            region_growths: vec![growth.clone()],
+            starts_added: 0,
+            start_min: None,
+            stop: ContinentStop::RetryGeneration {
+                failed_region: 1,
+                retail_return: growth.retail_return,
+            },
+        });
+    }
+    regions
+        .rebuild_after_coastlines(world)
+        .map_err(ContinentError::RegionRebuild)?;
     Ok(PartialReceipt {
         world_inverted: false,
-        regions_cleared: 1,
+        regions_cleared: 2,
         region_seeds: vec![seed_receipt],
+        region_growths: vec![growth],
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::GrowRegion {
-            primitive_va: MAP_GROW_REGION_VA,
-            call: GrowRegionCall {
-                region: 1,
-                target_area: area,
-                max_distance: min_dim,
-                anchor_x: -1,
-                anchor_y: -1,
-                return_partial_size: 0,
-            },
+        stop: ContinentStop::MakeCoastlines {
+            primitive_va: MAP_MAKE_COASTLINES_VA,
+            passes: 2,
         },
     })
 }
@@ -482,6 +526,7 @@ fn great_lakes(
         world_inverted: false,
         regions_cleared: 1,
         region_seeds: Vec::new(),
+        region_growths: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::LandDistance {
@@ -499,6 +544,7 @@ fn great_lakes(
 fn east_indies(
     players: u8,
     map_size: u8,
+    orientation: i32,
     world: &mut World,
     regions: &mut Regions,
     rng: &mut Random,
@@ -528,6 +574,7 @@ fn east_indies(
     )
     .max(4);
     let region_area = scale_land_area(250, players, map_size);
+    let mut growth_config = map_growth_config(style, world, players, map_size, orientation)?;
 
     world.wipe();
     regions.clear_all(world);
@@ -587,22 +634,49 @@ fn east_indies(
         receipt.flags = seeded.flags;
         seeds.push(receipt);
     }
+    let mut growths = Vec::with_capacity(players as usize * 2);
+    let max_distance = initial_radius / 2;
+    for target_area in [region_area / 3, region_area] {
+        for region in 1..=players {
+            let call = GrowRegionCall {
+                region: i32::from(region),
+                target_area,
+                max_distance,
+                anchor_x: -1,
+                anchor_y: -1,
+                return_partial_size: 0,
+            };
+            let growth = execute_grow_region(world, regions, rng, &mut growth_config, &call)
+                .map_err(ContinentError::RegionGrowth)?;
+            sites.extend_from_slice(&growth.rng_sites);
+            let failed = growth.retail_return != 0;
+            let retail_return = growth.retail_return;
+            growths.push(growth);
+            if failed {
+                return Ok(PartialReceipt {
+                    world_inverted: false,
+                    regions_cleared: 1,
+                    region_seeds: seeds,
+                    region_growths: growths,
+                    starts_added: players as usize,
+                    start_min: None,
+                    stop: ContinentStop::RetryGeneration {
+                        failed_region: i32::from(region),
+                        retail_return,
+                    },
+                });
+            }
+        }
+    }
     Ok(PartialReceipt {
         world_inverted: false,
         regions_cleared: 1,
         region_seeds: seeds,
+        region_growths: growths,
         starts_added: players as usize,
         start_min: None,
-        stop: ContinentStop::GrowRegion {
-            primitive_va: MAP_GROW_REGION_VA,
-            call: GrowRegionCall {
-                region: 1,
-                target_area: region_area / 3,
-                max_distance: initial_radius / 2,
-                anchor_x: -1,
-                anchor_y: -1,
-                return_partial_size: 0,
-            },
+        stop: ContinentStop::EastIndiesNonplayerIslands {
+            next_rng_va: EAST_INDIES_NONPLAYER_ISLANDS_VA,
         },
     })
 }
@@ -619,6 +693,7 @@ fn east_meets_west(
         world_inverted: false,
         regions_cleared: 1,
         region_seeds: Vec::new(),
+        region_growths: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::FillCont {
@@ -760,6 +835,93 @@ fn map_int(
             value: raw.to_owned(),
         })
 }
+
+fn map_growth_config(
+    style: &MapStyleStaticData,
+    world: &World,
+    players: u8,
+    map_size: u8,
+    orientation: i32,
+) -> Result<MapGrowthConfig, ContinentError> {
+    let avoid_center = map_scaled_int(style, "AVOID_CENTER", "scalevalue", world)?;
+    let avoid_continent = scale_land_area(
+        map_scaled_int(style, "AVOID_CONTINENT", "scalevalue", world)?,
+        players,
+        map_size,
+    )
+    .max(4);
+    let mut edge_avoid = [0; 4];
+    for (index, value) in edge_avoid.iter_mut().enumerate() {
+        let tag = match index {
+            0 => "AVOID_EDGE_0",
+            1 => "AVOID_EDGE_1",
+            2 => "AVOID_EDGE_2",
+            3 => "AVOID_EDGE_3",
+            _ => unreachable!(),
+        };
+        *value = map_scaled_int(style, tag, "scalevalue", world)?;
+    }
+    Ok(MapGrowthConfig {
+        avoid_center,
+        avoid_continent,
+        edge_avoid,
+        base_edge: orientation,
+        edge_jitter: 0,
+    })
+}
+
+fn map_scaled_int(
+    style: &MapStyleStaticData,
+    tag: &'static str,
+    attribute: &'static str,
+    world: &World,
+) -> Result<i32, ContinentError> {
+    let entry = find_entry(&style.selected_map_entries, tag)
+        .or_else(|| find_entry(&style.default_map_entries, tag))
+        .ok_or(ContinentError::MissingMapParameter { tag, attribute })?;
+    let raw = entry
+        .attribute(attribute)
+        .ok_or(ContinentError::MissingMapParameter { tag, attribute })?;
+    let fields = raw.split_whitespace().collect::<Vec<_>>();
+    let value = fields
+        .first()
+        .and_then(|field| field.parse::<i32>().ok())
+        .ok_or_else(|| ContinentError::InvalidMapParameter {
+            tag,
+            attribute,
+            value: raw.to_owned(),
+        })?;
+    match fields.as_slice() {
+        [_] => Ok(value),
+        [_, "SCALE"] => Ok(scale_by_axis(world, value)),
+        [_, "AREA"] => Ok(scale_by_area(world, value)),
+        _ => Err(ContinentError::InvalidMapParameter {
+            tag,
+            attribute,
+            value: raw.to_owned(),
+        }),
+    }
+}
+
+fn scale_by_axis(world: &World, value: i32) -> i32 {
+    if value < 1 {
+        0
+    } else {
+        ((STANDARD_MAP_EDGE / 2).wrapping_add(world.xs.wrapping_mul(value)) / STANDARD_MAP_EDGE)
+            .max(1)
+    }
+}
+
+fn scale_by_area(world: &World, value: i32) -> i32 {
+    if value < 1 {
+        0
+    } else {
+        let standard_area = STANDARD_MAP_EDGE * STANDARD_MAP_EDGE;
+        ((standard_area / 2).wrapping_add(world.size.wrapping_mul(value)) / standard_area).max(1)
+    }
+}
+
+const STANDARD_MAP_EDGE: i32 = 70;
 
 fn find_entry<'a>(entries: &'a [StaticXmlEntry], tag: &str) -> Option<&'a StaticXmlEntry> {
     entries.iter().find(|entry| entry.tag == tag)
