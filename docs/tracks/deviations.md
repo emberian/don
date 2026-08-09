@@ -232,7 +232,8 @@ gate refuses to launch a claim-bearing run on that surface. Research-only drift 
 as such: it remains usable as a bounded experiment, but cannot be promoted to a product or
 fidelity claim.
 
-### `env-patrol-execution`
+### `env-air-patrol-physics`, `env-air-patrol-unit-target-search`, and
+`env-air-patrol-building-target-search`
 
 The command-to-order path and queue ownership are now exact. Opcode 10 installs
 `GROUP_PATROL` (22) for ground units and helicopters, but follows retail's
@@ -244,14 +245,21 @@ waypoint arrays and the real front/current queue shape: ground `QUEUE_FIRST` rep
 compatible `QUEUE_LAST` extends with the raw command coordinate, air `QUEUE_LAST` extends
 only a compatible active patrol, and the true-plane installer replaces otherwise.
 
-Both recovered executor transitions are reachable. `GROUP_PATROL` advances before reading
+The former aggregate `env-patrol-execution` blocker is retired: both recovered executor
+transitions and their queue effects exist. `GROUP_PATROL` advances before reading
 its waypoint and inserts the exact `ATTACK_TO` body ahead of itself, then resumes when that
-leg retires. `AIR_PATROL` retains its cursor and post-physics retirement rules. The
-remaining drift is narrower but still product-blocking: EnvWorld has not ported
-`Unit::do_air_physics`, and its mod-16/mod-32 air/building target-search callbacks currently
-produce no target. Its existing explicitly scaffolded mover serves that host boundary; it
-is not a retail airframe implementation. RL readiness stays blocked until those adjacent
-air systems are derived and wired.
+leg retires. `AIR_PATROL` retains its cursor, post-physics retirement rules, actor-indexed
+mod-16/mod-32 scan cadence, exact search origins, acceptance gates and front-inserted
+`STRAFE` body.
+
+The three remaining adjacent systems now block RL readiness independently. EnvWorld has
+not ported `Unit::do_air_physics`, the air/bomber primary-plus-fallback target search, or
+the ordered building spatial search. `AirPatrolHost` makes all three mandatory with no
+default callbacks. Ordinary `EnvWorld::frame` leaves AIR_PATROL stationary and preserves
+its order body; it no longer moves aircraft through `advance_towards`. Only
+`frame_with_air_patrol_host` may cross the post-physics transition, after preflight and a
+successful host transaction. An empty search is therefore an explicit host result, not an
+inherited always-`None` approximation.
 *`docs/mechanics/COVERAGE.md` §3.1; `docs/assembly/command-bridge.md`.*
 
 ### `ai-model-simplifications`
@@ -281,7 +289,7 @@ playable surface while their runtime path remains incomplete:
 | `arena-gather-occupancy-model` | 3b | persistent owner-local chain, generational order identity, attach/prune/detach and close paths |
 | `arena-gather-reservation-model` | 3c | ordered MiningList selection/verification, TData `0x1000` claims and non-flat rotation |
 | `arena-gather-payout-model` | 3d | authoritative six-slot per-worker evaluation and leader income/cap/expense transaction |
-| `arena-target-acquisition-model` | 4 | complete stable spatial scan with diplomacy, fog, validity, region and priority gates |
+| `arena-target-acquisition-model` | 4 | focused non-cloaked direct-land scan recovered; full Arena/Marshal validation, seen3 cloak/detection and WData building territory remain |
 | `arena-guy-turret-model` | post-5 prerequisite | graphics-turret Guy materialization and state |
 | `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
 | `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
@@ -289,6 +297,17 @@ playable surface while their runtime path remains incomplete:
 | `arena-diplomacy-model` | 6d | declaration command plus retargeting, shared vision, event/chat and strategy side effects |
 | `arena-attrition-model` | 6e | per-unit period state/recomputation and exact fractional damage host |
 | `arena-supply-model` | 6f | `Supplies::find_supply`, building scans, reload call site and healing |
+
+MODEL 4's focused unit-target integration is substantially narrower: five exact target tests
+cover stable traversal, spatial lifecycle, stance, visibility, region and priority. The
+coarse gate intentionally remains, however, because full Arena/Marshal validation currently
+regresses after integration. The claim is also restricted to the non-cloaked direct-land
+roster: the pre-fog `UnitData::is_seen` path applies cloak/detection gates, Arena has no
+authoritative `seen3` detector materialization, and shipped Partisan/Explorer/Commando/SF
+types can cloak. Separately, `check_target` reads `WData.who` for ordinary building
+admission while Arena materializes every territory cell with the unclaimed sentinel `-1`;
+only the measured BuildType flag `0x10` exception is exact. Split these literal residuals
+only after the complete Arena/Marshal product gate is green.
 
 The recovered construction and gathering cores do not clear these rows. Construction's
 local frame/builder state machine is guarded by mandatory effect callbacks and explicitly

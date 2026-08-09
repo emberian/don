@@ -113,7 +113,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         cfg.assert_ready(Surface::RlEnvironment),
         Err(ModeError::KnownDrift(
             Surface::RlEnvironment,
-            Deviation::EnvPatrolExecution,
+            Deviation::EnvAirPatrolPhysics,
         ))
     );
 
@@ -121,7 +121,9 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
     assert_eq!(
         product,
         vec![
-            ReadinessBlocker::KnownDrift(Deviation::EnvPatrolExecution),
+            ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolPhysics),
+            ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolUnitTargetSearch),
+            ReadinessBlocker::KnownDrift(Deviation::EnvAirPatrolBuildingTargetSearch),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionScheduleModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionPlacementModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionLifecycleModel),

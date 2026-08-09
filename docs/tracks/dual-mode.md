@@ -26,7 +26,7 @@
 
 ## 1. The shape of it
 
-`crates/don-sim/src/deviations.rs` — one module, no dependencies, 29 registry entries and
+`crates/don-sim/src/deviations.rs` — one module, no dependencies, 31 registry entries and
 the scoped readiness policy. `crates/don-sim/tests/fidelity_mode.rs` — integration tests
 for both mode immutability and reachable-gap gating. `crates/don-sim/src/bin/deviations.rs`
 — the CLI, `--assert-fidelity`, and `--assert-ready` checks.
@@ -115,7 +115,9 @@ form:
 | `refund-repeat-compounding` | `adj` written back over the record, so repeats compound | leave the record alone | **on** |
 | `caravan-heuristic-goal-y` | `pf_dist(dx, −goalY)` at `0x00685FD9`; mode A ≈ Dijkstra | pass `child.y − goalY` | off |
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
-| `env-patrol-execution` | orders 17/22 route, queue, execute, and cross retail airframe/search boundaries | *drift*: exact dynamic queue and patrol transitions; env air physics/target-search host remains incomplete | — |
+| `env-air-patrol-physics` | `Unit::do_air_physics` completes before patrol-local work | *drift*: exact queue/transition waits behind a mandatory unavailable host | — |
+| `env-air-patrol-unit-target-search` | mod-16 air/bomber primary search and option fallback | *drift*: cadence/origin/insertion exact, spatial search absent | — |
+| `env-air-patrol-building-target-search` | mod-32 ordered building scan and owner-target bit | *drift*: cadence/origin/insertion exact, spatial search absent | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
 | `arena-construction-schedule-model` | persistent site/order identity and retail traversal | *drift*: MODEL 2 has no Arena schedule/state host | — |
 | `arena-construction-placement-model` | complete `blocked_site` transaction | *drift*: MODEL 2 has no authoritative placement host | — |
@@ -125,7 +127,7 @@ form:
 | `arena-gather-occupancy-model` | persistent chain and generational order identity | *drift*: MODEL 3 has no Arena object/order host | — |
 | `arena-gather-reservation-model` | ordered MiningList and TData reservation lifecycle | *drift*: MODEL 3 has reservation writes only | — |
 | `arena-gather-payout-model` | authoritative six-slot evaluation and leader credit | *drift*: MODEL 3 has local arithmetic only | — |
-| `arena-target-acquisition-model` | complete retail spatial target scan | *drift*: MODEL 4 incomplete host | — |
+| `arena-target-acquisition-model` | complete target path, detection and building admission | *drift*: focused non-cloaked unit path is recovered; full Arena/Marshal, seen3 cloak/detection and territory remain | — |
 | `arena-guy-turret-model` | graphics-turret Guy materialization | *drift*: exact MODEL 5 path hard-gates unresolved turret types | — |
 | `arena-water-model` | water terrain/regions and water A* | *drift*: MODEL 6a absent host | — |
 | `arena-naval-model` | naval objects, orders, queues and supply | *drift*: MODEL 6b absent host | — |

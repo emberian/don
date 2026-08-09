@@ -236,48 +236,52 @@ pub enum Deviation {
     RefineryBonusDead = 8,
 
     // -- Drift ---------------------------------------------------------------------------
-    /// `don-env` preserving patrol order kinds without executing their `do_job` arms.
-    EnvPatrolExecution = 9,
+    /// `don-env` has no authoritative `Unit::do_air_physics` host.
+    EnvAirPatrolPhysics = 9,
+    /// `don-env` has no authoritative patrol air/bomber target-search host.
+    EnvAirPatrolUnitTargetSearch = 10,
+    /// `don-env` has no authoritative patrol building target-search host.
+    EnvAirPatrolBuildingTargetSearch = 11,
     /// `don-ai`'s six numbered model simplifications.
-    AiModelSimplifications = 10,
+    AiModelSimplifications = 12,
     /// Arena MODEL 2a: no persistent retail construction schedule/identity host.
-    ArenaConstructionScheduleModel = 11,
+    ArenaConstructionScheduleModel = 13,
     /// Arena MODEL 2b: no authoritative construction placement transaction.
-    ArenaConstructionPlacementModel = 12,
+    ArenaConstructionPlacementModel = 14,
     /// Arena MODEL 2c: no authoritative construction lifecycle transaction.
-    ArenaConstructionLifecycleModel = 13,
+    ArenaConstructionLifecycleModel = 15,
     /// Arena MODEL 2d: no authoritative construction interruption transaction.
-    ArenaConstructionInterruptionModel = 14,
+    ArenaConstructionInterruptionModel = 16,
     /// Arena MODEL 3a: no authoritative gathering-capacity evaluator.
-    ArenaGatherCapacityModel = 15,
+    ArenaGatherCapacityModel = 17,
     /// Arena MODEL 3b: no persistent retail gathering-occupancy host.
-    ArenaGatherOccupancyModel = 16,
+    ArenaGatherOccupancyModel = 18,
     /// Arena MODEL 3c: no authoritative gathering-terrain reservation lifecycle.
-    ArenaGatherReservationModel = 17,
+    ArenaGatherReservationModel = 19,
     /// Arena MODEL 3d: no authoritative gathering-payout transaction.
-    ArenaGatherPayoutModel = 18,
+    ArenaGatherPayoutModel = 20,
     /// Arena MODEL 4: incomplete retail target-acquisition host.
-    ArenaTargetAcquisitionModel = 19,
+    ArenaTargetAcquisitionModel = 21,
     /// Arena roster prerequisite: graphics-turret Guys are not materialized.
-    ArenaGuyTurretModel = 20,
+    ArenaGuyTurretModel = 22,
     /// Arena MODEL 6a: no retail water terrain/pathing host.
-    ArenaWaterModel = 21,
+    ArenaWaterModel = 23,
     /// Arena MODEL 6b: no retail naval object/order/production host.
-    ArenaNavalModel = 22,
+    ArenaNavalModel = 24,
     /// Arena MODEL 6c: no complete retail airframe host.
-    ArenaAirModel = 23,
+    ArenaAirModel = 25,
     /// Arena MODEL 6d: no complete retail diplomacy state/side-effect host.
-    ArenaDiplomacyModel = 24,
+    ArenaDiplomacyModel = 26,
     /// Arena MODEL 6e: no wired retail attrition state/damage host.
-    ArenaAttritionModel = 25,
+    ArenaAttritionModel = 27,
     /// Arena MODEL 6f: no wired retail supply-query/state host.
-    ArenaSupplyModel = 26,
+    ArenaSupplyModel = 28,
 
     // -- Rejected ------------------------------------------------------------------------
     /// "`attack_dir` does not mean what its name says" — it does.
-    AttackDirSemantics = 27,
+    AttackDirSemantics = 29,
     /// "The gather-enhancer tables are off by one" — they are 1-based by design.
-    GatherEnhancerTableBase = 28,
+    GatherEnhancerTableBase = 30,
 }
 
 /// One registry entry: the whole justification for a divergence, in one place.
@@ -623,36 +627,75 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::EnvPatrolExecution,
-        slug: "env-patrol-execution",
-        title: "don-env executes patrol queues around an incomplete airframe host",
+        id: Deviation::EnvAirPatrolPhysics,
+        slug: "env-air-patrol-physics",
+        title: "don-env lacks the authoritative AIR_PATROL airframe transaction",
         kind: Kind::Drift,
-        retail: "Opcode 10 installs `GROUP_PATROL` (22), except that true planes delegate \
-                 to `AIR_PATROL` (17); opcode 11 installs `AIR_PATROL` only for true planes. \
-                 `Unit::do_job` then dispatches those live orders to their executors.",
-        ours: "`don-env` carries a dynamic `OrderQueue`, preserves the two patrol classes, \
-               implements their exceptional `QUEUE_FIRST`/`QUEUE_LAST` installation, and \
-               runs the recovered waypoint/retirement/front-insertion transitions. Ground \
-               patrol therefore schedules the exact `ATTACK_TO` leg and resumes behind it. \
-               AIR_PATROL still crosses EnvWorld's scaffold movement host instead of \
-               `Unit::do_air_physics`, and its target-search callbacks return no target.",
-        why: "The former command routing, queue, and executor-identity drift is closed. The \
-              readiness blocker remains because an AIR_PATROL run can still diverge at the \
-              adjacent physics and target-acquisition calls. Keeping that boundary named \
-              prevents exact queue semantics from being promoted into a whole-executor \
-              fidelity claim.",
+        retail: "Unit::do_air_patrol calls Unit::do_air_physics before it advances a waypoint \
+                 or searches for a target; a zero result stops the executor for the frame.",
+        ours: "Routing, dynamic queue ownership and patrol-local transitions are exact. EnvWorld \
+               now leaves AIR_PATROL stationary unless a mandatory AirPatrolHost supplies the \
+               complete physics transaction; its straight-line mover is no longer reused.",
+        why: "Moving an aircraft through the ground movement scaffold changes position, facing, \
+              altitude, fuel, hosting and later scan timing while appearing plausible.",
         derived_from: &[
-            "Group::action_patrol 0x007030C0",
-            "Group::action_launch_patrol 0x00703580",
-            "Unit::add_air_patrol_order 0x005E4350",
-            "Unit::add_patrol_order 0x005E4560",
             "Unit::do_air_patrol 0x005EA620",
-            "Unit::do_patrol 0x005F1910",
-            "Unit::do_job jump table 0x00617B94 (28 arms)",
-            "crates/don-env/src/state.rs::process_slot",
+            "Unit::do_air_physics 0x005E86D0",
+            "crates/don-env/src/state.rs::AirPatrolHost",
         ],
-        evidence: "docs/mechanics/COVERAGE.md §3.1 and \
-                   docs/assembly/command-bridge.md §Agreement checks. [measured].",
+        evidence: "docs/mechanics/air.md and docs/assembly/command-bridge.md §Agreement \
+                   checks. The call boundary is measured; the physics body is not ported.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::RlEnvironment],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::EnvAirPatrolUnitTargetSearch,
+        slug: "env-air-patrol-unit-target-search",
+        title: "don-env lacks AIR_PATROL's air/bomber target searches",
+        kind: Kind::Drift,
+        retail: "On the actor-indexed mod-16 cadence, patrol chooses find_new_air_target or \
+                 find_new_bomber_target first, then applies the game-option fallback.",
+        ours: "The exact cadence, search origin, fighter-bomber home-relative transform and \
+               StrafeOrder insertion are recovered, but EnvWorld has no spatial search host.",
+        why: "Always returning no target silently removes opportunistic interception; nearest \
+              entity or unordered iteration would choose a different target.",
+        derived_from: &[
+            "Unit::do_air_patrol 0x005EA6EC",
+            "find_new_air_target",
+            "find_new_bomber_target",
+            "crates/don-env/src/state.rs::AirPatrolHost::find_unit_target",
+        ],
+        evidence: "docs/mechanics/air.md §patrol cadence and \
+                   crates/don-sim/src/systems/order_dispatch.rs::do_air_patrol. [measured].",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::RlEnvironment],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::EnvAirPatrolBuildingTargetSearch,
+        slug: "env-air-patrol-building-target-search",
+        title: "don-env lacks AIR_PATROL's building spatial search",
+        kind: Kind::Drift,
+        retail: "On the actor-indexed mod-32 cadence, patrol calls ObjectsData::find_building_at \
+                 with SearchIndexBH(3) and tests the returned type's owner-target bit.",
+        ours: "The cadence, waypoint-derived origin, acceptance bit and mandatory StrafeOrder \
+               insertion are exact, but EnvWorld has no ordered building spatial query.",
+        why: "Returning no building erases attacks; a nearest-building stand-in leaks different \
+              visibility, diplomacy, spatial-order and type-bit behavior.",
+        derived_from: &[
+            "Unit::do_air_patrol 0x005EA84C",
+            "ObjectsData::find_building_at",
+            "crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
+        ],
+        evidence: "docs/mechanics/air.md §patrol cadence and \
+                   crates/don-sim/src/systems/order_dispatch.rs::do_air_patrol. [measured].",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -878,17 +921,22 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         title: "Arena MODEL 4 has an incomplete retail target-acquisition host",
         kind: Kind::Drift,
         retail: "Retail walks spatial cells in stable order and applies diplomacy, visibility, \
-                 validity, region, priority, crowding and stance gates.",
-        ours:
-            "The arena does not yet execute that entire recovered scan at every acquisition site.",
-        why: "A nearest-hostile or partially gated scan changes both combat choices and hidden \
-              information; it cannot stand in for retail target selection.",
+                 pre-fog cloak/detection, validity, region, priority, crowding, stance and \
+                 building-territory gates.",
+        ours: "The focused unit-target path is recovered, but the full Arena/Marshal product \
+               behavior is not yet green. Arena also lacks authoritative seen3 detector/cloak \
+               state and ordinary building admission still lacks WData territory ownership.",
+        why: "A partially integrated scan changes combat choices and bot economy. The coarse \
+              blocker remains until full Arena/Marshal gates pass; only then may the residual \
+              building-territory transaction be split out independently.",
         derived_from: &[
             "Object::find_auto_target 0x0064DDA0",
-            "crates/don-ai/src/arena/world.rs MODEL 4 declaration",
+            "Object::check_target building tail",
+            "crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
         ],
-        evidence: "docs/assembly/target-selection.md and \
-                   don_sim::systems::target::find_auto_target.",
+        evidence: "docs/assembly/target-selection.md. Focused non-cloaked direct-land target \
+                   integration is green, but full Arena/Marshal validation currently regresses; \
+                   cloak/detection and building-territory hosts remain explicit residuals.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -901,20 +949,24 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         slug: "arena-guy-turret-model",
         title: "Arena does not materialize graphics-turret Guys",
         kind: Kind::Drift,
-        retail: "Types carrying `GUY_FLAG_TURRETS` materialize their graphics-turret Guy \
-                 components and their live angles/state before `Unit::fight` plans a volley.",
-        ours: "MODEL 5's direct-land volley/flank path is wired, but the arena hard-rejects \
-               `GUY_FLAG_TURRETS` because their Guy components are not materialized.",
+        retail: "`Guy::init_real` selects each Guy's gpiece and sets `GUY_FLAG_TURRETS` \
+                 when that selected graphics graph has pivot restrictions; initial and live \
+                 angles come from the loaded hierarchy before `Unit::fight` plans a volley.",
+        ours: "The supported installed XML catalog, transactional Guy graphics profile \
+               installer and exact pivot-aim arithmetic are recovered, but Arena does not \
+               yet supply the required retail/.bh3 hierarchy extractor and position provider.",
         why: "The exact supported-roster flank path is complete. Silently treating a turret \
               type as an ordinary Guy would create a different approximation, so the roster \
               prerequisite remains independently product-blocking.",
         derived_from: &[
             "Unit::fight 0x005FD4D0",
+            "Guy::init_real 0x005DB6B0",
+            "Guy::set_all_pivots 0x005D8BC0",
             "don_sim::systems::fight::direct_land_volley_plan",
-            "crates/don-ai/src/arena/world.rs GUY_FLAG_TURRETS gate",
+            "don_sim::systems::graphics_turret",
         ],
-        evidence: "MODEL 5 runtime integration is covered by don-sim fight and arena combat \
-                   tests; this separate gate names only the unmaterialized turret prerequisite.",
+        evidence: "docs/mechanics/graphics-turrets.md; installed-file catalog smoke test and \
+                   fail-closed materialization/aim tests in graphics_turret.rs.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -1125,7 +1177,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
 
 impl Deviation {
     /// The number of registry entries.
-    pub const COUNT: usize = 29;
+    pub const COUNT: usize = 31;
 
     /// Every deviation, in registry order.
     pub const ALL: [Deviation; Deviation::COUNT] = [
@@ -1138,7 +1190,9 @@ impl Deviation {
         Deviation::RefundRepeatCompounding,
         Deviation::CaravanHeuristicGoalY,
         Deviation::RefineryBonusDead,
-        Deviation::EnvPatrolExecution,
+        Deviation::EnvAirPatrolPhysics,
+        Deviation::EnvAirPatrolUnitTargetSearch,
+        Deviation::EnvAirPatrolBuildingTargetSearch,
         Deviation::AiModelSimplifications,
         Deviation::ArenaConstructionScheduleModel,
         Deviation::ArenaConstructionPlacementModel,

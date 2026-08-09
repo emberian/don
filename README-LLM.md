@@ -99,7 +99,7 @@ with prose.
 | Retail differential suite | `schema/oracle-regression.json`: 18/18 cases, 17,573,073 trials, zero mismatches/skips/crashes/errors after adding full-state turning plus map-seed/start-coordinate anchors. |
 | Replay corpus | `schema/replay-validation.json`: 61 files, 585,152 turns, 488,557 structurally valid checksum packets; dynamic world reconstruction remains unmodelled, so current checksum agreement is not whole-game fidelity. |
 | Improved-mode seams | The seven default fixes are wired through real economy/production/border/BHS paths and covered by the fidelity gate. |
-| Product readiness | `tools/product-readiness.sh` intentionally refuses with two registered blockers: `env-patrol-execution` and `arena-model-simplifications`. Do not turn them into waivers. |
+| Product readiness | `tools/product-readiness.sh` intentionally refuses on literal registered subsystem blockers, including RL air physics/unit-search/building-search and independently gated Arena transactions. Do not turn them into waivers. |
 | RL surface | Builds, imports, resets, steps, masks, and exposes zero-copy observations through native/Gymnasium/PettingZoo APIs. The last published partial-dynamics report reaches 98,505 env-steps/s at 1,024 worlds; remeasure before quoting it as current. |
 | Playable browser | Native/wasm integration smoke, real command codecs, WebGPU/WebGL2/Canvas2D rendering, and deterministic digest paths exist. The UI labels itself an integration build because whole-game model gaps remain. |
 | Live retail control | Main-thread pause/move commands and frame-by-frame movement trajectories are live-proven. Hook generations upgrade in place without restarting the game and restore the exact overwritten bytes on STOP. |
