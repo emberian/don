@@ -681,6 +681,46 @@ class RetailCtlTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete or unexpected"):
             retailctl.migrate_netsys_manifest(extra)
 
+    def test_netsys_directory_probe_ignores_clixml_before_bounded_json(self):
+        output = (
+            "#< CLIXML\n<Objs Version=\"1.1.0.1\"></Objs>\n"
+            f"{retailctl.NETSYS_JSON_BEGIN}\n"
+            '{"present":true}\n'
+            f"{retailctl.NETSYS_JSON_END}\n"
+        )
+        with mock.patch.object(retailctl, "guest_ps_encoded", return_value=output):
+            self.assertTrue(retailctl.guest_directory_present(retailctl.NETSYS_ARCHIVE_ROOT))
+        ambiguous = output + output
+        with mock.patch.object(retailctl, "guest_ps_encoded", return_value=ambiguous):
+            with self.assertRaisesRegex(ValueError, "missing or ambiguous"):
+                retailctl.guest_directory_present(retailctl.NETSYS_ARCHIVE_ROOT)
+
+    def test_netsys_preintent_retry_reuses_only_exact_current_parity_next(self):
+        manifest = netsys_manifest_fixture()
+        host = {"size": 198_656, "sha256": "c" * 64}
+        next_record = {
+            "present": True,
+            "path": retailctl.NETSYS_NEXT,
+            "size": host["size"],
+            "sha256": host["sha256"],
+        }
+        self.assertTrue(
+            retailctl.reuse_preintent_netsys_next(next_record, host, manifest)
+        )
+        self.assertFalse(
+            retailctl.reuse_preintent_netsys_next(
+                {"present": False, "path": retailctl.NETSYS_NEXT}, host, manifest
+            )
+        )
+        unknown = {**next_record, "sha256": "d" * 64}
+        with self.assertRaisesRegex(SystemExit, "unknown or different orphaned"):
+            retailctl.reuse_preintent_netsys_next(unknown, host, manifest)
+        in_flight = copy.deepcopy(manifest)
+        in_flight["state"] = "rollover-staged"
+        in_flight["rollover"] = {"unexpected": True}
+        with self.assertRaisesRegex(SystemExit, "unknown or different orphaned"):
+            retailctl.reuse_preintent_netsys_next(next_record, host, in_flight)
+
     def test_netsys_trace_is_contiguous_pid_bound_and_credential_free(self):
         trace = (
             "seq=1 pid=77 call=factory.get_netsys_object_ptr\n"

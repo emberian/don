@@ -4190,13 +4190,22 @@ Write-Output '{NETSYS_JSON_END}'
 
 
 def guest_directory_present(path: str) -> bool:
-    output = guest_ps_encoded(
-        f"if (Test-Path -LiteralPath {ps_literal(path)} -PathType Container) "
-        "{ Write-Output 'present' } else { Write-Output 'absent' }"
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$record = [pscustomobject]@{{
+    present = [bool](Test-Path -LiteralPath {ps_literal(path)} -PathType Container)
+}}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    record = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
     )
-    if output not in {"present", "absent"}:
+    if not isinstance(record, dict) or set(record) != {"present"} or not isinstance(
+            record.get("present"), bool):
         raise ValueError(f"guest returned an ambiguous directory record for {path}")
-    return output == "present"
+    return record["present"]
 
 
 def guest_read_bytes(path: str, maximum: int) -> bytes:
@@ -4387,6 +4396,16 @@ def host_netsys_identity(shim: Path) -> dict:
     return {"path": str(shim), "size": size, "sha256": digest}
 
 
+def reuse_preintent_netsys_next(next_record: dict, host: dict, manifest: dict) -> bool:
+    if not next_record.get("present"):
+        return False
+    if (manifest.get("state") == "installed" and manifest.get("rollover") is None and
+            next_record.get("size") == host.get("size") and
+            next_record.get("sha256") == host.get("sha256")):
+        return True
+    raise SystemExit("REFUSING rollover with an unknown or different orphaned next DLL")
+
+
 def netsys_snapshot() -> dict:
     require_retail_absent("NetSys snapshot")
     if guest_file_record(NETSYS_MANIFEST)["present"]:
@@ -4533,26 +4552,27 @@ def netsys_next_generation(shim: Path, port: int) -> dict:
             not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256 or
             backup["size"] != EXPECTED_NETSYS_SIZE):
         raise SystemExit("REFUSING rollover: target/staged/backup state is not exact")
-    if guest_file_record(NETSYS_NEXT)["present"]:
-        raise SystemExit("REFUSING rollover with an orphaned next-generation DLL")
     host = host_netsys_identity(shim)
     if host["sha256"] == manifest["shim"]["sha256"]:
         raise SystemExit("REFUSING rollover to the already-installed shim identity")
-    server = serve_once(port, shim.resolve().parent)
+    next_record = guest_file_record(NETSYS_NEXT)
+    reuse_next = reuse_preintent_netsys_next(next_record, host, manifest)
+    server = None if reuse_next else serve_once(port, shim.resolve().parent)
     download = NETSYS_NEXT + ".download"
     try:
-        guest_cmd(
-            f'curl.exe -f -sS -o "{download}" '
-            f'http://10.211.55.2:{port}/CrossplayNetLib.dll'
-        )
-        downloaded = guest_file_record(download)
-        if (not downloaded["present"] or downloaded["sha256"] != host["sha256"] or
-                downloaded["size"] != host["size"]):
-            raise SystemExit("REFUSING rollover: downloaded DLL does not match current shim")
-        guest_ps_encoded(
-            f"Move-Item -LiteralPath {ps_literal(download)} "
-            f"-Destination {ps_literal(NETSYS_NEXT)}"
-        )
+        if not reuse_next:
+            guest_cmd(
+                f'curl.exe -f -sS -o "{download}" '
+                f'http://10.211.55.2:{port}/CrossplayNetLib.dll'
+            )
+            downloaded = guest_file_record(download)
+            if (not downloaded["present"] or downloaded["sha256"] != host["sha256"] or
+                    downloaded["size"] != host["size"]):
+                raise SystemExit("REFUSING rollover: downloaded DLL does not match current shim")
+            guest_ps_encoded(
+                f"Move-Item -LiteralPath {ps_literal(download)} "
+                f"-Destination {ps_literal(NETSYS_NEXT)}"
+            )
         next_shim = guest_file_record(NETSYS_NEXT)
         if (next_shim["sha256"] != host["sha256"] or
                 next_shim["size"] != host["size"]):
@@ -4636,8 +4656,9 @@ if (Test-Path -LiteralPath {ps_literal(target_temp)}) {{
         return result
     finally:
         guest_cmd(f'del /q "{download}" 2>nul & exit /b 0', check=False)
-        server.shutdown()
-        server.server_close()
+        if server is not None:
+            server.shutdown()
+            server.server_close()
 
 
 def netsys_configure_host(bind: str) -> dict:
