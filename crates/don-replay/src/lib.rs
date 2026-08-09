@@ -45,6 +45,7 @@
 #![forbid(unsafe_code)]
 
 pub mod check_all;
+pub mod check_player_forest;
 pub mod checksum;
 pub mod continent;
 pub mod fractal_boundary;
@@ -71,6 +72,11 @@ pub mod walk_gen;
 mod wire_gen;
 
 pub use check_all::{check_all, CheckAll, CheckSumsRecord};
+pub use check_player_forest::{
+    execute_check_player_forest, CheckPlayerForestError, CheckPlayerForestFacts,
+    CheckPlayerForestReceipt, ForestPatch, PlayerForestResult, MAP_CHECK_PLAYER_FOREST_VA,
+    TERRAIN_GROUPS_NUBIFY_FOREST_VA,
+};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use continent::{
     execute_continent_prefix, execute_continent_prefix_from_rng,
@@ -103,9 +109,9 @@ pub use place_all_boundary::{
 };
 pub use place_all_facts::{
     resolve_place_all_prerequisites, resolve_terrain_group_catalog, CapturedHelpingFacts,
-    PlaceAllFactKind, PlaceAllLiveCaptureEvidence, PlaceAllLiveFacts,
-    PlaceAllPrerequisiteError, PlaceAllPrerequisiteResolution, PreparedReplayPlaceAll,
-    TerrainGroupCatalogError, TerrainGroupCatalogReceipt, UnavailablePlaceAllFact,
+    PlaceAllFactKind, PlaceAllLiveCaptureEvidence, PlaceAllLiveFacts, PlaceAllPrerequisiteError,
+    PlaceAllPrerequisiteResolution, PreparedReplayPlaceAll, TerrainGroupCatalogError,
+    TerrainGroupCatalogReceipt, UnavailablePlaceAllFact,
 };
 pub use player_land::{
     execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
