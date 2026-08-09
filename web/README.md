@@ -59,6 +59,26 @@ generated codec, and the gitignored data pack.
 Query parameters: `?backend=webgl2` forces the fallback (the choice is made once, at device
 creation, so it cannot be switched live).
 
+## Playable integration client
+
+`public/play.html` is the browser control surface for the recovered game-world work. Build
+its extra tables and run its native and browser gates with:
+
+```sh
+node web/tools/pack-playdata.mjs
+web/build.sh
+cargo run --manifest-path web/wasm/Cargo.toml --release --bin playcheck -- \
+  web/public/data/gamedata.bin web/public/data/playdata.bin
+node web/serve.mjs 8787
+node web/tools/play-smoke.mjs --json web/play-results.json
+```
+
+The playable page requires both packed data files; it will not fall back to synthetic data.
+It exposes every rejected command in the HUD and labels itself an integration build because
+map generation, nation/builder eligibility, movement/collision, acquisition, construction,
+fog/LOS, and parts of the economy are not yet retail-complete. The recovered primitives are
+real, but their present composition is not called Fidelity mode.
+
 ## Playing
 
 Left click selects — that emits a real `GroupCommand` (`0x00`): `num`, `who`, then `num`

@@ -81,6 +81,7 @@ async function boot() {
   wireInput($('gl'));
   wirePanels();
   buildPalette();
+  renderMenus();
   requestAnimationFrame(frame);
 }
 
