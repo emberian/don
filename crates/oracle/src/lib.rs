@@ -22,3 +22,4 @@ pub mod image;
 pub mod models;
 pub mod registry;
 pub mod run;
+pub mod turn_test;

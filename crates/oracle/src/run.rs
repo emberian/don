@@ -25,6 +25,7 @@ use crate::damage_test;
 use crate::image::{self, Mapped, PAGE};
 use crate::models;
 use crate::registry::{Case, Cols, Dist2, Plan, KNOWN_GAPS, REGISTRY};
+use crate::turn_test;
 use don_pe::PeImage;
 use std::ffi::c_void;
 use std::io::Write;
@@ -69,6 +70,34 @@ unsafe fn call_thiscall1(f: *const u8, this: *mut u8, arg: i32) -> i32 {
         "push {s:e}",
         "call {f}",
         s = in(reg) arg,
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") r,
+        clobber_abi("C"),
+    );
+    r
+}
+
+/// `Guy::turn_angles`: `__thiscall` plus four dwords, callee cleans (`ret 0x10`).
+unsafe fn call_turn_angles(
+    f: *const u8,
+    this: *mut u8,
+    desired: u32,
+    out_angle: *mut u32,
+    raw_step: i32,
+    half: i32,
+) -> u32 {
+    let r: u32;
+    std::arch::asm!(
+        "push {half:e}",
+        "push {raw:e}",
+        "push {out:e}",
+        "push {desired:e}",
+        "call {f}",
+        half = in(reg) half,
+        raw = in(reg) raw_step,
+        out = in(reg) out_angle,
+        desired = in(reg) desired,
         f = in(reg) f,
         in("ecx") this,
         lateout("eax") r,
@@ -558,6 +587,194 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                  reads adjacent .data",
                 outside,
             );
+        }
+
+        Plan::GuyTurnSpeed {
+            random,
+            distribution,
+        } => {
+            let Some(arena) = scratch_page(turn_test::ARENA_BYTES) else {
+                a.skip = Some("turn fixture scratch mmap failed".into());
+                return a;
+            };
+            if ctx.at(turn_test::VA_OBJECT_LISTS).is_none()
+                || ctx.at(turn_test::VA_OBJECT_LISTS + 7 * 7 * 4).is_none()
+                || ctx.at(turn_test::VA_CONSTANTS_PTR).is_none()
+            {
+                a.skip = Some("turn fixture globals are outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
+                return a;
+            }
+            let write_global = |va: u32, v: u32| unsafe {
+                std::ptr::write_unaligned(ctx.at(va).unwrap() as *mut u32, v)
+            };
+            let f = f as *const u8;
+            let mut counts = [0u64; 8];
+            let mut check = |s: turn_test::Scenario, label: &str, a: &mut Acc| {
+                if s.turn_speed_would_de() {
+                    return false;
+                }
+                let guy = unsafe { turn_test::install(arena, s, &write_global) };
+                let want = s.model_turn_speed();
+                let got = unsafe { call_thiscall1(f, guy, s.arg) as u32 };
+                a.trials += 1;
+                counts[if (s.guy_num as i32) < s.squad_size { 0 } else { 1 }] += 1;
+                counts[if s.arg == 0 { 2 } else { 3 }] += 1;
+                if s.track_dx != 0 || s.track_dy != 0 {
+                    counts[4] += 1;
+                }
+                if s.fast_face && s.last_speed == 0 {
+                    counts[5] += 1;
+                }
+                if s.unit_mask_scale2 {
+                    counts[6] += 1;
+                }
+                if s.turn_scale < 0 || s.turn_scale2 < 0 || s.type_turn_speed < 0 {
+                    counts[7] += 1;
+                }
+                if want != got {
+                    a.mismatches += 1;
+                    a.first_detail(one_line(&format!(
+                        "{label} model={want:#010x} retail={got:#010x} scenario={s:?}"
+                    )));
+                }
+                true
+            };
+
+            let edges = turn_test::edges();
+            for &s in &edges {
+                debug_assert!(!s.turn_speed_would_de());
+                check(s, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "hand-selected squad/crew, early-return, scaling, damping, floor and \
+                 signed/wrapping boundaries",
+            );
+
+            let generated = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed);
+            let mut de = 0u64;
+            let before = a.trials;
+            for _ in 0..generated {
+                let s = turn_test::Scenario::draw([
+                    rng.next(),
+                    rng.next(),
+                    rng.next(),
+                    rng.next(),
+                ]);
+                if s.turn_speed_would_de() {
+                    de += 1;
+                    continue;
+                }
+                check(s, "random", &mut a);
+            }
+            a.phase("random", a.trials - before, distribution);
+            a.exclude("retail #DE: damped avg_speed/4 + 1 is zero", de);
+            a.extras.push((
+                "branch_counts".into(),
+                format!(
+                    "squad={} crew={} damped={} raw={} tracking={} fast_face={} scale2={} \
+                     signed_or_wrapping_rules={}",
+                    counts[0], counts[1], counts[2], counts[3], counts[4], counts[5],
+                    counts[6], counts[7]
+                ),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
+        }
+
+        Plan::GuyTurnAngles {
+            random,
+            distribution,
+        } => {
+            let Some(arena) = scratch_page(turn_test::ARENA_BYTES) else {
+                a.skip = Some("turn fixture scratch mmap failed".into());
+                return a;
+            };
+            if ctx.at(turn_test::VA_OBJECT_LISTS).is_none()
+                || ctx.at(turn_test::VA_OBJECT_LISTS + 7 * 7 * 4).is_none()
+                || ctx.at(turn_test::VA_CONSTANTS_PTR).is_none()
+            {
+                a.skip = Some("turn fixture globals are outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
+                return a;
+            }
+            let write_global = |va: u32, v: u32| unsafe {
+                std::ptr::write_unaligned(ctx.at(va).unwrap() as *mut u32, v)
+            };
+            let f = f as *const u8;
+            let mut counts = [0u64; 5];
+            let mut check = |s: turn_test::Scenario, label: &str, a: &mut Acc| {
+                let guy = unsafe { turn_test::install(arena, s, &write_global) };
+                let (want_angle, want_rem) = s.model_turn_angles();
+                let mut got_angle = 0xDEAD_BEEFu32;
+                let got_rem = unsafe {
+                    call_turn_angles(
+                        f,
+                        guy,
+                        s.desired,
+                        &mut got_angle,
+                        1,
+                        s.half as i32,
+                    )
+                };
+                a.trials += 1;
+                let diff = s.desired.wrapping_sub(s.angle);
+                let mag = if diff > 0x8000_0000 { !diff } else { diff };
+                if mag < don_sim::systems::groups_guys::ANGLE_SNAP {
+                    counts[0] += 1;
+                }
+                if diff == 0x8000_0000 || diff == 0x8000_0001 {
+                    counts[1] += 1;
+                }
+                if diff > 0x8000_0000 {
+                    counts[2] += 1;
+                } else {
+                    counts[3] += 1;
+                }
+                if s.half {
+                    counts[4] += 1;
+                }
+                if want_angle != got_angle || want_rem != got_rem {
+                    a.mismatches += 1;
+                    a.first_detail(one_line(&format!(
+                        "{label} model=(angle={want_angle:#010x}, rem={want_rem:#010x}) \
+                         retail=(angle={got_angle:#010x}, rem={got_rem:#010x}) scenario={s:?}"
+                    )));
+                }
+            };
+
+            let edges = turn_test::edges();
+            for &s in &edges {
+                check(s, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "hand-selected snap neighbours, half-turn tie, wrap, step equality and \
+                 half-step boundaries",
+            );
+            let generated = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0xA5A5_5A5A_C3C3_3C3C);
+            for _ in 0..generated {
+                let s = turn_test::Scenario::draw([
+                    rng.next(),
+                    rng.next(),
+                    rng.next(),
+                    rng.next(),
+                ]);
+                check(s, "random", &mut a);
+            }
+            a.phase("random", generated as u64, distribution);
+            a.extras.push((
+                "branch_counts".into(),
+                format!(
+                    "snap={} half_turn_ties={} reverse={} forward={} half_step={}",
+                    counts[0], counts[1], counts[2], counts[3], counts[4]
+                ),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
         }
 
         Plan::Damage {

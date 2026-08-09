@@ -132,6 +132,18 @@ pub enum Plan {
         /// Grids over raw `TypeIndex` values — not zero-based rows.
         grids: &'static [Grid],
     },
+    /// `GuyData::turn_speed` with its owning-unit lookup and `Constants` pointer installed
+    /// in a private arena. The model is the shipped `groups_guys` method.
+    GuyTurnSpeed {
+        random: u32,
+        distribution: &'static str,
+    },
+    /// The pure `Guy::turn_angles` solver. Unlike `Guy::turn_towards`, this writes the
+    /// proposed angle through an output pointer and never enters `Guy::do_turn`.
+    GuyTurnAngles {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -367,6 +379,59 @@ pub static REGISTRY: &[Case] = &[
                     cols: Cols::List(&[50, 100, 542]),
                 },
             ],
+        },
+    },
+    Case {
+        id: "guy_turn_speed",
+        va: 0x005D_E340,
+        abi: "int __thiscall GuyData::turn_speed(int) const; ECX=this, one stack dword, \
+              callee `ret 4`. PDB and 202-byte body agree",
+        model: "don_sim::systems::groups_guys::GuyData::turn_speed",
+        subsystem: "movement / formation facing",
+        ledger: "docs/mechanics/groups-guys.md §2.6 — GuyData::turn_speed",
+        derivation: "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005de340.c; \
+                     PDB GuyData::turn_speed @0x005DE340",
+        reachability: "SELF-CALL only into mapped data: reads GuyData, \
+                       objects.lists[who][o], UnitData+0x18/+0x68, \
+                       UnitTypeData+0x2C4/+0x304 and Constants+8/+0xC",
+        caveat: "The object graph and Constants pointer are fabricated, so this pins the \
+                 shipped arithmetic and exact field/width reads, not the live values fed \
+                 by a match. The damped form performs an unchecked `div`; generated \
+                 avg_speed values -7..=-4 make its divisor zero and are EXCLUDED and \
+                 counted rather than crashing the case. Signed owner/object indexes \
+                 outside their live domains are not generated.",
+        plan: Plan::GuyTurnSpeed {
+            random: 250_000,
+            distribution: "branch-biased xorshift64: squad/crew boundary; raw/damped; \
+                           tracking and fast-face early returns; both rule scales; \
+                           wrapping i32 rule products; avg_speed division/floor boundaries",
+        },
+    },
+    Case {
+        id: "guy_turn_angles",
+        va: 0x005D_98C0,
+        abi: "unsigned long __thiscall Guy::turn_angles(unsigned long desired, \
+              unsigned long *out, int raw_step, int half); ECX=this, ret 0x10. PDB and \
+              134-byte body agree",
+        model: "don_sim::systems::groups_guys::GuyData::turn_angles",
+        subsystem: "movement / formation facing",
+        ledger: "docs/mechanics/groups-guys.md §2.6 — Guy::turn_angles/turn_towards solver",
+        derivation: "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005d98c0.c; \
+                     PDB Guy::turn_angles @0x005D98C0",
+        reachability: "SELF-CALL only to GuyData::turn_speed; writes only the caller-owned \
+                       output dword. Chosen instead of turn_towards because the latter \
+                       enters the side-effecting Guy::do_turn tail",
+        caveat: "This pins the pure solver shared with turn_towards: the 0x02222220 snap, \
+                 `not` magnitude fold, shortest-direction choice, wrap, remainder and \
+                 optional half-step. Retail's third argument is constrained to 1 because \
+                 the shipped Rust `turn_angles` API represents the live raw-step call \
+                 shape. It does NOT cover Guy::do_turn, pivots, animation, or writing the \
+                 live Guy angle.",
+        plan: Plan::GuyTurnAngles {
+            random: 250_000,
+            distribution: "branch-biased xorshift64: exact snap neighbours; 0x80000000 \
+                           direction tie; clockwise/counter-clockwise wrap; step equality \
+                           and one-past; full/half step; the turn_speed rule boundaries",
         },
     },
     Case {

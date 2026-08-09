@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786239554,
+  "generated_unix": 1786241058,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 59602,
+  "wall_ms": 61239,
   "exit_code": 0,
   "summary": {
-    "registered": 13,
-    "pass": 13,
+    "registered": 15,
+    "pass": 15,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 16479445
+    "total_trials": 16973039
   },
   "cases": [
     {
@@ -124,6 +124,58 @@
       "detail": null
     },
     {
+      "id": "guy_turn_speed",
+      "va": "0x005de340",
+      "abi": "int __thiscall GuyData::turn_speed(int) const; ECX=this, one stack dword, callee `ret 4`. PDB and 202-byte body agree",
+      "model": "don_sim::systems::groups_guys::GuyData::turn_speed",
+      "subsystem": "movement / formation facing",
+      "ledger_entry": "docs/mechanics/groups-guys.md §2.6 — GuyData::turn_speed",
+      "derivation": "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005de340.c; PDB GuyData::turn_speed @0x005DE340",
+      "reachability": "SELF-CALL only into mapped data: reads GuyData, objects.lists[who][o], UnitData+0x18/+0x68, UnitTypeData+0x2C4/+0x304 and Constants+8/+0xC",
+      "caveat": "The object graph and Constants pointer are fabricated, so this pins the shipped arithmetic and exact field/width reads, not the live values fed by a match. The damped form performs an unchecked `div`; generated avg_speed values -7..=-4 make its divisor zero and are EXCLUDED and counted rather than crashing the case. Signed owner/object indexes outside their live domains are not generated.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 243578,
+      "mismatches": 0,
+      "wall_ms": 508,
+      "phases": [
+        {"kind": "edges", "count": 16, "distribution": "hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries"},
+        {"kind": "random", "count": 243562, "distribution": "branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries"}
+      ],
+      "excluded": [
+        {"reason": "retail #DE: damped avg_speed/4 + 1 is zero", "count": 6438}
+      ],
+      "extras": {
+        "branch_counts": "squad=119670 crew=123908 damped=118259 raw=125319 tracking=183551 fast_face=62520 scale2=121521 signed_or_wrapping_rules=70344"
+      },
+      "detail": null
+    },
+    {
+      "id": "guy_turn_angles",
+      "va": "0x005d98c0",
+      "abi": "unsigned long __thiscall Guy::turn_angles(unsigned long desired, unsigned long *out, int raw_step, int half); ECX=this, ret 0x10. PDB and 134-byte body agree",
+      "model": "don_sim::systems::groups_guys::GuyData::turn_angles",
+      "subsystem": "movement / formation facing",
+      "ledger_entry": "docs/mechanics/groups-guys.md §2.6 — Guy::turn_angles/turn_towards solver",
+      "derivation": "docs/mechanics/groups-guys.md §2.6; re/decomp-all/005d98c0.c; PDB Guy::turn_angles @0x005D98C0",
+      "reachability": "SELF-CALL only to GuyData::turn_speed; writes only the caller-owned output dword. Chosen instead of turn_towards because the latter enters the side-effecting Guy::do_turn tail",
+      "caveat": "This pins the pure solver shared with turn_towards: the 0x02222220 snap, `not` magnitude fold, shortest-direction choice, wrap, remainder and optional half-step. Retail's third argument is constrained to 1 because the shipped Rust `turn_angles` API represents the live raw-step call shape. It does NOT cover Guy::do_turn, pivots, animation, or writing the live Guy angle.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 250016,
+      "mismatches": 0,
+      "wall_ms": 526,
+      "phases": [
+        {"kind": "edges", "count": 16, "distribution": "hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries"},
+        {"kind": "random", "count": 250000, "distribution": "branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries"}
+      ],
+      "excluded": [],
+      "extras": {
+        "branch_counts": "snap=67997 half_turn_ties=26778 reverse=71320 forward=178696 half_step=124951"
+      },
+      "detail": null
+    },
+    {
       "id": "accessor_movsx_word_0xa",
       "va": "0x00472400",
       "abi": "__thiscall, no stack args (movsx eax, word ptr [ecx+0xA])",
@@ -181,7 +233,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 42997,
+      "wall_ms": 43967,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -216,7 +268,7 @@
       "status": "pass",
       "trials": 999950,
       "mismatches": 0,
-      "wall_ms": 25,
+      "wall_ms": 24,
       "phases": [
         {"kind": "chained-walk", "count": 999950, "distribution": "70 seeds x 14285 steps: six edge seeds (0 is what every statically-constructed Random starts at) plus 64 random seeds, each walked forward; compares the f32 bit pattern and the resulting state at every step"}
       ],
@@ -287,7 +339,7 @@
       "status": "pass",
       "trials": 4000026,
       "mismatches": 0,
-      "wall_ms": 103,
+      "wall_ms": 104,
       "phases": [
         {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
         {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
@@ -312,7 +364,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15817,
+      "wall_ms": 15451,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
