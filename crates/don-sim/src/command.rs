@@ -110,7 +110,8 @@
 
 use crate::order::{Order, OrderIndex};
 use crate::systems::groups_guys::{
-    resolve_form, vector_dist, GroupData, MemberState, GROUP_MAX_MEMBERS,
+    formation_order_coord, resolve_form, vector_dist, FormationMember, GroupData, MemberState,
+    GROUP_MAX_MEMBERS,
 };
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
@@ -454,6 +455,25 @@ pub trait Fleet {
     fn form_category(&self, _who: u8, _o: i16) -> i32 {
         0
     }
+    /// Effective type facts for `Form::categorize` at this destination. Returning `None`
+    /// keeps the command on the already-recovered flat order-installation path; formation
+    /// offsets are never guessed from the category alone.
+    fn formation_member(
+        &self,
+        _who: u8,
+        _o: i16,
+        _water_destination: bool,
+    ) -> Option<FormationMember> {
+        None
+    }
+    /// The terrain predicate passed to `Form::categorize` by `Group::compute_form`.
+    fn formation_water_destination(&self, _x: i32, _y: i32) -> bool {
+        false
+    }
+    /// Game option bit `GameData +0x821 & 8`, which forces formation facing to zero.
+    fn force_formation_facing_zero(&self) -> bool {
+        false
+    }
     /// `UnitData::form`, the signed byte at `+0xAA`.
     fn form(&self, _who: u8, _o: i16) -> i8 {
         0
@@ -546,6 +566,7 @@ pub struct Slot {
     pub is_captain: bool,
     pub leaves_groups: bool,
     pub form_category: i32,
+    pub formation_member: Option<FormationMember>,
     pub form: i8,
     pub angle: i32,
     pub role: i32,
@@ -654,6 +675,18 @@ impl Fleet for ObjectTable {
     }
     fn form_category(&self, who: u8, o: i16) -> i32 {
         self.get(who, o).map_or(18, |s| s.form_category)
+    }
+    fn formation_member(
+        &self,
+        who: u8,
+        o: i16,
+        _water_destination: bool,
+    ) -> Option<FormationMember> {
+        let slot = self.get(who, o)?;
+        let mut member = slot.formation_member?;
+        member.angle = slot.angle;
+        member.category = slot.form_category;
+        Some(member)
     }
     fn form(&self, who: u8, o: i16) -> i8 {
         self.get(who, o).map_or(0, |s| s.form)
@@ -1222,7 +1255,9 @@ impl Action<'_> {
                 let angle = i32_at(cmd, 13).unwrap_or(0);
                 let orders = i8_at(cmd, 17).unwrap_or(0) as i64;
                 let q = QueuePos::from_i64(i8_at(cmd, 18).unwrap_or(0) as i64);
-                self.action_move_near(x, y, 0, q, set_angle, angle, orders, f);
+                let form = i8_at(cmd, 19).unwrap_or(-1) as i32;
+                let width = i8_at(cmd, 20).unwrap_or(-1) as i32;
+                self.action_move_near(x, y, 0, q, set_angle, angle, orders, form, width, f);
             }
             "move_near" => {
                 // MoveNearCommand adds tolerance@9 and shifts the tail by four
@@ -1236,7 +1271,9 @@ impl Action<'_> {
                 let angle = i32_at(cmd, 17).unwrap_or(0);
                 let orders = i8_at(cmd, 21).unwrap_or(0) as i64;
                 let q = QueuePos::from_i64(i8_at(cmd, 22).unwrap_or(0) as i64);
-                self.action_move_near(x, y, tol, q, set_angle, angle, orders, f);
+                let form = i8_at(cmd, 23).unwrap_or(-1) as i32;
+                let width = i8_at(cmd, 24).unwrap_or(-1) as i32;
+                self.action_move_near(x, y, tol, q, set_angle, angle, orders, form, width, f);
             }
             "attack" => {
                 // AttackCommand: ox@1 whom@5 ignore@9 queued@13; the handler calls
@@ -1505,10 +1542,10 @@ impl Action<'_> {
     /// `Group::action_form` `0x00707220`, recovered through its state write and the
     /// exact parameters of its `action_halt` / `action_move_to` delegates.
     ///
-    /// `action_move_to` remains the bridge's documented order-installation spine: the
-    /// downstream `action_move_near` formation-layout half is not represented here, so
-    /// this action deliberately remains [`Port::Orders`] rather than claiming complete
-    /// positional fidelity.
+    /// `action_move_to` now consumes exact per-member destinations for the five forms this
+    /// hotkey can select when the fleet supplies complete formation type facts. The row
+    /// remains [`Port::Orders`] because the retail-only Square/Wedge/Mob and subordinate
+    /// sorting paths are still unavailable.
     fn action_form(&mut self, form: i32, rotate: i32, queued: i32, f: &mut dyn Fleet) {
         if !self.group_is_on_map(f) {
             return;
@@ -1599,7 +1636,7 @@ impl Action<'_> {
                     };
                     base.wrapping_add(rotate)
                 };
-                self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, f);
+                self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, -1, -1, f);
             }
             return;
         }
@@ -1623,12 +1660,12 @@ impl Action<'_> {
                 };
                 base.wrapping_add(rotate)
             };
-            self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, f);
+            self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, -1, -1, f);
         }
     }
 
-    /// `Group::action_move_near` `0x00704990` (9,205 B, 23 call sites), order-installation
-    /// spine only.
+    /// `Group::action_move_near` `0x00704990` (9,205 B, 23 call sites), including the
+    /// recovered captain-only formation path used by all five FORM-hotkey shapes.
     ///
     /// The `orders` argument is an `OrderIndex` and is threaded all the way to
     /// `Unit::add_move_facing_order` `0x005E55C0`, whose selection is [measured]:
@@ -1640,12 +1677,11 @@ impl Action<'_> {
     /// switch (orders) { 2 -> ATTACK_TO; 3 -> EXPLORE_TO; 4 -> FLEE_TO; default -> MOVE_TO }
     /// ```
     ///
-    /// **What this port does not do**: the 9 KB body is overwhelmingly *formation and
-    /// destination* work — `Group::compute_form` `0x00707C80`, `Form::categorize`, the
-    /// per-member `curr_x`/`curr_y` offsets, the `GROUP_MOVE` promotion when the group is
-    /// marching, the garrison-into-transport branch, and the disembark handling. Those
-    /// belong to the groups lane's `compute_form` / `update_positions`. Here every member
-    /// gets the same destination and the `tolerance` the command carried.
+    /// Wedge/Square/Mob, subordinate (non-captain) sorting, GROUP_MOVE promotion,
+    /// garrison-into-transport, and disembark remain explicit gaps. A fleet which does not
+    /// provide complete [`FormationMember`] facts retains the flat order spine; the bridge
+    /// never invents spacing values.
+    #[allow(clippy::too_many_arguments)]
     fn action_move_near(
         &mut self,
         x: i32,
@@ -1655,26 +1691,153 @@ impl Action<'_> {
         set_angle: bool,
         angle: i32,
         orders: i64,
+        form: i32,
+        width: i32,
         f: &mut dyn Fleet,
     ) {
+        self.normalize_for_action(f);
         let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
             let kind = move_order_kind(orders);
             let (who, list) = a.members();
-            for o in list {
+            let water = f.formation_water_destination(x, y);
+            let profiles: Option<Vec<FormationMember>> = list
+                .iter()
+                .copied()
+                .map(|o| {
+                    (f.alive(who, o)
+                        && f.can_move(who, o)
+                        && f.is_on_map(who, o)
+                        && f.is_captain(who, o))
+                    .then(|| f.formation_member(who, o, water))
+                    .flatten()
+                })
+                .collect();
+
+            let resolved_form = if form == 9 || form == -1 {
+                // `GroupData::get_form` `0x0070B9F0`: `-1` is both the initial
+                // sentinel and a real signed UnitData value. Consequently an early
+                // `-1` is skipped, while a `-1` after a non-negative form makes the
+                // group mixed. Preserve that order-sensitive quirk.
+                let mut common = -1i32;
+                for &o in &list {
+                    if !f.alive(who, o) || !f.is_on_map(who, o) {
+                        continue;
+                    }
+                    let member_form = f.form(who, o) as i32;
+                    if member_form != common {
+                        let had_form = common >= 0;
+                        common = member_form;
+                        if had_form {
+                            common = -1;
+                            break;
+                        }
+                    }
+                }
+                common.max(0)
+            } else {
+                form
+            };
+            let resolved_width = if width == -1 {
+                profiles
+                    .as_ref()
+                    .and_then(|members| {
+                        let (sum, count) = members
+                            .iter()
+                            .filter(|member| member.width != -1)
+                            .fold((0i32, 0i32), |(sum, count), member| {
+                                (sum.wrapping_add(member.width), count + 1)
+                            });
+                        (count != 0).then_some(sum / count)
+                    })
+                    .unwrap_or(50)
+            } else {
+                width
+            };
+
+            let leader = a.form_leader(f);
+            let old = leader.map(|leader| {
+                let mut old = if q == QueuePos::Last {
+                    f.final_pos(who, leader)
+                } else {
+                    f.pos(who, leader)
+                };
+                if let Some(group) = a.groups.get(a.slot) {
+                    if group.ox >= 0
+                        && group.oy >= 0
+                        && vector_dist(group.ox.wrapping_sub(old.0), group.oy.wrapping_sub(old.1))
+                            < 0x181
+                    {
+                        old = (group.ox, group.oy);
+                    }
+                }
+                old
+            });
+
+            let computed = profiles.as_ref().and_then(|profiles| {
+                let old = old?;
+                let group = a.groups.get_mut(a.slot)?;
+                group.compute_form(
+                    profiles,
+                    x,
+                    y,
+                    resolved_form,
+                    resolved_width,
+                    set_angle,
+                    angle,
+                    old.0,
+                    old.1,
+                    f.force_formation_facing_zero(),
+                )
+            });
+            if q == QueuePos::Last || q == QueuePos::New {
+                if let Some((_, actual_angle)) = computed.as_ref() {
+                    if let Some(group) = a.groups.get_mut(a.slot) {
+                        group.o_angle = *actual_angle;
+                        group.ox = x;
+                        group.oy = y;
+                        group.disband = 0;
+                    }
+                }
+            }
+
+            for (i, o) in list.iter().copied().enumerate() {
                 if !f.alive(who, o) || !f.can_move(who, o) {
                     continue;
                 }
+                let (to_x, to_y, member_angle) = if let Some((layout, actual_angle)) = &computed {
+                    let angle_offset = a.groups.get(a.slot).map_or(0, |group| {
+                        (group.angles[i] as i32).wrapping_mul(0x0100_0000)
+                    });
+                    (
+                        formation_order_coord(layout.to_x[i]),
+                        formation_order_coord(layout.to_y[i]),
+                        actual_angle.wrapping_add(angle_offset),
+                    )
+                } else {
+                    (x, y, angle)
+                };
                 let ord = Order {
                     kind,
-                    x,
-                    y,
+                    x: to_x,
+                    y: to_y,
                     tolerance,
                     ..Order::default()
                 };
                 let mut ord = OrderRec::from(ord);
-                ord.angle = angle;
-                ord.facing = i32::from(set_angle);
+                ord.angle = member_angle;
+                // `action_move_near` pushes literal 1 as
+                // `Unit::add_move_facing_order`'s fifth argument at 0x00705F98.
+                ord.facing = 1;
                 a.install_rec(who, o, ord, q, f);
+            }
+
+            if computed.is_some() {
+                if let Some(leader) = leader {
+                    let update_angle = f.angle(who, leader);
+                    if let Some(group) = a.groups.get_mut(a.slot) {
+                        group.update_positions(update_angle);
+                    }
+                }
             }
         };
         if self.with_queue_first(q, f, &mut body) {

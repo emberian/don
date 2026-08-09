@@ -1299,6 +1299,401 @@ pub fn resolve_form(arg: i32, current_form_option: i32, leader_form: i32) -> i32
     }
 }
 
+/// Static object/type facts consumed by `Form::categorize` and `Form::compute_dests`.
+///
+/// The retail functions discover these through the object and unit-type tables.  Keeping
+/// them as an explicit value makes the formation math usable by the command bridge without
+/// smuggling a world reference into this checksum/state module.  `category` is the already
+/// resolved `FormData::type_cat(...)` result; a host which substitutes a transport's cargo
+/// type or a water/modern-infantry upgrade must do so before constructing this value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormationMember {
+    /// `FormCatIndex`, in `0..18`.
+    pub category: i32,
+    /// `ObjectTypeData::x_spacing` `+0x228` for the effective formation type.
+    pub x_spacing: i32,
+    /// `ObjectTypeData::y_spacing` `+0x22C` for the effective formation type.
+    pub y_spacing: i32,
+    /// `UnitTypeData::uber_size` `+0x308` for the effective formation type.
+    pub formation_size: i32,
+    /// `ObjectTypeData::guy_spacing` `+0x224` (used by subordinate members).
+    pub guy_spacing: i32,
+    /// Result of `UnitData::is_modern_infantry` `0x00607B40`.
+    pub modern_infantry: bool,
+    /// Signed `UnitData::form_mod` byte `+0xAB`; `-1` is the retail
+    /// `get_form_mod_option` non-contributor sentinel. Hosts must also use `-1` for
+    /// object classes that function filters before reading the byte.
+    pub width: i32,
+    /// `UnitData::angle` `+0x50` for `Group::compute_form`'s leader-facing test.
+    pub angle: i32,
+}
+
+impl Default for FormationMember {
+    fn default() -> Self {
+        FormationMember {
+            category: 0,
+            x_spacing: FORM_CELL,
+            y_spacing: FORM_CELL,
+            formation_size: 1,
+            guy_spacing: FORM_CELL,
+            modern_infantry: false,
+            width: 50,
+            angle: 0,
+        }
+    }
+}
+
+/// The transient global `Form` result consumed by `Group::action_move_near`.
+///
+/// Retail owns ten process-global `Form` objects, clears the range `+0x30..+0xE90` for
+/// each computation, and immediately consumes these four arrays while installing orders.
+/// Returning a value gives Rust the same lifetime without introducing shared mutable state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormationLayout {
+    pub leader_index: usize,
+    pub to_x: [i32; GROUP_MAX_MEMBERS],
+    pub to_y: [i32; GROUP_MAX_MEMBERS],
+    pub off_x: [i32; GROUP_MAX_MEMBERS],
+    pub off_y: [i32; GROUP_MAX_MEMBERS],
+    pub reverse: bool,
+}
+
+impl Default for FormationLayout {
+    fn default() -> Self {
+        FormationLayout {
+            leader_index: 0,
+            to_x: [0; GROUP_MAX_MEMBERS],
+            to_y: [0; GROUP_MAX_MEMBERS],
+            off_x: [0; GROUP_MAX_MEMBERS],
+            off_y: [0; GROUP_MAX_MEMBERS],
+            reverse: false,
+        }
+    }
+}
+
+#[inline]
+fn div_3_table(v: i32) -> i32 {
+    // `div_3_table` is initialized at 0x00681DB0. Positive entries are `n / 3`;
+    // negative entries are `(n - 2) / 3`, i.e. mathematical floor division.
+    let q = v / 3;
+    let r = v % 3;
+    if r != 0 && v < 0 {
+        q - 1
+    } else {
+        q
+    }
+}
+
+/// Convert a high-resolution `Form::to_x/to_y` coordinate to the coordinate passed to
+/// `Unit::add_move_facing_order`: `div_3_table[coord >> 4]`.
+#[inline]
+pub fn formation_order_coord(coord: i32) -> i32 {
+    div_3_table(coord >> 4)
+}
+
+#[inline]
+fn opposite_half_turn(delta: i32) -> bool {
+    matches!(delta as u32, 0x4000_0000..=0xC000_0000)
+}
+
+#[derive(Clone)]
+struct FormScratch {
+    form: i32,
+    idx: usize,
+    num_category: [i32; 18],
+    x_spacing: [i32; 18],
+    y_spacing: [i32; 18],
+    cat_id: [i32; GROUP_MAX_MEMBERS],
+    category: [i32; GROUP_MAX_MEMBERS],
+    layout: FormationLayout,
+}
+
+impl FormScratch {
+    fn new(form: i32) -> Self {
+        FormScratch {
+            form,
+            idx: 0,
+            num_category: [0; 18],
+            x_spacing: [0; 18],
+            y_spacing: [0; 18],
+            cat_id: [0; GROUP_MAX_MEMBERS],
+            category: [0; GROUP_MAX_MEMBERS],
+            layout: FormationLayout::default(),
+        }
+    }
+
+    /// `Form::categorize` `0x0072E250`, for the captain-only path.
+    fn categorize(&mut self, members: &[FormationMember]) -> Option<()> {
+        let mut largest_category = 8usize;
+        let mut largest_count = 0;
+        let mut leader: Option<(usize, usize)> = None;
+
+        for (i, member) in members.iter().enumerate() {
+            let category = usize::try_from(member.category).ok()?;
+            if category >= 18 || category == 8 {
+                continue;
+            }
+            self.category[i] = category as i32;
+            self.cat_id[i] = self.num_category[category];
+            self.num_category[category] = self.num_category[category].wrapping_add(1);
+            self.accumulate_spacing(category, *member, true)?;
+            if largest_count < self.num_category[category] {
+                largest_category = category;
+                largest_count = self.num_category[category];
+            }
+            if leader.is_none_or(|(_, best)| category < best) {
+                leader = Some((i, category));
+            }
+        }
+
+        // FormCatOther (8) is deliberately assigned in a second pass. For non-Square
+        // forms retail picks the first populated category at/after largest+1, or that
+        // category itself when the suffix is empty.
+        for (i, member) in members.iter().enumerate() {
+            if member.category != 8 {
+                continue;
+            }
+            let mut category = 8usize;
+            if self.form != Formation::Square as i32 && largest_category + 1 < 18 {
+                category = largest_category + 1;
+                if let Some(found) = (category..18).find(|&cat| self.num_category[cat] != 0) {
+                    category = found;
+                }
+            }
+            self.category[i] = category as i32;
+            self.cat_id[i] = self.num_category[category];
+            self.num_category[category] = self.num_category[category].wrapping_add(1);
+            self.accumulate_spacing(category, *member, false)?;
+            if largest_count <= self.num_category[category] {
+                largest_count = self.num_category[category];
+            }
+            if leader.is_none_or(|(_, best)| category < best) {
+                leader = Some((i, category));
+            }
+        }
+
+        self.idx = leader.map_or(0, |(i, _)| i);
+        self.layout.leader_index = self.idx;
+        Some(())
+    }
+
+    fn accumulate_spacing(
+        &mut self,
+        category: usize,
+        member: FormationMember,
+        add_modern_pad: bool,
+    ) -> Option<()> {
+        if member.formation_size <= 0 || member.x_spacing <= 0 || member.y_spacing <= 0 {
+            return None;
+        }
+        if member.formation_size == 1 {
+            self.x_spacing[category] = self.x_spacing[category].max(member.x_spacing);
+            self.y_spacing[category] = self.y_spacing[category].max(member.y_spacing);
+            return Some(());
+        }
+        let columns = if self.form == Formation::Column as i32 {
+            2
+        } else {
+            member.formation_size.min(3)
+        };
+        self.x_spacing[category] =
+            self.x_spacing[category].max(columns.wrapping_mul(member.x_spacing));
+        let rows = (member.formation_size - 1) / columns + 1;
+        let mut y = rows.wrapping_mul(member.y_spacing);
+        if add_modern_pad && member.modern_infantry {
+            y = y.wrapping_add(FORM_CELL);
+        }
+        self.y_spacing[category] = self.y_spacing[category].max(y);
+        Some(())
+    }
+
+    /// Non-Wedge `Form::compute_rows_and_columns` `0x0072D910`.
+    fn rows_and_columns(&self, width: i32) -> Option<([i32; 18], [i32; 18])> {
+        let mut per = [0i32; 18];
+        let mut rows = [0i32; 18];
+        let mut widest = 0i32;
+        for category in 0..18 {
+            let product = self.num_category[category].wrapping_mul(self.x_spacing[category]);
+            // The compare at 0x0072DCD8 is against the category *count*, not its index.
+            let candidate = if self.num_category[category] < 6 {
+                product
+            } else {
+                product / 2
+            };
+            widest = widest.max(candidate);
+        }
+        for category in 0..18 {
+            let count = self.num_category[category];
+            if self.form == Formation::Column as i32 {
+                rows[category] = (count + 2) / 3;
+                continue;
+            }
+            if count == 0 {
+                continue;
+            }
+            let spacing = self.x_spacing[category];
+            if spacing <= 0 {
+                return None;
+            }
+            let requested = widest.wrapping_mul(width) / 50 / spacing;
+            per[category] = count.min(requested).max(1);
+            rows[category] = (count - 1 + per[category]) / per[category];
+        }
+        Some((per, rows))
+    }
+
+    /// Captain branch of `Form::compute_dests` `0x0072CBA0` for forms 0..5 and Column.
+    fn compute_captain_dests(
+        &mut self,
+        group: &mut GroupData,
+        x: i32,
+        y: i32,
+        angle: i32,
+        facing: bool,
+        rows: &[i32; 18],
+    ) -> Option<()> {
+        let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        group.form_num = group.num;
+        let mut anchor_lateral = 0i32;
+        let mut anchor_forward = 0i32;
+
+        for i in 0..n {
+            let category = usize::try_from(self.category[i]).ok()?;
+            if category >= 18 {
+                return None;
+            }
+            let slot = self.cat_id[i];
+            let row_count = rows[category];
+            if row_count <= 0 {
+                return None;
+            }
+            let x_spacing = self.x_spacing[category];
+            let y_spacing = self.y_spacing[category];
+            let (placed_lateral, mut forward, base_forward, write_angle) = if self.form
+                == Formation::Column as i32
+            {
+                let lateral = ((slot + 1) % 3 - 1).wrapping_mul(x_spacing);
+                let forward = (slot / 3).wrapping_mul(y_spacing).wrapping_neg();
+                (
+                    if facing {
+                        lateral.wrapping_neg()
+                    } else {
+                        lateral
+                    },
+                    forward,
+                    forward,
+                    false,
+                )
+            } else {
+                let one_based = slot % row_count + 1;
+                let half = one_based >> 1;
+                let mut lateral = half.wrapping_mul(x_spacing).wrapping_neg();
+                if slot % row_count & 1 == 0 {
+                    lateral = half.wrapping_mul(x_spacing);
+                }
+                if row_count & 1 == 0 {
+                    lateral = lateral.wrapping_add(x_spacing / 2);
+                }
+                if (category < 3 || category == 6 || category >= 12) && (slot / row_count & 1) != 0
+                {
+                    lateral = lateral.wrapping_add(x_spacing / 2);
+                }
+
+                // Categorized captains force local density to 2 at
+                // 0x0072CCC2..CCCF, so `(density != 0) - 2` is -1 here.
+                let base_forward = (slot / row_count).wrapping_mul(y_spacing).wrapping_neg();
+                let forward = match self.form {
+                    x if x == Formation::Refused as i32 => {
+                        base_forward.wrapping_sub(lateral.wrapping_abs())
+                    }
+                    x if x == Formation::Envelop as i32 => {
+                        base_forward.wrapping_add(lateral.wrapping_abs())
+                    }
+                    x if x == Formation::EchelonLeft as i32 => {
+                        if facing {
+                            base_forward.wrapping_sub(lateral)
+                        } else {
+                            base_forward.wrapping_add(lateral)
+                        }
+                    }
+                    x if x == Formation::EchelonRight as i32 => {
+                        if facing {
+                            base_forward.wrapping_add(lateral)
+                        } else {
+                            base_forward.wrapping_sub(lateral)
+                        }
+                    }
+                    _ => base_forward,
+                };
+                (
+                    if facing {
+                        lateral.wrapping_neg()
+                    } else {
+                        lateral
+                    },
+                    forward,
+                    base_forward,
+                    true,
+                )
+            };
+
+            // Stack populated categories front-to-back. The `float` conversion and
+            // truncation are instruction-visible (`cvtdq2ps` / `cvttss2si`).
+            let mut first_nonempty = None;
+            for previous in 0..=category {
+                if self.num_category[previous] == 0 {
+                    continue;
+                }
+                if first_nonempty.is_some() {
+                    forward = forward.wrapping_sub(self.y_spacing[previous] / 2);
+                } else {
+                    first_nonempty = Some(previous);
+                }
+                if previous < category {
+                    let shift =
+                        (((rows[previous] as f32) - 0.5) * self.y_spacing[previous] as f32) as i32;
+                    forward = forward.wrapping_sub(shift);
+                }
+            }
+
+            self.layout.off_x[i] = placed_lateral;
+            self.layout.off_y[i] = forward;
+            self.layout.to_x[i] = x
+                .wrapping_add(cosx(angle, placed_lateral))
+                .wrapping_add(sinx(angle, forward));
+            self.layout.to_y[i] = y
+                .wrapping_add(sinx(angle, placed_lateral))
+                .wrapping_sub(cosx(angle, forward));
+            if write_angle {
+                group.angles[i] = match (placed_lateral.signum(), (forward - base_forward).signum())
+                {
+                    (-1, -1) | (1, 1) => -0x20,
+                    (-1, 1) | (1, -1) => 0x20,
+                    _ if placed_lateral == 0 && self.form == Formation::EchelonLeft as i32 => -0x20,
+                    _ if placed_lateral == 0 && self.form == Formation::EchelonRight as i32 => 0x20,
+                    _ => 0,
+                };
+            }
+            if first_nonempty == Some(category) && slot == 0 {
+                anchor_lateral = placed_lateral;
+                anchor_forward = forward;
+            }
+        }
+
+        let correction_x = cosx(angle, anchor_lateral).wrapping_add(sinx(angle, anchor_forward));
+        let correction_y = sinx(angle, anchor_lateral).wrapping_sub(cosx(angle, anchor_forward));
+        for i in 0..n {
+            self.layout.to_x[i] = self.layout.to_x[i].wrapping_sub(correction_x);
+            self.layout.to_y[i] = self.layout.to_y[i].wrapping_sub(correction_y);
+            self.layout.off_x[i] = self.layout.off_x[i].wrapping_sub(anchor_lateral);
+            self.layout.off_y[i] = self.layout.off_y[i].wrapping_sub(anchor_forward);
+            group.off_x[i] = div_3_table(self.layout.off_x[i] >> 4);
+            group.off_y[i] = div_3_table(self.layout.off_y[i] >> 4);
+        }
+        Some(())
+    }
+}
+
 /// One selection / control group. Layout matches `GroupData`, `sizeof` 2508.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupData {
@@ -1595,6 +1990,101 @@ impl GroupData {
             self.curr_y[j] = self.curr_y[j + 1];
         }
         self.num -= 1;
+    }
+
+    /// `Group::compute_form` `0x00707C80` plus the captain branch of
+    /// `Form::categorize` / `Form::compute`.
+    ///
+    /// This entry point intentionally accepts only the formation shapes for which every
+    /// intermediate is recovered without an implicit retail-global dependency: Line,
+    /// Refused, Envelop, both Echelons, Sparse, and Column. Those include all five shapes
+    /// reachable from the FORM hotkey. Wedge reads an uninitialized stack cell in the
+    /// shipped function, Square uses `FormData::space[4][18]`, and Mob carries an evolving
+    /// binary-angle ring; they return `None` until those paths have oracle evidence.
+    ///
+    /// `members` must be the live, on-map **captain** prefix in exact group-list order.
+    /// Returning `None` is transactional: no byte of `self` is changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_form(
+        &mut self,
+        members: &[FormationMember],
+        x: i32,
+        y: i32,
+        form: i32,
+        width: i32,
+        set_angle: bool,
+        requested_angle: i32,
+        old_x: i32,
+        old_y: i32,
+        force_facing_zero: bool,
+    ) -> Option<(FormationLayout, i32)> {
+        let n = self.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        if n == 0 || members.len() != n {
+            return None;
+        }
+        if !matches!(form, 0..=5 | 8) {
+            return None;
+        }
+
+        let mut scratch = FormScratch::new(form);
+        scratch.categorize(members)?;
+        let (_, rows) = scratch.rows_and_columns(width)?;
+        let leader_index = scratch.idx;
+        let leader_angle = members
+            .get(leader_index)?
+            .angle
+            .wrapping_sub((self.angles[leader_index] as i32).wrapping_mul(0x0100_0000));
+        let dx = x.wrapping_sub(old_x);
+        let dy = y.wrapping_sub(old_y);
+        let mut angle = requested_angle;
+        let mut reverse_move = false;
+        if !set_angle {
+            angle = if dx == 0 && dy == 0 {
+                if old_x != self.ox || old_y != self.oy {
+                    leader_angle
+                } else {
+                    self.o_angle
+                }
+            } else {
+                find_angle(dx, dy)
+            };
+        } else {
+            let found = find_angle(dx, dy);
+            reverse_move = opposite_half_turn(found.wrapping_sub(angle));
+        }
+
+        let mut work = self.clone();
+        work.form = form;
+        if opposite_half_turn(leader_angle.wrapping_sub(angle)) {
+            work.facing ^= 1;
+        }
+        if force_facing_zero {
+            work.facing = 0;
+            reverse_move = false;
+        }
+        let facing = work.facing != 0;
+        scratch.compute_captain_dests(&mut work, x, y, angle, facing, &rows)?;
+        if opposite_half_turn(leader_angle.wrapping_sub(angle)) {
+            work.facing ^= 1;
+        }
+
+        let leader_x = scratch.layout.to_x[leader_index];
+        let leader_y = scratch.layout.to_y[leader_index];
+        work.o_angle = find_angle(x.wrapping_sub(leader_x), y.wrapping_sub(leader_y));
+        work.o_dist = vector_dist(x.wrapping_sub(leader_x), y.wrapping_sub(leader_y));
+
+        if reverse_move {
+            scratch.layout.reverse = true;
+            for i in 0..n {
+                scratch.layout.off_x[i] = scratch.layout.off_x[i].wrapping_neg();
+                scratch.layout.off_y[i] = scratch.layout.off_y[i].wrapping_neg();
+                work.off_x[i] = work.off_x[i].wrapping_neg();
+                work.off_y[i] = work.off_y[i].wrapping_neg();
+            }
+        }
+
+        *self = work;
+        Some((scratch.layout, angle))
     }
 
     /// `Group::update_positions` `0x00713810` — rotate the formation offsets into world
