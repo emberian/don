@@ -949,6 +949,131 @@ fn force_transport_fails_closed_before_missing_type_facts_write() {
     assert_eq!(sim.world.units.get_unit_masks(row), 0x100);
 }
 
+fn configure_attrition_effect_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+
+    // Keep step 8 active while clearing the canonical LeaderData ACTIVE bit. Every
+    // attrition handler must reject player 2 from the authoritative gate, not from a
+    // stale synchronized facade.
+    sim.vic_leaders.slots[1].leader_flags &= !victory_score::leader_flag::ACTIVE;
+
+    let leader = &mut sim.vic_leaders.slots[0];
+    leader.give_attrition_disabled = 7;
+    leader.take_attrition_disabled = -9;
+    leader.neutral_attrition = 222;
+    leader.building_attrition_disabled = 11;
+
+    let rejected = &mut sim.vic_leaders.slots[1];
+    rejected.give_attrition_disabled = 31;
+    rejected.take_attrition_disabled = 32;
+    rejected.neutral_attrition = 333;
+    rejected.building_attrition_disabled = 34;
+
+    // Seed deliberately stale projection values. Step 8 must replace all four from
+    // the canonical owner after the step-4 script transaction.
+    let projected = &mut sim.step8.leaders[0];
+    projected.attrition_off = 91;
+    projected.anti_attrition_off = 92;
+    projected.neutral_attrition = 93;
+    projected.building_attrition_off = 94;
+}
+
+fn assert_attrition_policy(sim: &Sim, expected: [i32; 4]) {
+    let leader = &sim.vic_leaders.slots[0];
+    assert_eq!(
+        [
+            leader.give_attrition_disabled,
+            leader.take_attrition_disabled,
+            leader.neutral_attrition,
+            leader.building_attrition_disabled,
+        ],
+        expected
+    );
+    let projected = &sim.step8.leaders[0];
+    assert_eq!(
+        [
+            projected.attrition_off,
+            projected.anti_attrition_off,
+            projected.neutral_attrition,
+            projected.building_attrition_off,
+        ],
+        expected,
+        "step 8 must consume the exact canonical policy projection"
+    );
+    let rejected = &sim.vic_leaders.slots[1];
+    assert_eq!(
+        [
+            rejected.give_attrition_disabled,
+            rejected.take_attrition_disabled,
+            rejected.neutral_attrition,
+            rejected.building_attrition_disabled,
+        ],
+        [31, 32, 333, 34],
+        "an inactive canonical LeaderData row must reject without mutation"
+    );
+}
+
+fn execute_attrition_effect_sequence(sim: &mut Sim, scripts: &mut ScriptRuntime) {
+    sim.world.seconds = 0;
+    let disabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(disabled.steps[4], StepRun::Executed);
+    assert!(disabled.work[4] > 0);
+    assert_attrition_policy(sim, [1, 1, 0, 1]);
+
+    sim.world.seconds = 1;
+    let enabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(enabled.steps[4], StepRun::Executed);
+    assert!(enabled.work[4] > 0);
+    assert_attrition_policy(sim, [0, 0, 1000, 0]);
+
+    sim.world.seconds = 2;
+    let in_range = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(in_range.steps[4], StepRun::Executed);
+    assert!(in_range.work[4] > 0);
+    assert_attrition_policy(sim, [0, 0, 417, 0]);
+}
+
+#[test]
+fn ordinary_source_executes_attrition_policy_effects() {
+    let program = compile_source_fixture("scenario_attrition_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "attrition_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8140, 8);
+    configure_attrition_effect_state(&mut sim);
+
+    execute_attrition_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_attrition_policy_effects() {
+    let compiled = compile_source_fixture("scenario_attrition_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "attrition_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8141, 8);
+    configure_attrition_effect_state(&mut sim);
+
+    execute_attrition_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn attrition_policy_owner_changes_the_sim_channel_digest() {
+    let mut sim = Sim::new(0x8142, 8);
+    let before = sim.channel_digest();
+    sim.vic_leaders.slots[0].neutral_attrition = 417;
+    assert_ne!(sim.channel_digest(), before);
+}
+
 fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
     use victory_score::Victory;
 

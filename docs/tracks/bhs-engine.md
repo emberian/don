@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Seventy
+`Program`, and `ScriptRuntime` runs either producer against that live host. Eighty
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -532,10 +532,17 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 797 | `disable_city_ai` | active non-human Leader, then set `leader_flags2` bit `0x10` (`0x009ffbf0`) |
 | 798 | `enable_city_defeat` | active Leader, then clear `leader_flags2` bit `0x01` (`0x009ffc40`) |
 | 799 | `disable_city_defeat` | active Leader, then set `leader_flags2` bit `0x01` (`0x009ffc80`) |
+| 863 | `enable_take_attrition` | active Leader, then write `take_att_disabled` at `+0x7fc` to zero (`0x00a02880`) |
+| 864 | `disable_take_attrition` | active Leader, then write `take_att_disabled` at `+0x7fc` to one (`0x00a028c0`) |
+| 865 | `enable_give_attrition` | active Leader, then write `give_att_disabled` at `+0x7f8` to zero (`0x00a02900`) |
+| 866 | `disable_give_attrition` | active Leader, then write `give_att_disabled` at `+0x7f8` to one (`0x00a02940`) |
+| 867 | `enable_building_attrition` | active Leader, then write `disable_building_attrition` at `+0x804` to zero (`0x00a02980`) |
+| 868 | `disable_building_attrition` | active Leader, then write `disable_building_attrition` at `+0x804` to one (`0x00a029c0`) |
+| 869 | `set_neutral_attrition` | active Leader, clamp signed input to `0..=1000`, then write `neutral_attrition` at `+0x800` (`0x00a02a00`) |
 
-The current 363-file census contains 8,465 calls to those seventy-three registrations. Together
+The current 363-file census contains 8,528 calls to those eighty registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-9,256 of 39,957 measured shipped-corpus call sites (**23.16%**, up from **1.98%**).
+9,319 of 39,957 measured shipped-corpus call sites (**23.32%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
@@ -610,6 +617,24 @@ mutation-test a valid-but-non-processing Leader, an active Ground unit, inactive
 transport inclusion, ordinary warship and Aircraft Carrier exclusion, foreign-owner
 isolation, unrelated bits, and invalid player sentinels. A separate test removes an active
 unit's type projection and proves that neither Leader field nor UnitData changes.
+
+The attrition-policy tranche adds 63 shipped calls across global #863 through #869. The
+comment-stripped counts are respectively 1, 18, 0, 5, 6, 26, and 7; two additional literal
+`disable_take_attrition` matches are comments and therefore do not count as executable
+reachability. Every handler decrements the one-based player, rejects unsigned slots above
+7, then requires both Leader flag bits before reading or writing anything else. Failure
+returns -1 without mutation. The six toggles store literal zero or one rather than applying
+a bit mask. `set_neutral_attrition` clamps signed input below zero to zero and above 1000 to
+1000, then stores the result. The canonical owner is the four contiguous walked LeaderData
+words at `+0x7f8..+0x804`; `Sim::channel_digest` now folds that channel-8 projection. Step 8
+receives all four words from the canonical owner immediately before `Leaders::process_all`,
+including the already-consumed give/take gates, rather than owning another mutable copy.
+Source and loaded-chunk fixtures test the invalid 0/9 sentinels, a stale active facade whose
+canonical LeaderData row is inactive, literal disable/enable stores, both clamp boundaries,
+an in-range neutral value, and the same-frame step-8 projection. Adjacent #870
+`get_neutral_attrition` is exact and unblocked by this owner, but has zero shipped calls and
+retains a peculiar ignored second integer argument, so it remains outside this reachability
+tranche.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
@@ -727,7 +752,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-782 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+775 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

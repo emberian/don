@@ -152,7 +152,9 @@
 //! * 10 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
-use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
+use crate::order::{
+    ArmStatus, Order, OrderIndex, SpecialAnimOrderState, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED,
+};
 use crate::systems::construction::{BuilderFinish, ObjectKey};
 use crate::systems::construction_builder::{
     self, AfterInvalidTarget, PreflightInput as BuildAtPreflightInput, PreflightPlan,
@@ -462,6 +464,11 @@ pub struct OrderRec {
     /// what `Unit::work`'s tail treats as "the target you named is not there any more".
     pub target_uid: u16,
 
+    /// Complete concrete payload for `SpecialAnimOrder` (order 25). This is separate from
+    /// `x/y` and target identity because its nine walked words are not layout-compatible
+    /// with either generic descriptive union.
+    pub special_anim: Option<SpecialAnimOrderState>,
+
     /// Concrete checksum-visible storage for the coordinate-target order classes. These
     /// classes are not layout-compatible with `MoveOrder` or `TargetOrder`, so retaining
     /// only the generic `x/y` union would discard `attack_unit` and the walked `AirOrder`
@@ -560,6 +567,7 @@ impl Default for OrderRec {
             target_o: -1,
             target_who: -1,
             target_uid: 0,
+            special_anim: None,
             targeted_payload: TargetedOrderPayload::None,
             patrol_payload: PatrolPayload::None,
         }
@@ -819,6 +827,7 @@ impl From<Order> for OrderRec {
             tolerance: o.tolerance,
             target_o: o.target_o as i32,
             target_who: o.target_who as i32,
+            special_anim: o.special_anim,
             targeted_payload,
             ..OrderRec::default()
         }
@@ -837,6 +846,7 @@ impl From<OrderRec> for Order {
             target_who: r.target_who.clamp(i8::MIN as i32, i8::MAX as i32) as i8,
             target_o: r.target_o.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             tolerance: r.tolerance,
+            special_anim: r.special_anim,
         }
     }
 }

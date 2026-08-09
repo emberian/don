@@ -77,7 +77,7 @@ pub enum DefeatCleanupError {
         group_id: i32,
         error: crate::systems::groups_guys::GroupActionPlanError,
     },
-    UnsupportedSpecialAnimSubtype {
+    MissingSpecialAnimPayload {
         owner: usize,
         object_id: usize,
     },

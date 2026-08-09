@@ -158,6 +158,67 @@ pub const ORDER_DISEMBARK: u8 = 32;
 pub const ORDER_PUSHED: u8 = 64;
 pub const ORDER_FACING_TARGET: u8 = 128;
 
+/// `SpecialType`, the four-byte discriminator at `SpecialAnimOrder+0x08`.
+///
+/// `UnitData::is_entering_or_exiting` `0x0060A6F0` returns true for the first two values
+/// and false for `SPECIAL_UNIT`. Keeping this enum on the order is required because those
+/// branches differ even though all three orders report [`OrderIndex::SpecialAnim`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum SpecialAnimType {
+    Enter = 0,
+    Exit = 1,
+    Unit = 2,
+}
+
+impl SpecialAnimType {
+    #[inline]
+    pub const fn from_raw(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Enter),
+            1 => Some(Self::Exit),
+            2 => Some(Self::Unit),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_entering_or_exiting(self) -> bool {
+        matches!(self, Self::Enter | Self::Exit)
+    }
+}
+
+/// The complete walked payload of `SpecialAnimOrder` `sizeof=44` after its eight-byte
+/// `UnitOrder` base. Defaults are from `SpecialAnimOrder::clear` `0x00484EC0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpecialAnimOrderState {
+    pub special_type: SpecialAnimType,
+    pub started: i32,
+    pub frames: i32,
+    pub data1: i32,
+    pub data2: i32,
+    pub data3: i32,
+    pub data4: i32,
+    pub ox: i32,
+    pub whom: i32,
+}
+
+impl Default for SpecialAnimOrderState {
+    fn default() -> Self {
+        Self {
+            special_type: SpecialAnimType::Unit,
+            started: 0,
+            frames: 0,
+            data1: -1,
+            data2: -1,
+            data3: -1,
+            data4: -1,
+            ox: -1,
+            whom: -1,
+        }
+    }
+}
+
 /// How faithfully this port implements one jump-table arm.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ArmStatus {
@@ -276,6 +337,9 @@ pub struct Order {
     pub target_o: i16,
     /// Arrival tolerance in Coord units; `UnitData::tolerance` is the per-unit default.
     pub tolerance: i32,
+    /// Concrete payload for order 25. `None` on a `SpecialAnim` order is malformed legacy
+    /// state and must fail any caller which needs the subtype rather than guessing UNIT.
+    pub special_anim: Option<SpecialAnimOrderState>,
 }
 
 impl Default for Order {
@@ -288,6 +352,7 @@ impl Default for Order {
             target_who: -1,
             target_o: -1,
             tolerance: 0,
+            special_anim: None,
         }
     }
 }
@@ -309,6 +374,36 @@ impl Order {
             target_who,
             target_o,
             ..Order::default()
+        }
+    }
+
+    /// `Unit::add_spec_anim_order(type, data1, data2, QueuePos)` `0x005E4160`.
+    pub fn special_anim(special_type: SpecialAnimType, data1: i32, data2: i32) -> Order {
+        Order {
+            kind: OrderIndex::SpecialAnim,
+            flags: ORDER_GROUP,
+            special_anim: Some(SpecialAnimOrderState {
+                special_type,
+                data1,
+                data2,
+                ..SpecialAnimOrderState::default()
+            }),
+            ..Order::default()
+        }
+    }
+
+    /// Exact result of `UnitData::is_entering_or_exiting` for this flattened order.
+    ///
+    /// `None` identifies a malformed `SpecialAnim` without its concrete discriminator.
+    #[inline]
+    pub const fn is_entering_or_exiting(&self) -> Option<bool> {
+        if matches!(self.kind, OrderIndex::SpecialAnim) {
+            match self.special_anim {
+                Some(state) => Some(state.special_type.is_entering_or_exiting()),
+                None => None,
+            }
+        } else {
+            Some(false)
         }
     }
 
@@ -490,6 +585,34 @@ mod tests {
         assert_eq!(l.order_type(), OrderIndex::Attack);
         l.replace(Order::move_to(1, 1, 0));
         assert_eq!(l.len(), 1);
+    }
+
+    #[test]
+    fn special_anim_preserves_the_discriminator_and_retail_clear_defaults() {
+        let enter = Order::special_anim(SpecialAnimType::Enter, 17, 19);
+        let state = enter.special_anim.unwrap();
+        assert_eq!(enter.kind, OrderIndex::SpecialAnim);
+        assert_eq!(enter.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!((state.data1, state.data2), (17, 19));
+        assert_eq!(
+            (state.data3, state.data4, state.ox, state.whom),
+            (-1, -1, -1, -1)
+        );
+        assert_eq!(enter.is_entering_or_exiting(), Some(true));
+        assert_eq!(
+            Order::special_anim(SpecialAnimType::Exit, 0, 0).is_entering_or_exiting(),
+            Some(true)
+        );
+        assert_eq!(
+            Order::special_anim(SpecialAnimType::Unit, 0, 0).is_entering_or_exiting(),
+            Some(false)
+        );
+
+        let malformed = Order {
+            kind: OrderIndex::SpecialAnim,
+            ..Order::default()
+        };
+        assert_eq!(malformed.is_entering_or_exiting(), None);
     }
 
     #[test]

@@ -1,0 +1,24 @@
+int scenario attrition_effects_tick()
+{
+    if (time_sec() == 0) {
+        if (disable_take_attrition(0) == -1 &&
+            disable_take_attrition(9) == -1 &&
+            disable_take_attrition(2) == -1 &&
+            disable_give_attrition(2) == -1 &&
+            disable_building_attrition(2) == -1 &&
+            set_neutral_attrition(2, 333) == -1) {
+            disable_take_attrition(1);
+            disable_give_attrition(1);
+            disable_building_attrition(1);
+            set_neutral_attrition(1, -37);
+        }
+    } else if (time_sec() == 1) {
+        enable_take_attrition(1);
+        enable_give_attrition(1);
+        enable_building_attrition(1);
+        set_neutral_attrition(1, 1001);
+    } else {
+        set_neutral_attrition(1, 417);
+    }
+    return 1;
+}

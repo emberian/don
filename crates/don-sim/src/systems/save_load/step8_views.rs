@@ -1,12 +1,12 @@
 //! Save admission for step-8's synchronized views.
 //!
 //! `Sim::sync_step8_inputs` materializes a second layout immediately before retail step 8:
-//! economy values are copied from `LeaderSlot`, while unit and build views are copied from
-//! the authoritative `World`/`BuildData` stores.  An inactive leader never consumes or
-//! mutates those views.  They are therefore reconstructible adapter state, not another save
-//! owner.  This validator admits only the constructor-empty form or the exact post-sync form;
-//! every query package, persistent call counter, active leader, and non-default external host
-//! remains refused.
+//! economy values are copied from `LeaderSlot`, attrition policy from the canonical
+//! `victory_score::LeaderState`, and unit/build views from the authoritative
+//! `World`/`BuildData` stores. An inactive leader never consumes or mutates those views.
+//! They are therefore reconstructible adapter state, not another save owner. This validator
+//! admits only the constructor-empty form or the exact post-sync form; every query package,
+//! persistent call counter, active leader, and non-default external host remains refused.
 
 use crate::objects::Band;
 use crate::systems::{economy, leaders, production};
@@ -26,8 +26,18 @@ fn leader_has_only_mirrors(
     let mirror_is_synchronized = actual.econ == facade.econ
         && actual.last_calc_frame == facade.last_calc_frame
         && actual.econ_dirty == facade.dirty;
+    let policy = &sim.vic_leaders.slots[who];
+    let policy_is_empty = actual.attrition_off == fresh.attrition_off
+        && actual.anti_attrition_off == fresh.anti_attrition_off
+        && actual.neutral_attrition == fresh.neutral_attrition
+        && actual.building_attrition_off == fresh.building_attrition_off;
+    let policy_is_synchronized = actual.attrition_off == policy.give_attrition_disabled
+        && actual.anti_attrition_off == policy.take_attrition_disabled
+        && actual.neutral_attrition == policy.neutral_attrition
+        && actual.building_attrition_off == policy.building_attrition_disabled;
 
     (mirror_is_empty || mirror_is_synchronized)
+        && (policy_is_empty || policy_is_synchronized)
         && actual.flags == fresh.flags
         && actual.slot == fresh.slot
         && actual.diplo == fresh.diplo
@@ -41,8 +51,6 @@ fn leader_has_only_mirrors(
         && actual.frame_counter_b == fresh.frame_counter_b
         && actual.attrition == fresh.attrition
         && actual.anti_attrition.to_bits() == fresh.anti_attrition.to_bits()
-        && actual.attrition_off == fresh.attrition_off
-        && actual.anti_attrition_off == fresh.anti_attrition_off
         && actual.explored == fresh.explored
         && actual.event_frame == fresh.event_frame
         && actual.conquest_byte == fresh.conquest_byte

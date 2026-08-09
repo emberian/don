@@ -40,7 +40,8 @@ consumer of `game_random`. Counting its skipped calls does not preserve RNG posi
 are executable through the defeated-owner drain. The outer scan preserves Army-slot and
 Group-list order; the live adapter applies `Group::action_begin`/halt and Unit order/path
 effects without changing `ArmyData`. The remaining stop-only boundary is the scenario
-`ignore_orders` prelude and the missing ENTER/EXIT/UNIT subtype of generic `SPECIAL_ANIM`.
+`ignore_orders` prelude. The complete `SpecialAnimOrder` payload now distinguishes the
+ENTER/EXIT skip arms from the UNIT halt arm.
 
 ## Executable boundary
 

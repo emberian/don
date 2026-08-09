@@ -1218,9 +1218,14 @@ impl Sim {
         for who in 0..NUM_LEADERS {
             let src = &self.leaders[who];
             let dst = &mut self.step8.leaders[who];
+            let policy = &self.vic_leaders.slots[who];
             dst.econ = src.econ;
             dst.last_calc_frame = src.last_calc_frame;
             dst.econ_dirty = src.dirty;
+            dst.attrition_off = policy.give_attrition_disabled;
+            dst.anti_attrition_off = policy.take_attrition_disabled;
+            dst.neutral_attrition = policy.neutral_attrition;
+            dst.building_attrition_off = policy.building_attrition_disabled;
 
             let env = &mut self.step8_env.leaders[who];
             env.gather = src.gather_inputs.clone();
@@ -1536,13 +1541,16 @@ impl Sim {
                     // helicopter exception, so a true result is precisely this stop arm.
                     facts.domain = 2;
                 } else {
-                    // Generic Order preserves the order class but not SpecialAnimOrder.type.
-                    // ENTER/EXIT must be skipped while SPECIAL_UNIT must be halted, so there
-                    // is no state-equivalent guess for mask 0x100.
-                    if self.world.orders(row).order_type() == OrderIndex::SpecialAnim {
-                        return Err(Error::UnsupportedSpecialAnimSubtype { owner, object_id });
-                    }
-                    if self.paths.get(row).is_none() {
+                    let Some(entering_or_exiting) = self
+                        .world
+                        .orders(row)
+                        .current()
+                        .map_or(Some(false), Order::is_entering_or_exiting)
+                    else {
+                        return Err(Error::MissingSpecialAnimPayload { owner, object_id });
+                    };
+                    facts.entering_or_exiting = entering_or_exiting;
+                    if !entering_or_exiting && self.paths.get(row).is_none() {
                         return Err(Error::MissingPathState { owner, object_id });
                     }
                 }
@@ -2879,6 +2887,9 @@ impl Sim {
         for l in self.leaders.iter() {
             mix(l.econ.adler32());
         }
+        let mut leader_bytes = Vec::new();
+        self.vic_leaders.walk_bytes(&mut leader_bytes);
+        mix(adler32(1, &leader_bytes));
         mix(economy::market_adler32(&self.market));
         mix(self.map.world.checksum());
         for w in self.walls.iter() {
@@ -3804,7 +3815,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_special_anim_subtype_keeps_the_whole_defeat_transaction_unmutated() {
+    fn missing_special_anim_payload_keeps_the_whole_defeat_transaction_unmutated() {
         let mut sim = Sim::new(14, 8);
         let unit_type = 119;
         sim.production_runtime.install_type(
@@ -3842,7 +3853,7 @@ mod tests {
 
         assert_eq!(
             error,
-            defeat_cleanup::DefeatCleanupError::UnsupportedSpecialAnimSubtype {
+            defeat_cleanup::DefeatCleanupError::MissingSpecialAnimPayload {
                 owner: 0,
                 object_id: object_id as usize,
             }
@@ -3855,6 +3866,76 @@ mod tests {
                 & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100),
             defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100
         );
+    }
+
+    #[test]
+    fn standing_army_skips_enter_animation_but_halts_special_unit_animation() {
+        let mut sim = Sim::new(15, 8);
+        let unit_type = 121;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::ordinary_unit(unit_type, 1, 1),
+        );
+        let entering = sim.spawn_unit(0, unit_type, 10, 20, 4).unwrap();
+        let special_unit = sim.spawn_unit(0, unit_type, 30, 40, 4).unwrap();
+        let entering_row = sim.world.row_of(entering).unwrap();
+        let special_unit_row = sim.world.row_of(special_unit).unwrap();
+        let entering_o = sim.world.units.o()[entering_row];
+        let special_unit_o = sim.world.units.o()[special_unit_row];
+        sim.world
+            .orders_mut(entering_row)
+            .replace(Order::special_anim(
+                crate::order::SpecialAnimType::Enter,
+                1,
+                2,
+            ));
+        sim.world
+            .orders_mut(special_unit_row)
+            .replace(Order::special_anim(
+                crate::order::SpecialAnimType::Unit,
+                3,
+                4,
+            ));
+        for row in [entering_row, special_unit_row] {
+            sim.paths[row].push(movement::PathData::default());
+            sim.world.units.set_unit_masks(
+                row,
+                defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100,
+            );
+        }
+
+        let group_id = groups_guys::Groups::index(0, 4);
+        let mut group = groups_guys::GroupData {
+            id: group_id as i32,
+            form: 5,
+            disband: 6,
+            ..Default::default()
+        };
+        assert!(group.add(entering_o, 0, false, 0, 0));
+        assert!(group.add(special_unit_o, 0, false, 0, 0));
+        sim.groups.list[group_id] = group;
+        sim.armies.lists[0][2].valid = 1;
+        sim.armies.lists[0][2].num_groups = 1;
+        sim.armies.lists[0][2].list[0] = group_id as i32;
+
+        let runtime = std::mem::take(&mut sim.production_runtime);
+        let receipt = sim.clean_defeated_unit_band(&runtime, 0).unwrap();
+        sim.production_runtime = runtime;
+
+        assert_eq!(receipt.army_members_halted, 1);
+        assert_eq!(sim.groups.list[group_id].form, -1);
+        assert_eq!(sim.groups.list[group_id].disband, 0);
+        assert_ne!(
+            sim.world.units.get_unit_masks(entering_row) & 0x0000_0100,
+            0,
+            "SPECIAL_ENTER is skipped by Army::stop"
+        );
+        assert_eq!(
+            sim.world.units.get_unit_masks(special_unit_row) & 0x0000_0100,
+            0,
+            "SPECIAL_UNIT is halted by Army::stop"
+        );
+        assert!(sim.world.orders(entering_row).is_empty());
+        assert!(sim.world.orders(special_unit_row).is_empty());
     }
 
     #[test]

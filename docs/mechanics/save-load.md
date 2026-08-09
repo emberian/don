@@ -76,8 +76,9 @@ object-graph coverage.
 ## Container and validation
 
 The root chunk (`0x444e`) has seven required leaf children in deterministic order. The
-current DoN format version is 2; version 1 predates authoritative item state and is
-rejected rather than being interpreted as an absent producer.
+current DoN format version is 3. Version 1 predates authoritative item state; version 2
+predates the complete `SpecialAnimOrder` payload. Both are rejected rather than silently
+inventing missing checksum-visible order state.
 
 | id | section |
 |---:|---|

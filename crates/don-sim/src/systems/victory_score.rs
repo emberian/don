@@ -780,6 +780,15 @@ pub struct LeaderState {
     /// `+0x7DC` `defeat_type`.
     pub defeat_type: i32,
 
+    /// `+0x7F8` `give_att_disabled` — nonzero disables attrition dealt to enemies.
+    pub give_attrition_disabled: i32,
+    /// `+0x7FC` `take_att_disabled` — nonzero disables attrition received from enemies.
+    pub take_attrition_disabled: i32,
+    /// `+0x800` `neutral_attrition`, clamped by the scenario setter to `0..=1000`.
+    pub neutral_attrition: i32,
+    /// `+0x804` `disable_building_attrition`.
+    pub building_attrition_disabled: i32,
+
     /// `+0x555E` `num_buildings[129]`, indexed by `TypeIndex - 414`.
     pub num_buildings: Vec<u16>,
     /// `+0x5762` `num_units[352]`, indexed by `TypeIndex - 50`.
@@ -842,6 +851,10 @@ impl Default for LeaderState {
             lost_capital_timer: 0,
             victory_type: 0,
             defeat_type: 0,
+            give_attrition_disabled: 0,
+            take_attrition_disabled: 0,
+            neutral_attrition: 0,
+            building_attrition_disabled: 0,
             num_buildings: vec![0; NUM_BUILD_SLOTS],
             num_units: vec![0; NUM_UNIT_SLOTS],
             num_queued: vec![0; NUM_TYPES],
@@ -937,6 +950,10 @@ impl LeaderState {
             self.lost_capital_timer,
             self.victory_type,
             self.defeat_type,
+            self.give_attrition_disabled,
+            self.take_attrition_disabled,
+            self.neutral_attrition,
+            self.building_attrition_disabled,
             self.territory,
         ] {
             out.extend_from_slice(&v.to_le_bytes());
@@ -2465,5 +2482,30 @@ mod tests {
         assert_eq!(adler32(1, &[]), 1);
         // known vector: adler32("Wikipedia") == 0x11E60398
         assert_eq!(adler32(1, b"Wikipedia"), 0x11E6_0398);
+    }
+
+    #[test]
+    fn attrition_policy_words_are_walked_in_leaderdata_order() {
+        let mut leader = LeaderState::default();
+        leader.give_attrition_disabled = 0x1122_3344;
+        leader.take_attrition_disabled = 0x2132_4354;
+        leader.neutral_attrition = 0x3142_5364;
+        leader.building_attrition_disabled = 0x4152_6374;
+        leader.territory = 0x5162_7384;
+
+        let mut walked = Vec::new();
+        leader.walk_bytes(&mut walked);
+        let tail = &walked[walked.len() - 20..];
+        let mut expected = Vec::new();
+        for value in [
+            leader.give_attrition_disabled,
+            leader.take_attrition_disabled,
+            leader.neutral_attrition,
+            leader.building_attrition_disabled,
+            leader.territory,
+        ] {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(tail, expected.as_slice());
     }
 }

@@ -15,7 +15,7 @@ use crate::generated::state::unit::{UnitCols, W1_PLANES, W2_PLANES, W4_PLANES, W
 use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
 };
-use crate::order::{Order, OrderIndex, OrderList};
+use crate::order::{Order, OrderIndex, OrderList, SpecialAnimOrderState, SpecialAnimType};
 use crate::systems::{borders_fog, economy, items::Item, map_terrain, movement, production};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
@@ -23,7 +23,7 @@ use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
@@ -303,12 +303,24 @@ fn write_order(w: &mut Writer, o: &Order) {
     w.i8(o.target_who);
     w.i16(o.target_o);
     w.i32(o.tolerance);
+    w.bool(o.special_anim.is_some());
+    if let Some(special) = o.special_anim {
+        w.i32(special.special_type as i32);
+        w.i32(special.started);
+        w.i32(special.frames);
+        w.i32(special.data1);
+        w.i32(special.data2);
+        w.i32(special.data3);
+        w.i32(special.data4);
+        w.i32(special.ox);
+        w.i32(special.whom);
+    }
 }
 
 fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
     let kind = OrderIndex::from_index(r.u8()? as usize)
         .ok_or(SaveError::Invalid("unknown unit order index"))?;
-    Ok(Order {
+    let order = Order {
         kind,
         flags: r.u8()?,
         x: r.i32()?,
@@ -316,6 +328,28 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
         target_who: r.i8()?,
         target_o: r.i16()?,
         tolerance: r.i32()?,
+        special_anim: None,
+    };
+    let special_anim = if r.bool()? {
+        let special_type = SpecialAnimType::from_raw(r.i32()?)
+            .ok_or(SaveError::Invalid("unknown special animation type"))?;
+        Some(SpecialAnimOrderState {
+            special_type,
+            started: r.i32()?,
+            frames: r.i32()?,
+            data1: r.i32()?,
+            data2: r.i32()?,
+            data3: r.i32()?,
+            data4: r.i32()?,
+            ox: r.i32()?,
+            whom: r.i32()?,
+        })
+    } else {
+        None
+    };
+    Ok(Order {
+        special_anim,
+        ..order
     })
 }
 
@@ -1899,7 +1933,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::order::OrderIndex;
+    use crate::order::{OrderIndex, SpecialAnimType};
     use crate::systems::items::{self, GoodyRules, LeaderGoody, DOWN_ITEM, WFLAG_ITEM};
 
     fn supported_sim() -> Sim {
@@ -1921,6 +1955,7 @@ mod tests {
             target_who: 3,
             target_o: 0,
             tolerance: 77,
+            special_anim: None,
         });
         sim.world.orders_mut(ar).push(Order {
             kind: OrderIndex::Patrol,
@@ -1932,6 +1967,9 @@ mod tests {
             target_o: 0,
             ..Order::default()
         });
+        sim.world
+            .orders_mut(br)
+            .push(Order::special_anim(SpecialAnimType::Exit, 41, 43));
         sim.paths[ar].push(movement::PathData {
             to_x: 1500,
             to_y: 1600,
@@ -2533,6 +2571,19 @@ mod tests {
         assert_eq!(
             read_order(&mut reader),
             Err(SaveError::Invalid("unknown unit order index"))
+        );
+    }
+
+    #[test]
+    fn unknown_special_animation_discriminators_are_rejected() {
+        let mut bytes = vec![OrderIndex::SpecialAnim as u8, 0];
+        bytes.extend_from_slice(&[0; 4 + 4 + 1 + 2 + 4]);
+        bytes.push(1);
+        bytes.extend_from_slice(&3i32.to_le_bytes());
+        let mut reader = Reader::new(&bytes);
+        assert_eq!(
+            read_order(&mut reader),
+            Err(SaveError::Invalid("unknown special animation type"))
         );
     }
 }

@@ -685,10 +685,14 @@ pub struct Leader {
     pub attrition: i32,
     /// `+0x7F4`, f32.
     pub anti_attrition: f32,
-    /// `+0x7F8`.
+    /// `+0x7F8` `give_att_disabled`, projected from the canonical LeaderData owner.
     pub attrition_off: i32,
-    /// `+0x7FC`.
+    /// `+0x7FC` `take_att_disabled`, projected from the canonical LeaderData owner.
     pub anti_attrition_off: i32,
+    /// `+0x800` `neutral_attrition`, projected from the canonical LeaderData owner.
+    pub neutral_attrition: i32,
+    /// `+0x804` `disable_building_attrition`, projected from the canonical owner.
+    pub building_attrition_off: i32,
     /// `+0x9D4`, rebuilt by step 11's [`check_explore`] on its phase.
     pub explored: i32,
     /// `+0xA4C..+0xA66`, processed at step 19.

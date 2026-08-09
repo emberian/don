@@ -622,6 +622,33 @@ impl Sim {
         1
     }
 
+    /// The direct LeaderData attrition-policy stores at `0x00a02880..0x00a02a5c`.
+    ///
+    /// All seven handlers use the canonical two-bit active gate, then write exactly
+    /// one whole word. The six toggles store literal zero/one rather than treating the
+    /// fields as bit masks. `set_neutral_attrition` clamps signed input to `0..=1000`.
+    fn script_set_attrition_policy(&mut self, index: u32, who: i32, value: i32) -> i32 {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(leader) = self.vic_leaders.slots.get_mut(who) else {
+            return -1;
+        };
+        if !leader.is_active() {
+            return -1;
+        }
+
+        match index {
+            863 => leader.take_attrition_disabled = 0,
+            864 => leader.take_attrition_disabled = 1,
+            865 => leader.give_attrition_disabled = 0,
+            866 => leader.give_attrition_disabled = 1,
+            867 => leader.building_attrition_disabled = 0,
+            868 => leader.building_attrition_disabled = 1,
+            869 => leader.neutral_attrition = value.clamp(0, 1000),
+            _ => unreachable!(),
+        }
+        1
+    }
+
     /// `ScenarioFuncSet::{enable,disable}_unit_ai` (`0x009ff920` / `0x009ffa10`).
     ///
     /// A live addressed unit redirects to its captain and mutates every member in
@@ -1736,6 +1763,17 @@ impl ScenarioHost for Sim {
             795 => Ok(Value::Int(
                 self.script_force_transport_ability(args[0].as_int())?,
             )),
+            // Direct walked LeaderData words at +0x7f8..+0x804. These are global
+            // builtin indices; #869 alone consumes the second argument.
+            863..=869 => Ok(Value::Int(self.script_set_attrition_policy(
+                decl.index,
+                args[0].as_int(),
+                if decl.index == 869 {
+                    args[1].as_int()
+                } else {
+                    0
+                },
+            ))),
             _ => Err(HostError::Unimplemented),
         }
     }

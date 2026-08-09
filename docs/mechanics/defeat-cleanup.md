@@ -68,12 +68,13 @@ receive the two instruction-ordered Unit mask clears around path/order/action re
 entire Army + Unit-band transaction is preflighted before the first mutation, so an unknown
 installed type/path fact cannot leave half a standing Army stopped.
 
-The remaining typed Army-stop boundary is `SpecialAnimOrder.type`: generic `Order` preserves
-the `SPECIAL_ANIM` class but not whether it is `SPECIAL_ENTER`, `SPECIAL_EXIT`, or
-`SPECIAL_UNIT`. The first two must be skipped and the last halted, so a reached non-plane
-special animation defers the owner transaction instead of guessing. Scenario
-`ScenarioData::ignore_orders` / `Group::kill` is also kept outside the ordinary multiplayer
-adapter. Presentation/network notifications later in `Leader::defeat` remain intentionally
-separate. The other frozen object boundary is the remainder of `Unit::close` after the
-current live death/corpse adapter: type-specific counts, containment and Group teardown
-still need their own exact host facts.
+`SpecialAnimOrder.type` is now concrete order state. `SPECIAL_ENTER` and `SPECIAL_EXIT`
+members are skipped by Army stop; `SPECIAL_UNIT` is halted and receives the final `0x100`
+mask clear. A malformed legacy `SPECIAL_ANIM` record without its payload defers the entire
+owner transaction rather than guessing. The remaining stop boundary is Scenario
+`ScenarioData::ignore_orders` / `Group::kill`, which is kept outside the ordinary
+multiplayer adapter until the checksum-visible per-owner ignored-object arrays have a live
+Scenario host. Presentation/network notifications later in `Leader::defeat` remain
+intentionally separate. The other frozen object boundary is the remainder of `Unit::close`
+after the current live death/corpse adapter: type-specific counts, containment and Group
+teardown still need their own exact host facts.
