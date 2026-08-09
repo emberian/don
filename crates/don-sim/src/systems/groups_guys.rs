@@ -671,10 +671,15 @@ impl GuyData {
     /// The remainder is what `Guy::move` compares against `2 * turn_speed(1)` to decide
     /// whether it may translate this frame at all.
     ///
-    /// Retail applies the new angle through `Guy::do_turn` `0x005D97A0`, which also drives
-    /// pivots; only the angle store is modelled here. **`do_turn` is not ported.**
+    /// Retail applies the new angle through `Guy::do_turn` `0x005D97A0`. Its
+    /// `0x005D97B2..0x005D97BE` head marks a changed facing with
+    /// [`GUY_FLAG_NO_IDLE_TURN`] before storing the angle. The later animation/pivot path
+    /// is not yet ported.
     pub fn turn_towards(&mut self, des: u32, env: &GuyEnv) -> u32 {
         let (new_angle, rem) = self.turn_solve(des, env, false);
+        if new_angle != self.angle as u32 {
+            self.guy_flags |= GUY_FLAG_NO_IDLE_TURN;
+        }
         self.angle = new_angle as i32;
         rem
     }
@@ -1963,6 +1968,21 @@ mod tests {
         let des = (ANGLE_SNAP - 1) as i32;
         assert_eq!(g.turn_towards(des as u32, &env), 0);
         assert_eq!(g.angle, des);
+        assert_ne!(g.guy_flags & GUY_FLAG_NO_IDLE_TURN, 0);
+    }
+
+    #[test]
+    fn turn_towards_does_not_mark_an_unchanged_facing() {
+        let t = ut();
+        let env = GuyEnv::with_type(t);
+        let mut g = GuyData {
+            guy_num: 0,
+            angle: 0x1234_5678,
+            guy_flags: GUY_FLAG_FAST_FACE,
+            ..Default::default()
+        };
+        assert_eq!(g.turn_towards(0x1234_5678, &env), 0);
+        assert_eq!(g.guy_flags, GUY_FLAG_FAST_FACE);
     }
 
     #[test]
