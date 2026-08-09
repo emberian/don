@@ -54,6 +54,7 @@ use crate::checksum::adler32;
 use crate::objects::{Band, BANDED_SLOTS, HERD_PERIOD, WILDLIFE_PERIOD};
 use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
+use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, combat, economy, groups_guys, movement, production,
     victory_score, walls,
@@ -118,7 +119,7 @@ impl Gap {
 
 /// One line per [`Gap`], in enum order: the retail function and why it is absent.
 pub const GAP_NOTES: [&str; Gap::COUNT] = [
-    "step 4  RunTimeEnv::run_script 0x0043D0E0 - no BHS interpreter; the script channel has no runtime producer",
+    "step 4  RunTimeEnv::run_script 0x0043D0E0 - runtime is wired; unrecovered ScenarioFuncSet builtins fail the tick closed",
     "step 8  Leader::calc_wall_stats leaders.cpp:13858 - uncited",
     "step 8  Leader::calc_unit_stats leaders.cpp:13831 - uncited",
     "step 8  Leader::process_taunt leaders.cpp:28050 - AI chat",
@@ -880,6 +881,26 @@ impl Sim {
 
     /// `Game::do_frame` `0x00591EF0`, all 29 steps, in retail's order.
     pub fn do_frame(&mut self) -> TickTrace {
+        // With no attached script producer step 4 is vacuous and cannot fail. Keep
+        // the script-free Sim `Send` for the existing parallel batch path: don-bhs
+        // values are intentionally thread-confined `Rc` graphs.
+        self.do_frame_inner(None)
+            .expect("a script-free tick has no BHS failure path")
+    }
+
+    /// The same tick with a persistent BHS runtime attached at retail step 4.
+    /// Unsupported host semantics return before any later subsystem or frame++.
+    pub fn do_frame_with_scripts(
+        &mut self,
+        scripts: &mut ScriptRuntime,
+    ) -> Result<TickTrace, ScriptRunError> {
+        self.do_frame_inner(Some(scripts))
+    }
+
+    fn do_frame_inner(
+        &mut self,
+        scripts: Option<&mut ScriptRuntime>,
+    ) -> Result<TickTrace, ScriptRunError> {
         let mut t = TickTrace {
             frame: self.world.frame,
             ..Default::default()
@@ -889,8 +910,15 @@ impl Sim {
         for s in 0..4 {
             t.steps[s] = StepRun::OutOfScope;
         }
-        // 4 — RunTimeEnv::run_script, twice.
-        t.steps[4] = StepRun::Unimplemented(Gap::RunScript);
+        // 4 — RunTimeEnv::run_script, twice: selected game script first on every
+        // frame, then general powers only when the pre-increment frame is positive.
+        // Any missing host semantic aborts here, before leaders, objects, or frame++.
+        let (r, w) = match scripts {
+            Some(runtime) => self.run_scripts(runtime)?,
+            None => (StepRun::Vacuous, 0),
+        };
+        t.steps[4] = r;
+        t.work[4] = w;
         // 5..7 — Conquer-the-World, tutorial, Steam.
         for s in 5..8 {
             t.steps[s] = StepRun::OutOfScope;
@@ -983,7 +1011,7 @@ impl Sim {
         t.steps[28] = StepRun::OutOfScope;
 
         self.cover.record(&t);
-        t
+        Ok(t)
     }
 
     /// `n` ticks, returning the last trace.
@@ -993,6 +1021,36 @@ impl Sim {
             last = self.do_frame();
         }
         last
+    }
+
+    /// Run `n` script-bearing ticks, stopping on the first unsupported builtin or
+    /// retail runtime error.
+    pub fn run_with_scripts(
+        &mut self,
+        scripts: &mut ScriptRuntime,
+        n: usize,
+    ) -> Result<TickTrace, ScriptRunError> {
+        let mut last = TickTrace::default();
+        for _ in 0..n {
+            last = self.do_frame_with_scripts(scripts)?;
+        }
+        Ok(last)
+    }
+
+    // -- step 4 -----------------------------------------------------------------------
+
+    fn run_scripts(
+        &mut self,
+        runtime: &mut ScriptRuntime,
+    ) -> Result<(StepRun, u32), ScriptRunError> {
+        let run = runtime.run_frame(self.world.frame, &mut self.world.random)?;
+        if run.calls == 0 {
+            Ok((StepRun::Vacuous, 0))
+        } else {
+            // Each VM call is capped at 50,000,000 instructions, so the two measured
+            // call sites cannot overflow the trace's u32 work counter.
+            Ok((StepRun::Executed, run.bytecodes as u32))
+        }
     }
 
     // -- step 8 -----------------------------------------------------------------------

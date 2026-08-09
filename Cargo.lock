@@ -216,6 +216,7 @@ version = "0.1.0"
 name = "don-sim"
 version = "0.1.0"
 dependencies = [
+ "don-bhs",
  "don-rules",
  "quick-xml",
 ]

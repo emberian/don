@@ -6,6 +6,7 @@ license.workspace = true
 description = "Batch-parallel simulation core: world storage and the fixed-tick scheduler."
 
 [dependencies]
+don-bhs = { path = "../don-bhs" }
 quick-xml = "0.38"
 
 [dev-dependencies]

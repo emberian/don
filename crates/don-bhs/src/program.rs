@@ -63,8 +63,9 @@ pub struct Script {
     pub params: Vec<u32>,
     /// `Script::refs` (+32), one byte per parameter. Retail's chunk writer emits a
     /// dword `0` or `1` beside each parameter type and the loader compacts its low byte
-    /// into this array. Runtime aliasing for `ref` calls is not recovered yet, so the VM
-    /// refuses scripts containing a set bit rather than passing them by value.
+    /// into this array. Runtime aliasing itself is selected by the compiled
+    /// `OP_INIT`/`OP_INIT_COPY` prologue; the VM does not consult this metadata at call
+    /// time.
     pub refs: Vec<u8>,
     /// Byte offset of this function's entry point in [`ScriptFile::code`]
     /// (`Script::offset`, +192).

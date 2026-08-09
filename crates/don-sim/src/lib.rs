@@ -57,6 +57,7 @@ pub mod objects;
 pub mod order;
 pub mod rng;
 pub mod schedule;
+pub mod script_runtime;
 pub mod simd;
 pub mod systems;
 pub mod tick;
