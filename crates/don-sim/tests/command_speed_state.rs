@@ -229,3 +229,58 @@ fn check_random_ai_controls_and_marwan_preserve_exact_simulation_effects() {
     assert_eq!(bridge.stats.inline_state, 11);
     assert_eq!(bridge.stats.inert, 0);
 }
+
+#[test]
+fn checksum_chat_status_and_camera_paths_preserve_exact_state_boundaries() {
+    for op in [57, 58, 69, 72] {
+        assert_eq!(InlineDef::find(op).unwrap().port, InlinePort::Complete);
+    }
+
+    let mut bridge = Bridge::new();
+    let mut package = Package::new(4, 0);
+
+    let mut all = vec![57];
+    for word in 0x1020_3040u32..0x1020_3050 {
+        all.extend_from_slice(&word.to_le_bytes());
+    }
+    issue(&mut bridge, &mut package, &all);
+    assert_eq!(
+        bridge.inline.checksums[4], 0x1020_304f,
+        "CheckSums stores only the sixteenth total word at wire +61"
+    );
+
+    let mut next = vec![58, 14];
+    next.extend_from_slice(&0xfedc_ba98u32.to_le_bytes());
+    issue(&mut bridge, &mut package, &next);
+    assert_eq!(bridge.inline.checksums[4], 0xfedc_ba98);
+
+    bridge.inline.checksum_recheck = 1;
+    next[1] = 3;
+    next[2..].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+    issue(&mut bridge, &mut package, &next);
+    assert_eq!(
+        bridge.inline.checksums[4], 0xfedc_ba98,
+        "active checksum recheck suppresses the opcode-58 store"
+    );
+
+    let before_camera = bridge.inline.clone();
+    let mut camera = vec![72, 6];
+    camera.extend_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    camera.extend_from_slice(&0x8000_0000u32.to_le_bytes());
+    issue(&mut bridge, &mut package, &camera);
+    assert_eq!(
+        bridge.inline, before_camera,
+        "CameraCommand mutates only local presentation state"
+    );
+
+    bridge.inline.player_who[4] = 2;
+    issue(&mut bridge, &mut package, &[69, 0, 1, 2, 0xff, 7, 6, 5, 4]);
+    assert_eq!(
+        bridge.inline.chat_status[2],
+        [0, 1, 2, 255, 7, 6, 5, 4],
+        "ChatSet zero-extends every status byte into the sender's Player::who row"
+    );
+    assert_eq!(bridge.inline.chat_status[4], [0; 8]);
+    assert_eq!(bridge.stats.inline_state, 5);
+    assert_eq!(bridge.stats.inert, 0);
+}

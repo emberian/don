@@ -55,7 +55,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "begin", va: 0x00714100, size: 8, call_sites: 0, installs: &[], delegates: &[], port: Port::Complete },
 ];
 
-pub const NUM_INLINE_COMMANDS: usize = 12;
+pub const NUM_INLINE_COMMANDS: usize = 16;
 
 /// Inline state-writing handlers recovered beyond the `action_*` receiver table.
 #[rustfmt::skip]
@@ -66,9 +66,13 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 54, name: "speed_down", port: InlinePort::Complete },
     InlineDef { op: 55, name: "mp_log", port: InlinePort::Complete },
     InlineDef { op: 56, name: "check_random", port: InlinePort::Complete },
+    InlineDef { op: 57, name: "check_sums", port: InlinePort::Complete },
+    InlineDef { op: 58, name: "next_check_sum", port: InlinePort::Complete },
     InlineDef { op: 62, name: "cheat_ai_speed_increase", port: InlinePort::Complete },
     InlineDef { op: 63, name: "cheat_ai_speed_normal", port: InlinePort::Complete },
     InlineDef { op: 64, name: "cheat_ai_toggle", port: InlinePort::Complete },
+    InlineDef { op: 69, name: "chat_set", port: InlinePort::Complete },
+    InlineDef { op: 72, name: "camera", port: InlinePort::Complete },
     InlineDef { op: 76, name: "pause", port: InlinePort::StateWired },
     InlineDef { op: 79, name: "player_speed", port: InlinePort::Complete },
     InlineDef { op: 81, name: "marwan", port: InlinePort::Complete },

@@ -1125,6 +1125,7 @@ impl BridgeStats {
 }
 
 pub const PLAYER_SPEED_FIELDS: usize = 8;
+pub const NUM_NETWORK_PLAYERS: usize = 8;
 pub const HOTKEY_GROUP_SLOTS: usize = 162;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1146,7 +1147,8 @@ pub struct HotKeySlot {
 /// `speed` is `TurnControl+0x30`. `network`, `speed_locked`, and `immediate_process`
 /// name the exact `Game+0x820/0x20/0x821` gates read by the handlers. The eight player
 /// counters are the `u32` fields at `PlayerData+0x48..+0x68`. `ai_speed` and `ai_off`
-/// are the `GameAccess` globals at `0x00C061C0/0x00C061C4` [measured].
+/// are the `GameAccess` globals at `0x00C061C0/0x00C061C4`; `checksums` is the
+/// `CommandPackage` peer-total table at `0x00CBEE90` [measured].
 #[derive(Clone, Debug, PartialEq)]
 pub struct InlineCommandState {
     pub speed: i32,
@@ -1161,6 +1163,13 @@ pub struct InlineCommandState {
     pub ai_speed: i32,
     /// Retail stores an `int`, and toggles any non-zero value back to zero.
     pub ai_off: i32,
+    pub checksums: [u32; NUM_NETWORK_PLAYERS],
+    /// `CommandPackage::checksum_recheck` at `0x00CC00B0` gates opcode 58's store.
+    pub checksum_recheck: i32,
+    /// `Player::who` for each package play slot; ChatSet indexes its state by this map.
+    pub player_who: [u8; NUM_NETWORK_PLAYERS],
+    /// Eight recipient status words for each `who` in the global chat matrix.
+    pub chat_status: [[u32; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
     pub mp_log: bool,
     pub restart_delay: i32,
     pub hotkeys: Vec<HotKeySlot>,
@@ -1180,6 +1189,10 @@ impl Default for InlineCommandState {
             player_speed: [[0; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
             ai_speed: 1,
             ai_off: 0,
+            checksums: [0; NUM_NETWORK_PLAYERS],
+            checksum_recheck: 0,
+            player_who: std::array::from_fn(|play| play as u8),
+            chat_status: [[0; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
             mp_log: false,
             restart_delay: 0,
             hotkeys: (0..HOTKEY_GROUP_SLOTS)
@@ -1369,6 +1382,28 @@ impl Bridge {
             // CheckRandomCommand is deliberately log-only in this retail build. It reads
             // the seed dword at +1 for SyncLogger output but performs no comparison/store.
             56 => {}
+            // CheckSumsCommand logs all sixteen channel words, then stores the final
+            // `total` word in CommandPackage::checksums[package.play].
+            57 => {
+                let (Ok(play), Some(total)) = (usize::try_from(pkg.play), i32_at(cmd, 61)) else {
+                    return;
+                };
+                if let Some(checksum) = self.inline.checksums.get_mut(play) {
+                    *checksum = total as u32;
+                }
+            }
+            // NextCheckSumCommand's type byte is diagnostic-only. During an active
+            // recheck retail logs the value but deliberately leaves the peer table alone.
+            58 => {
+                let (Ok(play), Some(value)) = (usize::try_from(pkg.play), i32_at(cmd, 2)) else {
+                    return;
+                };
+                if self.inline.checksum_recheck == 0 {
+                    if let Some(checksum) = self.inline.checksums.get_mut(play) {
+                        *checksum = value as u32;
+                    }
+                }
+            }
             // The three AI controls write a diagnostic log before this branch. Their only
             // simulation mutation is gated off in network play.
             62 => {
@@ -1386,6 +1421,28 @@ impl Bridge {
                     self.inline.ai_off = i32::from(self.inline.ai_off == 0);
                 }
             }
+            // ChatSetCommand replaces all eight recipient status words for the sender's
+            // Player::who row. These values later gate chat and ping delivery.
+            69 => {
+                let Ok(play) = usize::try_from(pkg.play) else {
+                    return;
+                };
+                let (Some(&who), Some(status)) = (
+                    self.inline.player_who.get(play),
+                    cmd.get(1..1 + NUM_NETWORK_PLAYERS),
+                ) else {
+                    return;
+                };
+                let Some(row) = self.inline.chat_status.get_mut(who as usize) else {
+                    return;
+                };
+                for (dst, &src) in row.iter_mut().zip(status) {
+                    *dst = src as u32;
+                }
+            }
+            // CameraCommand logs the remote viewpoint and may update only the local
+            // Console/Scene zoom and scroll. It has no headless simulation mutation.
+            72 => {}
             76 => {
                 if let Some(&state) = cmd.get(1) {
                     self.process_pause(pkg.play, state);

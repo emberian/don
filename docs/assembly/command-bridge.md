@@ -30,9 +30,10 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Twelve inline state handlers** — control-group save/camera, MP-log toggle, speed
-  set/up/down, all eight player-speed accumulators, three AI controls, and two measured
-  simulation no-ops are complete; pause's common state path is wired but remains partial.
+* **Sixteen inline state handlers** — control-group save/camera, MP-log toggle, speed
+  set/up/down, all eight player-speed accumulators, two lockstep report stores, chat-route
+  status, three AI controls, and three measured simulation no-ops are complete; pause's
+  common state path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -49,10 +50,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,404 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 12 `InlineDef` + 82 `OpDef` | 162 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,461 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 16 `InlineDef` + 82 `OpDef` | 166 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52/53/54/55/56/62/63/64/76/79/81, 4 tests | 231 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–58/62–64/69/72/76/79/81, 5 tests | 286 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -60,9 +61,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-49 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+50 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 4/4,
+`cargo test -p don-sim --test command_speed_state` 5/5,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -227,6 +228,25 @@ them; the lockstep seed array is updated elsewhere in `begin_process/process_tur
 Opcode 81 likewise has no simulation tail after logging its byte. The bridge still
 consumes both exact fixed wire bodies (5 and 2 bytes),
 so a following command starts at the retail cursor.
+
+### Lockstep report, chat-route, and camera tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 57 | `process_check_sums` `0x009459D0` | sixteen logged `u32` channels; total at `+61` → `CommandPackage::checksums[play]` | `complete` |
+| 58 | `process_next_check_sum` `0x00945E20` | `u32` value at `+2` → the same peer slot when `checksum_recheck == 0` | `complete` |
+| 69 | `process_chat_set` `0x009458E0` | eight status bytes → sender `Player::who` row in the chat matrix | `complete` |
+| 72 | `process_camera` `0x00943B00` | viewpoint log and local Console/Scene zoom/scroll only | `complete` |
+
+The bridge carries the exact eight-entry `checksums` table at `0x00CBEE90` and the
+`checksum_recheck` gate at `0x00CC00B0`. Opcode 57 always replaces its sender slot with
+the sixteenth wire word; opcode 58 ignores its `checksum_type` byte for state and refuses
+the store during a recheck. Both retain raw `u32` bits. Opcode 69 zero-extends all eight
+wire bytes into the row selected through `Player::who`; those statuses later gate chat
+and ping delivery, so the routing matrix is retained rather than dismissed as UI.
+Opcode 72 is closure-green as a measured simulation no-op: every non-log branch targets
+local camera presentation, and the full ten-byte body is still consumed before the next
+command.
 
 ## Five things worth keeping
 
