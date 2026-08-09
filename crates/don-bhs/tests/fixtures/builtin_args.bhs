@@ -1,0 +1,4 @@
+int scenario builtin_args()
+{
+    return char_at("abc", 1);
+}

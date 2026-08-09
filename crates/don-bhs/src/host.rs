@@ -8,8 +8,9 @@
 //!
 //! Call convention, [measured] from `0x009e0550`:
 //!
-//! - Arguments are already on the **shared run stack**, pushed left to right, so the
-//!   last argument is on top.
+//! - Arguments are already on the **shared run stack**, pushed right to left, so
+//!   logical parameter 0 is on top. This order is captured in shipped-compiler output
+//!   for both script calls and native `char_at("abc", 1)`.
 //! - `nargs < 0` (which is how `OP_CALL_GAME` encodes "default") is replaced by
 //!   `ScriptFunc::params.count`, i.e. the declared arity.
 //! - The handler receives a `ScriptParamStack { Stack* stack; int num_params;

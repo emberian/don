@@ -7,8 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
-use don_bhs::program::{Script, ScriptFile};
+use don_bhs::builtins::UtilHost;
+use don_bhs::host::NullHost;
+use don_bhs::program::{Program, Script, ScriptFile};
 use don_bhs::value::Value;
+use don_bhs::vm::Vm;
 use don_bhs_cc::sema::{self, Severity};
 
 const SCHEMA: &str = include_str!("../../../schema/bhs-compiler-regression.json");
@@ -200,10 +203,15 @@ fn fixture_path(id: &str) -> PathBuf {
         .join(format!("{id}.bhs"))
 }
 
-fn compile_local(id: &str) -> NFile {
-    let path = fixture_path(id);
+fn runtime_fixture_path(id: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../don-bhs/tests/fixtures")
+        .join(format!("{id}.bhs"))
+}
+
+fn compile_program(path: &Path) -> Program {
     let inc = sema::IncludePath::with_roots([path.parent().unwrap().to_path_buf()]);
-    let unit = sema::analyze(&path, &inc).unwrap();
+    let unit = sema::analyze(path, &inc).unwrap();
     let (program, diags, _) = don_bhs_cc::codegen::compile(&unit);
     let errors: Vec<String> = unit
         .diags
@@ -212,8 +220,23 @@ fn compile_local(id: &str) -> NFile {
         .filter(|d| d.severity == Severity::Error)
         .map(ToString::to_string)
         .collect();
-    assert!(errors.is_empty(), "{id}: {}", errors.join("\n"));
-    assert_eq!(program.files.len(), 1, "{id}: unexpected include closure");
+    assert!(
+        errors.is_empty(),
+        "{}: {}",
+        path.display(),
+        errors.join("\n")
+    );
+    assert_eq!(
+        program.files.len(),
+        1,
+        "{}: unexpected include closure",
+        path.display()
+    );
+    program
+}
+
+fn compile_local(id: &str) -> NFile {
+    let program = compile_program(&fixture_path(id));
     normalize_file(&program.files[0])
 }
 
@@ -311,6 +334,51 @@ fn a_one_bit_retail_mutation_is_detected() {
             fixture.id
         );
     }
+}
+
+#[test]
+fn measured_multi_argument_fixtures_are_byte_identical_and_execute() {
+    // Shipped Compiler::compile capture, source SHA-256
+    // b10d7f9f9dffa9c610d0db5da9e00db347aad8e1617b9923cc386c4dfb707e66.
+    let mut mixed = compile_program(&runtime_fixture_path("mixed_params"));
+    assert_eq!(
+        mixed.files[0].code,
+        hex_bytes(
+            "470000000032000000003301000000320200000032030000002601000000260000000004\
+             2602000000042603000000042601000000002726010000003e47010000002600000020\
+             3200000000260100002032010000002602000020320200000026030000203203000000\
+             260300000026020000002601000000260000000036000000002726010000003e"
+                .replace(' ', "")
+                .as_str()
+        )
+    );
+    assert_eq!(mixed.files[0].scripts[0].entry, 0);
+    assert_eq!(mixed.files[0].scripts[0].refs, [0, 1, 0, 0]);
+    assert_eq!(mixed.files[0].scripts[1].entry, 61);
+    let mut host = NullHost;
+    assert_eq!(
+        Vm::new(&mut mixed, &mut host)
+            .run_script(0, "mixed_params")
+            .unwrap()
+            .returned,
+        Some(Value::Int(1111))
+    );
+
+    // Independent native-call capture, source SHA-256
+    // ffab74ced8626eda196a2d944444ebc1d79958238be9ad417118fc431bcafa66.
+    let mut builtin_args = compile_program(&runtime_fixture_path("builtin_args"));
+    assert_eq!(
+        builtin_args.files[0].code,
+        hex_bytes("47000000002601000020260000002038130000003e")
+    );
+    let mut host = UtilHost::default();
+    assert_eq!(
+        Vm::new(&mut builtin_args, &mut host)
+            .run_script(0, "builtin_args")
+            .unwrap()
+            .returned,
+        Some(Value::Int('b' as i32))
+    );
 }
 
 #[test]

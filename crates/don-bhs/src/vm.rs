@@ -380,7 +380,10 @@ impl<'a, H: Host> Vm<'a, H> {
     ) -> Result<RunOutcome, VmError> {
         let before = self.bytecodes_executed;
         self.returned = None;
-        for a in args {
+        // Retail callers emit logical arguments right-to-left, leaving parameter 0
+        // on top for the forward OP_INIT[_COPY] callee prologue. Mirror that at the
+        // external entry boundary, whose API accepts ordinary logical order.
+        for a in args.into_iter().rev() {
             self.stack.push(a);
         }
         self.push_frame(file, script)?;
@@ -1175,11 +1178,13 @@ impl<'a, H: Host> Vm<'a, H> {
 
     /// `VirtualMachine::call_func` (`0x009e0550`) + `ScriptFuncSet::call_func`.
     fn call_builtin(&mut self, decl: &'static BuiltinDecl, argc: usize) -> Result<(), VmError> {
+        // Shipped compiler captures push arguments right-to-left, so each pop is
+        // already the next logical parameter: param 0, param 1, ... . Native
+        // ScriptParamStack handlers consume the same top-first order.
         let mut args = Vec::with_capacity(argc);
         for _ in 0..argc {
             args.push(self.pop_value()?);
         }
-        args.reverse();
         // `TriggerUtilFuncSet` (indices 15..=17) is the one part of the builtin
         // surface that is *VM* state rather than *host* state: all three handlers
         // (`0x00a04440` / `0x00a04460` / `0x00a04480`) open with

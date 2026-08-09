@@ -1,0 +1,15 @@
+int scenario accumulate(int first, ref int total, int third, int fourth)
+{
+    total = total + first + third + fourth;
+    return total;
+}
+
+int scenario mixed_params()
+{
+    int first = 1;
+    int total = 10;
+    int third = 100;
+    int fourth = 1000;
+    accumulate(first, total, third, fourth);
+    return total;
+}

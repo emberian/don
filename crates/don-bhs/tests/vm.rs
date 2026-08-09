@@ -5,6 +5,7 @@
 //! harness described in `docs/tracks/bhs-engine.md`. A green run here means the
 //! crate does what we believe the engine does, not that the belief is right.
 
+use don_bhs::builtins::UtilHost;
 use don_bhs::disasm::{asm, asm_len, disassemble};
 use don_bhs::host::{Coverage, Host, HostError, HostResult, NullHost};
 use don_bhs::program::{Program, Script, ScriptFile};
@@ -106,6 +107,69 @@ fn retail_param_program(by_ref: bool) -> Program {
     })
 }
 
+/// Exact pointer-free output captured from the shipped compiler for a four-parameter
+/// script with its second parameter passed by reference. The caller emits locals
+/// 3,2,1,0; the callee binds COPY 0, REF 1, COPY 2, COPY 3.
+fn retail_mixed_param_program() -> Program {
+    let code = decode_hex(
+        "470000000032000000003301000000320200000032030000002601000000260000000004\
+         2602000000042603000000042601000000002726010000003e47010000002600000020\
+         3200000000260100002032010000002602000020320200000026030000203203000000\
+         260300000026020000002601000000260000000036000000002726010000003e"
+            .replace(' ', "")
+            .as_str(),
+    );
+    Program::single(ScriptFile {
+        code,
+        const_pool: vec![
+            Value::Int(1),
+            Value::Int(10),
+            Value::Int(100),
+            Value::Int(1000),
+        ],
+        scripts: vec![
+            Script {
+                name: "accumulate".into(),
+                entry: 0,
+                arity: 4,
+                params: vec![don_bhs::ScriptTy::Int.tag(); 4],
+                refs: vec![0, 1, 0, 0],
+                return_type: don_bhs::ScriptTy::Int.tag(),
+                var_names: vec!["first", "total", "third", "fourth"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                ..Default::default()
+            },
+            Script {
+                name: "mixed_params".into(),
+                entry: 61,
+                return_type: don_bhs::ScriptTy::Int.tag(),
+                var_names: vec!["first", "total", "third", "fourth"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    })
+}
+
+fn retail_builtin_args_program() -> Program {
+    Program::single(ScriptFile {
+        code: decode_hex("47000000002601000020260000002038130000003e"),
+        const_pool: vec![Value::str("abc"), Value::Int(1)],
+        scripts: vec![Script {
+            name: "builtin_args".into(),
+            entry: 0,
+            return_type: don_bhs::ScriptTy::Int.tag(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+}
+
 #[test]
 fn shipped_compiler_ref_prologue_mutates_the_callers_scalar() {
     // Fixture SHA-256 cf4fb7fb00c03be5cdefa98349465a47a3ec5cda6a891f2700c97d9254fea08f.
@@ -191,6 +255,86 @@ fn shipped_compiler_value_prologue_copies_and_the_mutation_gate_bites() {
         .run_script(0, "ref_alias")
         .unwrap();
     assert_eq!(out.returned, Some(Value::Int(41)));
+}
+
+#[test]
+fn shipped_compiler_mixed_parameters_bind_forward_and_write_back_only_ref() {
+    // Fixture SHA-256 b10d7f9f9dffa9c610d0db5da9e00db347aad8e1617b9923cc386c4dfb707e66.
+    assert_eq!(
+        include_str!("fixtures/mixed_params.bhs"),
+        concat!(
+            "int scenario accumulate(int first, ref int total, int third, int fourth)\n",
+            "{\n",
+            "    total = total + first + third + fourth;\n",
+            "    return total;\n",
+            "}\n",
+            "\n",
+            "int scenario mixed_params()\n",
+            "{\n",
+            "    int first = 1;\n",
+            "    int total = 10;\n",
+            "    int third = 100;\n",
+            "    int fourth = 1000;\n",
+            "    accumulate(first, total, third, fourth);\n",
+            "    return total;\n",
+            "}\n",
+        )
+    );
+
+    // Internal script call: the returned value is discarded, so 1111 proves the
+    // second local was actually aliased back into the caller.
+    let mut p = retail_mixed_param_program();
+    let mut host = NullHost;
+    let out = Vm::new(&mut p, &mut host)
+        .run_script(0, "mixed_params")
+        .unwrap();
+    assert_eq!(out.returned, Some(Value::Int(1111)));
+
+    // External boundary: API arguments arrive in logical order, are stacked in
+    // retail order, and only the measured `ref` slot writes through.
+    let mut p = retail_mixed_param_program();
+    let mut host = NullHost;
+    let mut args = [
+        Value::Int(1),
+        Value::Int(10),
+        Value::Int(100),
+        Value::Int(1000),
+    ];
+    let out = Vm::new(&mut p, &mut host)
+        .run_script_index_mut(0, 0, &mut args)
+        .unwrap();
+    assert_eq!(out.returned, Some(Value::Int(1111)));
+    assert_eq!(
+        args,
+        [
+            Value::Int(1),
+            Value::Int(1111),
+            Value::Int(100),
+            Value::Int(1000),
+        ]
+    );
+}
+
+#[test]
+fn shipped_compiler_builtin_arguments_are_consumed_top_first() {
+    // Fixture SHA-256 ffab74ced8626eda196a2d944444ebc1d79958238be9ad417118fc431bcafa66.
+    assert_eq!(
+        include_str!("fixtures/builtin_args.bhs"),
+        concat!(
+            "int scenario builtin_args()\n",
+            "{\n",
+            "    return char_at(\"abc\", 1);\n",
+            "}\n",
+        )
+    );
+    let mut p = retail_builtin_args_program();
+    let mut host = UtilHost::default();
+    let out = Vm::new(&mut p, &mut host)
+        .run_script(0, "builtin_args")
+        .unwrap();
+    // Reversing the popped arguments (the previous VM behavior) returns '1' (49),
+    // so this is mutation-sensitive to the exact native-call stack convention.
+    assert_eq!(out.returned, Some(Value::Int('b' as i32)));
 }
 
 /// The defining property of a per-frame script: `Game::do_frame` calls it once per

@@ -493,13 +493,17 @@ impl<'a> FileGen<'a> {
         // `Script::offset`s; the VM consumes the operand and otherwise ignores it.
         self.emit1(op::SCRIPT_MARKER, si as u32, sig.pos);
 
-        // Parameters occupy local slots 0..arity, in order. `RunTimeEnv::call_script`
-        // leaves the arguments on the shared run stack and
-        // `expected_stack_size -= params.count`, so the callee's slots line up with the
-        // caller's pushes without any copying instruction. [measured]
+        // Parameters occupy local slots 0..arity, in order. Callers push logical
+        // arguments right-to-left, leaving parameter 0 on top. The shipped compiler
+        // then emits this forward prologue: OP_INIT_COPY duplicates by-value arguments,
+        // while OP_INIT retains a `ref` argument's caller-owned pointer. The
+        // mixed_params retail capture measures COPY 0, REF 1, COPY 2, COPY 3 exactly.
+        // [measured]
         for p in &sig.params {
             let ty = self.unit.resolve_type(p.ty.as_ref());
-            g.declare_local(&p.name, ty);
+            let slot = g.declare_local(&p.name, ty);
+            let init = if p.by_ref { op::INIT } else { op::INIT_COPY };
+            self.emit1(init, slot.encode(), p.pos);
         }
 
         // A `labels` block anywhere in the body is script-scoped and visible throughout,
@@ -512,11 +516,16 @@ impl<'a> FileGen<'a> {
 
         // Implicit tail return. `RunTimeEnv::close_frame` asserts the stack landed on
         // `expected_stack_size`, which is +1 for a non-void script, so a non-void script
-        // that falls off the end must still leave a value.
-        if !matches!(ret, Ty::Scalar(ScriptTy::Void)) {
-            self.emit_default_value(&mut g, &ret, body.pos);
+        // that falls off the end must still leave a value. The mixed_params and
+        // builtin_args retail captures both end at their source-level terminal return:
+        // retail does not append an unreachable default+return pair. Keep this narrow
+        // rather than claiming an unmeasured full control-flow analysis.
+        if !matches!(body.stmts.last(), Some(Stmt::Return { .. })) {
+            if !matches!(ret, Ty::Scalar(ScriptTy::Void)) {
+                self.emit_default_value(&mut g, &ret, body.pos);
+            }
+            self.emit(op::RETURN, body.pos);
         }
-        self.emit(op::RETURN, body.pos);
 
         // Patch jumps.
         for (at, label) in std::mem::take(&mut g.fixups) {
@@ -1478,16 +1487,30 @@ impl<'a> FileGen<'a> {
             }
         }
 
-        // Arguments are pushed **left to right**: `VirtualMachine::call_func` pops `argc`
-        // values and reverses them. This ordering is observable wherever an argument
-        // draws RNG (`rand_int` is builtin 9 and the shipped scripts call it 566 times),
-        // so it is not a free choice. [measured]
-        let argc = args.len() + usize::from(recv.is_some());
+        // Retail assigns constant-pool indices in source order even though calls
+        // evaluate arguments right-to-left. Pre-intern the logical argument list so
+        // reversing emission cannot reverse the compiled image's constant table. The
+        // builtin_args capture is decisive: pool[0] is "abc", pool[1] is 1, but the
+        // bytecode pushes pool[1] before pool[0].
         if let Some(r) = recv {
-            self.expr(g, r);
+            self.preintern_expr_constants(g, r);
         }
         for a in args {
+            self.preintern_expr_constants(g, a);
+        }
+
+        // Arguments are pushed **right to left**, leaving logical parameter 0 on top
+        // for either the callee's forward OP_INIT[_COPY] prologue or a native
+        // ScriptParamStack consumer. This ordering is captured independently by
+        // mixed_params (script call: locals 3,2,1,0) and builtin_args
+        // (char_at: index 1, then string "abc"). It is also observable when arguments
+        // have side effects, so it is not a free choice. [measured]
+        let argc = args.len() + usize::from(recv.is_some());
+        for a in args.iter().rev() {
             self.expr(g, a);
+        }
+        if let Some(r) = recv {
+            self.expr(g, r);
         }
 
         // A script in this unit wins over a builtin of the same name: the compiler
@@ -1552,6 +1575,69 @@ impl<'a> FileGen<'a> {
                     format!("unknown function `{name}`")
                 };
                 self.diag(Severity::Error, pos, msg);
+            }
+        }
+    }
+
+    /// Intern literals in lexical expression order without emitting code.
+    ///
+    /// This is intentionally tied to call arguments, the measured place where source
+    /// order and evaluation order differ. Existing `intern` deduplication makes the
+    /// later normal expression lowering idempotent.
+    fn preintern_expr_constants(&mut self, g: &ScriptGen, e: &Expr) {
+        match e {
+            Expr::Int(v, _) => {
+                self.intern(Value::Int(*v as i32));
+            }
+            Expr::Real(v, _) => {
+                self.intern(Value::Real(*v));
+            }
+            Expr::Str(s, _) => {
+                self.intern(Value::str(s.clone()));
+            }
+            Expr::LocStr(s, _) => {
+                let c = self.intern(Value::str(s.clone()));
+                if !self.loc_consts.contains(&c) {
+                    self.loc_consts.push(c);
+                }
+            }
+            Expr::Name(n, _) => {
+                if let Some(v) = g.labels.get(n).copied() {
+                    self.intern(Value::Int(v as i32));
+                }
+            }
+            Expr::ArrayLit(items, _) => {
+                for item in items {
+                    self.preintern_expr_constants(g, item);
+                }
+            }
+            Expr::Cast { expr, .. }
+            | Expr::Unary { expr, .. }
+            | Expr::PreIncDec { expr, .. }
+            | Expr::PostIncDec { expr, .. }
+            | Expr::Member { base: expr, .. } => self.preintern_expr_constants(g, expr),
+            Expr::Binary { lhs, rhs, .. } => {
+                self.preintern_expr_constants(g, lhs);
+                self.preintern_expr_constants(g, rhs);
+            }
+            Expr::Assign { target, value, .. } => {
+                self.preintern_expr_constants(g, target);
+                self.preintern_expr_constants(g, value);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    self.preintern_expr_constants(g, arg);
+                }
+            }
+            Expr::MethodCall { recv, args, .. } => {
+                self.preintern_expr_constants(g, recv);
+                for arg in args {
+                    self.preintern_expr_constants(g, arg);
+                }
+            }
+            Expr::Index { base, index, .. } => {
+                self.preintern_expr_constants(g, base);
+                self.preintern_expr_constants(g, index);
             }
         }
     }
