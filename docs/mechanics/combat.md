@@ -358,8 +358,11 @@ not mine.
 * **`attack_dist` `0x006488F0` is ported for resolved ordinary objects** in
   `systems::held_target`. The `0x00CAE5FC` read is the same measured divide-three table used
   by the movement lane: `T[coord >> 4] * 0x30 + 0x18` snaps to a 48-unit-cell centre. Retail
-  subtracts target and attacker footprints per axis before `vector_dist`; object virtuals
-  selecting the raw vtable-`+0xC0` bypass remain required host inputs rather than defaults.
+  subtracts target and attacker footprints per axis before `vector_dist`. Unit vtable slot
+  `+0xC0` is PDB `UnitData::is_plane` `0x0046CE40`, exactly `domain == 2 &&
+  !(unit_flags & 0x20)`; the no-footprint branch additionally requires type
+  `obj_masks & 0x08000000` to be clear. Automatic target ranking now requires those exact
+  facts and rejects a candidate when its footprint cannot be resolved.
 * **The `CheckSum::label` question.** `check_units` and `check_deaths` both call
   `DataWalk::label(const char*)` (vtable `+4`) once per record with a `StringTable` pointer.
   Whether `CheckSum`'s implementation folds bytes into `accum` is **not established** —

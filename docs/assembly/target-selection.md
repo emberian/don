@@ -292,8 +292,15 @@ stacking on one victim, and it is a checksummed counter that saturates at 100.
   `systems::held_target`. Capstone shows that retail snaps both anchors to 48-unit cell
   centres, subtracts target and attacker footprints from the x and y legs independently,
   then calls `vector_dist`; a rectangular building is therefore not a scalar
-  `max(x_size,y_size)` subtraction. The early vtable-`+0xC0`/objmask-`0x08000000` bypass is
-  explicit, but a host must still resolve that raw virtual/type gate from the real object.
+  `max(x_size,y_size)` subtraction. Unit vtable slot `+0xC0` is now resolved from the shipped
+  vtable/PDB as `UnitData::is_plane` `0x0046CE40`: exactly `domain == 2 &&
+  !(unit_flags & 0x20)`. The centre-distance bypass occurs only when that is true and type
+  `obj_masks & 0x08000000` is clear.
+* **Automatic acquisition now uses that exact distance.** `AutoTargetCandidate` requires both
+  resolved footprints and the measured mode; missing object/type facts reject the candidate.
+  The response cadence, intrusive-cell order, crowding penalty and strict-greater tie-break are
+  unchanged. A regression with an `8x1` building proves that candidates equidistant by centre
+  rank differently along the long and short footprint axes, as retail does.
 * **The range/pursuit seam is only part of `Unit::fight`.** `systems::held_target` now carries
   `ObjectData::is_in_range`'s preconditions, fixed `0x66/0xF6` reach, ranged `-6/+6` edges,
   unit `big_radius` minimum rescue, and `Unit::fight`'s exact retire-after-lost-contact gate.

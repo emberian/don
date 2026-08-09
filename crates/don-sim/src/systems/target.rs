@@ -59,6 +59,7 @@
 //! | `+0x2C` | 0 | `BuildData::is_wonder` | 0 | `is_wonder` |
 //! | `+0x4C` | `flags8 & 1` | `flags8 & 1` | `flags8 & 1` | `is_alive` |
 //! | `+0xAC`,`+0xB0` | 0 | `return this` | — | building self-cast |
+//! | `+0xC0` | `UnitData::is_plane` | 0 | 0 | exact footprint-bypass gate in `attack_dist` |
 //! | `+0xCC` | `is_supply` | 0 | 0 | |
 //! | `+0xD8` | `is_moving` | 0 | 0 | |
 //! | `+0x114` | `hits_left` | `hits_left` | | |
@@ -75,6 +76,9 @@
 
 use crate::mechanics::flank_level;
 use crate::systems::combat::{circle_table, in_attack_range, vector_dist, CircleTable};
+use crate::systems::held_target::{
+    attack_distance, AttackDistanceInput, AttackDistanceMode, ObjectFootprint,
+};
 use crate::trig::find_angle;
 
 // ===========================================================================================
@@ -502,16 +506,14 @@ impl TargetWorld {
 // 3. Distance
 // ===========================================================================================
 
-/// `ObjectData::attack_dist(o, who, x, y)` — `0x006488F0`, the edge-to-edge distance.
+/// Historical centre-distance/scalar-footprint helper.
 ///
-/// [`vector_dist`] between the two centres with the **target's** footprint subtracted, so a
-/// `max_range` of 0 still permits a melee hit against a large building. `footprint` is
-/// `block_radius + 0x18` for a unit, or `max(x_size, y_size) × 0x60` for a building; the
-/// full 676-byte function also handles cargo and garrison indirection, which this does not.
-///
-/// Clamped at zero: retail's subtract is followed by a `test/jns` at `0x00648A31`.
+/// This is **not** `ObjectData::attack_dist` `0x006488F0`: that function snaps anchors and
+/// subtracts both objects' x/y extents independently.  Automatic acquisition uses the exact
+/// [`attack_distance`] path below.  The generic grid benchmark and legacy [`Engagement`]
+/// scaffold retain this private helper until those non-runtime examples are removed.
 #[inline]
-pub fn attack_dist(ax: i32, ay: i32, tx: i32, ty: i32, target_footprint: i32) -> i32 {
+fn scalar_attack_dist(ax: i32, ay: i32, tx: i32, ty: i32, target_footprint: i32) -> i32 {
     let d = vector_dist(tx.wrapping_sub(ax), ty.wrapping_sub(ay));
     (d - target_footprint).max(0)
 }
@@ -1211,7 +1213,7 @@ where
             }
             let dist = {
                 let row = world.row(cand_ref).unwrap();
-                attack_dist(sx, sy, row.x, row.y, 0)
+                scalar_attack_dist(sx, sy, row.x, row.y, 0)
             };
             let Some(c) = admit(world, cand_ref, dist) else {
                 continue;
@@ -1355,12 +1357,24 @@ pub struct AutoTargetCandidate {
     /// The path-check flag that `check_target` returns to `compare_target` after its
     /// in-range/path arms (`local_64` at `0x00649612`).
     pub check_path: bool,
-    /// Target footprint subtracted by `ObjectData::attack_dist`: unit block radius + 24,
-    /// or `max(building x_size, y_size) * 96`.  Cargo/garrison indirection must already be
-    /// resolved by the adapter.
-    pub target_footprint: i32,
+    /// Mandatory resolved distance facts for `ObjectData::attack_dist` `0x006488F0`.
+    ///
+    /// Both footprints are required even though the attacker is invariant across this
+    /// search. A rectangular building must retain both axes. [`AttackDistanceMode`] must be
+    /// derived from the attacker vtable/type gate (for `Unit`, use
+    /// [`AttackDistanceMode::for_unit_type`]); it has no default. Return `None` from the
+    /// adapter when any fact is unavailable.
+    pub distance_facts: AutoTargetDistanceFacts,
     /// The virtual/type/dynamic fields used by the exact priority arithmetic.
     pub compare: CompareTargetInput,
+}
+
+/// Coordinate-independent facts read by `ObjectData::attack_dist` for one candidate pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoTargetDistanceFacts {
+    pub attacker: ObjectFootprint,
+    pub target: ObjectFootprint,
+    pub mode: AttackDistanceMode,
 }
 
 /// Read-only object-side contract for ordinary automatic target acquisition.
@@ -1443,13 +1457,15 @@ pub fn find_auto_target<A: AutoTargetAdapter>(
         if !facts.valid_target_const || !facts.check_target {
             return None;
         }
-        let dist = attack_dist(
-            searcher_row.x,
-            searcher_row.y,
-            target_row.x,
-            target_row.y,
-            facts.target_footprint,
-        );
+        let dist = attack_distance(AttackDistanceInput {
+            attacker_x: searcher_row.x,
+            attacker_y: searcher_row.y,
+            target_x: target_row.x,
+            target_y: target_row.y,
+            attacker: facts.distance_facts.attacker,
+            target: facts.distance_facts.target,
+            mode: facts.distance_facts.mode,
+        });
         if dist > max_dist {
             return None;
         }
@@ -1668,7 +1684,7 @@ impl Engagement {
             let t = world.row(target).expect("target row");
             (t.x, t.y)
         };
-        let dist = attack_dist(ux, uy, tx, ty, 0);
+        let dist = scalar_attack_dist(ux, uy, tx, ty, 0);
         let dir = attack_dir(ux, uy, tx, ty);
         self.facing = dir;
 
@@ -2277,7 +2293,11 @@ mod tests {
                 valid_target_const: candidate != self.invalid,
                 check_target: true,
                 check_path: false,
-                target_footprint: 0,
+                distance_facts: AutoTargetDistanceFacts {
+                    attacker: ObjectFootprint::Unit { block_radius: 0 },
+                    target: ObjectFootprint::Unit { block_radius: 0 },
+                    mode: AttackDistanceMode::for_unit_type(0, 0, 0),
+                },
                 compare: CompareTargetInput {
                     // Enough separation that the high-value rows also exercise priority,
                     // not merely chain order or distance.
@@ -2367,6 +2387,79 @@ mod tests {
             Some(newer),
             "strictly-greater replacement keeps the first equal score"
         );
+    }
+
+    #[test]
+    fn auto_target_ranking_uses_both_footprints_and_rectangular_axes() {
+        #[derive(Clone, Copy)]
+        struct RectAdapter;
+
+        impl AutoTargetAdapter for RectAdapter {
+            fn is_enemy(&self, observer_who: i16, candidate_who: i16) -> bool {
+                observer_who != candidate_who
+            }
+
+            fn is_seen(&self, _observer_who: i16, _candidate: ObjRef) -> bool {
+                true
+            }
+
+            fn candidate(
+                &self,
+                _searcher: ObjRef,
+                _candidate: ObjRef,
+                _searcher_row: TargetRow,
+                _candidate_row: TargetRow,
+            ) -> Option<AutoTargetCandidate> {
+                Some(AutoTargetCandidate {
+                    valid_target_const: true,
+                    check_target: true,
+                    check_path: false,
+                    distance_facts: AutoTargetDistanceFacts {
+                        attacker: ObjectFootprint::Unit { block_radius: 48 },
+                        target: ObjectFootprint::Building {
+                            x_size: 8,
+                            y_size: 1,
+                        },
+                        mode: AttackDistanceMode::for_unit_type(0, 0, 0),
+                    },
+                    compare: CompareTargetInput {
+                        t_type_value: 1_000_000,
+                        estimated_damage: 1,
+                        ..CompareTargetInput::default()
+                    },
+                })
+            }
+        }
+
+        let mut w = TargetWorld::new(4, 4);
+        let me = ObjRef::new(0, 0);
+        let along_long_axis = ObjRef::new(1, 1);
+        let along_short_axis = ObjRef::new(2, 1);
+        assert!(w.place_at(me, unit_row(24, 24)));
+
+        let mut horizontal = unit_row(984, 24);
+        horizontal.is_unit = false;
+        horizontal.is_building = true;
+        let mut vertical = unit_row(24, 984);
+        vertical.is_unit = false;
+        vertical.is_building = true;
+        assert!(w.place_at(along_long_axis, horizontal));
+        assert!(w.place_at(along_short_axis, vertical));
+
+        let AutoTargetStep::Searched { result, .. } =
+            find_auto_target(&mut w, &spiral(), auto_query(me, 0), &RectAdapter)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            result.best,
+            Some(along_long_axis),
+            "the 8x1 building removes 768 units on x but only 96 on y"
+        );
+        // The former scalar approximation used max(8,1)*96 after vector_dist and made the
+        // two centre-distance-equal candidates tie. Retail first leaves residual legs
+        // 960-768-72=120 and 960-96-72=792, so priority/ranking must distinguish them.
+        assert_eq!(result.nearest_dist, 120);
     }
 
     /// Admit every object of a *different* player, priority from the caller.
@@ -2690,7 +2783,7 @@ mod tests {
                         if !row.is_alive() {
                             continue;
                         }
-                        let d = attack_dist(sx, sy, row.x, row.y, 0);
+                        let d = scalar_attack_dist(sx, sy, row.x, row.y, 0);
                         let s = rank_candidate(10_000, d, &plain_weights()).unwrap_or(0);
                         if s > best {
                             best = s;

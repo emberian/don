@@ -61,10 +61,33 @@ impl ObjectFootprint {
 pub enum AttackDistanceMode {
     /// The ordinary object path: subtract target and attacker extents before `vector_dist`.
     Footprints,
-    /// The attacker virtual at vtable `+0xC0` returned non-zero while attacker type
-    /// `obj_masks` (`+0x1E4`) did not contain `0x0800_0000`.  The semantic name of that
-    /// virtual is not established, so the raw gate is retained rather than guessed.
-    RawVfuncC0WithoutObjmask08000000,
+    /// `UnitData::is_plane` returned non-zero while attacker type `obj_masks` (`+0x1E4`)
+    /// did not contain `0x0800_0000`.
+    PlaneWithoutObjmask08000000,
+}
+
+impl AttackDistanceMode {
+    /// Resolve `ObjectData::attack_dist`'s early footprint-bypass gate for a `Unit`.
+    ///
+    /// The shipped `Unit` vtable at `0x00B417D0` has `UnitData::is_plane` `0x0046CE40` in
+    /// slot `+0xC0`.  Its complete body is:
+    ///
+    /// ```text
+    /// return type.domain(+0x218) == 2 && !(type.unit_flags(+0x2B4) & 0x20);
+    /// ```
+    ///
+    /// `attack_dist` bypasses both footprints only when that result is true and type
+    /// `obj_masks(+0x1E4) & 0x08000000` is clear.  A direct-land unit (`domain == 0`) is
+    /// therefore measured to use [`Self::Footprints`]; this is not a host default.
+    #[inline]
+    pub const fn for_unit_type(domain: i32, unit_flags: u32, obj_masks: u32) -> Self {
+        let is_plane = domain == 2 && unit_flags & 0x20 == 0;
+        if is_plane && obj_masks & 0x0800_0000 == 0 {
+            Self::PlaneWithoutObjmask08000000
+        } else {
+            Self::Footprints
+        }
+    }
 }
 
 /// Fully resolved inputs to `ObjectData::attack_dist(o, who, x, y)` `0x006488F0`.
@@ -106,7 +129,7 @@ pub fn attack_distance(i: AttackDistanceInput) -> i32 {
         .wrapping_sub(snap_anchor(i.target_y))
         .wrapping_abs();
 
-    if i.mode == AttackDistanceMode::RawVfuncC0WithoutObjmask08000000 {
+    if i.mode == AttackDistanceMode::PlaneWithoutObjmask08000000 {
         return vector_dist(dx, dy);
     }
 
@@ -410,7 +433,7 @@ mod tests {
             target_y: 24,
             attacker: ObjectFootprint::Unit { block_radius: 0 },
             target: ObjectFootprint::Unit { block_radius: 0 },
-            mode: AttackDistanceMode::RawVfuncC0WithoutObjmask08000000,
+            mode: AttackDistanceMode::PlaneWithoutObjmask08000000,
         }
     }
 
@@ -483,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_vfunc_c0_branch_skips_both_footprints() {
+    fn is_plane_without_objmask_branch_skips_both_footprints() {
         let mut i = AttackDistanceInput {
             attacker_x: 24,
             attacker_y: 24,
@@ -500,8 +523,31 @@ mod tests {
             mode: AttackDistanceMode::Footprints,
         };
         assert_eq!(attack_distance(i), 0);
-        i.mode = AttackDistanceMode::RawVfuncC0WithoutObjmask08000000;
+        i.mode = AttackDistanceMode::PlaneWithoutObjmask08000000;
         assert_eq!(attack_distance(i), vector_dist(960, 960));
+    }
+
+    #[test]
+    fn unit_type_fields_resolve_the_is_plane_footprint_bypass() {
+        assert_eq!(
+            AttackDistanceMode::for_unit_type(0, 0, 0),
+            AttackDistanceMode::Footprints,
+            "every direct-land Unit fails UnitData::is_plane"
+        );
+        assert_eq!(
+            AttackDistanceMode::for_unit_type(2, 0, 0),
+            AttackDistanceMode::PlaneWithoutObjmask08000000
+        );
+        assert_eq!(
+            AttackDistanceMode::for_unit_type(2, 0x20, 0),
+            AttackDistanceMode::Footprints,
+            "the +0x2B4 bit is part of UnitData::is_plane"
+        );
+        assert_eq!(
+            AttackDistanceMode::for_unit_type(2, 0, 0x0800_0000),
+            AttackDistanceMode::Footprints,
+            "the +0x1E4 objmask cancels the bypass"
+        );
     }
 
     #[test]

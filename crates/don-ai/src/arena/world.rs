@@ -70,14 +70,17 @@ use don_sim::systems::combat::{
 };
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
+use don_sim::systems::held_target::{
+    attack_distance, AttackDistanceInput, AttackDistanceMode, ObjectFootprint,
+};
 use don_sim::systems::movement::{PathFinder, PathUnit, UnitWorld, UCELL};
 use don_sim::systems::order_dispatch::{
     self, ArmResult, AttackOutcome, DispatchCoverage, GatherOutcome, KillReason, OrderRec,
     TargetState, UnitWork, WorkWorld,
 };
 use don_sim::systems::target::{
-    self, AutoTargetAdapter, AutoTargetCandidate, AutoTargetQuery, AutoTargetStep,
-    CompareTargetInput, ObjRef, TargetRow, TargetWorld,
+    self, AutoTargetAdapter, AutoTargetCandidate, AutoTargetDistanceFacts, AutoTargetQuery,
+    AutoTargetStep, CompareTargetInput, ObjRef, TargetRow, TargetWorld,
 };
 
 use super::cmd::{Cmd, EntId};
@@ -568,18 +571,39 @@ impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
                 // valid_target_const rejects melee acquisition into a tree surface.
                 && (at.max_range != 0 || target_terrain != Terrain::Forest);
 
-        let footprint = if target_ent.building {
-            dt.x_size.max(dt.y_size).wrapping_mul(0x60)
-        } else {
-            dt.block_radius.wrapping_add(0x18)
+        let attacker_footprint = ObjectFootprint::Unit {
+            block_radius: at.block_radius,
         };
-        let dist = target::attack_dist(
-            searcher_row.x,
-            searcher_row.y,
-            candidate_row.x,
-            candidate_row.y,
-            footprint,
-        );
+        let target_footprint = if target_ent.building {
+            ObjectFootprint::Building {
+                x_size: dt.x_size,
+                y_size: dt.y_size,
+            }
+        } else {
+            ObjectFootprint::Unit {
+                block_radius: dt.block_radius,
+            }
+        };
+        // Unit vtable +0xC0 is PDB `UnitData::is_plane` 0x0046CE40. Its exact type test is
+        // domain==2 && !(unit_flags&0x20), so the direct-land gate above proves footprint
+        // mode for every candidate admitted here; the helper also preserves the complete
+        // plane/objmask branch for future domain expansion.
+        let distance_mode =
+            AttackDistanceMode::for_unit_type(at.domain, at.unit_flags, at.obj_masks);
+        let distance_facts = AutoTargetDistanceFacts {
+            attacker: attacker_footprint,
+            target: target_footprint,
+            mode: distance_mode,
+        };
+        let dist = attack_distance(AttackDistanceInput {
+            attacker_x: searcher_row.x,
+            attacker_y: searcher_row.y,
+            target_x: candidate_row.x,
+            target_y: candidate_row.y,
+            attacker: distance_facts.attacker,
+            target: distance_facts.target,
+            mode: distance_facts.mode,
+        });
         let in_range = in_attack_range(dist, at.max_range);
         let same_region = self.region(attacker) == self.region(target_ent);
 
@@ -726,7 +750,7 @@ impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
             valid_target_const,
             check_target,
             check_path,
-            target_footprint: footprint,
+            distance_facts,
             compare,
         })
     }
