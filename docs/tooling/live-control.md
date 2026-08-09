@@ -499,10 +499,11 @@ generation rearmed. Both failure modes have negative regressions.
 
 Passive post-frame evidence in that paused match reported `network=0`, `network_is_solo=1`,
 `playback=0`, `immediate_process=0`, a valid local play slot, package size zero, checksum room, and
-zero peer totals, with `mutates_outgoing_package=0` and `checksum_gate=network_clear`. A bounded
-`don.retail-player.v4` observation contained 15 owned objects with no unknown class, unknown type,
-or truncation: eight units and seven buildings at frame zero, including live `GatherOrder`
-identities for the starting Citizens. The observation command then parked the controller itself.
+zero peer totals, with `mutates_outgoing_package=0` and `checksum_gate=network_clear`. The bounded
+[`don.retail-player.v4` observation](../../schema/live/retail-player-pid13876.json) contained 15
+owned objects with no unknown class, unknown type, or truncation: eight units and seven buildings
+at frame zero, including live `GatherOrder` identities for the starting Citizens. The observation
+command then parked the controller itself.
 
 Finally, while the process remained parked, an exact external read of all 24 live Tribe records
 completed the local Rules input channel without retaining raw memory on the host. The normalized

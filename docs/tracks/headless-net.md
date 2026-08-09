@@ -281,22 +281,19 @@ Two ABI notes worth carrying forward:
 
 ### What is NOT proven
 
-**The DLL has never been loaded by `riseofnations.exe`.** That needs the Parallels VM and
-was not done. The milestone in the brief — "two local instances hand each other turns" — is
-met *at the transport and session layer* (§0, two OS processes, real sockets) and **not**
-inside the retail game. Do not let those two sentences merge.
+**The replacement DLL has never been loaded by `riseofnations.exe`.** The milestone in the
+brief — "two local instances hand each other turns" — is met *at the transport and session
+layer* (§0, two OS processes, real sockets) and **not** inside retail. Do not let those two
+sentences merge.
 
-Known risks, in the order they would bite:
-
-1. `NetPlayer::get_id` returns a `std::wstring` **by value**. We hand back the caller's
-   return slot untouched, which reads as empty only if the caller zero-initialised it. Most
-   likely first crash.
-2. `NetSys::get` copies into a `NetDaemon`-owned buffer whose extent we have not measured.
-   We cap at 1024 bytes — above the largest real message (`NetMsg_SyncDirInfo`, 529) — but
-   that cap is a safety guess, not a measurement.
-3. `set_p2p_callbacks` takes three `std::function`s by value; we never destroy them. A
-   deliberate small leak.
-4. Per §1.2, the lobby/setup path is not served by this DLL at all.
+The first three ABI risks recorded here are now closed structurally. The shipped callback takes
+three inline 40-byte `std::function` values, destroys each target through vtable `+0x10`, and
+returns with `ret 0x78`; the shim now matches that sequence. `NetPlayer`'s by-value identity
+returns are fully initialized 24-byte MSVC `std::wstring` SSO objects. PDB type information proves
+the `NetDaemon` destination at `+8` is `unsigned char[2048]`, and the shim uses that exact bound.
+Those fixes have strict PE32 build/disassembly/export checks, but still need their first retail
+load. Per §1.2, the larger remaining architectural gap is that the lobby/setup path is not served
+by this DLL at all.
 
 ---
 
@@ -334,20 +331,30 @@ path compiled in. `SteamAuthentication::GetEncryptedAppTicket` /
 | # | blocker | status | what it would take |
 |---|---|---|---|
 | 1 | **A Steam auth session ticket for the RoN:EE app** | **hard blocker** | A running Steam client, signed in, owning the game. `SteamAPI_Init` + `GetAuthSessionTicket`. There is no `SteamAPI_RestartAppIfNecessary` call in the exe, so the app id is supplied by the Steam client / `steam_appid.txt`, not baked into the binary [measured]. **A ticket cannot be minted offline; this is the one irreducible dependency.** |
-| 2 | **The PlayFab title id value** | **address recovered; one bounded live read remains** | The pointer to `PlayFabSettings::staticSettings` is at `CrossplayProxy.dll+0xC2ED8`. The 80-byte `PlayFabApiSettings` stores only its `titleId` string object at `+56`; the developer secret begins at `+0` and must never be read or logged. A menu-state probe must bracket the shared pointer, read only that 24-byte string object plus its bounded title bytes, validate the MSVC string length/capacity, and refuse a torn or malformed snapshot. |
+| 2 | **The PlayFab title id value** | **closed by bounded live read: `84214`** | The pointer to `PlayFabSettings::staticSettings` is at `CrossplayProxy.dll+0xC2ED8`. The 80-byte `PlayFabApiSettings` stores only its `titleId` string object at `+56`; the developer secret begins at `+0` and was never read or logged. The menu-state probe brackets the shared pointer, reads only that 24-byte string object plus its bounded title bytes, validates the MSVC string length/capacity, and refuses a torn or malformed snapshot. |
 | 3 | Party network configuration | soft | `PartyCreateNewNetwork`'s configuration struct is not established. Only needed to *create* a network; a *joining* peer takes the serialized descriptor from the lobby. |
 | 4 | 32-bit Windows host for the SDKs | soft | `PartyWin.dll` and `PlayFabMultiplayerWin.dll` are PE32 i386, so this side runs in the VM or gets reimplemented. |
 
-Blockers 2–4 are bounded engineering or observation. **Only blocker 1 is a credential**, and
+Blockers 3–4 are bounded engineering. **Only blocker 1 is a credential**, and
 it cannot be engineered around: PlayFab is configured for Steam login only, so an internet
 join is gated on a Steam ticket for an account that owns the game. That is a licensing fact,
 not a missing measurement. The title id is an endpoint identifier, not a secret; nevertheless,
 the probe is deliberately narrow so adjacent credentials cannot enter an evidence artifact.
 
-**Recommended next step:** while the game sits at the multiplayer menu, run the bounded
-title-only read above together with a double-read snapshot of Crossplay's scalar session roots.
-That closes the last unknown value without inspecting a ticket, token, player name, platform id,
-lobby id, descriptor, or developer secret.
+That bounded live read ran on 2026-08-09 against PID `13876`. At the Multiplayer Game Menu,
+Crossplay had a current-session object, flags `70`, no launched lobby, and no NetSys players. After
+the retail Game Browser stabilized and visibly reached the public service, a second snapshot found
+the same session object, flags `0`, no launched match lobby, and again no NetSys players. All five
+module identities matched the pinned executable and SDK hashes. The user then joined one public
+retail-hosted room without chatting, readying, changing settings, or starting the match. Crossplay
+flags became `6`; NetSys reported exactly two players (`player_pointer_present_mask=3`) and both
+the local-player and host-player pointers were present. This is the first direct client-peering
+evidence against a real retail host. It does not establish match launch, turn traffic, checksum
+agreement, or replacement-DLL interoperability. After a normal leave, a fourth snapshot found
+flags `2`, player count zero, mask zero, and both peer pointers clear while the public browser
+session remained present, proving the bounded join/leave lifecycle. The exact redacted artifact is
+[`retail-netstate-menu-v1.json`](../../schema/live/retail-netstate-menu-v1.json). It contains no
+ticket, token, lobby descriptor, player/platform identifier, or name.
 
 The host-side collector for that experiment is now:
 
@@ -372,8 +379,8 @@ Two honest routes, and they are different products:
 - **Our own peers over the internet: working today.** `donnet-peer` needs no PlayFab, no
   Steam, and no relay — one forwarded port. This is the right substrate for self-play and
   for a headless RL environment, which is what the project is actually for.
-- **Joining a retail player's lobby: not yet exercised; blocked first on §5.2 #1 and the
-  bounded #2 live read.** Everything else — the
+- **Joining a retail player's lobby: exercised with the signed-in retail client; a native
+  replacement peer remains blocked first on §5.2 #1.** Everything else — the
   lobby key schema, every packet layout, the readiness protocol, the turn channel — is now
   specified and implemented.
 
@@ -404,7 +411,6 @@ cd ron-bin && uv run --with pefile --with capstone python <the script in this la
 ## 7. What I could not establish
 
 - Whether the retail game runs with the replacement DLL. **Untested.** Needs the VM.
-- The live PlayFab title-id value at the recovered, bounded address (§5.2 #2).
 - The exact `send_game` key→field assignment. The key *values* are measured and the pairing
   is by name; the individual `mov`s in `0x0094E200` were not traced one at a time, and
   `don_net::lobby::SETTING_KEYS` is marked `[inferred]` for the pairing only.

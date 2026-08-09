@@ -1,0 +1,94 @@
+{
+  "schema": "don.retail-netstate-evidence.v1",
+  "captured_on": "2026-08-09",
+  "process_pid": 13876,
+  "mutation": "none; bounded read-only module/hash/scalar/title-id snapshots",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "modules": {
+    "crossplaynetlib.dll": {
+      "image_size": 1257472,
+      "sha256": "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60"
+    },
+    "crossplayproxy.dll": {
+      "image_size": 847872,
+      "sha256": "ec7a6c18f03c6d7463fc3d36b7f663ec23c1477225d46b202b29756ef7554abc"
+    },
+    "partywin.dll": {
+      "image_size": 2408448,
+      "sha256": "2f88d21fd95f5fc87b75bcf85f9fc905c9feec1dbcc5ef415613a6fa0a46ae2a"
+    },
+    "playfabmultiplayerwin.dll": {
+      "image_size": 3534848,
+      "sha256": "3a6e7a0fadce8c9ddb5da8a571de4c58fb9f040faf6a5f68c9962d93e4c4fad8"
+    }
+  },
+  "playfab_title_id": "84214",
+  "snapshots": [
+    {
+      "surface": "multiplayer-game-menu",
+      "crossplay": {
+        "current_session_present": true,
+        "flags": 70,
+        "lobby_launched": false
+      },
+      "netsys": {
+        "player_count": 0,
+        "player_pointer_present_mask": 0,
+        "local_player_pointer_present": false,
+        "host_player_pointer_present": false
+      }
+    },
+    {
+      "surface": "game-browser-stable",
+      "crossplay": {
+        "current_session_present": true,
+        "flags": 0,
+        "lobby_launched": false
+      },
+      "netsys": {
+        "player_count": 0,
+        "player_pointer_present_mask": 0,
+        "local_player_pointer_present": false,
+        "host_player_pointer_present": false
+      }
+    },
+    {
+      "surface": "joined-public-retail-host",
+      "crossplay": {
+        "current_session_present": true,
+        "flags": 6,
+        "lobby_launched": false
+      },
+      "netsys": {
+        "player_count": 2,
+        "player_pointer_present_mask": 3,
+        "local_player_pointer_present": true,
+        "host_player_pointer_present": true
+      }
+    },
+    {
+      "surface": "game-browser-after-normal-leave",
+      "crossplay": {
+        "current_session_present": true,
+        "flags": 2,
+        "lobby_launched": false
+      },
+      "netsys": {
+        "player_count": 0,
+        "player_pointer_present_mask": 0,
+        "local_player_pointer_present": false,
+        "host_player_pointer_present": false
+      }
+    }
+  ],
+  "redacted_by_design": [
+    "developer_secret",
+    "tickets",
+    "tokens",
+    "lobby_ids",
+    "descriptors",
+    "platform_ids",
+    "player_ids",
+    "player_names"
+  ]
+}
