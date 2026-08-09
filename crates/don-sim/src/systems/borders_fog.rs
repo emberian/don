@@ -70,6 +70,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::map_terrain::{World, COORD_PER_FCELL, COORD_PER_TILE, COORD_PER_WCELL};
+use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
 
 // ---------------------------------------------------------------------------
 // 0. Coordinate systems
@@ -548,6 +549,8 @@ pub fn update_seen(
 /// confirmation of the whole block.
 #[derive(Clone, Copy, Debug)]
 pub struct TerritoryRules {
+    /// Edition policy for named-rule corrections. Defaults to fidelity.
+    pub mode: ModeConfig,
     /// `+0x0B8`, 4 entries — fort border upgrade ladder. `{2, 4, 6, 9}`
     pub fort_upgrade_terr: [i32; 4],
     /// `+0x0C8`, 5 entries — temple border upgrade ladder. `{2, 4, 6, 9, 12}`
@@ -582,15 +585,18 @@ pub struct TerritoryRules {
     pub colosseum_territory_bonus: i32,
     /// `+0x478` — Colosseum, fort ladder. `0`
     pub colosseum_fort_borders: i32,
-    /// The Tikal multiplier on the temple bonus, percent.
+    /// `+0x498` — the named Tikal temple-border multiplier, percent.
     ///
-    /// **The engine reads `+0x4A0`, which is `TIKAL_TEMPLE_HP`** — `[measured]` at
+    /// **Retail instead reads `+0x4A0`, which is `TIKAL_TEMPLE_HP`** — `[measured]` at
     /// `0x006B0DC9`, `mov ecx, [constants + 0x4A0]`. `TIKAL_TEMPLE_BORDERS` is `+0x498`
     /// (XML declaration order: `TIKAL_TIMBER_COMMERCE 0x494`, `TIKAL_TEMPLE_BORDERS 0x498`,
     /// `TIKAL_TEMPLE_RANGE 0x49C`, `TIKAL_TEMPLE_HP 0x4A0`). Both ship as `50`, so no
     /// shipped number moves — but the wonder's border effect is driven by the *hit-point*
     /// field, so a mod editing only `TIKAL_TEMPLE_BORDERS` changes nothing.
     pub tikal_temple_borders_pct: i32,
+    /// `+0x4A0` — Tikal temple hit points, incorrectly consumed as the retail border
+    /// percentage. Both values ship as 50; keeping separate fields makes mods observable.
+    pub tikal_temple_hp_pct: i32,
     /// `+0x53C` — Eiffel Tower. `6`
     pub eiffel_tower_territory_bonus: i32,
     /// `+0x604` — Roman tribe bonus, fort ladder. `3`
@@ -609,6 +615,7 @@ impl Default for TerritoryRules {
     /// The shipped `rules.xml` values.
     fn default() -> Self {
         Self {
+            mode: ModeConfig::fidelity(),
             fort_upgrade_terr: [2, 4, 6, 9],
             temple_upgrade_terr: [2, 4, 6, 9, 12],
             civic_upgrade_terr: [0, 1, 2, 4, 6, 8, 11, 14],
@@ -625,6 +632,7 @@ impl Default for TerritoryRules {
             colosseum_territory_bonus: 3,
             colosseum_fort_borders: 0,
             tikal_temple_borders_pct: 50,
+            tikal_temple_hp_pct: 50,
             gems_territory_bonus: 2,
             eiffel_tower_territory_bonus: 6,
             roman_fort_borders: 3,
@@ -731,7 +739,12 @@ pub fn leader_border_params(
     p.temple_level = tl;
     p.temple_terr = c.temple_upgrade_terr[(tl - 1) as usize];
     if l.wonder_tikal {
-        p.temple_terr = ((c.tikal_temple_borders_pct + 100) * p.temple_terr) / 100;
+        let tikal_pct = deviation_behaviour::tikal_border_percent(
+            &c.mode,
+            c.tikal_temple_borders_pct,
+            c.tikal_temple_hp_pct,
+        );
+        p.temple_terr = ((tikal_pct + 100) * p.temple_terr) / 100;
     }
     if l.ctw_missionaries {
         p.temple_terr = ((c.ctw_missionaries_bonus + 100) * p.temple_terr) / 100;
@@ -1808,6 +1821,31 @@ mod tests {
         let with = leader_border_params(&l, &c, 44, 4, 4).temple_terr;
         assert_eq!(base, 6);
         assert_eq!(with, (150 * 6) / 100);
+    }
+
+    #[test]
+    fn tikal_rule_selection_is_mode_gated_on_the_real_border_path() {
+        let mut l = plain_leader();
+        l.temple_upgrade = [true, true, false]; // level 3 -> 6
+        l.wonder_tikal = true;
+
+        let mut c = TerritoryRules {
+            tikal_temple_borders_pct: 90,
+            tikal_temple_hp_pct: 50,
+            ..Default::default()
+        };
+        assert_eq!(
+            leader_border_params(&l, &c, 44, 4, 4).temple_terr,
+            9,
+            "fidelity reads TIKAL_TEMPLE_HP: 6 * 150%"
+        );
+
+        c.mode = ModeConfig::improved();
+        assert_eq!(
+            leader_border_params(&l, &c, 44, 4, 4).temple_terr,
+            11,
+            "DoN reads TIKAL_TEMPLE_BORDERS: 6 * 190% truncates to 11"
+        );
     }
 
     #[test]

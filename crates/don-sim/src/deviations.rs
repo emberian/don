@@ -236,11 +236,11 @@ pub enum Deviation {
     RefineryBonusDead = 8,
 
     // -- Drift ---------------------------------------------------------------------------
-    /// `don-env` collapsing three patrol-shaped verbs onto `OrderIndex::MoveTo`.
-    EnvPatrolRouting = 9,
+    /// `don-env` preserving patrol order kinds without executing their `do_job` arms.
+    EnvPatrolExecution = 9,
     /// `don-ai`'s six numbered model simplifications.
     AiModelSimplifications = 10,
-    /// `don-ai::arena`'s six declared substitutes for retail game systems.
+    /// `don-ai::arena`'s five remaining declared substitutes for retail game systems.
     ArenaModelSimplifications = 11,
 
     // -- Rejected ------------------------------------------------------------------------
@@ -364,9 +364,9 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
                    oracle-checked); the 2.29x spread is [measured] in our own runner.",
         default_in_improved: true,
         affects_checksum: true,
-        seam: "don_sim::deviations::behaviour::gather_handicap_pct",
+        seam: "don_sim::deviations::behaviour::select_gather_handicap",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -392,9 +392,9 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
                    code, which is why hand-computing an expectation would have hidden it.",
         default_in_improved: true,
         affects_checksum: true,
-        seam: "don_sim::deviations::behaviour::apply_gather_handicap",
+        seam: "don_sim::deviations::behaviour::apply_gather_handicap_pct",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -427,7 +427,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         affects_checksum: true,
         seam: "don_sim::deviations::behaviour::bhs_order_failed",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -454,7 +454,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         affects_checksum: true,
         seam: "don_sim::deviations::behaviour::bhs_unit_type_name",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -482,7 +482,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         affects_checksum: true,
         seam: "don_sim::deviations::behaviour::tikal_border_percent",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -507,7 +507,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         affects_checksum: true,
         seam: "don_sim::deviations::behaviour::refund_slot",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -533,7 +533,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
         affects_checksum: true,
         seam: "don_sim::deviations::behaviour::refund_slot",
         surfaces: &[Surface::PlayableEdition, Surface::RlEnvironment],
-        implementation: ImplementationStatus::Unwired,
+        implementation: ImplementationStatus::Wired,
     },
     // ---------------------------------------------------------------------------------
     Entry {
@@ -593,24 +593,32 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::EnvPatrolRouting,
-        slug: "env-patrol-routing",
-        title: "don-env routes three patrol-shaped verbs to plain MoveTo",
+        id: Deviation::EnvPatrolExecution,
+        slug: "env-patrol-execution",
+        title: "don-env installs retail patrol orders but does not execute them",
         kind: Kind::Drift,
-        retail: "`LAUNCH_PATROL` goes to an air order and a live patrol to `GROUP_PATROL` \
-                 (order 22). `OrderIndex::PATROL` (5) is the dead arm — its `do_job` slot \
-                 is the default, faithfully empty.",
-        ours: "`crates/don-env/src/action.rs` sends `MOVE_TO`, `MOVE_NEAR`, `PATROL` and \
-               `LAUNCH_PATROL` all to `OrderIndex::MoveTo`, and counts them as `applied`.",
-        why: "Nobody decided this; it is what happens when an action table is filled in \
-              faster than the orders behind it. It is worse than the verbs that honestly \
-              report `accepted_no_effect`, because those are visible in the 34% figure and \
-              this is not. Recorded as debt: the fix is `GROUP_PATROL`, not a toggle.",
+        retail: "Opcode 10 installs `GROUP_PATROL` (22), except that true planes delegate \
+                 to `AIR_PATROL` (17); opcode 11 installs `AIR_PATROL` only for true planes. \
+                 `Unit::do_job` then dispatches those live orders to their executors.",
+        ours: "For `QUEUE_NEW`, `don-env` now preserves that exact command-to-order split, \
+               including the helicopter/plane distinction, but `EnvWorld::process_slot` \
+               has no executor for either order 17 or 22. They remain installed and \
+               stationary. `QUEUE_FIRST`/`QUEUE_LAST` visibly report no effect because the \
+               env does not yet model `UnitOrder`'s linked list.",
+        why: "Routing a patrol through the env's straight-line MoveTo scaffold would erase \
+              the order's identity and repeat the old drift. Exact routing is landed; this \
+              blocker stays until the patrol executors and order-list semantics are \
+              derived and wired.",
         derived_from: &[
+            "Group::action_patrol 0x007030C0",
+            "Group::action_launch_patrol 0x00703580",
+            "Unit::add_air_patrol_order 0x005E4350",
+            "Unit::add_patrol_order 0x005E4560",
             "Unit::do_job jump table 0x00617B94 (28 arms)",
-            "crates/don-env/src/action.rs::apply_unit",
+            "crates/don-env/src/state.rs::process_slot",
         ],
-        evidence: "docs/mechanics/COVERAGE.md §3.1. [measured] by reading both tables.",
+        evidence: "docs/mechanics/COVERAGE.md §3.1 and \
+                   docs/assembly/command-bridge.md §Agreement checks. [measured].",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -648,21 +656,21 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     Entry {
         id: Deviation::ArenaModelSimplifications,
         slug: "arena-model-simplifications",
-        title: "don-ai's playable arena substitutes six simplified models for retail systems",
+        title: "don-ai's playable arena substitutes five simplified models for retail systems",
         kind: Kind::Drift,
         retail:
-            "Retail uses collision-aware A* movement and collision resolution; actual build-site \
-                 construction, terrain resource ownership, and target scans; fully derived flank \
+            "Retail uses actual build-site construction, terrain resource ownership, and target \
+                 scans; fully derived flank \
                  semantics; and water, naval, air, diplomacy, attrition, and supply systems.",
-        ours: "`crates/don-ai/src/arena/world.rs` declares six numbered `MODEL` choices: \
-               greedy eight-way movement, a builder-frame construction model, inferred gather \
-               slots, nearest-hostile acquisition, incompletely derived flank inputs, and the \
+        ours: "`crates/don-ai/src/arena/world.rs` retains five numbered `MODEL` choices: \
+               a builder-frame construction model, inferred gather slots, nearest-hostile \
+               acquisition, incompletely derived flank inputs, and the \
                omission of water, naval, air, diplomacy, attrition, and supply.",
         why: "The arena is invoked as a head-to-head game and feeds the playable WebGPU client. \
               Those approximations are therefore not merely research boundaries: until replaced \
               with retail-sophisticated systems, they block claims that the playable edition or \
               complete product is ready.",
-        derived_from: &["crates/don-ai/src/arena/world.rs:34-52 (six numbered MODEL declarations)"],
+        derived_from: &["crates/don-ai/src/arena/world.rs:34-48 (MODEL declarations 2-6)"],
         evidence: "Self-declared by the arena implementation and audited against the playable \
                    `arena` binary; each retail replacement still requires its own derivation.",
         default_in_improved: false,
@@ -748,7 +756,7 @@ impl Deviation {
         Deviation::RefundRepeatCompounding,
         Deviation::CaravanHeuristicGoalY,
         Deviation::RefineryBonusDead,
-        Deviation::EnvPatrolRouting,
+        Deviation::EnvPatrolExecution,
         Deviation::AiModelSimplifications,
         Deviation::ArenaModelSimplifications,
         Deviation::AttackDirSemantics,
@@ -1108,13 +1116,22 @@ pub mod behaviour {
     /// player at all — retail gives humans 0 unless the no-rush option is set, and that
     /// gate lives in `Leader::do_gather`, not here. Out-of-range difficulties return 0.
     pub fn gather_handicap_pct(cfg: &ModeConfig, difficulty: u8) -> i32 {
-        if cfg.is_active(Deviation::AiGatherHandicap) {
-            return 0;
-        }
-        GATHER_HANDICAP_PCT
+        let retail = GATHER_HANDICAP_PCT
             .get(difficulty as usize)
             .copied()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        select_gather_handicap(cfg, retail)
+    }
+
+    /// Select between the percentage already produced by retail's caller and DoN's fair
+    /// difficulty policy. Keeping this separate from the difficulty table preserves the
+    /// human/no-rush gates that `LeaderData::get_gather_handicap` applies before payout.
+    pub fn select_gather_handicap(cfg: &ModeConfig, retail_pct: i32) -> i32 {
+        if cfg.is_active(Deviation::AiGatherHandicap) {
+            0
+        } else {
+            retail_pct
+        }
     }
 
     /// One application of the handicap: `Leader::do_gather` `0x006CE450` computes
@@ -1122,6 +1139,11 @@ pub mod behaviour {
     /// toward zero.
     pub fn apply_gather_handicap(cfg: &ModeConfig, income: i32, difficulty: u8) -> i32 {
         let pct = gather_handicap_pct(cfg, difficulty);
+        apply_gather_handicap_pct(cfg, income, pct)
+    }
+
+    /// Apply an already selected percentage at the real `Leader::do_gather` seam.
+    pub fn apply_gather_handicap_pct(cfg: &ModeConfig, income: i32, pct: i32) -> i32 {
         let scaled = (100i32.wrapping_add(pct)).wrapping_mul(income);
         if cfg.is_active(Deviation::GatherHandicapTruncation) {
             div_round_nearest(scaled, 100)

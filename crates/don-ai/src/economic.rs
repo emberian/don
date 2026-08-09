@@ -2,10 +2,10 @@
 //! (Mark Sobota / Mike Engle, "boom script, good for Aztec, Inca, Mongols,
 //! Romans, Russians, Spanish").
 //!
-//! This is a **faithful transcription, not an improvement**. Order of calls,
-//! dead stores, unused locals, redundant re-queries and shipped bugs are all
-//! preserved. Every place the script does something that looks wrong is marked
-//! `SHIPPED BUG` or `QUIRK` and left alone.
+//! This is a faithful transcription in fidelity mode. Order of calls, dead stores,
+//! unused locals, redundant re-queries and shipped bugs are preserved there. Improved
+//! mode changes only the two registered, evidence-backed script fixes, through
+//! `don_sim::deviations`; every other `SHIPPED BUG` or `QUIRK` remains untouched.
 //!
 //! Entry point signature in the script:
 //! ```text
@@ -14,6 +14,8 @@
 //! and the engine calls it (`FUN_006C1960` case 1) with
 //! `who = player_index + 1`, `step = &player[0x790]`,
 //! `boom_vs_rush = player[0x6DD4] + 2`, `num_loops = 5`.
+
+use don_sim::deviations::behaviour as deviation_behaviour;
 
 use crate::abi::ScriptResult;
 use crate::api::{bhs_true, ScriptWorld};
@@ -79,6 +81,7 @@ pub fn economic<W: ScriptWorld>(
     num_loops: i32,
     st: &mut EconomicStatics,
 ) -> i32 {
+    let mode = w.mode_config();
     // if ((num_cities(who) < 1) && (num_type_with_queued(who, "Citizen") < 1))
     //   return SCRIPT_DONE;
     if w.num_cities(who) < 1 && w.num_type_with_queued(who, "Citizen") < 1 {
@@ -457,9 +460,15 @@ pub fn economic<W: ScriptWorld>(
                 // typenames.xml / unitrules.xml — only "Citizen" is. The
                 // engine's name lookup returns -1 for an unresolved name, so
                 // this call and the ones in cases 11/16/22/27 cannot train
-                // anything. Reproduced verbatim.
+                // anything. Fidelity reproduces it; improved mode resolves the registered
+                // type-name correction at the call boundary.
                 needed_citizens = 9;
-                train_unit_with_need(w, who, needed_citizens, "Citizens");
+                train_unit_with_need(
+                    w,
+                    who,
+                    needed_citizens,
+                    deviation_behaviour::bhs_unit_type_name(&mode, "Citizens"),
+                );
                 if w.find_nation(who) != "Lakota" {
                     *step += 1;
                 } else {
@@ -500,7 +509,12 @@ pub fn economic<W: ScriptWorld>(
             }
             11 => {
                 needed_citizens = 11;
-                train_unit_with_need(w, who, needed_citizens, "Citizens"); // SHIPPED BUG
+                train_unit_with_need(
+                    w,
+                    who,
+                    needed_citizens,
+                    deviation_behaviour::bhs_unit_type_name(&mode, "Citizens"),
+                ); // SHIPPED BUG in fidelity mode
                 if w.find_nation(who) != "Lakota" {
                     *step += 1;
                 } else {
@@ -573,7 +587,12 @@ pub fn economic<W: ScriptWorld>(
             }
             16 => {
                 needed_citizens = 14;
-                train_unit_with_need(w, who, needed_citizens, "Citizens"); // SHIPPED BUG
+                train_unit_with_need(
+                    w,
+                    who,
+                    needed_citizens,
+                    deviation_behaviour::bhs_unit_type_name(&mode, "Citizens"),
+                ); // SHIPPED BUG in fidelity mode
                 if bantu && npow && sea_map < 1 {
                     *step = 15;
                 } else if w.find_nation(who) != "Lakota" {
@@ -661,12 +680,14 @@ pub fn economic<W: ScriptWorld>(
                 // universities
                 if bhs_true(w.have_tech(who, "Classical Age")) || (greek && npow) {
                     if w.num_city_buildings(who, &my_second_city, "University", 1) < 1 {
-                        if w.place_building_with_cost(who, "University", &my_second_city) == 0 {
+                        let result = w.place_building_with_cost(who, "University", &my_second_city);
+                        if deviation_behaviour::bhs_order_failed(&mode, result) {
                             return SCRIPT_DONE;
                         }
                         old_step = 0;
                     } else if w.num_city_buildings(who, &my_capital, "University", 1) < 1 {
-                        if w.place_building_with_cost(who, "University", &my_capital) == 0 {
+                        let result = w.place_building_with_cost(who, "University", &my_capital);
+                        if deviation_behaviour::bhs_order_failed(&mode, result) {
                             return SCRIPT_DONE;
                         }
                         old_step = 0;
@@ -710,7 +731,12 @@ pub fn economic<W: ScriptWorld>(
             22 => {
                 old_step = 0;
                 needed_citizens = if inca && npow && sea_map < 1 { 27 } else { 23 };
-                train_unit_with_need(w, who, needed_citizens, "Citizens"); // SHIPPED BUG
+                train_unit_with_need(
+                    w,
+                    who,
+                    needed_citizens,
+                    deviation_behaviour::bhs_unit_type_name(&mode, "Citizens"),
+                ); // SHIPPED BUG in fidelity mode
                 if sea_map > 0 {
                     *step = 32;
                 } else if bantu && npow && sea_map < 1 {
@@ -818,7 +844,12 @@ pub fn economic<W: ScriptWorld>(
             }
             27 => {
                 needed_citizens = 28;
-                train_unit_with_need(w, who, needed_citizens, "Citizens"); // SHIPPED BUG
+                train_unit_with_need(
+                    w,
+                    who,
+                    needed_citizens,
+                    deviation_behaviour::bhs_unit_type_name(&mode, "Citizens"),
+                ); // SHIPPED BUG in fidelity mode
                 *step += 1;
                 return_value = BLOCK_ON_THIS;
             }

@@ -205,4 +205,49 @@ mod tests {
         );
         assert_eq!(w2.count("get_techs_per_age"), 0);
     }
+
+    #[test]
+    fn economic_routes_the_citizens_typo_through_the_world_mode() {
+        let run = |mode| {
+            let mut w = base_world().with_mode(mode);
+            let mut st = EconomicStatics::new();
+            let mut step = 8;
+            economic(&mut w, 1, &mut step, 2, 1, &mut st);
+            w.calls()
+        };
+
+        let fidelity = run(don_sim::deviations::ModeConfig::fidelity());
+        assert!(fidelity
+            .iter()
+            .any(|c| c == "num_type_with_queued(1,Citizens)"));
+        let improved = run(don_sim::deviations::ModeConfig::improved());
+        assert!(improved
+            .iter()
+            .any(|c| c == "num_type_with_queued(1,Citizen)"));
+        assert!(!improved.iter().any(|c| c.contains("Citizens")));
+    }
+
+    #[test]
+    fn economic_routes_step_twenty_invalid_orders_through_the_world_mode() {
+        let run = |mode| {
+            let mut w = base_world()
+                .with_mode(mode)
+                .with_str("find_nation(1)", "Greeks")
+                // Despite the local name `npow`, the script tests
+                // get_is_no_nation_powers() < 1: zero means powers are enabled.
+                .with("get_is_no_nation_powers()", 0)
+                .with("num_city_buildings(1,Ostia,University,1)", 0)
+                .with("place_building_with_cost(1,University,Ostia)", -1);
+            let mut st = EconomicStatics::new();
+            let mut step = 20;
+            let result = economic(&mut w, 1, &mut step, 2, 1, &mut st);
+            (result, step)
+        };
+
+        let fidelity = run(don_sim::deviations::ModeConfig::fidelity());
+        assert_eq!(fidelity.0, ScriptResult::BlockOnThis.as_i32());
+        assert_eq!(fidelity.1, 20, "retail leaves the state machine stuck");
+        let improved = run(don_sim::deviations::ModeConfig::improved());
+        assert_eq!(improved.0, ScriptResult::ScriptDone.as_i32());
+    }
 }

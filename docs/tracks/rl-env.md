@@ -15,7 +15,7 @@ is which at runtime.
 
 ```sh
 python3 crates/don-env/gen/gen_spec.py     # regenerate spec + capability table
-cargo test -p don-env                      # 9 tests, all green
+cargo test -p don-env                      # 18 tests, all green
 bash python/build.sh                       # -> python/don_env/_don_env.so
 PYTHONPATH=python python3 python/smoke_test.py --envs 256
 ```
@@ -25,6 +25,7 @@ PYTHONPATH=python python3 python/smoke_test.py --envs 256
 | Factored `MultiDiscrete` action space, 10 unit heads + 5 player heads | `spec.rs`, printed by the smoke test |
 | 33 unit verbs + 16 player verbs, an exact partition of the engine's 82 opcodes | `tests::every_opcode_is_classified_exactly_once` |
 | Per-parameter masks, bit-packed, derived from shipped rules data | `tests::no_mask_head_is_ever_all_zero` |
+| Retail patrol command routing, including plane vs helicopter | `command_bridge_agreement::env_patrol_routing_uses_retail_is_plane` |
 | Masked sampling never produces an illegal action | `tests::masked_sampling_produces_no_illegal_actions` — 0 illegal in ~486 k applied actions over the smoke test |
 | Zero-copy observations (numpy views over Rust memory) | smoke test: `entities.flags.owndata == False`, pointer stable across `step`, contents change in place |
 | Batch parallelism is bit-deterministic in thread count | `tests::stepping_is_deterministic_across_thread_counts` |
@@ -135,15 +136,19 @@ correspondence then holds and cross-checks on every boundary:
 `typecaps::tests::real_table_agrees_with_the_typeindex_partition` asserts a sample of this
 and skips loudly (never vacuously green) if the table is absent.
 
-From that: 16 capability flags per type, plus 312 producer→product edges recovered from the
-unit `WHERE` column joined against building `NAME`. Those edges are what makes the `Type`
-head mask exact — a Barracks offers exactly the units the shipped data says it trains, and
-only those the player can currently afford and has pop headroom for.
+From that: 16 capability flags per type, the exact `UnitData::is_plane` predicate, plus 312
+producer→product edges recovered from the unit `WHERE` column joined against building
+`NAME`. Those edges are what makes the `Type` head mask exact — a Barracks offers exactly
+the units the shipped data says it trains, and only those the player can currently afford
+and has pop headroom for. The plane predicate is the retail test (`AIR` domain and no
+`FLAGS f`), so an air-domain helicopter is not silently treated as a plane.
 
 Because the XML is copyrighted, the generator writes the table to
 `schema/live/env-typecaps.bin` (gitignored) rather than into the committed `generated.rs`.
 Absent that file the env still runs with permissive masks and `provenance()` says
-`ABSENT — masks are PERMISSIVE` in that exact wording.
+`ABSENT — masks are PERMISSIVE` in that exact wording. Evidence-dependent branches are
+not guessed: launch-patrol is not offered and ordinary patrol reports no effect until the
+real table is present.
 
 **Masks are bit-packed** (LSB-first, each head byte-aligned): 137 B per entity versus
 1,063 B as `bool`. That is not micro-optimisation. The `Type` head row is
@@ -219,6 +224,10 @@ The env prints this itself (`env.provenance()`); repeated here so it is not only
 * **movement** — straight-line integer approach with an octagonal distance approximation.
   Not `Unit::move_step` (which uses `sin_table`/`cosx`/`find_angle`) and not
   `PathFinder::astar_path` `0x00683770`, which is unread.
+* **patrol execution** — `QUEUE_NEW` commands install the exact `AIR_PATROL` (17) or
+  `GROUP_PATROL` (22) order, but neither order has an env frame executor yet. They remain
+  stationary; patrol is never substituted with the straight-line `MoveTo` scaffold.
+  `QUEUE_FIRST`/`QUEUE_LAST` report no effect because the env has no linked order list.
 * **pathfinding, gathering, economy rates, build-queue timing, tech tree, terrain, map
   generation, real fog** — absent. `QueueUp` and `Build` complete instantly with cost and
   pop enforced from the shipped tables; the timing would otherwise be invented.

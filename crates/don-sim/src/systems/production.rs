@@ -71,6 +71,8 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
+
 // =======================================================================================
 // Pool geometry
 // =======================================================================================
@@ -1726,6 +1728,7 @@ pub fn refund_cost(
     entry: &BuildQueueEntry,
     ages_elapsed: i32,
     r: &ProdRules,
+    mode: &ModeConfig,
 ) -> ([(i32, i32); 3], [i16; 3]) {
     let mut deltas = [(-1i32, 0i32); 3];
     let mut new_amts = entry.amt;
@@ -1734,8 +1737,9 @@ pub fn refund_cost(
             continue;
         }
         let adj = refund_amount(entry.amt[i] as i32, ages_elapsed, r);
-        deltas[i] = (entry.res[i] as i32, (entry.amt[i] as i32).wrapping_sub(adj));
-        new_amts[i] = adj as i16;
+        let outcome = deviation_behaviour::refund_slot(mode, entry.amt[i] as i32, adj);
+        deltas[i] = (entry.res[i] as i32, outcome.credit);
+        new_amts[i] = outcome.new_amt as i16;
     }
     (deltas, new_amts)
 }
@@ -2907,12 +2911,48 @@ mod tests {
             amt: [100, 0, 0],
             ..Default::default()
         };
-        let (deltas, new_amts) = refund_cost(&e, 0, &r);
+        let (deltas, new_amts) = refund_cost(&e, 0, &r, &ModeConfig::fidelity());
         assert_eq!(deltas[0].0, 3);
         assert_eq!(deltas[0].1, 100 - 110, "the player is charged 10");
         assert_eq!(new_amts[0], 110, "the record is rewritten in place");
         // Unused slots are left alone.
         assert_eq!(deltas[1], (-1, 0));
+    }
+
+    #[test]
+    fn improved_refund_neither_bills_nor_rewrites_on_the_real_queue_path() {
+        let r = ProdRules::shipped();
+        let e = BuildQueueEntry {
+            res: [3, -1, -1],
+            amt: [100, 0, 0],
+            ..Default::default()
+        };
+        let (deltas, new_amts) = refund_cost(&e, 0, &r, &ModeConfig::improved());
+        assert_eq!(deltas[0], (3, 0), "cancelling cannot charge the player");
+        assert_eq!(new_amts[0], 100, "the paid amount is not compounded");
+
+        let mut sign_only = ModeConfig::improved_bare();
+        sign_only
+            .enable(crate::deviations::Deviation::RefundChargesPlayer)
+            .unwrap();
+        let (deltas, new_amts) = refund_cost(&e, 0, &r, &sign_only);
+        assert_eq!(deltas[0], (3, 0));
+        assert_eq!(
+            new_amts[0], 110,
+            "the write-back bug remains independently selectable"
+        );
+
+        let mut state_only = ModeConfig::improved_bare();
+        state_only
+            .enable(crate::deviations::Deviation::RefundRepeatCompounding)
+            .unwrap();
+        let (deltas, new_amts) = refund_cost(&e, 0, &r, &state_only);
+        assert_eq!(
+            deltas[0],
+            (3, -10),
+            "the negative credit bug remains independently selectable"
+        );
+        assert_eq!(new_amts[0], 100);
     }
 
     #[test]

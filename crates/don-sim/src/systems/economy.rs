@@ -75,6 +75,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
 use crate::rng::Random;
 
 // ---------------------------------------------------------------------------------------
@@ -1493,6 +1494,9 @@ pub const HARD_INCOME_CEILING: i32 = 0x3E70;
 /// Per-tick, per-leader context for [`do_gather`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DoGatherContext {
+    /// Fidelity/improved policy for the payout deviations. Defaults to fidelity, so replay
+    /// and oracle callers cannot inherit an improved process configuration.
+    pub mode: ModeConfig,
     /// `LeaderData::type_avail(res, 1)` — resources that are not in play are skipped
     /// entirely (no payout, no accumulator movement).
     pub type_avail: [bool; NUM_RESOURCES],
@@ -1530,6 +1534,7 @@ pub struct DoGatherContext {
 impl Default for DoGatherContext {
     fn default() -> Self {
         DoGatherContext {
+            mode: ModeConfig::fidelity(),
             type_avail: [true; NUM_RESOURCES],
             extra_income: [0; NUM_RESOURCES],
             dutch: false,
@@ -1639,10 +1644,14 @@ pub fn do_gather(
         econ.displayed[res] = income;
         payouts[res].displayed = income;
 
-        // 7. `get_gather_handicap` returning 0 skips the multiply entirely (`jz`), which
-        //    matters only in that `* 100 / 100` would be a no-op anyway.
-        if ctx.gather_handicap != 0 {
-            income = pct(income, ctx.gather_handicap.wrapping_add(100));
+        // 7. The caller has already applied retail's human/no-rush gate and supplied its
+        //    resulting percentage. Fidelity keeps that percentage and C truncation;
+        //    improved mode may remove the AI cheat and/or round without bias.
+        let gather_handicap =
+            deviation_behaviour::select_gather_handicap(&ctx.mode, ctx.gather_handicap);
+        if gather_handicap != 0 {
+            income =
+                deviation_behaviour::apply_gather_handicap_pct(&ctx.mode, income, gather_handicap);
         }
 
         // 8. 0x006CE755: `res == 3 && difficulty > 1 && difficulty > 4`.
@@ -3238,6 +3247,41 @@ mod tests {
         );
         assert_eq!(out[RES_FOOD].displayed, 7200, "display is pre-handicap");
         assert_eq!(out[RES_FOOD].whole, 2, "payout is post-handicap");
+    }
+
+    #[test]
+    fn do_gather_routes_both_handicap_deviations_through_the_real_payout() {
+        let r = shipped();
+        let run = |mode: ModeConfig| {
+            let mut econ = LeaderEcon::new();
+            econ.commerce_cap = [1_000_000; NUM_RESOURCES];
+            econ.gross[RES_FOOD] = 7;
+            do_gather(
+                &r,
+                &mut econ,
+                &DoGatherContext {
+                    mode,
+                    gather_handicap: -35,
+                    ..Default::default()
+                },
+            );
+            econ.accumulator[RES_FOOD]
+        };
+
+        assert_eq!(run(ModeConfig::fidelity()), 4, "retail truncates 7 * 65%");
+        assert_eq!(
+            run(ModeConfig::improved()),
+            7,
+            "DoN removes the difficulty income cheat"
+        );
+
+        let mut rounded_ladder = ModeConfig::improved();
+        rounded_ladder.disable(crate::deviations::Deviation::AiGatherHandicap);
+        assert_eq!(
+            run(rounded_ladder),
+            5,
+            "the independently enabled rounding fix reaches do_gather"
+        );
     }
 
     #[test]

@@ -47,6 +47,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use don_sim::deviations::{behaviour as deviation_behaviour, ModeConfig};
 use don_sim::mechanics::{
     commerce_cap, credit_resource, resource_period, resource_tick, CommerceCapGates, EconomyRules,
     ResourceTickInput,
@@ -82,9 +83,6 @@ pub struct ModelParams {
     pub gather_max: BTreeMap<String, i32>,
     /// `DEVIATION 3` — resource slot a gatherer building yields into.
     pub gathers: BTreeMap<String, usize>,
-    /// Whether the difficulty income bonus (`LeaderData::get_gather_handicap`
-    /// `0x006D66A0`) is applied. On by default because retail applies it.
-    pub apply_difficulty_bonus: bool,
     /// The accumulator-period shift, and the **one open calibration question**
     /// in the whole economy.
     ///
@@ -122,7 +120,6 @@ impl Default for ModelParams {
         ModelParams {
             gather_max,
             gathers,
-            apply_difficulty_bonus: true,
             gather_period_shift: 4,
         }
     }
@@ -240,6 +237,9 @@ pub struct Event {
 /// The whole match.
 #[derive(Clone)]
 pub struct Game {
+    /// Edition policy. Explicit and per-world: validation constructs fidelity; playable
+    /// clients opt into improved mode without a process-global switch.
+    pub mode: ModeConfig,
     pub rules: Rules,
     pub params: ModelParams,
     pub econ: EconomyRules,
@@ -298,6 +298,7 @@ impl Game {
             });
         }
         let mut g = Game {
+            mode: ModeConfig::fidelity(),
             rules,
             params,
             econ,
@@ -318,6 +319,12 @@ impl Game {
             g.seed_start(i);
         }
         g
+    }
+
+    /// Select an edition for this world before it is handed to the scheduler.
+    pub fn with_mode(mut self, mode: ModeConfig) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Seed a player's starting town from `citytemplates.xml`.
@@ -446,11 +453,10 @@ impl Game {
     fn tick_economy(&mut self, idx: usize) {
         let age = self.age_of(idx);
         let gross = self.gross_income(idx);
-        let bonus = if self.params.apply_difficulty_bonus {
-            self.effective_difficulty(idx).income_bonus_percent()
-        } else {
-            0
-        };
+        let bonus = deviation_behaviour::select_gather_handicap(
+            &self.mode,
+            self.effective_difficulty(idx).income_bonus_percent(),
+        );
         // `resource_period` is `GATHER_RATE << 4`; the shift is the knob.
         let period = if self.params.gather_period_shift == 4 {
             resource_period(self.econ.gather_rate)
@@ -948,6 +954,10 @@ macro_rules! guard {
 }
 
 impl ScriptWorld for PlayerView<'_> {
+    fn mode_config(&self) -> ModeConfig {
+        self.game.mode
+    }
+
     fn get_mapstyle(&self) -> String {
         self.game.map_style.clone()
     }
@@ -1462,18 +1472,25 @@ mod tests {
     }
 
     #[test]
-    fn difficulty_scales_income_exactly_as_the_bonus_table_says() {
-        let mut totals = Vec::new();
-        for d in [Difficulty::Easiest, Difficulty::Tough, Difficulty::Toughest] {
-            let Some(rules) = Rules::load(&default_data_dir()).ok() else {
-                return;
-            };
-            let mut g = Game::new(rules, &["Romans"], d);
-            for _ in 0..4500 {
-                g.step();
+    fn world_mode_controls_the_difficulty_income_bonus() {
+        let run = |mode| {
+            let mut totals = Vec::new();
+            for d in [Difficulty::Easiest, Difficulty::Tough, Difficulty::Toughest] {
+                let Some(rules) = Rules::load(&default_data_dir()).ok() else {
+                    return None;
+                };
+                let mut g = Game::new(rules, &["Romans"], d).with_mode(mode);
+                for _ in 0..4500 {
+                    g.step();
+                }
+                totals.push(g.players[0].stock[0]);
             }
-            totals.push(g.players[0].stock[0]);
-        }
+            Some(totals)
+        };
+
+        let Some(totals) = run(ModeConfig::fidelity()) else {
+            return;
+        };
         let [easiest, tough, toughest] = [totals[0], totals[1], totals[2]];
         assert!(
             easiest < tough,
@@ -1482,6 +1499,13 @@ mod tests {
         assert!(
             toughest > tough,
             "Toughest {toughest} should beat Tough {tough}"
+        );
+
+        let improved = run(ModeConfig::improved()).unwrap();
+        assert_eq!(
+            improved,
+            vec![improved[1]; 3],
+            "DoN difficulty changes decisions, not food income"
         );
     }
 }

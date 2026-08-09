@@ -8,6 +8,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use don_sim::deviations::ModeConfig;
+
 use crate::api::ScriptWorld;
 
 /// One recorded host-function call, rendered as `name(arg, arg, ...)`.
@@ -15,6 +17,7 @@ pub type CallLog = Vec<String>;
 
 #[derive(Default)]
 pub struct ProbeWorld {
+    pub mode: ModeConfig,
     /// Answers keyed by the rendered call string; missing keys fall back to
     /// [`ProbeWorld::default_int`].
     pub answers: HashMap<String, i32>,
@@ -40,6 +43,11 @@ impl ProbeWorld {
 
     pub fn with_str(mut self, call: &str, v: &str) -> Self {
         self.string_answers.insert(call.to_string(), v.to_string());
+        self
+    }
+
+    pub fn with_mode(mut self, mode: ModeConfig) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -78,6 +86,10 @@ macro_rules! call {
 }
 
 impl ScriptWorld for ProbeWorld {
+    fn mode_config(&self) -> ModeConfig {
+        self.mode
+    }
+
     fn get_mapstyle(&self) -> String {
         self.qs(call!("get_mapstyle"))
     }

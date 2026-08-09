@@ -88,8 +88,8 @@ type.
 | `Rejected` | no | never | investigated, turned out not to be a deviation |
 
 `Drift` is the entry type that keeps the register honest. Product drift names the exact
-execution surfaces it reaches and `assert_ready` refuses those runs. The RL patrol collapse
-blocks `rl-env`; the arena's six simplified game systems block `playable`; both block the
+execution surfaces it reaches and `assert_ready` refuses those runs. The missing RL patrol
+executors block `rl-env`; the arena's five remaining simplified game systems block `playable`; both block the
 aggregate `product` target. The older `don-ai::game` simplifications are explicitly
 `ResearchOnly`: useful for bounded experiments, never evidence about the product.
 
@@ -115,9 +115,9 @@ form:
 | `refund-repeat-compounding` | `adj` written back over the record, so repeats compound | leave the record alone | **on** |
 | `caravan-heuristic-goal-y` | `pf_dist(dx, −goalY)` at `0x00685FD9`; mode A ≈ Dijkstra | pass `child.y − goalY` | off |
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
-| `env-patrol-routing` | `GROUP_PATROL` (22) and an air order | *drift*: all four verbs → `MoveTo` | — |
+| `env-patrol-execution` | orders 17/22 route, queue, and execute | *drift*: `QUEUE_NEW` routes exactly; no env executor or queued order list | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
-| `arena-model-simplifications` | full retail game systems | *drift*: six simplified arena models on the playable path | — |
+| `arena-model-simplifications` | full retail game systems | *drift*: five simplified arena models on the playable path (retail A* movement is now wired) | — |
 | `attack-dir-semantics` | attacker→target bearing | *rejected*: retail is right | — |
 | `gather-enhancer-table-base` | tables indexed `level − 1` | *rejected*: deliberate, 1-based accessors | — |
 
@@ -192,35 +192,26 @@ in our own runner, which is a measurement of our port, not of the shipped game.
 
 ## 5. What is wired, and what is not — the honest part
 
-The registry records the known gaps and the gate is real. **The seams are not yet called by the
-subsystems they describe.** Every one of `economy.rs`, `production.rs`, `borders_fog.rs`,
-`movement.rs`, `tech_cities.rs` and `don-ai/src/game.rs` was owned by a live lane while this
-lane ran, and editing another lane's file mid-flight is how shared-tree work goes wrong. So
-this lane built the mechanism, the registry, the tests and the gate, and left the call sites
-to their owners.
+The seven fixes enabled by default in improved mode are now wired through their real
+subsystems, with the fidelity branch preserved beside each improvement:
 
-Concretely, adopting a seam is a one-line change at each site (six of the seven exist; the
-seventh is waiting on a port):
-
-| site | today | becomes |
+| subsystem | wired deviations | mode proof |
 |---|---|---|
-| `don-ai/src/game.rs:449` | `if self.params.apply_difficulty_bonus { … .income_bonus_percent() }` | `deviations::behaviour::gather_handicap_pct(&cfg, diff)` |
-| `don-sim/src/systems/production.rs::refund_cost` | `deltas[i] = (res, amt − adj); new_amts[i] = adj` | `let r = behaviour::refund_slot(&cfg, amt, adj);` |
-| `don-sim/src/systems/borders_fog.rs` (Tikal term) | reads the `+0x4A0` field | `behaviour::tikal_border_percent(&cfg, borders, hp)` |
-| `don-sim/src/systems/tech_cities.rs::calc_gather` | `refinery = 0` | `behaviour::refinery_bonus_pct(&cfg, rules.refinery_bonus)` |
-| the caravan road A\* | **no call site yet** — `PathFinder::astar_caravan_road` `0x00685990` is unported; `movement.rs` implements the *unit* search. The seam is waiting for the port | `behaviour::caravan_h_mode_a_dy(&cfg, child_y, goal_y)` |
-| `don-ai/src/economic.rs:664,669` | `if w.place_building_with_cost(…) == 0` | `if behaviour::bhs_order_failed(&cfg, …)` |
-| `don-ai/src/economic.rs` (5 sites) | `"Citizens"` | `behaviour::bhs_unit_type_name(&cfg, "Citizens")` |
+| `systems::economy::do_gather` | `ai-gather-handicap`, `gather-handicap-truncation` | retail keeps the caller's percentage and C truncation; improved removes the cheat, or independently rounds when the ladder is re-enabled |
+| `don-ai::economic` through `ScriptWorld::mode_config` | `bhs-prereq-result-test`, `bhs-citizens-typo` | fidelity sends `"Citizens"` and ignores `-1`; improved sends `"Citizen"` and treats every non-positive placement as failure |
+| `systems::borders_fog::leader_border_params` | `tikal-border-rule-slot` | fidelity reads the separate HP value; improved reads the named borders value |
+| `systems::production::refund_cost` | `refund-charges-player`, `refund-repeat-compounding` | fidelity returns the negative credit and rewritten amount; improved returns zero credit and preserves the paid amount |
 
-`don-ai/src/game.rs`'s existing `apply_difficulty_bonus: bool` is the ad-hoc version of
-exactly this idea and should be replaced by the registry entry rather than kept alongside it
-— two switches for one behaviour is how a fidelity claim gets made under the wrong one.
+`Game` and the simulation contexts own a `ModeConfig`; there is no process-global mode.
+The old `apply_difficulty_bonus` boolean was removed, eliminating two switches for one
+behaviour. Each subsystem test drives both modes through the public runtime function rather
+than merely unit-testing the registry helper.
 
-Until those seven edits land, **improved mode changes nothing observable at runtime**.
-Those entries are now `ImplementationStatus::Unwired`, so an improved playable, RL, or
-product readiness check refuses them instead of advertising inert switches. Fidelity replay
-validation is unaffected because those fixes are off and the known drifts are unreachable
-from its entrypoint.
+The two optional, improved-default-off candidates remain honestly `Unwired`:
+`caravan-heuristic-goal-y` awaits the caravan-road A* port, and `refinery-bonus-dead`
+awaits a measured balance decision and its city-gather call site. Because neither is active,
+they do not masquerade as shipped improvements and do not block the canonical improved
+edition. Product readiness is now blocked only by registered product drift.
 
 ### Where `ModeConfig` should live
 
@@ -247,10 +238,12 @@ startup; harnesses should construct `ModeConfig::fidelity()` explicitly.
    only be caught by self-play stability and by the fidelity suite continuing to pass with
    every entry off. That asymmetry is inherent, and worth naming before someone reports an
    improved-mode number as if it had been validated.
-4. **The `no-rush` gate on the human handicap is unmodelled.** Retail gives humans 0 unless
-   the no-rush option is set; `gather_handicap_pct` deliberately does not encode that gate,
-   leaving it to `Leader::do_gather`'s caller. Somebody has to derive it before the seam is
-   adopted, or the AI cheat will be applied to a human in one configuration.
+4. **The `no-rush` gate on the human handicap is still an input boundary.** Retail gives
+   humans 0 unless the no-rush option is set. The wired payout seam therefore accepts the
+   caller's already-gated retail percentage rather than reconstructing it from difficulty;
+   improved mode can zero that value without ever applying the AI table to a human. The
+   upstream game-option predicate still needs derivation before a world can synthesize the
+   percentage rather than reading it from leader state.
 
 ---
 

@@ -228,41 +228,43 @@ retail-derived thing to dispatch them.
 ### 3.1 Reconciling the rl-env lane's 34 %
 
 `docs/tracks/rl-env.md` reports **34 % of applied actions are `accepted_no_effect`**,
-dominated by `GARRISON`, `GUARD`, `FOLLOW`, `REPAIR`, `GATHER`. **That number is consistent
-with this table, and it is measuring a different axis — the number is fine, the framing
-around it needs one correction.**
+dominated by `GARRISON`, `GUARD`, `FOLLOW`, `REPAIR`, `GATHER`. That observed rate is a
+policy-weighted runtime measure, not the percentage of command verbs with dynamics.
 
 The env's action space is the **command** layer, not the order layer:
 `crates/don-env/src/generated.rs` defines 33 unit verbs and 16 player verbs, derived from
 the 82 `CommandTypes` opcodes. Auditing `apply_unit` / `apply_player` in
 `crates/don-env/src/action.rs`, the arms with real dynamics are:
 
-* unit (13 of 33): `MOVE_TO`, `MOVE_NEAR`, `PATROL`, `LAUNCH_PATROL` (all four collapse to
-  one move), `ATTACK`, `SIEGE_ATTACK`, `SWARM_AROUND` (all three collapse to one attack),
-  `HALT`, `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`.
+* unit (11 of 33 with downstream dynamics): `MOVE_TO`, `MOVE_NEAR`, `ATTACK`,
+  `SIEGE_ATTACK`, `SWARM_AROUND` (the three attacks collapse to one attack), `HALT`,
+  `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`. `PATROL` and `LAUNCH_PATROL` now
+  install the exact retail order kinds for `QUEUE_NEW`, but their frame executors are
+  absent. `QUEUE_FIRST`/`QUEUE_LAST` visibly report no effect because there is no env order
+  list.
 * player (4 of 16): `TREATY`, `DECLARE`, `TRIBUTE`, `RESIGN`.
 
-**17 of 49 verbs = 34.7 % of the verb space carries dynamics; the other 32 fall to the
-`_ =>` arm that increments `accepted_no_effect`.** That the *observed* rate of
-`accepted_no_effect` is also ~34 % is a coincidence of two different quantities landing on
-the same number — the observed rate is share of applied actions under a masked sampler, and
+**15 of 49 verbs = 30.6 % of the verb space currently carries downstream dynamics.** Of
+the other 34, 32 fall to the `_ =>` arm that increments `accepted_no_effect`; the two
+patrol verbs install exact orders whose executors are absent. The *observed* rate of
+`accepted_no_effect` is instead the share of applied actions under a masked sampler, and
 masking suppresses many unimplemented verbs before they are ever emitted (you cannot
-`GATHER` with no gatherable in range). The two agreeing is not evidence of anything.
+`GATHER` with no gatherable in range). The two percentages are not expected to agree.
 
 Consistency with §3: every one of the 20 unhandled *unit* verbs maps to an order whose
 `do_job` arm is also absent — `GATHER`→`do_gather`, `REPAIR`→`do_repair`,
 `GARRISON`→`do_garrison`, `FOLLOW`→`do_follow`, `GUARD`→`do_guard`,
 `BOARD_SHIP`→`do_board`, `TRADE`→`do_trade`, `SPELL`→`do_cast`,
-`ATTACK_GROUND`→`do_attack_ground`. **The two tables agree exactly**, which is the useful
-check: the env is dropping precisely the verbs whose executors are unported, and nothing
-else.
+`ATTACK_GROUND`→`do_attack_ground`. `PATROL` and `LAUNCH_PATROL` are the additional honest
+case: their orders are retained rather than dropped, but `AIR_PATROL` and `GROUP_PATROL`
+also lack executors.
 
-One divergence the 34 % hides, worth recording separately because it is *wrong* rather than
-*missing*: the env routes four distinct verbs (`MOVE_TO`, `MOVE_NEAR`, `PATROL`,
-`LAUNCH_PATROL`) to `OrderIndex::MoveTo`. Retail sends `LAUNCH_PATROL` to an air order and
-live patrols to `GROUP_PATROL` (22); `OrderIndex::PATROL` (5) is the dead arm. Those
-actions are counted as `applied`, so they are invisible in the 34 % while being less
-faithful than the verbs that honestly report no effect.
+The former routing divergence is closed. `PATROL` now installs `GROUP_PATROL` (22) for
+ground units and helicopters and delegates true planes to `AIR_PATROL` (17);
+`LAUNCH_PATROL` installs `AIR_PATROL` only for true planes. `OrderIndex::PATROL` (5) stays
+the dead arm. These actions are still counted as `applied` because the exact order is
+installed, but they remain stationary until the two executors are derived. That execution
+gap, together with queued order-list insertion, is now the registered RL readiness blocker.
 
 **Better metric for the RL lane:** `accepted_no_effect` measures the *command* surface.
 The order-layer figure is 4 of 28 `do_job` arms. The hand-classified `do_frame` table marks

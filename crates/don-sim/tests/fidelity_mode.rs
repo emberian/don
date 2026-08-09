@@ -113,7 +113,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         cfg.assert_ready(Surface::RlEnvironment),
         Err(ModeError::KnownDrift(
             Surface::RlEnvironment,
-            Deviation::EnvPatrolRouting,
+            Deviation::EnvPatrolExecution,
         ))
     );
 
@@ -121,7 +121,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
     assert_eq!(
         product,
         vec![
-            ReadinessBlocker::KnownDrift(Deviation::EnvPatrolRouting),
+            ReadinessBlocker::KnownDrift(Deviation::EnvPatrolExecution),
             ReadinessBlocker::KnownDrift(Deviation::ArenaModelSimplifications),
         ]
     );
@@ -130,17 +130,28 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         .all(|b| b.deviation() != Deviation::AiModelSimplifications));
 }
 
-/// Improved-mode fixes may not be advertised before their real call sites adopt the seam.
+/// Improved-mode fixes may clear readiness only after their real call sites adopt the seam.
 #[test]
-fn unwired_improvements_block_improved_product_entrypoints() {
+fn wired_improvements_leave_only_known_product_drift() {
     let cfg = ModeConfig::improved();
     let playable: Vec<_> = cfg.readiness_blockers(Surface::PlayableEdition).collect();
-    assert!(playable.contains(&ReadinessBlocker::UnwiredImprovement(
-        Deviation::AiGatherHandicap
-    )));
-    assert!(playable.contains(&ReadinessBlocker::KnownDrift(
-        Deviation::ArenaModelSimplifications
-    )));
+    assert_eq!(
+        playable,
+        vec![ReadinessBlocker::KnownDrift(
+            Deviation::ArenaModelSimplifications
+        )]
+    );
+    for d in [
+        Deviation::AiGatherHandicap,
+        Deviation::GatherHandicapTruncation,
+        Deviation::BhsPrereqResultTest,
+        Deviation::BhsCitizensTypo,
+        Deviation::TikalBorderRuleSlot,
+        Deviation::RefundChargesPlayer,
+        Deviation::RefundRepeatCompounding,
+    ] {
+        assert_eq!(d.entry().implementation, ImplementationStatus::Wired, "{d}");
+    }
 }
 
 /// Research harnesses are allowed to be bounded models, but their gaps are never silently

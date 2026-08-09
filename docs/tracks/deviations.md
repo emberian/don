@@ -232,17 +232,22 @@ gate refuses to launch a claim-bearing run on that surface. Research-only drift 
 as such: it remains usable as a bounded experiment, but cannot be promoted to a product or
 fidelity claim.
 
-### `env-patrol-routing`
+### `env-patrol-execution`
 
-`crates/don-env/src/action.rs` sends `MOVE_TO`, `MOVE_NEAR`, `PATROL` and `LAUNCH_PATROL`
-all to `OrderIndex::MoveTo`. Retail sends `LAUNCH_PATROL` to an air order and a live patrol
-to `GROUP_PATROL` (order 22); `OrderIndex::PATROL` (5) is the dead arm, and its `do_job`
-slot is faithfully empty.
+The `QUEUE_NEW` command-to-order path is now exact. Opcode 10 installs `GROUP_PATROL` (22)
+for ground units and helicopters, but follows retail's `Group::action_patrol` branch to
+`AIR_PATROL` (17) for true planes. Opcode 11 installs `AIR_PATROL` only for true planes.
+The mask uses retail's `UnitData::is_plane` predicate (`AIR` domain and no `FLAGS f`), not
+the broader air-domain capability, and `OrderIndex::PATROL` (5) remains the dead arm.
+`QUEUE_FIRST` and `QUEUE_LAST` report `accepted_no_effect` rather than being silently
+treated as `QUEUE_NEW`, because the env does not yet model `UnitOrder`'s linked list.
 
-This is worse than the verbs that honestly report `accepted_no_effect`, because those are
-visible in the RL lane's 34 % figure and this is not — these are counted as `applied`. The
-fix is to implement `GROUP_PATROL`, not to add a switch.
-*`docs/mechanics/COVERAGE.md` §3.1.*
+The remaining drift is execution: `EnvWorld::process_slot` has no executor for order 17 or
+22, so the exact order remains installed and stationary. Routing it through the env's
+straight-line `MoveTo` scaffold would recreate the former silent substitution. RL
+readiness therefore stays blocked until both patrol executors and order-list semantics are
+derived and wired.
+*`docs/mechanics/COVERAGE.md` §3.1; `docs/assembly/command-bridge.md`.*
 
 ### `ai-model-simplifications`
 
@@ -257,17 +262,17 @@ systems do not falsely block unrelated replay, playable, or RL entrypoints.
 
 ### `arena-model-simplifications`
 
-`crates/don-ai/src/arena/world.rs` declares six numbered `MODEL` substitutions: greedy
-eight-way movement instead of retail's collision-aware A* and collision resolution; a
+`crates/don-ai/src/arena/world.rs` retains five numbered `MODEL` substitutions: a
 builder-frame construction model; inferred terrain gather slots; nearest-hostile target
 acquisition; incompletely derived flank inputs; and no water, naval, air, diplomacy,
-attrition, or supply.
+attrition, or supply. The former greedy-movement model has been replaced by the derived
+retail A* pathfinder; it is no longer part of this blocker.
 
 Unlike the older research runner, the arena drives head-to-head matches and the playable
 WebGPU client. It is therefore a **playable-product blocker**, not an acceptable research
 boundary. The fix is to replace each model with a system at least as sophisticated as the
 derived retail behaviour, then remove this drift status. *Self-declared at
-`crates/don-ai/src/arena/world.rs:34-52`.*
+`crates/don-ai/src/arena/world.rs:34-48`.*
 
 ---
 

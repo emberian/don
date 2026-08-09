@@ -46,6 +46,8 @@
 //! `-1` (`0xFFFFFFFF`) if that fails. Name lookups scan a 0x326-entry (806)
 //! table and also yield `-1` when the name is not found.
 
+use don_sim::deviations::ModeConfig;
+
 /// The read-only + command surface the shipped scripts use.
 ///
 /// Implementors are the *engine*, not the script. Nothing here is derived
@@ -57,6 +59,12 @@
 /// otherwise a count, an object id, or `1`/`0` for success/failure of a
 /// command.
 pub trait ScriptWorld {
+    /// Edition policy owned by the host, not by the script. Real game worlds override
+    /// this; test doubles and fidelity oracles default closed to retail behaviour.
+    fn mode_config(&self) -> ModeConfig {
+        ModeConfig::fidelity()
+    }
+
     // ---- game / rules queries (no player argument) -------------------------
     /// `get_mapstyle()` @ `0x009E4CC0`.
     fn get_mapstyle(&self) -> String;
