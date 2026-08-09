@@ -161,7 +161,7 @@ code actually does.
 | 10 | AI diplomacy chat | — | out of scope | |
 | 11 | **`Leaders::strategy_all`** | `0x006ED430` | **dispatcher + deterministic prefix executed** | full `check_explore`; score/victory ports; `plan_strategy` and `diplomacy` bodies remain explicit |
 | 12 | **`GameDaemon::process_all`** | `0x00732700` | module exists, runtime call unverified | `borders_fog.rs` |
-| 13 | `Armies::process_all` | `0x006F3B00` | **absent** | |
+| 13 | `Armies::process_all` | `0x006F3B00` | **dispatcher + deterministic prefix executed** | exact owner/slot gates and Army state-machine prefix; live Army host and reached AI bodies remain explicit |
 | 14 | **`Objects::process_all`** | `0x0065DCE0` | **implemented** | rotation `(frame+i)%10`, `crate::objects` |
 | 15 | `Objects::inc_time` | `0x0065DB70` | module exists, runtime call unverified | `ammo.rs` lives here |
 | 16 | `GraphicEvents::process` | `0x008E50A0` | out of scope | |

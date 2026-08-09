@@ -1,11 +1,11 @@
 # wire-tick — the tick now runs
 
 **What runs that did not before.** `Game::do_frame` is executable. `crates/don-sim/src/tick.rs`
-drives the declared 29-call schedule in retail's order and dispatches into thirteen of the
+drives the declared 29-call schedule in retail's order and dispatches into fourteen of the
 reviewed `systems/*` modules from the step each one belongs to. Before this lane, the only
 thing in the repository that visited `schedule::DO_FRAME` was `World::step`, which incremented
-29 counters, ran the object traversal, and advanced two clocks. **Ten of the 29 steps now
-execute derived code with real inputs on every tick — 10 of the 14 that are in scope, since 15
+29 counters, ran the object traversal, and advanced two clocks. **Eleven of the 29 steps now
+execute derived code with real inputs on every tick — 11 of the 14 that are in scope, since 15
 of the 29 are presentation, telemetry or session management.** A binary prints the trace.
 
 ```sh
@@ -14,9 +14,9 @@ cargo run -p don-sim --bin don-tick-trace -- --frames 900 --trace 3
 
 ```
        step:   01234567890123456789012345678
-  f0      ----o---X--XX.XX-X-XX-XXo--o-  10/29 executed
+  f0      ----o---X--XXXXX-X-XX-XXo--o-  11/29 executed
   ...                                            X executed  o ported-but-vacuous
-  f899    ----o---X--XX.XX-X-XX-XXo--o-  10/29 executed       . unimplemented  - out of scope
+  f899    ----o---X--XXXXX-X-XX-XXo--o-  11/29 executed       . unimplemented  - out of scope
 ```
 
 Nothing here is new derivation. Every system called carries whatever tier its own module
@@ -29,11 +29,11 @@ for the other.
 
 | measure | before | now |
 |---|---:|---:|
-| steps of `DO_FRAME` executing derived code, per tick | 1 | **10** |
-| of the 14 in-scope steps | 1 / 14 | **10 / 14** |
+| steps of `DO_FRAME` executing derived code, per tick | 1 | **11** |
+| of the 14 in-scope steps | 1 / 14 | **11 / 14** |
 | steps that only increment a counter | 28 | 0 |
-| `systems/*` modules reached from the tick | 0 | **13** |
-| named retail sub-calls skipped, counted per tick | not counted | **16** |
+| `systems/*` modules reached from the tick | 0 | **14** |
+| named retail sub-calls skipped, counted per tick | not counted | **15** |
 
 The three-way split is deliberate and the categories are enforced by a test:
 
@@ -45,12 +45,13 @@ The three-way split is deliberate and the categories are enforced by a test:
   do not exist".
 * **OutOfScope** — correctly absent from a headless deterministic core.
 
-Step 13 remains unimplemented retail code: `Armies::process_all`. Step 22 now executes the
-complete `Roads::scan_and_kill_stray_roads` dispatcher and both direct cleanup bodies;
-renderer-owned candidate records remain explicit fail-closed inputs. Steps 17 and 19 execute the complete recovered
-`Leaders::end_process_all` and `Leader::process_event_frame` dispatchers and deterministic bodies. Steps
-4, 24 and 27 are runnable but correctly report vacuous until a script, cannon-time window,
-or resolved-victory latch supplies work.
+No in-scope top-level row remains `Unimplemented`. Step 13 executes the exact
+`Armies::process_all` owner/slot dispatcher and the recovered deterministic `Army::process`
+prefix when a complete host is supplied; a valid Army without that host is preserved and
+charged. Step 22 executes the complete `Roads::scan_and_kill_stray_roads` dispatcher and
+both direct cleanup bodies, with renderer-owned candidates as explicit fail-closed inputs.
+Steps 4, 24 and 27 are runnable but correctly report vacuous until a script,
+cannon-time window, or resolved-victory latch supplies work.
 
 ## 2. What each executing step actually calls
 
@@ -59,6 +60,7 @@ or resolved-victory latch supplies work.
 | 8 | `Leaders::process_all` `0x006ED2A0` | recovered whole dispatcher; hostile scan; `leader_gather`; rare-mask dirty protocol; wall/unit stat-band traversals; resolved `is_active`/`is_captain`, base Object virtuals, full building `Wall::update_hits/update_los`, full `Unit::update_speed`, `ObjectData::armor`, and `Unit::update_armor`; automatic Unit speed/armor packages from shipped type plus live leader/object state; `process_elimination`; grace timers; taunt dispatch | `Wall::update_construct_time`; automatic Wall and Unit base hit/LOS query population; reached `Object::eject_contents`; `process_taunt` AI-chat body |
 | 11 | `Leaders::strategy_all` `0x006ED430` | complete 93-byte dispatcher; exact `(flags&3)==3` slot gate and call order; full `check_explore` phase/recount body; `victory_score::compute_score`; semaphore-gated `check_victory`, including the zero-active-leader tail | `plan_strategy`, `diplomacy` AI bodies |
 | 12 | `GameDaemon::process_all` `0x00732700` | `victory_score::process_victory`; `map_terrain::World::clear_seen` + `borders_fog::update_seen` per object; `economy::calc_markets` (**on the sim RNG stream**); `borders_fog::check_borders`; `groups_guys::Groups::process` | `calc_danger`, `process_coll_blocks` |
+| 13 | `Armies::process_all` `0x006F3B00` | complete eight-owner/16-slot dispatcher; exact three-part leader gate and hurry consumption; 128/256-frame phasing; normalize, retirement, human-order, merge, retarget and status-dispatch prefix | valid armies need the complete Group/Unit/City/type host; muster/defend/march/form/transport and specialist AI bodies remain named |
 | 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | `Guy::process`, `suffer_attrition`, `process_supply`, `detect_unit_collision`, `needs_transport`, wildlife spawn, anti-air dud roll |
 | 15 | `Objects::inc_time` `0x0065DB70` | `ammo::ammo_inc_time` over the pool in slot order, `hit_target`/`check_hit`, `ammo_do_damage_single` | `Unit::inc_time` (the other half) |
 | 17 | `Leaders::end_process_all` `0x006ED070` | complete eight-slot dispatcher; matching Player warning-bit cleanup; exact 450-frame feedback limiter and stamp-before-cap compare | localized message/audio are emitted as inspectable presentation events |
@@ -67,7 +69,7 @@ or resolved-victory latch supplies work.
 | 22 | `Roads::scan_and_kill_stray_roads` `0x008956A0` | complete cursor/budget dispatcher; exact nine-tile cache population; full bad-road and straggled-road cleanup; direct candidate release and terrain clear | a live road without its renderer-owned `RoadElementCandidate` is preserved and charged |
 | 23 | `frame % 15 → seconds++` | the counter | — |
 
-Thirteen modules are now reached from the tick: `ammo`, `borders_fog`, `casters_animals`,
+Fourteen modules are now reached from the tick: `ammo`, `armies`, `borders_fog`, `casters_animals`,
 `combat`, `economy`, `groups_guys`, `leaders`, `map_terrain`, `movement`, `production`,
 `roads`, `victory_score`, `walls`, plus crate-level `mechanics`, `objects`, `order`, `rng`, `trig`,
 `balance` and the new
@@ -102,7 +104,7 @@ inside the driver, not estimates.
 
 | | |
 |---|---:|
-| steps executed, every tick | **10 / 29** (10 of 14 in scope) |
+| steps executed, every tick | **11 / 29** (11 of 14 in scope) |
 | `Unit::process` | 36,000 |
 | `Unit::move_step` (ported integrator) | 13,544 |
 | `Unit::do_attack` | 454 |
@@ -117,6 +119,7 @@ inside the driver, not estimates.
 | territory tiles claimed | 4,096 |
 | `Groups::process` passes | 900 |
 | `Leader::gather` calls | 3,600 |
+| Army slots examined | 57,600 |
 | road tiles evaluated | 115,200 |
 | market cycles | 900 |
 | pathfinder searches / failures | 24 / 0 |

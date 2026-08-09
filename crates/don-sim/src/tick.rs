@@ -131,7 +131,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
     "step 12 GameDaemon::calc_danger gamedaemon.cpp:102 - uncited",
     "step 12 GameDaemon::process_coll_blocks gamedaemon.cpp:556 - uncited",
-    "step 13 Armies::process_all 0x006F3B00 / Army::find_target 0x006F69B0 - uncited",
+    "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
     "step 14 Unit::process_supply unit.cpp:29845 - uncited",
     "step 14 Guy::process 0x005E0230 / Guy::move 0x005D9240 - groups_guys::GuyData exists; per-guy bodies are not populated",
@@ -725,6 +725,10 @@ pub struct Sim {
     pub road_scan: crate::systems::roads::RoadScanState,
     pub groups: groups_guys::Groups,
 
+    // ---- step 13: standing AI armies -------------------------------------------------
+    pub armies: crate::systems::armies::Armies,
+    pub army_leader_flags2: [u32; NUM_LEADERS],
+
     // ---- step 14: the object bands ----------------------------------------------------
     pub prod_rules: production::ProdRules,
     pub combat_rules: combat::CombatConstants,
@@ -795,6 +799,8 @@ impl Sim {
             map,
             road_scan: crate::systems::roads::RoadScanState::default(),
             groups: groups_guys::Groups::default(),
+            armies: crate::systems::armies::Armies::new(),
+            army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
             combat_rules: combat::CombatConstants::shipped(),
             builds: Vec::new(),
@@ -1058,7 +1064,9 @@ impl Sim {
         t.work[12] = w;
 
         // 13 — Armies::process_all.
-        t.steps[13] = StepRun::Unimplemented(Gap::ArmiesProcessAll);
+        let (r, w) = self.armies_process_all();
+        t.steps[13] = r;
+        t.work[13] = w;
 
         // 14 — Objects::process_all. The rotation lives here.
         let (r, w) = self.objects_process_all();
@@ -1668,6 +1676,29 @@ impl Sim {
             (StepRun::Vacuous, 0)
         } else {
             (StepRun::Executed, work)
+        }
+    }
+
+    // -- step 13 ----------------------------------------------------------------------
+
+    /// `Armies::process_all` `0x006F3B00`: exact owner/slot dispatcher over the retail
+    /// preallocated store. Valid armies fail closed until their full object host is present.
+    fn armies_process_all(&mut self) -> (StepRun, u32) {
+        let trace =
+            self.armies
+                .process_step13_dispatch(crate::systems::armies::Step13DispatchInputs {
+                    frame: self.world.frame,
+                    world_width: self.map.world.tile_xs,
+                    world_height: self.map.world.tile_ys,
+                    leader_flags: std::array::from_fn(|who| self.step8.leaders[who].flags),
+                    leader_flags2: self.army_leader_flags2,
+                });
+        self.cover.gaps[Gap::ArmiesProcessAll.index()] +=
+            trace.missing_live_host_armies as u64 + trace.process.gaps.total();
+        if trace.process.slots_examined == 0 {
+            (StepRun::Vacuous, 0)
+        } else {
+            (StepRun::Executed, trace.process.slots_examined)
         }
     }
 

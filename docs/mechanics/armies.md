@@ -1,9 +1,9 @@
 # Armies — recovered step-13 evidence
 
-Status: **research-only, Tier C, not wired**. The declared Rust module is an evidence-bearing
-transcription, not a runnable implementation of `Armies::process_all`. Its composite drivers
-are compiled only for tests and named `*_research_partial`; `RUNTIME_FIDELITY_READY` is
-`false`.
+Status: **executable Tier C dispatcher and deterministic prefix**. `Armies::process_all`
+runs from tick step 13. `RUNTIME_FIDELITY_READY` remains `false`: the instruction-derived
+outer/state-machine control flow is runnable, while reached AI bodies and an unattached live
+Army host remain explicit gaps rather than approximations.
 
 ## Retail shape
 
@@ -37,9 +37,25 @@ The following retail bodies are reached by the step-13 control flow and remain a
 `Army::find_target` is especially load-bearing: it is 7,571 bytes and is the class's only
 consumer of `game_random`. Counting its skipped calls does not preserve RNG position.
 
-## Admission rule
+## Executable boundary
 
-Do not wire the research drivers into `Game::do_frame`, replay validation, the RL environment,
-or the playable edition. Admission requires all machine-readable blockers to be removed and
-retail differential evidence for the completed entry points. Passing local control-flow tests
-only establishes internal consistency of the transcription.
+The public `Armies::process_all` accepts a complete `ArmyWorld` and executes the recovered
+deterministic prefix, returning every reached unresolved body in `ArmyProcessTrace::gaps`.
+The lightweight tick owns the exact 8-by-16 preallocated Army store, uses live Leader flags,
+an explicit `leader_flags2` input, and scans invalid slots exactly. This is the ordinary
+state until the still-unported `Leader::plan_strategy` creates an Army.
+
+A valid Army reaches Group, Unit, City, diplomacy and type-table facts. Until that composite
+host is attached, the tick counts valid records first and refuses the whole Army transaction:
+no hurry bit, timer, target or group state is partially changed. This is a runtime boundary,
+not retail-oracle evidence; `RUNTIME_FIDELITY_READY` remains false until the named bodies and
+oracle work close.
+
+## Verification
+
+Forty-nine focused module tests cover the PDB image, save walk, container lifecycle,
+membership and aggregates, group sorting, movement/engagement tests, action fan-out,
+targeting prologue, owner gates, both phase schedules, hurry, retirement, merge, retarget and
+the production dispatcher trace. Four real-tick tests pin active/vacuous dispatch, the
+`leader_flags2 & 0xA` gate, 16 slots per enabled owner, and transactional preservation of a
+valid Army when its live host is unavailable.

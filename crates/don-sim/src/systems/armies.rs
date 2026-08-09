@@ -100,11 +100,10 @@
 //!
 //! # Fidelity
 //!
-//! **Research-only Tier C.** Instruction-level transcription with local tests; nothing here
-//! has been executed against retail and there is no oracle case for any `Army` entry point.
-//! The recovered retail tick entry points are intentionally test-only and carry a
-//! `_research_partial` suffix: their gap ledgers are evidence tools, not runnable fidelity.
-//! Exact, self-contained data-layout and query primitives remain public. The machine-readable
+//! **Tier C.** Instruction-level transcription with local tests; nothing here has been
+//! executed against a retail oracle. The complete step-13 dispatcher and deterministic
+//! `Army::process` prefix are executable through [`Armies::process_all`]. Reached AI bodies
+//! remain explicit [`ArmyGaps`] rather than guessed. The machine-readable retail-oracle
 //! boundary is [`RUNTIME_FIDELITY_READY`] / [`RUNTIME_FIDELITY_BLOCKERS`], and the evidence
 //! ledger is `docs/mechanics/armies.md`.
 
@@ -118,6 +117,11 @@ use crate::trig::find_angle;
 /// production library contains no army tick driver while any named retail body remains
 /// absent.
 pub const RUNTIME_FIDELITY_READY: bool = false;
+
+/// The recovered step-13 dispatcher and deterministic state-machine prefix are safe to
+/// execute with an [`ArmyWorld`] host. This is deliberately independent of retail-oracle
+/// fidelity: unresolved reached bodies are returned in [`ArmyProcessTrace::gaps`].
+pub const STEP13_DISPATCH_READY: bool = true;
 
 /// Retail bodies reached by the recovered step-13 driver but not executed by it.
 ///
@@ -325,6 +329,36 @@ impl ArmyGaps {
             + self.use_scouts
             + self.find_muster_spot
     }
+
+    fn merge(&mut self, other: &ArmyGaps) {
+        self.do_mustering += other.do_mustering;
+        self.do_defending += other.do_defending;
+        self.do_marching += other.do_marching;
+        self.do_forming += other.do_forming;
+        self.do_transporting += other.do_transporting;
+        self.engagement += other.engagement;
+        self.use_generals += other.use_generals;
+        self.use_spies += other.use_spies;
+        self.use_scouts += other.use_scouts;
+        self.find_muster_spot += other.find_muster_spot;
+        self.game_random_stream_unresolved += other.game_random_stream_unresolved;
+    }
+}
+
+/// Per-call evidence from the exact `Armies::process_all` dispatcher and the recovered
+/// deterministic prefix of every reached `Army::process`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArmyProcessTrace {
+    /// Owners that passed all three retail leader gates.
+    pub owners_enabled: u32,
+    /// Army slots examined under enabled owners, including invalid preallocated slots.
+    pub slots_examined: u32,
+    /// Valid armies dispatched to `Army::process`.
+    pub armies_processed: u32,
+    /// Valid armies whose 256-frame heavy prefix ran, including hurry-forced passes.
+    pub heavy_passes: u32,
+    /// Reached bodies which remain unresolved.
+    pub gaps: ArmyGaps,
 }
 
 /// The three `Random::get` sites inside `Army::find_target` `0x006F69B0`, in address order.
@@ -491,6 +525,147 @@ pub trait ArmyWorld {
     /// `Group` virtual `+0x0C` — the in-place add `Army::add_unit` uses when the army
     /// already has a group 0.
     fn group_add_member(&mut self, gid: i32, o: i32, who: usize);
+}
+
+/// Live facts required by the outer step-13 dispatcher when no valid Army has yet been
+/// created. `Leader::plan_strategy` is the normal creator; until that AI body runs, the
+/// retail-preallocated 16 slots per enabled owner are all invalid and no deeper host query
+/// is reached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Step13DispatchInputs {
+    pub frame: i32,
+    pub world_width: i32,
+    pub world_height: i32,
+    pub leader_flags: [u32; NUM_LEADERS],
+    pub leader_flags2: [u32; NUM_LEADERS],
+}
+
+/// Result of executing the ordinary preallocated-slot step-13 boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Step13DispatchTrace {
+    pub process: ArmyProcessTrace,
+    /// Valid armies suppressed because their Group/Unit/City host was not attached. This
+    /// is zero for a newly initialized game, whose 128 slots are all invalid.
+    pub missing_live_host_armies: u32,
+}
+
+struct DispatcherOnlyWorld {
+    inputs: Step13DispatchInputs,
+}
+
+impl ArmyWorld for DispatcherOnlyWorld {
+    fn frame(&self) -> i32 {
+        self.inputs.frame
+    }
+    fn world_width(&self) -> i32 {
+        self.inputs.world_width
+    }
+    fn world_height(&self) -> i32 {
+        self.inputs.world_height
+    }
+    fn leader_flags(&self, who: usize) -> u32 {
+        self.inputs.leader_flags[who]
+    }
+    fn leader_flags2(&self, who: usize) -> u32 {
+        self.inputs.leader_flags2[who]
+    }
+
+    fn tile_region(&self, _wx: i32, _wy: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query terrain")
+    }
+    fn tile_owner(&self, _wx: i32, _wy: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query terrain")
+    }
+    fn leader_city_num(&self, _who: usize) -> i32 {
+        unreachable!("invalid preallocated armies never query cities")
+    }
+    fn leader_is_enemy(&self, _who: usize, _other: i32) -> bool {
+        unreachable!("invalid preallocated armies never query diplomacy")
+    }
+    fn city_flags(&self, _who: usize, _city: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query cities")
+    }
+    fn city_reg(&self, _who: usize, _city: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query cities")
+    }
+    fn city_pos(&self, _who: usize, _city: i32) -> (i32, i32) {
+        unreachable!("invalid preallocated armies never query cities")
+    }
+    fn object_alive(&self, _who: usize, _o: i32) -> bool {
+        unreachable!("invalid preallocated armies never query objects")
+    }
+    fn object_pos(&self, _who: usize, _o: i32) -> (i32, i32) {
+        unreachable!("invalid preallocated armies never query objects")
+    }
+    fn unit_on_map(&self, _who: usize, _o: i32) -> bool {
+        unreachable!("invalid preallocated armies never query units")
+    }
+    fn unit_action_type(&self, _who: usize, _o: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query units")
+    }
+    fn unit_order_active(&self, _who: usize, _o: i32) -> Option<bool> {
+        unreachable!("invalid preallocated armies never query orders")
+    }
+    fn unit_type_category(&self, _who: usize, _o: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query type data")
+    }
+    fn group_id(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_army(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn set_group_army(&mut self, _gid: i32, _army: i32) {
+        unreachable!("invalid preallocated armies never mutate groups")
+    }
+    fn group_num(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_role(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_buildings(&self, _gid: i32) -> bool {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_who(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_member(&self, _gid: i32, _k: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_num_cap(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_count(&self, _gid: i32, _ci: i32, _arg: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_find_leader(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_stance_type(&self, _gid: i32) -> i32 {
+        unreachable!("invalid preallocated armies never query groups")
+    }
+    fn group_normalize(&mut self, _gid: i32) {
+        unreachable!("invalid preallocated armies never mutate groups")
+    }
+    fn group_action_halt(&mut self, _gid: i32) {
+        unreachable!("invalid preallocated armies never issue group actions")
+    }
+    fn group_action_stance(&mut self, _gid: i32, _stance: i32) {
+        unreachable!("invalid preallocated armies never issue group actions")
+    }
+    fn group_action_move_to(&mut self, _gid: i32, _x: i32, _y: i32, _angle: i32, _order: i32) {
+        unreachable!("invalid preallocated armies never issue group actions")
+    }
+    fn push_singleton_group(&mut self, _who: usize, _o: i32) -> i32 {
+        unreachable!("invalid preallocated armies never create groups")
+    }
+    fn unit_set_group(&mut self, _who: usize, _o: i32, _gid: i32) {
+        unreachable!("invalid preallocated armies never mutate units")
+    }
+    fn group_add_member(&mut self, _gid: i32, _o: i32, _who: usize) {
+        unreachable!("invalid preallocated armies never mutate groups")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,6 +1468,48 @@ impl Armies {
         }
     }
 
+    /// Execute the exact outer dispatcher over retail's preallocated invalid slots.
+    ///
+    /// A valid `Army` reaches Group, Unit, City, diplomacy, and type-table state. The
+    /// lightweight tick does not yet own a complete adapter for those stores, so such
+    /// records are counted and the whole call fails closed before any Army mutation. A
+    /// newly initialized game has no valid Army records and therefore executes the full
+    /// dispatcher without needing that host.
+    pub fn process_step13_dispatch(&mut self, inputs: Step13DispatchInputs) -> Step13DispatchTrace {
+        let mut world = DispatcherOnlyWorld { inputs };
+        let mut missing_live_host_armies = 0u32;
+        for who in 0..NUM_LEADERS {
+            if !owner_enabled(&world, who) {
+                continue;
+            }
+            missing_live_host_armies = missing_live_host_armies.wrapping_add(
+                self.lists[who]
+                    .iter()
+                    .filter(|army| army.valid != 0)
+                    .count() as u32,
+            );
+        }
+        if missing_live_host_armies != 0 {
+            let mut process = ArmyProcessTrace::default();
+            for who in 0..NUM_LEADERS {
+                if owner_enabled(&world, who) {
+                    process.owners_enabled = process.owners_enabled.wrapping_add(1);
+                    process.slots_examined = process
+                        .slots_examined
+                        .wrapping_add(self.lists[who].len() as u32);
+                }
+            }
+            return Step13DispatchTrace {
+                process,
+                missing_live_host_armies,
+            };
+        }
+        Step13DispatchTrace {
+            process: self.process_all(&mut world),
+            missing_live_host_armies: 0,
+        }
+    }
+
     /// `Armies::init_army` `0x006F36A0`.
     ///
     /// First invalid slot wins; otherwise **the live slot with the fewest `num_units`**,
@@ -1553,31 +1770,41 @@ impl Armies {
     /// `valid`. And the owner loop is a **fixed 0..7 in index order**, with none of the
     /// `(frame + i) % 10` rotation `Objects::process_all` applies: army order is stable
     /// across frames, unit order is not.
+    pub fn process_all<W: ArmyWorld + ?Sized>(&mut self, w: &mut W) -> ArmyProcessTrace {
+        let mut trace = ArmyProcessTrace::default();
+        for who in 0..NUM_LEADERS {
+            if !owner_enabled(w, who) {
+                continue;
+            }
+            trace.owners_enabled += 1;
+            let mut i = 0usize;
+            while i < self.lists[who].len() {
+                trace.slots_examined += 1;
+                if self.lists[who][i].valid != 0 {
+                    let hurry = self.lists[who][i].status & ST_HURRY != 0;
+                    if hurry {
+                        self.lists[who][i].status &= !ST_HURRY;
+                    }
+                    if self.process_one(w, who, i, hurry, &mut trace.gaps) {
+                        trace.heavy_passes += 1;
+                    }
+                    trace.armies_processed += 1;
+                }
+                i += 1;
+            }
+        }
+        trace
+    }
+
     #[cfg(test)]
     pub(crate) fn process_all_research_partial<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
         gaps: &mut ArmyGaps,
     ) -> u32 {
-        let mut processed = 0u32;
-        for who in 0..NUM_LEADERS {
-            if !owner_enabled(w, who) {
-                continue;
-            }
-            let mut i = 0usize;
-            while i < self.lists[who].len() {
-                if self.lists[who][i].valid != 0 {
-                    let hurry = self.lists[who][i].status & ST_HURRY != 0;
-                    if hurry {
-                        self.lists[who][i].status &= !ST_HURRY;
-                    }
-                    self.process_one_research_partial(w, who, i, hurry, gaps);
-                    processed += 1;
-                }
-                i += 1;
-            }
-        }
-        processed
+        let trace = self.process_all(w);
+        gaps.merge(&trace.gaps);
+        trace.armies_processed
     }
 
     /// Research transcription of `Army::process` `0x006F93D0`'s outer state machine.
@@ -1614,8 +1841,7 @@ impl Armies {
     /// for artificial lag is *not* what staggers this; `off` is deterministic.
     ///
     /// Returns `true` if the heavy pass ran.
-    #[cfg(test)]
-    pub(crate) fn process_one_research_partial<W: ArmyWorld + ?Sized>(
+    fn process_one<W: ArmyWorld + ?Sized>(
         &mut self,
         w: &mut W,
         who: usize,
@@ -1795,6 +2021,18 @@ impl Armies {
         true
     }
 
+    #[cfg(test)]
+    pub(crate) fn process_one_research_partial<W: ArmyWorld + ?Sized>(
+        &mut self,
+        w: &mut W,
+        who: usize,
+        idx: usize,
+        hurry: bool,
+        gaps: &mut ArmyGaps,
+    ) -> bool {
+        self.process_one(w, who, idx, hurry, gaps)
+    }
+
     /// The merge branch of `Army::process`, `0x006F9588`..`0x006F9792`.
     ///
     /// A shrunken army — `num_standard < (num_captains - num_decoys)/2` — scans **all
@@ -1809,7 +2047,6 @@ impl Armies {
     /// and `add_unit` appends to the destination's group 0, so the merged army's member
     /// order is the reverse of the source's. That ordering is visible in the `groups`
     /// checksum channel.
-    #[cfg(test)]
     fn try_merge<W: ArmyWorld + ?Sized>(&mut self, w: &mut W, who: usize, idx: usize) -> bool {
         let (num_standard, num_captains, num_decoys, reg) = {
             let a = &self.lists[who][idx];
@@ -2542,6 +2779,54 @@ mod tests {
     }
 
     // --- process_all -------------------------------------------------------------------
+
+    #[test]
+    fn production_dispatch_trace_counts_enabled_owners_slots_and_heavy_passes() {
+        let mut w = TestWorld::new();
+        w.leader_flags = [0; NUM_LEADERS];
+        w.leader_flags[0] = LF_ACTIVE;
+        let mut ar = Armies::new();
+        ar.lists[0][0].init(&w, 0, 0, -1);
+
+        let trace = ar.process_all(&mut w);
+
+        assert_eq!(trace.owners_enabled, 1);
+        assert_eq!(trace.slots_examined, ARMIES_PER_PLAYER as u32);
+        assert_eq!(trace.armies_processed, 1);
+        assert_eq!(trace.heavy_passes, 1);
+        assert_eq!(trace.gaps.do_mustering, 1);
+    }
+
+    #[test]
+    fn step13_preallocated_dispatch_executes_without_deeper_host_facts() {
+        let mut ar = Armies::new();
+        let mut inputs = Step13DispatchInputs::default();
+        inputs.leader_flags[0] = LF_ACTIVE;
+
+        let trace = ar.process_step13_dispatch(inputs);
+
+        assert_eq!(trace.process.owners_enabled, 1);
+        assert_eq!(trace.process.slots_examined, ARMIES_PER_PLAYER as u32);
+        assert_eq!(trace.process.armies_processed, 0);
+        assert_eq!(trace.missing_live_host_armies, 0);
+    }
+
+    #[test]
+    fn step13_live_army_without_complete_host_fails_closed_before_mutation() {
+        let mut ar = Armies::new();
+        ar.lists[0][0].valid = 1;
+        ar.lists[0][0].status = ST_HURRY | ST_MUSTERING;
+        let before = ar.lists[0][0].clone();
+        let mut inputs = Step13DispatchInputs::default();
+        inputs.leader_flags[0] = LF_ACTIVE;
+
+        let trace = ar.process_step13_dispatch(inputs);
+
+        assert_eq!(trace.process.slots_examined, ARMIES_PER_PLAYER as u32);
+        assert_eq!(trace.process.armies_processed, 0);
+        assert_eq!(trace.missing_live_host_armies, 1);
+        assert_eq!(ar.lists[0][0], before);
+    }
 
     #[test]
     fn process_all_skips_a_disabled_owner_three_ways() {
