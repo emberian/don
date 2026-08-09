@@ -234,4 +234,40 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn six_action_frontier_has_exact_static_delta() {
+        assert_eq!(
+            don_sim::command::ActionDef::find("stop_spell")
+                .unwrap()
+                .port,
+            Port::Complete
+        );
+        for name in [
+            "transport",
+            "city_gather",
+            "gather_point",
+            "eject_all",
+            "alarm",
+        ] {
+            assert_eq!(
+                don_sim::command::ActionDef::find(name).unwrap().port,
+                Port::StateWired
+            );
+        }
+        let counts = GROUP_ACTIONS
+            .iter()
+            .fold([0usize; 6], |mut counts, action| {
+                counts[match action.port {
+                    Port::Complete => 0,
+                    Port::Orders => 1,
+                    Port::State => 2,
+                    Port::StateWired => 3,
+                    Port::Todo => 4,
+                    Port::NotOnTheWire => 5,
+                }] += 1;
+                counts
+            });
+        assert_eq!(counts, [8, 15, 0, 5, 7, 7]);
+    }
 }

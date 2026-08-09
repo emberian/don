@@ -131,6 +131,8 @@ use crate::systems::order_dispatch::{
 pub mod diplomacy_command_plans;
 #[path = "systems/direct_entity_command_integration.rs"]
 pub mod direct_entity_command_integration;
+#[path = "systems/group_action_frontier.rs"]
+pub mod group_action_frontier;
 #[path = "systems/late_command_plans.rs"]
 pub mod late_command_plans;
 #[path = "systems/object_command_plans.rs"]
@@ -144,6 +146,10 @@ use self::diplomacy_command_plans::{
     DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
 };
 use self::direct_entity_command_integration::{DirectEntityFleetReceipt, DirectEntityFleetRequest};
+use self::group_action_frontier::{
+    plan_stop_spell, GroupActionTransactionStatus, OpenGroupActionCommand, StopSpellMemberFacts,
+    StopSpellReceipt, StopSpellRequest, StopSpellStep,
+};
 use self::late_command_plans::{
     CannonTimeFacts, CannonTimeReceipt, CannonTimeRequest, PlanStatus as LateCommandPlanStatus,
 };
@@ -1002,6 +1008,11 @@ pub trait Fleet {
         DirectEntityFleetReceipt::unavailable(request)
     }
 
+    /// Atomic receiver boundary for complete `Group::action_stop_spell`.
+    fn apply_stop_spell_transaction(&mut self, request: StopSpellRequest) -> StopSpellReceipt {
+        StopSpellReceipt::unavailable(request)
+    }
+
     fn apply_group_halt_transaction(
         &mut self,
         request: GroupHaltTransactionRequest,
@@ -1146,6 +1157,10 @@ pub struct Slot {
     pub stance_update_order_mandatory: bool,
     pub stance_update_action_present: bool,
     pub stance_update_action_mandatory: bool,
+    /// Effective concrete type index used by direct action receivers.
+    pub type_index: i32,
+    /// Unit word at `+0x98`, cleared by `action_stop_spell`.
+    pub spell_word_0x98: u16,
     pub build_active: bool,
     pub can_make_disband: bool,
     pub can_make_depopulate: bool,
@@ -1209,6 +1224,7 @@ pub struct ObjectTable {
     leader_flags: [u32; NUM_OWNER_SLOTS],
     local_who: Option<u8>,
     pause_steps: Vec<PauseStep>,
+    stop_spell_gpiece_update: bool,
 }
 
 impl ObjectTable {
@@ -1220,6 +1236,7 @@ impl ObjectTable {
             leader_flags: [0; NUM_OWNER_SLOTS],
             local_who: None,
             pause_steps: Vec::new(),
+            stop_spell_gpiece_update: false,
         }
     }
 
@@ -1235,6 +1252,10 @@ impl ObjectTable {
 
     pub fn take_pause_steps(&mut self) -> Vec<PauseStep> {
         std::mem::take(&mut self.pause_steps)
+    }
+
+    pub fn take_stop_spell_gpiece_update(&mut self) -> bool {
+        std::mem::take(&mut self.stop_spell_gpiece_update)
     }
 
     pub fn put(&mut self, who: u8, o: i16, s: Slot) {
@@ -1371,6 +1392,64 @@ impl Fleet for ObjectTable {
             s.alive = false;
             s.group = -1;
             s.orders.clear();
+        }
+    }
+
+    fn apply_stop_spell_transaction(&mut self, request: StopSpellRequest) -> StopSpellReceipt {
+        let group_after_ignore_orders = request.group.clone();
+        let n = group_after_ignore_orders
+            .num
+            .clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = group_after_ignore_orders.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(group_after_ignore_orders.who, o);
+                StopSpellMemberFacts {
+                    o,
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    on_map: slot.is_some_and(|slot| slot.is_on_map),
+                    current_order: slot
+                        .and_then(|slot| slot.orders.current())
+                        .map(|order| order.kind),
+                    unit_masks: slot.map_or(0, |slot| slot.unit_masks),
+                    type_index: slot.map_or(-1, |slot| slot.type_index),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_stop_spell(&group_after_ignore_orders, &members) else {
+            return StopSpellReceipt::unavailable(request);
+        };
+        for step in &plan.steps {
+            match *step {
+                StopSpellStep::SetUnitMasks { o, value } => {
+                    if let Some(slot) = self.get_mut(plan.group.who, o) {
+                        slot.unit_masks = value;
+                    }
+                }
+                StopSpellStep::CloseOrders { o, .. } => {
+                    if let Some(slot) = self.get_mut(plan.group.who, o) {
+                        slot.orders.clear();
+                    }
+                }
+                StopSpellStep::ClearSpellWord98 { o } => {
+                    if let Some(slot) = self.get_mut(plan.group.who, o) {
+                        slot.spell_word_0x98 = 0;
+                    }
+                }
+                StopSpellStep::SetObjectsFlag22c | StopSpellStep::UpdateGpiece => {
+                    self.stop_spell_gpiece_update = true;
+                }
+                StopSpellStep::ClearPathAnchor { .. }
+                | StopSpellStep::ClearPartialPath { .. }
+                | StopSpellStep::UpdateAction { .. } => {}
+            }
+        }
+        StopSpellReceipt {
+            request,
+            status: GroupActionTransactionStatus::Applied,
+            group_after_ignore_orders: Some(group_after_ignore_orders),
+            members,
+            plan: Some(plan),
         }
     }
 
@@ -3594,6 +3673,16 @@ impl Action<'_> {
             "halt" => {
                 let _ = self.action_halt(0, f);
             }
+            "transport" | "city_gather" | "gather_point" | "eject_all" | "alarm" => {
+                if let Some(command) = group_action_frontier::decode_open_group_action(cmd) {
+                    self.action_open_frontier(command);
+                }
+            }
+            "stop_spell" => {
+                if group_action_frontier::decode_stop_spell(cmd) {
+                    self.action_stop_spell(f);
+                }
+            }
             "set_transport" => {
                 if let Some(flag) = i32_at(cmd, 1) {
                     self.action_set_transport(flag, f);
@@ -3703,6 +3792,41 @@ impl Action<'_> {
             _ => {
                 self.stats.unported += 1;
             }
+        }
+    }
+
+    /// Deterministic prefix for five world-owning group actions.  The typed plan exposes
+    /// the exact downstream owner and keeps these rows `StateWired` until that tail lands.
+    fn action_open_frontier(&mut self, command: OpenGroupActionCommand) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let plan = group_action_frontier::plan_open_group_action(&group, command);
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
+        }
+    }
+
+    fn action_stop_spell(&mut self, f: &mut dyn Fleet) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let request = StopSpellRequest {
+            group,
+            frame: self.frame,
+        };
+        let receipt = f.apply_stop_spell_transaction(request.clone());
+        if receipt.status != GroupActionTransactionStatus::Applied || !receipt.validates(&request) {
+            return;
+        }
+        let Some(plan) = receipt.plan else { return };
+        self.stats.orders_cleared += plan
+            .steps
+            .iter()
+            .filter(|step| matches!(step, StopSpellStep::CloseOrders { .. }))
+            .count() as u64;
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
         }
     }
 

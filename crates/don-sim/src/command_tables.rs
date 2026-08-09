@@ -99,7 +99,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 1,
         installs: &[],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::Complete,
     },
     ActionDef {
         name: "alarm_peasant",
@@ -135,7 +135,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[],
         delegates: &["flight"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "board_ship",
@@ -171,7 +171,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 1,
         installs: &[],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "trade",
@@ -207,7 +207,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "air_patrol",
@@ -347,7 +347,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 4,
         installs: &[],
         delegates: &["alarm_peasant", "garrison"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "move_to",
@@ -382,7 +382,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 3,
         installs: &[],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "scramble",
