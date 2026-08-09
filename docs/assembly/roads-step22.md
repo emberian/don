@@ -27,7 +27,11 @@ WCoord cells performs no scan and the scheduled step reports vacuous.
 For each tile, retail fills the nine cache entries in the order center, northwest, north,
 northeast, east, southeast, south, southwest, west. The corresponding road flag masks are
 `0`, then bits 31 down through 24. Building and aqua facts come from the terrain mask;
-connection points come from the selected `RoadElementCandidate` flags.
+all nine connection points come from the **current scanned tile's** single selected
+`RoadElementCandidate`. The instruction stream computes that pointer once at
+`0x00895849..0x00895858`, then applies each direction mask to its `flags` dword at
+`0x0089585E..0x00895870`. Neighbour road bits gate a direction, but neighbour candidate
+records are never read.
 
 The out-of-bounds store is a retail quirk, not a cleanup: disassembly writes zero at
 `Roads+0x128+i*4`. It leaves the newer `road_cache2` entry at `+0x604+i*4` stale while
@@ -55,15 +59,26 @@ is cleared at the start of every scheduled call so stale events cannot replay.
 The deterministic core therefore accepts sparse `CandidateFact` inputs. A roadless tile
 proves that no candidate is required. A live road without a supplied fact is preserved and
 increments the named step-22 gap; connectivity is never invented from neighboring road
-bits. `Absent` and `Present` facts execute the full recovered mutation path.
+bits. Only the current live road's missing candidate can block its evaluation. Candidate
+facts attached to neighbouring roads cannot block or alter that evaluation; those facts
+become relevant later only when their own tiles are scanned. `Absent` and `Present` facts
+execute the full recovered mutation path.
 
 ## Verification
 
-Eight module tests pin the budget and increment-before-scan order, known-absent and missing
+Ten module tests pin the budget and increment-before-scan order, known-absent and missing
 candidate branches, bad and straggled cleanup, building support, candidate-release order,
-per-call event clearing, and the stale off-map cache quirk. Three integration tests prove
+per-call event clearing, the stale off-map cache quirk, current-candidate ownership of all
+direction masks, and an east/west mutation pair that fails if neighbour flags are consulted.
+Three integration tests prove
 the real tick executes 128 tile evaluations on a 64-by-64 WCoord world, charges only missing
 renderer facts, and clears a live road when an exact absence fact is supplied.
 
 Evidence tier remains C: shipped PDB layouts, executable disassembly/decompiler, and shipped
 `roads.xml`, without a retail oracle comparison.
+
+The corrected current-candidate ownership passed both independent profiles on 2026-08-09:
+hbox `roads-step22-maskfix-v2-20260809T221638Z-57786-13777-c05be0c65aa3` and persvati release
+`roads-step22-maskfix-release-v2-20260809T221638Z-57787-3664-c05be0c65aa3`, each with 10/10
+focused module tests and exit 0. The first convergence attempt correctly failed the stale
+neighbor-owned legacy fixture; v2 pins the reciprocal current-tile EAST/WEST masks.

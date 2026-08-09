@@ -7,8 +7,9 @@
 //!
 //! One input does not live in `WorldData`: `Terrain::CoordInfo::roads_in_wcoord` points at
 //! sixteen `RoadElementCandidate` records maintained by the product road renderer.  This
-//! module represents the six fields the scheduled body actually reads or mutates.  A road
-//! tile without that fact fails closed and is reported; it is never guessed from adjacency.
+//! module represents the six fields the scheduled body actually reads or mutates.  A current
+//! road tile without that fact fails closed and is reported; neighbour candidates are not
+//! inputs because retail reuses the current record's direction bits for all nine cache slots.
 //! Tiles without the `SURFACE_ROAD` bit establish that no candidate is needed, so an
 //! ordinary road-free headless map still executes the exact scanner without synthetic data.
 
@@ -152,10 +153,19 @@ fn is_road(world: &World, tx: i32, ty: i32) -> bool {
     world.tmask(tx, ty) & tflag::SURFACE_MASK == tflag::SURFACE_ROAD
 }
 
-/// Populate the four caches exactly as `0x00895770..0x00895899` does. Returns whether a
-/// live road made the renderer-candidate result unknowable.
-fn populate_caches(state: &mut RoadScanState, world: &World, tx: i32, ty: i32) -> bool {
-    let mut missing = false;
+/// Populate the four caches exactly as `0x00895770..0x00895899` does. `candidate` is the
+/// record for the tile being scanned, not a record selected from each neighbouring tile:
+/// retail computes that pointer once at `0x00895849..0x00895858` and reuses its `flags`
+/// dword for all nine direction masks. Returns whether the current live road made that
+/// renderer-owned record unknowable.
+fn populate_caches(
+    state: &mut RoadScanState,
+    world: &World,
+    tx: i32,
+    ty: i32,
+    candidate: CandidateFact,
+) -> bool {
+    let missing = is_road(world, tx, ty) && candidate == CandidateFact::Missing;
     for i in 0..9 {
         let nx = tx + DX[i];
         let ny = ty + DY[i];
@@ -180,13 +190,12 @@ fn populate_caches(state: &mut RoadScanState, world: &World, tx: i32, ty: i32) -
         if road == 0 {
             continue;
         }
-        match state.candidate(nx, ny) {
-            CandidateFact::Missing => missing = true,
-            CandidateFact::Absent => {}
-            CandidateFact::Present(candidate) if candidate.rotation != 10 => {
-                state.points_cache[i] = (candidate.flags & ROAD_DIRECTION_MASK[i] != 0) as i32;
+        match candidate {
+            CandidateFact::Present(current) if current.rotation != 10 => {
+                state.points_cache[i] = (current.flags & ROAD_DIRECTION_MASK[i] != 0) as i32;
             }
             CandidateFact::Present(_) => {}
+            CandidateFact::Absent | CandidateFact::Missing => {}
         }
     }
     missing
@@ -336,12 +345,6 @@ pub fn scan_and_kill_stray_roads(state: &mut RoadScanState, world: &mut World) -
             let tx = state.curscan_x * 4 + (tile & 3);
             let ty = state.curscan_y * 4 + (tile >> 2);
             trace.tiles_scanned = trace.tiles_scanned.wrapping_add(1);
-            let missing = populate_caches(state, world, tx, ty);
-            if missing {
-                trace.missing_candidate_tiles = trace.missing_candidate_tiles.wrapping_add(1);
-                continue;
-            }
-
             let candidate = if is_road(world, tx, ty) {
                 state.candidate(tx, ty)
             } else {
@@ -353,6 +356,12 @@ pub fn scan_and_kill_stray_roads(state: &mut RoadScanState, world: &mut World) -
                     .copied()
                     .unwrap_or(CandidateFact::Absent)
             };
+            let missing = populate_caches(state, world, tx, ty, candidate);
+            if missing {
+                trace.missing_candidate_tiles = trace.missing_candidate_tiles.wrapping_add(1);
+                continue;
+            }
+
             scan_bad_tcoord(state, world, tx, ty, candidate, &mut trace);
             // Retail tests the cache populated before scan_bad, not the possibly-cleared
             // terrain bit. This can call the second child after the first removed the road.
@@ -441,8 +450,11 @@ mod tests {
         world.set_road_at(5, 0, true, 0, true);
         world.set_building_at(4, 1, true);
         let mut state = RoadScanState::default();
-        state.set_candidate(4, 0, candidate(ROAD_DIRECTION_MASK[8]));
-        state.set_candidate(5, 0, candidate(ROAD_DIRECTION_MASK[4]));
+        // Candidate flags belong to their own tile: (4,0) points EAST (index 4) and
+        // (5,0) points WEST (index 8). The former fixture inverted these masks because
+        // the old port incorrectly read each direction from the neighbouring candidate.
+        state.set_candidate(4, 0, candidate(ROAD_DIRECTION_MASK[4]));
+        state.set_candidate(5, 0, candidate(ROAD_DIRECTION_MASK[8]));
         let trace = scan_and_kill_stray_roads(&mut state, &mut world);
         assert!(is_road(&world, 4, 0));
         assert_eq!(trace.roads_cleared, 0);
@@ -467,12 +479,62 @@ mod tests {
         let mut state = RoadScanState::default();
         state.road_cache2[1] = 9;
         state.legacy_road_cache[1] = 7;
-        assert!(!populate_caches(&mut state, &world, 0, 0));
+        assert!(!populate_caches(
+            &mut state,
+            &world,
+            0,
+            0,
+            CandidateFact::Absent,
+        ));
         assert_eq!(state.road_cache2[1], 9);
         assert_eq!(state.legacy_road_cache[1], 0);
         assert_eq!(state.build_cache[1], 0);
         assert_eq!(state.points_cache[1], 0);
         assert_eq!(state.aqua_cache[1], 0);
+    }
+
+    #[test]
+    fn all_direction_masks_belong_to_the_current_tile_candidate() {
+        let mut world = world(25, 20);
+        world.set_road_at(4, 0, true, 0, true);
+        world.set_road_at(5, 0, true, 0, true);
+        let current = candidate(ROAD_DIRECTION_MASK[4]);
+        let mut state = RoadScanState::default();
+
+        // The east neighbour's renderer record is deliberately missing. Retail still
+        // obtains the east connection from the current (4,0) candidate's bit 28.
+        assert!(!populate_caches(&mut state, &world, 4, 0, current));
+        assert_eq!(state.points_cache[4], 1);
+
+        // Supplying and then mutating the neighbour candidate cannot affect this cache.
+        state.set_candidate(5, 0, candidate(0));
+        assert!(!populate_caches(&mut state, &world, 4, 0, current));
+        assert_eq!(state.points_cache[4], 1);
+        state.set_candidate(5, 0, candidate(ROAD_DIRECTION_MASK[8]));
+        assert!(!populate_caches(&mut state, &world, 4, 0, current));
+        assert_eq!(state.points_cache[4], 1);
+    }
+
+    #[test]
+    fn east_west_candidate_ownership_is_mutation_sensitive() {
+        fn run(current_flags: u32, east_flags: u32) -> bool {
+            let mut world = world(25, 20);
+            world.set_road_at(4, 0, true, 0, true);
+            world.set_road_at(5, 0, true, 0, true);
+            // Prevent the exact one-ended straggler rule from obscuring the bad-road
+            // connection decision under test.
+            world.set_building_at(4, 1, true);
+            let mut state = RoadScanState::default();
+            state.set_candidate(4, 0, candidate(current_flags));
+            state.set_candidate(5, 0, candidate(east_flags));
+            scan_and_kill_stray_roads(&mut state, &mut world);
+            is_road(&world, 4, 0)
+        }
+
+        // Current points east; the east candidate advertises nothing. Retail keeps center.
+        assert!(run(ROAD_DIRECTION_MASK[4], 0));
+        // Current points west into an empty tile; the east candidate's east bit cannot save it.
+        assert!(!run(ROAD_DIRECTION_MASK[8], ROAD_DIRECTION_MASK[4]));
     }
 
     #[test]
