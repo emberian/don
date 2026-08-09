@@ -937,7 +937,7 @@ impl ArmyData {
     ///               - count(0x13, 0x119)
     /// ```
     ///
-    /// **Phase 2** is an insertion sort over the group list, ascending by
+    /// **Phase 2** is an insertion sort over the group list, descending by
     /// `TypeData::cat` (`unit->ptype->+0x14`) of each group's leader unit, where a building
     /// group's "leader" is `list[0]` and everyone else's is `GroupData::find_leader`.
     /// The PDB names this field `cat`; it is not a combat-strength rank.
@@ -1003,9 +1003,9 @@ impl ArmyData {
                     continue;
                 }
                 let key_j = if gj < 0 { -1 } else { leader_of(w, gj) };
-                // Retail breaks when the preceding category is <= the inserted category
-                // (`jle` at the tail of Army::normalize), producing ascending order.
-                if w.unit_type_category(who, key_j) <= w.unit_type_category(who, key_i) {
+                // `cmp previous.cat, inserted.cat; jge` at 0x006F9D99..0x006F9D9C:
+                // stop shifting when the preceding category is already greater or equal.
+                if w.unit_type_category(who, key_j) >= w.unit_type_category(who, key_i) {
                     break;
                 }
                 self.list.swap(j as usize, j as usize + 1);
@@ -2358,7 +2358,9 @@ mod tests {
         a.add_group(&mut w, g2);
         a.remove_group(&mut w, g1);
         assert_eq!(a.num_groups, 2);
-        assert_eq!(&a.list[..2], &[w.group_id(g0), w.group_id(g2)]);
+        // remove_group re-enters normalize, whose category sort places g2 (cat 13)
+        // ahead of g0 (cat 11).
+        assert_eq!(&a.list[..2], &[w.group_id(g2), w.group_id(g0)]);
         assert_eq!(w.group_army(g1), -1);
     }
 
@@ -2422,17 +2424,17 @@ mod tests {
     }
 
     #[test]
-    fn normalize_sorts_groups_by_leader_type_category_ascending() {
+    fn normalize_sorts_groups_by_leader_type_category_descending() {
         let mut w = TestWorld::new();
-        let high_category = w.push_group(0, &[1], 1);
-        let low_category = w.push_group(0, &[2], 1);
+        let low_category = w.push_group(0, &[1], 1);
+        let high_category = w.push_group(0, &[2], 1);
         for o in w.objects.iter_mut() {
-            o.type_category = if o.o == 2 { 5 } else { 500 };
+            o.type_category = if o.o == 2 { 500 } else { 5 };
         }
-        let mut ar = armies_with(&mut w, 0, &[high_category, low_category]);
+        let mut ar = armies_with(&mut w, 0, &[low_category, high_category]);
         ar.lists[0][0].normalize(&mut w);
-        assert_eq!(ar.lists[0][0].list[0], w.group_id(low_category));
-        assert_eq!(ar.lists[0][0].list[1], w.group_id(high_category));
+        assert_eq!(ar.lists[0][0].list[0], w.group_id(high_category));
+        assert_eq!(ar.lists[0][0].list[1], w.group_id(low_category));
     }
 
     // --- geometry ----------------------------------------------------------------------
