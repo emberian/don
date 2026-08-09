@@ -79,6 +79,14 @@ pub extern "C" fn shim_is_connected_to_network() -> bool {
     netsys::connected()
 }
 
+/// Shim-only diagnostic marker/action. The PE32 smoke resolves this before it
+/// asks the load-only object to materialise its local NetPlayer; shipped DLLs
+/// cannot satisfy that gate and are never called with synthetic arguments.
+#[no_mangle]
+pub unsafe extern "C" fn shim_materialize_load_only_peer(this: *mut NetSysBase) -> bool {
+    netsys::materialize_load_only_peer(this)
+}
+
 /// `void CrossplayNetLib::set_network_connection_state(bool)` — `__cdecl`.
 #[no_mangle]
 pub extern "C" fn shim_set_network_connection_state(state: bool) {
@@ -127,13 +135,15 @@ pub unsafe extern "thiscall" fn shim_IsHost(this: *mut NetSysBase, _member: *con
 /// `void CrossplayNetLibSys::OnPlayerJoined(const LobbyMemberDTO&, const std::wstring&)`
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_OnPlayerJoined(
-    _this: *mut NetSysBase,
-    _member: *const c_void,
+    this: *mut NetSysBase,
+    member: *const c_void,
     _name: *const c_void,
 ) {
     netsys::trace_once("export.OnPlayerJoined");
-    // Membership is discovered from IPT_ADDPLAYER on our own transport, not
-    // from a lobby callback. Nothing to do, and nothing may fault.
+    // The only authenticated DTO in the zero-credential route is retail's own
+    // host. Retain its id solely so NetPlayer::get_id matches slot 0; remote
+    // membership remains transport-driven and carries no credential material.
+    let _ = netsys::capture_local_member_id(this, member);
 }
 
 /// `void CrossplayNetLibSys::OnPlayerLeft(const LobbyMemberDTO&)`

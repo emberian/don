@@ -45,7 +45,7 @@
 //! Every virtual is an MSVC x86 C++ member function: `__thiscall` — `this` in
 //! `ECX`, remaining arguments pushed right-to-left, **callee** cleans the stack.
 //! Rust spells that `extern "thiscall"`, which is supported on
-//! `i686-pc-windows-msvc`. The nine directly-imported `CrossplayNetLibSys`
+//! `i686-pc-windows-msvc`. The eight directly-imported `CrossplayNetLibSys`
 //! methods are `QAE` in their mangled names, which is exactly `__thiscall`
 //! public non-const; the two free functions are `YA` = `__cdecl`.
 
@@ -135,7 +135,7 @@ pub struct NetSysVtable {
     pub is_joining_in_process: unsafe extern "thiscall" fn(*mut NetSysBase) -> i32,
     /* 0x024 */ pub is_session_full: unsafe extern "thiscall" fn(*mut NetSysBase) -> i32,
     /* 0x028 */
-    pub get_url_string: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void) -> *mut c_void,
+    pub get_url_string: unsafe extern "thiscall" fn(*mut NetSysBase) -> *const MsvcGameString,
     /* 0x02c */ pub accept_host_messages: unsafe extern "thiscall" fn(*mut NetSysBase, i32),
     /* 0x030 */ pub set_number_players: unsafe extern "thiscall" fn(*mut NetSysBase, i32),
     /* 0x034 */ pub set_number_observers: unsafe extern "thiscall" fn(*mut NetSysBase, i32),
@@ -164,7 +164,8 @@ pub struct NetSysVtable {
         *mut *const NetPlayerObj,
         *mut u32,
     ) -> bool,
-    /* 0x060 */ pub poll_services: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void),
+    /* 0x060 */
+    pub poll_services: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void) -> i32,
     /* 0x064 */
     pub host: unsafe extern "thiscall" fn(
         *mut NetSysBase,
@@ -196,17 +197,17 @@ pub struct NetSysVtable {
     /* 0x070 */ pub cancel_joining: unsafe extern "thiscall" fn(*mut NetSysBase),
     /* 0x074 */ pub cancel_join: unsafe extern "thiscall" fn(*mut NetSysBase),
     /* 0x078 */ pub cancel_join_skybox: unsafe extern "thiscall" fn(*mut NetSysBase),
-    /* 0x07c */ pub disconnect: unsafe extern "thiscall" fn(*mut NetSysBase, bool),
+    /* 0x07c */ pub disconnect: unsafe extern "thiscall" fn(*mut NetSysBase, bool) -> i32,
     /* 0x080 */
     pub poll_sessions: unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void) -> i32,
     /* 0x084 */ pub stop_poll_sessions: unsafe extern "thiscall" fn(*mut NetSysBase),
     /* 0x088 */ pub clear_net_sessions: unsafe extern "thiscall" fn(*mut NetSysBase, u32),
     /* 0x08c */
     pub poll_players:
-        unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void, *mut c_void) -> i32,
+        unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void, MsvcArrayNetPlayers) -> i32,
     /* 0x090 */
     pub find_player_from_id:
-        unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void) -> *const NetPlayerObj,
+        unsafe extern "thiscall" fn(*mut NetSysBase, MsvcWstring) -> *const NetPlayerObj,
     /* 0x094 */
     pub validate_player: unsafe extern "thiscall" fn(*mut NetSysBase, *const NetPlayerObj) -> i32,
     /* 0x098 */
@@ -223,7 +224,7 @@ pub struct NetSysVtable {
     /* 0x0b4 */
     pub log_connection: unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void),
     /* 0x0b8 */
-    pub log_connection2: unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void),
+    pub log_connection2: unsafe extern "thiscall" fn(*mut NetSysBase, *const c_void, i32),
     /// Variadic. MSVC compiles a member function with an ellipsis as `__cdecl`
     /// with `this` pushed as the first stack argument, **not** `__thiscall`, so
     /// this slot is `extern "C"` and the caller cleans the stack — which is why
@@ -244,9 +245,9 @@ pub struct NetSysVtable {
     pub error_set_callback:
         unsafe extern "thiscall" fn(*mut NetSysBase, Option<unsafe extern "C" fn(i32)>),
     /* 0x0e4 */
-    pub get_group_data: unsafe extern "thiscall" fn(*mut NetSysBase) -> *mut c_void,
+    pub get_group_data: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void) -> *mut c_void,
     /* 0x0e8 */
-    pub get_service_data: unsafe extern "thiscall" fn(*mut NetSysBase) -> *mut c_void,
+    pub get_service_data: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void) -> *mut c_void,
     /* 0x0ec */
     pub delete_group_data: unsafe extern "thiscall" fn(*mut NetSysBase, *mut c_void),
     /* 0x0f0 */
@@ -342,6 +343,7 @@ const _: () = {
 /// representation, so retail's destructor never attempts to free memory
 /// allocated by another CRT.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MsvcWstring {
     pub sso: [u16; 8],
     pub len: u32,
@@ -351,6 +353,68 @@ pub struct MsvcWstring {
 const _: () = assert!(core::mem::size_of::<MsvcWstring>() == 24);
 const _: () = assert!(core::mem::offset_of!(MsvcWstring, len) == 0x10);
 const _: () = assert!(core::mem::offset_of!(MsvcWstring, capacity) == 0x14);
+
+/// Big Huge Games' own `String`, returned by value from two `NetPlayer`
+/// virtuals and by reference from `NetSys::get_url_string`.
+///
+/// The class is 20 bytes in `CrossplayNetLib.pdb`. Its canonical empty image
+/// has `module_id=1` at byte 11; it owns no allocation.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MsvcGameString {
+    pub bytes: [u8; 20],
+}
+
+const _: () = assert!(core::mem::size_of::<MsvcGameString>() == 20);
+
+/// `Array<NetPlayer*>`, passed **by value** to `NetSys::poll_players`.
+///
+/// PDB size is 28 bytes. Keeping the aggregate by value is load-bearing on
+/// x86: the callee must emit `ret 0x20` for the preceding `NetSession*` plus
+/// these 28 inline bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MsvcArrayNetPlayers {
+    pub bytes: [u8; 28],
+}
+
+const _: () = assert!(core::mem::size_of::<MsvcArrayNetPlayers>() == 28);
+
+/// `NetMessenger`'s complete 12-slot retail callback surface. **[measured,
+/// `rise.pdb` class `NetMessenger`, vtable `0x00B247E8`]**
+#[repr(C)]
+pub struct NetMessengerVtable {
+    /* 0x00 */
+    pub destructor: unsafe extern "thiscall" fn(*mut NetMessenger, u32) -> *mut c_void,
+    /* 0x04 */
+    pub on_send_failed: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x08 */
+    pub on_player_added: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x0c */
+    pub on_name_changed: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x10 */ pub on_session_lost: unsafe extern "thiscall" fn(*mut NetMessenger),
+    /* 0x14 */
+    pub on_host_migrate: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x18 */ pub on_join: unsafe extern "thiscall" fn(*mut NetMessenger, i32, u32),
+    /* 0x1c */
+    pub on_player_deleted: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x20 */
+    pub on_player_timed_out: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x24 */
+    pub on_player_pulse: unsafe extern "thiscall" fn(*mut NetMessenger, *const NetPlayerObj),
+    /* 0x28 */
+    pub allow_connection: unsafe extern "thiscall" fn(*mut NetMessenger, *const c_void) -> i32,
+    /* 0x2c */
+    pub get_session_data: unsafe extern "thiscall" fn(*mut NetMessenger) -> *const c_void,
+}
+
+#[repr(C)]
+pub struct NetMessenger {
+    pub vftable: *const NetMessengerVtable,
+}
+
+const _: () = assert!(core::mem::size_of::<NetMessengerVtable>() == 12 * 4);
+const _: () = assert!(core::mem::size_of::<NetMessenger>() == 4);
 
 /// The by-value MSVC x86 `std::function` representation used by
 /// `CrossplayNetLibSys::set_p2p_callbacks`.
@@ -382,31 +446,35 @@ pub struct NetPlayerVtable {
     /* 0x0c */ pub is_pending: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
     /* 0x10 */ pub is_observer: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
     /* 0x14 */
-    pub get_internal_name: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> *const c_void,
+    pub get_internal_name:
+        unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut MsvcGameString) -> *mut MsvcGameString,
     /* 0x18 */
+    pub set_name: unsafe extern "thiscall" fn(*mut NetPlayerObj, *const MsvcGameString),
+    /* 0x1c */
+    pub get_internal_description:
+        unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut MsvcGameString) -> *mut MsvcGameString,
+    /* 0x20 */
+    pub set_description: unsafe extern "thiscall" fn(*mut NetPlayerObj, *const MsvcGameString),
+    /* 0x24 */
     pub get_id:
         unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut MsvcWstring) -> *mut MsvcWstring,
-    /* 0x1c */
+    /* 0x28 */
     pub get_platform_id:
         unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut MsvcWstring) -> *mut MsvcWstring,
-    /* 0x20 */
+    /* 0x2c */
     pub get_platform:
         unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut MsvcWstring) -> *mut MsvcWstring,
-    /* 0x24 */ pub get_player_index: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
-    /* 0x28 */ pub get_game_version: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
-    /* 0x2c */ pub get_ping_time: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
-    /* 0x30 */
+    /* 0x30 */ pub get_player_index: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
+    /* 0x34 */ pub get_game_version: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
+    /* 0x38 */ pub get_ping_time: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
+    /* 0x3c */
     pub get_time_since_last_pulse: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
-    /* 0x34 */
+    /* 0x40 */
     pub get_send_queue_info: unsafe extern "thiscall" fn(*mut NetPlayerObj, *mut u32, *mut u32),
-    /* 0x38 */ pub reset_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj),
-    /* 0x3c */ pub inc_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj),
-    /* 0x40 */ pub get_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> u32,
-    /* 0x44 */ pub get_name: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> *const c_void,
-    /* 0x48 */
-    pub get_description: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> *const c_void,
-    /* 0x4c */ pub set_name: unsafe extern "thiscall" fn(*mut NetPlayerObj, *const c_void),
-    /* 0x50 */ pub get_dsync_frame: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
+    /* 0x44 */ pub reset_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj),
+    /* 0x48 */ pub inc_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj),
+    /* 0x4c */ pub get_sync_counter: unsafe extern "thiscall" fn(*mut NetPlayerObj) -> i32,
+    /* 0x50 */ pub log_state: unsafe extern "thiscall" fn(*mut NetPlayerObj),
 }
 
 const _: () = assert!(core::mem::size_of::<NetPlayerVtable>() == 21 * 4);
@@ -417,44 +485,67 @@ const _: () = {
     assert!(core::mem::offset_of!(NetPlayerVtable, is_pending) == 0x0c);
     assert!(core::mem::offset_of!(NetPlayerVtable, is_observer) == 0x10);
     assert!(core::mem::offset_of!(NetPlayerVtable, get_internal_name) == 0x14);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_id) == 0x18);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_platform_id) == 0x1c);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_platform) == 0x20);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_player_index) == 0x24);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_game_version) == 0x28);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_ping_time) == 0x2c);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_time_since_last_pulse) == 0x30);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_send_queue_info) == 0x34);
-    assert!(core::mem::offset_of!(NetPlayerVtable, reset_sync_counter) == 0x38);
-    assert!(core::mem::offset_of!(NetPlayerVtable, inc_sync_counter) == 0x3c);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_sync_counter) == 0x40);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_name) == 0x44);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_description) == 0x48);
-    assert!(core::mem::offset_of!(NetPlayerVtable, set_name) == 0x4c);
-    assert!(core::mem::offset_of!(NetPlayerVtable, get_dsync_frame) == 0x50);
+    assert!(core::mem::offset_of!(NetPlayerVtable, set_name) == 0x18);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_internal_description) == 0x1c);
+    assert!(core::mem::offset_of!(NetPlayerVtable, set_description) == 0x20);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_id) == 0x24);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_platform_id) == 0x28);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_platform) == 0x2c);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_player_index) == 0x30);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_game_version) == 0x34);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_ping_time) == 0x38);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_time_since_last_pulse) == 0x3c);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_send_queue_info) == 0x40);
+    assert!(core::mem::offset_of!(NetPlayerVtable, reset_sync_counter) == 0x44);
+    assert!(core::mem::offset_of!(NetPlayerVtable, inc_sync_counter) == 0x48);
+    assert!(core::mem::offset_of!(NetPlayerVtable, get_sync_counter) == 0x4c);
+    assert!(core::mem::offset_of!(NetPlayerVtable, log_state) == 0x50);
 };
 
-/// Our `NetPlayer` implementation object. The first word must be the vtable.
+/// Our `NetPlayer` implementation object. The first 172 bytes reproduce the
+/// shipped `CrossplayNetLibPlayer`; private metadata follows that prefix.
 #[repr(C)]
 pub struct NetPlayerObj {
     pub vftable: *const NetPlayerVtable,
-    /// `CrossplayNetLibPlayer::unique_id` equivalent.
-    pub unique_id: i32,
+    pub drop_requests: [u8; 28],
     pub flags: i32,
+    pub crossplay_player: *mut c_void,
+    pub ready: bool,
+    pub ready_padding: [u8; 3],
+    pub id: MsvcWstring,
+    pub platform: MsvcWstring,
+    pub platform_id: MsvcWstring,
+    pub name: MsvcGameString,
+    pub description: MsvcGameString,
+    pub game_version: u32,
+    pub last_pulse_ms: u32,
     pub sync_counter: u32,
     pub dsync_frame: i32,
-    pub last_pulse_ms: u32,
-    pub ping_ms: u32,
+    // Shim-private tail; retail's measured object ends at byte 172.
+    pub unique_id: i32,
     pub player_index: i32,
-    pub game_version: u32,
-    /// Collision-free base-36 encoding of the complete `unique_id` bit pattern.
-    /// It is at most seven UTF-16 code units and therefore always fits the
-    /// measured MSVC `wstring` SSO representation.
-    pub id_sso: [u16; 8],
-    pub id_len: u32,
-    /// Narrow name for `get_internal_name`.
-    pub name_utf8: [u8; 64],
+    pub ping_ms: u32,
+    pub id_wide: [u16; 129],
+    pub id_len: u16,
+    pub name_wide: [u16; 65],
+    pub name_len: u16,
 }
+
+const _: () = {
+    assert!(core::mem::offset_of!(NetPlayerObj, flags) == 32);
+    assert!(core::mem::offset_of!(NetPlayerObj, crossplay_player) == 36);
+    assert!(core::mem::offset_of!(NetPlayerObj, ready) == 40);
+    assert!(core::mem::offset_of!(NetPlayerObj, id) == 44);
+    assert!(core::mem::offset_of!(NetPlayerObj, platform) == 68);
+    assert!(core::mem::offset_of!(NetPlayerObj, platform_id) == 92);
+    assert!(core::mem::offset_of!(NetPlayerObj, name) == 116);
+    assert!(core::mem::offset_of!(NetPlayerObj, description) == 136);
+    assert!(core::mem::offset_of!(NetPlayerObj, game_version) == 156);
+    assert!(core::mem::offset_of!(NetPlayerObj, last_pulse_ms) == 160);
+    assert!(core::mem::offset_of!(NetPlayerObj, sync_counter) == 164);
+    assert!(core::mem::offset_of!(NetPlayerObj, dsync_frame) == 168);
+    assert!(core::mem::offset_of!(NetPlayerObj, unique_id) == 172);
+};
 
 /// `CrossplayNetLibPlayer::Flags`. **[measured]**
 pub const SNLPLAYER_HOST: i32 = 1;

@@ -11,13 +11,23 @@ use crate::abi::*;
 use core::ffi::c_void;
 use don_net::session::{Role, Session};
 use don_net::transport::{Dest, TcpTransport, Transport};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(block: *mut c_void);
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+}
 
 /// Exact extent of `NetDaemon::data`, the destination passed to `NetSys::get`.
 ///
@@ -29,7 +39,7 @@ use std::time::{Duration, Instant};
 /// are therefore refused before any copy.
 const NETDAEMON_RECEIVE_EXTENT: usize = 2048;
 
-static CONNECTED: AtomicBool = AtomicBool::new(true);
+static CONNECTED: AtomicBool = AtomicBool::new(false);
 
 struct Trace {
     file: Option<File>,
@@ -114,21 +124,43 @@ struct State {
     matchmaking_id: i32,
     error_callback: Option<unsafe extern "C" fn(i32)>,
     load_only: bool,
+    game_version: u32,
+    active: bool,
+    local_member_id: Vec<u16>,
+    setup_bridge: bool,
+    bridged_slots: BTreeMap<i32, i32>,
 }
 
 #[repr(C)]
 struct NetSysObj {
     base: NetSysBase,
+    // Reproduce the direct-access prefix of shipped CrossplayNetLibSys. Retail
+    // reads m_crossplay at +0xCC immediately after init returns success.
+    flags: i32,
+    net_messenger: *mut NetMessenger,
+    reserved_to_crossplay: [u8; 108],
+    m_crossplay: *mut c_void,
+    reserved_shipped_tail: [u8; 768],
     /// Boxed so the C-visible prefix stays exactly `NetSysBase`.
     state: *mut State,
 }
+
+const _: () = {
+    assert!(core::mem::offset_of!(NetSysObj, flags) == 0x58);
+    assert!(core::mem::offset_of!(NetSysObj, net_messenger) == 0x5c);
+    assert!(core::mem::offset_of!(NetSysObj, m_crossplay) == 0xcc);
+    assert!(core::mem::offset_of!(NetSysObj, state) == 0x3d0);
+};
 
 pub fn connected() -> bool {
     CONNECTED.load(Ordering::Relaxed)
 }
 
 pub fn set_connected(v: bool) {
-    CONNECTED.store(v && !load_only_mode(), Ordering::Relaxed);
+    // Shipped set_network_connection_state is an empty function. Connection
+    // truth is owned by successful lifecycle transitions below, not by this
+    // compatibility export.
+    let _ = v;
 }
 
 pub unsafe fn is_load_only(this: *mut NetSysBase) -> bool {
@@ -174,7 +206,9 @@ pub fn create() -> *mut NetSysBase {
         .map(|addr| addr.to_string())
         .unwrap_or_else(|_| "unavailable".into());
     let load_only = load_only_mode();
-    CONNECTED.store(!load_only, Ordering::Relaxed);
+    // Merely loading the replacement is not a connection. The lifecycle
+    // entry point makes this true after `init` retained retail's callbacks.
+    CONNECTED.store(false, Ordering::Relaxed);
     trace_detail(format_args!(
         "factory=ready abi=netsys-v65 role={role:?} load_only={load_only} local_addr={local_addr}"
     ));
@@ -194,11 +228,20 @@ pub fn create() -> *mut NetSysBase {
         matchmaking_id: 0,
         error_callback: None,
         load_only,
+        game_version: 0,
+        active: false,
+        local_member_id: Vec::new(),
+        setup_bridge: env_truthy("DON_NET_SETUP_BRIDGE"),
+        bridged_slots: BTreeMap::new(),
     });
     let obj = Box::new(NetSysObj {
         base: NetSysBase {
             vftable: &NETSYS_VTABLE,
-            num_players: 1,
+            // Match the shipped CrossplayNetLibSys constructor: membership is
+            // empty until the first session/lobby materialisation. Advertising
+            // one player while players[0] is null lets retail dereference a
+            // contradiction before `pump` can populate the prefix.
+            num_players: 0,
             players: [core::ptr::null_mut(); 8],
             local_player: core::ptr::null_mut(),
             host_player: core::ptr::null_mut(),
@@ -207,6 +250,12 @@ pub fn create() -> *mut NetSysBase {
             net_sessions: [0u8; 28],
             log: core::ptr::null_mut(),
         },
+        // Shipped CrossplayNetLibSys constructor state at concrete +0x58.
+        flags: 0x40,
+        net_messenger: core::ptr::null_mut(),
+        reserved_to_crossplay: [0; 108],
+        m_crossplay: core::ptr::null_mut(),
+        reserved_shipped_tail: [0; 768],
         state: Box::into_raw(state),
     });
     // Deliberately leaked: the game never frees the object (there is no
@@ -269,74 +318,444 @@ fn encode_id_sso(id: i32) -> ([u16; 8], u32) {
     (out, count as u32)
 }
 
+const fn empty_game_string() -> MsvcGameString {
+    let mut bytes = [0u8; 20];
+    bytes[11] = 1;
+    MsvcGameString { bytes }
+}
+
+fn sso_wstring(code_units: [u16; 8], len: u32) -> MsvcWstring {
+    MsvcWstring {
+        sso: code_units,
+        len,
+        capacity: 7,
+    }
+}
+
+unsafe fn wstring_units(value: &MsvcWstring) -> Option<&[u16]> {
+    let len = value.len as usize;
+    if len > 128 || value.capacity < value.len {
+        return None;
+    }
+    if value.capacity < 8 {
+        return Some(&value.sso[..len]);
+    }
+    let ptr = core::ptr::read_unaligned(value.sso.as_ptr().cast::<*const u16>());
+    if ptr.is_null() {
+        return None;
+    }
+    Some(core::slice::from_raw_parts(ptr, len))
+}
+
+unsafe fn destroy_wstring(value: &mut MsvcWstring) {
+    if value.capacity >= 8 {
+        let ptr = core::ptr::read_unaligned(value.sso.as_ptr().cast::<*mut c_void>());
+        if !ptr.is_null() {
+            free(ptr);
+        }
+    }
+    *value = sso_wstring([0; 8], 0);
+}
+
+unsafe fn owned_wstring(units: &[u16]) -> Option<MsvcWstring> {
+    if units.len() <= 7 {
+        let mut sso = [0u16; 8];
+        sso[..units.len()].copy_from_slice(units);
+        return Some(sso_wstring(sso, units.len() as u32));
+    }
+    let bytes = (units.len() + 1).checked_mul(core::mem::size_of::<u16>())?;
+    let ptr = malloc(bytes).cast::<u16>();
+    if ptr.is_null() {
+        return None;
+    }
+    core::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+    *ptr.add(units.len()) = 0;
+    let mut storage = [0u16; 8];
+    core::ptr::write_unaligned(storage.as_mut_ptr().cast::<*mut u16>(), ptr);
+    Some(MsvcWstring {
+        sso: storage,
+        len: units.len() as u32,
+        capacity: units.len() as u32,
+    })
+}
+
+unsafe fn set_player_id(object: &mut NetPlayerObj, units: &[u16]) -> bool {
+    if units.len() > object.id_wide.len() - 1 {
+        return false;
+    }
+    let Some(id) = owned_wstring(units) else {
+        return false;
+    };
+    let Some(platform_id) = owned_wstring(units) else {
+        let mut id = id;
+        destroy_wstring(&mut id);
+        return false;
+    };
+    destroy_wstring(&mut object.id);
+    destroy_wstring(&mut object.platform_id);
+    object.id = id;
+    object.platform_id = platform_id;
+    object.id_wide = [0; 129];
+    object.id_wide[..units.len()].copy_from_slice(units);
+    object.id_len = units.len() as u16;
+    true
+}
+
+impl Drop for NetPlayerObj {
+    fn drop(&mut self) {
+        unsafe {
+            destroy_wstring(&mut self.id);
+            destroy_wstring(&mut self.platform);
+            destroy_wstring(&mut self.platform_id);
+        }
+    }
+}
+
+fn build_player(player: &don_net::session::Player) -> Box<NetPlayerObj> {
+    let (id_sso, id_len) = encode_id_sso(player.unique_id);
+    let mut id_wide = [0u16; 129];
+    id_wide[..id_len as usize].copy_from_slice(&id_sso[..id_len as usize]);
+    let mut platform = [0u16; 8];
+    platform[..3].copy_from_slice(&[b'd' as u16, b'o' as u16, b'n' as u16]);
+    let mut name_wide = [0u16; 65];
+    let mut name_len = 0usize;
+    for unit in player.name.encode_utf16().take(64) {
+        name_wide[name_len] = unit;
+        name_len += 1;
+    }
+    let mut object = Box::new(NetPlayerObj {
+        vftable: &NETPLAYER_VTABLE,
+        drop_requests: [0; 28],
+        // Shipped process_playerlist calls on_player_added while this pending
+        // bit is still set, then clears it immediately afterwards.
+        flags: SNLPLAYER_PENDING,
+        crossplay_player: core::ptr::null_mut(),
+        ready: player.ready,
+        ready_padding: [0; 3],
+        id: sso_wstring(id_sso, id_len),
+        platform: sso_wstring(platform, 3),
+        platform_id: sso_wstring(id_sso, id_len),
+        name: empty_game_string(),
+        description: empty_game_string(),
+        game_version: 0,
+        last_pulse_ms: player.last_pulse_ms as u32,
+        sync_counter: 0,
+        dsync_frame: 0,
+        unique_id: player.unique_id,
+        player_index: player.slot as i32,
+        ping_ms: 0,
+        id_wide,
+        id_len: id_len as u16,
+        name_wide,
+        name_len: name_len as u16,
+    });
+    // SetupWin::check_all_connected (retail 0x005BCC23) tests the concrete
+    // CrossplayNetLibPlayer field at +0x24 for non-null. Our transport has no
+    // ICrossplayPlayer, so the stable allocation itself is the durable opaque
+    // membership handle. The game only compares this field in the recovered
+    // setup gate; shim code never dispatches through it.
+    object.crossplay_player = object.as_mut() as *mut NetPlayerObj as *mut c_void;
+    object
+}
+
+fn update_player(object: &mut NetPlayerObj, player: &don_net::session::Player) {
+    object.flags = (object.flags & SNLPLAYER_PENDING)
+        | if player.is_host { SNLPLAYER_HOST } else { 0 }
+        | if player.is_local { SNLPLAYER_LOCAL } else { 0 };
+    object.ready = player.ready;
+    object.last_pulse_ms = player.last_pulse_ms as u32;
+    object.player_index = player.slot as i32;
+}
+
+fn game_string_from_wide(ptr: *const u16, len: u16) -> MsvcGameString {
+    let mut value = empty_game_string();
+    value.bytes[..4].copy_from_slice(&(ptr as u32).to_le_bytes());
+    value.bytes[4..6].copy_from_slice(&len.to_le_bytes());
+    value.bytes[8..10].copy_from_slice(&len.to_le_bytes());
+    value.bytes[10] = 1; // const-literal form; no allocation ownership
+    value
+}
+
+unsafe fn messenger(this: *mut NetSysBase) -> Option<*mut NetMessenger> {
+    let object = this as *mut NetSysObj;
+    if object.is_null() || (*object).net_messenger.is_null() {
+        None
+    } else {
+        Some((*object).net_messenger)
+    }
+}
+
+unsafe fn notify_player_added(this: *mut NetSysBase, player: *const NetPlayerObj) {
+    let Some(messenger) = messenger(this) else {
+        return;
+    };
+    let vtable = (*messenger).vftable;
+    if !vtable.is_null() {
+        trace_detail(format_args!(
+            "callback=NetMessenger.on_player_added player_non_null={}",
+            !player.is_null()
+        ));
+        ((*vtable).on_player_added)(messenger, player);
+    }
+}
+
+unsafe fn notify_player_deleted(this: *mut NetSysBase, player: *const NetPlayerObj) {
+    let Some(messenger) = messenger(this) else {
+        return;
+    };
+    let vtable = (*messenger).vftable;
+    if !vtable.is_null() {
+        trace_detail(format_args!(
+            "callback=NetMessenger.on_player_deleted player_non_null={}",
+            !player.is_null()
+        ));
+        ((*vtable).on_player_deleted)(messenger, player);
+    }
+}
+
+const CONNECTION_DATA_RVA: usize = 0x00aa_e448;
+const SETUPWIN_GLOBAL_RVA: usize = 0x008a_b3a0;
+const CONNECTION_ADD_PLAYER_RVA: usize = 0x0054_f560;
+const CONNECTION_GET_PLAYER_INDEX_RVA: usize = 0x0054_d180;
+const CONNECTION_SEND_PLAYER_RVA: usize = 0x0054_ec40;
+
+unsafe fn bridge_context(this: *mut NetSysBase) -> Option<(*mut u8, *mut c_void)> {
+    let state = st(this)?;
+    if state.load_only || !state.setup_bridge || state.session.role != Role::Host {
+        return None;
+    }
+    let base = GetModuleHandleW(core::ptr::null()).cast::<u8>();
+    if base.is_null() {
+        return None;
+    }
+    let setup = *base.add(SETUPWIN_GLOBAL_RVA).cast::<*mut c_void>();
+    if setup.is_null() {
+        trace_detail(format_args!("setup_bridge=deferred reason=setupwin-null"));
+        return None;
+    }
+    Some((base, base.add(CONNECTION_DATA_RVA).cast()))
+}
+
+unsafe fn bridge_add_player(this: *mut NetSysBase, player: *const NetPlayerObj) -> Option<i32> {
+    if player.is_null() || (*player).flags & SNLPLAYER_LOCAL != 0 {
+        return None;
+    }
+    let (base, connection_data) = bridge_context(this)?;
+    let units = &(&(*player).id_wide)[..(*player).id_len as usize];
+    let add_id = owned_wstring(units)?;
+    let find_id = owned_wstring(units)?;
+    let add_player: unsafe extern "thiscall" fn(*mut c_void, MsvcWstring) =
+        core::mem::transmute(base.add(CONNECTION_ADD_PLAYER_RVA));
+    let get_player_index: unsafe extern "thiscall" fn(*mut c_void, MsvcWstring) -> i32 =
+        core::mem::transmute(base.add(CONNECTION_GET_PLAYER_INDEX_RVA));
+    add_player(connection_data, add_id);
+    let slot = get_player_index(connection_data, find_id);
+    if !(0..8).contains(&slot) {
+        trace_detail(format_args!(
+            "setup_bridge=refused action=add_player reason=slot-not-found"
+        ));
+        return None;
+    }
+    trace_detail(format_args!(
+        "setup_bridge=ok action=add_player slot={slot} credential_material=none"
+    ));
+    Some(slot)
+}
+
+unsafe fn bridge_ready(this: *mut NetSysBase, unique_id: i32, ready: bool) -> bool {
+    let slot = {
+        let Some(state) = st(this) else { return false };
+        let Some(&slot) = state.bridged_slots.get(&unique_id) else {
+            return false;
+        };
+        slot
+    };
+    let Some((base, connection_data)) = bridge_context(this) else {
+        return false;
+    };
+    // PlayerConnectionData is exactly 59 bytes; ready is byte +58.
+    *connection_data.cast::<u8>().add(slot as usize * 59 + 58) = u8::from(ready);
+    let send_player: unsafe extern "thiscall" fn(*mut c_void, i32, bool) =
+        core::mem::transmute(base.add(CONNECTION_SEND_PLAYER_RVA));
+    send_player(connection_data, slot, true);
+    trace_detail(format_args!(
+        "setup_bridge=ok action=ready slot={slot} ready={ready} credential_material=none"
+    ));
+    true
+}
+
 /// Refresh the `NetPlayer*` array the game can read directly, and drain new
 /// game-layer packets into our own inbox.
 unsafe fn pump(this: *mut NetSysBase) {
-    let Some(s) = st(this) else { return };
-    let t = now_ms(s);
-    let _ = s.session.poll(t, Duration::from_millis(0));
-    for e in s.session.drain_events() {
-        if let don_net::session::Event::Game { from, msg } = e {
-            if msg.bytes.len() <= NETDAEMON_RECEIVE_EXTENT {
-                s.inbox.push_back((from, msg.bytes));
+    let (removed, added_ptrs, next_local, next_host, ready_changes) = {
+        let Some(s) = st(this) else { return };
+        if !s.active {
+            return;
+        }
+        let t = now_ms(s);
+        let _ = s.session.poll(t, Duration::from_millis(0));
+        let mut ready_changes = Vec::new();
+        for e in s.session.drain_events() {
+            match e {
+                don_net::session::Event::Game { from, msg } => {
+                    if msg.bytes.len() <= NETDAEMON_RECEIVE_EXTENT {
+                        s.inbox.push_back((from, msg.bytes));
+                    }
+                }
+                don_net::session::Event::ReadyChanged { unique_id, ready } => {
+                    ready_changes.push((unique_id, ready));
+                }
+                _ => {}
             }
         }
-    }
-    // Rebuild the player objects. Cheap: at most eight, and only on change.
-    let roster: Vec<(i32, bool, bool, String)> = s
-        .session
-        .players()
-        .iter()
-        .map(|p| (p.unique_id, p.is_host, p.is_local, p.name.clone()))
-        .collect();
-    if roster.len() != s.players.len()
-        || roster
-            .iter()
-            .zip(s.players.iter())
-            .any(|(r, p)| r.0 != p.unique_id)
-    {
-        s.players.clear();
-        for (i, (uid, is_host, is_local, name)) in roster.iter().enumerate() {
-            let (id_sso, id_len) = encode_id_sso(*uid);
-            let mut po = Box::new(NetPlayerObj {
-                vftable: &NETPLAYER_VTABLE,
-                unique_id: *uid,
-                flags: if *is_host { SNLPLAYER_HOST } else { 0 }
-                    | if *is_local { SNLPLAYER_LOCAL } else { 0 },
-                sync_counter: 0,
-                dsync_frame: 0,
-                last_pulse_ms: 0,
-                ping_ms: 0,
-                player_index: i as i32,
-                game_version: 0,
-                id_sso,
-                id_len,
-                name_utf8: [0u8; 64],
-            });
-            let nb = name.as_bytes();
-            let n = nb.len().min(63);
-            po.name_utf8[..n].copy_from_slice(&nb[..n]);
-            s.players.push(po);
+        // Keep each NetPlayer allocation stable. Shipped OnPlayerLeft first
+        // removes the pointer from NetSys::players, then invokes
+        // NetMessenger::on_player_deleted while the object remains alive
+        // (0x10018B4B..0x10018BAD). Rebuilding every box would violate both parts.
+        let roster = s.session.players().to_vec();
+        let mut old = core::mem::take(&mut s.players);
+        let mut next = Vec::with_capacity(roster.len());
+        let mut added = Vec::new();
+        for player in &roster {
+            let mut object = if let Some(index) = old
+                .iter()
+                .position(|candidate| candidate.unique_id == player.unique_id)
+            {
+                old.remove(index)
+            } else {
+                added.push(player.unique_id);
+                build_player(player)
+            };
+            update_player(&mut object, player);
+            if player.is_local
+                && !s.local_member_id.is_empty()
+                && object.id_wide[..object.id_len as usize] != s.local_member_id
+            {
+                let _ = set_player_id(&mut object, &s.local_member_id);
+            }
+            object.game_version = s.game_version;
+            next.push(object);
         }
+        s.players = next;
+        let obj = this as *mut NetSysObj;
+        (*obj).base.num_players = s.players.len() as i32;
+        (*obj).base.players = [core::ptr::null_mut(); 8];
+        for (i, p) in s.players.iter_mut().enumerate().take(8) {
+            (*obj).base.players[i] = p.as_mut() as *mut NetPlayerObj;
+        }
+        let next_local = s
+            .players
+            .iter_mut()
+            .find(|p| p.flags & SNLPLAYER_LOCAL != 0)
+            .map(|p| p.as_mut() as *mut NetPlayerObj)
+            .unwrap_or(core::ptr::null_mut());
+        let next_host = s
+            .players
+            .iter_mut()
+            .find(|p| p.flags & SNLPLAYER_HOST != 0)
+            .map(|p| p.as_mut() as *mut NetPlayerObj)
+            .unwrap_or(core::ptr::null_mut());
+        let local_removed = old
+            .iter()
+            .any(|player| core::ptr::eq(player.as_ref(), (*obj).base.local_player));
+        let host_removed = old
+            .iter()
+            .any(|player| core::ptr::eq(player.as_ref(), (*obj).base.host_player));
+        // Additions must see coherent direct pointers. For removal, shipped
+        // leaves the old host/local pointer intact until the delete callback
+        // returns, even though players[]/num_players were already compacted.
+        if !local_removed {
+            (*obj).base.local_player = next_local;
+        }
+        if !host_removed {
+            (*obj).base.host_player = next_host;
+        }
+        let added_ptrs = added
+            .into_iter()
+            .filter_map(|id| {
+                s.players
+                    .iter()
+                    .find(|player| player.unique_id == id)
+                    .map(|player| player.as_ref() as *const NetPlayerObj)
+            })
+            .collect::<Vec<_>>();
+        (old, added_ptrs, next_local, next_host, ready_changes)
+    };
+
+    // The prefix mutation and Rust borrows are complete before retail sees a
+    // callback. Removed boxes stay alive through on_player_deleted.
+    for player in &removed {
+        notify_player_deleted(this, player.as_ref());
     }
-    let obj = this as *mut NetSysObj;
-    (*obj).base.num_players = s.players.len() as i32;
-    (*obj).base.players = [core::ptr::null_mut(); 8];
-    for (i, p) in s.players.iter_mut().enumerate().take(8) {
-        (*obj).base.players[i] = p.as_mut() as *mut NetPlayerObj;
+    let object = this as *mut NetSysObj;
+    (*object).base.local_player = next_local;
+    (*object).base.host_player = next_host;
+    for player in added_ptrs {
+        let bridged_slot = bridge_add_player(this, player);
+        if let Some(slot) = bridged_slot {
+            if let Some(state) = st(this) {
+                state.bridged_slots.insert((*player).unique_id, slot);
+            }
+        } else {
+            notify_player_added(this, player);
+        }
+        // Exact shipped ordering: process_playerlist clears pending only after
+        // NetMessenger::on_player_added returns (0x1001AADE..0x1001AAF4).
+        (*(player as *mut NetPlayerObj)).flags &= !SNLPLAYER_PENDING;
     }
-    (*obj).base.local_player = s
+    for (unique_id, ready) in ready_changes {
+        let _ = bridge_ready(this, unique_id, ready);
+    }
+}
+
+/// Activate only the loopback/ephemeral diagnostic session so the external
+/// PE32 smoke can dispatch every NetPlayer slot. This never enables traffic
+/// and refuses normal retail mode.
+pub unsafe fn materialize_load_only_peer(this: *mut NetSysBase) -> bool {
+    let Some(state) = st(this) else { return false };
+    if !state.load_only {
+        return false;
+    }
+    state.active = true;
+    pump(this);
+    true
+}
+
+/// Capture the authenticated retail host's own lobby-member id without ever
+/// logging it. `LobbyMemberDTO` inherits `UserDTO`; its first field is the
+/// measured 24-byte MSVC `wstring _userId`. The value becomes only a local
+/// alias, so the owned TCP peer still needs no account or ticket.
+pub unsafe fn capture_local_member_id(this: *mut NetSysBase, member: *const c_void) -> bool {
+    if member.is_null() {
+        return false;
+    }
+    let Some(units) = wstring_units(&*member.cast::<MsvcWstring>()) else {
+        return false;
+    };
+    if units.is_empty() {
+        return false;
+    }
+    let copy = units.to_vec();
+    let Some(state) = st(this) else { return false };
+    state.local_member_id = copy;
+    if let Some(player) = state
         .players
         .iter_mut()
-        .find(|p| p.flags & SNLPLAYER_LOCAL != 0)
-        .map(|p| p.as_mut() as *mut NetPlayerObj)
-        .unwrap_or(core::ptr::null_mut());
-    (*obj).base.host_player = s
-        .players
-        .iter_mut()
-        .find(|p| p.flags & SNLPLAYER_HOST != 0)
-        .map(|p| p.as_mut() as *mut NetPlayerObj)
-        .unwrap_or(core::ptr::null_mut());
+        .find(|player| player.flags & SNLPLAYER_LOCAL != 0)
+    {
+        let ok = set_player_id(player, &state.local_member_id);
+        trace_detail(format_args!(
+            "local_member_id=captured code_units={} player_updated={ok}",
+            state.local_member_id.len()
+        ));
+        ok
+    } else {
+        trace_detail(format_args!(
+            "local_member_id=captured code_units={} player_updated=false",
+            state.local_member_id.len()
+        ));
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -364,20 +783,51 @@ unsafe extern "thiscall" fn ns_dtor(_this: *mut NetSysBase, _flags: u32) -> *mut
 }
 
 unsafe extern "thiscall" fn ns_init(
-    _this: *mut NetSysBase,
-    _messenger: *mut c_void,
-    _guid: *const c_void,
-    _a: i32,
+    this: *mut NetSysBase,
+    messenger: *mut c_void,
+    crossplay_service: *const c_void,
+    game_version: i32,
     _b: i32,
     _c: u32,
     _d: u32,
 ) -> i32 {
     trace_once("vtable.ns_init");
+    let object = this as *mut NetSysObj;
+    if object.is_null() {
+        return LIBERR_NOT_AVAILABLE;
+    }
+    (*object).net_messenger = messenger.cast();
+    (*object).m_crossplay = crossplay_service.cast_mut();
+    if let Some(state) = st(this) {
+        // Shipped init stores its first integer argument at the concrete
+        // CrossplayNetLibSys game-version field (+0x270).
+        state.game_version = game_version as u32;
+    }
+    trace_detail(format_args!(
+        "init=stored messenger={} crossplay_service={} object_size=0x3d4",
+        !messenger.is_null(),
+        !crossplay_service.is_null()
+    ));
+    // Returning success authorises retail's immediate `[netsys+0xCC]` service
+    // vcall. Only do so when both retained pointers are concrete; load-only is
+    // still safe because every session/traffic entry point remains refused.
+    if messenger.is_null() || crossplay_service.is_null() {
+        return LIBERR_NOT_AVAILABLE;
+    }
     LIBERR_OK
 }
 
-unsafe extern "thiscall" fn ns_close(_this: *mut NetSysBase) {
+unsafe extern "thiscall" fn ns_close(this: *mut NetSysBase) {
     trace_once("vtable.ns_close");
+    if let Some(state) = st(this) {
+        state.active = false;
+        state.joining = 0;
+    }
+    let object = this as *mut NetSysObj;
+    if !object.is_null() {
+        (*object).flags = 0;
+    }
+    CONNECTED.store(false, Ordering::Relaxed);
 }
 
 nop!(ns_get_memory_manager() -> *mut c_void = core::ptr::null_mut());
@@ -415,7 +865,12 @@ unsafe extern "thiscall" fn ns_is_session_full(this: *mut NetSysBase) -> i32 {
         .unwrap_or(0)
 }
 
-nop!(ns_get_url_string(*mut c_void) -> *mut c_void = core::ptr::null_mut());
+static EMPTY_GAME_STRING: MsvcGameString = empty_game_string();
+
+unsafe extern "thiscall" fn ns_get_url_string(_this: *mut NetSysBase) -> *const MsvcGameString {
+    trace_once("vtable.ns_get_url_string");
+    &EMPTY_GAME_STRING
+}
 
 unsafe extern "thiscall" fn ns_accept_host_messages(this: *mut NetSysBase, v: i32) {
     trace_once("vtable.ns_accept_host_messages");
@@ -555,10 +1010,17 @@ unsafe extern "thiscall" fn ns_get(
     true
 }
 
-nop!(ns_poll_services(*mut c_void));
+unsafe extern "thiscall" fn ns_poll_services(this: *mut NetSysBase, _services: *mut c_void) -> i32 {
+    trace_once("vtable.ns_poll_services");
+    if st(this).is_some_and(|s| s.load_only) {
+        LIBERR_NOT_AVAILABLE
+    } else {
+        LIBERR_OK
+    }
+}
 
 unsafe extern "thiscall" fn ns_host(
-    _this: *mut NetSysBase,
+    this: *mut NetSysBase,
     _a: *const c_void,
     _b: *const c_void,
     _c: *const c_void,
@@ -566,9 +1028,20 @@ unsafe extern "thiscall" fn ns_host(
     _e: *const c_void,
 ) -> i32 {
     trace_once("vtable.ns_host");
-    if st(_this).is_some_and(|s| s.load_only) {
+    let object = this as *mut NetSysObj;
+    let ready =
+        !object.is_null() && !(*object).net_messenger.is_null() && !(*object).m_crossplay.is_null();
+    let Some(state) = st(this) else {
+        return LIBERR_NOT_AVAILABLE;
+    };
+    if state.load_only || state.session.role != Role::Host || !ready {
         return LIBERR_NOT_AVAILABLE;
     }
+    state.active = true;
+    state.joining = 0;
+    (*object).flags |= 0x11;
+    CONNECTED.store(true, Ordering::Relaxed);
+    pump(this);
     LIBERR_OK
 }
 
@@ -581,12 +1054,29 @@ unsafe extern "thiscall" fn ns_join(
     _d: i32,
 ) -> i32 {
     trace_once("vtable.ns_join");
-    if st(this).is_some_and(|s| s.load_only) {
-        return LIBERR_NOT_AVAILABLE;
+    let object = this as *mut NetSysObj;
+    let ready =
+        !object.is_null() && !(*object).net_messenger.is_null() && !(*object).m_crossplay.is_null();
+    {
+        let Some(state) = st(this) else {
+            return LIBERR_NOT_AVAILABLE;
+        };
+        if state.load_only || state.session.role != Role::Client || !ready {
+            return LIBERR_NOT_AVAILABLE;
+        }
+        state.active = true;
+        state.joining = 1;
     }
-    if let Some(s) = st(this) {
-        s.joining = 1;
+    (*object).flags |= 0x90;
+    CONNECTED.store(true, Ordering::Relaxed);
+    pump(this);
+    // There is no lobby DTO round-trip in the owned TCP route. The local
+    // player is materialised synchronously by pump, which is the equivalent
+    // point at which shipped OnPlayerJoined clears bit 0x80.
+    if let Some(state) = st(this) {
+        state.joining = 0;
     }
+    (*object).flags &= !0x80;
     LIBERR_OK
 }
 
@@ -600,13 +1090,17 @@ unsafe extern "thiscall" fn ns_join_ip(
     _f: i32,
 ) -> i32 {
     trace_once("vtable.ns_join_ip");
-    if st(this).is_some_and(|s| s.load_only) {
-        return LIBERR_NOT_AVAILABLE;
-    }
-    if let Some(s) = st(this) {
-        s.joining = 1;
-    }
-    LIBERR_OK
+    // Shipped join_ip is a dead `return 26`; the replacement deliberately
+    // activates it as the zero-credential owned-TCP seam, with the same state
+    // transition as `join` and no interpretation of lobby/auth arguments.
+    ns_join(
+        this,
+        core::ptr::null(),
+        core::ptr::null(),
+        core::ptr::null(),
+        core::ptr::null(),
+        0,
+    )
 }
 
 unsafe extern "thiscall" fn ns_cancel_joining(this: *mut NetSysBase) {
@@ -618,18 +1112,53 @@ unsafe extern "thiscall" fn ns_cancel_joining(this: *mut NetSysBase) {
 
 nop!(ns_cancel_join());
 nop!(ns_cancel_join_skybox());
-nop!(ns_disconnect(bool));
+unsafe extern "thiscall" fn ns_disconnect(this: *mut NetSysBase, _forced: bool) -> i32 {
+    trace_once("vtable.ns_disconnect");
+    if st(this).is_some_and(|s| s.load_only) {
+        LIBERR_NOT_AVAILABLE
+    } else {
+        ns_close(this);
+        LIBERR_OK
+    }
+}
 nop!(ns_poll_sessions(*const c_void) -> i32 = LIBERR_OK);
 nop!(ns_stop_poll_sessions());
 nop!(ns_clear_net_sessions(u32));
-nop!(ns_poll_players(*const c_void, *mut c_void) -> i32 = 0);
+unsafe extern "thiscall" fn ns_poll_players(
+    this: *mut NetSysBase,
+    _session: *const c_void,
+    players: MsvcArrayNetPlayers,
+) -> i32 {
+    trace_once("vtable.ns_poll_players");
+    // The shipped slot destroys the by-value 28-byte Array before `ret 0x20`.
+    let backing = core::ptr::read_unaligned(players.bytes.as_ptr().add(0x10).cast::<*mut c_void>());
+    if !backing.is_null() {
+        free(backing);
+    }
+    if st(this).is_some_and(|s| s.load_only) {
+        LIBERR_NOT_AVAILABLE
+    } else {
+        LIBERR_OK
+    }
+}
 
 unsafe extern "thiscall" fn ns_find_player_from_id(
-    _this: *mut NetSysBase,
-    _id: *const c_void,
+    this: *mut NetSysBase,
+    mut id: MsvcWstring,
 ) -> *const NetPlayerObj {
     trace_once("vtable.ns_find_player_from_id");
-    core::ptr::null()
+    let result = wstring_units(&id).and_then(|wanted| {
+        st(this).and_then(|state| {
+            state
+                .players
+                .iter()
+                .find(|player| player.id_wide[..player.id_len as usize] == *wanted)
+                .map(|player| player.as_ref() as *const NetPlayerObj)
+        })
+    });
+    // Shipped destroys the by-value wstring and returns with `ret 0x18`.
+    destroy_wstring(&mut id);
+    result.unwrap_or(core::ptr::null())
 }
 
 unsafe extern "thiscall" fn ns_validate_player(
@@ -658,7 +1187,7 @@ nop!(ns_cancel_drop_player(*const NetPlayerObj));
 nop!(ns_set_log(*mut c_void));
 nop!(ns_log_set_frame(i32));
 nop!(ns_log_connection(*const c_void));
-nop!(ns_log_connection2(*const c_void));
+nop!(ns_log_connection2(*const c_void, i32));
 
 /// `__cdecl`, variadic — see the note on the vtable field. Ignoring the
 /// variadic tail is safe precisely because the caller cleans the stack.
@@ -716,8 +1245,8 @@ unsafe extern "thiscall" fn ns_error_set_callback(
     }
 }
 
-nop!(ns_get_group_data() -> *mut c_void = core::ptr::null_mut());
-nop!(ns_get_service_data() -> *mut c_void = core::ptr::null_mut());
+nop!(ns_get_group_data(*mut c_void) -> *mut c_void = core::ptr::null_mut());
+nop!(ns_get_service_data(*mut c_void) -> *mut c_void = core::ptr::null_mut());
 nop!(ns_delete_group_data(*mut c_void));
 nop!(ns_delete_service_data(*mut c_void));
 nop!(ns_log_state());
@@ -820,9 +1349,43 @@ unsafe extern "thiscall" fn np_is_observer(t: *mut NetPlayerObj) -> i32 {
     trace_once("netplayer.is_observer");
     i32::from((*t).flags & SNLPLAYER_OBSERVER != 0)
 }
-unsafe extern "thiscall" fn np_get_internal_name(t: *mut NetPlayerObj) -> *const c_void {
+unsafe fn write_empty_game_string(out: *mut MsvcGameString) -> *mut MsvcGameString {
+    if out.is_null() {
+        return core::ptr::null_mut();
+    }
+    *out = empty_game_string();
+    out
+}
+
+unsafe extern "thiscall" fn np_get_internal_name(
+    t: *mut NetPlayerObj,
+    out: *mut MsvcGameString,
+) -> *mut MsvcGameString {
     trace_once("netplayer.get_internal_name");
-    (*t).name_utf8.as_ptr() as *const c_void
+    if t.is_null() || out.is_null() {
+        return core::ptr::null_mut();
+    }
+    *out = game_string_from_wide((*t).name_wide.as_ptr(), (*t).name_len);
+    out
+}
+
+unsafe extern "thiscall" fn np_set_name(_t: *mut NetPlayerObj, _name: *const MsvcGameString) {
+    trace_once("netplayer.set_name");
+}
+
+unsafe extern "thiscall" fn np_get_internal_description(
+    _t: *mut NetPlayerObj,
+    out: *mut MsvcGameString,
+) -> *mut MsvcGameString {
+    trace_once("netplayer.get_internal_description");
+    write_empty_game_string(out)
+}
+
+unsafe extern "thiscall" fn np_set_description(
+    _t: *mut NetPlayerObj,
+    _description: *const MsvcGameString,
+) {
+    trace_once("netplayer.set_description");
 }
 unsafe fn write_sso_wstring(
     out: *mut MsvcWstring,
@@ -847,7 +1410,12 @@ unsafe extern "thiscall" fn np_get_id(
     if t.is_null() {
         return core::ptr::null_mut();
     }
-    write_sso_wstring(out, &(*t).id_sso, (*t).id_len)
+    let units = &(&(*t).id_wide)[..(*t).id_len as usize];
+    let Some(value) = owned_wstring(units) else {
+        return core::ptr::null_mut();
+    };
+    *out = value;
+    out
 }
 
 unsafe extern "thiscall" fn np_get_platform_id(
@@ -858,16 +1426,23 @@ unsafe extern "thiscall" fn np_get_platform_id(
     if t.is_null() {
         return core::ptr::null_mut();
     }
-    write_sso_wstring(out, &(*t).id_sso, (*t).id_len)
+    let units = &(&(*t).id_wide)[..(*t).id_len as usize];
+    let Some(value) = owned_wstring(units) else {
+        return core::ptr::null_mut();
+    };
+    *out = value;
+    out
 }
 
 unsafe extern "thiscall" fn np_get_platform(
-    _t: *mut NetPlayerObj,
+    t: *mut NetPlayerObj,
     out: *mut MsvcWstring,
 ) -> *mut MsvcWstring {
     trace_once("netplayer.get_platform");
-    const DON: [u16; 8] = [b'd' as u16, b'o' as u16, b'n' as u16, 0, 0, 0, 0, 0];
-    write_sso_wstring(out, &DON, 3)
+    if t.is_null() {
+        return core::ptr::null_mut();
+    }
+    write_sso_wstring(out, &(*t).platform.sso, (*t).platform.len)
 }
 unsafe extern "thiscall" fn np_get_player_index(t: *mut NetPlayerObj) -> i32 {
     trace_once("netplayer.get_player_index");
@@ -906,24 +1481,12 @@ unsafe extern "thiscall" fn np_inc_sync_counter(t: *mut NetPlayerObj) {
     trace_once("netplayer.inc_sync_counter");
     (*t).sync_counter = (*t).sync_counter.wrapping_add(1);
 }
-unsafe extern "thiscall" fn np_get_sync_counter(t: *mut NetPlayerObj) -> u32 {
+unsafe extern "thiscall" fn np_get_sync_counter(t: *mut NetPlayerObj) -> i32 {
     trace_once("netplayer.get_sync_counter");
-    (*t).sync_counter
+    (*t).sync_counter as i32
 }
-unsafe extern "thiscall" fn np_get_name(t: *mut NetPlayerObj) -> *const c_void {
-    trace_once("netplayer.get_name");
-    (*t).name_utf8.as_ptr() as *const c_void
-}
-unsafe extern "thiscall" fn np_get_description(t: *mut NetPlayerObj) -> *const c_void {
-    trace_once("netplayer.get_description");
-    (*t).name_utf8.as_ptr() as *const c_void
-}
-unsafe extern "thiscall" fn np_set_name(_t: *mut NetPlayerObj, _n: *const c_void) {
-    trace_once("netplayer.set_name");
-}
-unsafe extern "thiscall" fn np_get_dsync_frame(t: *mut NetPlayerObj) -> i32 {
-    trace_once("netplayer.get_dsync_frame");
-    (*t).dsync_frame
+unsafe extern "thiscall" fn np_log_state(_t: *mut NetPlayerObj) {
+    trace_once("netplayer.log_state");
 }
 
 pub static NETPLAYER_VTABLE: NetPlayerVtable = NetPlayerVtable {
@@ -933,6 +1496,9 @@ pub static NETPLAYER_VTABLE: NetPlayerVtable = NetPlayerVtable {
     is_pending: np_is_pending,
     is_observer: np_is_observer,
     get_internal_name: np_get_internal_name,
+    set_name: np_set_name,
+    get_internal_description: np_get_internal_description,
+    set_description: np_set_description,
     get_id: np_get_id,
     get_platform_id: np_get_platform_id,
     get_platform: np_get_platform,
@@ -944,10 +1510,7 @@ pub static NETPLAYER_VTABLE: NetPlayerVtable = NetPlayerVtable {
     reset_sync_counter: np_reset_sync_counter,
     inc_sync_counter: np_inc_sync_counter,
     get_sync_counter: np_get_sync_counter,
-    get_name: np_get_name,
-    get_description: np_get_description,
-    set_name: np_set_name,
-    get_dsync_frame: np_get_dsync_frame,
+    log_state: np_log_state,
 };
 
 #[cfg(test)]

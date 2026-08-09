@@ -3,10 +3,12 @@
 `riseofnations.exe` does not import its network stack. `NetSys::load_dll`
 (`0x00538490`) `LoadLibraryW`s the DLL, `GetProcAddress`es
 `get_netsys_object_ptr`, and drives everything else through the returned
-object's **65-slot `NetSys` vtable** plus **nine `CrossplayNetLibSys` methods and
-two free functions** resolved through the ordinary import table.
+object's **65-slot `NetSys` vtable**, **eight `CrossplayNetLibSys` methods** and
+**two free functions**. Retail imports eight methods plus
+`is_connected_to_network`; it resolves the factory with `GetProcAddress`, and
+the second free function is present in the shipped export surface.
 
-Provide those twelve symbols and the retail binary talks to us instead of to
+Provide those 11 shipped exports and the retail binary talks to us instead of to
 PlayFab, **with no patching of the game**.
 
 ## Build
@@ -18,6 +20,12 @@ XWIN_ARCH=x86 cargo xwin build --release
 
 uv run --with pefile --with capstone python check-exports.py
 # -> name + ordinal parity, PE32/i386/DLL identity, callback ret 0x78
+
+# Execute the Windows loader and x86 __thiscall boundary in a disposable
+# process. The executable and DLL are emitted beside one another.
+MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
+  wine target/i686-pc-windows-msvc/release/netsys-load-smoke.exe
+# -> one JSON line: "status":"pass", "stack_pointer_checks":41
 
 # Compile focused unit tests for the retail target. They cannot execute on the
 # arm64 host; the layout assertions also run during the DLL build above.
@@ -91,7 +99,8 @@ make the DLL self-describing under `dumpbin /exports`.
 |---|---|
 | 11 exports match the shipped DLL exactly, PE32 i386 DLL | `check-exports.py`, PASS |
 | shipped names occupy the exact ordinals 1..11; the callback export emits `ret 0x78` | `check-exports.py`, PASS |
-| vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | compile-time assertions in `abi.rs` |
+| vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | fresh shipped-PDB extraction plus compile-time assertions in `abi.rs` |
+| Windows loads the replacement; factory state matches shipped (`num_players=0`); loader slots 56/63, all eight previously mismatched `NetSys` slots, and all 20 non-destructor `NetPlayer` slots preserve ESP | `netsys-load-smoke.exe` under Wine, 41 checked calls, PASS |
 | `NetPlayer::{get_id,get_platform_id,get_platform}` return a complete MSVC `wstring` by value | shipped `get_id` `0x10027220`: return object `size=0` at `+0x10`, `capacity=7` at `+0x14`, NUL at `+0`; focused cross-target tests |
 | receive copies cannot exceed the retail destination | `rise.pdb` `NetDaemon::data` type `0x8912`: `unsigned char[2048]` at `+8`; caller `0x00950F30`; shipped copier `0x10013550` |
 | three by-value callbacks are consumed and destroyed with the shipped ABI | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78` |
@@ -99,16 +108,45 @@ make the DLL self-describing under `dumpbin /exports`.
 | **the retail game loads this DLL and reaches a match** | **untested.** Needs the Parallels VM. |
 
 The last row is the honest gap. Nothing here has been run inside
-`riseofnations.exe`. The three previously stated ABI risks are now resolved
-from the shipped PDB/caller/callee instructions, but that is not live-load
-evidence. The next exercise is load-only, with `DON_NET_LOAD_ONLY=1`, and must
-inspect the flushed trace before enabling transport.
+`riseofnations.exe`. The earlier vtable prototype was not load-safe:
+`NetPlayer` slots from `+0x14` onward and eight `NetSys` signatures disagreed
+with the shipped PDB. Those definitions are now corrected and crossed in a
+disposable PE32 loader with an ESP-preservation check around each call. That
+still is not retail live-load evidence. The next exercise is load-only, with
+`DON_NET_LOAD_ONLY=1`, and must inspect the flushed trace before enabling
+transport.
 
 The architectural blocker remains: game setup and readiness do **not** flow
 through `NetSys` in this build; they are PlayFab lobby attributes driven by
 `MultiplayerManager` (see `don_net::lobby`). Replacing this DLL alone gets the
 turn channel under our control but leaves lobby/setup unserved. Getting two
 retail instances into a match still requires the lobby path.
+
+## Load-only smoke executable
+
+`netsys-load-smoke.exe` is a PE32 host which uses `LoadLibraryW` and
+`GetProcAddress`, rather than linking against the replacement. It resolves all
+11 shipped exports, calls `get_netsys_object_ptr(nullptr, nullptr)`, verifies
+all 65 vtable entries are non-null, and calls the same two slots retail's
+`NetSys::load_dll` calls immediately: `error_set_callback` (56 / `+0xE0`) and
+`set_profiler` (63 / `+0xFC`). It also crosses direct decorated `__thiscall`
+exports for readiness and role. It then calls the eight `NetSys` slots whose
+old prototype had the wrong return value, argument width, or cleanup, checks
+ESP before/after every ABI call, materialises the local player, and exercises
+all 20 non-destructor `NetPlayer` slots including hidden `String` and
+`wstring` return buffers.
+
+The host sets `DON_NET_LOAD_ONLY=1` before loading. It requires host/join to
+return `LIBERR_NOT_AVAILABLE` (26), send/get to return false, connected state to
+remain false, and the flushed trace to prove the only listener is
+`127.0.0.1:ephemeral`. The host refuses an existing trace instead of appending
+ambiguous evidence. No ticket, lobby id, credential, game directory, or
+running retail process is read.
+
+This closes the Windows PE/export/factory/vtable calling boundary in a
+disposable process. It still does not make the final status row above green:
+only a separately approved disposable `riseofnations.exe` run can establish
+the rest of retail's menu-time call frontier.
 
 The Rust cdylib exposes ten `shim_*` alias targets in addition to the exact
 shipped name/ordinal surface. They are not imported by retail. The parity gate
