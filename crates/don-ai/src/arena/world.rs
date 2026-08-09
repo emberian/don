@@ -37,20 +37,22 @@
 //! Ours, and each one a **model choice, not a fidelity claim**, marked `MODEL n` at its
 //! site:
 //!
-//! 2. A building's construction consumes builder-frames: `JOB_TIME` is spent one frame
-//!    per assigned citizen per frame, which is exactly what the shipped comment says
-//!    (*"How long for one citizen to build"*) but is not how retail's build sites are
-//!    known to work.
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
 //! 6. No water, no naval, no air, no diplomacy, no attrition, no supply.
 //!
-//! Fidelity: **C**. Nothing here is differentially tested against retail.
+//! Construction no longer fabricates a builder-frame countdown.  Arena persists the
+//! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
+//! `don-sim`, and runs the building band before the unit band.  The first missing retail
+//! world transaction is recorded on the site and stops progress before any state is
+//! guessed. This is integration of recovered Tier-C
+//! structure, not a promotion of its fidelity tier.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use don_sim::balance::BalanceTable;
+use don_sim::command::QueuePos;
 use don_sim::mechanics::{
     commerce_cap, credit_resource, damage_traced, get_armor, get_attack, resource_period,
     resource_tick, CommerceCapGates, DamageInput, DamagePredicates, EconomyRules,
@@ -68,6 +70,10 @@ use don_sim::systems::combat::{
     scale_damage_unit, vector_dist_between, AttackCycle, CircleTable, CombatConstants, HitPoints,
     PoorTargetInput, RANGE_UNITS_PER_TILE,
 };
+use don_sim::systems::construction::{
+    self, BuildOrderRegions, BuildOrderTarget, ConstructionFrame, ObjectKey,
+};
+use don_sim::systems::construction_builder::{self, PreflightInput, PreflightPlan};
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
 use don_sim::systems::gather_lifecycle::OrdinaryGatherKind;
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
@@ -79,6 +85,7 @@ use don_sim::systems::order_dispatch::{
     self, ArmResult, AttackOutcome, DispatchCoverage, GatherOutcome, KillReason, OrderRec,
     TargetState, UnitWork, WorkWorld,
 };
+use don_sim::systems::production::{self, BuildData, ConstructTimeGates, ProdRules};
 use don_sim::systems::target::{
     self, AutoTargetAdapter, AutoTargetCandidate, AutoTargetDistanceFacts, AutoTargetQuery,
     AutoTargetStep, CompareTargetInput, ObjRef, TargetRow, TargetWorld,
@@ -200,6 +207,26 @@ pub enum Job {
     Work { target: EntId },
 }
 
+/// The first mandatory retail transaction which prevented a construction activation.
+///
+/// This is persistent, observable simulation state rather than a log string.  Arena may
+/// not turn an absent world host into a successful callback with an empty receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructionRefusal {
+    /// `BuildTypeData::blocked_site` needs terrain, territory, city/dock and adjacency
+    /// stores which Arena does not yet materialise in the retail layout.
+    MissingBlockedSiteTransaction,
+    /// The exact unit-side plan requested the temporary Group/reswarm transaction.  The
+    /// arena movement host has not yet ported `action_swarm_around(BUILD_AT)`.
+    MissingReswarmTransaction,
+    /// `Unit::set_anim` and its complete Guy/group receipt are not available. Facing is
+    /// not committed unless that ordered animation transaction is also available.
+    MissingBuilderAnimationTransaction,
+    /// The target reached the activation threshold, but the full `Build::activate` world
+    /// graph (leaders/cities/terrain/events/RNG/checksums) is unavailable.
+    MissingActivationTransaction,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MoveProgress {
     Working,
@@ -230,8 +257,20 @@ pub struct Ent {
     /// A building still under construction is not active: it does not gather, produce,
     /// or satisfy a `WHERE`.
     pub complete: bool,
-    /// Builder-frames of `JOB_TIME` still owed.
+    /// Compatibility observation derived from `BuildData::{constr_time,job_counter}`.
+    /// It is never decremented as an independent construction model.
     pub build_left: i32,
+    /// Arena's stable object-generation token. Object slots do not recycle in this host;
+    /// retaining the token independently still makes every construction order carry the
+    /// retail `(who,o,uid)` identity and prevents an `EntId`-only adapter from returning.
+    pub object_uid: u16,
+    /// The full recovered construction record for buildings. Units store `None`.
+    pub build: Option<BuildData>,
+    /// Exact target payload installed by `Unit::add_build_order` for an incomplete site.
+    /// Repair orders remain on their separate arena path and therefore store `None`.
+    pub build_order: Option<BuildOrderTarget>,
+    /// Fail-closed reason for a site whose next mandatory world transaction is absent.
+    pub construction_refusal: Option<ConstructionRefusal>,
     pub job: Job,
     pub cycle: AttackCycle,
     /// 32-bit turn units. Set when the entity moves or fires.
@@ -339,6 +378,19 @@ pub struct ArenaParams {
     /// radius inside which a city owns its buildings, so two cities at that spacing have
     /// touching rather than overlapping build areas.
     pub min_city_sep: i32,
+    /// Construction authority boundary. The playable arena remains explicitly research
+    /// modelled until the mandatory world transactions exist; claim-bearing runs select
+    /// `FailClosedRetail` and stop at the first absent callback.
+    pub construction_mode: ConstructionMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructionMode {
+    /// Use recovered local state/arithmetic, but retain Arena's incomplete flags-only
+    /// start/activation so development matches remain playable. This is not fidelity.
+    ResearchModel,
+    /// Refuse before any missing builder/placement/lifecycle world transaction.
+    FailClosedRetail,
 }
 
 impl Default for ArenaParams {
@@ -348,6 +400,7 @@ impl Default for ArenaParams {
             difficulty_income_bonus: 0,
             fog_period: 15,
             min_city_sep: 20,
+            construction_mode: ConstructionMode::ResearchModel,
         }
     }
 }
@@ -373,6 +426,8 @@ pub struct World {
     pub balance: BalanceTable,
     pub combat: CombatConstants,
     pub econ: EconomyRules,
+    /// Shipped production constants consumed by the recovered construction kernels.
+    pub prod_rules: ProdRules,
     pub params: ArenaParams,
     pub log: Vec<Event>,
     pub logging: bool,
@@ -910,6 +965,7 @@ impl World {
             balance,
             combat: CombatConstants::shipped(),
             econ,
+            prod_rules: ProdRules::shipped(),
             params,
             log: Vec::new(),
             logging: true,
@@ -979,6 +1035,8 @@ impl World {
             None => return EntId::NONE,
         };
         let id = EntId::from_index(self.ents.len());
+        let object_uid = u16::try_from(id.0)
+            .expect("Arena's non-recycling object table exhausted its construction UID domain");
         let (worker_cap, gather_res) = self.gather_capacity(&t, tx, ty);
         let city = if t.kind_building {
             self.nearest_own_city(who, tx, ty).unwrap_or(EntId::NONE)
@@ -991,6 +1049,52 @@ impl World {
             initial_unit_stance(&self.players[who as usize], &t)
         } else {
             0
+        };
+        let build = if t.kind_building {
+            let constr_time = production::update_construct_time(
+                t.job_time.max(0) as u32,
+                &ConstructTimeGates::default(),
+                &self.prod_rules,
+            );
+            let is_wonder = (0x20E..0x21F).contains(&type_id);
+            let city_o = city
+                .index()
+                .map(|i| i16::try_from(i).expect("Arena city object slot fits retail i16"))
+                .unwrap_or(-1);
+            let mut b = BuildData {
+                flags: production::flag::VALID
+                    | if complete {
+                        production::flag::STARTED | production::flag::ACTIVE
+                    } else {
+                        0
+                    },
+                who,
+                myhits: t.hits,
+                uid: object_uid,
+                constr_time,
+                construct_hits: production::construct_hits(
+                    t.hits,
+                    complete,
+                    is_wonder,
+                    0,
+                    production::construct_time(
+                        constr_time,
+                        false,
+                        &Default::default(),
+                        &self.prod_rules,
+                    ),
+                ),
+                orig_type: type_id,
+                city: city_o,
+                ..BuildData::default()
+            };
+            if complete {
+                // `Build::activate` 0x00623E20 sets this measured active-building mask.
+                b.build_masks |= 0x1000;
+            }
+            Some(b)
+        } else {
+            None
         };
         // `Unit::init` writes this binary angle before its first `set_new_location` call.
         const INITIAL_UNIT_ANGLE: i32 = 0x5555_5555;
@@ -1066,6 +1170,10 @@ impl World {
             building: t.kind_building,
             complete,
             build_left: if complete { 0 } else { t.job_time },
+            object_uid,
+            build,
+            build_order: None,
+            construction_refusal: None,
             job: Job::Idle,
             cycle: AttackCycle::default(),
             facing: if t.kind_unit { INITIAL_UNIT_ANGLE } else { 0 },
@@ -1485,14 +1593,21 @@ impl World {
                 let Some(b) = self.ent(target) else {
                     return OrderResult::Invalid;
                 };
+                let incomplete = !b.complete;
                 if b.who != who || !b.building {
                     return OrderResult::Invalid;
                 }
                 if self.ty(unit).map(|t| t.id) != Some(self.ids.citizen) {
                     return OrderResult::Invalid;
                 }
-                self.detach(unit);
-                self.ent_mut(unit).unwrap().job = Job::Work { target };
+                if incomplete {
+                    if !self.assign_build_order(unit, target) {
+                        return OrderResult::Invalid;
+                    }
+                } else {
+                    self.detach(unit);
+                    self.ent_mut(unit).unwrap().job = Job::Work { target };
+                }
                 OrderResult::Ok(1)
             }
             Cmd::Halt { unit } => {
@@ -1518,12 +1633,69 @@ impl World {
         }
         if let Some(e) = self.ent_mut(unit) {
             e.assigned_to = EntId::NONE;
+            e.build_order = None;
             if let Some(u) = &mut e.motion {
                 u.orders.clear();
                 order_dispatch::clear_partial_path(u);
                 u.unit_masks &= !order_dispatch::masks::PATH_EXHAUSTED;
             }
         }
+    }
+
+    /// Install the measured `Unit::add_build_order` payload and queue mutation.
+    ///
+    /// Arena has one land region and no transport runtime (MODEL 6), so the cross-region
+    /// transport branch is unreachable rather than answered with guessed leader flags.
+    fn assign_build_order(&mut self, unit: EntId, target: EntId) -> bool {
+        let Some(builder) = self.ent(unit) else {
+            return false;
+        };
+        let Some(site) = self.ent(target) else {
+            return false;
+        };
+        if builder.building || !site.building || site.complete || builder.who != site.who {
+            return false;
+        }
+        let target_key = ObjectKey {
+            who: i32::from(site.who),
+            o: target.index().expect("live construction target has a slot") as i32,
+            uid: site.object_uid,
+        };
+        let builder_region = self
+            .collision_world
+            .get_tregion(builder.tile().0, builder.tile().1);
+        let target_region = self
+            .collision_world
+            .get_tregion(site.tile().0, site.tile().1);
+        if builder_region != target_region {
+            // The no-water Arena cannot faithfully execute the measured transport arm.
+            return false;
+        }
+
+        self.detach(unit);
+        let Some(e) = self.ent_mut(unit) else {
+            return false;
+        };
+        let Some(motion) = e.motion.as_mut() else {
+            return false;
+        };
+        let receipt = construction::install_build_order(
+            motion,
+            target_key,
+            QueuePos::New,
+            false,
+            BuildOrderRegions {
+                builder_region,
+                target_region,
+                builder_transport_type: 0,
+                can_ever_transport: false,
+                leader_flags: 0,
+            },
+        );
+        debug_assert_eq!(receipt.rng_draws, 0);
+        e.build_order = Some(receipt.target);
+        e.job = Job::Work { target };
+        true
     }
 
     fn retire_exact_gather(&mut self, owner: u8, unit: EntId) {
@@ -1630,8 +1802,10 @@ impl World {
         let cost = t.cost;
         self.pay(pi, &cost);
         let site = self.spawn(pi as u8, type_id, tx, ty, false);
-        self.detach(worker);
-        self.ent_mut(worker).unwrap().job = Job::Work { target: site };
+        assert!(
+            self.assign_build_order(worker, site),
+            "a paid Arena site must atomically receive its BUILD_AT order"
+        );
         self.note(pi as u8, format!("place {} at ({tx},{ty})", t.name));
         OrderResult::Ok(site.0 as i32)
     }
@@ -1654,14 +1828,20 @@ impl World {
         self.frame += 1;
         let n = self.players.len();
         // `Objects::process_all` rotates owner order every frame as `(frame + i) % 10`
-        // [measured]. The arena echoes it so no player is permanently first.
-        for k in 0..n {
-            let pi = ((self.frame as usize) + k) % n;
-            if !self.players[pi].alive {
-                continue;
-            }
+        // [measured]. Within that rotation the build band runs before the unit band;
+        // `helpers` is therefore reset for every site before any builder can contribute.
+        let owners: Vec<usize> = (0..n)
+            .map(|k| ((self.frame as usize) + k) % n)
+            .filter(|&pi| self.players[pi].alive)
+            .collect();
+        for &pi in &owners {
             self.tick_economy(pi);
-            self.tick_ents(pi);
+        }
+        for &pi in &owners {
+            self.tick_band(pi, true);
+        }
+        for &pi in &owners {
+            self.tick_band(pi, false);
         }
         self.reap();
         if self.frame % self.params.fog_period == 0 {
@@ -1741,13 +1921,20 @@ impl World {
         }
     }
 
-    fn tick_ents(&mut self, pi: usize) {
+    fn tick_band(&mut self, pi: usize, buildings: bool) {
         let idxs: Vec<usize> = (0..self.ents.len())
-            .filter(|&i| self.ents[i].alive && self.ents[i].who as usize == pi)
+            .filter(|&i| {
+                self.ents[i].alive
+                    && self.ents[i].who as usize == pi
+                    && self.ents[i].building == buildings
+            })
             .collect();
         for i in idxs {
             if !self.ents[i].alive {
                 continue;
+            }
+            if buildings {
+                self.begin_construction_site_frame(i);
             }
             target::decay_targeted(
                 &mut self.target_world,
@@ -1758,6 +1945,33 @@ impl World {
             self.tick_cycle(i);
             self.tick_job(i);
         }
+    }
+
+    fn begin_construction_site_frame(&mut self, i: usize) {
+        let type_id = self.ents[i].type_id;
+        let is_wonder = (0x20E..0x21F).contains(&type_id);
+        let Some(site) = self.ents[i].build.as_mut() else {
+            panic!(
+                "Arena building {} has no persistent BuildData",
+                self.ents[i].id.0
+            );
+        };
+        let receipt = construction::begin_site_frame(
+            site,
+            ConstructionFrame {
+                construct_query: Default::default(),
+                is_wonder,
+            },
+            &self.prod_rules,
+        );
+        debug_assert_eq!(receipt.rng_draws, 0);
+        self.ents[i].build_left = if site.is_active() {
+            0
+        } else {
+            site.constr_time
+                .saturating_sub(site.job_counter)
+                .min(i32::MAX as u32) as i32
+        };
     }
 
     fn tick_cycle(&mut self, i: usize) {
@@ -1854,12 +2068,12 @@ impl World {
             }
             Job::Work { target } => {
                 let Some(b) = self.ent(target).cloned() else {
-                    self.retire_motion_order(i, KillReason::Failed);
+                    self.detach(self.ents[i].id);
                     self.ents[i].job = Job::Idle;
                     return;
                 };
                 if b.complete && b.hits_left() >= b.hp.myhits {
-                    self.retire_motion_order(i, KillReason::Completed);
+                    self.detach(self.ents[i].id);
                     // Finished and undamaged: a gatherer keeps its builder, everything
                     // else releases them.
                     self.ents[i].job = if b.worker_cap > 0 {
@@ -1871,27 +2085,8 @@ impl World {
                 }
                 match self.step_toward(i, b.x, b.y, RANGE_UNITS_PER_TILE) {
                     MoveProgress::Arrived => {
-                        // MODEL 2 — one builder-frame per assigned citizen per frame.
-                        let e = self.ent_mut(target).unwrap();
-                        if !e.complete {
-                            e.build_left -= 1;
-                            if e.build_left <= 0 {
-                                e.complete = true;
-                                let name = self
-                                    .types
-                                    .get(self.ents[i].who as i32)
-                                    .map(|_| String::new())
-                                    .unwrap_or_default();
-                                let _ = name;
-                                let ty = self.ent(target).unwrap().type_id;
-                                let who = self.ents[i].who;
-                                let n = self
-                                    .types
-                                    .get(ty)
-                                    .map(|t| t.name.clone())
-                                    .unwrap_or_default();
-                                self.note(who, format!("built {n}"));
-                            }
+                        if !b.complete {
+                            self.preflight_construction_builder(i, target);
                         } else {
                             // Repair: 1/16 of a hit point per frame, the same granularity the
                             // engine damages in (`HitPoints::accumulate`).
@@ -1900,10 +2095,230 @@ impl World {
                             self.sync_target_damage(target);
                         }
                     }
-                    MoveProgress::Failed => self.ents[i].job = Job::Idle,
+                    MoveProgress::Failed => {
+                        self.detach(self.ents[i].id);
+                        self.ents[i].job = Job::Idle;
+                    }
                     MoveProgress::Working => {}
                 }
             }
+        }
+    }
+
+    /// Run the exact recovered `Unit::do_build` policy through the first world effect
+    /// Arena cannot execute. No construction counter changes on refusal.
+    fn preflight_construction_builder(&mut self, i: usize, target: EntId) {
+        let Some(order) = self.ents[i].build_order else {
+            panic!(
+                "Arena builder {} reached an incomplete site without (who,o,uid)",
+                self.ents[i].id.0
+            );
+        };
+        let Some(site_index) = target.index() else {
+            return;
+        };
+        let Some(site) = self.ents.get(site_index) else {
+            return;
+        };
+        let Some(site_build) = site.build.as_ref() else {
+            panic!("construction target {} has no BuildData", target.0);
+        };
+        let target_type = self
+            .types
+            .get(site.type_id)
+            .expect("live construction target keeps its type row");
+        let builder = &self.ents[i];
+        let builder_key = ObjectKey {
+            who: i32::from(builder.who),
+            o: i as i32,
+            uid: builder.object_uid,
+        };
+        let (btx, bty) = builder.tile();
+        let (ttx, tty) = site.tile();
+        let half_x = (target_type.x_size / 2).max(0);
+        let half_y = (target_type.y_size / 2).max(0);
+        let builder_tile_is_covered = (btx - ttx).abs() <= half_x && (bty - tty).abs() <= half_y;
+        let order_flags = builder
+            .motion
+            .as_ref()
+            .and_then(|u| {
+                u.orders
+                    .iter()
+                    .find(|o| o.kind == don_sim::order::OrderIndex::BuildAt)
+            })
+            .map_or(0, |o| o.flags);
+        let unit_decoy = builder
+            .motion
+            .as_ref()
+            .is_some_and(|u| u.unit_masks & 1 != 0);
+        let plan = construction_builder::preflight(PreflightInput {
+            builder: builder_key,
+            target_order: order.target,
+            // Direct `do_build` deliberately ignores the captured UID here.
+            target_is_valid_wall: site.alive && site_build.is_valid(),
+            target_is_active: site_build.is_active(),
+            has_next_action_after_retire: false,
+            adjacent: Map::tile_dist((btx, bty), (ttx, tty)) <= 1,
+            builder_tile_is_covered,
+            target_is_farm: site.type_id == self.ids.farm,
+            order_flags,
+            builder_x: builder.x,
+            builder_y: builder.y,
+            target_x: site.x,
+            target_y: site.y,
+            builder_angle: builder.facing,
+            unit_decoy,
+        });
+
+        let refusal = match plan {
+            PreflightPlan::Reswarm { .. } => {
+                if self.params.construction_mode == ConstructionMode::ResearchModel {
+                    // MODEL: the playable arena has no temporary Group/reswarm host. Its
+                    // old one-tile approach is retained only on this explicitly labelled
+                    // path, while progress itself uses the recovered harmonic kernel.
+                    self.apply_research_construction(
+                        i,
+                        site_index,
+                        construction_builder::CHAR_BUILD,
+                        None,
+                        true,
+                    );
+                    return;
+                }
+                ConstructionRefusal::MissingReswarmTransaction
+            }
+            PreflightPlan::AnimateFace {
+                animation,
+                set_angle,
+                contribute,
+            } => {
+                if self.params.construction_mode == ConstructionMode::ResearchModel {
+                    self.apply_research_construction(
+                        i, site_index, animation, set_angle, contribute,
+                    );
+                    return;
+                }
+                // `Unit::set_anim` 0x00616F40 calls the 4,723-byte Guy::set_anim body for
+                // every squad/crew member before `Unit::set_angle`. The current don-sim
+                // primitive returns this ordered plan but does not own that transaction;
+                // setting only `GuyData::cur_anim` would be an invented shortcut.
+                ConstructionRefusal::MissingBuilderAnimationTransaction
+            }
+            PreflightPlan::RetireInvalid { .. } => {
+                self.detach(self.ents[i].id);
+                self.ents[i].job = Job::Idle;
+                return;
+            }
+            PreflightPlan::RetireActive => {
+                self.detach(self.ents[i].id);
+                self.ents[i].job = Job::Idle;
+                return;
+            }
+        };
+        self.ents[site_index].construction_refusal = Some(refusal);
+    }
+
+    /// Playable-only adapter around the exact local construction arithmetic.
+    ///
+    /// The `BuildData` writes and harmonic helper sequence are the recovered primitives.
+    /// Animation, start and activation below remain an explicit research model because
+    /// Arena cannot return the mandatory full-world receipts. Claim-bearing mode never
+    /// enters this function.
+    fn apply_research_construction(
+        &mut self,
+        builder_index: usize,
+        site_index: usize,
+        animation: i32,
+        set_angle: Option<i32>,
+        contribute: bool,
+    ) {
+        for guy in self.ents[builder_index].guys.guys.iter_mut().flatten() {
+            // MODEL: `Unit::set_anim`/`Guy::set_anim` have a larger transaction. This
+            // carries only the visible current-animation byte for playable research runs.
+            guy.cur_anim = animation as i8;
+            if let Some(angle) = set_angle {
+                guy.des_angle = angle;
+            }
+        }
+        if let Some(angle) = set_angle {
+            self.ents[builder_index].facing = angle;
+            if let Some(motion) = self.ents[builder_index].motion.as_mut() {
+                motion.body.angle = angle;
+            }
+        }
+        if !contribute {
+            return;
+        }
+
+        let mut completed = false;
+        {
+            let site = self.ents[site_index]
+                .build
+                .as_mut()
+                .expect("construction site retains BuildData");
+            if !site.is_started() {
+                // MODEL: flags/frame only; the terrain/visibility/competition transaction
+                // required by Build::start is deliberately not claimed here.
+                site.flags |= production::flag::STARTED;
+                site.frame_started = self.frame as i32;
+            }
+            if site.build_masks & production::mask::HELPER_COUNTED == 0 {
+                site.recharging = site.recharging.wrapping_add(1);
+                site.build_masks |= production::mask::HELPER_COUNTED;
+            }
+            let total = production::construct_time(
+                site.constr_time,
+                false,
+                &Default::default(),
+                &self.prod_rules,
+            );
+            let rate = production::construct_rate(site.is_under_attack(), false, &self.prod_rules);
+            let step = production::do_construct(
+                rate,
+                1,
+                site.is_active(),
+                site.job_counter,
+                site.job_counter_2,
+                site.helpers,
+                total,
+            );
+            site.job_counter = step.job_counter;
+            site.job_counter_2 = step.job_counter_2;
+            site.helpers = step.helpers;
+            if step.completed {
+                // MODEL: only the recovered local activation core. Leader/city/terrain,
+                // event, Farm RNG and registry transactions remain absent blockers.
+                site.flags |= production::flag::ACTIVE;
+                site.build_masks |= 0x1000;
+                site.job_counter = 0;
+                site.job_counter_2 = 0;
+                site.recharging = 0;
+                site.construct_hits = site.myhits;
+                completed = true;
+            }
+        }
+
+        let site = self.ents[site_index]
+            .build
+            .as_ref()
+            .expect("construction site retains BuildData");
+        self.ents[site_index].build_left = if completed {
+            0
+        } else {
+            site.constr_time
+                .saturating_sub(site.job_counter)
+                .min(i32::MAX as u32) as i32
+        };
+        if completed {
+            self.ents[site_index].complete = true;
+            let who = self.ents[site_index].who;
+            let type_id = self.ents[site_index].type_id;
+            let name = self
+                .types
+                .get(type_id)
+                .map(|t| t.name.clone())
+                .unwrap_or_default();
+            self.note(who, format!("built {name}"));
         }
     }
 
@@ -2016,7 +2431,30 @@ impl World {
                 || u.tolerance != tol
         });
         if replace {
-            u.orders.replace(OrderRec::move_to(gx, gy, tol));
+            if let Some(build_order) = self.ents[i].build_order {
+                assert!(
+                    u.orders.iter().any(|o| {
+                        o.kind == don_sim::order::OrderIndex::BuildAt
+                            && o.target_who == build_order.target.who
+                            && o.target_o == build_order.target.o
+                            && o.target_uid == build_order.target.uid
+                    }),
+                    "construction movement must retain the generational BUILD_AT tail"
+                );
+                // `check_build_order` inserts a MOVE_TO leg ahead of BUILD_AT. Arena's
+                // movement executor owns only one such leg, so retire an obsolete front
+                // leg before inserting the current destination without touching the tail.
+                if u.orders
+                    .front()
+                    .is_some_and(|o| o.kind == don_sim::order::OrderIndex::MoveTo)
+                {
+                    u.orders.reset();
+                    let _ = u.orders.remove_current();
+                }
+                u.orders.push_front(OrderRec::move_to(gx, gy, tol));
+            } else {
+                u.orders.replace(OrderRec::move_to(gx, gy, tol));
+            }
             order_dispatch::clear_partial_path(&mut u);
             u.unit_masks &= !order_dispatch::masks::PATH_EXHAUSTED;
         }
@@ -2479,6 +2917,14 @@ impl World {
                 self.target_world.remove(target_ref(&e)),
                 "dead arena object must unlink from target acquisition"
             );
+            if let Some(build) = self.ents[i].build.as_mut() {
+                // Target destruction invalidates the addressed object. Builders are not
+                // proactively visited; their next do_build observes the invalid slot.
+                // The remaining close/disband world transaction is still a declared
+                // construction-interruption blocker, so no refund/terrain mutation is
+                // invented here and credited counters stay in the record.
+                build.flags &= !production::flag::VALID;
+            }
             self.ents[i].alive = false;
             self.players[e.who as usize].losses += 1;
             for p in 0..self.players.len() {
