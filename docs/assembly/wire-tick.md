@@ -4,8 +4,8 @@
 drives the declared 29-call schedule in retail's order and dispatches into eleven of the
 reviewed `systems/*` modules from the step each one belongs to. Before this lane, the only
 thing in the repository that visited `schedule::DO_FRAME` was `World::step`, which incremented
-29 counters, ran the object traversal, and advanced two clocks. **Eight of the 29 steps now
-execute derived code with real inputs on every tick — 8 of the 14 that are in scope, since 15
+29 counters, ran the object traversal, and advanced two clocks. **Nine of the 29 steps now
+execute derived code with real inputs on every tick — 9 of the 14 that are in scope, since 15
 of the 29 are presentation, telemetry or session management.** A binary prints the trace.
 
 ```sh
@@ -14,9 +14,9 @@ cargo run -p don-sim --bin don-tick-trace -- --frames 900 --trace 3
 
 ```
        step:   01234567890123456789012345678
-  f0      ----o---X--XX.XX-X-.X-.Xo--o-  8/29 executed
+  f0      ----o---X--XX.XX-X-XX-.Xo--o-  9/29 executed
   ...                                            X executed  o ported-but-vacuous
-  f899    ----o---X--XX.XX-X-.X-.Xo--o-  8/29 executed        . unimplemented  - out of scope
+  f899    ----o---X--XX.XX-X-XX-.Xo--o-  9/29 executed        . unimplemented  - out of scope
 ```
 
 Nothing here is new derivation. Every system called carries whatever tier its own module
@@ -29,11 +29,11 @@ for the other.
 
 | measure | before | now |
 |---|---:|---:|
-| steps of `DO_FRAME` executing derived code, per tick | 1 | **8** |
-| of the 14 in-scope steps | 1 / 14 | **8 / 14** |
+| steps of `DO_FRAME` executing derived code, per tick | 1 | **9** |
+| of the 14 in-scope steps | 1 / 14 | **9 / 14** |
 | steps that only increment a counter | 28 | 0 |
 | `systems/*` modules reached from the tick | 0 | **11** |
-| named retail sub-calls skipped, counted per tick | not counted | **18** |
+| named retail sub-calls skipped, counted per tick | not counted | **17** |
 
 The three-way split is deliberate and the categories are enforced by a test:
 
@@ -45,9 +45,9 @@ The three-way split is deliberate and the categories are enforced by a test:
   do not exist".
 * **OutOfScope** — correctly absent from a headless deterministic core.
 
-Steps 13, 19 and 22 remain unimplemented retail code: `Armies::process_all`,
-`Leader::process_event_frame`, and `Roads::scan_and_kill_stray_roads`. Step 17 now executes
-the complete recovered `Leaders::end_process_all` dispatcher and deterministic body. Steps
+Steps 13 and 22 remain unimplemented retail code: `Armies::process_all` and
+`Roads::scan_and_kill_stray_roads`. Steps 17 and 19 now execute the complete recovered
+`Leaders::end_process_all` and `Leader::process_event_frame` dispatchers and deterministic bodies. Steps
 4, 24 and 27 are runnable but correctly report vacuous until a script, cannon-time window,
 or resolved-victory latch supplies work.
 
@@ -61,6 +61,7 @@ or resolved-victory latch supplies work.
 | 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | `Guy::process`, `suffer_attrition`, `process_supply`, `detect_unit_collision`, `needs_transport`, wildlife spawn, anti-air dud roll |
 | 15 | `Objects::inc_time` `0x0065DB70` | `ammo::ammo_inc_time` over the pool in slot order, `hit_target`/`check_hit`, `ammo_do_damage_single` | `Unit::inc_time` (the other half) |
 | 17 | `Leaders::end_process_all` `0x006ED070` | complete eight-slot dispatcher; matching Player warning-bit cleanup; exact 450-frame feedback limiter and stamp-before-cap compare | localized message/audio are emitted as inspectable presentation events |
+| 19 | `Leader::process_event_frame` `0x006EC180` | complete eight-slot dispatcher; exact 50-frame unsigned-rate smoothing; sequential hostile-score combat-mood selection; lopsided-battle threshold, cooldown and sentinel writes | JukeBox mood requests and achievement notifications are emitted as inspectable presentation events |
 | 20 | `Game::frame++` `0x005924BF` | the counter, after the object pass | — |
 | 23 | `frame % 15 → seconds++` | the counter | — |
 
@@ -99,7 +100,7 @@ inside the driver, not estimates.
 
 | | |
 |---|---:|
-| steps executed, every tick | **8 / 29** (8 of 14 in scope) |
+| steps executed, every tick | **9 / 29** (9 of 14 in scope) |
 | `Unit::process` | 36,000 |
 | `Unit::move_step` (ported integrator) | 13,544 |
 | `Unit::do_attack` | 454 |

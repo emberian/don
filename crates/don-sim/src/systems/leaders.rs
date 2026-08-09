@@ -1,6 +1,6 @@
 //! Leader-owned tick dispatchers: step 8 `Leaders::process_all` `0x006ED2A0`, step 11
-//! `Leaders::strategy_all` `0x006ED430`, and step 17 `Leaders::end_process_all`
-//! `0x006ED070`.
+//! `Leaders::strategy_all` `0x006ED430`, step 17 `Leaders::end_process_all` `0x006ED070`,
+//! and step 19 `Leader::process_event_frame` `0x006EC180`.
 //!
 //! # What this file is
 //!
@@ -42,11 +42,16 @@
 //!      for slot in 0..8, flags & 2:
 //!        if pop_issues == 0: clear matching Player warning flags
 //!        else if local player: rate-limit and emit population-cap feedback
+//!  +- [19] Leader::process_event_frame 0x006EC180 <- [`process_event_frames`], this file
+//!      for slot in 0..8, flags & 1:
+//!        every 50 frames: fold event counters into rates and 15-second totals
+//!        choose local combat music; emit lopsided-battle achievement event
 //! ```
 //!
 //! Everything above is [measured] from a capstone disassembly of `0x006ED2A0`,
 //! `0x006CE280`, `0x006CF7C0`, `0x006CF970`, `0x006CDEA0`, `0x006CDCC0`, `0x006B8A20`,
-//! `0x006ED430`, `0x006BC860`, and `0x006ED070` against `ron-bin/riseofnations.exe` (sha256
+//! `0x006ED430`, `0x006BC860`, `0x006ED070`, and `0x006EC180` against
+//! `ron-bin/riseofnations.exe` (sha256
 //! `30478a44…625079`), cross-read against `re/decomp-all/`. **Tier C**: structure and
 //! constants are read from the binary, nothing here has been executed against retail, and
 //! no claim may be promoted without an oracle run.
@@ -206,6 +211,20 @@ pub mod offsets {
     pub const ANTI_ATTRITION_OFF: usize = 0x7FC;
     /// `0x006ED2D4` — likewise.
     pub const FRAME_COUNTER_B: usize = 0x9F4;
+    /// `0x006EC485` — prior lopsided-battle event frame.
+    pub const FRAME_BATTLE: usize = 0xA4C;
+    pub const AVERAGE_DEATH_RATE: usize = 0xA50;
+    pub const AVERAGE_KILL_RATE: usize = 0xA52;
+    pub const AVERAGE_DAMAGE_RATE: usize = 0xA54;
+    pub const AVERAGE_HIT_RATE: usize = 0xA56;
+    pub const DEATHS_CURRENT_FRAME: usize = 0xA58;
+    pub const KILLS_CURRENT_FRAME: usize = 0xA5A;
+    pub const HITS_CURRENT_FRAME: usize = 0xA5C;
+    pub const DAMAGE_CURRENT_FRAME: usize = 0xA5E;
+    pub const DEATHS_FIFTEEN_SECONDS: usize = 0xA60;
+    pub const KILLS_FIFTEEN_SECONDS: usize = 0xA62;
+    pub const HITS_FIFTEEN_SECONDS: usize = 0xA64;
+    pub const DAMAGE_FIFTEEN_SECONDS: usize = 0xA66;
     /// `0x006CDF6E` — the CTW gate byte `calc_attrition` tests.
     pub const CONQUEST_BYTE: usize = 0x6900;
     /// `BitMask<44>` object; payload at `+0xC` = `0x6DA4`. The effective mask.
@@ -611,6 +630,28 @@ pub struct GraceTimer {
     pub frozen: i32,
 }
 
+/// The PDB-named `LeaderData +0xA4C..+0xA66` event-rate block consumed by step 19.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct EventFrameState {
+    /// `+0xA4C`.
+    pub frame_battle: i32,
+    /// `+0xA50/+0xA52/+0xA54/+0xA56`.
+    pub average_death_rate: u16,
+    pub average_kill_rate: u16,
+    pub average_damage_rate: u16,
+    pub average_hit_rate: u16,
+    /// `+0xA58/+0xA5A/+0xA5C/+0xA5E`.
+    pub deaths_current_frame: u16,
+    pub kills_current_frame: u16,
+    pub hits_current_frame: u16,
+    pub damage_current_frame: u16,
+    /// `+0xA60/+0xA62/+0xA64/+0xA66`.
+    pub deaths_fifteen_seconds: u16,
+    pub kills_fifteen_seconds: u16,
+    pub hits_fifteen_seconds: u16,
+    pub damage_fifteen_seconds: u16,
+}
+
 /// The slice of `Leader` that step 8 touches.
 ///
 /// Field-for-field with [`offsets`]; nothing here is a convenience aggregate except the
@@ -650,6 +691,8 @@ pub struct Leader {
     pub anti_attrition_off: i32,
     /// `+0x9D4`, rebuilt by step 11's [`check_explore`] on its phase.
     pub explored: i32,
+    /// `+0xA4C..+0xA66`, processed at step 19.
+    pub event_frame: EventFrameState,
     /// `+0x6900`, the CTW gate byte.
     pub conquest_byte: u8,
     /// `+0x6D98` payload.
@@ -763,11 +806,53 @@ impl Default for EndProcessState {
     }
 }
 
+/// One reached `JukeBox::set_next_mood` presentation call from step 19.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CombatMoodRequest {
+    pub leader_index: usize,
+    pub mood: i32,
+    /// The boolean passed in `ECX`: quiet with no combat, or a >=2000 high-rate transition
+    /// out of mood 2.
+    pub force: bool,
+}
+
+/// The two `Achieve::add_event` kinds emitted by the lopsided-battle detector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BattleAchievementKind {
+    KillsOverDeaths = 0,
+    DeathsOverKills = 1,
+}
+
+/// One reached `Achieve::add_event(kind, who, EMPTY_STRING)` call from step 19.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BattleAchievementEvent {
+    pub leader_index: usize,
+    pub who: i32,
+    pub kind: BattleAchievementKind,
+}
+
+/// Presentation-owned globals touched by step 19.
+///
+/// Both moods are zero in the executable image; a product host may refresh
+/// `current_music_mood` from its JukeBox before the step. Requests and achievement events
+/// are cleared and rebuilt on every dispatcher call, so headless consumers never replay a
+/// prior frame's presentation work.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct EventProcessState {
+    /// `JukeBox` current mood at `0x00ECBA20`.
+    pub current_music_mood: i32,
+    /// Requested mood at `0x00ECBA2C`.
+    pub next_music_mood: i32,
+    pub last_mood_requests: Vec<CombatMoodRequest>,
+    pub last_achievement_events: Vec<BattleAchievementEvent>,
+}
+
 /// The eight `Leader` slots the loop walks.
 #[derive(Clone, Debug)]
 pub struct Leaders {
     pub leaders: [Leader; NUM_LEADER_SLOTS],
     pub end: EndProcessState,
+    pub event: EventProcessState,
 }
 
 impl Default for Leaders {
@@ -784,6 +869,7 @@ impl Leaders {
         Leaders {
             leaders: std::array::from_fn(|i| Leader::new(i as i32)),
             end: EndProcessState::default(),
+            event: EventProcessState::default(),
         }
     }
 
@@ -2633,6 +2719,283 @@ pub fn end_process_all(ls: &mut Leaders, frame: i32) -> EndProcessTrace {
 }
 
 // ===========================================================================================
+// Leader::process_event_frame 0x006EC180 / Game::do_frame step-19 dispatcher
+// ===========================================================================================
+
+pub const EVENT_RATE_PERIOD: i32 = 50;
+pub const EVENT_RATE_SCALE: u16 = 100;
+pub const COMBAT_MOOD_QUIET_THRESHOLD: u32 = 300;
+pub const COMBAT_MOOD_ACTIVE_THRESHOLD: u32 = 600;
+pub const COMBAT_MOOD_FORCE_THRESHOLD: u32 = 2000;
+pub const COMBAT_SCORE_BIAS: i32 = 200;
+pub const BATTLE_EVENT_COOLDOWN: i32 = 1800;
+pub const BATTLE_RATE_PER_AGE: i32 = 125;
+pub const BATTLE_IMBALANCE_PER_AGE: i32 = 10;
+pub const BATTLE_IMBALANCE_BASE: i32 = 20;
+pub const BATTLE_RATE_SENTINEL: u16 = 0xFC18;
+
+pub mod combat_mood {
+    pub const WINNING: i32 = 0;
+    pub const LOSING: i32 = 1;
+    pub const QUIET: i32 = 2;
+}
+
+/// Exact non-Leader inputs reached by the step-19 body. Ages are indexed by player `who`;
+/// team scores are indexed by Leader record because retail calls `get_team_score` on each
+/// concrete Leader object. `None` leaves a broken who→age adapter explicit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EventFrameInputs {
+    pub frame: i32,
+    pub age_by_who: [Option<i32>; NUM_LEADER_SLOTS],
+    pub team_scores: [i32; NUM_LEADER_SLOTS],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EventFrameMissingFact {
+    AgeForWho(i32),
+    LocalLeaderSlot(i32),
+}
+
+/// Measured execution of the complete step-19 dispatcher and deterministic body.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EventFrameTrace {
+    /// Passed `Game::do_frame`'s `flags & 1` gate.
+    pub dispatched: [bool; NUM_LEADER_SLOTS],
+    /// Passed the body's `frame % 50 == 0` gate.
+    pub due: [bool; NUM_LEADER_SLOTS],
+    pub mood_requests: Vec<CombatMoodRequest>,
+    pub achievement_events: Vec<BattleAchievementEvent>,
+    pub missing_facts: Vec<EventFrameMissingFact>,
+}
+
+impl EventFrameTrace {
+    pub fn leaders_dispatched(&self) -> usize {
+        self.dispatched.iter().filter(|ran| **ran).count()
+    }
+
+    pub fn leaders_due(&self) -> usize {
+        self.due.iter().filter(|ran| **ran).count()
+    }
+}
+
+#[inline]
+fn fold_event_rate(current: u16, average: u16) -> (u16, u16) {
+    // `imul reg,reg,100` followed by a 16-bit store: multiplication wraps before the
+    // zero test and average calculation.
+    let scaled = current.wrapping_mul(EVENT_RATE_SCALE);
+    let average = if scaled == 0 {
+        ((u32::from(average) * 7) >> 3) as u16
+    } else {
+        ((u32::from(scaled) + u32::from(average)) >> 1) as u16
+    };
+    (scaled, average)
+}
+
+fn update_event_rates(event: &mut EventFrameState) {
+    event.deaths_fifteen_seconds = event
+        .deaths_fifteen_seconds
+        .wrapping_add(event.deaths_current_frame);
+    event.damage_fifteen_seconds = event
+        .damage_fifteen_seconds
+        .wrapping_add(event.damage_current_frame);
+    event.kills_fifteen_seconds = event
+        .kills_fifteen_seconds
+        .wrapping_add(event.kills_current_frame);
+    event.hits_fifteen_seconds = event
+        .hits_fifteen_seconds
+        .wrapping_add(event.hits_current_frame);
+
+    (event.deaths_current_frame, event.average_death_rate) =
+        fold_event_rate(event.deaths_current_frame, event.average_death_rate);
+    (event.kills_current_frame, event.average_kill_rate) =
+        fold_event_rate(event.kills_current_frame, event.average_kill_rate);
+    (event.hits_current_frame, event.average_hit_rate) =
+        fold_event_rate(event.hits_current_frame, event.average_hit_rate);
+    (event.damage_current_frame, event.average_damage_rate) =
+        fold_event_rate(event.damage_current_frame, event.average_damage_rate);
+}
+
+fn local_combat_mood(
+    ls: &Leaders,
+    leader_index: usize,
+    team_scores: &[i32; NUM_LEADER_SLOTS],
+) -> Result<Option<(i32, bool)>, EventFrameMissingFact> {
+    let event = ls.leaders[leader_index].event_frame;
+    let combat_sum = u32::from(event.average_hit_rate) + u32::from(event.average_damage_rate);
+
+    if combat_sum < COMBAT_MOOD_ACTIVE_THRESHOLD {
+        if combat_sum >= COMBAT_MOOD_QUIET_THRESHOLD {
+            return Ok(None);
+        }
+        return Ok(Some((
+            combat_mood::QUIET,
+            event.average_hit_rate == 0 && event.average_damage_rate == 0,
+        )));
+    }
+
+    let local_who = ls.leaders[leader_index].slot;
+    let local = ls
+        .by_slot(local_who)
+        .ok_or(EventFrameMissingFact::LocalLeaderSlot(local_who))?;
+    let mut strongest_hostile_score = 0i32;
+    for other_index in 0..NUM_LEADER_SLOTS {
+        let other = &ls.leaders[other_index];
+        if other.flags & flag::IN_GAME == 0 || other.slot == local_who {
+            continue;
+        }
+        let hostile = other.diplo_toward(local_who) == 0 || local.diplo_toward(other.slot) == 0;
+        if !hostile
+            || (other.event_frame.average_hit_rate == 0
+                && other.event_frame.average_damage_rate == 0)
+        {
+            continue;
+        }
+        strongest_hostile_score = strongest_hostile_score.max(team_scores[other_index]);
+    }
+
+    let own_score = team_scores[leader_index];
+    let mut balance =
+        i32::from(event.average_hit_rate).wrapping_sub(i32::from(event.average_damage_rate));
+    let hostile_four_thirds = strongest_hostile_score.wrapping_mul(4) / 3;
+    if own_score >= hostile_four_thirds {
+        balance = balance.wrapping_add(COMBAT_SCORE_BIAS);
+    } else {
+        let hostile_three_quarters = strongest_hostile_score.wrapping_mul(3) / 4;
+        if own_score <= hostile_three_quarters {
+            balance = balance.wrapping_sub(COMBAT_SCORE_BIAS);
+        }
+    }
+
+    let mood = if balance < 0 {
+        combat_mood::LOSING
+    } else {
+        combat_mood::WINNING
+    };
+    let force = ls.event.current_music_mood == combat_mood::QUIET
+        && combat_sum >= COMBAT_MOOD_FORCE_THRESHOLD;
+    Ok(Some((mood, force)))
+}
+
+fn battle_achievement(
+    event: &mut EventFrameState,
+    leader_index: usize,
+    who: i32,
+    frame: i32,
+    age: i32,
+) -> Option<BattleAchievementEvent> {
+    let combined =
+        i32::from(event.average_death_rate).wrapping_add(i32::from(event.average_kill_rate));
+    let minimum = age.wrapping_add(1).wrapping_mul(BATTLE_RATE_PER_AGE);
+    if combined < minimum
+        || (event.frame_battle != 0
+            && frame.wrapping_sub(event.frame_battle) < BATTLE_EVENT_COOLDOWN)
+    {
+        return None;
+    }
+
+    let imbalance = age
+        .wrapping_mul(BATTLE_IMBALANCE_PER_AGE)
+        .wrapping_add(BATTLE_IMBALANCE_BASE);
+    let deaths = i32::from(event.average_death_rate);
+    let kills = i32::from(event.average_kill_rate);
+    let kind = if deaths >= kills.wrapping_add(imbalance) {
+        BattleAchievementKind::DeathsOverKills
+    } else if kills >= deaths.wrapping_add(imbalance) {
+        BattleAchievementKind::KillsOverDeaths
+    } else {
+        return None;
+    };
+
+    event.average_death_rate = BATTLE_RATE_SENTINEL;
+    event.average_kill_rate = BATTLE_RATE_SENTINEL;
+    event.frame_battle = frame;
+    Some(BattleAchievementEvent {
+        leader_index,
+        who,
+        kind,
+    })
+}
+
+/// **Step 19 of `Game::do_frame`.** The exact eight-Leader `flags & 1` dispatcher plus the
+/// complete 918-byte `Leader::process_event_frame` body.
+///
+/// JukeBox and Achieve calls are presentation/product boundaries, emitted as typed events;
+/// all LeaderData additions, smoothing, sentinels, cooldown stamps and counter resets run
+/// directly in retail order. Because the dispatcher is sequential, a local leader's music
+/// scan observes freshly folded hit/damage rates only for earlier Leader slots, exactly as
+/// the original loop does.
+pub fn process_event_frames(ls: &mut Leaders, input: EventFrameInputs) -> EventFrameTrace {
+    let mut trace = EventFrameTrace::default();
+    ls.event.last_mood_requests.clear();
+    ls.event.last_achievement_events.clear();
+
+    for leader_index in 0..NUM_LEADER_SLOTS {
+        if ls.leaders[leader_index].flags & flag::IN_GAME == 0 {
+            continue;
+        }
+        trace.dispatched[leader_index] = true;
+
+        // `idiv 50; test edx` — non-due frames return before touching any Leader field.
+        if input.frame % EVENT_RATE_PERIOD != 0 {
+            continue;
+        }
+        trace.due[leader_index] = true;
+        update_event_rates(&mut ls.leaders[leader_index].event_frame);
+
+        let who = ls.leaders[leader_index].slot;
+        if who == ls.end.local_who {
+            match local_combat_mood(ls, leader_index, &input.team_scores) {
+                Ok(Some((mood, force))) => {
+                    ls.event.next_music_mood = mood;
+                    if ls.event.current_music_mood != mood {
+                        let request = CombatMoodRequest {
+                            leader_index,
+                            mood,
+                            force,
+                        };
+                        trace.mood_requests.push(request);
+                        ls.event.last_mood_requests.push(request);
+                    }
+                }
+                Ok(None) => {}
+                Err(missing) => trace.missing_facts.push(missing),
+            }
+        }
+
+        let age = usize::try_from(who)
+            .ok()
+            .and_then(|who| input.age_by_who.get(who))
+            .copied()
+            .flatten();
+        if let Some(age) = age {
+            if let Some(event) = battle_achievement(
+                &mut ls.leaders[leader_index].event_frame,
+                leader_index,
+                who,
+                input.frame,
+                age,
+            ) {
+                trace.achievement_events.push(event);
+                ls.event.last_achievement_events.push(event);
+            }
+        } else {
+            trace
+                .missing_facts
+                .push(EventFrameMissingFact::AgeForWho(who));
+        }
+
+        // Two dword stores at 0x006EC501/0x006EC507 zero all four adjacent counters.
+        let event = &mut ls.leaders[leader_index].event_frame;
+        event.deaths_current_frame = 0;
+        event.kills_current_frame = 0;
+        event.hits_current_frame = 0;
+        event.damage_current_frame = 0;
+    }
+
+    trace
+}
+
+// ===========================================================================================
 // A driver, so this is a thing that runs rather than a thing that compiles
 // ===========================================================================================
 
@@ -3091,6 +3454,215 @@ mod tests {
         assert!(trace.stamp_writes.is_empty());
         assert!(trace.feedback.is_empty());
         assert!(trace.missing_facts.is_empty());
+    }
+
+    fn event_input(frame: i32) -> EventFrameInputs {
+        EventFrameInputs {
+            frame,
+            age_by_who: [Some(0); NUM_LEADER_SLOTS],
+            team_scores: [0; NUM_LEADER_SLOTS],
+        }
+    }
+
+    /// The dispatcher uses IN_GAME, not PROCESS, and the 50-frame body gate returns before
+    /// even clearing current counters.
+    #[test]
+    fn event_dispatch_gate_and_non_due_return_are_exact() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::PROCESS;
+        ls.leaders[1].flags = flag::IN_GAME;
+        ls.leaders[1].event_frame.deaths_current_frame = 7;
+
+        let trace = process_event_frames(&mut ls, event_input(49));
+
+        assert!(!trace.dispatched[0]);
+        assert!(trace.dispatched[1]);
+        assert_eq!(trace.leaders_dispatched(), 1);
+        assert_eq!(trace.leaders_due(), 0);
+        assert_eq!(ls.leaders[1].event_frame.deaths_current_frame, 7);
+    }
+
+    /// Every event counter uses 16-bit wrapping. The scaled current value is selected by
+    /// its wrapped zero/nonzero state, then all four currents are zeroed at the tail.
+    #[test]
+    fn event_rates_fold_wrap_accumulate_and_reset_in_retail_order() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[0].event_frame = EventFrameState {
+            average_death_rate: 80,
+            average_kill_rate: 10,
+            average_hit_rate: 60_000,
+            average_damage_rate: 5,
+            deaths_current_frame: 0,
+            kills_current_frame: 2,
+            hits_current_frame: 1_000,
+            damage_current_frame: 656, // 65,600 wraps to 64 before averaging
+            deaths_fifteen_seconds: u16::MAX,
+            kills_fifteen_seconds: u16::MAX,
+            hits_fifteen_seconds: u16::MAX,
+            damage_fifteen_seconds: u16::MAX,
+            ..EventFrameState::default()
+        };
+
+        let mut input = event_input(50);
+        input.age_by_who[0] = Some(7); // keep the achievement arm below its age threshold
+        let trace = process_event_frames(&mut ls, input);
+        let event = ls.leaders[0].event_frame;
+
+        assert!(trace.due[0]);
+        assert_eq!(event.average_death_rate, 70, "zero current decays 7/8");
+        assert_eq!(event.average_kill_rate, 105, "(2*100 + 10)/2");
+        assert_eq!(event.average_hit_rate, 47_232);
+        assert_eq!(event.average_damage_rate, 34, "(64 + 5)/2");
+        assert_eq!(event.deaths_fifteen_seconds, u16::MAX);
+        assert_eq!(event.kills_fifteen_seconds, 1);
+        assert_eq!(event.hits_fifteen_seconds, 999);
+        assert_eq!(event.damage_fifteen_seconds, 655);
+        assert_eq!(event.deaths_current_frame, 0);
+        assert_eq!(event.kills_current_frame, 0);
+        assert_eq!(event.hits_current_frame, 0);
+        assert_eq!(event.damage_current_frame, 0);
+    }
+
+    /// Below 300 combat points mood 2 is requested; the boolean is one only when both
+    /// rates are zero. The 300..599 band deliberately leaves the requested mood untouched.
+    #[test]
+    fn event_music_quiet_and_dead_band_boundaries_are_pinned() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.end.local_who = 0;
+        ls.event.current_music_mood = combat_mood::WINNING;
+
+        let quiet = process_event_frames(&mut ls, event_input(0));
+        assert_eq!(ls.event.next_music_mood, combat_mood::QUIET);
+        assert_eq!(
+            quiet.mood_requests,
+            vec![CombatMoodRequest {
+                leader_index: 0,
+                mood: combat_mood::QUIET,
+                force: true,
+            }]
+        );
+
+        ls.leaders[0].event_frame.hits_current_frame = 2; // average 100
+        ls.leaders[0].event_frame.damage_current_frame = 4; // average 200
+        ls.event.next_music_mood = 91;
+        let dead_band = process_event_frames(&mut ls, event_input(50));
+        assert!(dead_band.mood_requests.is_empty());
+        assert_eq!(ls.event.next_music_mood, 91);
+        assert!(ls.event.last_mood_requests.is_empty());
+    }
+
+    /// A weak local score subtracts 200 from the hit-minus-damage balance. This flips a
+    /// locally positive combat rate to mood 1 when an active hostile has the stronger score.
+    #[test]
+    fn event_music_uses_hostile_team_score_bias_and_sequential_rates() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[1].flags = flag::IN_GAME;
+        ls.end.local_who = 0;
+        ls.event.current_music_mood = combat_mood::QUIET;
+        // These zero-current averages fold to hit=700 and damage=600: +100 before bias.
+        ls.leaders[0].event_frame.average_hit_rate = 800;
+        ls.leaders[0].event_frame.average_damage_rate = 686;
+        // Slot 0 runs first and sees slot 1's prior-frame combat state, as retail does.
+        ls.leaders[1].event_frame.average_hit_rate = 1;
+        let mut input = event_input(50);
+        input.team_scores[0] = 100;
+        input.team_scores[1] = 1_000;
+
+        let trace = process_event_frames(&mut ls, input);
+
+        assert_eq!(
+            trace.mood_requests,
+            vec![CombatMoodRequest {
+                leader_index: 0,
+                mood: combat_mood::LOSING,
+                force: false,
+            }]
+        );
+    }
+
+    /// The high-rate transition out of quiet passes a one only at the exact 2000 boundary.
+    #[test]
+    fn event_music_force_flag_starts_at_two_thousand() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.end.local_who = 0;
+        ls.event.current_music_mood = combat_mood::QUIET;
+        ls.leaders[0].event_frame.hits_current_frame = 40; // average = 2000
+
+        let trace = process_event_frames(&mut ls, event_input(50));
+
+        assert_eq!(trace.mood_requests.len(), 1);
+        assert_eq!(trace.mood_requests[0].mood, combat_mood::WINNING);
+        assert!(trace.mood_requests[0].force);
+    }
+
+    /// Achievement type 1 is deaths-over-kills. It stamps the frame and writes both
+    /// average fields to 0xFC18; elapsed 1750 is suppressed while 1800 is allowed.
+    #[test]
+    fn battle_achievement_kind_sentinel_and_cooldown_are_exact() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[0].event_frame.average_death_rate = 200;
+        ls.leaders[0].event_frame.average_kill_rate = 100;
+
+        let first = process_event_frames(&mut ls, event_input(200));
+        let expected = BattleAchievementEvent {
+            leader_index: 0,
+            who: 0,
+            kind: BattleAchievementKind::DeathsOverKills,
+        };
+        assert_eq!(first.achievement_events, vec![expected]);
+        assert_eq!(ls.leaders[0].event_frame.frame_battle, 200);
+        assert_eq!(
+            ls.leaders[0].event_frame.average_death_rate,
+            BATTLE_RATE_SENTINEL
+        );
+        assert_eq!(
+            ls.leaders[0].event_frame.average_kill_rate,
+            BATTLE_RATE_SENTINEL
+        );
+
+        ls.leaders[0].event_frame.average_death_rate = 200;
+        ls.leaders[0].event_frame.average_kill_rate = 100;
+        let early = process_event_frames(&mut ls, event_input(1_950));
+        assert!(early.achievement_events.is_empty());
+
+        ls.leaders[0].event_frame.average_death_rate = 200;
+        ls.leaders[0].event_frame.average_kill_rate = 100;
+        let due = process_event_frames(&mut ls, event_input(2_000));
+        assert_eq!(due.achievement_events, vec![expected]);
+        assert_eq!(ls.leaders[0].event_frame.frame_battle, 2_000);
+    }
+
+    /// A missing who→age fact suppresses only the achievement arm. Counter folds/resets
+    /// still happen, and presentation lists are refreshed rather than replayed.
+    #[test]
+    fn event_missing_age_is_explicit_without_stale_replay() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[0].slot = 9;
+        ls.leaders[0].event_frame.deaths_current_frame = 3;
+        ls.event
+            .last_achievement_events
+            .push(BattleAchievementEvent {
+                leader_index: 7,
+                who: 7,
+                kind: BattleAchievementKind::KillsOverDeaths,
+            });
+
+        let trace = process_event_frames(&mut ls, event_input(50));
+
+        assert_eq!(
+            trace.missing_facts,
+            vec![EventFrameMissingFact::AgeForWho(9)]
+        );
+        assert!(trace.achievement_events.is_empty());
+        assert!(ls.event.last_achievement_events.is_empty());
+        assert_eq!(ls.leaders[0].event_frame.deaths_fifteen_seconds, 3);
+        assert_eq!(ls.leaders[0].event_frame.deaths_current_frame, 0);
     }
 
     /// The outer gate is bit 1. A leader with only bit 0 is scanned by everyone else's

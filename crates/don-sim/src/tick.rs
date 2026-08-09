@@ -1076,7 +1076,9 @@ impl Sim {
         t.work[17] = w;
         // 18, 19.
         t.steps[18] = StepRun::OutOfScope;
-        t.steps[19] = StepRun::Unimplemented(Gap::LeaderProcessEventFrame);
+        let (r, w) = self.leaders_process_event_frames();
+        t.steps[19] = r;
+        t.work[19] = w;
 
         // 20 — Game::frame++. After the object pass, which is why the rotation used the
         // pre-increment value.
@@ -1472,6 +1474,30 @@ impl Sim {
         self.step8.sync_end_players_from_leaders();
         let trace = leaders::end_process_all(&mut self.step8, self.world.frame);
         let work = trace.leaders_processed() as u32;
+        if work == 0 {
+            (StepRun::Vacuous, 0)
+        } else {
+            (StepRun::Executed, work)
+        }
+    }
+
+    // -- step 19 ----------------------------------------------------------------------
+
+    /// The exact IN_GAME-gated dispatcher and complete deterministic body of
+    /// `Leader::process_event_frame` `0x006EC180`.
+    fn leaders_process_event_frames(&mut self) -> (StepRun, u32) {
+        let age_by_who = std::array::from_fn(|who| Some(self.step8.leaders[who].econ.age));
+        let team_scores =
+            std::array::from_fn(|who| self.vic_leaders.get_team_score(&self.vic_match, who));
+        let trace = leaders::process_event_frames(
+            &mut self.step8,
+            leaders::EventFrameInputs {
+                frame: self.world.frame,
+                age_by_who,
+                team_scores,
+            },
+        );
+        let work = trace.leaders_dispatched() as u32;
         if work == 0 {
             (StepRun::Vacuous, 0)
         } else {
