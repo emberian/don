@@ -29,6 +29,7 @@
 //! | recharge | `don_sim::systems::combat::{recharge_frames, AttackCycle}` |
 //! | unit orders / route search / turning | `don_sim::systems::{order_dispatch, movement}` |
 //! | per-guy occupancy / unit collision response | `don_sim::systems::collision` |
+//! | idle unit target acquisition | `don_sim::systems::target::find_auto_target` |
 //! | balance percentages | `schema/live/balance-real.bin`, the real 493x493 table |
 //! | unit and building stats | `schema/live/live-tables-*.tsv`, live reads |
 //! | rules constants | `ron-data/rules.xml` |
@@ -42,8 +43,6 @@
 //!    known to work.
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
-//! 4. Target acquisition is "nearest hostile inside `UNIT_RESPOND_RANGE`". Retail's is
-//!    `Object::poor_target` plus a scan whose scheduling is not derived.
 //! 6. No water, no naval, no air, no diplomacy, no attrition, no supply.
 //!
 //! Fidelity: **C**. Nothing here is differentially tested against retail.
@@ -58,12 +57,16 @@ use don_sim::mechanics::{
     ResourceTickInput,
 };
 use don_sim::rng::Random;
+use don_sim::systems::casters_animals::{
+    CLOAK_OBJECT_FLAG, CLOAK_SECONDARY_OBJECT_FLAG, CLOAK_TYPE_FLAG, CLOAK_WHILE_IDLE_TYPE_FLAG,
+};
 use don_sim::systems::collision::{
     self, CollCheck, CollGuy, UnitRow as CollisionUnit, UnitTable as CollisionUnits,
 };
 use don_sim::systems::combat::{
-    below_min_range, in_attack_range, scale_damage_build, scale_damage_unit, vector_dist_between,
-    AttackCycle, CombatConstants, HitPoints, RANGE_UNITS_PER_TILE,
+    below_min_range, circle_table, in_attack_range, poor_target, scale_damage_build,
+    scale_damage_unit, vector_dist_between, AttackCycle, CircleTable, CombatConstants, HitPoints,
+    PoorTargetInput, RANGE_UNITS_PER_TILE,
 };
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
@@ -71,6 +74,10 @@ use don_sim::systems::movement::{PathFinder, PathUnit, UnitWorld, UCELL};
 use don_sim::systems::order_dispatch::{
     self, ArmResult, AttackOutcome, DispatchCoverage, GatherOutcome, KillReason, OrderRec,
     TargetState, UnitWork, WorkWorld,
+};
+use don_sim::systems::target::{
+    self, AutoTargetAdapter, AutoTargetCandidate, AutoTargetQuery, AutoTargetStep,
+    CompareTargetInput, ObjRef, TargetRow, TargetWorld,
 };
 
 use super::cmd::{Cmd, EntId};
@@ -204,6 +211,10 @@ pub struct Ent {
     pub cycle: AttackCycle,
     /// 32-bit turn units. Set when the entity moves or fires.
     pub facing: i32,
+    /// `UnitData +0xB1`: the persistent per-instance combat stance.  This is initialised
+    /// through retail's type-class/player-preference switch, not from an arena-wide combat
+    /// policy. Buildings retain zero because ordinary `find_new_target` is a Unit path.
+    pub stance: i8,
     /// Which of its owner's cities this building belongs to, or `NONE`.
     pub city: EntId,
     /// Gatherer buildings: seated citizens and the terrain-derived cap.
@@ -261,6 +272,15 @@ pub struct PlayerState {
     pub damage_taken: i64,
     pub kills: u32,
     pub losses: u32,
+    /// `leaders[who] & 4`. Arena players are bot-controlled leaders; target comparison and
+    /// the Unit constructor both read this bit.
+    pub leader_ai: bool,
+    /// Retail player option `+0x04`, copied into stance-type-1 units for an AI leader.
+    pub stance_type_1: i8,
+    /// Retail player option `+0x0C`, copied into stance-type-0 units.
+    pub stance_type_0: i8,
+    /// Retail player option byte `+0x1C`. Bits 3 and 4 initialise stance types 3 and 2.
+    pub leader_option_flags: u8,
 }
 
 /// What a player remembers about an enemy object.
@@ -290,11 +310,6 @@ pub struct ArenaParams {
     pub difficulty_income_bonus: i32,
     /// Frames between fog recomputations.
     pub fog_period: i64,
-    /// `UNIT_RESPOND_RANGE`, in tiles — from `CombatConstants::shipped`.
-    pub respond_range: i32,
-    /// Frames between target re-acquisitions. `docs/tracks/ron-ai.md` measured "each unit
-    /// re-evaluates every 32 ticks"; that is the number.
-    pub retarget_period: i64,
     /// Minimum tile separation between city centres. Ours: `CITY_CENTER_RADIUS`, the
     /// radius inside which a city owns its buildings, so two cities at that spacing have
     /// touching rather than overlapping build areas.
@@ -307,8 +322,6 @@ impl Default for ArenaParams {
             gather_period_shift: 0,
             difficulty_income_bonus: 0,
             fog_period: 15,
-            respond_range: CombatConstants::shipped().unit_respond_range,
-            retarget_period: 32,
             min_city_sep: 20,
         }
     }
@@ -353,7 +366,426 @@ pub struct World {
     collision_world: don_sim::systems::map_terrain::World,
     collision_check: CollCheck,
     collision_units: CollisionUnits,
+    /// `World::wdata`'s target-acquisition chains and checksummed near/targeted fields.
+    target_world: TargetWorld,
+    target_circle: CircleTable,
     age_techs: Vec<i32>,
+}
+
+fn target_ref(e: &Ent) -> ObjRef {
+    ObjRef::new(
+        i16::try_from(e.id.index().expect("live Ent has a nonzero id"))
+            .expect("arena object slot fits retail i16"),
+        e.who as i16,
+    )
+}
+
+fn target_row(e: &Ent, t: &TypeRow, ids: &Ids) -> TargetRow {
+    TargetRow {
+        flags8: 1 | if e.type_id == ids.small_city { 0x20 } else { 0 },
+        x: e.x,
+        y: e.y,
+        damage: e.hp.damage,
+        full: 0,
+        is_unit: !e.building,
+        is_build: e.building,
+        is_building: e.building,
+        is_wonder: t.kind_building && (0x20E..0x21F).contains(&t.id),
+        ..TargetRow::default()
+    }
+}
+
+/// `Unit::init` `0x00612100`, after `UnitTypeData::get_stance_type` `0x0061D350`.
+fn initial_unit_stance(player: &PlayerState, t: &TypeRow) -> i8 {
+    match t.stance_type() {
+        0 => player.stance_type_0,
+        1 if player.leader_ai => player.stance_type_1,
+        // The human type-1 arm also depends on GameData +0x2D. Arena leaders are AI, so
+        // accepting a human leader here without that setting would fabricate a stance.
+        1 => panic!("human stance-type-1 construction needs the live GameData +0x2D option"),
+        2 => i8::from(player.leader_option_flags & 0x10 == 0),
+        3 => i8::from(player.leader_option_flags & 0x08 == 0),
+        // `get_stance_type == -1` takes no constructor write; the freshly zeroed Unit
+        // instance therefore retains stance zero.
+        -1 => 0,
+        other => unreachable!("get_stance_type returned impossible category {other}"),
+    }
+}
+
+fn type_is(types: &Types, mut type_id: i32, ancestor: i32) -> bool {
+    for _ in 0..types.rows.len().saturating_add(1) {
+        if type_id == ancestor {
+            return true;
+        }
+        let Some(row) = types.get(type_id) else {
+            return false;
+        };
+        if row.from < 0 || row.from == type_id {
+            return false;
+        }
+        type_id = row.from;
+    }
+    false
+}
+
+fn root_type<'a>(types: &'a Types, mut type_id: i32) -> Option<&'a TypeRow> {
+    for _ in 0..types.rows.len().saturating_add(1) {
+        let row = types.get(type_id)?;
+        if row.from < 0 || row.from == type_id {
+            return Some(row);
+        }
+        type_id = row.from;
+    }
+    None
+}
+
+fn type_chain_has_build_flag(types: &Types, mut type_id: i32, flag: u32) -> bool {
+    for _ in 0..types.rows.len().saturating_add(1) {
+        let Some(row) = types.get(type_id) else {
+            return false;
+        };
+        if row.build_flags & flag != 0 {
+            return true;
+        }
+        if row.from < 0 || row.from == type_id {
+            return false;
+        }
+        type_id = row.from;
+    }
+    false
+}
+
+struct ArenaTargetAdapter<'a> {
+    ents: &'a [Ent],
+    types: &'a Types,
+    players: &'a [PlayerState],
+    map: &'a Map,
+    territory: &'a don_sim::systems::map_terrain::World,
+    balance: &'a BalanceTable,
+    combat: &'a CombatConstants,
+    frame: i32,
+}
+
+impl ArenaTargetAdapter<'_> {
+    fn ent(&self, r: ObjRef) -> Option<&Ent> {
+        let e = self.ents.get(r.o as usize)?;
+        (e.alive && e.who as i16 == r.who).then_some(e)
+    }
+
+    fn region(&self, e: &Ent) -> i32 {
+        let (tx, ty) = e.tile();
+        // `Regions::find_all` 0x0067EFF0 flood-fills WData land/sea classes, not the
+        // passability of individual map tiles. The arena is explicitly no-water and
+        // `World::init_default_rules` materialises every WData with the same region value
+        // (the wipe sentinel 64), including across mountain tile blockers. Region number
+        // bands distinguish land/sea elsewhere, but check_target consumes equality only;
+        // on Arena's no-water maps this single equivalence class is exact. A passable-tile
+        // connected component would incorrectly split retail regions at ridges.
+        self.territory.get_tregion(tx, ty)
+    }
+
+    fn currently_visible(&self, observer: usize, e: &Ent) -> bool {
+        let (tx, ty) = e.tile();
+        if tx < 0 || ty < 0 || tx >= self.map.w || ty >= self.map.h {
+            return false;
+        }
+        self.players[observer].visible[(ty * self.map.w + tx) as usize]
+    }
+}
+
+impl AutoTargetAdapter for ArenaTargetAdapter<'_> {
+    fn is_enemy(&self, observer_who: i16, candidate_who: i16) -> bool {
+        // Arena match construction has no team/shared-control field: every non-negative
+        // distinct participant slot is an opposing FFA leader. Diplomacy expansion remains
+        // a literal MODEL 6 blocker rather than being guessed from object ownership here.
+        observer_who >= 0
+            && candidate_who >= 0
+            && (observer_who as usize) < self.players.len()
+            && (candidate_who as usize) < self.players.len()
+            && observer_who != candidate_who
+    }
+
+    fn is_seen(&self, observer_who: i16, candidate: ObjRef) -> bool {
+        let Ok(observer) = usize::try_from(observer_who) else {
+            return false;
+        };
+        let Some(e) = self.ent(candidate) else {
+            return false;
+        };
+        // UnitData::is_seen 0x00607A60 and BuildData::is_seen 0x0062E1A0 admit the
+        // current fog plane or the object's remembered-visible bit. Arena memory is that
+        // per-object bit plus the last sighting payload. After that admission retail's
+        // find_nearby_target walks the live WData object and check/compare_target read its
+        // current coordinates, damage and action. Deliberately do not substitute the
+        // Sighting payload here: the simulation-internal acquisition would then diverge
+        // from retail. Fog-safe bot snapshots remain restricted to the payload.
+        self.currently_visible(observer, e) || self.players[observer].memory.contains_key(&e.id)
+    }
+
+    fn candidate(
+        &self,
+        searcher: ObjRef,
+        candidate: ObjRef,
+        searcher_row: TargetRow,
+        candidate_row: TargetRow,
+    ) -> Option<AutoTargetCandidate> {
+        let attacker = self.ent(searcher)?;
+        let target_ent = self.ent(candidate)?;
+        let at = self.types.get(attacker.type_id)?;
+        let dt = self.types.get(target_ent.type_id)?;
+
+        // This arena's supported combat roster is direct land. The full retail predicate
+        // has distinct naval and air arms; allowing those through the land reduction would
+        // be a permissive default, so they remain behind MODEL 6.
+        if attacker.building || at.domain != 0 || dt.domain != 0 {
+            return None;
+        }
+
+        let (target_masks, target_masks2) = target_ent
+            .motion
+            .as_ref()
+            .map_or((0, 0), |u| (u.unit_masks, u.unit_masks2));
+        // UnitData::is_seen 0x00607A60 runs cloak/is_detected before its current-or-memory
+        // fog test. Arena does not yet materialise the detector seen3 plane or the exact
+        // action-pointer arm for CLOAK_WHILE_IDLE, so admitting any cloak-capable/dynamic
+        // cloak object would reveal it permissively. Fail closed until that literal target
+        // visibility host exists. CompareTarget's separate unit_masks bit 0 detection read
+        // is gated for the same reason.
+        if !target_ent.building
+            && (dt.unit_flags & (CLOAK_TYPE_FLAG | CLOAK_WHILE_IDLE_TYPE_FLAG) != 0
+                || target_masks & (CLOAK_OBJECT_FLAG | 1) != 0
+                || target_masks2 & CLOAK_SECONDARY_OBJECT_FLAG != 0)
+        {
+            return None;
+        }
+
+        let target_terrain = self.map.at(target_ent.tile().0, target_ent.tile().1);
+        let valid_target_const =
+            // UnitData::is_on_map: every live arena Ent is on-map.
+            !(at.unit_flags & 0x10_2000 != 0)
+                // An anti-air-only land unit does not admit land targets.
+                && at.obj_masks & 0x8000_0000 == 0
+                // valid_target_const rejects melee acquisition into a tree surface.
+                && (at.max_range != 0 || target_terrain != Terrain::Forest);
+
+        let footprint = if target_ent.building {
+            dt.x_size.max(dt.y_size).wrapping_mul(0x60)
+        } else {
+            dt.block_radius.wrapping_add(0x18)
+        };
+        let dist = target::attack_dist(
+            searcher_row.x,
+            searcher_row.y,
+            candidate_row.x,
+            candidate_row.y,
+            footprint,
+        );
+        let in_range = in_attack_range(dist, at.max_range);
+        let same_region = self.region(attacker) == self.region(target_ent);
+
+        // check_target's building tail admits ordinary buildings only when their WData
+        // cell is claimed. Types carrying build flag 0x10 are the measured exception.
+        let (ttx, tty) = target_ent.tile();
+        let territory_claimed = self.territory.get_who(ttx >> 2, tty >> 2) != -1;
+        let building_admitted =
+            !target_ent.building || dt.build_flags & 0x10 != 0 || territory_claimed;
+
+        let target_guy_flag_0x40 = target_ent
+            .guys
+            .guys
+            .first()
+            .and_then(Option::as_ref)
+            .is_some_and(|g| g.guy_flags & 0x40 != 0);
+        let bearing = don_sim::trig::find_angle(
+            target_ent.x.wrapping_sub(attacker.x),
+            target_ent.y.wrapping_sub(attacker.y),
+        );
+        let rear_delta = target_ent
+            .facing
+            .wrapping_sub(bearing)
+            .wrapping_add(i32::MIN) as u32;
+        let poor = poor_target(
+            &PoorTargetInput {
+                both_are_units: !target_ent.building,
+                target_guy_flag_0x40,
+                attacker_has_objmask_high: at.obj_masks & 0x8000_0000 != 0,
+                target_speed_here: dt.moves,
+                attacker_speed_here: at.moves,
+                flank_level_from_behind: rear_delta,
+                attack_dist: dist,
+                attacker_role_0x400: at.role & 0x400 != 0,
+                max_range_tiles: at.max_range,
+            },
+            don_sim::mechanics::flank_level,
+        );
+        let check_target = (same_region || in_range) && building_admitted && !poor;
+
+        let (unit_masks, unit_masks2) = attacker
+            .motion
+            .as_ref()
+            .map_or((0, 0), |u| (u.unit_masks, u.unit_masks2));
+        let check_path = attacker.stance == 2
+            || (unit_masks & 0x0200_0000 != 0 && unit_masks2 & 0x2_0000 == 0)
+            || (at.unit_flags2 & 4 != 0 && unit_masks & 0x8_0000 == 0);
+
+        // Missile Silo's active-trainer arm reads two BuildData captain fields the arena
+        // does not materialise. Stop at that object instead of mapping queue state to them.
+        if type_is(self.types, target_ent.type_id, 0x208) {
+            return None;
+        }
+
+        let t_root = root_type(self.types, target_ent.type_id)?;
+        let t_is_spellcaster = if target_ent.building {
+            type_chain_has_build_flag(self.types, target_ent.type_id, 0x2000_0000)
+        } else {
+            dt.unit_flags2 & 2 != 0
+        };
+        let t_is_moving = !target_ent.building && matches!(target_ent.job, Job::MoveTo { .. });
+        let estimated_damage = estimated_target_damage(
+            self.balance,
+            self.combat,
+            self.frame,
+            attacker,
+            target_ent,
+            at,
+            dt,
+        )?;
+        let compare = CompareTargetInput {
+            check_path,
+            // `find_auto_target` overwrites mode from AutoTargetQuery; this initializer
+            // is not observed by compare_target.
+            mode: false,
+            a_is_unit: true,
+            a_ref: searcher,
+            // The host rejects building attackers and non-land domains above. These are
+            // exact impossible states for the admitted ordinary direct-land Unit path.
+            a_is_building: false,
+            a_stance_is_3: attacker.stance == 3,
+            a_unit_mask_0x40000: unit_masks & 0x4_0000 != 0,
+            a_domain_is_sea: false,
+            a_domain_is_air: false,
+            a_has_objmask_0x40000: at.obj_masks & 0x4_0000 != 0,
+            a_has_objmask_high: at.obj_masks & 0x8000_0000 != 0,
+            a_type_mask_0x40000: at.obj_masks & 0x4_0000 != 0,
+            // Only the retail sea-special arm calls Type+0x108; that arm is excluded by
+            // the direct-land domain gate above.
+            a_type_vf_0x108: false,
+            a_leader_flag_4: self.players[attacker.who as usize].leader_ai,
+            // Unit::find_new_target is entered from the ordinary idle think arm: it has
+            // no current action target and is not firing garrison arrows (a Build path).
+            a_current_target: None,
+            a_garrison_arrows: 0,
+            t_ref: candidate,
+            t_alive: target_ent.alive,
+            t_is_building: target_ent.building,
+            t_is_spellcaster,
+            // Arena has no CastSpell activity; absence is an exact state, not a false
+            // default for an activity it stores elsewhere.
+            t_action_is_cast_spell: false,
+            t_action_target: None,
+            t_is_tech_0x3a: type_is(self.types, target_ent.type_id, 0x3A),
+            t_is_wonder: target_ent.building && (0x20E..0x21F).contains(&dt.id),
+            t_has_objmask_high: target_ent.building && dt.obj_masks & 0x8000_0000 != 0,
+            t_type_value: dt.cost.iter().fold(0i32, |sum, &v| sum.wrapping_add(v)),
+            t_is_city_centre: candidate_row.is_city_centre(),
+            // Arena Ents materialise only the Unit and Build classes; the separate Wall
+            // class cannot reach this adapter.
+            t_is_defensive_wall: false,
+            t_is_military_trainer: target_ent.building && t_root.build_flags & 0x4000_0000 != 0,
+            t_is_training_building: target_ent.building && t_root.build_flags & 0x8000_0000 != 0,
+            // This field is consulted only for Missile Silo (`is 0x208`), which is
+            // hard-gated above because its two captain fields are not materialised.
+            t_trainer_is_active: false,
+            t_type_has_hits: dt.hits != 0,
+            t_hits_left: target_ent.hits_left(),
+            t_attack: dt.attack,
+            t_is_damaged: target_ent.hp.damage != 0,
+            t_is_moving,
+            t_is_supply: !target_ent.building && dt.unit_flags2 & 0x40 != 0,
+            // Non-land candidates are hard-gated above, so air is impossible here.
+            t_domain_is_air: false,
+            // unit_masks bit 0 is hard-gated with the missing detector plane above.
+            t_stealth_undetected: false,
+            t_type_mask_0x10000: dt.role & 0x1_0000 != 0,
+            t_type_mask_0x200000: dt.unit_flags & 0x20_0000 != 0,
+            t_type_mask_0x10: dt.unit_flags & 0x10 != 0,
+            t_is_tech_0x150: type_is(self.types, target_ent.type_id, 0x150),
+            t_is_tech_0x13d: type_is(self.types, target_ent.type_id, 0x13D),
+            t_empty_shell: target_ent.alive
+                && candidate_row.is_city_centre()
+                && target_ent.hits_left() == 0,
+            // Arena's admitted direct-land Unit/Build objects have no containment or
+            // garrison state, so TargetRow::full is exactly zero, not a default for a
+            // hidden store.
+            t_full: candidate_row.full as i32,
+            estimated_damage,
+            in_range,
+        };
+
+        Some(AutoTargetCandidate {
+            valid_target_const,
+            check_target,
+            check_path,
+            target_footprint: footprint,
+            compare,
+        })
+    }
+}
+
+fn estimated_target_damage(
+    balance: &BalanceTable,
+    combat: &CombatConstants,
+    frame: i32,
+    a: &Ent,
+    b: &Ent,
+    at: &TypeRow,
+    dt: &TypeRow,
+) -> Option<i32> {
+    let input = DamageInput {
+        // Every admitted live type pair must have a real balance-table entry. A fabricated
+        // neutral 100% fallback would silently change compare_target ordering.
+        balance_pct: balance.get(at.id, dt.id)?,
+        attack: get_attack(at.attack, false, 0, 0),
+        armor: get_armor(dt.armor, false, 0, 0),
+        attacker_masks: at.obj_masks,
+        defender_masks: dt.obj_masks,
+        // compare_target calls get_damage with find_angle(0, 0) and zero mode flags.
+        attack_dir: 0,
+        splash_flag: 0,
+        overkill_gate: 0,
+        attacker_player: a.who as u32,
+        attacker_type_id: at.id,
+        attacker_domain: at.domain,
+        attacker_splash_percent: at.splash_percent,
+        attacker_type_0x40: 0,
+        attacker_z: 0,
+        attacker_flag8_bit5: false,
+        defender_type_id: dt.id,
+        defender_domain: dt.domain,
+        defender_type_0x2b8_bit2: false,
+        defender_splash_divisor: 1,
+        defender_flags_0x68: 0,
+        defender_flags_0x6c_bit12: false,
+        defender_z: 0,
+        defender_facing: b.facing,
+        defender_facing_entrench: b.facing,
+        defender_overkill_stamp: 0,
+        defender_word_0xa4: 0,
+        attacker_vf_0xe4: 0,
+        current_frame: frame,
+        game_flag_0x821_bit1: false,
+        tile_rocky: false,
+        tile_owner: -1,
+    };
+    let predicates = DamagePredicates {
+        attacker_vf_0x18: !a.building,
+        defender_vf_0x18: !b.building,
+        attacker_vf_0x20: true,
+        ..DamagePredicates::default()
+    };
+    let rules = target::combat_rules(combat);
+    let terms = target::unreached_terms(combat, 0);
+    Some(damage_traced(&input, &predicates, &rules, &terms).0)
 }
 
 impl World {
@@ -381,6 +813,7 @@ impl World {
         };
         let age_techs = types.age_techs();
         let spatial = map.spatial;
+        let target_world = TargetWorld::new(((map.w + 3) / 4).max(1), ((map.h + 3) / 4).max(1));
         let collision_world = don_sim::systems::map_terrain::World::init_default_rules(
             ((map.w + 3) / 4).max(1),
             ((map.h + 3) / 4).max(1),
@@ -410,6 +843,12 @@ impl World {
                     damage_taken: 0,
                     kills: 0,
                     losses: 0,
+                    leader_ai: true,
+                    // `PlayerOptions::init` 0x006F1CD0 clears +4/+0x0C and leaves option
+                    // bits 1 and 3 set. These are the bytes Unit::init 0x00612100 reads.
+                    stance_type_1: 0,
+                    stance_type_0: 0,
+                    leader_option_flags: 0x0A,
                 })
                 .collect(),
             types,
@@ -433,6 +872,8 @@ impl World {
             collision_world,
             collision_check: CollCheck::new(),
             collision_units: CollisionUnits::default(),
+            target_world,
+            target_circle: circle_table(),
             age_techs,
         };
         for i in 0..w.players.len() {
@@ -495,6 +936,11 @@ impl World {
         };
         let x = tx * RANGE_UNITS_PER_TILE + HALF;
         let y = ty * RANGE_UNITS_PER_TILE + HALF;
+        let stance = if t.kind_unit {
+            initial_unit_stance(&self.players[who as usize], &t)
+        } else {
+            0
+        };
         // `Unit::init` writes this binary angle before its first `set_new_location` call.
         const INITIAL_UNIT_ANGLE: i32 = 0x5555_5555;
         let type_stats = unit_type_stats(&t);
@@ -572,6 +1018,7 @@ impl World {
             job: Job::Idle,
             cycle: AttackCycle::default(),
             facing: if t.kind_unit { INITIAL_UNIT_ANGLE } else { 0 },
+            stance,
             city,
             workers: 0,
             worker_cap,
@@ -605,6 +1052,12 @@ impl World {
                 live_guys,
             );
         }
+        let ent = self.ents.last().expect("object was just pushed");
+        assert!(
+            self.target_world
+                .place_at(target_ref(ent), target_row(ent, &t, &self.ids)),
+            "every arena object must occupy its stable retail target slot"
+        );
         id
     }
 
@@ -1155,6 +1608,11 @@ impl World {
             if !self.ents[i].alive {
                 continue;
             }
+            target::decay_targeted(
+                &mut self.target_world,
+                self.frame as i32,
+                target_ref(&self.ents[i]),
+            );
             self.tick_queue(i);
             self.tick_cycle(i);
             self.tick_job(i);
@@ -1210,20 +1668,19 @@ impl World {
         let job = self.ents[i].job;
         match job {
             Job::Idle => {
+                self.service_idle_unit(i);
                 self.auto_acquire(i);
             }
-            Job::MoveTo { x, y } => {
-                match self.step_toward(i, x, y, 0) {
-                    MoveProgress::Arrived | MoveProgress::Failed => {
-                        self.ents[i].job = Job::Idle;
-                    }
-                    MoveProgress::Working => {}
+            Job::MoveTo { x, y } => match self.step_toward(i, x, y, 0) {
+                MoveProgress::Arrived | MoveProgress::Failed => {
+                    self.ents[i].job = Job::Idle;
                 }
-                self.auto_acquire(i);
-            }
+                MoveProgress::Working => {}
+            },
             Job::Attack { target } => self.do_attack(i, target),
             Job::Gather { target } => {
                 let Some(b) = self.ent(target).cloned() else {
+                    self.retire_motion_order(i, KillReason::Failed);
                     self.ents[i].job = Job::Idle;
                     return;
                 };
@@ -1256,10 +1713,12 @@ impl World {
             }
             Job::Work { target } => {
                 let Some(b) = self.ent(target).cloned() else {
+                    self.retire_motion_order(i, KillReason::Failed);
                     self.ents[i].job = Job::Idle;
                     return;
                 };
                 if b.complete && b.hits_left() >= b.hp.myhits {
+                    self.retire_motion_order(i, KillReason::Completed);
                     // Finished and undamaged: a gatherer keeps its builder, everything
                     // else releases them.
                     self.ents[i].job = if b.worker_cap > 0 {
@@ -1297,6 +1756,7 @@ impl World {
                             // engine damages in (`HitPoints::accumulate`).
                             let e = self.ent_mut(target).unwrap();
                             e.hp.damage = (e.hp.damage - 1).max(0);
+                            self.sync_target_damage(target);
                         }
                     }
                     MoveProgress::Failed => self.ents[i].job = Job::Idle,
@@ -1304,6 +1764,91 @@ impl World {
                 }
             }
         }
+    }
+
+    fn retire_motion_order(&mut self, i: usize, reason: KillReason) {
+        let Some(motion) = self.ents[i].motion.as_mut() else {
+            return;
+        };
+        if !motion.orders.is_empty() {
+            order_dispatch::kill_current_order(motion, reason);
+        }
+    }
+
+    /// Retail calls `Unit::work` for an idle unit too.  Besides the target-think phase,
+    /// that services checksum-visible periodic fields and decrements `UnitData::safe`;
+    /// freezing the motion record merely because the arena job is idle can carry a
+    /// collision retry delay into a much later player order.
+    fn service_idle_unit(&mut self, i: usize) {
+        if self.ents[i].building || self.ents[i].motion.is_none() {
+            return;
+        }
+        let mut u = self.ents[i].motion.take().expect("checked unit motion");
+        assert!(
+            u.orders.is_empty(),
+            "idle arena object {} at frame {} retained retail order {:?}",
+            self.ents[i].id.0,
+            self.frame,
+            u.orders.front(),
+        );
+        let coll_index = self
+            .collision_units
+            .find(u.who as i32, u.o as i32)
+            .expect("every arena unit is registered in collision");
+        {
+            let row = &mut self.collision_units.rows[coll_index];
+            row.safe = u.safe;
+            row.unit_masks = u.unit_masks;
+            row.moving = false;
+            row.order = 0;
+            row.action = 0;
+            row.has_orders = false;
+            row.searching = u.parked_search;
+            row.path_top_flags = u.path.peek().map_or(0, |p| p.flags as u8);
+        }
+        let occupied_tiles = self
+            .ents
+            .iter()
+            .filter(|e| e.alive && e.building)
+            .map(Ent::tile)
+            .collect();
+        let collision_me = self.collision_units.rows[coll_index];
+        let mut host = ArenaMoveWorld {
+            map: &self.map,
+            occupied_tiles,
+            collision: RefCell::new(ArenaCollisionProbe {
+                world: &mut self.collision_world,
+                check: &mut self.collision_check,
+                units: &mut self.collision_units,
+                me: collision_me,
+                step_dest: None,
+            }),
+            frame: self.frame as i32,
+            rng: &mut self.game_random,
+        };
+        let before = (u.body.x, u.body.y, u.body.angle);
+        let report = order_dispatch::work(
+            &mut u,
+            &mut host,
+            &mut self.pathfinder,
+            &mut self.movement_coverage,
+        );
+        drop(host);
+        assert!(matches!(
+            report.result,
+            ArmResult::Empty | ArmResult::NoOrder
+        ));
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle),
+            before,
+            "idle Unit::work must not translate or turn its body"
+        );
+        let row = &mut self.collision_units.rows[coll_index];
+        row.safe = u.safe;
+        row.unit_masks = u.unit_masks;
+        row.searching = u.parked_search;
+        row.path_top_flags = u.path.peek().map_or(0, |p| p.flags as u8);
+        self.ents[i].motion = Some(u);
     }
 
     /// Execute one frame of retail `Unit::work` against the arena map. The persistent
@@ -1404,6 +1949,11 @@ impl World {
             ),
             "moving arena unit must remain linked in its retail WData chain"
         );
+        assert!(
+            self.target_world
+                .relocate(target_ref(&self.ents[i]), after.0, after.1),
+            "moving arena unit must remain linked in its target-acquisition WData chain"
+        );
         self.ents[i].x = after.0;
         self.ents[i].y = after.1;
         self.ents[i].facing = u.body.angle;
@@ -1487,41 +2037,74 @@ impl World {
         }
     }
 
-    /// MODEL 4 — nearest hostile inside `UNIT_RESPOND_RANGE`, re-evaluated every
-    /// `retarget_period` frames.
+    /// `Unit::think_attack` -> `find_new_target` for an ordinary idle land unit.
+    ///
+    /// Cadence, response distance, spiral/cell-chain order, fog, terrain region,
+    /// `poor_target`, priority, target crowding and deterministic tie-breaking all belong
+    /// to the shared retail implementation. This host supplies the live object/type state;
+    /// it performs no fallback scan.
     fn auto_acquire(&mut self, i: usize) {
-        if (self.frame + i as i64) % self.params.retarget_period != 0 {
+        let Some(e) = self.ents.get(i) else {
             return;
-        }
-        let e = &self.ents[i];
+        };
         let Some(t) = self.types.get(e.type_id) else {
             return;
         };
-        // Civilians do not pick fights. A Citizen has `ATTACK 4` and would otherwise
-        // charge the first soldier that walked past, which is neither retail behaviour nor
-        // anything a player would want.
-        if t.attack <= 0 || t.is_civilian() {
+        if e.building || t.attack <= 0 || t.domain != 0 {
             return;
         }
-        let (ex, ey, who) = (e.x, e.y, e.who);
-        let reach = self.params.respond_range * RANGE_UNITS_PER_TILE;
-        let mut best: Option<(i32, EntId)> = None;
-        for o in self.ents.iter().filter(|o| o.alive) {
-            if !self.is_hostile(who, o.who) {
-                continue;
-            }
-            let d = vector_dist_between(ex, ey, o.x, o.y);
-            if d <= reach && best.map_or(true, |(bd, _)| d < bd) {
-                best = Some((d, o.id));
-            }
-        }
-        if let Some((_, id)) = best {
-            self.ents[i].job = Job::Attack { target: id };
+        let searcher = target_ref(e);
+        let unit_masks = e.motion.as_ref().map_or(0, |u| u.unit_masks);
+        let query = AutoTargetQuery {
+            searcher,
+            frame: self.frame as i32,
+            max_range_tiles: t.max_range,
+            min_range_tiles: t.min_range,
+            stance: e.stance as i32,
+            unit_masks,
+            has_objmask_high: t.obj_masks & 0x8000_0000 != 0,
+            unit_respond_range: self.combat.unit_respond_range,
+            unit_defensive_respond_range: self.combat.unit_defensive_respond_range,
+            compare_mode: !self.players[e.who as usize].leader_ai,
+            last_order_target: None,
+        };
+        let adapter = ArenaTargetAdapter {
+            ents: &self.ents,
+            types: &self.types,
+            players: &self.players,
+            map: &self.map,
+            territory: &self.collision_world,
+            balance: &self.balance,
+            combat: &self.combat,
+            frame: self.frame as i32,
+        };
+        let step =
+            target::find_auto_target(&mut self.target_world, &self.target_circle, query, &adapter);
+        let AutoTargetStep::Searched { result, .. } = step else {
+            return;
+        };
+        let Some(best) = result.best else { return };
+        let Some(target_ent) = self.ents.get(best.o as usize) else {
+            return;
+        };
+        assert_eq!(target_ent.who as i16, best.who, "target slot owner drift");
+        self.ents[i].job = Job::Attack {
+            target: target_ent.id,
+        };
+    }
+
+    fn sync_target_damage(&mut self, id: EntId) {
+        let Some(e) = id.index().and_then(|i| self.ents.get(i)) else {
+            return;
+        };
+        if let Some(row) = self.target_world.row_mut(target_ref(e)) {
+            row.damage = e.hp.damage;
         }
     }
 
     fn do_attack(&mut self, i: usize, target: EntId) {
         let Some(tgt) = self.ent(target).cloned() else {
+            self.retire_motion_order(i, KillReason::Failed);
             self.ents[i].job = Job::Idle;
             return;
         };
@@ -1738,6 +2321,7 @@ impl World {
         let tb = self.ent_mut(target).unwrap();
         let applied = tb.hp.accumulate(sd.whole, sd.sixteenths);
         tb.last_damaged = now;
+        self.sync_target_damage(target);
         applied.max(0)
     }
 
@@ -1750,6 +2334,10 @@ impl World {
                 continue;
             }
             let e = self.ents[i].clone();
+            assert!(
+                self.target_world.remove(target_ref(&e)),
+                "dead arena object must unlink from target acquisition"
+            );
             self.ents[i].alive = false;
             self.players[e.who as usize].losses += 1;
             for p in 0..self.players.len() {
@@ -1759,11 +2347,16 @@ impl World {
             }
             // Free any seat the dead entity held or held for others.
             if e.building {
-                for o in self.ents.iter_mut() {
-                    if o.alive && o.assigned_to == e.id {
-                        o.assigned_to = EntId::NONE;
-                        o.job = Job::Idle;
-                    }
+                let released: Vec<usize> = self
+                    .ents
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, o)| (o.alive && o.assigned_to == e.id).then_some(i))
+                    .collect();
+                for i in released {
+                    self.retire_motion_order(i, KillReason::Failed);
+                    self.ents[i].assigned_to = EntId::NONE;
+                    self.ents[i].job = Job::Idle;
                 }
             } else if let Some(b) = self.ent_mut(e.assigned_to) {
                 if matches!(e.job, Job::Gather { .. }) {
@@ -2533,6 +3126,311 @@ impl WorkWorld for ArenaMoveWorld<'_> {
 }
 
 #[cfg(test)]
+mod target_integration {
+    use super::*;
+    use crate::arena::match_run::{load_world, MatchConfig};
+
+    fn world() -> Option<World> {
+        load_world(&MatchConfig::default()).ok()
+    }
+
+    fn minuteman(w: &World) -> i32 {
+        w.types
+            .rows
+            .values()
+            .find(|t| t.name == "Minuteman")
+            .expect("live tables contain Minuteman")
+            .id
+    }
+
+    fn due_frame(object_slot: usize) -> i64 {
+        ((32 - (object_slot as i64 & 31)) & 31) as i64
+    }
+
+    fn remember(w: &mut World, observer: usize, id: EntId, tx: i32, ty: i32) {
+        let e = w.ent(id).expect("remembered target is live");
+        let sighting = Sighting {
+            id,
+            who: e.who,
+            type_id: e.type_id,
+            tx,
+            ty,
+            frame: w.frame,
+            building: e.building,
+        };
+        w.players[observer].memory.insert(id, sighting);
+    }
+
+    fn relocate_target_only(w: &mut World, id: EntId, tx: i32, ty: i32) {
+        let i = id.index().expect("live target id");
+        let x = tx * RANGE_UNITS_PER_TILE + HALF;
+        let y = ty * RANGE_UNITS_PER_TILE + HALF;
+        assert!(w.target_world.relocate(target_ref(&w.ents[i]), x, y));
+        w.ents[i].x = x;
+        w.ents[i].y = y;
+    }
+
+    #[test]
+    fn remembered_visibility_admits_the_live_retail_object_not_its_sighting_payload() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for y in cy - 2..=cy + 20 {
+            for x in cx - 2..=cx + 20 {
+                w.map.test_set(x, y, Terrain::Grass);
+            }
+        }
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 3, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.players[0].visible.fill(false);
+        w.players[0].memory.clear();
+        w.frame = due_frame(ai);
+
+        w.auto_acquire(ai);
+        assert_eq!(
+            w.ents[ai].job,
+            Job::Idle,
+            "unseen live objects are not exposed"
+        );
+
+        // Retail's object-visible bit remembers this identity. Move the live object well
+        // outside response range while retaining the old near sighting: current WData
+        // coordinates must win over the payload.
+        remember(&mut w, 0, target, cx + 3, cy);
+        relocate_target_only(&mut w, target, cx + 18, cy);
+        w.auto_acquire(ai);
+        assert_eq!(w.ents[ai].job, Job::Idle);
+
+        // Conversely a stale far payload must not hide the live object after it returns.
+        w.players[0].memory.get_mut(&target).unwrap().tx = cx + 18;
+        relocate_target_only(&mut w, target, cx + 3, cy);
+        w.auto_acquire(ai);
+        assert_eq!(w.ents[ai].job, Job::Attack { target });
+    }
+
+    #[test]
+    fn mountain_ridges_do_not_become_a_passability_component_tregion_proxy() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for y in cy - 8..=cy + 8 {
+            w.map.test_set(cx + 2, y, Terrain::Mountain);
+        }
+        w.map.test_set(cx, cy, Terrain::Grass);
+        w.map.test_set(cx + 4, cy, Terrain::Grass);
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 4, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        assert_eq!(
+            w.collision_world.get_tregion(cx, cy),
+            w.collision_world.get_tregion(cx + 4, cy),
+            "retail Regions groups the no-water WData class across tile ridges"
+        );
+        w.players[0].visible.fill(false);
+        w.players[0].memory.clear();
+        remember(&mut w, 0, target, cx + 4, cy);
+        w.frame = due_frame(ai);
+
+        w.auto_acquire(ai);
+
+        assert_eq!(w.ents[ai].job, Job::Attack { target });
+    }
+
+    #[test]
+    fn retail_priority_spreads_targets_instead_of_choosing_the_nearest_hostile() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for x in cx..=cx + 5 {
+            w.map.test_set(x, cy, Terrain::Grass);
+        }
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let near = w.spawn(1, w.ids.citizen, cx + 2, cy, true);
+        let far = w.spawn(1, w.ids.citizen, cx + 4, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.players[0].visible.fill(false);
+        w.players[0].memory.clear();
+        remember(&mut w, 0, near, cx + 2, cy);
+        remember(&mut w, 0, far, cx + 4, cy);
+        w.target_world
+            .row_mut(target_ref(w.ent(near).unwrap()))
+            .unwrap()
+            .targeted = target::TARGETED_MAX;
+        w.frame = due_frame(ai);
+
+        w.auto_acquire(ai);
+
+        assert_eq!(
+            w.ents[ai].job,
+            Job::Attack { target: far },
+            "the exact target-crowding term outweighs nearest distance"
+        );
+    }
+
+    #[test]
+    fn actual_instance_stance_and_object_slot_phase_drive_the_response_radius() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for x in cx..=cx + 12 {
+            w.map.test_set(x, cy, Terrain::Grass);
+        }
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 10, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.players[0].visible.fill(false);
+        w.players[0].memory.clear();
+        remember(&mut w, 0, target, cx + 10, cy);
+
+        let due = due_frame(ai);
+        w.frame = due + 1;
+        w.auto_acquire(ai);
+        assert_eq!(w.ents[ai].job, Job::Idle, "off-phase think is deferred");
+
+        w.frame = due;
+        w.ents[ai].stance = 1;
+        w.auto_acquire(ai);
+        assert_eq!(
+            w.ents[ai].job,
+            Job::Idle,
+            "defensive stance uses the measured shorter response radius"
+        );
+
+        w.ents[ai].stance = 0;
+        w.auto_acquire(ai);
+        assert_eq!(w.ents[ai].job, Job::Attack { target });
+    }
+
+    #[test]
+    fn cloak_capable_targets_fail_closed_without_the_retail_detector_plane() {
+        let Some(mut w) = world() else { return };
+        let ty = minuteman(&w);
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        for x in cx..=cx + 4 {
+            w.map.test_set(x, cy, Terrain::Grass);
+        }
+        let attacker = w.spawn(0, ty, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 3, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.players[0].visible.fill(false);
+        w.players[0].memory.clear();
+        remember(&mut w, 0, target, cx + 3, cy);
+        w.frame = due_frame(ai);
+        w.types.rows.get_mut(&w.ids.citizen).unwrap().unit_flags |= CLOAK_WHILE_IDLE_TYPE_FLAG;
+
+        w.auto_acquire(ai);
+
+        assert_eq!(
+            w.ents[ai].job,
+            Job::Idle,
+            "memory must not bypass UnitData::is_seen's detector gate"
+        );
+    }
+
+    #[test]
+    fn target_spatial_lifecycle_updates_damage_and_unlinks_death() {
+        let Some(mut w) = world() else { return };
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        w.map.test_set(cx, cy, Terrain::Grass);
+        let target = w.spawn(1, w.ids.citizen, cx, cy, true);
+        let i = target.index().expect("spawned target");
+        let r = target_ref(&w.ents[i]);
+        assert!(w.target_world.row(r).unwrap().is_alive());
+
+        w.ents[i].hp.damage = 7;
+        w.sync_target_damage(target);
+        assert_eq!(w.target_world.row(r).unwrap().damage, 7);
+
+        w.ents[i].hp.damage = w.ents[i].hp.myhits;
+        w.sync_target_damage(target);
+        w.reap();
+        assert!(!w.ents[i].alive);
+        assert!(!w.target_world.row(r).unwrap().is_alive());
+    }
+
+    #[test]
+    fn vanished_attack_target_retires_the_chase_and_idle_work_counts_safe_to_zero() {
+        let Some(mut w) = world() else { return };
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        w.map.test_set(cx, cy, Terrain::Grass);
+        w.map.test_set(cx + 1, cy, Terrain::Grass);
+        let attacker = w.spawn(0, w.ids.citizen, cx, cy, true);
+        let target = w.spawn(1, w.ids.citizen, cx + 1, cy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        let ti = target.index().expect("spawned target");
+        let target_pos = (w.ents[ti].x, w.ents[ti].y);
+        {
+            let motion = w.ents[ai].motion.as_mut().expect("citizen motion");
+            motion
+                .orders
+                .replace(OrderRec::move_to(target_pos.0, target_pos.1, UCELL));
+            motion.safe = 6;
+            motion.unit_masks |= order_dispatch::masks::PATH_EXHAUSTED;
+        }
+        w.ents[ai].job = Job::Attack { target };
+
+        w.ents[ti].hp.damage = w.ents[ti].hp.myhits;
+        w.reap();
+        w.tick_job(ai);
+        assert_eq!(w.ents[ai].job, Job::Idle);
+        let motion = w.ents[ai].motion.as_ref().unwrap();
+        assert!(
+            motion.orders.is_empty(),
+            "the dead target retires its chase"
+        );
+        assert_eq!(motion.safe, 6, "kill_current_order does not invent a reset");
+
+        // Keep this test on the order-lifecycle seam; there is no replacement candidate.
+        w.types.rows.get_mut(&w.ids.citizen).unwrap().attack = 0;
+        for _ in 0..6 {
+            w.frame += 1;
+            w.tick_job(ai);
+        }
+        let motion = w.ents[ai].motion.as_ref().unwrap();
+        assert_eq!(motion.safe, 0);
+        assert!(motion.orders.is_empty());
+        let ci = w.collision_units.find(0, ai as i32).unwrap();
+        assert_eq!(w.collision_units.rows[ci].safe, 0);
+    }
+
+    #[test]
+    fn dead_work_site_retires_every_assigned_workers_motion_before_idle() {
+        let Some(mut w) = world() else { return };
+        let (cx, cy) = (w.map.w / 2, w.map.h / 2);
+        w.map.test_set(cx, cy, Terrain::Grass);
+        w.map.test_set(cx + 1, cy, Terrain::Grass);
+        let site = w.spawn(0, w.ids.farm, cx, cy, true);
+        let worker = w.spawn(0, w.ids.citizen, cx + 1, cy, true);
+        let si = site.index().expect("spawned site");
+        let wi = worker.index().expect("spawned worker");
+        let site_pos = (w.ents[si].x, w.ents[si].y);
+        w.ents[wi].assigned_to = site;
+        w.ents[wi].job = Job::Work { target: site };
+        {
+            let motion = w.ents[wi].motion.as_mut().expect("citizen motion");
+            motion
+                .orders
+                .replace(OrderRec::move_to(site_pos.0, site_pos.1, UCELL));
+            motion.safe = 2;
+        }
+
+        w.ents[si].hp.damage = w.ents[si].hp.myhits;
+        w.reap();
+
+        assert_eq!(w.ents[wi].job, Job::Idle);
+        assert!(w.ents[wi].assigned_to.is_none());
+        assert!(w.ents[wi].motion.as_ref().unwrap().orders.is_empty());
+        w.types.rows.get_mut(&w.ids.citizen).unwrap().attack = 0;
+        for _ in 0..2 {
+            w.frame += 1;
+            w.tick_job(wi);
+        }
+        assert_eq!(w.ents[wi].motion.as_ref().unwrap().safe, 0);
+    }
+}
+
+#[cfg(test)]
 mod combat_integration {
     use super::*;
     use crate::arena::match_run::{load_world, MatchConfig};
@@ -2770,6 +3668,11 @@ mod movement_integration {
             }
             assert_eq!(outcome, MoveProgress::Arrived, "seed {seed:#x}");
             assert!(w.ents[i].tile().0 > ridge_x, "seed {seed:#x}");
+            let row = w
+                .target_world
+                .row(target_ref(&w.ents[i]))
+                .expect("moving unit remains in target object table");
+            assert_eq!((row.x, row.y), (w.ents[i].x, w.ents[i].y));
         }
     }
 

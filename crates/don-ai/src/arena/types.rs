@@ -142,6 +142,26 @@ impl TypeRow {
         self.kind_unit && self.cat == 5
     }
 
+    /// `UnitTypeData::get_stance_type` `0x0061D350`.
+    ///
+    /// This is the type category used by `Unit::init` to select which per-player stance
+    /// preference is copied into the new instance.  It is not the instance stance itself.
+    pub fn stance_type(&self) -> i32 {
+        if self.role & 0x1_0000 != 0 {
+            if self.unit_flags2 & 4 != 0 {
+                3
+            } else {
+                0
+            }
+        } else if (0x32..=0x35).contains(&self.id) {
+            1
+        } else if self.unit_flags2 & 6 == 2 {
+            2
+        } else {
+            -1
+        }
+    }
+
     /// Exact static fields consumed by the recovered retail air primitives. Keeping this
     /// conversion on the live-table row prevents an arena adapter from inventing flight
     /// bands or fuel values when aircraft are eventually admitted to the map.
@@ -450,6 +470,24 @@ mod tests {
         assert_eq!(citizen.base_form, 0);
         assert_eq!(citizen.push_size, 48);
         assert_eq!(citizen.push_circles, 1);
+        assert_eq!(citizen.stance_type(), 1);
+    }
+
+    #[test]
+    fn stance_type_is_the_measured_role_flag_and_citizen_switch() {
+        let mut t = TypeRow {
+            id: 50,
+            ..TypeRow::default()
+        };
+        assert_eq!(t.stance_type(), 1, "Citizen IDs 0x32..=0x35 use type 1");
+        t.id = 100;
+        assert_eq!(t.stance_type(), -1);
+        t.unit_flags2 = 2;
+        assert_eq!(t.stance_type(), 2);
+        t.role = 0x1_0000;
+        assert_eq!(t.stance_type(), 0);
+        t.unit_flags2 |= 4;
+        assert_eq!(t.stance_type(), 3);
     }
 
     #[test]

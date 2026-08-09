@@ -56,8 +56,7 @@ impl BoomGoal {
     }
 }
 
-/// Choose a citizen to send to a build site: an idle one first, else the one seated at
-/// the fullest gatherer (pulling from a five-slot camp costs less than emptying a farm).
+/// Choose the citizen with the lowest estimated completion/disruption time.
 pub fn builder_for(obs: &Obs, tx: i32, ty: i32) -> Option<EntId> {
     builder_for_except(obs, tx, ty, &[])
 }
@@ -69,34 +68,78 @@ pub fn builder_for(obs: &Obs, tx: i32, ty: i32) -> Option<EntId> {
 /// explores anything — which is exactly what happened.
 pub fn builder_for_except(obs: &Obs, tx: i32, ty: i32, skip: &[EntId]) -> Option<EntId> {
     let cit = obs.world.ids.citizen;
+    let moves = obs.ty(cit).map(|row| row.moves).unwrap_or(1).max(1);
     let mut best: Option<(i64, EntId)> = None;
     for m in obs.mine.iter().filter(|m| m.type_id == cit) {
         if skip.contains(&m.id) {
             continue;
         }
-        let d = (m.tx - tx).abs().max((m.ty - ty).abs()) as i64;
-        let busy = match m.job {
+        if matches!(m.job, Job::Gather { .. }) {
+            // MODEL 3 co-locates a seated body with its gather building/collision anchor,
+            // even at a one-seat Farm. Until exact LandData seating/unseat exists, no
+            // Gather worker is a physically supported construction candidate. Strong
+            // bots retain explicit idle builders instead.
+            continue;
+        }
+        let outbound = travel_frames((m.tx - tx).abs().max((m.ty - ty).abs()), moves);
+        let disruption = match m.job {
             Job::Idle => 0,
             Job::Gather { target } => {
-                // Prefer taking from a building with spare hands.
-                let occupancy = obs
+                // `employ` can restore the gather order on the next decision, then the
+                // worker must walk from the finished site back to its old seat. This is
+                // an actual opportunity-cost estimate, not a categorical busy penalty.
+                let return_trip = obs
                     .mine
                     .iter()
                     .find(|b| b.id == target)
-                    .map(|b| 400 / b.worker_cap.max(1) as i64)
-                    .unwrap_or(400);
-                200 + occupancy
+                    .map(|b| travel_frames((b.tx - tx).abs().max((b.ty - ty).abs()), moves))
+                    .unwrap_or(8 * crate::arena::world::FPS);
+                crate::arena::world::FPS + return_trip
             }
-            Job::Work { .. } => 1200,
-            // A citizen already walking somewhere was sent there on purpose.
-            _ => 1500,
+            Job::Work { target } => {
+                // Interrupting another site strands work already owed there. Estimate the
+                // postponement from its remaining builder frames, then add remobilisation.
+                let site = obs.mine.iter().find(|building| building.id == target);
+                let return_trip = site
+                    .map(|building| {
+                        travel_frames(
+                            (building.tx - tx).abs().max((building.ty - ty).abs()),
+                            moves,
+                        )
+                    })
+                    .unwrap_or(20 * crate::arena::world::FPS);
+                let postponed = site
+                    .map(|building| i64::from(building.build_left.max(0)))
+                    .unwrap_or(20 * crate::arena::world::FPS);
+                postponed + 4 * crate::arena::world::FPS + return_trip
+            }
+            Job::MoveTo { x, y } => {
+                let tile = don_sim::systems::combat::RANGE_UNITS_PER_TILE;
+                let destination = (x / tile, y / tile);
+                2 * crate::arena::world::FPS
+                    + travel_frames(
+                        (destination.0 - m.tx)
+                            .abs()
+                            .max((destination.1 - m.ty).abs()),
+                        moves,
+                    )
+            }
+            Job::Attack { .. } => 20 * crate::arena::world::FPS,
         };
-        let score = busy + d;
+        let score = outbound + disruption;
         if best.map_or(true, |(b, _)| score < b) {
             best = Some((score, m.id));
         }
     }
     best.map(|(_, id)| id)
+}
+
+/// Integer ceiling of straight-line travel time at the unit's live movement rate.
+fn travel_frames(tile_distance: i32, moves_per_frame: i32) -> i64 {
+    let world_distance =
+        i64::from(tile_distance.max(0)) * i64::from(don_sim::systems::combat::RANGE_UNITS_PER_TILE);
+    let speed = i64::from(moves_per_frame.max(1));
+    (world_distance + speed - 1) / speed
 }
 
 /// One step of the shipped build order.
@@ -465,5 +508,30 @@ impl Bot for CapFirst {
         {
             queue_at(obs, i.citizen, 1, out);
         }
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+
+    #[test]
+    fn travel_estimator_exposes_when_nearby_reseating_would_win() {
+        // Once MODEL 3 can physically unseat Gather workers, this proves the estimator can
+        // compare travel plus one decision/re-seat trip in one unit (frames). Until then,
+        // `builder_for_except` deliberately excludes those unsupported bodies above.
+        for moves in [6, 12, 24, 48] {
+            let far_idle = travel_frames(80, moves);
+            let near_gatherer =
+                travel_frames(4, moves) + crate::arena::world::FPS + travel_frames(5, moves);
+            assert!(near_gatherer < far_idle, "moves={moves}");
+        }
+    }
+
+    #[test]
+    fn equally_near_idle_worker_still_avoids_disruption() {
+        let idle = travel_frames(4, 24);
+        let gatherer = travel_frames(4, 24) + crate::arena::world::FPS + travel_frames(4, 24);
+        assert!(idle < gatherer);
     }
 }

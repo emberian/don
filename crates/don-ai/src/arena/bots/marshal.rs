@@ -123,6 +123,8 @@ pub struct Marshal {
     /// What we build, recomputed when the enemy's composition changes.
     pick: Option<i32>,
     pub pushes: u32,
+    /// Citizens kept unseated so MODEL 3 never has to detach a co-located gather body.
+    builders: Vec<EntId>,
 }
 
 impl Marshal {
@@ -141,6 +143,7 @@ impl Marshal {
             scout_leg: 0,
             pick: None,
             pushes: 0,
+            builders: Vec::new(),
         }
     }
 }
@@ -174,9 +177,8 @@ fn army_value(obs: &Obs) -> i64 {
 /// Filtered by the nation roster (`TRIBE_MASK`), the tech prerequisites actually held,
 /// and the age. That is the whole legality rule; nothing is hard-coded to Hoplites.
 pub fn buildable_military(obs: &Obs) -> Vec<i32> {
-    let roster = &obs.world.roster[obs.pi];
     let mut v: Vec<i32> = Vec::new();
-    for (_, id) in roster.names() {
+    for id in obs.roster_type_ids() {
         let Some(t) = obs.ty(id) else { continue };
         if !t.is_military() || t.domain != 0 {
             continue;
@@ -204,7 +206,7 @@ pub fn buildable_military(obs: &Obs) -> Vec<i32> {
 /// factor cancels inside [`counter_pick`]'s ratio. This is the one place the arena
 /// *reasons* about the balance table rather than merely obeying it.
 fn dps(obs: &Obs, a: &TypeRow, d: &TypeRow) -> i64 {
-    let bal = obs.world.balance.get(a.id, d.id).unwrap_or(100) as i64;
+    let bal = i64::from(obs.balance_percent(a.id, d.id));
     let rech = a.recharge.max(1) as i64;
     (a.attack as i64) * bal / rech
 }
@@ -348,6 +350,7 @@ impl Bot for Marshal {
     }
 
     fn act(&mut self, obs: &Obs, out: &mut Vec<Cmd>) {
+        self.reserve_builders(obs);
         self.sense(obs);
         self.economy(obs, out);
         if self.level.scout {
@@ -358,12 +361,29 @@ impl Bot for Marshal {
         // Whatever is left over goes to work. Doing this last means a citizen pulled for
         // a build site this tick is not immediately re-seated -- and the scout is exempt,
         // or it would be put back on a farm the tick after every waypoint.
-        let skip: Vec<EntId> = self.scout.into_iter().collect();
+        let mut skip = self.builders.clone();
+        skip.extend(self.scout);
         employ_except(obs, &skip, out);
     }
 }
 
 impl Marshal {
+    fn reserve_builders(&mut self, obs: &Obs) {
+        let citizen = obs.ids().citizen;
+        self.builders
+            .retain(|id| obs.mine.iter().any(|m| m.id == *id && m.type_id == citizen));
+        while self.builders.len() < 1 {
+            let next = obs
+                .mine
+                .iter()
+                .filter(|m| m.type_id == citizen)
+                .filter(|m| !self.builders.contains(&m.id) && Some(m.id) != self.scout)
+                .min_by_key(|m| (!m.idle, m.id));
+            let Some(next) = next else { break };
+            self.builders.push(next.id);
+        }
+    }
+
     /// Update beliefs: where the enemy is, and whether we are under attack.
     fn sense(&mut self, obs: &Obs) {
         if self.enemy_base.is_none() {

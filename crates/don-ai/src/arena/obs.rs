@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use super::cmd::EntId;
 use super::map::{Map, Terrain};
 use super::types::TypeRow;
-use super::world::{Ent, Job, Score, Sighting, World};
+use super::world::{Ent, Ids, Job, Score, Sighting, World};
 use crate::rules::NRES;
 
 /// One of my own entities, flattened.
@@ -37,6 +37,8 @@ pub struct MyEnt {
     pub max_hp: i32,
     pub building: bool,
     pub complete: bool,
+    /// Remaining own-site builder frames. Zero for complete objects and units.
+    pub build_left: i32,
     pub idle: bool,
     pub job: Job,
     pub workers: i32,
@@ -81,6 +83,7 @@ impl<'a> Obs<'a> {
                 max_hp: e.hp.myhits,
                 building: e.building,
                 complete: e.complete,
+                build_left: e.build_left,
                 idle: e.job == Job::Idle,
                 job: e.job,
                 workers: e.workers,
@@ -134,6 +137,25 @@ impl<'a> Obs<'a> {
 
     pub fn ty(&self, type_id: i32) -> Option<&TypeRow> {
         self.world.types.get(type_id)
+    }
+    /// Stable type ids a policy needs to name commands.
+    ///
+    /// This copies the public rules vocabulary into the observation facade; a bot does not
+    /// need to reach through the facade to the authoritative world just to name `Citizen`
+    /// or `Barracks`.
+    pub fn ids(&self) -> Ids {
+        self.world.ids
+    }
+    /// Type ids in this player's static nation roster.
+    pub fn roster_type_ids(&self) -> Vec<i32> {
+        self.world.roster[self.pi]
+            .names()
+            .map(|(_, type_id)| type_id)
+            .collect()
+    }
+    /// Shipped balance percentage for two public type ids.
+    pub fn balance_percent(&self, attacker: i32, defender: i32) -> i32 {
+        self.world.balance.get(attacker, defender).unwrap_or(100)
     }
     pub fn has_tech(&self, t: i32) -> bool {
         self.techs.binary_search(&t).is_ok()
