@@ -12,6 +12,10 @@ use crate::growth::{
 };
 use crate::initial::InitialWorldgenInputs;
 use crate::map_style::{MapStyleStaticData, StaticXmlEntry, MAP_MAKE_ORIENTATION_RNG_VA};
+pub use crate::player_land::MAP_CHECK_PLAYER_LAND_VA;
+use crate::player_land::{
+    execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
+};
 use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
@@ -21,12 +25,12 @@ use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
 use don_sim::systems::regions::Regions;
 use don_sim::trig::{cosx, sinx};
 
-pub const REGIONS_FIND_ALL_VA: u32 = 0x0068_0060;
+pub const REGIONS_CLEAR_ALL_VA: u32 = 0x0068_0060;
+pub const REGIONS_FIND_ALL_VA: u32 = 0x0067_eff0;
 pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
-pub const MAP_CHECK_PLAYER_LAND_VA: u32 = 0x0068_ef00;
 pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,18 +74,6 @@ pub enum ContinentStop {
         primitive_va: u32,
         call: GrowRegionCall,
     },
-    /// Mediterranean has collapsed enclosed pools, inverted the map, repeated
-    /// the collapse, and placed every start. All four helper arguments are
-    /// resolved; the helper body itself is the next unported mutation.
-    CheckPlayerLand {
-        primitive_va: u32,
-        first: i32,
-        avoid_continent: i32,
-        radius: i32,
-        unit_type_index: usize,
-        unit_type_field_offset: u32,
-        source_max_range_tiles: i32,
-    },
     /// East Indies completed both player-region growth passes. The next stage
     /// chooses and grows non-player islands.
     EastIndiesNonplayerIslands { next_rng_va: u32 },
@@ -122,6 +114,7 @@ pub struct ContinentReceipt {
     pub region_seeds: Vec<RegionSeedReceipt>,
     pub region_growths: Vec<GrowRegionReceipt>,
     pub pool_eliminations: Vec<EliminatePoolsReceipt>,
+    pub player_land: Option<CheckPlayerLandReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -175,6 +168,7 @@ pub enum ContinentError {
     RegionGrowth(GrowRegionError),
     RegionRebuild(don_sim::systems::regions::RegionsError),
     PoolElimination(EliminatePoolsError),
+    PlayerLand(CheckPlayerLandError),
     StartPlacementUnavailable {
         player: usize,
         attempts: usize,
@@ -358,6 +352,7 @@ pub fn execute_continent_prefix_with_regions(
         region_seeds: partial.region_seeds,
         region_growths: partial.region_growths,
         pool_eliminations: partial.pool_eliminations,
+        player_land: partial.player_land,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -370,6 +365,7 @@ struct PartialReceipt {
     region_seeds: Vec<RegionSeedReceipt>,
     region_growths: Vec<GrowRegionReceipt>,
     pool_eliminations: Vec<EliminatePoolsReceipt>,
+    player_land: Option<CheckPlayerLandReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
@@ -422,10 +418,11 @@ fn old_world_or_himalayas(
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
         pool_eliminations: Vec::new(),
+        player_land: None,
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
-            next_va: REGIONS_FIND_ALL_VA,
+            next_va: REGIONS_CLEAR_ALL_VA,
         },
     }
 }
@@ -482,6 +479,7 @@ fn mediterranean(
             region_seeds: vec![seed_receipt],
             region_growths: vec![growth.clone()],
             pool_eliminations: Vec::new(),
+            player_land: None,
             starts_added: 0,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -577,25 +575,75 @@ fn mediterranean(
         };
         world.add_starting_location(WCoord(x), WCoord(y));
     }
+    // unittypes.items[349] is Battleship. PDB +0x1fc names
+    // ObjectTypeData::max_range; NAVAL_ROSTER and unitrules.xml both fix it at
+    // 24 TCoords. Retail rounds signed division up to six before this call.
+    let player_land = execute_check_player_land(
+        world,
+        regions,
+        CheckPlayerLandCall {
+            enabled: 1,
+            avoid_continent: growth_config.avoid_continent,
+            radius: 6,
+            unused: 0,
+        },
+    )
+    .map_err(ContinentError::PlayerLand)?;
+
+    // The complete caller tail creates region 32, grows it, and removes only
+    // edge-connected pools before returning from the style virtual.
+    let second_area =
+        scale_land_area(150, inputs.active_slots.len() as u8, inputs.map_size).max(75);
+    let second_seed = RegionSeedCall {
+        region: 32,
+        x: world.xs / 2 + (draw(rng, sites, style_sites[4]) & 1),
+        y: world.ys / 2 + (draw(rng, sites, style_sites[5]) & 1),
+        area: second_area,
+    };
+    let second_seed_receipt = apply_make_region(world, regions, &second_seed, defaults)?;
+    let second_growth_call = GrowRegionCall {
+        region: 32,
+        target_area: second_area,
+        max_distance: min_dim,
+        anchor_x: -1,
+        anchor_y: -1,
+        return_partial_size: 0,
+    };
+    let second_growth =
+        execute_grow_region(world, regions, rng, &mut growth_config, &second_growth_call)
+            .map_err(ContinentError::RegionGrowth)?;
+    sites.extend_from_slice(&second_growth.rng_sites);
+    let second_failed = second_growth.retail_return != 0;
+    let second_retail_return = second_growth.retail_return;
+    if second_failed {
+        return Ok(PartialReceipt {
+            world_inverted: true,
+            regions_cleared: 7,
+            region_seeds: vec![seed_receipt, second_seed_receipt],
+            region_growths: vec![growth, second_growth],
+            pool_eliminations: vec![first_pools, second_pools],
+            player_land: Some(player_land),
+            starts_added: players,
+            start_min: None,
+            stop: ContinentStop::RetryGeneration {
+                failed_region: 32,
+                retail_return: second_retail_return,
+            },
+        });
+    }
+    let final_pools = execute_eliminate_pools(world, regions, ElimPoolParam::EdgesOnly)
+        .map_err(ContinentError::PoolElimination)?;
     Ok(PartialReceipt {
         world_inverted: true,
-        regions_cleared: 7,
-        region_seeds: vec![seed_receipt],
-        region_growths: vec![growth],
-        pool_eliminations: vec![first_pools, second_pools],
+        regions_cleared: 8,
+        region_seeds: vec![seed_receipt, second_seed_receipt],
+        region_growths: vec![growth, second_growth],
+        pool_eliminations: vec![first_pools, second_pools, final_pools],
+        player_land: Some(player_land),
         starts_added: players,
         start_min: None,
-        stop: ContinentStop::CheckPlayerLand {
-            primitive_va: MAP_CHECK_PLAYER_LAND_VA,
-            first: 1,
-            avoid_continent: growth_config.avoid_continent,
-            // unittypes.items[349] is Battleship. PDB +0x1fc names
-            // ObjectTypeData::max_range; NAVAL_ROSTER and unitrules.xml both
-            // fix it at 24 TCoords. Retail rounds signed division up to 6.
-            radius: 6,
-            unit_type_index: 0x574 / 4,
-            unit_type_field_offset: 0x1fc,
-            source_max_range_tiles: 24,
+        stop: ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA,
         },
     })
 }
@@ -644,6 +692,7 @@ fn great_lakes(
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
         pool_eliminations: Vec::new(),
+        player_land: None,
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::LandDistance {
@@ -776,6 +825,7 @@ fn east_indies(
                     region_seeds: seeds,
                     region_growths: growths,
                     pool_eliminations: Vec::new(),
+                    player_land: None,
                     starts_added: players as usize,
                     start_min: None,
                     stop: ContinentStop::RetryGeneration {
@@ -792,6 +842,7 @@ fn east_indies(
         region_seeds: seeds,
         region_growths: growths,
         pool_eliminations: Vec::new(),
+        player_land: None,
         starts_added: players as usize,
         start_min: None,
         stop: ContinentStop::EastIndiesNonplayerIslands {
@@ -814,6 +865,7 @@ fn east_meets_west(
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
         pool_eliminations: Vec::new(),
+        player_land: None,
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::FillCont {

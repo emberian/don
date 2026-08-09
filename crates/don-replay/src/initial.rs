@@ -568,14 +568,6 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
-            crate::continent::ContinentStop::CheckPlayerLand { primitive_va, .. } => {
-                InitialItemBoundary::MapContinentPrimitiveUnavailable {
-                    boundary: "map_check_player_land",
-                    map_style: receipt.map_style,
-                    make_continents_va: receipt.make_continents_va,
-                    primitive_va: *primitive_va,
-                }
-            }
             crate::continent::ContinentStop::EastIndiesNonplayerIslands { next_rng_va } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
                     boundary: "map_east_indies_nonplayer_islands",

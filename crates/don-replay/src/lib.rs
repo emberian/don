@@ -52,6 +52,7 @@ pub mod harness;
 pub mod image;
 pub mod initial;
 pub mod map_style;
+pub mod player_land;
 pub mod pools;
 pub mod replay;
 pub mod report;
@@ -83,6 +84,10 @@ pub use initial::{
 pub use map_style::{
     MapGenerationStage, MapStyleIdentity, MapStyleLoadError, MapStyleStaticData,
     StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE, SHIPPED_MAP_STYLE_CATALOG,
+};
+pub use player_land::{
+    execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
+    MAP_CHECK_PLAYER_LAND_VA,
 };
 pub use pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,

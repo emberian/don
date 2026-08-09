@@ -3,15 +3,13 @@
 
 use don_replay::continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError, ContinentStop,
-    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_CHECK_PLAYER_LAND_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA,
-    REGIONS_FIND_ALL_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA, REGIONS_CLEAR_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
 use don_replay::map_style::{
     MapStyleStaticData, StaticFileEvidence, StaticXmlEntry, SHIPPED_MAP_STYLE_CATALOG,
 };
 use don_sim::systems::map_terrain::{land, World};
-use don_sim::systems::naval::naval_roster;
 use don_sim::systems::regions::Regions;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -143,7 +141,7 @@ fn old_world_and_himalayas_finish_the_identical_hook_and_mutate_the_map() {
         assert_eq!(
             receipt.stop,
             ContinentStop::HookComplete {
-                next_va: REGIONS_FIND_ALL_VA
+                next_va: REGIONS_CLEAR_ALL_VA
             }
         );
         assert_eq!(world.start_x.items.len(), 2);
@@ -170,34 +168,31 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     )
     .unwrap();
     assert!(med.direct_rng_sites.len() > 5);
-    assert_eq!(med.region_growths.len(), 1);
-    assert_eq!(med.rng_final, med.region_growths[0].rng_final);
-    match med.stop {
-        ContinentStop::CheckPlayerLand {
-            primitive_va,
-            first,
-            avoid_continent,
-            radius,
-            unit_type_index,
-            unit_type_field_offset,
-            source_max_range_tiles,
-        } => {
-            assert_eq!(primitive_va, MAP_CHECK_PLAYER_LAND_VA);
-            assert_eq!(first, 1);
-            assert_eq!(avoid_continent, 4);
-            assert_eq!(radius, 6);
-            assert_eq!(unit_type_index, 349);
-            assert_eq!(unit_type_field_offset, 0x1fc);
-            assert_eq!(source_max_range_tiles, 24);
-            assert_eq!(
-                naval_roster(unit_type_index as i32)
-                    .expect("Battleship static row")
-                    .max_range_tiles,
-                source_max_range_tiles
-            );
+    assert_eq!(med.region_growths.len(), 2);
+    assert_eq!(med.rng_final, med.region_growths[1].rng_final);
+    assert_eq!(
+        med.stop,
+        ContinentStop::HookComplete {
+            next_va: REGIONS_CLEAR_ALL_VA
         }
-        other => panic!("Mediterranean stopped at {other:?}"),
-    }
+    );
+    let player_land = med
+        .player_land
+        .as_ref()
+        .expect("Mediterranean executes check_player_land");
+    assert_eq!(player_land.call.enabled, 1);
+    assert_eq!(player_land.call.avoid_continent, 4);
+    assert_eq!(player_land.call.radius, 6);
+    assert_eq!(player_land.effective_radius, 6);
+    assert_eq!(player_land.footprints_visited, 16);
+    assert_eq!(player_land.target_searches, 16);
+    assert_eq!(player_land.target_regions_found, 0);
+    assert_eq!(player_land.seed_cells_written, 0);
+    assert!(player_land.outer_cells_written > 0);
+    assert_eq!(
+        player_land.region_zero_appends,
+        player_land.outer_cells_written
+    );
     let med_growth = &med.region_growths[0];
     assert_eq!(
         (med_growth.call.region, med_growth.call.target_area),
@@ -222,17 +217,29 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         ),
         (4, 8, 0)
     );
-    assert_eq!(med.pool_eliminations.len(), 2);
+    let second_growth = &med.region_growths[1];
+    assert_eq!(
+        (second_growth.call.region, second_growth.call.target_area),
+        (32, 150)
+    );
+    assert!(second_growth.completed);
+    assert_eq!(med.region_seeds.len(), 2);
+    assert_eq!(
+        (
+            med.region_seeds[1].call.region,
+            med.region_seeds[1].call.area
+        ),
+        (32, 150)
+    );
+    assert_eq!(med.pool_eliminations.len(), 3);
     assert_eq!(med.starts_added, 4);
     assert_eq!(med_world.start_x.items.len(), 4);
     assert_eq!(med_world.start_y.items.len(), 4);
-    assert!(med_regions.list.iter().all(|region| region.size == 0));
-    let med_cell = med_world.wdata(med_seed.call.x, med_seed.call.y);
-    assert_eq!(
-        (med_cell.land, med_cell.land_sub, med_cell.region),
-        (land::OCEAN, 0, 0)
-    );
-    assert!(med_world.wdata.iter().all(|cell| cell.region == 0));
+    assert!(med_regions.list.iter().any(|region| region.size > 0));
+    assert!(med_world
+        .wdata
+        .iter()
+        .all(|cell| (0..128).contains(&i32::from(cell.region))));
 
     let mut lakes_world = seeded_world(100, seed);
     let lakes =

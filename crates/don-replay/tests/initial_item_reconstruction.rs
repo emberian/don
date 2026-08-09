@@ -137,7 +137,7 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     assert_eq!(executed.style, plan.style);
     assert_eq!(
         executed.boundary.name(),
-        "map_check_player_land",
+        "map_post_continent_regions",
         "continent execution error: {:?}",
         sim.initial_item_error
     );
@@ -148,9 +148,10 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     assert_eq!(continent.map_style, 12);
     assert_eq!(continent.direct_rng_sites.len(), 20_728);
     assert_eq!(continent.rng_final as u32, 0x3e25_9e29);
-    assert_eq!(continent.region_seeds.len(), 1);
-    assert_eq!(continent.region_growths.len(), 1);
-    assert_eq!(continent.pool_eliminations.len(), 2);
+    assert_eq!(continent.region_seeds.len(), 2);
+    assert_eq!(continent.region_growths.len(), 2);
+    assert_eq!(continent.pool_eliminations.len(), 3);
+    assert!(continent.player_land.is_some());
     assert_eq!(continent.starts_added, 4);
     assert!(continent.region_growths[0].completed);
     assert_eq!(continent.region_growths[0].retail_return, 0);
