@@ -8,11 +8,12 @@
 //! derived integer chain from `ObjectData::get_damage` `0x00644130`, driven with the real
 //! 493×493 balance table when `schema/live/balance-real.bin` is present.
 //!
-//! Everything else — gathering, construction, tech, pathing, fog — is **scaffolding**, and
-//! each scaffolded verb increments a counter in [`EnvWorld::unimplemented`] so a training
-//! run can print exactly which parts of the action space currently have no dynamics behind
-//! them. That counter is the point: an RL surface whose gaps are silent is worse than no
-//! surface at all.
+//! Construction, tech, pathing and fog remain **scaffolding**. Ordinary VecEnv gathering is
+//! masked, while an explicit Farm-only [`GatherHost`] seam owns the recovered order,
+//! occupancy, payout and retirement transaction without guessing its still-external inputs.
+//! Every other scaffolded verb increments [`EnvWorld::unimplemented`] so a training run can
+//! print exactly which parts of the action space have no dynamics behind them. That counter
+//! is the point: an RL surface whose gaps are silent is worse than no surface at all.
 
 use crate::generated as g;
 use crate::typecaps::{TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE};
@@ -28,8 +29,9 @@ use don_sim::systems::gather_lifecycle::{
     FarmFirstTickDisposition, OrdinaryGatherKind, OrdinaryGatherTarget,
 };
 use don_sim::systems::gathering::{
-    num_gatherers, site_gross, AttachResult, GatherAssignment, GatherCount, GatherOrderWalk,
-    GatherSite, GatherWorker, NonFlatGatherState,
+    check_gatherers, num_gatherers, retire_gather_order, site_gross, AttachResult,
+    GatherAssignment, GatherCount, GatherOrderWalk, GatherSite, GatherWorker, NonFlatGatherState,
+    NO_OBJECT,
 };
 use don_sim::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, AirPatrolSearch, OrderQueue, OrderRec, PatrolInstall,
@@ -389,7 +391,7 @@ impl EnvFarmGatherOrder {
 /// These are identity-keyed rather than row-parallel because retail links sites and workers
 /// by `(who,o)`, and EnvWorld compacts rows after a despawn. The vectors retain deterministic
 /// insertion order; the intrusive `gather_down` chain remains authoritative for occupancy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvGatherState {
     pub sites: Vec<GatherSite>,
     pub workers: Vec<GatherWorker>,
@@ -482,6 +484,7 @@ pub trait GatherHost {
 }
 
 /// One environment instance.
+#[derive(Clone)]
 pub struct EnvWorld {
     pub sim: World,
     pub rules: Arc<Rules>,
@@ -686,10 +689,39 @@ impl EnvWorld {
     }
 
     /// Remove an entity, mirroring `don-sim`'s swap-remove into the env columns.
-    pub fn despawn(&mut self, h: Handle) -> bool {
+    ///
+    /// A worker Gather order or Farm site is retired before the object table compacts.
+    /// The retirement runs against a checkpoint: an invalid intrusive chain refuses the
+    /// despawn without leaving the order, occupancy, or economy-dirty state half changed.
+    pub fn try_despawn(&mut self, h: Handle) -> Result<bool, GatherHostError> {
         let Some(row) = self.sim.row_of(h) else {
-            return false;
+            return Ok(false);
         };
+        let owner = u8::try_from(self.sim.owner()[row]).ok();
+        let object = self.sim.units.o()[row];
+        let gather_related = owner.is_some_and(|owner| {
+            self.gather.farm_orders.iter().any(|order| {
+                (order.worker_owner == owner && order.worker_o == object)
+                    || (order.target_owner == owner && order.target_o == object)
+            }) || self
+                .gather
+                .workers
+                .iter()
+                .any(|worker| worker.owner == owner && worker.unit_o == object)
+                || self
+                    .gather
+                    .sites
+                    .iter()
+                    .any(|site| site.owner == owner && site.build_o == object)
+        });
+        let checkpoint = gather_related.then(|| self.clone());
+        if gather_related {
+            if let Err(error) = self.retire_gather_for_despawn(row) {
+                *self = checkpoint.expect("gather-related despawn has a checkpoint");
+                return Err(error);
+            }
+        }
+
         let last = self.sim.live_count() as usize - 1;
         let t = self.type_index[row];
         let owner = self.sim.owner()[row] as usize;
@@ -730,7 +762,13 @@ impl EnvWorld {
                 p.units_lost += 1;
             }
         }
-        ok
+        Ok(ok)
+    }
+
+    /// Compatibility form for callers that cannot surface an invariant error. A failed
+    /// gather retirement is observable as a refused despawn, with the world restored.
+    pub fn despawn(&mut self, h: Handle) -> bool {
+        self.try_despawn(h).unwrap_or(false)
     }
 
     /// `ObjectData::get_damage` `0x00644130` driven from env state.
@@ -811,9 +849,96 @@ impl EnvWorld {
         self.orders[row].push_back(rec);
     }
 
-    /// Install an ordinary order with the three queue positions carried on the wire.
-    /// Patrol uses its two exceptional installers below instead.
-    pub fn install_order(&mut self, row: usize, rec: OrderRec, queue: QueuePos) {
+    /// Retire the persistent Gather state for one owner-local worker identity.
+    ///
+    /// `kill_current_order`'s Gather epilogue deliberately ignores the captured target UID
+    /// after resolving the raw `(whom,ox)` target. When that object has vanished, retail
+    /// leaves a stale chain entry for `Build::check_gatherers`; this compact host runs that
+    /// exact pruning primitive immediately so a later object-slot reuse cannot cross-link
+    /// the worker into two sites.
+    fn retire_farm_gather_inner(
+        &mut self,
+        worker_owner: u8,
+        worker_o: i16,
+    ) -> Result<bool, GatherHostError> {
+        let Some(order_pos) = self
+            .gather
+            .farm_orders
+            .iter()
+            .position(|order| order.worker_owner == worker_owner && order.worker_o == worker_o)
+        else {
+            return Ok(false);
+        };
+        let order = self.gather.farm_orders[order_pos];
+        let target_live = (0..self.sim.live_count() as usize).any(|row| {
+            self.sim.owner()[row] == order.target_owner as i8
+                && self.sim.units.o()[row] == order.target_o
+        });
+        let site_pos =
+            self.gather.sites.iter().position(|site| {
+                site.owner == order.target_owner && site.build_o == order.target_o
+            });
+        if target_live && site_pos.is_none() {
+            return Err(GatherHostError::InvalidState(
+                "live Farm Gather target has no persistent site",
+            ));
+        }
+
+        let retirement = if target_live {
+            let site = &mut self.gather.sites[site_pos.expect("checked above")];
+            retire_gather_order(
+                Some(site),
+                &mut self.gather.workers,
+                worker_owner,
+                worker_o,
+                None,
+            )
+        } else {
+            retire_gather_order(None, &mut self.gather.workers, worker_owner, worker_o, None)
+        }
+        .map_err(|_| GatherHostError::InvalidState("Farm Gather retirement chain is invalid"))?;
+
+        if !target_live {
+            if let Some(site_pos) = site_pos {
+                check_gatherers(&mut self.gather.sites[site_pos], &mut self.gather.workers)
+                    .map_err(|_| {
+                        GatherHostError::InvalidState("stale Farm Gather chain cannot be pruned")
+                    })?;
+            }
+        }
+        self.gather.farm_orders.remove(order_pos);
+        if retirement.leader_economy_dirty {
+            self.players[worker_owner as usize].gather_dirty = true;
+        }
+        Ok(true)
+    }
+
+    /// Checkpointed form used by HALT and unshifted order replacement.
+    fn retire_farm_gather_for_row(&mut self, row: usize) -> Result<bool, GatherHostError> {
+        let worker_owner = u8::try_from(self.sim.owner()[row])
+            .map_err(|_| GatherHostError::InvalidState("Gather worker lost its owner"))?;
+        let worker_o = self.sim.units.o()[row];
+        if !self
+            .gather
+            .farm_orders
+            .iter()
+            .any(|order| order.worker_owner == worker_owner && order.worker_o == worker_o)
+        {
+            return Ok(false);
+        }
+        let gather_checkpoint = self.gather.clone();
+        let dirty_checkpoint = self.players[worker_owner as usize].gather_dirty;
+        match self.retire_farm_gather_inner(worker_owner, worker_o) {
+            Ok(retired) => Ok(retired),
+            Err(error) => {
+                self.gather = gather_checkpoint;
+                self.players[worker_owner as usize].gather_dirty = dirty_checkpoint;
+                Err(error)
+            }
+        }
+    }
+
+    fn install_order_without_retirement(&mut self, row: usize, rec: OrderRec, queue: QueuePos) {
         self.import_legacy_order(row);
         match queue {
             QueuePos::New => self.orders[row].replace(rec),
@@ -821,6 +946,48 @@ impl EnvWorld {
             QueuePos::First => self.orders[row].push_front(rec),
         }
         self.sync_order_from_queue(row);
+    }
+
+    /// Install an ordinary order with the three queue positions carried on the wire.
+    /// Patrol uses its two exceptional installers below instead.
+    ///
+    /// An unshifted command first executes the recovered Gather retirement epilogue. A
+    /// FRONT/BACK insertion leaves the Gather node in the queue and is therefore refused
+    /// while this Farm-only provider owns it: the env has not derived retail's suspended
+    /// Gather occupancy behavior and must not keep paying a preempted worker by guess.
+    pub fn install_order(
+        &mut self,
+        row: usize,
+        rec: OrderRec,
+        queue: QueuePos,
+    ) -> Result<(), GatherHostError> {
+        let has_gather = self.retire_farm_gather_for_row_if_new(row, queue)?;
+        if has_gather && queue != QueuePos::New {
+            return Err(GatherHostError::InvalidState(
+                "queued order insertion around a live Farm Gather is not admitted",
+            ));
+        }
+        self.install_order_without_retirement(row, rec, queue);
+        Ok(())
+    }
+
+    fn retire_farm_gather_for_row_if_new(
+        &mut self,
+        row: usize,
+        queue: QueuePos,
+    ) -> Result<bool, GatherHostError> {
+        let owner = u8::try_from(self.sim.owner()[row])
+            .map_err(|_| GatherHostError::InvalidState("order actor lost its owner"))?;
+        let object = self.sim.units.o()[row];
+        let has_gather = self
+            .gather
+            .farm_orders
+            .iter()
+            .any(|order| order.worker_owner == owner && order.worker_o == object);
+        if has_gather && queue == QueuePos::New {
+            self.retire_farm_gather_for_row(row)?;
+        }
+        Ok(has_gather)
     }
 
     fn gather_collision_row(&self, row: usize) -> UnitRow {
@@ -844,6 +1011,23 @@ impl EnvWorld {
     /// or type-table estimate is used. This function installs only QUEUE_NEW because queued
     /// attachment/retirement interaction has not yet been integrated into EnvWorld.
     pub fn install_farm_gather(
+        &mut self,
+        worker_row: usize,
+        target_row: usize,
+        target: OrdinaryGatherTarget,
+        queue: QueuePos,
+    ) -> Result<AttachResult, GatherHostError> {
+        let checkpoint = self.clone();
+        match self.install_farm_gather_inner(worker_row, target_row, target, queue) {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                *self = checkpoint;
+                Err(error)
+            }
+        }
+    }
+
+    fn install_farm_gather_inner(
         &mut self,
         worker_row: usize,
         target_row: usize,
@@ -880,6 +1064,11 @@ impl EnvWorld {
                 "ordinary Farm worker and site must share the owner-local object table",
             ));
         }
+        if worker_owner as usize >= g::NUM_PLAYERS {
+            return Err(GatherHostError::InvalidState(
+                "ordinary Farm Gather owner is outside the leader table",
+            ));
+        }
         if i32::from(self.cap(self.type_index[worker_row]).domain) != DOMAIN_LAND {
             return Err(GatherHostError::InvalidState(
                 "ordinary Farm gatherer is not land-domain",
@@ -889,6 +1078,9 @@ impl EnvWorld {
         let worker_o = self.sim.units.o()[worker_row];
         let target_o = self.sim.units.o()[target_row];
         let target_uid = self.sim.units.uid()[target_row] as u16;
+        // QUEUE_NEW kills the current order before constructing its replacement. This is
+        // the recovered Gather retirement epilogue, not an occupancy shortcut.
+        self.retire_farm_gather_for_row(worker_row)?;
         let site_pos = if let Some(pos) = self
             .gather
             .sites
@@ -964,7 +1156,7 @@ impl EnvWorld {
             ));
         }
 
-        self.install_order(
+        self.install_order_without_retirement(
             worker_row,
             OrderRec::gather(i32::from(target_owner), i32::from(target_o), target_uid),
             QueuePos::New,
@@ -996,10 +1188,12 @@ impl EnvWorld {
             .find(|order| order.worker_owner == worker_owner && order.worker_o == worker_o)
     }
 
-    /// Clear `UnitData::orderlist`, the exact queue-side effect of HALT / QUEUE_NEW.
-    pub fn clear_orders(&mut self, row: usize) {
+    /// Clear `UnitData::orderlist`, including `kill_current_order`'s Gather epilogue.
+    pub fn clear_orders(&mut self, row: usize) -> Result<(), GatherHostError> {
+        self.retire_farm_gather_for_row(row)?;
         self.orders[row].clear();
         self.sync_order_from_queue(row);
+        Ok(())
     }
 
     /// `Group::action_patrol` + `Unit::add_patrol_order` for one environment actor.
@@ -1013,7 +1207,13 @@ impl EnvWorld {
         target_x: i32,
         target_y: i32,
         queue: QueuePos,
-    ) -> PatrolInstall {
+    ) -> Result<PatrolInstall, GatherHostError> {
+        let has_gather = self.retire_farm_gather_for_row_if_new(row, queue)?;
+        if has_gather && queue != QueuePos::New {
+            return Err(GatherHostError::InvalidState(
+                "queued patrol insertion around a live Farm Gather is not admitted",
+            ));
+        }
         self.import_legacy_order(row);
         let who = self.sim.owner()[row] as u8;
         let o = self.sim.units.o()[row];
@@ -1036,7 +1236,7 @@ impl EnvWorld {
         self.dest_x[row] = target_x;
         self.dest_y[row] = target_y;
         self.sync_order_from_queue(row);
-        result
+        Ok(result)
     }
 
     /// `Group::action_air_patrol` + the true-plane replacement/extension installer.
@@ -1046,7 +1246,13 @@ impl EnvWorld {
         target_x: i32,
         target_y: i32,
         queue: QueuePos,
-    ) -> PatrolInstall {
+    ) -> Result<PatrolInstall, GatherHostError> {
+        let has_gather = self.retire_farm_gather_for_row_if_new(row, queue)?;
+        if has_gather && queue != QueuePos::New {
+            return Err(GatherHostError::InvalidState(
+                "queued patrol insertion around a live Farm Gather is not admitted",
+            ));
+        }
         self.import_legacy_order(row);
         let who = self.sim.owner()[row] as u8;
         let o = self.sim.units.o()[row];
@@ -1060,7 +1266,7 @@ impl EnvWorld {
         self.dest_x[row] = target_x;
         self.dest_y[row] = target_y;
         self.sync_order_from_queue(row);
-        result
+        Ok(result)
     }
 
     /// Refresh the compact observation/action mirror from the executable list head.
@@ -1099,6 +1305,98 @@ impl EnvWorld {
         self.sync_order_from_queue(row);
     }
 
+    fn remove_farm_order_node(&mut self, row: usize, order: EnvFarmGatherOrder) {
+        let retained: Vec<OrderRec> = self.orders[row]
+            .iter()
+            .filter(|record| {
+                !(record.kind == OrderIndex::Gather
+                    && record.target_who == i32::from(order.target_owner)
+                    && record.target_o == i32::from(order.target_o)
+                    && record.target_uid == order.target_uid)
+            })
+            .cloned()
+            .collect();
+        self.orders[row].clear();
+        for record in retained {
+            self.orders[row].push_back(record);
+        }
+        self.sync_order_from_queue(row);
+    }
+
+    /// Retire every gather relationship owned by an entity while its owner-local object
+    /// identity is still resolvable. This runs before `World::despawn` compacts the rows.
+    fn retire_gather_for_despawn(&mut self, row: usize) -> Result<(), GatherHostError> {
+        let owner = u8::try_from(self.sim.owner()[row])
+            .map_err(|_| GatherHostError::InvalidState("despawned gather object lost owner"))?;
+        let object = self.sim.units.o()[row];
+
+        if let Some(order) = self
+            .gather
+            .farm_orders
+            .iter()
+            .copied()
+            .find(|order| order.worker_owner == owner && order.worker_o == object)
+        {
+            self.retire_farm_gather_inner(owner, object)?;
+            self.remove_farm_order_node(row, order);
+        }
+
+        let targeting: Vec<EnvFarmGatherOrder> = self
+            .gather
+            .farm_orders
+            .iter()
+            .copied()
+            .filter(|order| order.target_owner == owner && order.target_o == object)
+            .collect();
+        for order in targeting {
+            self.retire_farm_gather_inner(order.worker_owner, order.worker_o)?;
+            if let Some(worker_row) = (0..self.sim.live_count() as usize).find(|&candidate| {
+                self.sim.owner()[candidate] == order.worker_owner as i8
+                    && self.sim.units.o()[candidate] == order.worker_o
+            }) {
+                self.remove_farm_order_node(worker_row, order);
+            }
+        }
+
+        if let Some(site_pos) = self
+            .gather
+            .sites
+            .iter()
+            .position(|site| site.owner == owner && site.build_o == object)
+        {
+            check_gatherers(&mut self.gather.sites[site_pos], &mut self.gather.workers)
+                .map_err(|_| GatherHostError::InvalidState("despawned Farm chain is invalid"))?;
+            if self.gather.sites[site_pos].gather_down != NO_OBJECT {
+                return Err(GatherHostError::InvalidState(
+                    "despawned Farm still has an unretired gatherer",
+                ));
+            }
+            self.gather.sites.remove(site_pos);
+        }
+
+        if let Some(worker_pos) = self
+            .gather
+            .workers
+            .iter()
+            .position(|worker| worker.owner == owner && worker.unit_o == object)
+        {
+            self.gather.workers[worker_pos].valid_unit = false;
+            self.gather.workers[worker_pos].assignment = None;
+            for site in &mut self.gather.sites {
+                check_gatherers(site, &mut self.gather.workers).map_err(|_| {
+                    GatherHostError::InvalidState("despawned gather worker cannot be unlinked")
+                })?;
+            }
+            if self.gather.workers[worker_pos].gather_down != NO_OBJECT {
+                return Err(GatherHostError::InvalidState(
+                    "despawned gather worker retains an intrusive successor",
+                ));
+            }
+            self.gather.workers.remove(worker_pos);
+        }
+        Ok(())
+    }
+
     // ---- per-frame systems -----------------------------------------------------------
 
     /// Advance one simulation frame.
@@ -1119,13 +1417,19 @@ impl EnvWorld {
         host: &mut dyn AirPatrolHost,
     ) -> Result<(), AirPatrolHostError> {
         host.preflight(self)?;
-        self.frame_inner(Some(host), None)
-            .map_err(|error| match error {
-                EnvFrameHostError::Air(error) => error,
-                EnvFrameHostError::Gather(_) => {
-                    unreachable!("no Gather host was supplied to the air-only frame")
-                }
-            })
+        let checkpoint = self.clone();
+        match self.frame_inner(Some(host), None) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                *self = checkpoint;
+                Err(match error {
+                    EnvFrameHostError::Air(error) => error,
+                    EnvFrameHostError::Gather(_) => {
+                        unreachable!("no Gather host was supplied to the air-only frame")
+                    }
+                })
+            }
+        }
     }
 
     /// Advance one frame with the Farm gathering boundaries explicit. Preflight runs before
@@ -1136,13 +1440,19 @@ impl EnvWorld {
         host: &mut dyn GatherHost,
     ) -> Result<(), GatherHostError> {
         host.preflight(self)?;
-        self.frame_inner(None, Some(host))
-            .map_err(|error| match error {
-                EnvFrameHostError::Gather(error) => error,
-                EnvFrameHostError::Air(_) => {
-                    unreachable!("no air host was supplied to the Gather-only frame")
-                }
-            })
+        let checkpoint = self.clone();
+        match self.frame_inner(None, Some(host)) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                *self = checkpoint;
+                Err(match error {
+                    EnvFrameHostError::Gather(error) => error,
+                    EnvFrameHostError::Air(_) => {
+                        unreachable!("no air host was supplied to the Gather-only frame")
+                    }
+                })
+            }
+        }
     }
 
     fn frame_inner(
@@ -1620,7 +1930,8 @@ impl EnvWorld {
         while row < self.sim.live_count() as usize {
             if self.sim.hits()[row] <= 0 {
                 let h = self.handle_at(row);
-                self.despawn(h);
+                self.try_despawn(h)
+                    .expect("reap must retire a valid gather lifecycle");
             } else {
                 row += 1;
             }
@@ -1661,7 +1972,8 @@ impl EnvWorld {
     pub fn reset(&mut self, num_agents: usize, start_units: usize, seed: u64) {
         while self.sim.live_count() > 0 {
             let h = self.handle_at(0);
-            self.despawn(h);
+            self.try_despawn(h)
+                .expect("reset must retire a valid gather lifecycle");
         }
         self.gather = EnvGatherState::default();
         for v in self.ctrl.iter_mut().chain(self.obs_ents.iter_mut()) {

@@ -191,11 +191,13 @@ impl MaskWriter {
                     }
                 }
                 if c.has(F_CIVILIAN) && !is_building {
-                    // GATHER stays masked out. don-sim exposes the recovered order and
-                    // lifecycle primitives, but EnvWorld does not yet own the mandatory
-                    // authoritative terrain/capacity, persistent GatherSite/GatherWorker,
-                    // per-worker evaluator, and Leader::do_gather payout hosts. Crediting
-                    // resources here would manufacture the missing transaction.
+                    // GATHER stays masked out in the ordinary VecEnv. EnvWorld now owns a
+                    // transactionally retired Farm order/occupancy/payout seam, but that
+                    // seam intentionally requires an explicit GatherHost for FarmData::update,
+                    // per-worker gross and the leader-wide inputs. VecEnv supplies no such
+                    // host, and this factored target mask also cannot advertise Farms while
+                    // excluding every other friendly entity. Unmasking here would therefore
+                    // manufacture both the provider and target applicability.
                     if type_any {
                         allow(g::uv::BUILD);
                     }

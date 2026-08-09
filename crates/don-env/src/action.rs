@@ -170,9 +170,12 @@ pub fn apply_unit(
                 st.illegal += 1;
                 return;
             }
-            w.dest_x[row] = tx;
-            w.dest_y[row] = ty;
-            w.install_order(row, OrderRec::move_to(tx, ty, 0), queue);
+            if w.install_order(row, OrderRec::move_to(tx, ty, 0), queue)
+                .is_err()
+            {
+                st.illegal += 1;
+                return;
+            }
             st.applied += 1;
         }
         g::uv::PATROL | g::uv::LAUNCH_PATROL => {
@@ -199,10 +202,16 @@ pub fn apply_unit(
             };
             match order {
                 g::OrderIndex::GroupPatrol => {
-                    w.install_group_patrol_order(row, tx, ty, queue);
+                    if w.install_group_patrol_order(row, tx, ty, queue).is_err() {
+                        st.illegal += 1;
+                        return;
+                    }
                 }
                 g::OrderIndex::AirPatrol => {
-                    w.install_air_patrol_order(row, tx, ty, queue);
+                    if w.install_air_patrol_order(row, tx, ty, queue).is_err() {
+                        st.illegal += 1;
+                        return;
+                    }
                 }
                 _ => unreachable!("patrol router only returns executable patrol classes"),
             }
@@ -223,19 +232,26 @@ pub fn apply_unit(
                 st.illegal += 1;
                 return;
             }
-            w.target[row] = w.handle_at(tr);
             let target_who = w.sim.owner()[tr] as i32;
             let target_o = w.sim.units.o()[tr] as i32;
             let target_uid = w.sim.units.uid()[tr] as u16;
-            w.install_order(
+            if w.install_order(
                 row,
                 OrderRec::attack(target_who, target_o, target_uid),
                 queue,
-            );
+            )
+            .is_err()
+            {
+                st.illegal += 1;
+                return;
+            }
             st.applied += 1;
         }
         g::uv::HALT => {
-            w.clear_orders(row);
+            if w.clear_orders(row).is_err() {
+                st.illegal += 1;
+                return;
+            }
             let (px, py) = (w.sim.pos_x()[row], w.sim.pos_y()[row]);
             w.dest_x[row] = px;
             w.dest_y[row] = py;
@@ -251,8 +267,11 @@ pub fn apply_unit(
         }
         g::uv::DISBAND => {
             let h = w.handle_at(row);
-            w.despawn(h);
-            st.applied += 1;
+            match w.try_despawn(h) {
+                Ok(true) => st.applied += 1,
+                Ok(false) => st.stale += 1,
+                Err(_) => st.illegal += 1,
+            }
         }
         g::uv::QUEUE_UP => {
             // Producers instantiate immediately: the real build queue (`BuildQueue`,
