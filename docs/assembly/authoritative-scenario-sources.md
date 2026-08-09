@@ -1,6 +1,7 @@
 # Authoritative scenario movement-source tranche
 
-Status: implemented and remotely validated in `don-env`.
+Status: scenario-source setup was remotely validated; the additive action-source CAS wiring
+below is source-complete and awaits independent compilation/execution.
 
 ## Delivered contract
 
@@ -25,60 +26,72 @@ not become persistent by accident.
 `unit_verb_mask(who, template)` is a conditional mask over the 34-value generated verb head.
 It holds actor, destination, queue, and flags fixed and runs the same read-only preflight used
 by `apply_unit`. NOOP is therefore always set; MOVE_TO is set only when ownership, liveness,
-destination, queue/flags, complete collision sources, actor capability, and installed action
-state all pass. Every unhosted verb is clear. Masking never borrows a mutable store.
+destination, queue/flags, complete collision sources, actor capability, and a readable
+identity-bound source snapshot all pass. The source's current `moving/action` values are not
+an admission requirement: the action transaction owns that transition. Every unhosted verb
+is clear. Masking never borrows a mutable store or retains a backend sidecar.
 
 The contract tests in
 `crates/don-env/tests/authoritative_scenario_sources_contract.rs` freeze:
 
-- immediate MOVE_TO availability after scenario construction, with no manual installer;
+- immediate MOVE_TO availability after scenario construction from an idle/`NONE` source,
+  with no manual installer or pre-priming;
 - identical allocation handles, world digest, WData anchors/stamps, live sources, and MOVE_TO
   mask after reset;
 - typed out-of-range, duplicate, and live-host source refusals;
 - the exact `{NOOP, MOVE_TO}` mask for a ready request and MOVE_TO removal for a bad queue,
   destination, or owner;
-- no world, WData, live-source, or collision-order-state mutation during masking.
+- no world, WData, live-source, source-revision, or collision-order-state mutation during
+  masking.
 
-## Honest red boundary: action source-state transition
+## Action source-state transaction
 
-Scenario capture removes the out-of-band installation/reset problem. It does not make
-`UnitData::moving` or `UnitData::action_type` into scenario constants. Those are current-action
-state and must transition when MOVE_TO or FLEE_TO is issued.
-
-The backend cannot implement that mutation honestly today:
-
-- `LiveCollisionRuntime::source(row)` returns only `&LiveCollisionSource`;
-- `install(...)` is one-shot and returns `SourceAlreadyInstalled` on replacement;
-- `InstalledSource` and its row store are owned by `don-sim`;
-- the retail-ordered movement tick reads that installed source, so a `don-env` sidecar would
-  be dead state.
-
-`ActionSourceStateRequest { actor, state: { moving, action } }` and
-`ACTION_SOURCE_STATE_SETTER` freeze this as
-`IntegrationBoundary::MovementSourceStateHost`, with this required core seam:
+Scenario capture removes the out-of-band installation/reset problem without treating
+`UnitData::moving` or `UnitData::action_type` as scenario constants. MOVE_TO/FLEE_TO now uses
+the Sim-owned snapshot/CAS seam:
 
 ```rust
-Sim::set_movement_source_state(
-    actor: Handle,
-    moving: bool,
-    action: OrderIndex,
-) -> Result<usize, LiveCollisionFault>
+Sim::movement_source_state(actor)
+Sim::compare_exchange_movement_source_state(actor, expected_revision, true, order_kind)
+Sim::issue(actor, order)
 ```
 
-The core implementation must resolve the live handle, require an active installed source, and
-validate everything before changing `facts.moving` and `facts.action`. On fault, both runtime
-source and world must remain byte-for-byte unchanged. The backend integration order is then:
+Read-only preflight captures `{actor,row,revision,moving,action}`. Commit revalidates the
+ordinary request facts, then compare-exchanges `{moving: true, action: MoveTo|FleeTo}` against
+that exact revision immediately before `Sim::issue`. The only code between the successful CAS
+and issue is the issue call itself. A stale plan receives
+`LiveCollisionFault::StaleSourceRevision` before its source, order list, or path stack changes.
+Successful same-value actions still advance the revision, so a consumed plan cannot be replayed.
 
-1. run the existing immutable request/collision/actor preflight, excluding the old equality
-   requirement for the already-installed action state;
-2. set `{moving: true, action: MoveTo|FleeTo}` through the Sim-owned seam;
-3. call `Sim::issue` (the preflight has already proved the handle live, which is the only
-   rejection in `Sim::issue`);
-4. remove `MovementSourceState` as a pre-priming requirement from MOVE_TO masking.
+`AuthoritativeBackend::prepare_unit` exposes an optional opaque caller-owned plan for
+schedulers which separate planning from commit. `apply_unit` uses the same plan internally in
+one mutable-backend call. Neither path stores a plan or state mirror in the backend, and
+`unit_verb_mask` remains observational. A backend-local episode revision binds explicit plans
+across reset; this is lifecycle identity, not a mirror of source fields. It prevents a plan
+prepared at source revision zero from becoming spuriously current when deterministic reset
+recreates the same handles and a fresh source revision zero.
 
-Until that core-owned setter lands, captured sources can make MOVE_TO ready deterministically
-by capturing the currently observed state, but the typed red boundary prevents claiming that
-arbitrary action-state transitions are hosted.
+Reset reconstructs the captured scenario source and therefore resets its owner-local revision
+to zero. Contract tests freeze idle-to-MOVE_TO, idle-to-FLEE_TO, repeated same-value revision
+advance, stale-plan atomic refusal, exact reset of both source facts and revision, and rejection
+of a pre-reset plan whose handle/source revision happen to repeat.
+
+## Honest remaining action boundaries
+
+This closes only the source-state prerequisite for the generated MOVE_TO verb. The contract
+remains deliberately narrow:
+
+- queue positions `First` and `Last`, and order-modifier bits other than the recovered fleeing
+  bit, are refused;
+- multi-Guy movers, boat solving, attack slack, and missing repath facts remain fail-closed in
+  the underlying movement host;
+- MOVE_NEAR, FOLLOW, and GUARD still require their distinct command/group transactions even
+  though their eventual movement source can use this setter;
+- the other 32 generated unit verbs and all 16 player verbs retain their typed group,
+  formation, combat-target, containment, gathering, construction, production, spell,
+  diplomacy, market, tribute, and lifecycle boundaries;
+- external policy observations remain incomplete until cloak/detection-aware visibility is
+  hosted.
 
 ## Validation and benchmark evidence
 
@@ -89,7 +102,7 @@ operations over 64 fully sourced units:
 - reset plus deterministic source reinstallation;
 - one complete conditional verb-mask pass.
 
-The exact overlay passed on 2026-08-09:
+The scenario-source overlay before the CAS wiring passed on 2026-08-09:
 
 - hbox job `rl-scenario-sources-20260809T210604Z-82538-25710-e01ec386c154`:
   13/13 tests across `authoritative_scenario_sources_contract`,
@@ -102,7 +115,17 @@ The exact overlay passed on 2026-08-09:
 
 The measured release results were 624,906.8 ns per construct/install, 556,058.3 ns per
 reset/reinstall, and 795.9 ns per complete 34-value conditional mask. These numbers describe
-that persvati job rather than a portable performance promise.
+that persvati job rather than a portable performance promise. They do not validate or measure
+the later action-source CAS overlay.
+
+The later CAS overlay passed both independent profiles on 2026-08-09:
+
+- hbox `rl-movement-cas-20260809T222656Z-68771-29864-fff511f71587`;
+- persvati release `rl-movement-cas-release-20260809T222656Z-68772-15666-fff511f71587`.
+
+Each exited 0 with 6/6 authoritative-backend and 5/5 scenario-source tests. These receipts pin
+the source transition immediately before `Sim::issue`, competing stale-plan non-mutation, and
+reset-episode fencing; they do not close the other generated action hosts listed above.
 
 The reusable commands are:
 

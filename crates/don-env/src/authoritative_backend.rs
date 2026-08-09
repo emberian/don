@@ -10,7 +10,9 @@
 use crate::authoritative_episode::{AuthoritativeEpisode, EpisodeError, ScenarioSpec, StepReceipt};
 use don_sim::order::{Order, OrderIndex, ORDER_FLEEING};
 use don_sim::systems::map_terrain::{Coord, FCoord};
-use don_sim::systems::movement_live::{LiveCollisionFault, LiveCollisionSource};
+use don_sim::systems::movement_live::{
+    LiveCollisionFault, LiveCollisionSource, MovementSourceState,
+};
 use don_sim::systems::victory_score::{leader_flag, Diplo};
 use don_sim::world::{OBJ_FLAG_ACTIVE, SUBTILE};
 use don_sim::Handle;
@@ -27,9 +29,6 @@ pub enum IntegrationBoundary {
     FormationHost,
     CombatTargetHost,
     MovementCommandHost,
-    /// `LiveCollisionRuntime` owns `UnitData::moving/action_type`, but does not yet expose
-    /// the atomic setter an action transaction needs.
-    MovementSourceStateHost,
     PatrolAirframeHost,
     TransportContainmentHost,
     GatheringHost,
@@ -45,7 +44,8 @@ pub enum IntegrationBoundary {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerbRoute {
-    /// Single selected unit -> `Sim::issue` -> retail-ordered `Sim::do_frame`.
+    /// Single selected unit -> Sim-owned action-state CAS -> `Sim::issue` -> retail-ordered
+    /// `Sim::do_frame`.
     SimIssue,
     Refused(IntegrationBoundary),
 }
@@ -212,7 +212,7 @@ impl From<EpisodeError> for ScenarioSetupError {
     }
 }
 
-/// Future action-owned transition into `UnitData::moving/action_type`.
+/// Action-owned transition into `UnitData::moving/action_type`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActionSourceState {
     pub moving: bool,
@@ -222,14 +222,15 @@ pub struct ActionSourceState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActionSourceStateRequest {
     pub actor: Handle,
+    pub expected_revision: u64,
     pub state: ActionSourceState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionSourceStateSetterRoute {
-    /// A backend sidecar would not be consumed by the tick, so transition requests remain red
-    /// until the Sim-owned live collision source exposes this mutation.
-    Refused(IntegrationBoundary),
+    /// Snapshot the Sim-owned source, then compare-exchange its action fields immediately
+    /// before installing the order.
+    SimCompareExchange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,15 +240,15 @@ pub struct ActionSourceStateSetterIntegration {
     pub route: ActionSourceStateSetterRoute,
 }
 
-/// Typed integration map for the only missing MOVE_TO action-state transition.
+/// Typed integration map for MOVE_TO's Sim-owned action-state transition.
 ///
-/// The required implementation must update the installed source in place after validating
-/// the handle and before `Sim::issue`; it must leave both source and world unchanged on error.
+/// The backend stores no action-state sidecar. Prepared requests carry the observed revision,
+/// and the Sim owner validates identity plus revision before changing either source field.
 pub const ACTION_SOURCE_STATE_SETTER: ActionSourceStateSetterIntegration =
     ActionSourceStateSetterIntegration {
         owner: "don_sim::tick::Sim -> movement_live::LiveCollisionRuntime",
-        required_method: "Sim::set_movement_source_state(handle, moving, OrderIndex)",
-        route: ActionSourceStateSetterRoute::Refused(IntegrationBoundary::MovementSourceStateHost),
+        required_method: "Sim::movement_source_state + Sim::compare_exchange_movement_source_state",
+        route: ActionSourceStateSetterRoute::SimCompareExchange,
     };
 
 /// Raw core-coordinate request produced after the policy head decoder resolves grid cells.
@@ -413,12 +414,11 @@ pub enum ApplyRefusal {
     UnsupportedQueue(QueuePosition),
     UnsupportedOrderFlags(u8),
     MovementHost(LiveCollisionFault),
-    MovementSourceState {
-        actor: Handle,
-        expected_action: i32,
-        observed_action: i32,
-        moving: bool,
+    StaleEpisodeRevision {
+        expected: u64,
+        observed: u64,
     },
+    MovementSourceState(LiveCollisionFault),
     CoreRejectedAfterPreflight,
 }
 
@@ -489,14 +489,43 @@ pub struct CoreReward {
     pub alive: bool,
 }
 
+/// Immutable transaction prepared against one exact Sim-owned movement-source revision.
+///
+/// The fields are private so callers cannot fabricate a plan. Keeping a plan is optional:
+/// [`AuthoritativeBackend::apply_unit`] prepares and commits in one borrow. The explicit API
+/// exists for schedulers which separate read-only planning from mutation and must receive a
+/// typed stale-revision refusal if another action wins first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PreparedUnitAction {
+pub struct PreparedUnitAction {
+    who: u8,
+    request: UnitActionRequest,
+    episode_revision: u64,
     row: usize,
     kind: OrderIndex,
+    source: MovementSourceState,
+}
+
+impl PreparedUnitAction {
+    pub fn actor(&self) -> Handle {
+        self.request.actor
+    }
+
+    pub fn kind(&self) -> OrderIndex {
+        self.kind
+    }
+
+    pub fn source_revision(&self) -> u64 {
+        self.source.revision
+    }
+
+    pub fn episode_revision(&self) -> u64 {
+        self.episode_revision
+    }
 }
 
 pub struct AuthoritativeBackend {
     episode: AuthoritativeEpisode,
+    episode_revision: u64,
     scenario_movement_sources: Vec<ScenarioMovementSource>,
 }
 
@@ -504,6 +533,7 @@ impl AuthoritativeBackend {
     pub fn from_spec(spec: ScenarioSpec) -> Result<Self, EpisodeError> {
         Ok(Self {
             episode: AuthoritativeEpisode::from_spec(spec)?,
+            episode_revision: 0,
             scenario_movement_sources: Vec::new(),
         })
     }
@@ -525,6 +555,7 @@ impl AuthoritativeBackend {
         install_scenario_movement_sources(&mut episode, &movement_sources)?;
         Ok(Self {
             episode,
+            episode_revision: 0,
             scenario_movement_sources: movement_sources,
         })
     }
@@ -532,10 +563,11 @@ impl AuthoritativeBackend {
     /// Rebuild seed, allocation identity, and captured movement sources as one replacement.
     /// The current episode remains intact if construction or source installation is refused.
     pub fn reset(&mut self) -> Result<(), ScenarioSetupError> {
-        let replacement = Self::from_authoritative_scenario(AuthoritativeScenarioSpec {
+        let mut replacement = Self::from_authoritative_scenario(AuthoritativeScenarioSpec {
             episode: self.episode.spec().clone(),
             movement_sources: self.scenario_movement_sources.clone(),
         })?;
+        replacement.episode_revision = self.episode_revision.wrapping_add(1);
         *self = replacement;
         Ok(())
     }
@@ -577,7 +609,7 @@ impl AuthoritativeBackend {
                 verb_head: verb_head as u16,
                 ..template
             };
-            *slot = preflight_unit(self.episode.sim(), who, request).is_ok();
+            *slot = preflight_unit(self.episode.sim(), self.episode_revision, who, request).is_ok();
         }
         AuthoritativeUnitVerbMask { allowed }
     }
@@ -587,31 +619,81 @@ impl AuthoritativeBackend {
         who: u8,
         request: UnitActionRequest,
     ) -> Result<ApplyReceipt, ApplyRefusal> {
-        let Some(PreparedUnitAction { row, kind }) =
-            preflight_unit(self.episode.sim(), who, request)?
-        else {
+        let Some(prepared) = self.prepare_unit(who, request)? else {
             return Ok(ApplyReceipt::Noop {
                 frame: self.episode.sim().world.frame,
             });
         };
+        self.apply_prepared_unit(prepared)
+    }
+
+    /// Prepare one action without borrowing or mutating any simulation store.
+    ///
+    /// The returned plan contains the Sim-owned movement-source revision observed by the
+    /// shared mask/apply preflight. It is caller-owned transaction state, not a backend or
+    /// masking sidecar.
+    pub fn prepare_unit(
+        &self,
+        who: u8,
+        request: UnitActionRequest,
+    ) -> Result<Option<PreparedUnitAction>, ApplyRefusal> {
+        preflight_unit(self.episode.sim(), self.episode_revision, who, request)
+    }
+
+    /// Commit a previously prepared action or refuse it before any mutation.
+    ///
+    /// Ordinary request facts are revalidated read-only. The prepared source revision is then
+    /// compared and exchanged immediately before `Sim::issue`; consequently a stale plan can
+    /// neither overwrite a newer action state nor replace its order.
+    pub fn apply_prepared_unit(
+        &mut self,
+        prepared: PreparedUnitAction,
+    ) -> Result<ApplyReceipt, ApplyRefusal> {
+        if prepared.episode_revision != self.episode_revision {
+            return Err(ApplyRefusal::StaleEpisodeRevision {
+                expected: prepared.episode_revision,
+                observed: self.episode_revision,
+            });
+        }
+        let Some(current) = preflight_unit(
+            self.episode.sim(),
+            self.episode_revision,
+            prepared.who,
+            prepared.request,
+        )?
+        else {
+            unreachable!("a prepared non-NOOP action cannot become NOOP")
+        };
+        debug_assert_eq!(current.row, prepared.row);
+        debug_assert_eq!(current.kind, prepared.kind);
 
         let order = Order {
-            kind,
-            flags: request.order_flags,
-            x: request.target_x,
-            y: request.target_y,
+            kind: prepared.kind,
+            flags: prepared.request.order_flags,
+            x: prepared.request.target_x,
+            y: prepared.request.target_y,
             tolerance: 0,
             ..Order::default()
         };
         let sim = self.episode.sim_mut_for_backend();
-        if !sim.issue(request.actor, order) {
-            return Err(ApplyRefusal::CoreRejectedAfterPreflight);
-        }
+        sim.compare_exchange_movement_source_state(
+            prepared.request.actor,
+            prepared.source.revision,
+            true,
+            prepared.kind,
+        )
+        .map_err(ApplyRefusal::MovementSourceState)?;
+        // The successful identity-bound CAS proves the handle live. There is deliberately no
+        // fallible backend operation between this transition and order installation.
+        assert!(
+            sim.issue(prepared.request.actor, order),
+            "movement-source CAS proved actor live immediately before Sim::issue"
+        );
         Ok(ApplyReceipt::OrderInstalled {
             frame: sim.world.frame,
-            actor: request.actor,
-            kind,
-            queue_len: sim.world.orders(row).len(),
+            actor: prepared.request.actor,
+            kind: prepared.kind,
+            queue_len: sim.world.orders(prepared.row).len(),
         })
     }
 
@@ -806,6 +888,7 @@ fn install_scenario_movement_sources(
 /// Read-only half of the action transaction, shared byte-for-byte by masking and apply.
 fn preflight_unit(
     sim: &don_sim::tick::Sim,
+    episode_revision: u64,
     who: u8,
     request: UnitActionRequest,
 ) -> Result<Option<PreparedUnitAction>, ApplyRefusal> {
@@ -875,18 +958,15 @@ fn preflight_unit(
         OrderIndex::MoveTo
     };
     let source = sim
-        .movement_collision
-        .source(row)
-        .ok_or(ApplyRefusal::MovementHost(
-            LiveCollisionFault::MissingSource(row),
-        ))?;
-    if !source.moving || source.action != kind as i32 {
-        return Err(ApplyRefusal::MovementSourceState {
-            actor: request.actor,
-            expected_action: kind as i32,
-            observed_action: source.action,
-            moving: source.moving,
-        });
-    }
-    Ok(Some(PreparedUnitAction { row, kind }))
+        .movement_source_state(request.actor)
+        .map_err(ApplyRefusal::MovementHost)?;
+    debug_assert_eq!(source.row, row);
+    Ok(Some(PreparedUnitAction {
+        who,
+        request,
+        episode_revision,
+        row,
+        kind,
+        source,
+    }))
 }

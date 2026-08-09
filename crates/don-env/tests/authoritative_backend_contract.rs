@@ -9,7 +9,7 @@ use don_env::{AuthoritativeBackend, ScenarioSpec, ScenarioUnit};
 use don_sim::order::{OrderIndex, ORDER_FLEEING};
 use don_sim::systems::collision::DOMAIN_LAND;
 use don_sim::systems::map_terrain::COORD_PER_WCELL;
-use don_sim::systems::movement_live::{LiveCollisionGuy, LiveCollisionSource};
+use don_sim::systems::movement_live::{LiveCollisionFault, LiveCollisionGuy, LiveCollisionSource};
 
 fn spec() -> ScenarioSpec {
     ScenarioSpec {
@@ -137,7 +137,7 @@ fn admitted_move_installs_into_sim_and_executes_in_the_retail_tick() {
         backend.sim().world.pos_y()[1],
     );
     backend
-        .install_movement_source(actor, source(start.0, start.1, true, OrderIndex::MoveTo))
+        .install_movement_source(actor, source(start.0, start.1, false, OrderIndex::None))
         .unwrap();
     backend
         .install_movement_source(
@@ -166,6 +166,10 @@ fn admitted_move_installs_into_sim_and_executes_in_the_retail_tick() {
         backend.sim().world.orders(0).order_type(),
         OrderIndex::MoveTo
     );
+    let installed_state = backend.sim().movement_source_state(actor).unwrap();
+    assert_eq!(installed_state.revision, 1);
+    assert!(installed_state.moving);
+    assert_eq!(installed_state.action, OrderIndex::MoveTo as i32);
 
     let tick = backend.step_frames(1);
     assert_eq!(tick.executed[14], 1);
@@ -179,7 +183,7 @@ fn admitted_move_installs_into_sim_and_executes_in_the_retail_tick() {
 }
 
 #[test]
-fn unsupported_queue_and_unprimed_flee_source_refuse_atomically() {
+fn unsupported_queue_refuses_and_flee_transitions_the_same_source_atomically() {
     let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
     let actor = backend.sim().world.handle_at_row(0).unwrap();
     let other = backend.sim().world.handle_at_row(1).unwrap();
@@ -192,7 +196,7 @@ fn unsupported_queue_and_unprimed_flee_source_refuse_atomically() {
         backend.sim().world.pos_y()[1],
     );
     backend
-        .install_movement_source(actor, source(start.0, start.1, true, OrderIndex::MoveTo))
+        .install_movement_source(actor, source(start.0, start.1, false, OrderIndex::None))
         .unwrap();
     backend
         .install_movement_source(
@@ -201,6 +205,7 @@ fn unsupported_queue_and_unprimed_flee_source_refuse_atomically() {
         )
         .unwrap();
     let before = backend.sim().world.digest();
+    let before_source_state = backend.sim().movement_source_state(actor).unwrap();
 
     let mut request = UnitActionRequest {
         verb_head: (generated::uv::MOVE_TO + 1) as u16,
@@ -215,14 +220,96 @@ fn unsupported_queue_and_unprimed_flee_source_refuse_atomically() {
         Err(ApplyRefusal::UnsupportedQueue(QueuePosition::Last))
     );
     assert_eq!(backend.sim().world.digest(), before);
+    assert_eq!(
+        backend.sim().movement_source_state(actor).unwrap(),
+        before_source_state
+    );
 
     request.queue = QueuePosition::Replace;
     request.order_flags = ORDER_FLEEING;
     assert!(matches!(
         backend.apply_unit(0, request),
-        Err(ApplyRefusal::MovementSourceState { .. })
+        Ok(ApplyReceipt::OrderInstalled {
+            kind: OrderIndex::FleeTo,
+            queue_len: 1,
+            ..
+        })
     ));
-    assert_eq!(backend.sim().world.digest(), before);
+    let state = backend.sim().movement_source_state(actor).unwrap();
+    assert_eq!(state.revision, 1);
+    assert!(state.moving);
+    assert_eq!(state.action, OrderIndex::FleeTo as i32);
+    assert_ne!(backend.sim().world.digest(), before);
+}
+
+#[test]
+fn stale_prepared_move_refuses_before_source_order_or_path_mutation() {
+    let mut backend = AuthoritativeBackend::from_spec(spec()).unwrap();
+    let actor = backend.sim().world.handle_at_row(0).unwrap();
+    let other = backend.sim().world.handle_at_row(1).unwrap();
+    let start = (
+        backend.sim().world.pos_x()[0],
+        backend.sim().world.pos_y()[0],
+    );
+    let other_pos = (
+        backend.sim().world.pos_x()[1],
+        backend.sim().world.pos_y()[1],
+    );
+    backend
+        .install_movement_source(actor, source(start.0, start.1, false, OrderIndex::None))
+        .unwrap();
+    backend
+        .install_movement_source(
+            other,
+            source(other_pos.0, other_pos.1, false, OrderIndex::None),
+        )
+        .unwrap();
+
+    let stale_request = UnitActionRequest {
+        verb_head: (generated::uv::MOVE_TO + 1) as u16,
+        actor,
+        target_x: start.0 + 240,
+        target_y: start.1,
+        queue: QueuePosition::Replace,
+        order_flags: 0,
+    };
+    let stale = backend.prepare_unit(0, stale_request).unwrap().unwrap();
+    assert_eq!(stale.source_revision(), 0);
+
+    let winning_request = UnitActionRequest {
+        target_x: start.0,
+        target_y: start.1 + 240,
+        ..stale_request
+    };
+    backend.apply_unit(0, winning_request).unwrap();
+    let before_digest = backend.sim().world.digest();
+    let before_state = backend.sim().movement_source_state(actor).unwrap();
+    let before_source = backend.sim().movement_collision.source(0).cloned();
+    let before_order = backend.sim().world.orders(0).clone();
+    let before_paths = backend.sim().paths.clone();
+    assert_eq!(before_state.revision, 1);
+
+    assert_eq!(
+        backend.apply_prepared_unit(stale),
+        Err(ApplyRefusal::MovementSourceState(
+            LiveCollisionFault::StaleSourceRevision {
+                row: 0,
+                expected: 0,
+                observed: 1,
+            }
+        ))
+    );
+    assert_eq!(backend.sim().world.digest(), before_digest);
+    assert_eq!(
+        backend.sim().movement_source_state(actor).unwrap(),
+        before_state
+    );
+    assert_eq!(
+        backend.sim().movement_collision.source(0).cloned(),
+        before_source
+    );
+    assert_eq!(backend.sim().world.orders(0), &before_order);
+    assert_eq!(backend.sim().paths, before_paths);
 }
 
 #[test]

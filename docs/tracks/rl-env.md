@@ -23,20 +23,25 @@ The authoritative contract is frozen at this boundary:
   initial unit state. `reset()` reconstructs that image; `step_frames(n)` executes exactly
   `n` retail-ordered `Sim::do_frame` calls and returns per-stage reachability counts.
 * Unit/player NOOP is observational. MOVE_TO is the only non-NOOP route and reaches
-  `Sim::issue` only after ownership, queue/flag, map, and live movement-host preflight.
+  `Sim::issue` only after ownership, queue/flag, map, and live movement-host preflight. Its
+  Sim-owned source state is revision-checked and changed to `{moving: true,
+  action: MoveTo|FleeTo}` immediately before issue; stale prepared actions refuse without
+  changing source, order, or path state. An episode revision also prevents deterministic reset
+  from reviving a plan whose handle and fresh source revision happen to repeat.
   Every other generated unit/player verb returns `ApplyRefusal::Unhosted` with the missing
   authoritative owner and cannot mutate `Sim`.
 * `observe()` and `reward_snapshot()` project directly from `Sim`. Observation currently
   contains own units and leader state only; `external_entities_complete` remains false until
   cloak/detection-aware visibility has an authoritative host. Reward deltas use Sim-owned
   score, economy, alive, and won state.
-* `install_movement_source()` is scenario/content setup authority. Because that source is
-  not yet part of `ScenarioSpec`, `reset()` discards it and callers must reinstall it before
-  issuing MOVE_TO. No hidden sidecar survives reset.
+* `AuthoritativeScenarioSpec` captures movement sources by deterministic scenario-unit
+  ordinal and reinstalls them atomically on reset. `install_movement_source()` remains an
+  explicitly out-of-band setup escape hatch and is not silently persisted. Masks read the
+  Sim-owned source snapshot and retain no hidden sidecar.
 
 Migration proceeds by moving one complete transaction at a time behind the authoritative
-variant: first content-owned movement sources, then group/command decoding, then visibility
-and opponent observations, then vectorisation. Compact `EnvWorld` remains available for
+variant: next group/command decoding, then visibility and opponent observations, then
+vectorisation. Compact `EnvWorld` remains available for
 throughput comparison; it is not incrementally copied into `Sim` and does not become a
 second source of truth for the authoritative variant.
 
@@ -352,20 +357,17 @@ modified.
 
 ## 9. Next, in order of leverage
 
-1. **Put movement collision sources into authoritative scenario/content setup.** This makes
-   MOVE_TO usable immediately after both construction and reset without an out-of-band
-   installer while preserving `Sim` as the only mutable game-state owner.
-2. **Host group/command decoding over the authoritative backend.** Decode the existing
+1. **Host group/command decoding over the authoritative backend.** Decode the existing
    generated factored heads into fail-closed typed transactions; do not route unsupported
    verbs through compact `action.rs` behavior.
-3. **Cloak/detection-aware external observations.** Only then may
+2. **Cloak/detection-aware external observations.** Only then may
    `external_entities_complete` become true or the authoritative backend expose opponents.
-4. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
+3. **Gathering and the build queue** — the two scaffolded verbs that most distort what a
    policy learns, and both have derivable rules data (`SUPPORT`, `JOB_TIME`,
    `JOB_EXTRA_TIME`, `PROGRESSION`).
-5. **Terrain + `PathFinder::astar_path`** — unlocks 5 of 12 spatial planes and the
+4. **Terrain + `PathFinder::astar_path`** — unlocks 5 of 12 spatial planes and the
    reachability mask.
-6. **`Leader::compute_score` `0x006EC560`** — one function; removes the last "ours, not the
+5. **`Leader::compute_score` `0x006EC560`** — one function; removes the last "ours, not the
    engine's" caveat from the reward.
-7. **Prerequisites** (`PREQ0/1/2` columns) — turns the `Type` head mask from
+6. **Prerequisites** (`PREQ0/1/2` columns) — turns the `Type` head mask from
    affordability-only into the real tech-gated set.

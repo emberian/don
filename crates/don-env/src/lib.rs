@@ -54,8 +54,9 @@ mod py;
 pub use authoritative_backend::{
     decode_unit_heads, ApplyReceipt, ApplyRefusal, AuthoritativeBackend, CoreObservation,
     CoreReward, CoreRewardSnapshot, FactoredApplyRefusal, FactoredUnitActionSpace,
-    HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation, ProjectionRefusal, QueuePosition,
-    Relation, UnitActionRequest, VerbIntegration, VerbRoute, PLAYER_INTEGRATION, UNIT_INTEGRATION,
+    HeadDecodeRefusal, IntegrationBoundary, OwnEntityObservation, PreparedUnitAction,
+    ProjectionRefusal, QueuePosition, Relation, UnitActionRequest, VerbIntegration, VerbRoute,
+    PLAYER_INTEGRATION, UNIT_INTEGRATION,
 };
 pub use authoritative_episode::{
     AuthoritativeEpisode, EpisodeError, ScenarioSpec, ScenarioUnit, StepReceipt,

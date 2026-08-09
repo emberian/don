@@ -1,9 +1,9 @@
 //! Contract for deterministic authoritative movement setup and conditional verb masks.
 
 use don_env::authoritative_backend::{
-    ActionSourceStateSetterRoute, AuthoritativeBackend, AuthoritativeScenarioSpec,
-    IntegrationBoundary, QueuePosition, ScenarioMovementSource, ScenarioSetupError,
-    UnitActionRequest, ACTION_SOURCE_STATE_SETTER, MOVE_TO_VERB_INDEX, UNIT_VERB_HEAD_COUNT,
+    ActionSourceStateSetterRoute, AuthoritativeBackend, AuthoritativeScenarioSpec, QueuePosition,
+    ScenarioMovementSource, ScenarioSetupError, UnitActionRequest, ACTION_SOURCE_STATE_SETTER,
+    MOVE_TO_VERB_INDEX, UNIT_VERB_HEAD_COUNT,
 };
 use don_env::{ScenarioSpec, ScenarioUnit};
 use don_sim::order::OrderIndex;
@@ -67,7 +67,7 @@ fn setup(actor_action: OrderIndex) -> AuthoritativeScenarioSpec {
         movement_sources: vec![
             ScenarioMovementSource {
                 unit: 0,
-                source: source(episode.units[0].x, episode.units[0].y, true, actor_action),
+                source: source(episode.units[0].x, episode.units[0].y, false, actor_action),
             },
             ScenarioMovementSource {
                 unit: 1,
@@ -103,7 +103,7 @@ fn runtime_sources(backend: &AuthoritativeBackend) -> Vec<Option<LiveCollisionSo
 
 #[test]
 fn captured_sources_make_move_ready_at_construction_and_survive_reset_exactly() {
-    let declared = setup(OrderIndex::MoveTo);
+    let declared = setup(OrderIndex::None);
     let mut backend = AuthoritativeBackend::from_authoritative_scenario(declared.clone()).unwrap();
     let initial_digest = backend.sim().world.digest();
     let initial_wdata = backend.sim().map.world.wdata.clone();
@@ -120,7 +120,15 @@ fn captured_sources_make_move_ready_at_construction_and_survive_reset_exactly() 
     assert!(backend
         .unit_verb_mask(0, request)
         .allows(MOVE_TO_VERB_INDEX + 1));
+    let initial_state = backend.sim().movement_source_state(request.actor).unwrap();
+    assert_eq!(initial_state.revision, 0);
+    assert!(!initial_state.moving);
+    assert_eq!(initial_state.action, OrderIndex::None as i32);
     backend.apply_unit(0, request).unwrap();
+    let applied_state = backend.sim().movement_source_state(request.actor).unwrap();
+    assert_eq!(applied_state.revision, 1);
+    assert!(applied_state.moving);
+    assert_eq!(applied_state.action, OrderIndex::MoveTo as i32);
     backend.step_frames(1);
     assert_ne!(backend.sim().world.digest(), initial_digest);
 
@@ -132,6 +140,13 @@ fn captured_sources_make_move_ready_at_construction_and_survive_reset_exactly() 
     assert_eq!(backend.sim().world.digest(), initial_digest);
     assert_eq!(backend.sim().map.world.wdata, initial_wdata);
     assert_eq!(runtime_sources(&backend), initial_sources);
+    assert_eq!(
+        backend
+            .sim()
+            .movement_source_state(reset_handles[0])
+            .unwrap(),
+        initial_state
+    );
     assert_eq!(
         backend.scenario_movement_sources(),
         declared.movement_sources
@@ -176,12 +191,13 @@ fn source_ordinals_duplicates_and_host_faults_are_typed() {
 #[test]
 fn conditional_verb_mask_is_exact_and_observational() {
     let backend =
-        AuthoritativeBackend::from_authoritative_scenario(setup(OrderIndex::MoveTo)).unwrap();
+        AuthoritativeBackend::from_authoritative_scenario(setup(OrderIndex::None)).unwrap();
     let request = move_request(&backend);
     let before_digest = backend.sim().world.digest();
     let before_wdata = backend.sim().map.world.wdata.clone();
     let before_sources = runtime_sources(&backend);
     let before_order_state = backend.sim().movement_collision.order_state.clone();
+    let before_source_state = backend.sim().movement_source_state(request.actor).unwrap();
 
     let mask = backend.unit_verb_mask(0, request);
     assert_eq!(mask.allowed.len(), UNIT_VERB_HEAD_COUNT);
@@ -212,28 +228,81 @@ fn conditional_verb_mask_is_exact_and_observational() {
     assert_eq!(backend.sim().map.world.wdata, before_wdata);
     assert_eq!(runtime_sources(&backend), before_sources);
     assert_eq!(
+        backend.sim().movement_source_state(request.actor).unwrap(),
+        before_source_state
+    );
+    assert_eq!(
         backend.sim().movement_collision.order_state,
         before_order_state
     );
 }
 
 #[test]
-fn action_source_state_transition_remains_a_typed_core_boundary() {
+fn action_source_state_transition_is_sim_owned_and_same_value_actions_advance_revision() {
     assert_eq!(
         ACTION_SOURCE_STATE_SETTER.route,
-        ActionSourceStateSetterRoute::Refused(IntegrationBoundary::MovementSourceStateHost)
+        ActionSourceStateSetterRoute::SimCompareExchange
     );
 
-    let backend =
+    let mut backend =
         AuthoritativeBackend::from_authoritative_scenario(setup(OrderIndex::None)).unwrap();
-    assert!(!backend
+    let request = move_request(&backend);
+    assert!(backend
         .unit_verb_mask(0, move_request(&backend))
         .allows(MOVE_TO_VERB_INDEX + 1));
+    backend.apply_unit(0, request).unwrap();
+    let first = backend.sim().movement_source_state(request.actor).unwrap();
+    assert_eq!(first.revision, 1);
+    assert!(first.moving);
+    assert_eq!(first.action, OrderIndex::MoveTo as i32);
+    backend.apply_unit(0, request).unwrap();
+    let second = backend.sim().movement_source_state(request.actor).unwrap();
+    assert_eq!(second.revision, 2);
+    assert_eq!((second.moving, second.action), (first.moving, first.action));
 
     let mut incomplete = setup(OrderIndex::MoveTo);
     incomplete.movement_sources.pop();
     let backend = AuthoritativeBackend::from_authoritative_scenario(incomplete).unwrap();
     assert!(!backend
         .unit_verb_mask(0, move_request(&backend))
+        .allows(MOVE_TO_VERB_INDEX + 1));
+}
+
+#[test]
+fn reset_invalidates_prepared_actions_even_when_handles_and_source_revision_repeat() {
+    let mut backend =
+        AuthoritativeBackend::from_authoritative_scenario(setup(OrderIndex::None)).unwrap();
+    let request = move_request(&backend);
+    let prepared = backend.prepare_unit(0, request).unwrap().unwrap();
+    assert_eq!(prepared.episode_revision(), 0);
+    assert_eq!(prepared.source_revision(), 0);
+
+    backend.reset().unwrap();
+    let reset_request = move_request(&backend);
+    let before_digest = backend.sim().world.digest();
+    let before_state = backend
+        .sim()
+        .movement_source_state(reset_request.actor)
+        .unwrap();
+    let before_source = runtime_sources(&backend);
+    assert_eq!(before_state.revision, 0);
+    assert_eq!(
+        backend.apply_prepared_unit(prepared),
+        Err(don_env::ApplyRefusal::StaleEpisodeRevision {
+            expected: 0,
+            observed: 1,
+        })
+    );
+    assert_eq!(backend.sim().world.digest(), before_digest);
+    assert_eq!(
+        backend
+            .sim()
+            .movement_source_state(reset_request.actor)
+            .unwrap(),
+        before_state
+    );
+    assert_eq!(runtime_sources(&backend), before_source);
+    assert!(backend
+        .unit_verb_mask(0, reset_request)
         .allows(MOVE_TO_VERB_INDEX + 1));
 }
