@@ -121,6 +121,9 @@ pub mod regions;
 /// [`combat`], [`crate::mechanics`] and [`crate::trig`].
 pub mod target;
 pub mod tech_cities;
+/// Exact `TerrainGroups::fill_fertile` worldgen pass plus the instruction-pinned,
+/// fail-closed `place_all` boundary at the missing Mountains RNG/list state.
+pub mod terrain_groups;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
 /// event-execution paths.
