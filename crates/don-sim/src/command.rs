@@ -139,6 +139,10 @@ pub mod group_action_frontier;
 pub mod late_command_plans;
 #[path = "systems/object_command_plans.rs"]
 pub mod object_command_plans;
+#[path = "systems/recall_action_frontier.rs"]
+pub mod recall_action_frontier;
+#[path = "systems/return_action_frontier.rs"]
+pub mod return_action_frontier;
 #[path = "systems/setup_diplomacy.rs"]
 pub mod setup_diplomacy;
 #[path = "systems/tail_command_transactions.rs"]
@@ -164,10 +168,16 @@ use self::late_command_plans::{
 use self::object_command_plans::{
     RenameCityCommand, RenameCityTransactionReceipt, RenameCityTransactionStatus,
 };
+use self::recall_action_frontier::{
+    plan_recall, RecallBoundary, RecallEffect, RecallFacts, RecallPlan, RecallRequest,
+};
+use self::return_action_frontier::{
+    plan_return, ReturnEffect, ReturnFacts, ReturnPlan, ReturnRequest,
+};
 use self::tail_command_transactions::{TailCommandFacts, TailCommandReceipt, TailCommandRequest};
 use self::unimplemented_group_command_plans::{
     decode_unimplemented_group_command, plan_unimplemented_group_command, DelegatedGroupAction,
-    PlanStatus as GroupCommandPrefixPlanStatus, UnimplementedGroupCommandFacts,
+    GroupActionCall, PlanStatus as GroupCommandPrefixPlanStatus, UnimplementedGroupCommandFacts,
     UnimplementedGroupCommandReceipt, UnimplementedGroupCommandRequest,
 };
 
@@ -851,6 +861,121 @@ fn group_command_prefix_needs_addressed_object(
         )
 }
 
+/// Bridge-owned identity for one live `RecallCommand` transaction.
+///
+/// Scenario selection, `ignore_orders`, object/type facts, and order-list state belong to
+/// the product host.  The command bridge binds the callback to the addressed group and the
+/// returned receipt binds every additional observation before publication.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecallActionRequest {
+    pub group: GroupData,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecallActionTransactionStatus {
+    Applied,
+    Unavailable,
+}
+
+/// One atomic receipt spanning `Group::action_recall` and its conditional
+/// `Group::action_return` delegate.
+///
+/// In particular, an air-leader recall is never valid with only the recall prefix.  The
+/// return request is derived from the exact recall after-image and the same scenario-global
+/// snapshot, then its complete plan is recomputed before the receipt authorizes the Bridge
+/// group after-image.  Hosts must preflight and commit the two plans as one transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecallActionReceipt {
+    pub request: RecallActionRequest,
+    pub status: RecallActionTransactionStatus,
+    pub recall_request: Option<RecallRequest>,
+    pub recall_facts: Option<RecallFacts>,
+    pub recall_plan: Option<RecallPlan>,
+    pub return_facts: Option<ReturnFacts>,
+    pub return_plan: Option<ReturnPlan>,
+}
+
+impl RecallActionReceipt {
+    pub fn unavailable(request: RecallActionRequest) -> Self {
+        Self {
+            request,
+            status: RecallActionTransactionStatus::Unavailable,
+            recall_request: None,
+            recall_facts: None,
+            recall_plan: None,
+            return_facts: None,
+            return_plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &RecallActionRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            RecallActionTransactionStatus::Unavailable => {
+                self.recall_request.is_none()
+                    && self.recall_facts.is_none()
+                    && self.recall_plan.is_none()
+                    && self.return_facts.is_none()
+                    && self.return_plan.is_none()
+            }
+            RecallActionTransactionStatus::Applied => {
+                let (Some(recall_request), Some(recall_facts), Some(observed_recall)) = (
+                    self.recall_request.as_ref(),
+                    self.recall_facts.as_ref(),
+                    self.recall_plan.as_ref(),
+                ) else {
+                    return false;
+                };
+                if recall_request.group != expected.group
+                    || !plan_recall(recall_request, recall_facts)
+                        .is_ok_and(|recomputed| recomputed == *observed_recall)
+                    || observed_recall.direct_rng_draws != 0
+                {
+                    return false;
+                }
+
+                match observed_recall.boundary {
+                    RecallBoundary::EmptyGroup | RecallBoundary::MainBody => {
+                        self.return_facts.is_none() && self.return_plan.is_none()
+                    }
+                    RecallBoundary::OpenActionReturn => {
+                        if !matches!(
+                            observed_recall.effects.last(),
+                            Some(RecallEffect::OpenActionReturnTail { .. })
+                        ) {
+                            return false;
+                        }
+                        let (Some(return_facts), Some(observed_return)) =
+                            (self.return_facts.as_ref(), self.return_plan.as_ref())
+                        else {
+                            return false;
+                        };
+                        let return_request = ReturnRequest {
+                            group: observed_recall.group.clone(),
+                            ignore_orders: recall_request.ignore_orders,
+                            scenario_selection: recall_request.scenario_selection.clone(),
+                        };
+                        observed_return.direct_rng_draws == 0
+                            && plan_return(&return_request, return_facts)
+                                .is_ok_and(|recomputed| recomputed == *observed_return)
+                    }
+                }
+            }
+        }
+    }
+
+    fn final_group(&self) -> Option<&GroupData> {
+        match self.recall_plan.as_ref()?.boundary {
+            RecallBoundary::OpenActionReturn => Some(&self.return_plan.as_ref()?.group),
+            RecallBoundary::EmptyGroup | RecallBoundary::MainBody => {
+                Some(&self.recall_plan.as_ref()?.group)
+            }
+        }
+    }
+}
+
 /// The object-side interface `Group::action_*` needs.
 ///
 /// The retail actions reach the world through `objects.lists[who][o]` and a pile of
@@ -1073,6 +1198,18 @@ pub trait Fleet {
                 addressed_object_flag_1: None,
             },
         )
+    }
+
+    /// Atomic host boundary for opcode 35 and the complete conditional RETURN tail.
+    ///
+    /// The fail-closed default is load-bearing: the Bridge never publishes scenario kills,
+    /// group state, launching-list edits, unit masks, paths, action state, or replacement
+    /// STRAFE orders unless one recomputable receipt covers all of them.
+    fn apply_recall_action_transaction(
+        &mut self,
+        request: RecallActionRequest,
+    ) -> RecallActionReceipt {
+        RecallActionReceipt::unavailable(request)
     }
 
     /// Atomic receiver boundary for complete `Group::action_stop_spell`.
@@ -3110,8 +3247,8 @@ impl Bridge {
 
     /// Execute the exact `CommandPackage::process_*` prefix for every formerly-Todo
     /// group row. The atomic host callback supplies the addressed-object flag snapshot
-    /// when retail reads it. A reached action is emitted as a typed open tail and never
-    /// executed here.
+    /// when retail reads it. Reached actions remain typed open tails except RECALL, whose
+    /// complete conditional RETURN transaction now crosses its own fail-closed host receipt.
     fn process_group_command_prefix(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
         let Some(request) = decode_unimplemented_group_command(cmd) else {
             self.stats.unported += 1;
@@ -3158,6 +3295,12 @@ impl Bridge {
                     return;
                 }
                 self.stats.by_action[action_index] += 1;
+                if delegate.call == GroupActionCall::Recall
+                    && self.dispatch_recall_action(pkg.group, f)
+                {
+                    self.stats.acted += 1;
+                    return;
+                }
                 self.stats.open_group_action_tails += 1;
                 self.stats.unported += 1;
             }
@@ -3941,6 +4084,16 @@ impl Bridge {
         };
         act.run(name, cmd, f);
     }
+
+    fn dispatch_recall_action(&mut self, slot: i32, f: &mut dyn Fleet) -> bool {
+        let mut act = Action {
+            groups: &mut self.groups,
+            slot,
+            stats: &mut self.stats,
+            frame: self.frame,
+        };
+        act.action_recall(f)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4225,6 +4378,59 @@ impl Action<'_> {
         let plan = group_action_frontier::plan_open_group_action(&group, command);
         if let Some(group) = self.groups.get_mut(self.slot) {
             *group = plan.group;
+        }
+    }
+
+    /// `Group::action_recall` `0x006FA7E0`, including its conditional call to
+    /// `Group::action_return` `0x006FAD40`.
+    ///
+    /// A single host callback owns fact capture, preflight, and publication for both
+    /// functions.  The Bridge validates the combined receipt before exposing even the
+    /// recall prefix's group after-image.
+    fn action_recall(&mut self, f: &mut dyn Fleet) -> bool {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return false;
+        };
+        let request = RecallActionRequest { group };
+        let receipt = f.apply_recall_action_transaction(request.clone());
+        if receipt.status != RecallActionTransactionStatus::Applied || !receipt.validates(&request)
+        {
+            return false;
+        }
+        let Some(final_group) = receipt.final_group().cloned() else {
+            return false;
+        };
+
+        let mut orders_cleared = 0u64;
+        let mut strafes_installed = 0u64;
+        if let Some(plan) = receipt.recall_plan.as_ref() {
+            for effect in &plan.effects {
+                match effect {
+                    RecallEffect::ClearAircraftOrders { .. } | RecallEffect::CloseOrders { .. } => {
+                        orders_cleared += 1
+                    }
+                    RecallEffect::AddStrafeOrder { .. } => strafes_installed += 1,
+                    _ => {}
+                }
+            }
+        }
+        if let Some(plan) = receipt.return_plan.as_ref() {
+            for effect in &plan.effects {
+                match effect {
+                    ReturnEffect::CloseOrders { .. } => orders_cleared += 1,
+                    ReturnEffect::AddStrafeOrder { .. } => strafes_installed += 1,
+                    _ => {}
+                }
+            }
+        }
+        self.stats.orders_cleared += orders_cleared;
+        self.stats.orders_installed += strafes_installed;
+        self.stats.by_order[OrderIndex::Strafe.index()] += strafes_installed;
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = final_group;
+            true
+        } else {
+            false
         }
     }
 
