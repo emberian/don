@@ -19,14 +19,17 @@ use crate::order::{
     FollowOrderPayload, FormOrderState, Order, OrderIndex, OrderList, SpecialAnimOrderState,
     SpecialAnimType,
 };
-use crate::systems::{borders_fog, economy, items::Item, map_terrain, movement, production};
+use crate::systems::{
+    borders_fog, economy, game_daemon_step12, groups_guys, items::Item, map_terrain, movement,
+    production,
+};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
@@ -1789,6 +1792,20 @@ fn read_leaders(
     Ok((leaders, market))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CoreState {
+    seed: i32,
+    frame: i32,
+    seconds: i32,
+    random_state: i32,
+    /// Exact PDB-owned record. Its `repaths`, `borders`, and `busy` fields are independent;
+    /// `empty_colls` is the one persisted representation of the collision runtime's cursor.
+    game_daemon: game_daemon_step12::GameDaemonState,
+    /// Independent `GroupsData` walk cursor. Group slots and `last_group` remain outside
+    /// this narrow tranche and are still refused unless pristine.
+    groups_proc_group: i32,
+}
+
 fn write_core(sim: &Sim) -> Vec<u8> {
     let mut w = Writer::default();
     w.u32(FORMAT_VERSION);
@@ -1796,17 +1813,50 @@ fn write_core(sim: &Sim) -> Vec<u8> {
     w.i32(sim.world.frame);
     w.i32(sim.world.seconds);
     w.i32(sim.world.random.state());
+    for &repath in &sim.game_daemon.repaths {
+        w.i32(repath);
+    }
+    // The live runtime exclusively advances this scalar; reject_unsupported has already
+    // proved the PDB-shaped GameDaemon mirror agrees with it.
+    w.i32(sim.collision_blocks.cursor());
+    w.i32(sim.game_daemon.borders);
+    w.i32(sim.game_daemon.busy);
+    w.i32(sim.groups.proc_group);
     w.0
 }
 
-fn read_core(data: &[u8]) -> Result<(i32, i32, i32, i32), SaveError> {
+fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
     let mut r = Reader::new(data);
     if r.u32()? != FORMAT_VERSION {
         return Err(SaveError::Invalid("unsupported save format version"));
     }
-    let out = (r.i32()?, r.i32()?, r.i32()?, r.i32()?);
+    let seed = r.i32()?;
+    let frame = r.i32()?;
+    let seconds = r.i32()?;
+    let random_state = r.i32()?;
+    let mut repaths = [0; game_daemon_step12::LEADER_SLOTS];
+    for repath in &mut repaths {
+        *repath = r.i32()?;
+    }
+    let game_daemon = game_daemon_step12::GameDaemonState {
+        repaths,
+        empty_colls: r.i32()?,
+        borders: r.i32()?,
+        busy: r.i32()?,
+    };
+    let groups_proc_group = r.i32()?;
+    if !(0..groups_guys::GROUPS_PER_PLAYER as i32).contains(&groups_proc_group) {
+        return Err(SaveError::Invalid("groups proc_group"));
+    }
     r.finish()?;
-    Ok(out)
+    Ok(CoreState {
+        seed,
+        frame,
+        seconds,
+        random_state,
+        game_daemon,
+        groups_proc_group,
+    })
 }
 
 fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
@@ -1850,11 +1900,17 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
         }
     }
     let default_groups = crate::systems::groups_guys::Groups::default();
-    if sim.groups.list != default_groups.list
-        || sim.groups.last_group != default_groups.last_group
-        || sim.groups.proc_group != default_groups.proc_group
+    if sim.groups.list != default_groups.list || sim.groups.last_group != default_groups.last_group
     {
         return Err(SaveError::Unsupported("groups"));
+    }
+    if !(0..groups_guys::GROUPS_PER_PLAYER as i32).contains(&sim.groups.proc_group) {
+        return Err(SaveError::Invalid("groups proc_group"));
+    }
+    if sim.game_daemon.empty_colls != sim.collision_blocks.cursor() {
+        // The runtime is an execution adapter for the same GameDaemon+0x20 scalar, not a
+        // second persistent owner. Refuse divergent public state instead of choosing one.
+        return Err(SaveError::Invalid("GameDaemon collision cursor mirror"));
     }
     if sim.world.rules.balance.is_some()
         || !sim.world.rules.unit_stats.is_empty()
@@ -1944,19 +2000,19 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
         }
     }
     let [core, map, objects, leaders, paths, items, builds] = sections.map(Option::unwrap);
-    let (seed, frame, seconds, random_state) = read_core(core)?;
+    let core = read_core(core)?;
     let map = read_map(map)?;
-    if map.world.seed != seed {
+    if map.world.seed != core.seed {
         return Err(SaveError::Invalid("core/map seed mismatch"));
     }
-    let world_state = read_world_state(objects, frame, seconds, random_state)?;
+    let world_state = read_world_state(objects, core.frame, core.seconds, core.random_state)?;
     let builds = read_builds(builds, &world_state)?;
     let expected_types = world_state.unit_type_id.clone();
     let (leaders, market) = read_leaders(leaders)?;
     let (unit_type, paths, path_unit) = read_paths(paths, &expected_types)?;
     let item_runtime = read_items(items, &map.world)?;
 
-    let mut sim = Sim::new(seed as u32 as u64, map.world.xs as u16);
+    let mut sim = Sim::new(core.seed as u32 as u64, map.world.xs as u16);
     sim.map = map;
     sim.world.import_save_state(world_state)?;
     sim.world.item_runtime = item_runtime;
@@ -1967,6 +2023,12 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.paths = paths;
     sim.path_unit = path_unit;
     sim.crash_units = vec![None; sim.world.live_count() as usize];
+    sim.game_daemon = core.game_daemon;
+    sim.collision_blocks =
+        crate::systems::collision_blocks_live::CollisionBlockRuntime::from_cursor(
+            core.game_daemon.empty_colls,
+        );
+    sim.groups.proc_group = core.groups_proc_group;
     // A loaded state must itself be saveable. This catches accidental constructor state
     // that would otherwise make the first post-load save fail or silently differ.
     reject_unsupported(&sim)?;
@@ -2284,6 +2346,73 @@ mod tests {
         for row in 0..original.world.live_count() as usize {
             assert_eq!(loaded.world.orders(row), original.world.orders(row));
         }
+    }
+
+    #[test]
+    fn step12_owned_state_round_trips_and_resumes_without_serializing_its_cursor_mirror_twice() {
+        let mut original = supported_sim();
+        original.game_daemon = game_daemon_step12::GameDaemonState {
+            repaths: [3, 4, 5, 6, 7, 8, i32::MIN, i32::MAX],
+            empty_colls: 37,
+            borders: -91,
+            busy: i32::MIN,
+        };
+        original.collision_blocks =
+            crate::systems::collision_blocks_live::CollisionBlockRuntime::from_cursor(37);
+        original.groups.proc_group = 63;
+
+        let bytes = save_sim(&original).unwrap();
+        let mut loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.game_daemon, original.game_daemon);
+        assert_eq!(loaded.collision_blocks.cursor(), 37);
+        assert_eq!(loaded.groups.proc_group, 63);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        original.do_frame();
+        loaded.do_frame();
+        assert_eq!(loaded.game_daemon, original.game_daemon);
+        assert_eq!(
+            loaded.collision_blocks.cursor(),
+            original.collision_blocks.cursor()
+        );
+        assert_eq!(loaded.groups.proc_group, original.groups.proc_group);
+    }
+
+    #[test]
+    fn one_real_step12_pass_can_be_saved_with_default_group_slots() {
+        let mut sim = Sim::new(0x3456_789a, 4);
+        sim.do_frame();
+        assert_eq!(sim.groups.proc_group, 1);
+        assert_eq!(sim.game_daemon.empty_colls, sim.collision_blocks.cursor());
+
+        let bytes = save_sim(&sim).unwrap();
+        let loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.game_daemon, sim.game_daemon);
+        assert_eq!(loaded.groups.proc_group, 1);
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn divergent_step12_cursor_views_and_live_group_slots_still_fail_closed() {
+        let mut divergent = supported_sim();
+        divergent.game_daemon.empty_colls = 7;
+        divergent.collision_blocks =
+            crate::systems::collision_blocks_live::CollisionBlockRuntime::from_cursor(9);
+        assert_eq!(
+            save_sim(&divergent),
+            Err(SaveError::Invalid("GameDaemon collision cursor mirror"))
+        );
+
+        let mut live_group = supported_sim();
+        live_group.groups.list[0].form = 4;
+        assert_eq!(save_sim(&live_group), Err(SaveError::Unsupported("groups")));
+
+        let mut invalid_cursor = supported_sim();
+        invalid_cursor.groups.proc_group = groups_guys::GROUPS_PER_PLAYER as i32;
+        assert_eq!(
+            save_sim(&invalid_cursor),
+            Err(SaveError::Invalid("groups proc_group"))
+        );
     }
 
     #[test]
