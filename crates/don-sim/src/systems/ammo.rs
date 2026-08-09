@@ -64,9 +64,9 @@
 //! * `TRAJ_SPLINE` cruise and nuke paths — `calc_from_dir` / both arms of
 //!   `calc_nuke_spline` → `calc_spline` → `generate_bspline` → `build_normals`, the six nested
 //!   array walks, the slot-aligned pool sidecar/recycler, and indexed flight step are implemented
-//!   below. The live nuke launch supplies [`NukeSplineEnv`]; the remaining live cruise boundary
-//!   is the exact source-orientation inputs and dynamic retarget/rebuild arm. Aircraft wrecks
-//!   actually use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
+//!   below. Live nuke and initial cruise launch are installed through the pool; the remaining
+//!   spline boundary is the dynamic cruise retarget/rebuild arm. Aircraft wrecks actually use
+//!   `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -698,6 +698,32 @@ pub enum RetailSplineFamily {
     Nuke,
 }
 
+/// Dynamic `Guy`/`UnitData` pose facts read only by the graphic-piece spline arm of
+/// `Ammo::init` (`0x0067CBA5..0x0067CDCF`).  They do not belong to the ammo type record:
+/// non-land shooters take angle/pitch from their lead `Guy`, while the nuke-mask override
+/// uses `UnitData::speed()` as the spline's minimum segment length.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CruiseLaunchPose {
+    /// `GuyData +0x18`, used in place of the target-facing ammo angle for non-land units.
+    pub lead_angle: i32,
+    /// `GuyData +0x4C`, in degrees, truncated before the half-degree table lookup.
+    pub lead_pitch: f32,
+    /// `UnitData::speed()` `0x0060AAE0`.
+    pub speed: i32,
+}
+
+/// The four vectors and scalar passed to `Spline::calc_from_dir` at `0x0067CDCF`, plus
+/// the angle already written to `AmmoData +0x2C` by the same constructor arm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CruiseSplineInputs {
+    pub min_segment_length: f32,
+    pub start: SplineVec3,
+    pub control: SplineVec3,
+    pub end: SplineVec3,
+    pub optional_control: SplineVec3,
+    pub ammo_angle: i32,
+}
+
 #[inline]
 pub fn select_retail_spline_family(
     graphic_piece_spline: bool,
@@ -710,6 +736,122 @@ pub fn select_retail_spline_family(
     } else {
         RetailSplineFamily::Arc
     }
+}
+
+#[inline]
+fn normalize_half_degree_index(mut degrees: i32) -> i32 {
+    // The shipped normalization is not `rem_euclid`: its negative arm is
+    // `359 - ((-degrees) % 360)`, making -1 map to 358 rather than 359.
+    if degrees < 0 {
+        degrees = degrees.wrapping_neg();
+        359i32.wrapping_sub(degrees % 360)
+    } else if degrees >= 360 {
+        degrees % 360
+    } else {
+        degrees
+    }
+}
+
+#[inline]
+fn half_degree_quaternion_pair(degrees: i32) -> (f32, f32) {
+    // `fast_half_degree_to_{cosine,sine}` lazily build 360 entries in precisely this
+    // multiply order (`0x00A29080`, `0x00A29180`) before returning the indexed f32.
+    let index = normalize_half_degree_index(degrees) as f32;
+    let radians = (index * 0.5) * f32::from_bits(0x3C8E_FA35);
+    (radians.cos(), radians.sin())
+}
+
+#[inline]
+fn rotate_retail(vector: &mut SplineVec3, qx: f32, qy: f32, qz: f32, qw: f32) {
+    // `Vector<float>::rotate(Quat<float> const*)` `0x00420B10`, retaining its scalar
+    // operand grouping because the resulting path is walked as raw f32 bits.
+    let xx = vector.x;
+    let yy = vector.y;
+    let zz = vector.z;
+    let yz2 = qz * qz + qy * qy;
+    let x_cross = (qz * qx - qw * qy) * zz + (qw * qz + qy * qx) * yy;
+    let zx2 = qz * qz + qx * qx;
+    let y_cross = (qw * qx + qz * qy) * zz + (qy * qx - qw * qz) * xx;
+    vector.x = (1.0 - (yz2 + yz2)) * xx + x_cross + x_cross;
+    let yx2 = qy * qy + qx * qx;
+    vector.y = (1.0 - (zx2 + zx2)) * yy + y_cross + y_cross;
+    let z_cross = (qz * qy - qw * qx) * yy + (qw * qy + qz * qx) * xx;
+    vector.z = (1.0 - (yx2 + yx2)) * zz + z_cross + z_cross;
+}
+
+/// Recover `Ammo::init`'s four `calc_from_dir` vectors from the initialized ammo and the
+/// live shooter pose.  No RNG is consumed.  The optional fourth control is constructed as
+/// the all-zero vector; `UnitData::speed()` is called only after those four future call
+/// arguments are pushed, which is why the decompiler incorrectly rendered them as speed
+/// arguments even though the PDB signature is `int UnitData::speed() const`.
+pub fn cruise_spline_inputs(
+    ammo: &AmmoWalk,
+    shooter: &ObjView,
+    attack_dist: i32,
+    pose: CruiseLaunchPose,
+) -> Result<CruiseSplineInputs, SplineBuildError> {
+    if shooter.rules.domain != 0 && !pose.lead_pitch.is_finite() {
+        return Err(SplineBuildError::NonFiniteInput);
+    }
+    let nuke_mask = shooter.rules.obj_masks & 0x0800_0000 != 0;
+    let (reach, pitch, ammo_angle) = if shooter.rules.domain == 0 {
+        // `0x0067C459..0x0067C469`: the distance is halved in EAX for reach, while
+        // XMM1 is loaded independently from retail's 45.0f constant before jumping
+        // past the non-land lead-Guy load at `0x0067CBA5`.
+        (attack_dist / 2, 45.0, ammo.angle)
+    } else {
+        (
+            if shooter.is_unit && !nuke_mask {
+                shooter
+                    .rules
+                    .proj_speed
+                    .wrapping_mul(UNIT_MOVE_SPEED)
+                    .wrapping_mul(5)
+            } else {
+                0x480
+            },
+            pose.lead_pitch,
+            pose.lead_angle,
+        )
+    };
+    let min_segment = if nuke_mask {
+        pose.speed
+    } else if shooter.is_unit {
+        shooter.rules.proj_speed.wrapping_mul(UNIT_MOVE_SPEED)
+    } else {
+        150i32.wrapping_mul(UNIT_MOVE_SPEED)
+    };
+    if min_segment <= 0 {
+        return Err(SplineBuildError::NonPositiveSegmentLength);
+    }
+
+    let mut control = SplineVec3::new(0.0, -(reach as f32), 0.0);
+    let pitch = cvttss2si(pitch);
+    // Retail's negative normalization executes `neg` followed by signed `idiv`; the
+    // architectural indefinite value would overflow that pair. A host adapter must never
+    // index a fabricated table entry when a corrupt/non-representable Guy pitch reaches it.
+    if pitch == i32::MIN {
+        return Err(SplineBuildError::NonFiniteInput);
+    }
+    let (pitch_cos, pitch_sin) = half_degree_quaternion_pair(pitch);
+    rotate_retail(&mut control, pitch_sin, 0.0, 0.0, pitch_cos);
+
+    let yaw_degrees = cvttss2si(super::unit_inctime::fast_angle_to_degrees(ammo_angle));
+    let (yaw_cos, yaw_sin) = half_degree_quaternion_pair(yaw_degrees.wrapping_neg());
+    rotate_retail(&mut control, 0.0, 0.0, yaw_sin, yaw_cos);
+
+    let start = SplineVec3::new(ammo.sx as f32, ammo.sy as f32, ammo.sz as f32);
+    control.x += start.x;
+    control.y += start.y;
+    control.z += start.z;
+    Ok(CruiseSplineInputs {
+        min_segment_length: min_segment as f32,
+        start,
+        control,
+        end: SplineVec3::new(ammo.ex as f32, ammo.ey as f32, ammo.ez as f32),
+        optional_control: SplineVec3::default(),
+        ammo_angle,
+    })
 }
 
 /// Reproduce the explicit `ArrayBase::make_valid`/length write used by the nuke arms while
@@ -1272,6 +1414,29 @@ impl AmmoPool {
         Ok(())
     }
 
+    /// Compose the recovered `Ammo::init` orientation transaction with the pool-owned
+    /// constructor. Input derivation is mutation-free; `ammo_angle` is committed only after
+    /// the spline itself succeeds, so missing/non-positive facts cannot half-install a path.
+    pub fn install_cruise_launch(
+        &mut self,
+        slot: usize,
+        shooter: &ObjView,
+        attack_dist: i32,
+        pose: CruiseLaunchPose,
+    ) -> Result<CruiseSplineInputs, SplineBuildError> {
+        let inputs = cruise_spline_inputs(&self.slots[slot].w, shooter, attack_dist, pose)?;
+        self.install_cruise_spline(
+            slot,
+            inputs.min_segment_length,
+            inputs.start,
+            inputs.control,
+            inputs.end,
+            inputs.optional_control,
+        )?;
+        self.slots[slot].w.angle = inputs.ammo_angle;
+        Ok(inputs)
+    }
+
     /// Install the retail nuke constructor selected by shooter property `0x13A`: zero uses
     /// the fixed high arc, non-zero uses the terrain-following path.
     pub fn install_nuke_spline<E: NukeSplineEnv + ?Sized>(
@@ -1823,6 +1988,9 @@ pub struct LaunchOrder {
     /// `find_angle(ex - sx, ey - sy)`, supplied by the caller because ordinary target,
     /// attack-ground, spline, and offset-muzzle arms choose different source points.
     pub angle: i32,
+    /// Lead-Guy pose / live `UnitData::speed()` facts consumed only by the graphic-piece
+    /// cruise constructor. Ordinary arcs and nukes ignore this record.
+    pub cruise_pose: CruiseLaunchPose,
     /// From the ammo graphic table (`graphic_pieces + 0xF70`, bit `0x80`).
     pub cosmetic: bool,
 }
@@ -3720,6 +3888,7 @@ mod tests {
             whom: 1,
             ox: 9,
             angle: 0x1234_5678,
+            cruise_pose: CruiseLaunchPose::default(),
             cosmetic: false,
         };
         (shooter, target, ord)
@@ -4921,6 +5090,7 @@ mod tests {
                 whom: 2,
                 ox: 4,
                 angle: 0,
+                cruise_pose: CruiseLaunchPose::default(),
                 cosmetic: false,
             };
             let dist = vector_dist(target.x - sp.x, target.y - sp.y);

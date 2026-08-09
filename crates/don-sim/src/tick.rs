@@ -2164,6 +2164,13 @@ impl Sim {
                 whom: target_who,
                 ox: target_o,
                 angle: crate::trig::find_angle(target.x - shooter.x, target.y - shooter.y),
+                cruise_pose: ammo::CruiseLaunchPose {
+                    lead_angle: self.world.units.angle()[row],
+                    // This Sim currently materializes one synthetic lead Guy at the Unit
+                    // position; its checksum-visible pitch begins at retail's zero default.
+                    lead_pitch: 0.0,
+                    speed: self.world.units.myspeed()[row] as i32,
+                },
                 cosmetic: false,
             };
             self.launch_ammo(&ord, &shooter, Some(&target), dist, damage);
@@ -2386,12 +2393,14 @@ impl Sim {
                 self.shots[slot] = AmmoShot::default();
             }
         } else if spline_family == ammo::RetailSplineFamily::Cruise {
-            // The constructor is live through AmmoPool::install_cruise_spline, but its
-            // orientation-derived control vectors are not present in LaunchOrder. An
-            // explicitly flagged cruise graphic therefore fails closed here until its
-            // caller supplies those exact four vectors instead of fabricating them.
-            self.ammo.close_slot(slot);
-            self.shots[slot] = AmmoShot::default();
+            if self
+                .ammo
+                .install_cruise_launch(slot, shooter, dist, ord.cruise_pose)
+                .is_err()
+            {
+                self.ammo.close_slot(slot);
+                self.shots[slot] = AmmoShot::default();
+            }
         }
         slot
     }
@@ -2744,6 +2753,7 @@ mod tests {
             whom: 1,
             ox: 1,
             angle: 0,
+            cruise_pose: ammo::CruiseLaunchPose::default(),
             cosmetic: false,
         };
         sim.launch_ammo(&ord, &shooter, Some(&target), 1200, 7);

@@ -1,8 +1,9 @@
 use don_sim::systems::ammo::{
     ammo_init_cruise_spline, ammo_init_nuke_spline_high_arc, ammo_init_nuke_spline_terrain,
-    ammo_step_cruise_spline, select_retail_spline_family, Ammo, AmmoPool, AmmoSplineChecksumError,
-    NukeSplineEnv, NukeTerrainSample, RetailSpline, RetailSplineFamily, SplineBuildError,
-    SplineVec3, FLAG_ALIVE, FLAG_FLYING, TRAJ_SPLINE,
+    ammo_step_cruise_spline, cruise_spline_inputs, select_retail_spline_family, Ammo, AmmoPool,
+    AmmoSplineChecksumError, CruiseLaunchPose, NukeSplineEnv, NukeTerrainSample, ObjView,
+    RetailSpline, RetailSplineFamily, ShooterRules, SplineBuildError, SplineVec3, FLAG_ALIVE,
+    FLAG_FLYING, TRAJ_SPLINE,
 };
 use std::cell::RefCell;
 
@@ -242,6 +243,197 @@ fn retail_selector_gives_graphic_cruise_priority_over_the_nuke_mask() {
     assert_eq!(
         select_retail_spline_family(true, 0x0800_0000),
         RetailSplineFamily::Cruise
+    );
+}
+
+#[test]
+fn cruise_launch_inputs_recover_retail_pitch_yaw_reach_and_minimum_order() {
+    let mut ammo = Ammo::default();
+    ammo.w.sx = 100;
+    ammo.w.sy = 200;
+    ammo.w.sz = 300;
+    ammo.w.ex = 900;
+    ammo.w.ey = 300;
+    ammo.w.ez = 600;
+    ammo.w.angle = don_sim::trig::QUARTER_TURN;
+    let land = ObjView {
+        is_unit: true,
+        rules: ShooterRules {
+            proj_speed: 20,
+            domain: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let land_inputs = cruise_spline_inputs(
+        &ammo.w,
+        &land,
+        600,
+        CruiseLaunchPose {
+            lead_angle: 0x1234_5678,
+            lead_pitch: 17.75,
+            speed: 77,
+        },
+    )
+    .unwrap();
+    assert_eq!(land_inputs.min_segment_length.to_bits(), 20.0f32.to_bits());
+    assert_eq!(land_inputs.ammo_angle, don_sim::trig::QUARTER_TURN);
+    assert_eq!(
+        [
+            land_inputs.control.x.to_bits(),
+            land_inputs.control.y.to_bits(),
+            land_inputs.control.z.to_bits(),
+        ],
+        [0x439c_0cc4, 0x434b_b3c2, 0x4400_0874]
+    );
+    let land_pose_mutation = cruise_spline_inputs(
+        &ammo.w,
+        &land,
+        600,
+        CruiseLaunchPose {
+            lead_angle: i32::MIN,
+            lead_pitch: f32::NAN,
+            speed: -999,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        land_pose_mutation, land_inputs,
+        "land uses retail's fixed 45-degree pitch/current ammo angle and never reads lead Guy pose"
+    );
+
+    let air = ObjView {
+        is_unit: true,
+        rules: ShooterRules {
+            proj_speed: 30,
+            domain: 2,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let air_inputs = cruise_spline_inputs(
+        &ammo.w,
+        &air,
+        600,
+        CruiseLaunchPose {
+            lead_angle: i32::MIN,
+            lead_pitch: 17.75,
+            speed: 77,
+        },
+    )
+    .unwrap();
+    assert_eq!(air_inputs.min_segment_length.to_bits(), 30.0f32.to_bits());
+    assert_eq!(air_inputs.ammo_angle, i32::MIN);
+    assert_eq!(
+        [
+            air_inputs.control.x.to_bits(),
+            air_inputs.control.y.to_bits(),
+            air_inputs.control.z.to_bits(),
+        ],
+        [0x42c2_fe38, 0x43ab_b642, 0x43ab_ed89]
+    );
+    let negative_one_yaw = cruise_spline_inputs(
+        &ammo.w,
+        &air,
+        600,
+        CruiseLaunchPose {
+            // The high-byte angle table maps this to one degree. Retail then negates
+            // and normalizes it to half-degree table index 358, not 359.
+            lead_angle: 0x0100_0000,
+            lead_pitch: 17.75,
+            speed: 77,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        [
+            negative_one_yaw.control.x.to_bits(),
+            negative_one_yaw.control.y.to_bits(),
+            negative_one_yaw.control.z.to_bits(),
+        ],
+        [0x42d2_032c, 0x4262_9110, 0x43ab_ed89]
+    );
+
+    let nuke_mask_air = ObjView {
+        rules: ShooterRules {
+            obj_masks: 0x0800_0000,
+            ..air.rules
+        },
+        ..air
+    };
+    let nuke_mask_inputs = cruise_spline_inputs(
+        &ammo.w,
+        &nuke_mask_air,
+        600,
+        CruiseLaunchPose {
+            lead_angle: i32::MIN,
+            lead_pitch: 17.75,
+            speed: 77,
+        },
+    )
+    .unwrap();
+    assert_eq!(nuke_mask_inputs.min_segment_length, 77.0);
+    assert_ne!(
+        nuke_mask_inputs.control, air_inputs.control,
+        "the nuke mask changes reach to 0x480 before the same two rotations"
+    );
+
+    let mut pool = AmmoPool::new();
+    pool.slots[0] = ammo;
+    pool.slots[0].w.flags = FLAG_ALIVE | FLAG_FLYING;
+    let installed = pool
+        .install_cruise_launch(
+            0,
+            &air,
+            600,
+            CruiseLaunchPose {
+                lead_angle: i32::MIN,
+                lead_pitch: 17.75,
+                speed: 77,
+            },
+        )
+        .unwrap();
+    assert_eq!(installed, air_inputs);
+    assert_eq!(pool.checksum_complete().unwrap(), 0x2c58_a925);
+
+    let mut rejected = pool.clone();
+    let before_checksum = rejected.checksum_complete().unwrap();
+    let before_path = rejected.spline(0).unwrap().clone();
+    assert_eq!(
+        rejected.install_cruise_launch(
+            0,
+            &nuke_mask_air,
+            600,
+            CruiseLaunchPose {
+                lead_angle: 1,
+                lead_pitch: 2.0,
+                speed: 0,
+            },
+        ),
+        Err(SplineBuildError::NonPositiveSegmentLength)
+    );
+    assert_eq!(rejected.checksum_complete().unwrap(), before_checksum);
+    assert_eq!(rejected.spline(0).unwrap(), &before_path);
+
+    let mut changed = AmmoPool::new();
+    changed.slots[0] = ammo;
+    changed.slots[0].w.flags = FLAG_ALIVE | FLAG_FLYING;
+    changed
+        .install_cruise_launch(
+            0,
+            &air,
+            600,
+            CruiseLaunchPose {
+                lead_angle: i32::MIN,
+                lead_pitch: 18.75,
+                speed: 77,
+            },
+        )
+        .unwrap();
+    assert_ne!(
+        changed.checksum_complete().unwrap(),
+        0x2c58_a925,
+        "one truncated pitch degree changes the rotated control and generated path"
     );
 }
 

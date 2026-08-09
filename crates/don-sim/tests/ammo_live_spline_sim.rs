@@ -57,6 +57,10 @@ fn launch_fixture(high_arc: bool) -> (LaunchOrder, ObjView, ObjView) {
         whom: 1,
         ox: 0,
         angle: 0,
+        cruise_pose: don_sim::systems::ammo::CruiseLaunchPose {
+            speed: 20,
+            ..Default::default()
+        },
         cosmetic: false,
     };
     (order, shooter, target)
@@ -133,18 +137,21 @@ fn terrain_nuke_without_exact_height_provider_fails_closed() {
 }
 
 #[test]
-fn live_graphic_cruise_gate_has_priority_and_never_falls_back_to_nuke() {
+fn live_graphic_cruise_gate_has_priority_and_installs_its_derived_path() {
     let mut sim = Sim::new(15, 16);
     sim.ammo.install_spline_graphic(41);
     let (order, shooter, target) = launch_fixture(true);
     let slot = sim.launch_ammo(&order, &shooter, Some(&target), 4_000, 90);
 
-    assert!(!sim.ammo.slots[slot].occupied());
-    assert!(sim.ammo.spline(slot).is_none());
-    assert_eq!(
-        sim.ammo.recycled_spline_count(),
-        0,
-        "the cruise selector does not allocate a nuke path when exact controls are absent"
+    assert!(sim.ammo.slots[slot].occupied());
+    assert!(sim.ammo.slots[slot].has_spline);
+    let path = sim.ammo.spline(slot).expect("live cruise path");
+    assert_eq!(path.control_verts.len(), 3);
+    assert_eq!(path.degree, 2);
+    assert_ne!(
+        path.control_verts.len(),
+        12,
+        "graphic flag 8 must retain priority over the shooter's nuke mask"
     );
 }
 
