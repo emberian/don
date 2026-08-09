@@ -435,8 +435,9 @@ pub enum TerrainPlacementBoundary {
     /// Both `add_doobers` passes completed. Retail next reads `GameInfo::map_style`
     /// and `TileSetGroupData::mnt_fringe_tree_prob` to gate `treeify_mountains`.
     TreeifyMountainsMapStyle,
-    /// Treeification (or the exact map-style-9 skip) completed. Retail's remaining
-    /// tail is localized reporting/formatting before returning one.
+    /// Treeification (or the exact map-style-9 skip) completed at `0x006a8f12`.
+    /// Retail's remaining tail is localized reporting/formatting before returning
+    /// one.
     PostPlacementReporting,
 }
 
@@ -760,6 +761,7 @@ impl TerrainGroups {
             helping,
             inputs,
             None,
+            None,
             &mut host,
         )
     }
@@ -796,6 +798,41 @@ impl TerrainGroups {
             helping,
             inputs,
             Some(rules),
+            None,
+            &mut host,
+        )
+    }
+
+    /// Extends the heterogeneous group/doober transaction through the exact
+    /// `GameInfo::map_style` gate and `TerrainGroups::treeify_mountains` body.
+    /// The treeification scan consumes the RNG left by both doober passes and
+    /// mutates their shared post-group preview world.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_group_treeify_inputs(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        rules: DooberTilesetRules,
+        map_style: u8,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_with_group_inputs_preview(
+            world,
+            regions,
+            random,
+            mountains,
+            progress,
+            place_players,
+            helping,
+            inputs,
+            Some(rules),
+            Some(map_style),
             &mut host,
         )
     }
@@ -812,12 +849,16 @@ impl TerrainGroups {
         helping: Option<RegionHelpingState>,
         inputs: &[PlaceAllGroupInput],
         doober_rules: Option<DooberTilesetRules>,
+        map_style: Option<u8>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
         if let Some(rules) = doober_rules {
             validate_bush_fringe_inputs(world, rules).map_err(PlaceAllError::InvalidBushFringe)?;
             validate_mountain_rock_fringe_inputs(world, rules)
                 .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+            if map_style.is_some_and(|style| style != 9) {
+                validate_treeify_world(world).map_err(PlaceAllError::InvalidTreeifyMountains)?;
+            }
         }
         let mut preview_random = *random;
         let mut preview_mountains = mountains.clone();
@@ -855,6 +896,7 @@ impl TerrainGroups {
         let mut region_pattern = None;
         let mut bush_fringe = None;
         let mut mountain_rock_fringe = None;
+        let mut treeify_mountains = None;
 
         loop {
             let expected = match next {
@@ -1029,6 +1071,20 @@ impl TerrainGroups {
                 next = TerrainPlacementBoundary::TreeifyMountainsMapStyle;
             }
         }
+        if next == TerrainPlacementBoundary::TreeifyMountainsMapStyle {
+            if let (Some(rules), Some(map_style)) = (doober_rules, map_style) {
+                treeify_mountains = Some(
+                    Self::treeify_mountains_for_map_style(
+                        &mut preview_world,
+                        &mut preview_random,
+                        map_style,
+                        rules.mountain_fringe_tree_prob,
+                    )
+                    .map_err(PlaceAllError::InvalidTreeifyMountains)?,
+                );
+                next = TerrainPlacementBoundary::PostPlacementReporting;
+            }
+        }
 
         Err(PlaceAllError::GameplayPlacementUnavailable {
             preview: PlaceAllPreviewReceipt {
@@ -1037,7 +1093,7 @@ impl TerrainGroups {
                 placement_preparation,
                 bush_fringe,
                 mountain_rock_fringe,
-                treeify_mountains: None,
+                treeify_mountains,
                 region_group_prefix,
                 region_group_drop,
                 region_group_continuation,

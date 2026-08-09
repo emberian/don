@@ -470,8 +470,12 @@ the World preview left by the heterogeneous player/region sequence, advance the 
 RNG, and surface every `Doober::add_doober("bush", ...)` call as an ordered host receipt after
 the final group pump. Both tileset-rule domains are preflighted before any group draw or host
 call, so a later mountain-rock validation failure cannot leak earlier bush effects. The exact
-residual is now the `GameInfo::map_style` read and `treeify_mountains` gate at `0x006a8ef7`;
-caller-owned World, terrain groups, mountain lists and RNG remain unchanged at that boundary.
+`u8` map-style input now composes the next gate at `0x006a8ef7` in the same transaction.
+Style 9 records the shipped skip without a World read or RNG draw; every other value runs the
+complete treeification scan on the post-group World with the RNG left by both doober passes.
+The treeify storage domain is preflighted before any earlier host effect can escape. Caller-owned
+World, terrain groups, mountain lists and RNG remain unchanged when the transaction reaches its
+new exact residual: the localized placement-reporting tail beginning at `0x006a8f12`.
 
 ### 7.2 Executable world-generation oracle boundary
 
