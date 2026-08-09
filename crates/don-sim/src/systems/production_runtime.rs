@@ -40,8 +40,11 @@ pub enum LiveUnitPlacement {
     /// the unit inside and immediately prunes the producer's intrusive gatherer chain;
     /// overflow Scholars come out through the ordinary placement tail.
     UniversityScholar,
-    /// Carrier payload, missile/Helicopter single-rally, and strafe effects still require
-    /// facts outside the bounded runtime cohort.
+    /// An Aircraft Carrier trained at an ordinary producer. It comes out through the
+    /// ground tail, then seeds its exact current-Helicopter payload after launch clears.
+    AircraftCarrier,
+    /// Missile/Helicopter single-rally and strafe effects still require facts outside the
+    /// bounded runtime cohort.
     Unsupported,
 }
 
@@ -92,6 +95,8 @@ pub struct LiveProductionType {
     pub gather_inside: bool,
     pub garrison_limit: i32,
     pub is_aircraft_carrier: bool,
+    /// Resolved `ObjectData::num_aircraft_limit()` for an explicit Carrier profile.
+    pub carrier_payload_capacity: Option<i32>,
     pub tech_effects: LiveTechEffects,
     /// Exact price for `action_queue(type,0)` after a repeat completion. `None` makes the
     /// repeat payment fail and preserves retail's repeat latch.
@@ -124,6 +129,7 @@ impl LiveProductionType {
             gather_inside: false,
             garrison_limit: 10,
             is_aircraft_carrier: false,
+            carrier_payload_capacity: None,
             tech_effects: LiveTechEffects::GenericOnly,
             repeat_cost: None,
         }
@@ -153,6 +159,20 @@ impl LiveProductionType {
         }
     }
 
+    pub fn aircraft_carrier(
+        type_index: i32,
+        train_time: i32,
+        control_cost: i32,
+        payload_capacity: i32,
+    ) -> Self {
+        Self {
+            unit_placement: LiveUnitPlacement::AircraftCarrier,
+            is_aircraft_carrier: true,
+            carrier_payload_capacity: Some(payload_capacity),
+            ..Self::ordinary_unit(type_index, train_time, control_cost)
+        }
+    }
+
     pub fn in_place_building(type_index: i32, train_time: i32) -> Self {
         Self {
             class: LiveTypeClass::Building,
@@ -175,6 +195,8 @@ pub struct LiveProductionLeader {
     pub control_cap: i32,
     pub caravan_limit: i32,
     pub aircraft_limit: i32,
+    /// Live `current_upgrade(HELICOPTER=308)` used when a new Carrier seeds its payload.
+    pub helicopter_current_upgrade: Option<i32>,
     pub ai_speed: i32,
     pub unit_counts: Vec<i32>,
     pub queued_counts: Vec<i32>,
@@ -197,6 +219,7 @@ impl Default for LiveProductionLeader {
             control_cap: 200,
             caravan_limit: i32::MAX,
             aircraft_limit: i32::MAX,
+            helicopter_current_upgrade: None,
             ai_speed: 1,
             unit_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
             queued_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
@@ -231,6 +254,8 @@ pub struct LiveProductionRuntime {
     /// Atomic projections of `Build::check_gatherers` performed by University Scholar
     /// completion. Each receipt pins the producer head transition and exact prune count.
     pub university_gather_checks: Vec<LiveUniversityGatherCheck>,
+    /// Exact Carrier `action_unqueue(1)`/payload allocation transactions.
+    pub carrier_payloads: Vec<LiveCarrierPayloadTransaction>,
 }
 
 impl Default for LiveProductionRuntime {
@@ -249,6 +274,7 @@ impl Default for LiveProductionRuntime {
             air_patrol_orders: Vec::new(),
             unit_presentations: Vec::new(),
             university_gather_checks: Vec::new(),
+            carrier_payloads: Vec::new(),
         }
     }
 }
@@ -271,6 +297,16 @@ pub struct LiveUniversityGatherCheck {
     pub head_before: i16,
     pub head_after: i16,
     pub removed: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveCarrierPayloadTransaction {
+    pub carrier: UnitIdentity,
+    pub queued_before: i16,
+    pub queued_after: i16,
+    pub payload_type: i32,
+    pub capacity: i32,
+    pub allocations: Vec<UnitAllocationReceipt>,
 }
 
 impl LiveProductionRuntime {
@@ -397,6 +433,9 @@ pub enum LiveProductionError {
     RecursiveTechUnlock(i32),
     MissingQueuedCounter(i32),
     MalformedUniversityGatherChain(&'static str),
+    MissingCarrierPayloadUpgrade(u8),
+    InvalidCarrierPayloadCapacity(i32),
+    UnexpectedCarrierQueueState(i16),
     UnsupportedCallback(&'static str),
     Queue(QueueTransactionError),
     Finished(FinishedEffectError),
@@ -641,14 +680,16 @@ fn preflight(
             .ok_or(LiveProductionError::MissingType(type_index))?;
         match facts.class {
             LiveTypeClass::Unit if facts.can_make => {
-                let carrier_unit = facts.is_aircraft_carrier
-                    || facts.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER
-                    || producer.is_aircraft_carrier
+                let trained_carrier = facts.is_aircraft_carrier
+                    || facts.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
+                let producer_carrier = producer.is_aircraft_carrier
                     || producer.type_index == UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
                 let university =
                     producer.is_university || producer.type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY;
                 let placement_supported = match facts.unit_placement {
-                    LiveUnitPlacement::OrdinaryGround => !producer.holds_air && !university,
+                    LiveUnitPlacement::OrdinaryGround => {
+                        !producer.holds_air && !university && !trained_carrier
+                    }
                     LiveUnitPlacement::HostedAir => {
                         if !producer.holds_air {
                             false
@@ -667,10 +708,30 @@ fn preflight(
                                 UNIT_PLACEMENT_TYPE_SCHOLAR | UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR
                             )
                     }
+                    LiveUnitPlacement::AircraftCarrier => {
+                        trained_carrier && !producer.holds_air && !university
+                    }
                     LiveUnitPlacement::Unsupported => false,
                 };
-                if carrier_unit || !placement_supported {
+                if producer_carrier || !placement_supported {
                     return Err(LiveProductionError::UnsupportedUnitPlacement(type_index));
+                }
+                if trained_carrier {
+                    let capacity = facts
+                        .carrier_payload_capacity
+                        .ok_or(LiveProductionError::InvalidCarrierPayloadCapacity(i32::MIN))?;
+                    if capacity < 0 {
+                        return Err(LiveProductionError::InvalidCarrierPayloadCapacity(capacity));
+                    }
+                    let payload_type = leader
+                        .helicopter_current_upgrade
+                        .ok_or(LiveProductionError::MissingCarrierPayloadUpgrade(build.who))?;
+                    if runtime
+                        .facts(payload_type)
+                        .is_none_or(|payload| payload.class != LiveTypeClass::Unit)
+                    {
+                        return Err(LiveProductionError::MissingType(payload_type));
+                    }
                 }
             }
             LiveTypeClass::Building
@@ -1258,10 +1319,82 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         &mut self,
         request: UnitPlacementRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "aircraft-carrier completion tail",
-            UnitPlacementMutation::CompleteCarrierTail(request),
-        )
+        let mutation = UnitPlacementMutation::CompleteCarrierTail(request);
+        let carrier = UnitIdentity {
+            owner: request.owner,
+            object_id: request.object_id,
+        };
+        let Some(carrier_row) = self.unit_row(carrier) else {
+            self.unsupported("Carrier payload target is missing");
+            return UnitPlacementMutationReceipt { mutation };
+        };
+        let queued_before = self.sim.world.units.num_queued()[carrier_row];
+        // `Objects::init_unit` constructs the Carrier with an empty implicit Helicopter
+        // queue. Retail's `action_unqueue(1)` returns immediately in exactly this state.
+        // A non-zero value would require its refund/type-counter branch, which cannot be
+        // reached by this allocator and therefore remains fail-closed.
+        if queued_before != 0 {
+            self.error
+                .get_or_insert(LiveProductionError::UnexpectedCarrierQueueState(
+                    queued_before,
+                ));
+            return UnitPlacementMutationReceipt { mutation };
+        }
+        let Some(payload_type) =
+            self.runtime.leaders[request.owner as usize].helicopter_current_upgrade
+        else {
+            self.error
+                .get_or_insert(LiveProductionError::MissingCarrierPayloadUpgrade(
+                    request.owner,
+                ));
+            return UnitPlacementMutationReceipt { mutation };
+        };
+        let Some(capacity) = self
+            .type_facts(request.type_index)
+            .and_then(|facts| facts.carrier_payload_capacity)
+        else {
+            self.error
+                .get_or_insert(LiveProductionError::InvalidCarrierPayloadCapacity(i32::MIN));
+            return UnitPlacementMutationReceipt { mutation };
+        };
+        if capacity < 0 {
+            self.error
+                .get_or_insert(LiveProductionError::InvalidCarrierPayloadCapacity(capacity));
+            return UnitPlacementMutationReceipt { mutation };
+        }
+        let x = self.sim.world.units.x_internal()[carrier_row];
+        let y = self.sim.world.units.y_internal()[carrier_row];
+        let mut allocations = Vec::with_capacity(capacity as usize);
+        for _ in 0..capacity {
+            let allocation = self.allocate_unit(UnitAllocationRequest {
+                owner: request.owner,
+                type_index: payload_type,
+                x,
+                y,
+                tail: [-1; 3],
+            });
+            if allocation.object_id >= 0 {
+                self.put_unit_inside(
+                    request.owner,
+                    allocation.object_id,
+                    request.object_id,
+                    request.owner,
+                    0,
+                );
+            }
+            allocations.push(allocation);
+        }
+        self.runtime
+            .carrier_payloads
+            .push(LiveCarrierPayloadTransaction {
+                carrier,
+                queued_before,
+                queued_after: self.sim.world.units.num_queued()[carrier_row],
+                payload_type,
+                capacity,
+                allocations,
+            });
+        UnitPlacementMutationReceipt { mutation }
     }
 
     fn present_trained_unit(
@@ -1543,9 +1676,10 @@ pub struct LiveProductionReceipt {
 ///
 /// Every installed queue type is preflighted before progress changes. Hosted true-plane
 /// patrol and held-inside/gather-inside routes, including their capacity-destruction tails,
-/// are executable. Carrier payload, University Scholar, single-rally missile/Helicopter,
-/// spell, captured-building, recursive-tech, or opaque special-tech effects return an
-/// error with the queue and RNG untouched.
+/// University Scholar gather-chain pruning, and new-Carrier payload seeding are executable.
+/// A Carrier's later Unit-owned production queue, single-rally missile/Helicopter, spell,
+/// captured-building, recursive-tech, or opaque special-tech effects return an error with
+/// the Build queue and RNG untouched.
 pub fn process_sim_build_queue(
     sim: &mut Sim,
     runtime: &mut LiveProductionRuntime,
@@ -1781,14 +1915,22 @@ mod tests {
         build
     }
 
-    fn harness(type_indices: &[i32]) -> (Sim, LiveProductionRuntime, usize) {
+    fn harness_with_capacity(
+        type_indices: &[i32],
+        capacity: usize,
+    ) -> (Sim, LiveProductionRuntime, usize) {
         let mut sim = Sim::new(0x51de, 16);
+        sim.world = crate::world::World::with_capacity(capacity, 0x51de);
         sim.activate(0);
         let row = sim.spawn_build(0, queue_build(type_indices));
         let mut runtime = LiveProductionRuntime::default();
         runtime.register_build(row, PRODUCER_TYPE);
         runtime.install_type(LiveProductionType::in_place_building(PRODUCER_TYPE, 1));
         (sim, runtime, row)
+    }
+
+    fn harness(type_indices: &[i32]) -> (Sim, LiveProductionRuntime, usize) {
+        harness_with_capacity(type_indices, 16)
     }
 
     #[test]
@@ -1988,6 +2130,132 @@ mod tests {
         assert_eq!(sim.builds[row].gather_down, 7);
         assert!(runtime.university_gather_checks.is_empty());
         assert!(!runtime.leaders[0].queue_dirty);
+    }
+
+    #[test]
+    fn aircraft_carrier_completion_seeds_current_helicopters_inside_after_launch_clear() {
+        let carrier_type = UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
+        let payload_type = UNIT_PLACEMENT_TYPE_HELICOPTER;
+        let (mut sim, mut runtime, row) = harness(&[carrier_type]);
+        runtime.install_type(LiveProductionType::aircraft_carrier(carrier_type, 1, 3, 2));
+        runtime.install_type(LiveProductionType::ordinary_unit(payload_type, 1, 1));
+        runtime.leaders[0].helicopter_current_upgrade = Some(payload_type);
+        let rng_before = sim.world.random.state();
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.world.live_count(), 3);
+        let unit_rows = sim.world.objects.slot(0).band(Band::Unit);
+        let carrier_row = unit_rows[0] as usize;
+        assert_eq!(sim.unit_type[carrier_row], carrier_type);
+        assert_eq!(sim.world.units.inside_up()[carrier_row], -1);
+        assert_eq!(sim.world.units.unit_masks()[carrier_row] & 0x0400_0000, 0);
+        assert_eq!(sim.world.units.num_queued()[carrier_row], 0);
+        for &payload_row in &unit_rows[1..] {
+            let payload_row = payload_row as usize;
+            assert_eq!(sim.unit_type[payload_row], payload_type);
+            assert_eq!(sim.world.units.inside_up()[payload_row], 0);
+            assert_eq!(sim.world.units.inside_up_who()[payload_row], 0);
+            assert_eq!(
+                (
+                    sim.world.units.x_internal()[payload_row],
+                    sim.world.units.y_internal()[payload_row]
+                ),
+                (768, 960)
+            );
+        }
+        assert_eq!(runtime.leaders[0].control, 5);
+        assert_eq!(runtime.leaders[0].unit_counts[carrier_type as usize], 1);
+        assert_eq!(runtime.leaders[0].unit_counts[payload_type as usize], 2);
+        assert_eq!(runtime.leaders[0].last_unit_built, 0);
+        assert_eq!(
+            runtime.leaders[0].last_unit_finished[carrier_type as usize],
+            0
+        );
+        assert_eq!(
+            runtime.carrier_payloads,
+            vec![LiveCarrierPayloadTransaction {
+                carrier: UnitIdentity {
+                    owner: 0,
+                    object_id: 0,
+                },
+                queued_before: 0,
+                queued_after: 0,
+                payload_type,
+                capacity: 2,
+                allocations: vec![
+                    UnitAllocationReceipt {
+                        request: UnitAllocationRequest {
+                            owner: 0,
+                            type_index: payload_type,
+                            x: 768,
+                            y: 960,
+                            tail: [-1; 3],
+                        },
+                        object_id: 1,
+                    },
+                    UnitAllocationReceipt {
+                        request: UnitAllocationRequest {
+                            owner: 0,
+                            type_index: payload_type,
+                            x: 768,
+                            y: 960,
+                            tail: [-1; 3],
+                        },
+                        object_id: 2,
+                    },
+                ],
+            }]
+        );
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn carrier_payload_facts_fail_closed_before_allocation_progress_or_rng() {
+        let carrier_type = UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
+        let (mut sim, mut runtime, row) = harness(&[carrier_type]);
+        runtime.install_type(LiveProductionType::aircraft_carrier(carrier_type, 1, 3, 2));
+        let queue_before = sim.builds[row].queue.clone();
+        let rng_before = sim.world.random.state();
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::MissingCarrierPayloadUpgrade(0))
+        );
+        assert_eq!(sim.world.live_count(), 0);
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+        assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
+        assert!(runtime.carrier_payloads.is_empty());
+        assert!(!runtime.leaders[0].queue_dirty);
+    }
+
+    #[test]
+    fn carrier_payload_continues_after_each_allocation_failure_and_still_unqueues() {
+        let carrier_type = UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER;
+        let payload_type = UNIT_PLACEMENT_TYPE_HELICOPTER;
+        let (mut sim, mut runtime, row) = harness_with_capacity(&[carrier_type], 2);
+        runtime.install_type(LiveProductionType::aircraft_carrier(carrier_type, 1, 3, 3));
+        runtime.install_type(LiveProductionType::ordinary_unit(payload_type, 1, 1));
+        runtime.leaders[0].helicopter_current_upgrade = Some(payload_type);
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(sim.world.live_count(), 2);
+        assert_eq!(runtime.carrier_payloads.len(), 1);
+        assert_eq!(
+            runtime.carrier_payloads[0]
+                .allocations
+                .iter()
+                .map(|allocation| allocation.object_id)
+                .collect::<Vec<_>>(),
+            vec![1, -1, -1]
+        );
+        let payload_row = sim.world.objects.slot(0).band(Band::Unit)[1] as usize;
+        assert_eq!(sim.world.units.inside_up()[payload_row], 0);
+        assert_eq!(runtime.leaders[0].unit_counts[payload_type as usize], 1);
+        assert_eq!(sim.builds[row].queue.queued, 0);
     }
 
     #[test]

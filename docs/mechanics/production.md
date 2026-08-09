@@ -421,15 +421,24 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
   check, the two distinct capacity deaths, `check_gatherers`, held-inside presentation,
   launching-bit clear, conditional Carrier payload tail, final presentation, and both
   missile-defense early returns. The host still owns actual object/order writes, `die`,
-  Aircraft Carrier payload allocations, and local message/sound/event mutations; each is
-  receipt-checked before the executor advances.
+  payload allocations, and local message/sound/event mutations; each is receipt-checked
+  before the executor advances.
   The live Sim adapter now closes the University Scholar subfamily without an opaque
   callback: explicit Scholar/Korean Scholar profiles count only those two contained types,
   choose `come_out` when the post-allocation count exceeds `gather_max`, and otherwise run
   recovered `Build::check_gatherers` over the owner Unit band. The producer head and every
   worker link are projected and validated before allocation, then committed atomically in
   retail traversal order; malformed/missing/cyclic links leave queue, world, and RNG
-  untouched. Carrier payload construction remains fail-closed.
+  untouched.
+  The live adapter also closes the new-Carrier tail at `0x0062FC07..0x0062FCDA`: after the
+  launching bit clears, the freshly allocated Carrier takes the exact empty
+  `action_unqueue(1)` return, resolves `current_upgrade(HELICOPTER=308)`, and issues exactly
+  `num_aircraft_limit()` RNG-free allocations at the Carrier's live coordinate. Every
+  successful payload executes `go_inside(carrier_o, owner, 0)`; allocation failures are
+  retained in a typed receipt and do not stop later attempts or the outer paid unqueue.
+  Missing upgrade/capacity/type facts fail during preflight before allocation. The
+  Carrier's subsequent Unit-owned implicit queue is separate from this Build queue and
+  remains outside the live Build-row adapter.
   `can_queue` / `could_queue` / `can_make` were read (they gate on `queued < num` and a
   scholar cap of 7 via `count_queue(1, 0x34) + num_gatherers > 6`) but are type-tree
   dependent.
@@ -539,11 +548,11 @@ The remaining wiring is deliberately at typed world boundaries, not module visib
 queue completion now owns top-level effect selection, tech mutation, ordinary-building
 callback order, the unit allocation spine, executable placement classification, and the
 placement/rally mutation transaction. The live adapter executes ordinary ground,
-Holds-Air patrol/containment/capacity, gather-inside, and University Scholar placement;
-Carrier payload, single-rally missile/Helicopter, strafe/carry target lookup, cast,
-building-leaf, and one-shot world owners remain typed fail-closed boundaries. Parallel
-production needs the live leader slot limit, and Library aggregation needs city
-assimilation, type-tree, stockpile, and queued-counter hosts. `production::train_time_ramp`
-also supersedes
+Holds-Air patrol/containment/capacity, gather-inside, University Scholar placement, and
+new-Carrier payload seeding. A Carrier's later Unit-owned implicit queue, single-rally
+missile/Helicopter, strafe/carry target lookup, cast, building-leaf, and one-shot world
+owners remain typed fail-closed boundaries. Parallel production needs the live leader slot
+limit, and Library aggregation needs city assimilation, type-tree, stockpile, and
+queued-counter hosts. `production::train_time_ramp` also supersedes
 `mechanics::ramped_rate` (§3.5); the latter should be retired when its remaining callers
 move to the production API.
