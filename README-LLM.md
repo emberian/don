@@ -96,7 +96,7 @@ with prose.
 
 | Gate/surface | Current authoritative state |
 |---|---|
-| Retail differential suite | `schema/oracle-regression.json`: 16/16 cases, 17,223,055 trials, zero mismatches/skips/crashes/errors after the full-state `Guy::turn_towards` case. |
+| Retail differential suite | `schema/oracle-regression.json`: 18/18 cases, 17,573,073 trials, zero mismatches/skips/crashes/errors after adding full-state turning plus map-seed/start-coordinate anchors. |
 | Replay corpus | `schema/replay-validation.json`: 61 files, 585,152 turns, 488,557 structurally valid checksum packets; dynamic world reconstruction remains unmodelled, so current checksum agreement is not whole-game fidelity. |
 | Improved-mode seams | The seven default fixes are wired through real economy/production/border/BHS paths and covered by the fidelity gate. |
 | Product readiness | `tools/product-readiness.sh` intentionally refuses with two registered blockers: `env-patrol-execution` and `arena-model-simplifications`. Do not turn them into waivers. |
@@ -307,8 +307,10 @@ coherent commits, and a refreshed blocker list.
 DoN source is GPL-3.0-or-later unless a file/subdirectory says otherwise. Preserve notices
 and add SPDX identifiers to new source where practical.
 
-Microsoft/Big Huge Games binaries, data, art, audio, PDBs, live captures, and derived packs
-are not covered by DoN’s license and must not be committed or redistributed. A public release
+Microsoft/Big Huge Games binaries, data, art, audio, PDBs, bulk live captures, and derived
+content packs are not covered by DoN’s license and must not be committed or redistributed. A public release
 must use extraction from a legally owned game and/or independently licensed replacement
 assets. Never “clean up” ignore rules in a way that stages `ron-bin/`, `ron-data/`,
-`schema/live/`, or compiled injected DLLs.
+`schema/live/` broadly, or compiled injected DLLs. A minimized, non-content evidence fixture
+under `schema/live/` may be tracked deliberately when its exact capture protocol is documented,
+as with `retail-move-trajectory-v1.json`; never sweep the directory.

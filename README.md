@@ -23,7 +23,7 @@ systems remain incomplete.
 | Surface | Current state |
 |---|---|
 | **Simulation** | Deterministic Rust state, retail-ordered tick structure, command/order plumbing, and broad ports of economy, production, combat, movement, A*, collision, groups, cities, borders/fog, air, naval, walls, items, scoring, RNG, and checksums. Runtime coverage is substantial but not yet the complete retail game. |
-| **Retail differential oracle** | 16 registered i686 cases, 17,223,055 trials in the current record, with zero mismatches, skips, crashes, or errors. The harness runs shipped machine code and mutation-tests its comparisons. |
+| **Retail differential oracle** | 18 registered i686 cases, 17,573,073 trials in the current record, with zero mismatches, skips, crashes, or errors. The harness runs shipped machine code and mutation-tests its comparisons. |
 | **Replay validation** | 61 `.rcx` recordings, 585,152 turns, and 488,557 structurally valid checksum packets. Command and checksum structure is real; deterministic initial-world reconstruction is still the gate to non-trivial whole-match agreement. |
 | **RL environment** | Batched Rust environment with Gymnasium, VectorEnv, and PettingZoo adapters; derived 82-opcode action taxonomy, parameter-level masks, zero-copy observations, native masked sampling, and deterministic parallel stepping. Some accepted verbs still expose absent dynamics instead of pretending to work. |
 | **AI** | Shipped BHS economic/runtime foundations plus a deterministic, observation-driven arena AI. The intended player is strong and non-cheating; remaining arena world-model substitutions are registered product blockers, not hidden advantages. |
