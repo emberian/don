@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.rontoy.invalid/schema/snapshot-v1.json",
+  "title": "RoNtoy host snapshot projection v1",
+  "type": "object",
+  "required": ["schema", "stream_id", "sequence", "meta", "scope", "local_human", "sources", "players", "entities", "warnings", "advice"],
+  "properties": {
+    "schema": { "const": "rontoy.snapshot/1" },
+    "stream_id": { "type": "string", "pattern": "^[0-9a-fA-F-]{32,36}$" },
+    "sequence": { "$ref": "#/$defs/u64" },
+    "meta": { "$ref": "#/$defs/meta" },
+    "scope": { "enum": ["own_player_only", "visible_world", "full_replay", "unknown"] },
+    "local_human": { "$ref": "#/$defs/human" },
+    "sources": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/source" } },
+    "players": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/player" } },
+    "entities": { "type": "array", "maxItems": 100000, "items": { "$ref": "#/$defs/entity" } },
+    "warnings": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/warning" } },
+    "advice": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/advice" } }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "u64": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 9007199254740991 }, { "type": "string", "pattern": "^[0-9]+$" }] },
+    "evidence": {
+      "type": "object",
+      "required": ["source_id", "confidence_bps", "calibration_id", "freshness_ms", "flags"],
+      "properties": {
+        "source_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "confidence_bps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "calibration_id": { "type": "string", "maxLength": 65536 },
+        "freshness_ms": { "type": "integer", "minimum": 0 },
+        "flags": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "meta": {
+      "type": "object",
+      "required": ["observed_unix_ms", "observed_monotonic_ns", "frame_start", "frame_end", "coherence", "game_mode", "partial", "capture_duration_us", "retry_count", "capability_bits", "component_validity", "read_calls", "bytes_read", "short_reads", "decode_errors", "advice_allowed"],
+      "properties": {
+        "observed_unix_ms": { "type": "integer" },
+        "observed_monotonic_ns": { "$ref": "#/$defs/u64" },
+        "game_frame": { "$ref": "#/$defs/u64" },
+        "frame_start": { "$ref": "#/$defs/u64" },
+        "frame_end": { "$ref": "#/$defs/u64" },
+        "coherence": { "enum": ["coherent", "paused", "incoherent_dropped", "source_lost", "unknown"] },
+        "game_mode": { "enum": ["single_player", "multiplayer", "replay", "menu", "unknown"] },
+        "partial": { "type": "boolean" },
+        "capture_duration_us": { "type": "integer", "minimum": 0 },
+        "retry_count": { "type": "integer", "minimum": 0 },
+        "capability_bits": { "$ref": "#/$defs/u64" },
+        "component_validity": { "$ref": "#/$defs/u64" },
+        "read_calls": { "type": "integer", "minimum": 0 },
+        "bytes_read": { "$ref": "#/$defs/u64" },
+        "short_reads": { "type": "integer", "minimum": 0 },
+        "decode_errors": { "type": "integer", "minimum": 0 },
+        "advice_allowed": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind", "source_key", "build_id", "detail"],
+      "properties": {
+        "kind": { "enum": ["process_memory", "replay", "network", "derived", "user", "unknown"] },
+        "source_key": { "type": "string", "maxLength": 65536 },
+        "build_id": { "type": "string", "maxLength": 65536 },
+        "process_id": { "type": "integer", "minimum": 0 },
+        "process_start_id": { "$ref": "#/$defs/u64" },
+        "image_base": { "$ref": "#/$defs/u64" },
+        "capture_id": { "$ref": "#/$defs/u64" },
+        "detail": { "type": "string", "maxLength": 65536 }
+      },
+      "additionalProperties": true
+    },
+    "human": {
+      "type": "object",
+      "required": ["player_id", "confirmed_local", "active", "identity_key"],
+      "properties": { "player_id": { "type": "integer", "minimum": 1, "maximum": 255 }, "confirmed_local": { "type": "boolean" }, "active": { "type": "boolean" }, "identity_key": { "type": "string", "minLength": 1, "maxLength": 65536 } },
+      "additionalProperties": true
+    },
+    "resource": {
+      "type": "object",
+      "required": ["retail_index", "name", "income_basis", "evidence"],
+      "properties": {
+        "retail_index": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "name": { "enum": ["food", "timber", "wealth", "knowledge", "metal", "oil", "custom"] },
+        "stockpile_raw": { "type": "integer" },
+        "income_sixteenths_per_period": { "type": "integer" },
+        "gross_sixteenths_per_period": { "type": "integer" },
+        "support_sixteenths_per_period": { "type": "integer" },
+        "bonus_sixteenths_per_period": { "type": "integer" },
+        "leftover_sixteenths_per_period": { "type": "integer" },
+        "resource_cap_raw": { "type": "integer" },
+        "over_cap_status": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "spend_sixteenths_per_period": { "type": "integer" },
+        "reserved_raw": { "type": "integer" },
+        "income_basis": { "enum": ["unknown", "engine_direct", "observed_delta", "modeled"] },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "additionalProperties": true
+    },
+    "player": {
+      "type": "object",
+      "required": ["player_id", "name", "resources", "population", "workers", "evidence"],
+      "properties": {
+        "player_id": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "name": { "type": "string", "maxLength": 65536 },
+        "nation_type_id": { "type": "integer", "minimum": 0 },
+        "age": { "type": "integer", "minimum": 0 },
+        "gather_stamp": { "$ref": "#/$defs/u64" },
+        "gather_cache_age_frames": { "type": "integer", "minimum": 0 },
+        "city_count": { "type": "integer", "minimum": 0 },
+        "num_units": { "type": "integer", "minimum": 0 },
+        "num_buildings": { "type": "integer", "minimum": 0 },
+        "queued_type_counts": { "type": "array", "maxItems": 1024, "items": { "type": "object", "required": ["type_id", "count", "valid"], "properties": { "type_id": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 0 }, "valid": { "type": "boolean" } }, "additionalProperties": true } },
+        "resources": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/resource" } },
+        "population": {
+          "type": "object",
+          "required": ["used", "cap", "queued"],
+          "properties": { "used": { "type": "integer", "minimum": 0 }, "cap": { "type": "integer", "minimum": 0 }, "queued": { "type": "integer", "minimum": 0 }, "citizens": { "type": "integer", "minimum": 0 }, "military": { "type": "integer", "minimum": 0 } },
+          "additionalProperties": true
+        },
+        "workers": {
+          "type": "object",
+          "required": ["gathering", "idle", "building", "scouting"],
+          "properties": { "gathering": { "type": "integer", "minimum": 0 }, "idle": { "type": "integer", "minimum": 0 }, "building": { "type": "integer", "minimum": 0 }, "scouting": { "type": "integer", "minimum": 0 } },
+          "additionalProperties": true
+        },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "additionalProperties": true
+    },
+    "queue_item": {
+      "type": "object",
+      "required": ["type_id", "count", "paused"],
+      "properties": { "type_id": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 0 }, "progress_ppm": { "type": "integer", "minimum": 0, "maximum": 1000000 }, "eta_ms": { "$ref": "#/$defs/u64" }, "paused": { "type": "boolean" } },
+      "additionalProperties": true
+    },
+    "entity": {
+      "type": "object",
+      "required": ["object_id", "type_id", "kind", "visibility", "x_fine", "y_fine", "state_flags", "queues", "evidence"],
+      "properties": {
+        "object_id": { "$ref": "#/$defs/u64" },
+        "type_id": { "type": "integer", "minimum": 0 },
+        "owner_id": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "kind": { "enum": ["unit", "building", "resource", "item", "projectile", "unknown"] },
+        "visibility": { "enum": ["own_or_neutral", "currently_visible", "remembered", "hidden", "unknown"] },
+        "x_fine": { "type": "integer" }, "y_fine": { "type": "integer" },
+        "state_flags": { "$ref": "#/$defs/u64" },
+        "queues": { "type": "array", "maxItems": 16, "items": { "type": "object", "required": ["queue_id", "items"], "properties": { "queue_id": { "type": "integer" }, "capacity": { "type": "integer" }, "items": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/queue_item" } } }, "additionalProperties": true } },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      },
+      "additionalProperties": true
+    },
+    "warning": {
+      "type": "object",
+      "required": ["warning_id", "code", "severity", "headline", "detail", "evidence"],
+      "properties": { "warning_id": { "$ref": "#/$defs/u64" }, "code": { "type": "string" }, "severity": { "enum": ["info", "opportunity", "caution", "critical", "unknown"] }, "headline": { "type": "string" }, "detail": { "type": "string" }, "evidence": { "$ref": "#/$defs/evidence" } },
+      "additionalProperties": true
+    },
+    "advice": {
+      "type": "object",
+      "required": ["advice_id", "rule_id", "rule_version", "lifecycle", "priority_bps", "headline", "rationale", "actions", "evidence"],
+      "properties": { "advice_id": { "$ref": "#/$defs/u64" }, "rule_id": { "type": "string" }, "rule_version": { "type": "string" }, "lifecycle": { "enum": ["proposed", "active", "cleared", "superseded"] }, "priority_bps": { "type": "integer", "minimum": 0, "maximum": 10000 }, "headline": { "type": "string" }, "rationale": { "type": "string" }, "actions": { "type": "array", "maxItems": 32, "items": { "type": "string" } }, "evidence": { "$ref": "#/$defs/evidence" } },
+      "additionalProperties": true
+    }
+  }
+}

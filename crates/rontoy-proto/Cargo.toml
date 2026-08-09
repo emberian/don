@@ -1,0 +1,9 @@
+[package]
+name = "rontoy-proto"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-free, forward-compatible telemetry protocol for rontoy"
+
+[lib]
+path = "src/lib.rs"

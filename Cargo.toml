@@ -1,9 +1,21 @@
 [workspace]
 resolver = "2"
-members = ["crates/don-rules", "crates/don-pe", "crates/don-sim", "crates/don-gpu", "crates/don-net", "crates/don-ai", "crates/don-env", "crates/don-replay"]
+members = [
+    "crates/don-rules",
+    "crates/don-pe",
+    "crates/don-sim",
+    "crates/don-gpu",
+    "crates/don-net",
+    "crates/don-ai",
+    "crates/don-env",
+    "crates/don-replay",
+    "crates/rontoy-core",
+    "crates/rontoy-proto",
+]
 # oracle: 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
 # donscan: Windows-only (kernel32 FFI); cross-built with cargo-xwin. See crates/donscan/README.md.
-exclude = ["crates/oracle", "crates/donscan"]
+# netsys-shim: i686-pc-windows-msvc cdylib loaded by the retail game. See crates/netsys-shim/README.md.
+exclude = ["crates/oracle", "crates/donscan", "crates/netsys-shim"]
 
 [workspace.package]
 edition = "2021"
