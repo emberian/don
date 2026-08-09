@@ -1,0 +1,562 @@
+{
+  "schema": "don.release-proof.v1",
+  "snapshot_date": "2026-08-09",
+  "claims_policy": {
+    "rights_claims": "Only license expressions already declared by repository manifests are recorded. A declaration is not treated as proof that a matching notice has been supplied.",
+    "retail_content": "Retail executables, PDBs, data, scripts, replays, art, audio, raw/bulk live captures, and content packs derived from them are not release payloads. A deliberately tracked compact redacted fact/protocol record may be source evidence, never a grant to redistribute underlying content.",
+    "blocked_means": "The named release claim is refused until the missing artifact is added and this manifest is deliberately updated.",
+    "proved_means": "The evidence proves only the gate's narrow claim, not whole-product readiness."
+  },
+  "hash_bound_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "role": "GPL-3.0 license text for the default repository source scope"
+    },
+    {
+      "path": ".gitattributes",
+      "sha256": "5df5210b64349eb3286c3b8d42f6849a8a82494e4c7b3a1459ac9ecbf7a16491",
+      "role": "git-archive exclusion policy for local and proprietary evidence"
+    },
+    {
+      "path": "tools/release-audit.sh",
+      "sha256": "c1d43f8cc3d0c5363dcc343442878876e4e8946e806bfc279d3b259e83d93c0e",
+      "role": "assembled-source-tree prohibited-payload refusal gate"
+    },
+    {
+      "path": "tools/release-audit-fixtures/test.sh",
+      "sha256": "2651c564e04c75123949b34a8e6f756241472d30800bf50ff35a11af150a58c5",
+      "role": "synthetic source-release payload-audit regressions"
+    },
+    {
+      "path": "docs/install.md",
+      "sha256": "b610381bf78d7fa2937db748ccc3c743bcaeb080db80658367d5cb3ac7ba6b32",
+      "role": "owned-input and source-release boundary documentation"
+    },
+    {
+      "path": "tools/install/owned-inputs.json",
+      "sha256": "8f738bb2e3bde50662afc3733d312507b68cd55ec3158dfde674e3de312b50ef",
+      "role": "supported owned-install identity and 51 exact local inputs"
+    },
+    {
+      "path": "tools/install/bootstrap.py",
+      "sha256": "042cf136524e9d30159d4d01f9deb859f995d834788003ef16666a3e660dcd0f",
+      "role": "create-only local owned-data bootstrap"
+    },
+    {
+      "path": "tools/install/test_bootstrap.py",
+      "sha256": "c0b9bd3d378458351f014652e3e16fb4d60ac10b667ee91192519ae0aa4169fa",
+      "role": "synthetic owned-data bootstrap regressions"
+    },
+    {
+      "path": "tools/retail-control/wer_localdumps.py",
+      "sha256": "3d5eec6ba8d4bd0f8f05969e0a7eb17b1b8b732faf63329ae2d2a16f4fdd64a1",
+      "role": "scoped Windows Error Reporting setup, removal, and in-place dump verification"
+    },
+    {
+      "path": "tools/retail-control/test_wer_localdumps.py",
+      "sha256": "3cc5821679b2e1cec829cdd8ae073ee3d24df0ec0688d16089fca065c140b415",
+      "role": "synthetic workflow regressions for crash capture and non-destructive removal"
+    },
+    {
+      "path": "tools/retail-control/README.md",
+      "sha256": "9b46d5e9c6e0b7cfb11088d706574802d17ceae508415b31e9152fdcf59974c0",
+      "role": "retail-control operational and safety boundary documentation"
+    },
+    {
+      "path": "schema/live/retail-control-stop-incident-v1.json",
+      "sha256": "d20ae37a9a2321df58fbf45a17a196e935dd76d07974ac3efcf86111254ca577",
+      "role": "redacted incident evidence stating that no crash dump survived"
+    },
+    {
+      "path": "docs/tooling/live-control.md",
+      "sha256": "a7f3fff85b5d0cd03f8ca33148061ad19772814f61ae6407407b24a021f1d6cf",
+      "role": "active-main-thread STOP/rearm and external byte-restoration evidence"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "722ecb69996476899711ab5c8f4d6e6d6fc877f22d02869d3618270b16567b6a",
+      "role": "root workspace dependency snapshot"
+    },
+    {
+      "path": "crates/donscan/Cargo.lock",
+      "sha256": "e2372c49d6fc774be8c58ed23f3ec86061eb0b12b68b5c59c1321c1bc4011a4b",
+      "role": "donscan dependency snapshot"
+    },
+    {
+      "path": "crates/netsys-shim/Cargo.lock",
+      "sha256": "56524efdd5bbaf86be02b2e01e573921cb77c1ef676a11de2868115d656e75d2",
+      "role": "netsys-shim dependency snapshot"
+    },
+    {
+      "path": "crates/oracle/Cargo.lock",
+      "sha256": "83173a16933ea3e8968ef44dfdbc49687f67a70ef7650c5343c033952ead23e9",
+      "role": "oracle dependency snapshot"
+    },
+    {
+      "path": "tools/owned-peer/Cargo.lock",
+      "sha256": "82372a93347c9bcfbecd0c325d84fa37e7005f29c44466d2385342f6e8beb2fe",
+      "role": "owned-peer dependency snapshot"
+    },
+    {
+      "path": "tools/pdb-extract/Cargo.lock",
+      "sha256": "e4b2f32f1b3c3b65003ffca5ac1cf41fe7ca502a417d3cbdbcc6733259c66c86",
+      "role": "pdb-extract dependency snapshot"
+    },
+    {
+      "path": "web/wasm/Cargo.lock",
+      "sha256": "7f311db3db512ef3d3b1b74c3455ec5513a3a1d6f2f8e12c3291f750bffe35d0",
+      "role": "browser wasm dependency snapshot"
+    }
+  ],
+  "license_text_catalog": [
+    {
+      "path": "LICENSE",
+      "expressions": [
+        "GPL-3.0-only",
+        "GPL-3.0-or-later"
+      ],
+      "evidence": "The tracked text identifies itself as GNU General Public License Version 3, 29 June 2007; repository manifests separately select the -or-later expression where declared."
+    }
+  ],
+  "repository_cargo_manifests": [
+    {
+      "path": "Cargo.toml",
+      "kind": "workspace",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-ai/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-bhs-cc/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-bhs/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-bhs/ops-oracle/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-bhs/oracle/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-content/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-env/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-gpu/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-net/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-pe/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-replay/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-rules/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/don-sim/Cargo.toml",
+      "kind": "package",
+      "declared": "workspace",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/donscan/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/netsys-shim/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/oracle/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/rontoy-core/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "crates/rontoy-proto/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "tools/owned-peer/Cargo.toml",
+      "kind": "package",
+      "declared": "MIT",
+      "effective": "MIT",
+      "license_text": null,
+      "state": "blocked_missing_license_text"
+    },
+    {
+      "path": "tools/pdb-extract/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "web/wasm/Cargo.toml",
+      "kind": "package",
+      "declared": "GPL-3.0-or-later",
+      "effective": "GPL-3.0-or-later",
+      "license_text": "LICENSE",
+      "state": "covered"
+    },
+    {
+      "path": "tools/oracle/remote-Cargo.toml",
+      "kind": "workspace-template",
+      "declared": "MIT OR Apache-2.0",
+      "effective": "MIT OR Apache-2.0",
+      "license_text": null,
+      "state": "blocked_missing_license_text"
+    }
+  ],
+  "locked_dependency_sets": [
+    {
+      "path": "Cargo.lock",
+      "package_records": 129,
+      "notice_inventory": null
+    },
+    {
+      "path": "crates/donscan/Cargo.lock",
+      "package_records": 1,
+      "notice_inventory": null
+    },
+    {
+      "path": "crates/netsys-shim/Cargo.lock",
+      "package_records": 2,
+      "notice_inventory": null
+    },
+    {
+      "path": "crates/oracle/Cargo.lock",
+      "package_records": 7,
+      "notice_inventory": null
+    },
+    {
+      "path": "tools/owned-peer/Cargo.lock",
+      "package_records": 2,
+      "notice_inventory": null
+    },
+    {
+      "path": "tools/pdb-extract/Cargo.lock",
+      "package_records": 33,
+      "notice_inventory": null
+    },
+    {
+      "path": "web/wasm/Cargo.lock",
+      "package_records": 5,
+      "notice_inventory": null
+    }
+  ],
+  "gates": [
+    {
+      "id": "source-license-coverage",
+      "scopes": [
+        "source",
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Every discovered repository Cargo manifest or remote workspace template carries applicable tracked license text for its declared expression.",
+      "evidence": [
+        "Cargo.toml",
+        "LICENSE",
+        "tools/owned-peer/Cargo.toml",
+        "tools/oracle/remote-Cargo.toml"
+      ],
+      "blocker": "tools/owned-peer declares MIT and tools/oracle/remote-Cargo.toml declares MIT OR Apache-2.0, but this proof pack found no applicable tracked texts and does not infer them. Obtain exact notices/texts from an authoritative source or change declarations with authority."
+    },
+    {
+      "id": "remote-workspace-license-consistency",
+      "scopes": [
+        "source",
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Every remote workspace template preserves the repository workspace's effective license expression unless a separately authorized exception is proved.",
+      "evidence": [
+        "Cargo.toml",
+        "tools/oracle/remote-Cargo.toml",
+        "tools/oracle-regress.sh"
+      ],
+      "blocker": "The repository workspace declares GPL-3.0-or-later, while the oracle workspace template copied to hbox declares MIT OR Apache-2.0 and supplies inherited metadata to copied crates. The proof pack records the inconsistency rather than choosing a license."
+    },
+    {
+      "id": "whole-source-license-provenance",
+      "scopes": [
+        "source",
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "A whole-tree inventory accounts for non-Cargo source, documentation, generated code, vendored material, exceptions, notices, and applicable license text.",
+      "evidence": [
+        "LICENSE",
+        "README.md",
+        "README-LLM.md"
+      ],
+      "blocker": "The Cargo declaration inventory is not a whole-source provenance inventory. Expected reviewed artifact: release/source-license-inventory.json."
+    },
+    {
+      "id": "source-proprietary-payload-exclusion",
+      "scopes": [
+        "source"
+      ],
+      "status": "proved",
+      "claim": "The current source-release tooling refuses its enumerated local/proprietary roots, generated-output paths, file formats/signatures, known executable hash, and compact-evidence violations, with explicit git-archive exclusions.",
+      "evidence": [
+        ".gitattributes",
+        "tools/release-audit.sh",
+        "tools/release-audit-fixtures/test.sh",
+        "docs/install.md"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "derived-research-release-review",
+      "scopes": [
+        "source",
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Every PDB/binary/live-derived fact extract admitted to a public source release has a reviewed classification and redistribution rationale distinct from rejection of raw PDB/PE content.",
+      "evidence": [
+        ".gitattributes",
+        "tools/release-audit.sh",
+        "docs/binary-ground-truth.md",
+        "docs/provenance-ledger.md"
+      ],
+      "blocker": "The source audit denies known raw formats and paths but does not inventory or adjudicate tracked derived research tables. Expected reviewed artifact: release/derived-research-review.json."
+    },
+    {
+      "id": "binary-third-party-notices",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Every dependency conveyed in a binary product has an audited license expression, required notice/text, and source treatment bound to the exact assembled artifact/SBOM and its contributing lock identities.",
+      "evidence": [
+        "Cargo.lock",
+        "crates/donscan/Cargo.lock",
+        "crates/netsys-shim/Cargo.lock",
+        "crates/oracle/Cargo.lock",
+        "tools/owned-peer/Cargo.lock",
+        "tools/pdb-extract/Cargo.lock",
+        "web/wasm/Cargo.lock"
+      ],
+      "blocker": "The seven repository lock snapshots contain 179 candidate package records, including first-party and research/tool packages, but no exact assembled-product SBOM identifies the conveyed subset and binds its audited notices/source treatment. Expected artifact: release/product-dependency-notices.json."
+    },
+    {
+      "id": "owned-data-bootstrap-boundary",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "proved",
+      "claim": "A local, create-only bootstrap verifies one retail executable identity and 51 owned data/script inputs before writing only ignored ron-data destinations; it is not a product installer or redistribution path.",
+      "evidence": [
+        "tools/install/owned-inputs.json",
+        "tools/install/bootstrap.py",
+        "tools/install/test_bootstrap.py",
+        "docs/install.md"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "standalone-product-installer",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "A user can install, configure, repair, and remove a complete standalone DoN product from an exact release payload.",
+      "evidence": [
+        "docs/install.md",
+        "GOAL.md"
+      ],
+      "blocker": "The repository explicitly describes a source development snapshot and owned-data bootstrap, not a standalone product installer; no product payload/repair/uninstall manifest is in this proof pack."
+    },
+    {
+      "id": "independent-presentation-content",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Every shipped art, audio, font, and presentation-data item has item-level provenance, license/extraction status, attribution, content identity, and the required human clearance recorded without the tooling certifying legal title.",
+      "evidence": [
+        "README.md",
+        "README-LLM.md",
+        "GOAL.md",
+        "docs/install.md",
+        "docs/content-licensing.md",
+        "tools/content-license-audit.py",
+        "tools/content-license-manifest.schema.json"
+      ],
+      "blocker": "A fail-closed mechanical content-manifest auditor now exists and explicitly emits legal_title_certified=false, but no real non-empty independent pack, human rights review, in-product attribution proof, or distribution clearance record is supplied. This pack records no license for any retail asset."
+    },
+    {
+      "id": "retail-controller-byte-restoration",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "The active-solo controller lifecycle has a compact machine record for five consecutive main-thread STOP/rearm acknowledgements plus a final park, zero dropped events, and an independent external read of the exact original five call bytes after every STOP.",
+      "evidence": [
+        "docs/tooling/live-control.md",
+        "tools/retail-control/README.md",
+        "schema/live/retail-control-stop-incident-v1.json"
+      ],
+      "blocker": "The measured five-cycle result is recorded in hash-bound prose, but the public tree has no compact per-cycle machine artifact. The older incident JSON explicitly predates and does not prove the active-main-thread path. Expected artifact: schema/live/retail-control-active-stop-cycles-v1.json."
+    },
+    {
+      "id": "scoped-crash-dump-workflow",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "proved",
+      "claim": "The tree contains a scoped WER workflow and synthetic regression cases for exact-owned setup/removal, dump preservation, and stable in-place MDMP verification without copying dumps.",
+      "evidence": [
+        "tools/retail-control/wer_localdumps.py",
+        "tools/retail-control/test_wer_localdumps.py",
+        "tools/retail-control/README.md"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "controller-stop-incident-closure",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "The recorded STOP-associated incident is closed by candidate-bound active soak/reversibility evidence; if another crash naturally occurs, its stable retained minidump identity and stack analysis are added without requiring an intentional crash.",
+      "evidence": [
+        "schema/live/retail-control-stop-incident-v1.json",
+        "docs/tooling/live-control.md"
+      ],
+      "blocker": "The incident record states dump_retained=false and explicitly declines to claim a unique cause. Successful later runs need a compact candidate-bound incident-closure/soak record; a new crash is not required. Expected artifact: schema/live/retail-control-stop-incident-closure-v1.json."
+    },
+    {
+      "id": "release-documentation-consistency",
+      "scopes": [
+        "source",
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "Public release status documents agree on active STOP/rearm and real-host lobby-peering status.",
+      "evidence": [
+        "README.md",
+        "GOAL.md",
+        "docs/tooling/live-control.md"
+      ],
+      "blocker": "README.md still says the active STOP/rearm exercise is missing, and docs/tooling/live-control.md says real-host peering remains open, while GOAL.md records both as green at their bounded scopes."
+    },
+    {
+      "id": "assembled-product-packaging",
+      "scopes": [
+        "distribution"
+      ],
+      "status": "blocked",
+      "claim": "An exact assembled product payload, checksums, dependency notices, independent-content clearance, install/repair/remove behavior, and a product-specific allowlisted provenance audit are recorded together.",
+      "evidence": [
+        "docs/install.md",
+        "tools/release-audit.sh",
+        "GOAL.md"
+      ],
+      "blocker": "There is no assembled product payload manifest or product-specific allowlisted provenance audit. The existing release-audit.sh is intentionally source-only and rejects executable payloads, so it cannot admit a binary product tree."
+    }
+  ],
+  "declared_readiness": {
+    "source": false,
+    "distribution": false
+  }
+}
