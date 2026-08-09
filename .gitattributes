@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# `git archive` is the source-release boundary. Keep local/proprietary evidence available
+# to developers without conveying it in a generated source archive. The release audit still
+# inspects the resulting tree and fails if a new artifact is not covered here.
+
+# Local retail inputs and generated browser packs.
+/ron-bin/** export-ignore
+/ron-data/** export-ignore
+/web/public/data/** export-ignore
+
+# Raw or bulk live-process evidence. Compact, deliberately tracked `retail-*.json` fixtures
+# remain in source archives unless an exact artifact is named below.
+/schema/live/*.bin export-ignore
+/schema/live/*.txt export-ignore
+/schema/live/*.tsv export-ignore
+/schema/live/*.png export-ignore
+/schema/live/*.csv export-ignore
+/schema/live/damage-hook/** export-ignore
+/schema/live/donscan-*.json export-ignore
+/schema/live/live-tables-*.json export-ignore
+/schema/live/retail-arena-marshal-supervised-loop-v1.json export-ignore
+
+# Reproducible build/session output must never become source-archive content even if it was
+# accidentally added to the index.
+*.py[cod] export-ignore
+**/__pycache__/** export-ignore
+/target/** export-ignore
+/.revive/** export-ignore
+/STATUS.md export-ignore
+/RESUME.md export-ignore
+/docs/RECOVERY.md export-ignore
+/docs/DESIGN-INTENT.md export-ignore

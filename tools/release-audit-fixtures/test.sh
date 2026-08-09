@@ -134,4 +134,20 @@ git -C "$repo" commit -qm "synthetic tracked leak"
 expect_refusal "git archive rejects tracked leakage" "compiled DLL/EXE/PDB/LIB/OBJ" \
   "$AUDIT" --git-archive HEAD --repo "$repo"
 
+manifest_repo="$tmp/manifest-repo"
+mkdir -p "$manifest_repo/schema/live"
+git -C "$manifest_repo" init -q
+git -C "$manifest_repo" config user.name "Synthetic Release Audit"
+git -C "$manifest_repo" config user.email "release-audit@example.invalid"
+printf '/schema/live/*.tsv export-ignore\n' > "$manifest_repo/.gitattributes"
+printf 'synthetic raw research evidence\n' > "$manifest_repo/schema/live/raw.tsv"
+printf '{}\n' > "$manifest_repo/schema/live/retail-synthetic-proof-v1.json"
+git -C "$manifest_repo" add .gitattributes schema/live/raw.tsv \
+  schema/live/retail-synthetic-proof-v1.json
+git -C "$manifest_repo" commit -qm "synthetic archive manifest"
+expect_refusal "staging tree retains and refuses raw research evidence" \
+  "bulk/raw schema/live capture" "$AUDIT" --staging-dir "$manifest_repo"
+expect_pass "git archive manifest excludes raw evidence but keeps compact fixture" \
+  "$AUDIT" --git-archive HEAD --repo "$manifest_repo"
+
 printf '1..%d\n' "$tests"

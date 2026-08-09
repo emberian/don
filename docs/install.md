@@ -57,6 +57,13 @@ temporary Git archive:
 tools/release-audit.sh --git-archive HEAD
 ```
 
+The source-package manifest is [`.gitattributes`](../.gitattributes). Its `export-ignore`
+rules keep raw and bulk retail-derived evidence out of `git archive` while leaving that
+evidence available to developers in repository history. Compact, deliberately tracked
+`schema/live/retail-*.json` protocol and proof fixtures remain eligible for the source
+archive; the audit refuses one once it exceeds the documented compact-evidence limit. Adding
+an archive exclusion does not relicense an artifact and does not make it a release payload.
+
 The archive mode deliberately cannot see untracked or ignored workspace files. Use the
 staging-directory mode on the final assembled tree as the last gate. Both modes fail closed
 and explain each path they refuse, including retail input roots, bulk live captures, generated
