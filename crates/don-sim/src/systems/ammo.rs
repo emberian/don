@@ -62,8 +62,10 @@
 //! ## What is NOT here
 //!
 //! * `TRAJ_SPLINE` (nukes and cruise missiles) — `Spline::calc_from_dir` /
-//!   `calc_nuke_spline` are unread. Aircraft wrecks actually use `TRAJ_ARC`; their separate
-//!   [`ammo_init_crash`] constructor is implemented below.
+//!   `calc_nuke_spline` are not modelled.  The former immediately enters `calc_spline`,
+//!   `generate_bspline`, and `build_normals`; all generated arrays are walked, so porting only
+//!   its control points would still desynchronise. Aircraft wrecks actually use `TRAJ_ARC`;
+//!   their separate [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -1884,6 +1886,18 @@ pub trait SplashEnv {
     fn splash_is_enemy(&self, shooter_who: i32, candidate_who: i32) -> bool;
 }
 
+/// The mutable half of retail's splash transaction.
+///
+/// [`SplashEnv`] deliberately exposes only snapshot reads, which is enough to inspect or
+/// replay a scan.  The real `Ammo::do_damage` loop is stronger: after it reads the current
+/// node's `down` link, it calls `Object::do_damage` **before** looking up that next node.  A
+/// hit may therefore kill/remove that node or change diplomacy before the walk resumes.
+/// Implementors must apply the call synchronously; queueing it until the scan ends changes
+/// retail ordering.
+pub trait SplashDamageEnv: SplashEnv {
+    fn splash_do_damage(&mut self, call: DamageCall);
+}
+
 /// The byte immediately following each 441-entry ring table in retail `.rdata`.
 ///
 /// `Ammo::do_damage` uses `jle` at `0x00678b50`, so its walk is inclusive: it reads index
@@ -1953,6 +1967,135 @@ pub fn splash_unit_scale(
     }
 }
 
+/// Resumable state for the retail splash-table/down-chain walk.
+///
+/// This cursor exists to preserve the call boundary at `0x00678b0a`: [`next`] captures the
+/// candidate's `down` identity and returns exactly one packed call.  A live adapter can then
+/// mutate the world and resume from the captured identity, exactly as the retail loop does.
+/// It is intentionally private; callers should use [`ammo_do_damage_splash_scan`] for an
+/// inspection snapshot or [`ammo_do_damage_splash_execute`] for the live transaction.
+struct SplashCursor {
+    primary: (i32, i32),
+    target_domain: i32,
+    base_x: i32,
+    base_y: i32,
+    angle: i32,
+    world_xs: i32,
+    world_ys: i32,
+    probe: usize,
+    probes: usize,
+    next: Option<(i32, i32)>,
+}
+
+impl SplashCursor {
+    fn new<E: SplashEnv>(a: &AmmoWalk, env: &E, target_domain: i32) -> Self {
+        let shooter_midpoint = env
+            .splash_object(a.who, a.o)
+            .is_some_and(|s| s.view.is_unit && s.view.rules.unit_flags & 0x2000 != 0);
+        let (centre_x, centre_y) = if shooter_midpoint {
+            (a.sx.wrapping_add(a.ex) / 2, a.sy.wrapping_add(a.ey) / 2)
+        } else {
+            (a.ex, a.ey)
+        };
+        let (world_xs, world_ys) = env.world_wcells();
+        Self {
+            primary: (a.whom, a.ox),
+            target_domain,
+            base_x: splash_wcell(centre_x),
+            base_y: splash_wcell(centre_y),
+            angle: crate::trig::find_angle(a.ex.wrapping_sub(a.sx), a.ey.wrapping_sub(a.sy)),
+            world_xs,
+            world_ys,
+            probe: 0,
+            probes: splash_probe_count(a.splash_area),
+            next: None,
+        }
+    }
+
+    fn next<E: SplashEnv>(&mut self, a: &mut AmmoWalk, env: &E) -> Option<DamageCall> {
+        loop {
+            while let Some((who, o)) = self.next.take() {
+                if o < 0 {
+                    break;
+                }
+                a.whom = who;
+                a.ox = o;
+
+                let Some(victim) = env.splash_object(who, o) else {
+                    break;
+                };
+                // Retail reads +0x2c/+0x2e before every gate and, critically, before the
+                // Object::do_damage call returned below.  Keep it in the cursor while that
+                // call is allowed to mutate the world.
+                self.next = victim.down;
+
+                if (who, o) == (a.who, a.o) || !(0..8).contains(&who) {
+                    continue;
+                }
+                let is_primary = (who, o) == self.primary;
+                if !is_primary && !env.splash_is_enemy(a.who, who) {
+                    continue;
+                }
+
+                let scale = if victim.live_build {
+                    if self.target_domain == DOMAIN_AIR {
+                        continue;
+                    }
+                    match splash_scale(a.ex, a.ey, &victim.view, a.splash_area) {
+                        // Building arm uses `js`: zero is still dispatched.
+                        Some(scale) => scale,
+                        None => continue,
+                    }
+                } else {
+                    if !victim.live_unit || !victim.on_map {
+                        continue;
+                    }
+                    let same_air_partition = (self.target_domain != DOMAIN_AIR)
+                        == (victim.view.rules.domain != DOMAIN_AIR);
+                    if !same_air_partition || victim.view.rules.obj_masks & 0x0800_0000 != 0 {
+                        continue;
+                    }
+                    match splash_unit_scale(
+                        a.ex,
+                        a.ey,
+                        &victim.view,
+                        victim.block_radius,
+                        a.splash_area,
+                    ) {
+                        Some(scale) => scale,
+                        None => continue,
+                    }
+                };
+
+                return Some(DamageCall {
+                    victim_o: o,
+                    victim_who: who,
+                    angle: self.angle,
+                    num_guys: a.num_guys,
+                    ammo_slot: a.index,
+                    scale256: scale,
+                    secondary: i32::from(!is_primary),
+                    shooter_who: a.who,
+                    shooter_o: a.o,
+                });
+            }
+
+            if self.probe >= self.probes {
+                return None;
+            }
+            let (dx, dy) =
+                splash_probe_offset(self.probe).expect("probe count is bounded by retail table");
+            self.probe += 1;
+            let wx = self.base_x.wrapping_add(dx);
+            let wy = self.base_y.wrapping_add(dy);
+            if wx < 0 || wy < 0 || wx >= self.world_xs || wy >= self.world_ys {
+                continue;
+            }
+            self.next = env.splash_head(wx, wy);
+        }
+    }
+}
+
 /// Retail-exact splash victim extraction and `Object::do_damage` call packing from
 /// `Ammo::do_damage` `0x00678629..0x00678b56`.
 ///
@@ -1968,96 +2111,43 @@ pub fn ammo_do_damage_splash_scan<E: SplashEnv>(
     if a.splash_area <= 0 {
         return Vec::new();
     }
-
-    let primary = (a.whom, a.ox);
-    let shooter_midpoint = env
-        .splash_object(a.who, a.o)
-        .is_some_and(|s| s.view.is_unit && s.view.rules.unit_flags & 0x2000 != 0);
-    let (centre_x, centre_y) = if shooter_midpoint {
-        (a.sx.wrapping_add(a.ex) / 2, a.sy.wrapping_add(a.ey) / 2)
-    } else {
-        (a.ex, a.ey)
-    };
-    let base_x = splash_wcell(centre_x);
-    let base_y = splash_wcell(centre_y);
-    let angle = crate::trig::find_angle(a.ex.wrapping_sub(a.sx), a.ey.wrapping_sub(a.sy));
-    let (world_xs, world_ys) = env.world_wcells();
+    let mut cursor = SplashCursor::new(a, env, target_domain);
     let mut calls = Vec::new();
-
-    for index in 0..splash_probe_count(a.splash_area) {
-        let (dx, dy) = splash_probe_offset(index).expect("probe count is bounded by retail table");
-        let wx = base_x.wrapping_add(dx);
-        let wy = base_y.wrapping_add(dy);
-        if wx < 0 || wy < 0 || wx >= world_xs || wy >= world_ys {
-            continue;
-        }
-
-        let mut next = env.splash_head(wx, wy);
-        while let Some((who, o)) = next {
-            if o < 0 {
-                break;
-            }
-            a.whom = who;
-            a.ox = o;
-
-            let Some(victim) = env.splash_object(who, o) else {
-                break;
-            };
-            // Retail fetches +0x2c/+0x2e before every gate, then resumes this link at
-            // 0x00678b2b.  Preserve the chain even when this node is rejected.
-            next = victim.down;
-
-            if (who, o) == (a.who, a.o) || !(0..8).contains(&who) {
-                continue;
-            }
-            let is_primary = (who, o) == primary;
-            if !is_primary && !env.splash_is_enemy(a.who, who) {
-                continue;
-            }
-
-            let scale = if victim.live_build {
-                if target_domain == DOMAIN_AIR {
-                    continue;
-                }
-                match splash_scale(a.ex, a.ey, &victim.view, a.splash_area) {
-                    Some(scale) => scale, // building arm uses `js`: zero is still dispatched
-                    None => continue,
-                }
-            } else {
-                if !victim.live_unit || !victim.on_map {
-                    continue;
-                }
-                let same_air_partition =
-                    (target_domain != DOMAIN_AIR) == (victim.view.rules.domain != DOMAIN_AIR);
-                if !same_air_partition || victim.view.rules.obj_masks & 0x0800_0000 != 0 {
-                    continue;
-                }
-                match splash_unit_scale(
-                    a.ex,
-                    a.ey,
-                    &victim.view,
-                    victim.block_radius,
-                    a.splash_area,
-                ) {
-                    Some(scale) => scale,
-                    None => continue,
-                }
-            };
-
-            calls.push(DamageCall {
-                victim_o: o,
-                victim_who: who,
-                angle,
-                num_guys: a.num_guys,
-                ammo_slot: a.index,
-                scale256: scale,
-                secondary: i32::from(!is_primary),
-                shooter_who: a.who,
-                shooter_o: a.o,
-            });
-        }
+    while let Some(call) = cursor.next(a, env) {
+        calls.push(call);
     }
     calls
+}
+
+/// Execute the ordinary splash walk as one live retail transaction.
+///
+/// This closes the gap between victim extraction and world mutation.  Calls are applied in
+/// table/down-chain order, with each `down` identity captured before its predecessor takes
+/// damage.  After the last probe, `Ammo::do_damage` falls through to `Ammo::close`, so the
+/// projectile flags are assigned zero and any spline is recycled.  The returned [`Impact`]
+/// inside `Some` is an audit record of calls that were actually issued; it is not a deferred
+/// command list.  A non-splash input returns `None` without touching ammo or world state.
+///
+/// The caller must already have run retail's splash preamble (`hit_target`/`check_hit`) and
+/// supplied the resulting primary target's domain.  Nuclear terrain effects and the optional
+/// post-hit statistics hook precede/follow this primitive and remain separate boundaries.
+pub fn ammo_do_damage_splash_execute<E: SplashDamageEnv>(
+    a: &mut Ammo,
+    env: &mut E,
+    target_domain: i32,
+) -> Option<Impact> {
+    if a.w.splash_area <= 0 {
+        return None;
+    }
+    let mut impact = Impact::default();
+    let mut cursor = SplashCursor::new(&a.w, env, target_domain);
+    while let Some(call) = cursor.next(&mut a.w, env) {
+        impact.calls.push(call);
+        env.splash_do_damage(call);
+    }
+    a.close();
+    impact.closed = true;
+    Some(impact)
 }
 
 /// `ring = min(10, splash_area/4 + 1)` — the `WCoord`-disc selector [measured,

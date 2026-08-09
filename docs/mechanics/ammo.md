@@ -15,7 +15,9 @@ The focused crate gate is:
 
 ```sh
 cargo test -p don-sim --lib systems::ammo
-# test result: ok. 41 passed; 0 failed
+# test result: ok. 53 passed; 0 failed
+cargo test -p don-sim --test ammo_splash_transaction
+# test result: ok. 2 passed; 0 failed
 ```
 
 The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
@@ -38,6 +40,7 @@ gate in `systems::air`; it is referenced by the real tick driver.
 | Hit tests | `hit_target`, `check_hit` | `0x00678F90`, `0x00678D90` | building rectangle vs unit radius; `accuracy > 100` doubling |
 | Impact + miss behaviour | `ammo_do_damage_single` | `Ammo::do_damage` `0x00678060` | hit costs 0 draws, miss costs exactly 2 |
 | Splash falloff | `splash_scale`, `splash_ring` | `0x006788E0`–`0x0067892D` | linear from the bounding box; negative skips |
+| Live splash transaction | `ammo_do_damage_splash_execute` | `Ammo::do_damage` `0x00678629`–`0x00678B56` | damage is interleaved with the exact table/down-chain cursor; mutation can change later admissions; projectile closes last |
 | `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
 
 **Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
@@ -427,6 +430,18 @@ between muzzle and impact; otherwise it is the impact. Every candidate identity 
 `AmmoData::{whom,ox}` before filtering and the original primary is not restored. These writes
 are mutation-tested because the fields live in the ammo checksum until the projectile closes.
 
+`ammo_do_damage_splash_execute` closes the scan/application ordering gap. Its cursor captures a
+node's `down` identity before issuing that node's `Object::do_damage` call, then re-enters the
+world adapter before inspecting the captured successor. This is not equivalent to first
+collecting a `Vec<DamageCall>`: an early hit can kill/remove the successor or change diplomacy,
+and those mutations affect the remainder of the same projectile's walk. The focused mutation
+test severs the current live link and kills the next node during the first callback; the cursor
+still reaches that captured node, rejects its new dead state, follows its own link, dispatches
+the tail, leaves the tail identity in `AmmoData::{whom,ox}`, and only then calls `Ammo::close`.
+The function returns `None` without mutation for `splash_area <= 0`, preventing a caller from
+accidentally closing a projectile that belongs to the distinct single-target branch. The splash
+walk itself consumes no RNG; all ordering sensitivity here is world and checksum mutation order.
+
 ---
 
 ## 7. Honest gaps
@@ -443,16 +458,22 @@ Ordered by how much they would cost a replay harness.
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
 3. **`TRAJ_SPLINE` is not modelled.** Nukes and cruise missiles go through
-   `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`), unread. `Ammo`
-   with a spline hashes an extra `Spline::walk_data` block, so those projectiles will diverge
-   on the channel. Aircraft crashes were previously misclassified here; `Ammo::init_crash`
-   writes an ordinary arc and is now executable. `Ammo::init` only ever writes `traj` 1 or 2 —
-   `TRAJ_STRAIGHT` (0) is never set by `init`, which is worth confirming independently.
-4. **The live impact driver must supply `SplashEnv` and call `ammo_do_damage_splash_scan`.**
-   The exact extractor is implemented and mutation-pinned, but its world/object/diplomacy
-   adapter is intentionally separate from the currently owned tick lane. The old
-   `ammo_do_damage_splash` compatibility helper remains for callers that already selected a
-   victim list; it does not have the scan's unit arm or mutation semantics.
+   `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`). The isolated
+   constructor boundary is now known: `calc_from_dir` clears/appends control vertices, derives
+   degree 2 or 3, calls `set_min_seg_length` (`0x009125E0`), then immediately enters
+   `calc_spline` (`0x00912F00`), `generate_bspline` (`0x00911820`), and `build_normals`
+   (`0x00911F60`). `SplineData::walk_data` (`0x009132B0`) hashes the control vertices, knots,
+   weights, generated knots, generated vertices, and generated normals including array headers;
+   a control-point-only port would therefore be checksum-wrong. Aircraft crashes were
+   previously misclassified here; `Ammo::init_crash` writes an ordinary arc and is executable.
+   `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`,
+   which is worth confirming independently.
+4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved
+   executor is implemented and mutation-pinned in `ammo_do_damage_splash_execute`; the remaining
+   seam is to expose the live WData/down-chain/diplomacy reads and `Object::do_damage` mutation
+   callback from the world adapter. `ammo_do_damage_splash_scan` remains the non-mutating
+   inspection form, while the older `ammo_do_damage_splash` compatibility helper still accepts
+   a preselected victim list and does not have the exact scan's gates or mutations.
 5. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
    (`0x006541E0`) and therefore whether it is on any channel. It monotonically increases and
    never rewinds, so if it *is* walked, save/load round-tripping must preserve it.
@@ -469,14 +490,15 @@ Ordered by how much they would cost a replay harness.
   flight-band state should use `ammo_init_targeted`, not the post-gate compatibility adapter.
 - The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
   world bounds, unit/building search, water test), `SplashEnv` (WData heads, down-chain objects,
-  diplomacy), and `CrashEnv` (WCoord bounds and terrain height) rather than reaching into the SoA
-  world, so it will not collide with the `world.rs` rewrite. Whoever owns the world implements
-  those adapters. The crash adapter is wired at the live death seam and activates only when its
-  exact optional Guy/type/terrain sources are installed; it does not reuse `AmmoView`'s documented
-  flat-terrain compatibility substitution.
-- Damage is **emitted, not applied**: `ammo_do_damage_single` / `ammo_do_damage_splash` return
-  `DamageCall` values matching `Object::do_damage`'s argument list exactly. This keeps the
-  `ammo`/`units`/`deaths` channel boundary clean.
+  diplomacy), `SplashDamageEnv` (synchronous `Object::do_damage` dispatch), and `CrashEnv`
+  (WCoord bounds and terrain height) rather than reaching into the SoA world. Whoever owns the
+  world implements those adapters. The crash adapter is wired at the live death seam and activates
+  only when its exact optional Guy/type/terrain sources are installed; it does not reuse
+  `AmmoView`'s documented flat-terrain compatibility substitution.
+- Single-target and compatibility splash paths still **emit** `DamageCall` values. The exact
+  live splash path applies those same argument packets synchronously through `SplashDamageEnv`
+  and returns an `Impact` audit log of calls already issued. Delaying those callbacks until after
+  victim extraction is not retail-equivalent.
 - For the `deaths` channel: projectile impacts resolve in `Objects::inc_time`, **after** every
   `Unit::process`, so a unit killed by a projectile dies at the end of the tick, later than one
   killed by melee. Death ordering within a tick is `Objects::process_all` deaths first, then
