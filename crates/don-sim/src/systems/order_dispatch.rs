@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 18 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 17 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -1386,6 +1386,16 @@ pub enum GroupMovePostStep {
     KillGroupAndDistribute,
 }
 
+/// Why `GROUP_ATTACK_TO` could not acquire the combat capabilities it may need after
+/// grouped movement. Capability preflight occurs before `do_group_move`, because retail
+/// calls `fight`/`do_attack_to_pause` only afterwards and a late "unavailable" result would
+/// leave the formation half-mutated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupAttackToHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1493,6 +1503,36 @@ pub trait WorkWorld: UnitWorld {
         _result: ArmResult,
     ) -> GroupMovePostStep {
         panic!("WorkWorld::group_move_post_step is required for GROUP_MOVE follower steps")
+    }
+
+    /// Prove that the post-movement `fight`/`do_attack_to_pause` callbacks are available. This
+    /// must be read-only. The default keeps grouped attack-move orders intact and unmoved.
+    fn group_attack_to_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<(), GroupAttackToHostError> {
+        Err(GroupAttackToHostError::Unavailable)
+    }
+
+    /// The periodic predicate `UnitType::attack != 0 && actor vfunc(+0xCC) == 0`, evaluated
+    /// after `do_group_move` exactly where retail evaluates it.
+    fn group_attack_to_calls_fight(&mut self, _actor: &UnitWork, _order: &OrderRec) -> bool {
+        panic!("WorkWorld::group_attack_to_calls_fight requires successful preflight")
+    }
+
+    /// `Unit::fight(-1, 0, 0, 1, 0)` at `0x005E758C`. All five literal arguments are fixed
+    /// by this call site; the host owns target selection and its cross-object mutations.
+    fn group_attack_to_fight(&mut self, _actor: &mut UnitWork, _order: &OrderRec) -> ArmResult {
+        panic!("WorkWorld::group_attack_to_fight requires successful preflight")
+    }
+
+    /// The two external Group/location predicates inside `Unit::do_attack_to_pause(order)`
+    /// `0x005F22A0` (113 bytes). On true the local executor writes literal `15` to
+    /// `MoveOrder::pause`. This is not the full `Unit::do_attack_to` executor at
+    /// `0x005F2320`; PDB symbol/address agreement makes that distinction authoritative.
+    fn group_attack_to_pause_gate(&mut self, _actor: &UnitWork, _order: &OrderRec) -> bool {
+        panic!("WorkWorld::group_attack_to_pause_gate requires successful preflight")
     }
 
     /// `Unit::set_anim(a, b, c)` at the head of both boarding executors. The shipped arms
@@ -1621,7 +1661,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Unimplemented,   // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
     ArmStatus::Implemented,     // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
     ArmStatus::Unimplemented,   // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
-    ArmStatus::Unimplemented,   // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
+    ArmStatus::Implemented,     // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
     ArmStatus::Unimplemented,   // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
     ArmStatus::Unimplemented,   // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
@@ -2502,6 +2542,58 @@ pub fn do_group_move<W: WorkWorld>(
     }
 }
 
+/// `Unit::do_group_attack_to(GroupMoveOrder*)` `0x005E74E0` (192 bytes), arm 21.
+///
+/// The shipped wrapper has four observable stages:
+///
+/// 1. execute [`do_group_move`];
+/// 2. continue only if the exact same order node remains current;
+/// 3. continue only when `(Game::frame + actor.o) % 15 == 0`;
+/// 4. when the unit has an attack and its virtual target predicate returns zero, call
+///    `fight(-1,0,0,1,0)` and return; otherwise call `do_attack_to_pause(order)`.
+///
+/// `fight` and `do_attack_to_pause` remain external mechanics, but they are mandatory rather
+/// than guessed. A grouped actor preflights both callbacks before stage 1, so an unavailable
+/// host cannot advance movement and then fail. The exact ungrouped conversion needs neither
+/// callback: it replaces the node with `ATTACK_TO`, causing stage 2 to return as in retail.
+pub fn do_group_attack_to<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = u.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::GroupAttackTo {
+        return ArmResult::MalformedOrder;
+    }
+
+    if u.group >= 0 {
+        match w.group_attack_to_preflight(&*u, &order) {
+            Ok(()) => {}
+            Err(GroupAttackToHostError::Unavailable) => return ArmResult::HostUnavailable,
+            Err(GroupAttackToHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+        }
+    }
+
+    let move_result = do_group_move(u, w, pf, cov);
+    if !same_group_order(u, &order) || !phase_due(w.frame(), u.o, 15) {
+        return move_result;
+    }
+    if w.group_attack_to_calls_fight(&*u, &order) {
+        return w.group_attack_to_fight(u, &order);
+    }
+    if u.group >= 0 && w.group_attack_to_pause_gate(&*u, &order) {
+        let current = u
+            .orders
+            .front_mut()
+            .expect("same_group_order verified a live GROUP_ATTACK_TO node");
+        current.pause = 15;
+    }
+    ArmResult::Working
+}
+
 /// `Unit::do_attack(AttackOrder*)` `0x005F1B80` (1,822 B), arm 10.
 ///
 /// The order-layer half: validate the target's identity, hand the shot to the host's damage
@@ -2821,6 +2913,7 @@ pub fn do_job<W: WorkWorld>(
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
+        OrderIndex::GroupAttackTo => do_group_attack_to(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
         OrderIndex::BoardShip => do_board(u, w, cov),
@@ -3206,6 +3299,11 @@ mod tests {
         group_plan: Result<GroupMovePlan, GroupMoveHostError>,
         group_effects: Vec<GroupMoveEffect>,
         group_post: GroupMovePostStep,
+        group_attack_preflight: Result<(), GroupAttackToHostError>,
+        group_attack_calls_fight: bool,
+        group_attack_pause_gate: bool,
+        group_attack_events: Vec<&'static str>,
+        group_attack_fight_result: ArmResult,
         scrambled: Vec<i16>,
     }
 
@@ -3228,6 +3326,11 @@ mod tests {
                 group_plan: Err(GroupMoveHostError::Unavailable),
                 group_effects: vec![],
                 group_post: GroupMovePostStep::Continue,
+                group_attack_preflight: Err(GroupAttackToHostError::Unavailable),
+                group_attack_calls_fight: false,
+                group_attack_pause_gate: false,
+                group_attack_events: vec![],
+                group_attack_fight_result: ArmResult::Working,
                 scrambled: vec![],
             }
         }
@@ -3343,6 +3446,26 @@ mod tests {
         ) -> GroupMovePostStep {
             self.group_post
         }
+        fn group_attack_to_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<(), GroupAttackToHostError> {
+            self.group_attack_events.push("preflight");
+            self.group_attack_preflight
+        }
+        fn group_attack_to_calls_fight(&mut self, _: &UnitWork, _: &OrderRec) -> bool {
+            self.group_attack_events.push("predicate");
+            self.group_attack_calls_fight
+        }
+        fn group_attack_to_fight(&mut self, _: &mut UnitWork, _: &OrderRec) -> ArmResult {
+            self.group_attack_events.push("fight");
+            self.group_attack_fight_result
+        }
+        fn group_attack_to_pause_gate(&mut self, _: &UnitWork, _: &OrderRec) -> bool {
+            self.group_attack_events.push("attack_to_pause_gate");
+            self.group_attack_pause_gate
+        }
         fn boarding_set_anim(&mut self, _: &mut UnitWork, _: i32, _: i32, _: i32) {}
         fn board_check_meet_ship(
             &mut self,
@@ -3420,7 +3543,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_eleven_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_twelve_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -3433,9 +3556,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Ten implemented, including GROUP_MOVE, both boarding arms and the two live
-        // patrols; PATROL remains faithfully empty.
-        assert_eq!((implemented, empty, absent), (10, 1, 17));
+        // Eleven implemented, including both grouped movement wrappers, both boarding arms,
+        // and the two live patrols; PATROL remains faithfully empty.
+        assert_eq!((implemented, empty, absent), (11, 1, 16));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -4055,6 +4178,131 @@ mod tests {
         assert!(w.group_effects.is_empty());
     }
 
+    // -- do_group_attack_to ----------------------------------------------
+
+    #[test]
+    fn group_attack_to_missing_combat_host_prevents_group_movement_mutation() {
+        let mut w = TestWorld::open(16);
+        // If combat capability were checked late, this plan would already mutate movement.
+        w.group_plan = Ok(GroupMovePlan::Leader {
+            kill_group_before_move: false,
+        });
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.safe = 29;
+        u.path.push(PathData {
+            to_x: 200,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        let mut order = group_move_order(u.who, u.o, 92, 900, 700);
+        order.kind = OrderIndex::GroupAttackTo;
+        u.orders.push_back(order);
+        let before_body = u.body;
+        let before_orders = u.orders.clone();
+        let before_path = u.path.clone();
+
+        assert_eq!(
+            do_group_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle, u.body.stuck_budget),
+            (
+                before_body.x,
+                before_body.y,
+                before_body.angle,
+                before_body.stuck_budget
+            )
+        );
+        assert_eq!(u.orders, before_orders);
+        assert_eq!(u.path, before_path);
+        assert_eq!((u.group, u.safe), (3, 29));
+        assert!(w.group_effects.is_empty());
+        assert_eq!(w.group_attack_events, vec!["preflight"]);
+    }
+
+    #[test]
+    fn ungrouped_group_attack_to_converts_without_demanding_a_combat_host() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        let mut order = group_move_order(u.who, 7, 92, 900, 700);
+        order.kind = OrderIndex::GroupAttackTo;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().kind, OrderIndex::AttackTo);
+        assert!(w.group_attack_events.is_empty());
+    }
+
+    #[test]
+    fn group_attack_to_phase_calls_fight_or_attack_to_pause_in_retail_order() {
+        let mut w = TestWorld::open(16);
+        w.frame = 7; // (frame + o=8) % 15 == 0
+        w.group_plan = Ok(GroupMovePlan::Hold);
+        w.group_attack_preflight = Ok(());
+        w.group_attack_calls_fight = true;
+        w.group_attack_fight_result = ArmResult::Fired(37);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        let mut order = group_move_order(u.who, 7, 92, 900, 700);
+        order.kind = OrderIndex::GroupAttackTo;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Fired(37)
+        );
+        assert_eq!(
+            w.group_attack_events,
+            vec!["preflight", "predicate", "fight"]
+        );
+
+        w.group_attack_events.clear();
+        w.group_attack_calls_fight = false;
+        w.group_attack_pause_gate = true;
+        assert_eq!(
+            do_group_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.group_attack_events,
+            vec!["preflight", "predicate", "attack_to_pause_gate"]
+        );
+        assert_eq!(u.orders.front().unwrap().pause, 15);
+    }
+
+    #[test]
+    fn group_attack_to_non_phase_stops_after_group_move() {
+        let mut w = TestWorld::open(16);
+        w.frame = 8; // (frame + o=8) % 15 != 0
+        w.group_plan = Ok(GroupMovePlan::Hold);
+        w.group_attack_preflight = Ok(());
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        let mut order = group_move_order(u.who, 7, 92, 900, 700);
+        order.kind = OrderIndex::GroupAttackTo;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(w.group_attack_events, vec!["preflight"]);
+    }
+
     #[test]
     fn safe_countdown_has_retails_byte_wrap_semantics() {
         let mut w = TestWorld::open(16);
@@ -4380,11 +4628,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 17 unimplemented arms, each hit once. This smoke actor takes GROUP_MOVE's exact
-        // ungrouped conversion; grouped actors without a snapshot fail closed at the
-        // mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 17);
-        assert!((cov.covered_fraction() - 11.0 / 28.0).abs() < 1e-12);
+        // 16 unimplemented arms, each hit once. The smoke actors take both grouped movement
+        // wrappers' exact ungrouped conversion; grouped actors without a snapshot fail
+        // closed at the mandatory host seam. Both boarding and both live patrol arms run.
+        assert_eq!(cov.unimplemented, 16);
+        assert!((cov.covered_fraction() - 12.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]

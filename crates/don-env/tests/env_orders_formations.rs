@@ -111,4 +111,49 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
             destination
         );
     }
+
+    bridge
+        .process_all(
+            &mut package,
+            &build::move_to(1_200, 1_400, QueuePos::New, 2),
+            &mut world,
+        )
+        .unwrap();
+    for &row in &rows {
+        assert_eq!(
+            world.orders[row].front().map(|order| order.kind),
+            Some(OrderIndex::GroupAttackTo),
+            "attack-move on the live line formation must install GROUP_ATTACK_TO"
+        );
+    }
+
+    // Env has no authoritative fight/do_attack_to host, so valid grouped nodes stay intact.
+    // The ungrouped retail branch, however, is wholly local and must convert without asking
+    // for unavailable combat state.
+    let detached = rows[2];
+    world.sim.units.group_mut()[detached] = -1;
+    let detached_before = (world.sim.pos_x()[detached], world.sim.pos_y()[detached]);
+    world.frame();
+    assert_eq!(
+        world.orders[detached].front().map(|order| order.kind),
+        Some(OrderIndex::AttackTo)
+    );
+    assert_eq!(
+        (world.sim.pos_x()[detached], world.sim.pos_y()[detached]),
+        detached_before,
+        "ungroup conversion returns before ordinary ATTACK_TO movement"
+    );
+    world.frame();
+    assert_ne!(
+        (world.sim.pos_x()[detached], world.sim.pos_y()[detached]),
+        detached_before,
+        "the converted ordinary ATTACK_TO must use the existing product mover"
+    );
+    for &row in &rows[..2] {
+        assert_eq!(
+            world.orders[row].front().map(|order| order.kind),
+            Some(OrderIndex::GroupAttackTo),
+            "grouped attack-move must fail closed without fight/do_attack_to callbacks"
+        );
+    }
 }

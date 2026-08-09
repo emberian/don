@@ -1319,7 +1319,10 @@ impl EnvWorld {
         self.order[row] = kind as u8;
         if matches!(
             kind,
-            OrderIndex::MoveTo | OrderIndex::AttackTo | OrderIndex::GroupMove
+            OrderIndex::MoveTo
+                | OrderIndex::AttackTo
+                | OrderIndex::GroupMove
+                | OrderIndex::GroupAttackTo
         ) {
             self.dest_x[row] = x;
             self.dest_y[row] = y;
@@ -1527,6 +1530,7 @@ impl EnvWorld {
                     self.advance_move(row, true);
                 }
                 x if x == g::OrderIndex::GroupMove as u8 => self.advance_group_move(row),
+                x if x == g::OrderIndex::GroupAttackTo as u8 => self.advance_group_attack_to(row),
                 x if x == g::OrderIndex::Attack as u8 => self.advance_attack(row),
                 x if x == g::OrderIndex::Gather as u8 => {
                     if let Some(host) = gather_host.as_deref_mut() {
@@ -1913,7 +1917,7 @@ impl EnvWorld {
             return;
         }
         if self.sim.units.group()[row] < 0 {
-            self.convert_group_move_to_move(row, &order);
+            self.convert_group_order_to_ordinary(row, &order);
             return;
         }
         let Ok(leader_who) = u8::try_from(order.group_whose) else {
@@ -1942,7 +1946,7 @@ impl EnvWorld {
                 // Exact local arm at 0x005E7EE2/0x005E8654: a near follower whose leader
                 // relationship disappeared converts this node, returns, and executes the
                 // ordinary move on the next frame.
-                self.convert_group_move_to_move(row, &order);
+                self.convert_group_order_to_ordinary(row, &order);
             } else {
                 // The far branch is Group::refresh_group_order, whose mutable Groups-pool
                 // state EnvWorld does not own.
@@ -1955,14 +1959,20 @@ impl EnvWorld {
         self.advance_move(row, true);
     }
 
-    fn convert_group_move_to_move(&mut self, row: usize, original: &OrderRec) {
+    /// The locally exact, allocation-free part of `Unit::ungroup_move_order`: replace the
+    /// group node with its ordinary movement counterpart and preserve the MoveOrder fields.
+    fn convert_group_order_to_ordinary(&mut self, row: usize, original: &OrderRec) {
         let actor_who = i32::from(self.sim.owner()[row]);
         let actor_o = i32::from(self.sim.units.o()[row]);
         let is_leader = original.group_whose == actor_who && original.group_oxx == actor_o;
         let current = self.orders[row]
             .front_mut()
             .expect("GROUP_MOVE conversion requires the front node cloned by its caller");
-        current.kind = OrderIndex::MoveTo;
+        current.kind = match original.kind {
+            OrderIndex::GroupMove => OrderIndex::MoveTo,
+            OrderIndex::GroupAttackTo => OrderIndex::AttackTo,
+            _ => return,
+        };
         if !is_leader {
             current.flags &= !ORDER_PATHED;
         }
@@ -1976,6 +1986,57 @@ impl EnvWorld {
         current.group_angle = 0;
         current.in_group = 0;
         self.sync_order_from_queue(row);
+    }
+
+    /// Product boundary for `GROUP_ATTACK_TO`.
+    ///
+    /// EnvWorld can authoritatively perform the same local ungroup conversions as retail,
+    /// but it does not own the virtual target predicate, `Unit::fight`, or
+    /// `Unit::do_attack_to_pause`. A live grouped node therefore remains intact: advancing its
+    /// movement before learning that combat is unavailable would violate the wrapper's
+    /// preflight transaction. Ungrouped actors and near followers whose leader relation was
+    /// lost convert to ordinary `ATTACK_TO`, which is the exact reachable local branch.
+    fn advance_group_attack_to(&mut self, row: usize) {
+        let Some(order) = self.orders[row].front().cloned() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        if order.kind != OrderIndex::GroupAttackTo
+            || order.group_id < 0
+            || order.group_oxx < 0
+            || order.group_whose < 0
+        {
+            self.unimplemented.unit[g::uv::MOVE_TO] += 1;
+            return;
+        }
+        if self.sim.units.group()[row] < 0 {
+            self.convert_group_order_to_ordinary(row, &order);
+            return;
+        }
+        let leader = u8::try_from(order.group_whose)
+            .ok()
+            .zip(i16::try_from(order.group_oxx).ok())
+            .and_then(|(who, object)| self.fleet_row(who, object));
+        let valid_leader = leader.is_some_and(|leader_row| {
+            self.sim.units.group()[leader_row] == self.sim.units.group()[row]
+                && self.orders[leader_row].front().is_some_and(|leader_order| {
+                    leader_order.kind == OrderIndex::GroupAttackTo
+                        && leader_order.group_id == order.group_id
+                        && leader_order.group_oxx == order.group_oxx
+                        && leader_order.group_whose == order.group_whose
+                })
+        });
+        if !valid_leader {
+            let dx = order.x - self.sim.pos_x()[row];
+            let dy = order.y - self.sim.pos_y()[row];
+            if vector_dist(dx, dy) <= 0x5ff {
+                self.convert_group_order_to_ordinary(row, &order);
+            } else {
+                self.unimplemented.unit[g::uv::MOVE_TO] += 1;
+            }
+            return;
+        }
+        self.unimplemented.unit[g::uv::MOVE_TO] += 1;
     }
 
     /// Integrate one frame toward an explicit target using the environment's existing
