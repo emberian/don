@@ -461,9 +461,12 @@ pattern-0 groups, carrying preview World, RNG and mountain cursors while resetti
 group-local formation arrays at each native cleanup edge. Per-group receipts preserve those
 otherwise-lost local arrays and `placed` results. A region-effect stream likewise continues
 across later patterns 1--3, additionally carrying the returned helping-score table. The
-transaction remains fail-closed when the next selected arm changes between player and region
-families. Executing that heterogeneous edge requires a multiplexed typed input API and is the
-exact residual composition boundary.
+heterogeneous adapter supplies one group-indexed union row per selected arm, so player and
+region families can alternate without coalescing their incompatible external receipts. An
+omitted row stops at the already-prepared placement kernel; a row whose index or arm kind
+conflicts fails closed before that kernel. Once every selected group completes, this adapter's
+exact residual is the common `add_doobers` call at `0x006a8ef2`; composing its tileset/object
+inputs into the same public transaction is downstream.
 
 ### 7.2 Executable world-generation oracle boundary
 

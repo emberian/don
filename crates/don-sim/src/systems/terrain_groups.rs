@@ -226,6 +226,42 @@ pub struct RegionPatternGroupReceipt {
     pub pattern: RegionPatternReceipt,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TerrainGroupInputKind {
+    Player,
+    Region,
+}
+
+/// One selected-group input row for the heterogeneous `place_all` adapter.
+/// Rows are ordered by native group index; each row owns only the external
+/// effects that its selected placement arm can consume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaceAllGroupInput {
+    Player {
+        group_index: usize,
+        externals: Vec<PlayerGroupExternalResolution>,
+    },
+    Region {
+        group_index: usize,
+        externals: Vec<DropTileExternalResolution>,
+    },
+}
+
+impl PlaceAllGroupInput {
+    pub const fn group_index(&self) -> usize {
+        match self {
+            Self::Player { group_index, .. } | Self::Region { group_index, .. } => *group_index,
+        }
+    }
+
+    pub const fn kind(&self) -> TerrainGroupInputKind {
+        match self {
+            Self::Player { .. } => TerrainGroupInputKind::Player,
+            Self::Region { .. } => TerrainGroupInputKind::Region,
+        }
+    }
+}
+
 /// Outputs of the still-upstream unit-catalog and region-selection block in
 /// `place_all`, sufficient to enter `TerrainGroup::place_region_group` exactly.
 ///
@@ -416,6 +452,12 @@ pub enum PlaceAllError {
     InvalidRegionPattern(RegionPatternError),
     InvalidPlayerGroupPrefix(PlacePlayerGroupError),
     InvalidPlayerMountainTemplateRetry(PlayerMountainTemplateRetryError),
+    InvalidMixedGroupInput {
+        expected_group_index: usize,
+        expected_kind: TerrainGroupInputKind,
+        actual_group_index: usize,
+        actual_kind: TerrainGroupInputKind,
+    },
     InvalidPlayerGroupInputs {
         group_index: usize,
     },
@@ -689,6 +731,240 @@ impl TerrainGroups {
             None,
             &mut host,
         )
+    }
+
+    /// Executes selected pattern-0 and pattern-1/2/3 groups in one native
+    /// group-index transaction. Each input row must match the next selected
+    /// group's index and arm kind; omission stops at that already-prepared
+    /// kernel, while a conflicting row fails closed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_group_inputs(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        let mut preview_random = *random;
+        let mut preview_mountains = mountains.clone();
+        let mountain_randomization = preview_mountains.randomize_mountains(&mut preview_random);
+        let group_selection = self
+            .select_groups(&mut preview_random)
+            .map_err(PlaceAllError::InvalidTerrainGroupSelection)?;
+        let (mut placement_preparation, boundary) = self
+            .prepare_placement_prefix(
+                &group_selection.groups,
+                &mut preview_random,
+                progress,
+                place_players,
+                &mut host,
+            )
+            .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
+
+        let mut preview_world = world.clone();
+        let mut preview_groups = self.groups.clone();
+        let mut current_helping = helping;
+        let mut next = boundary;
+        let mut input_cursor = 0usize;
+        let mut completed_placement_groups = Vec::new();
+        let mut player_group_dispatches = Vec::new();
+        let mut region_pattern_dispatches = Vec::new();
+        let mut player_calls = Vec::new();
+        let mut player_group_mountain_retries = Vec::new();
+        let mut player_group_host_events = Vec::new();
+        let mut player_group_placed_after = Vec::new();
+        let mut player_group_formation_x = Vec::new();
+        let mut player_group_formation_y = Vec::new();
+        let mut region_group_prefix = None;
+        let mut region_group_drop = None;
+        let mut region_group_continuation = None;
+        let mut region_pattern = None;
+
+        loop {
+            let expected = match next {
+                TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } => {
+                    Some((group_index, TerrainGroupInputKind::Player))
+                }
+                TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
+                    group_index,
+                    ..
+                } => Some((group_index, TerrainGroupInputKind::Region)),
+                _ => None,
+            };
+            let Some((group_index, expected_kind)) = expected else {
+                break;
+            };
+            let Some(input) = inputs.get(input_cursor) else {
+                break;
+            };
+            if input.group_index() != group_index || input.kind() != expected_kind {
+                return Err(PlaceAllError::InvalidMixedGroupInput {
+                    expected_group_index: group_index,
+                    expected_kind,
+                    actual_group_index: input.group_index(),
+                    actual_kind: input.kind(),
+                });
+            }
+
+            let Some(prepared) = placement_preparation
+                .prepared_groups
+                .iter()
+                .find(|prepared| prepared.group_index == group_index)
+            else {
+                return Err(match expected_kind {
+                    TerrainGroupInputKind::Player => {
+                        PlaceAllError::InvalidPlayerGroupInputs { group_index }
+                    }
+                    TerrainGroupInputKind::Region => {
+                        PlaceAllError::InvalidRegionPatternInputs { group_index }
+                    }
+                });
+            };
+
+            match input {
+                PlaceAllGroupInput::Player { externals, .. } => {
+                    let execution = Self::execute_player_pattern_group(
+                        &mut preview_groups[group_index],
+                        &mut preview_world,
+                        &mut preview_random,
+                        &mut preview_mountains,
+                        prepared,
+                        externals,
+                        &mut host,
+                    )?;
+                    player_calls.extend(execution.calls.iter().cloned());
+                    player_group_mountain_retries
+                        .extend(execution.mountain_retries.iter().cloned());
+                    player_group_host_events.extend(execution.host_events.iter().copied());
+                    player_group_placed_after = execution.placed_after.clone();
+                    player_group_formation_x = execution.formation_x_after.clone();
+                    player_group_formation_y = execution.formation_y_after.clone();
+                    next = match execution.outcome {
+                        PlayerPatternGroupOutcome::Complete => {
+                            completed_placement_groups.push(group_index);
+                            self.prepare_placement_continuation(
+                                &group_selection.groups,
+                                &mut preview_random,
+                                progress,
+                                place_players,
+                                group_index + 1,
+                                &mut placement_preparation,
+                                &mut host,
+                            )
+                            .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
+                        }
+                        PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                            clump_index,
+                            player_index,
+                            request,
+                        } => TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
+                            group_index,
+                            clump_index,
+                            player_index,
+                            request,
+                        },
+                        PlayerPatternGroupOutcome::GrowthKernel {
+                            clump_index,
+                            player_index,
+                        } => TerrainPlacementBoundary::PlayerGroupGrowthKernel {
+                            group_index,
+                            clump_index,
+                            player_index,
+                        },
+                    };
+                    player_group_dispatches.push(execution);
+                }
+                PlaceAllGroupInput::Region { externals, .. } => {
+                    let group_type = self.groups[group_index].group_type;
+                    let type_slot = usize::try_from(group_type - 4)
+                        .ok()
+                        .filter(|&slot| slot < 5)
+                        .ok_or(PlaceAllError::InvalidRegionPatternInputs { group_index })?;
+                    let receipt = preview_groups[group_index]
+                        .apply_region_pattern(
+                            &mut preview_world,
+                            regions,
+                            &mut preview_random,
+                            &mut preview_mountains,
+                            prepared.pattern,
+                            &prepared.primary_sizes,
+                            &prepared.secondary_sizes,
+                            group_selection.normalized_clumps_by_type[type_slot],
+                            place_players,
+                            group_index,
+                            current_helping,
+                            externals,
+                        )
+                        .map_err(PlaceAllError::InvalidRegionPattern)?;
+                    current_helping = receipt.helping_after;
+                    if let Some(first) = receipt.calls.first() {
+                        region_group_prefix = Some(first.placement.prefix.clone());
+                        region_group_drop = first.placement.drops.first().cloned();
+                        region_group_continuation = Some(first.placement.clone());
+                    }
+                    next = match receipt.outcome {
+                        RegionPatternOutcome::ExternalResolutionRequired { request } => {
+                            TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem {
+                                request,
+                            }
+                        }
+                        RegionPatternOutcome::Complete => {
+                            completed_placement_groups.push(group_index);
+                            self.prepare_placement_continuation(
+                                &group_selection.groups,
+                                &mut preview_random,
+                                progress,
+                                place_players,
+                                group_index + 1,
+                                &mut placement_preparation,
+                                &mut host,
+                            )
+                            .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
+                        }
+                    };
+                    region_pattern = Some(receipt.clone());
+                    region_pattern_dispatches.push(RegionPatternGroupReceipt {
+                        group_index,
+                        pattern: receipt,
+                    });
+                }
+            }
+            input_cursor += 1;
+        }
+
+        Err(PlaceAllError::GameplayPlacementUnavailable {
+            preview: PlaceAllPreviewReceipt {
+                mountain_randomization,
+                group_selection,
+                placement_preparation,
+                bush_fringe: None,
+                mountain_rock_fringe: None,
+                treeify_mountains: None,
+                region_group_prefix,
+                region_group_drop,
+                region_group_continuation,
+                region_pattern,
+                region_pattern_dispatches,
+                player_group_prefix: if player_group_dispatches.is_empty() {
+                    None
+                } else {
+                    Some(player_calls)
+                },
+                player_group_mountain_retries,
+                player_group_host_events,
+                player_group_placed_after,
+                player_group_formation_x,
+                player_group_formation_y,
+                player_group_dispatches,
+                completed_placement_groups,
+            },
+            boundary: next,
+        })
     }
 
     /// Exact `GameInfo::map_style` gate immediately preceding
