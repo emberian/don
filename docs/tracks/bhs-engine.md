@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Thirty
+`Program`, and `ScriptRuntime` runs either producer against that live host. Thirty-five
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -469,11 +469,15 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 86 | `world_x_size` | direct `WorldData::tile_xs` read at `+0x18` (`0x009e4ee0`) |
 | 87 | `world_y_size` | direct `WorldData::tile_ys` read at `+0x1c` (`0x009e4ef0`) |
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
+| 245 | `population` | active Leader's live control total at `+0x940` (`0x009e8e70`) |
 | 246 | `population_cap` | active Leader's direct `pop_cap` field at `+0x7e4` (`0x009e8eb0`) |
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
 | 249 | `score` | active Leader's direct score field at `+0x18` (`0x009e8fa0`) |
 | 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
 | 253 | `gather_rate` | active Leader's displayed primary-resource income divided by 16 (`0x009e90b0`) |
+| 256 | `get_starting_loc_x` | in-game Leader and start-array bounds, then `start_x[who] << 2` (`0x009e9250`) |
+| 257 | `get_starting_loc_y` | in-game Leader and start-array bounds, then `start_y[who] << 2` (`0x009e92a0`) |
+| 267 | `get_last_unit_built` | in-game Leader's last completed unit object id (`0x009e9a70`) |
 | 273 | `num_units` | sum all 352 `unsigned short` unit counters at `+0x5762` (`0x009e9d60`) |
 | 296 | `time` | signed `Game::seconds / 60` (`0x009ead00`) |
 | 297 | `time_min` | instruction-identical alias of `time` (`0x009ead20`) |
@@ -486,13 +490,14 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 662 | `take_good` | wrapping subtract from decoded stockpile, then clamp at zero (`0x009fb630`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
 | 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
+| 670 | `get_base_rate` | signed `/16` readback of that same live base-income term (`0x009fbc20`) |
 | 706 | `have_alliance` | both Leaders active, then directed diplomacy slot equals 2 (`0x009fcf50`) |
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 7,332 calls to those thirty registrations. Together
+The current 363-file census contains 7,458 calls to those thirty-five registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,123 of 39,957 measured shipped-corpus call sites (**20.33%**, up from **1.98%**).
+8,249 of 39,957 measured shipped-corpus call sites (**20.64%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
@@ -544,8 +549,16 @@ addition. Peace and war remain directed predicates, with alliance also satisfyin
 Source and loaded-chunk tests exercise rock that is passable but not buildable, negative
 income truncation, both stockpile edges, and asymmetric diplomacy.
 
+Five live player/map readbacks add 126 shipped calls without adding a second state owner.
+`population` reads the control total maintained by live production; the starting-location
+pair preserves retail's weaker one-bit in-game gate, independent x/y array-length checks,
+and wrapping WCoord-to-tile shift. `get_last_unit_built` reads the object id published by
+queue completion, while `get_base_rate` is the signed readback paired with `set_base_rate`
+over the same gather term. Source and loaded-chunk tests cover both one-bit and two-bit Leader
+gates, negative-rate truncation, and the absent-start-array `-1` sentinel.
+
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-812 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+807 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

@@ -1,0 +1,10 @@
+int scenario live_player_map_reads_tick()
+{
+    set_good(1, "Food", population(1));
+    set_good(1, "Timber", get_starting_loc_x(2));
+    set_good(1, "Wealth", get_starting_loc_y(2));
+    set_good(1, "Knowledge", get_base_rate(1, "Wealth") + 10);
+    set_good(1, "Metal", get_last_unit_built(2));
+    set_good(1, "Oil", get_starting_loc_x(3) + 1 + population(2) + 1);
+    return 1;
+}

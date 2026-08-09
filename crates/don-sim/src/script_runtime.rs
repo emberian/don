@@ -477,13 +477,18 @@ enum ScriptObject {
 }
 
 impl Sim {
-    /// The `(flags & 3) == 3` leader gate shared by the retail player-state readers.
-    fn active_script_leader(&self, who: i32) -> Option<usize> {
+    /// The `flags & 1` Leader gate used by retail reads that remain valid while the
+    /// slot is in-game but temporarily not processing.
+    fn in_game_script_leader(&self, who: i32) -> Option<usize> {
         let who = who.wrapping_sub(1) as u32 as usize;
         let flags = self.step8.leaders.get(who)?.flags;
-        (flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
-            == (leaders::flag::IN_GAME | leaders::flag::PROCESS))
-            .then_some(who)
+        (flags & leaders::flag::IN_GAME != 0).then_some(who)
+    }
+
+    /// The `(flags & 3) == 3` leader gate shared by the retail player-state readers.
+    fn active_script_leader(&self, who: i32) -> Option<usize> {
+        let who = self.in_game_script_leader(who)?;
+        (self.step8.leaders[who].flags & leaders::flag::PROCESS != 0).then_some(who)
     }
 
     fn script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
@@ -708,6 +713,19 @@ impl ScenarioHost for Sim {
                 let leader = &self.leaders[who as usize];
                 Ok(Value::Int(leader.econ.age_alt))
             }
+            // `population` `0x009e8e70`: both Leader flags, then the direct
+            // `LeaderData::control` read at +0x940.
+            245 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let leader = self
+                    .production_runtime
+                    .leaders
+                    .get(who)
+                    .ok_or(HostError::Unimplemented)?;
+                Ok(Value::Int(leader.control))
+            }
             // `population_cap` `0x009e8eb0`: both Leader flags, then the direct
             // `LeaderData::pop_cap` read at +0x7e4.
             246 => {
@@ -750,6 +768,35 @@ impl ScenarioHost for Sim {
                     return Ok(Value::Int(-1));
                 };
                 Ok(Value::Int(self.leaders[who].econ.displayed[resource] / 16))
+            }
+            // `get_starting_loc_{x,y}` (`0x009e9250` / `0x009e92a0`): the one-bit
+            // in-game Leader gate, array-length gate, then WCoord-to-tile `<< 2`.
+            256 | 257 => {
+                let Some(who) = self.in_game_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let coords = if decl.index == 256 {
+                    &self.map.world.start_x.items
+                } else {
+                    &self.map.world.start_y.items
+                };
+                let Some(&coord) = coords.get(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(coord.wrapping_shl(2)))
+            }
+            // `get_last_unit_built` `0x009e9a70`: the one-bit in-game Leader gate,
+            // then ScenarioData's owner-local last completed unit object id.
+            267 => {
+                let Some(who) = self.in_game_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let leader = self
+                    .production_runtime
+                    .leaders
+                    .get(who)
+                    .ok_or(HostError::Unimplemented)?;
+                Ok(Value::Int(leader.last_unit_built))
             }
             // `num_units` `0x009e9d60`: sum all 352 unsigned-short unit counters at
             // LeaderData +0x5762. The paired retail loop only unrolls that exact sum.
@@ -848,6 +895,18 @@ impl ScenarioHost for Sim {
                 }
                 leader.gather_ctx.extra_income[resource] = amount.wrapping_shl(4);
                 Ok(Value::Int(1))
+            }
+            // `get_base_rate` `0x009fbc20`: both Leader flags and a primary-resource
+            // type, then signed `/ 16` over the exact +0x4b0 base-rate term.
+            670 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource_index(string_arg(args, 1)?)? else {
+                    return Ok(Value::Int(-1));
+                };
+                let leader = self.leaders.get(who).ok_or(HostError::Unimplemented)?;
+                Ok(Value::Int(leader.gather_ctx.extra_income[resource] / 16))
             }
             // `have_alliance` `0x009fcf50`: both players pass the two-bit active gate,
             // then the first player's directed diplomacy slot is exactly value 2.

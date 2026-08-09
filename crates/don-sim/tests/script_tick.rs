@@ -7,6 +7,7 @@ use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
 };
 use don_sim::systems::{
+    leaders,
     map_terrain::{land, wflag},
     victory_score,
 };
@@ -601,6 +602,65 @@ fn retail_chunk_executes_the_same_map_resource_and_diplomacy_queries() {
         sim.leaders[0].econ.stockpile,
         [1, 0, 9, 13, 1, 1],
         "loaded chunks must retain the same live map, economy, and diplomacy reads"
+    );
+}
+
+fn configure_live_player_map_read_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    sim.activate(2);
+    sim.step8.leaders[1].flags = leaders::flag::IN_GAME;
+    sim.step8.leaders[2].flags = leaders::flag::IN_GAME;
+    sim.production_runtime.leaders[0].control = 37;
+    sim.production_runtime.leaders[1].last_unit_built = 123;
+    sim.map.world.start_x.items.extend([3, 4]);
+    sim.map.world.start_y.items.extend([5, 6]);
+    sim.leaders[0].gather_ctx.extra_income[2] = -31;
+}
+
+#[test]
+fn ordinary_source_executes_live_player_and_map_readbacks() {
+    let program = compile_source_fixture("scenario_live_player_map_reads.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "live_player_map_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8127, 8);
+    configure_live_player_map_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [37, 16, 24, 9, 123, 0],
+        "control, WCoord shifts, base rate, last unit, one-bit gates, and array sentinel must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_live_player_and_map_readbacks() {
+    let compiled = compile_source_fixture("scenario_live_player_map_reads.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "live_player_map_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8128, 12);
+    configure_live_player_map_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [37, 16, 24, 9, 123, 0],
+        "loaded chunks must retain the exact player, map, production, and economy reads"
     );
 }
 
