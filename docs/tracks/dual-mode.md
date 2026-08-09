@@ -134,7 +134,7 @@ form:
 | `arena-air-model` | air physics, orders, ammo RNG and walked state | *drift*: MODEL 6c local adapters only | — |
 | `arena-diplomacy-model` | declaration state and all set/strategy side effects | *drift*: MODEL 6d relation adapter only | — |
 | `arena-attrition-model` | non-friendly period authority and multi-slot damage | *drift*: MODEL 6e live reset/friendly return and singleton due damage are integrated; diplomacy/leader/object graphs remain | — |
-| `arena-supply-model` | foreign/allied worker/Iroquois diplomacy, remaining healing-family composition and multi-slot repair | *drift*: MODEL 6f live registry, recharge, full French/Versailles postlude and same-owner singleton worker/Iroquois healing paths are integrated | — |
+| `arena-supply-model` | foreign/allied worker/Iroquois diplomacy, remaining healing-family composition and multi-slot repair | *drift*: MODEL 6f live registry, Antipater/Wellington aura, recharge, full French/Versailles postlude and same-owner singleton worker/Iroquois healing paths are integrated | — |
 | `attack-dir-semantics` | attacker→target bearing | *rejected*: retail is right | — |
 | `gather-enhancer-table-base` | tables indexed `level − 1` | *rejected*: deliberate, 1-based accessors | — |
 

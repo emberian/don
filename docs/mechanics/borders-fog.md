@@ -398,17 +398,31 @@ due call rejects `unit_masks2 & 1`, accepts the four literal worker TypeIndexes
 healing maximum but does **not** clear `0x4000`. `Unit::execute_events` at
 `0x00610BC0..0x00610C30` decrements a non-zero healing word later in the same frame. Arena
 now executes the same-owner land-worker singleton and that marker clock. Foreign ownership
-stops at a typed diplomacy boundary; the caravan, merchant and earlier healing families
+stops at a typed diplomacy boundary; caravan, merchant, patriot and captain composition
 remain separate inputs.
 
-The Iroquois arm at `0x005E0B49..0x005E0C90` runs earlier. It rejects
+The earlier Antipater/Wellington aura arm at `0x005E09ED..0x005E0AE4` skips sea and
+supply units. Its optimized `LeaderData::num_units[0x137/0x13E]` reads are unit-table
+slots, **not TypeIndexes**: adding the live unit table's `0x32` TypeIndex base identifies
+Antipater (`0x169`) and Wellington (`0x170`). Either source enables the shipped
+`antipater_heal_rate` of 20 frames. On the target's due phase,
+`ObjectData::has_general(0, type)` first accepts the target itself, then walks the
+owner-local `HeroesData` registry in order with `HeroData::get_radius`; a match repairs one
+point and performs the root-mask/healing-marker postlude. Arena now executes that complete
+singleton family from the live registry and composes it before Iroquois healing.
+
+The Iroquois arm at `0x005E0B49..0x005E0C90` runs after that aura and before the
+supply/civilian arms. It rejects
 `unit_masks & 0x1000`, heroes and non-land units, selects `{20,15,10,5}` frames using
 `LeaderData::get_age`'s exact `0x2EF..0x2F1` tech walk, and repairs one point on allied
 territory with the root-mask/healing-marker postlude. Arena executes the same-owner
-ordinary-singleton subdomain. Before repair it checks the live hero registry, the earlier
-`num_units[0x137/0x13E]` sources, the later `0x161/0x163/0x165` families paired with
-`num_units[0x12F/0x131/0x133]`, the scenario-type fact and Versailles supply healing.
-Civilian/merchant, foreign-owner and multi-slot cases stop before mutation.
+ordinary-singleton subdomain; the Antipater/Wellington family has already executed. The
+later optimized
+`num_units[0x12F/0x131/0x133]` reads likewise map through the `0x32` table base to The
+Senator (`0x161`), The President (`0x163`) and The CEO (`0x165`); Arena blocks those
+unintegrated aura compositions, the scenario-type fact and Versailles supply healing
+before the Iroquois mutation. Civilian/merchant, foreign-owner and multi-slot cases stop
+before mutation.
 
 ---
 
@@ -472,8 +486,9 @@ still useful but the combination is not.
 4. **Non-friendly attrition-period selection and the remaining healing families remain open.**
    Arena executes the exact 32-frame reset/friendly-territory return and fails closed at
    the diplomacy/leader/object-graph boundary. Its healing host executes same-owner
-   singleton worker and ordinary Iroquois arms, but rejects foreign/allied decisions,
-   unintegrated hero/caravan/merchant composition and multi-slot objects.
+   singleton Antipater/Wellington, worker and ordinary Iroquois arms, but rejects
+   foreign/allied decisions, unintegrated patriot/caravan/merchant composition and
+   multi-slot objects.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.

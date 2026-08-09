@@ -358,10 +358,11 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "French and completed-Versailles supply-healing arm with full repair postlude",
             "same-owner land-worker healing, marker clock and singleton repair mutation",
             "same-owner Iroquois ordinary-unit healing with live age and composition preflight",
+            "Antipater/Wellington singleton healing through the live hero registry and radius",
         ],
         missing: &[
             "foreign/allied worker and Iroquois healing need the diplomacy matrix",
-            "hero, caravan and merchant healing families and their composition",
+            "patriot, caravan, merchant and captain healing-family composition",
             "multi-slot captain repair for ObjectType uber_size greater than one",
         ],
     },
@@ -1134,11 +1135,27 @@ pub trait ArenaSupplyHealingHost: ArenaSupplyAttritionHost {
     ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
+/// Live facts and the atomic repair write for the Antipater/Wellington hero-aura arm at
+/// `0x005E09ED..0x005E0AE4`. Hero identity and radius are deliberately resolved through
+/// the walked `HeroesData` registry inherited from [`ArenaSupplyAttritionHost`].
+pub trait ArenaHeroAuraHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHost {
+    fn repair_hero_aura_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error>;
+}
+
 /// Live facts and the atomic repair write for the Iroquois healing arm at
 /// `0x005E0B49..0x005E0C90`. The optional scenario TypeIndex is a mandatory game-mode
 /// fact: `None` means the retail scenario flag is disabled, not that its type lookup was
 /// unavailable.
-pub trait ArenaIroquoisHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHost {
+pub trait ArenaIroquoisHealingHost: ArenaHeroAuraHealingHost {
     fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error>;
     fn healing_age(&self, who: i32) -> Result<usize, Self::Error>;
     fn scenario_healing_type(&self) -> Result<Option<i32>, Self::Error>;
@@ -1252,9 +1269,9 @@ pub enum SupplyHealingTransaction {
 }
 
 /// Compare-and-swap-shaped receipt for `Unit::repair_damage` plus the caller's exact
-/// `ObjectData::healing = max(healing, rate)` postlude. The supply and supported Iroquois
-/// arms clear `unit_masks & 0x4000` after a root unit reaches zero damage; the worker arm
-/// retains it.
+/// `ObjectData::healing = max(healing, rate)` postlude. The supply, hero-aura and supported
+/// Iroquois arms clear `unit_masks & 0x4000` after a root unit reaches zero damage; the
+/// worker arm retains it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HealingRepairMutation {
     pub damage_before: i32,
@@ -1267,7 +1284,7 @@ pub struct HealingRepairMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerHealingBlocker {
-    LiveHeroRegistry,
+    PatriotHealing { patriot_type_id: i32 },
     IroquoisHealing,
     SupplyHealing,
     MultiSlot { type_id: i32, uber_size: i32 },
@@ -1306,26 +1323,40 @@ pub enum WorkerHealingTransaction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeroAuraHealingBlocker {
+    MultiSlot { type_id: i32, uber_size: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeroAuraHealingTransaction {
+    NoDamage,
+    SeaUnit,
+    SupplyUnit,
+    Disabled,
+    NotDue {
+        rate: i32,
+    },
+    OutsideAura {
+        rate: i32,
+    },
+    BlockedComposition {
+        rate: i32,
+        blocker: HeroAuraHealingBlocker,
+    },
+    Healed {
+        rate: i32,
+        hero_type_id: i32,
+        hero_object_index: i32,
+        repair: HealingRepairMutation,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IroquoisHealingBlocker {
-    CivilianOrMerchant {
-        type_id: i32,
-        type_category: i32,
-    },
-    MultiSlot {
-        type_id: i32,
-        uber_size: i32,
-    },
-    LiveHeroRegistry,
-    EarlierHeroSourceType {
-        source_type_id: i32,
-    },
-    ScenarioHealing {
-        scenario_type_id: i32,
-    },
-    LaterPatriotFamily {
-        unit_type_id: i32,
-        source_type_id: i32,
-    },
+    CivilianOrMerchant { type_id: i32, type_category: i32 },
+    MultiSlot { type_id: i32, uber_size: i32 },
+    ScenarioHealing { scenario_type_id: i32 },
+    LaterPatriotFamily { patriot_type_id: i32 },
     SupplyHealing,
 }
 
@@ -1503,6 +1534,54 @@ fn find_registered_supply<H: ArenaSupplyAttritionHost>(
             .wrapping_mul(SUPPORT_RANGE_UNITS_PER_TILE);
         if support_distance(state.unit, object) <= radius {
             return Ok(Some(slot as i32));
+        }
+    }
+    Ok(None)
+}
+
+/// `ObjectData::has_general(0, type_id)` for Arena's live unit object shape. Retail tests
+/// the object itself before walking its owner's `HeroesData` records, then uses each
+/// record's owner for `HeroData::get_radius`.
+fn find_registered_hero_aura<H: ArenaSupplyAttritionHost>(
+    state: SupplyAttritionUnitState,
+    type_id: i32,
+    host: &H,
+) -> Result<Option<i32>, SupplyAttritionTransactionError<H::Error>> {
+    if host
+        .object_is(state.unit.who, state.unit.o, type_id, 0)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(Some(state.unit.o));
+    }
+
+    let heroes = host
+        .hero_records(state.unit.who)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    for (slot, record) in heroes.iter().copied().enumerate() {
+        if record.hero_flags & SUPPORT_REGISTRY_ACTIVE == 0 {
+            continue;
+        }
+        let object = host
+            .support_object(state.unit.who, record.o as i32)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            .ok_or(SupplyAttritionTransactionError::MissingRegistryObject {
+                registry: SupportRegistry::Heroes,
+                slot,
+                who: state.unit.who,
+                o: record.o,
+            })?;
+        if !object.active
+            || !object.is_unit
+            || !host
+                .object_is(state.unit.who, record.o as i32, type_id, 0)
+                .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            continue;
+        }
+        let radius = hero_radius_tiles(host, state.unit.who, record.o as i32, record.who as i32)?
+            .wrapping_mul(SUPPORT_RANGE_UNITS_PER_TILE);
+        if support_distance(state.unit, object) <= radius {
+            return Ok(Some(record.o as i32));
         }
     }
     Ok(None)
@@ -1713,13 +1792,113 @@ pub fn execute_supply_healing<H: ArenaSupplyHealingHost>(
     })
 }
 
+/// Execute the complete singleton Antipater/Wellington hero-aura healing arm of
+/// `Unit::process_healing` (`0x005E09ED..0x005E0AE4`).
+///
+/// The optimized `LeaderData::num_units[0x137/0x13E]` loads are **unit-table slots**, not
+/// TypeIndexes: the live table starts at TypeIndex `0x32`, so they identify Antipater
+/// (`0x169`) and Wellington (`0x170`). Either enables the shipped 20-frame
+/// `antipater_heal_rate`; `ObjectData::has_general(0, type)` then resolves the target
+/// itself or the first in-radius live hero from the owner-local registry.
+pub fn execute_hero_aura_healing<H: ArenaHeroAuraHealingHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<HeroAuraHealingTransaction, SupplyAttritionTransactionError<H::Error>> {
+    const ANTIPATER_HEAL_RATE: i32 = 20;
+    const HERO_TYPES: [i32; 2] = [0x169, 0x170];
+
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.damage <= 0 {
+        return Ok(HeroAuraHealingTransaction::NoDamage);
+    }
+    // The domain-one arm returns before this family. Air and land continue.
+    if state.domain == 1 {
+        return Ok(HeroAuraHealingTransaction::SeaUnit);
+    }
+    if state.is_supply {
+        return Ok(HeroAuraHealingTransaction::SupplyUnit);
+    }
+
+    let mut owned = [false; HERO_TYPES.len()];
+    for (slot, type_id) in HERO_TYPES.into_iter().enumerate() {
+        owned[slot] = host
+            .owned_type_count(who, type_id)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            > 0;
+    }
+    if !owned.into_iter().any(|present| present) {
+        return Ok(HeroAuraHealingTransaction::Disabled);
+    }
+    if frame.wrapping_add(i32::from(state.unit_id)) % ANTIPATER_HEAL_RATE != 0 {
+        return Ok(HeroAuraHealingTransaction::NotDue {
+            rate: ANTIPATER_HEAL_RATE,
+        });
+    }
+    if state.type_308 != 1 || state.curr_uber_size != 1 {
+        return Ok(HeroAuraHealingTransaction::BlockedComposition {
+            rate: ANTIPATER_HEAL_RATE,
+            blocker: HeroAuraHealingBlocker::MultiSlot {
+                type_id: state.type_id,
+                uber_size: state.type_308,
+            },
+        });
+    }
+
+    for (slot, hero_type_id) in HERO_TYPES.into_iter().enumerate() {
+        if !owned[slot] {
+            continue;
+        }
+        let Some(hero_object_index) = find_registered_hero_aura(state, hero_type_id, host)? else {
+            continue;
+        };
+        let repair = host
+            .repair_hero_aura_damage(
+                who,
+                o,
+                state.damage,
+                state.healing,
+                state.unit_masks,
+                1,
+                ANTIPATER_HEAL_RATE,
+            )
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        return Ok(HeroAuraHealingTransaction::Healed {
+            rate: ANTIPATER_HEAL_RATE,
+            hero_type_id,
+            hero_object_index,
+            repair,
+        });
+    }
+
+    Ok(HeroAuraHealingTransaction::OutsideAura {
+        rate: ANTIPATER_HEAL_RATE,
+    })
+}
+
 /// Execute the exact same-owner, ordinary-unit subdomain of the Iroquois healing arm in
 /// `Unit::process_healing` (`0x005E0B49..0x005E0C90`).
 ///
-/// `LeaderData::get_age` selects the shipped `{20,15,10,5}` frame rate. Before mutating,
-/// this transaction preflights every earlier/later healing family which can compose in
-/// Arena's supported object shape. Civilian/merchant and multi-slot shapes remain typed
-/// blockers; foreign territory still needs the absent mutual diplomacy matrix.
+/// `LeaderData::get_age` selects the shipped `{20,15,10,5}` frame rate. The exact
+/// Antipater/Wellington family is sequenced by the live World before this call; this
+/// transaction preflights the remaining later patriot families before mutating.
+/// Civilian/merchant and multi-slot shapes remain typed blockers; foreign territory still
+/// needs the absent mutual diplomacy matrix.
 pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     frame: i32,
     who: i32,
@@ -1790,29 +1969,6 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
             },
         });
     }
-    if host
-        .hero_records(who)
-        .map_err(SupplyAttritionTransactionError::Host)?
-        .iter()
-        .any(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0)
-    {
-        return Ok(IroquoisHealingTransaction::BlockedComposition {
-            rate,
-            blocker: IroquoisHealingBlocker::LiveHeroRegistry,
-        });
-    }
-    for source_type_id in [0x137, 0x13E] {
-        if host
-            .owned_type_count(who, source_type_id)
-            .map_err(SupplyAttritionTransactionError::Host)?
-            > 0
-        {
-            return Ok(IroquoisHealingTransaction::BlockedComposition {
-                rate,
-                blocker: IroquoisHealingBlocker::EarlierHeroSourceType { source_type_id },
-            });
-        }
-    }
     if let Some(scenario_type_id) = host
         .scenario_healing_type()
         .map_err(SupplyAttritionTransactionError::Host)?
@@ -1827,21 +1983,19 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
             });
         }
     }
-    for (unit_type_id, source_type_id) in [(0x161, 0x12F), (0x163, 0x131), (0x165, 0x133)] {
+    // These optimized num_units loads use unit-table slots 0x12F/0x131/0x133. Adding
+    // the table's TypeIndex base 0x32 identifies the Senator/President/CEO themselves.
+    // Their later aura family is not yet integrated, so any live source blocks before
+    // the Iroquois mutation rather than being mistaken for an aircraft TypeIndex.
+    for patriot_type_id in [0x161, 0x163, 0x165] {
         if host
-            .owned_type_count(who, source_type_id)
+            .owned_type_count(who, patriot_type_id)
             .map_err(SupplyAttritionTransactionError::Host)?
             > 0
-            && host
-                .object_is(who, o, unit_type_id, 0)
-                .map_err(SupplyAttritionTransactionError::Host)?
         {
             return Ok(IroquoisHealingTransaction::BlockedComposition {
                 rate,
-                blocker: IroquoisHealingBlocker::LaterPatriotFamily {
-                    unit_type_id,
-                    source_type_id,
-                },
+                blocker: IroquoisHealingBlocker::LaterPatriotFamily { patriot_type_id },
             });
         }
     }
@@ -1888,8 +2042,9 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
 /// The shipped rate is 45 frames. Retail rejects the due call while under attack, accepts
 /// four literal worker TypeIndexes, then repairs on sea or allied territory. Arena has no
 /// diplomacy matrix, so same-owner land is exact, unowned land is an exact no-op, and a
-/// foreign owner is a typed authority boundary. Earlier hero/Iroquois/supply families and
-/// multi-slot repair likewise remain explicit instead of being silently composed.
+/// foreign owner is a typed authority boundary. The live World sequences the supported
+/// hero aura first; Iroquois/supply, unintegrated patriot and multi-slot composition remain
+/// explicit instead of being silently combined here.
 pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
     frame: i32,
     who: i32,
@@ -1945,16 +2100,17 @@ pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
             },
         });
     }
-    if host
-        .hero_records(who)
-        .map_err(SupplyAttritionTransactionError::Host)?
-        .iter()
-        .any(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0)
-    {
-        return Ok(WorkerHealingTransaction::BlockedPriorFamily {
-            rate: CIVILIAN_HEAL_RATE,
-            blocker: WorkerHealingBlocker::LiveHeroRegistry,
-        });
+    for patriot_type_id in [0x161, 0x163, 0x165] {
+        if host
+            .owned_type_count(who, patriot_type_id)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            > 0
+        {
+            return Ok(WorkerHealingTransaction::BlockedPriorFamily {
+                rate: CIVILIAN_HEAL_RATE,
+                blocker: WorkerHealingBlocker::PatriotHealing { patriot_type_id },
+            });
+        }
     }
     if host
         .iroquois_healing_bonus(who)
