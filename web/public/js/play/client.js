@@ -20,12 +20,20 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 /** Ticks per second at Normal speed: `TurnControl::timings` 0x00AFC4A4 is 67 ms. */
 const TICK_MS = 67;
 const DEFAULT_SEED = 0x00c0ffee;
+const SESSION_MAP = 'integration-land';
+const POPULATION_LIMITS = Object.freeze([25, 50, 75, 100, 125, 150, 175, 200]);
+const INCOME_MODES = Object.freeze([
+  Object.freeze({ value: 0, slug: 'retail-cap', label: 'retail commerce cap' }),
+  Object.freeze({ value: 1, slug: 'uncapped-experiment', label: 'DoN uncapped experiment' }),
+]);
 
 const state = {
   mod: null, gfx: null, data: null, play: null,
   who: 0,
   sessionSeed: DEFAULT_SEED,
   sessionInitialDigest: '',
+  sessionIncomeMode: 0,
+  sessionPopSetting: 3,
   cam: { x: 0, y: 0, tilePx: 22 },
   drag: null, panning: null,
   groups: new Map(),
@@ -68,8 +76,12 @@ async function boot() {
   const seed = parseSessionSeed(params.get('seed') ?? DEFAULT_SEED);
   if (!mod.create(gamedata, playdata, seed)) throw new Error('game_create failed');
   state.sessionSeed = seed;
-  state.sessionInitialDigest = mod.digest();
   state.who = parseSessionPlayer(params.get('player'), mod.playerCount);
+  state.sessionIncomeMode = parseSessionIncome(params.get('income'));
+  state.sessionPopSetting = parseSessionPopulation(params.get('population'));
+  mod.setIncomeMode(state.sessionIncomeMode);
+  mod.setPopSetting(state.sessionPopSetting);
+  state.sessionInitialDigest = mod.digest();
   if (!mod.hasGameData || !mod.hasPlayData) {
     throw new Error('packed retail-derived tables failed validation');
   }
@@ -135,6 +147,17 @@ function parseSessionPlayer(value, count) {
 }
 
 function formatSeed(seed) { return `0x${(seed >>> 0).toString(16).padStart(8, '0')}`; }
+
+function parseSessionIncome(value) {
+  if (value === null || value === '') return 0;
+  return INCOME_MODES.find((mode) => mode.slug === value)?.value ?? 0;
+}
+
+function parseSessionPopulation(value) {
+  if (value === null || value === '') return 3;
+  const index = POPULATION_LIMITS.indexOf(Number(value));
+  return index < 0 ? 3 : index;
+}
 
 // ---------------------------------------------------------------------------------------
 // camera
@@ -578,6 +601,12 @@ function initializeSessionPanel() {
   }
   players.value = String(state.who);
   $('session-seed').value = formatSeed(state.sessionSeed);
+  $('income').value = String(state.sessionIncomeMode);
+  $('popset').value = String(state.sessionPopSetting);
+  const size = `${state.mod.tiles}x${state.mod.tiles}`;
+  const sizeOption = $('session-size').options[0];
+  sizeOption.value = size;
+  sizeOption.textContent = `${state.mod.tiles} × ${state.mod.tiles} tiles — fixed`;
 
   $('session-new').addEventListener('click', restartSessionFromPanel);
   $('session-seed').addEventListener('keydown', (event) => {
@@ -587,6 +616,7 @@ function initializeSessionPanel() {
   $('session-share').addEventListener('click', shareSessionLink);
   syncSessionUrl();
   renderSessionStatus();
+  renderSessionSummary();
 }
 
 function restartSessionFromPanel() {
@@ -620,8 +650,8 @@ function restartSessionFromPanel() {
   state.edge = null;
   state.idleCursor = 0;
   state.terrainVersion = -1;
-  state.mod.setIncomeMode(Number($('income').value));
-  state.mod.setPopSetting(Number($('popset').value));
+  state.mod.setIncomeMode(state.sessionIncomeMode);
+  state.mod.setPopSetting(state.sessionPopSetting);
   state.sessionInitialDigest = state.mod.digest();
   miniVersion = -1;
   miniTerrain = null;
@@ -638,6 +668,7 @@ function restartSessionFromPanel() {
   renderMenus();
   renderSelection();
   renderSessionStatus();
+  renderSessionSummary();
   say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
     'seed-dependent map generation remains blocked', 'ok');
   return true;
@@ -658,13 +689,29 @@ function switchPlayer(player) {
   renderMenus();
   renderSelection();
   renderSessionStatus();
+  renderSessionSummary();
   say(`player perspective changed to ${state.who}`, 'hi');
 }
 
 function sessionUrl() {
-  const url = new URL(location.href);
+  const current = new URL(location.href);
+  const backend = current.searchParams.get('backend');
+  const url = new URL(current.href);
+  url.search = '';
+  url.hash = '';
   url.searchParams.set('seed', formatSeed(state.sessionSeed));
   url.searchParams.set('player', String(state.who));
+  url.searchParams.set('map', SESSION_MAP);
+  url.searchParams.set('size', `${state.mod.tiles}x${state.mod.tiles}`);
+  url.searchParams.set('nation', 'unavailable');
+  url.searchParams.set('team', 'unavailable');
+  url.searchParams.set('slots', `${state.mod.playerCount}-manual`);
+  url.searchParams.set('ai_slots', 'unavailable');
+  url.searchParams.set('ai_difficulty', 'unavailable');
+  url.searchParams.set('income', INCOME_MODES[state.sessionIncomeMode].slug);
+  url.searchParams.set('population', String(POPULATION_LIMITS[state.sessionPopSetting]));
+  url.searchParams.set('victory', 'unavailable');
+  if (backend) url.searchParams.set('backend', backend);
   return url;
 }
 
@@ -687,7 +734,7 @@ async function shareSessionLink() {
     copied = document.execCommand('copy');
     area.remove();
   }
-  if (copied) say('session link copied — requested seed and player are encoded in the URL', 'ok');
+  if (copied) say('session link copied — the canonical supported and unavailable setup is encoded', 'ok');
   else {
     $('session-status').textContent = `copy unavailable — ${url}`;
     say('clipboard unavailable; session link is shown in the session panel', 'warn');
@@ -701,6 +748,37 @@ function renderSessionStatus() {
     `initial digest ${state.sessionInitialDigest} · seed not yet consumed by world setup`;
 }
 
+function sessionDescriptor() {
+  const income = INCOME_MODES[state.sessionIncomeMode];
+  return Object.freeze({
+    seed: formatSeed(state.sessionSeed),
+    player: state.who,
+    map: SESSION_MAP,
+    size: `${state.mod.tiles}x${state.mod.tiles}`,
+    nation: 'unavailable',
+    team: 'unavailable',
+    slots: state.mod.playerCount,
+    aiSlots: 'unavailable',
+    aiDifficulty: 'unavailable',
+    income: income.slug,
+    population: POPULATION_LIMITS[state.sessionPopSetting],
+    victory: 'unavailable',
+  });
+}
+
+function renderSessionSummary() {
+  if (!$('session-summary') || !state.mod) return;
+  const setup = sessionDescriptor();
+  $('summary-world').textContent =
+    `integration land · ${state.mod.tiles} × ${state.mod.tiles} tiles · fixed`;
+  $('summary-player').textContent =
+    `P${setup.player} · nation unavailable · team unavailable`;
+  $('summary-slots').textContent =
+    `${setup.slots} manual command perspectives · AI unavailable`;
+  $('summary-rules').textContent =
+    `population ${setup.population} · ${INCOME_MODES[state.sessionIncomeMode].label} · victory unavailable`;
+}
+
 function wirePanels() {
   for (const id of ['tab-build', 'tab-train']) {
     $(id).addEventListener('click', () => {
@@ -710,10 +788,19 @@ function wirePanels() {
     });
   }
   $('income').addEventListener('change', (e) => {
-    state.mod.setIncomeMode(Number(e.target.value));
+    state.sessionIncomeMode = Number(e.target.value) === 1 ? 1 : 0;
+    state.mod.setIncomeMode(state.sessionIncomeMode);
+    syncSessionUrl();
+    renderSessionSummary();
     say(`income mode: ${e.target.selectedOptions[0].textContent}`, 'hi');
   });
-  $('popset').addEventListener('change', (e) => state.mod.setPopSetting(Number(e.target.value)));
+  $('popset').addEventListener('change', (e) => {
+    state.sessionPopSetting = clamp(Number(e.target.value) | 0, 0, POPULATION_LIMITS.length - 1);
+    state.mod.setPopSetting(state.sessionPopSetting);
+    syncSessionUrl();
+    renderSessionSummary();
+    say(`population limit: ${POPULATION_LIMITS[state.sessionPopSetting]}`, 'hi');
+  });
   $('speed').addEventListener('input', (e) => setSpeed(Number(e.target.value)));
   $('pause').addEventListener('click', () => setPaused(!state.paused));
   $('halt').addEventListener('click', () => logPacket('HALT', state.mod.halt(state.who)));
@@ -1348,6 +1435,7 @@ window.don = {
       return state.who;
     },
     url: () => sessionUrl().href,
+    setup: () => sessionDescriptor(),
   },
   activate,
   info: (id) => state.mod.info(id),
@@ -1372,6 +1460,7 @@ window.don = {
     backend: state.gfx.kind, backendErrors: state.gfx.errors.slice(),
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
+    sessionSetup: sessionDescriptor(),
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),

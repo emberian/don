@@ -119,7 +119,15 @@ try {
   await c.send('Page.enable');
   out.userAgent = (await (await fetch(`http://127.0.0.1:${CDP}/json/version`)).json())['User-Agent'];
 
-  const url = `http://127.0.0.1:${PORT}/play.html` + (BACKEND ? `?backend=${BACKEND}` : '');
+  // Ask for unsupported setup values on purpose. The client must canonicalize those to
+  // unavailable while honoring the two rule parameters the current WASM ABI really accepts.
+  const requested = new URLSearchParams({
+    map: 'requested-ocean', nation: 'requested-nation', team: '2',
+    ai_slots: '3', ai_difficulty: 'hard', victory: 'conquest',
+    income: 'uncapped-experiment', population: '150',
+  });
+  if (BACKEND) requested.set('backend', BACKEND);
+  const url = `http://127.0.0.1:${PORT}/play.html?${requested}`;
   await c.send('Page.navigate', { url });
   let up = false;
   for (let i = 0; i < 100; i++) {
@@ -170,6 +178,13 @@ try {
       sessionStatus: document.getElementById('session-status')?.textContent ?? '',
       sessionStatusLive: document.getElementById('session-status')?.getAttribute('aria-live') ?? '',
       sessionShare: !!document.getElementById('session-share'),
+      sessionSetup: window.don.session.setup(),
+      sessionUrl: window.don.session.url(),
+      sessionUnavailableDisabled: [
+        'session-map', 'session-size', 'session-nation', 'session-team',
+        'session-ai-slots', 'session-ai-difficulty', 'session-victory',
+      ].every(id => document.getElementById(id)?.disabled),
+      sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -194,6 +209,18 @@ try {
       out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('seed not yet consumed')],
     ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
     ['session links are shareable', out.ui.sessionShare],
+    ['unsupported setup choices stay disabled', out.ui.sessionUnavailableDisabled],
+    ['unsupported URL requests are canonicalized rather than fabricated',
+      out.ui.sessionSetup.map === 'integration-land' && out.ui.sessionSetup.size === '128x128' &&
+      out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 'unavailable' &&
+      out.ui.sessionSetup.aiSlots === 'unavailable' && out.ui.sessionSetup.aiDifficulty === 'unavailable' &&
+      out.ui.sessionSetup.victory === 'unavailable'],
+    ['the two accepted rules are restored from the URL',
+      out.ui.sessionSetup.income === 'uncapped-experiment' && out.ui.sessionSetup.population === 150 &&
+      out.boot.player.popCap === 150],
+    ['the pregame summary exposes world, slots, rules, and unavailable systems',
+      out.ui.sessionSummary.includes('128 × 128') && out.ui.sessionSummary.includes('manual') &&
+      out.ui.sessionSummary.includes('population 150') && out.ui.sessionSummary.includes('victory unavailable')],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -243,8 +270,17 @@ try {
     m.step(9);
     const dirtyFrame = m.frame;
     const oldDigest = d.state.sessionInitialDigest;
+    const income = document.getElementById('income');
+    income.value = '0';
+    income.dispatchEvent(new Event('change', { bubbles: true }));
+    const population = document.getElementById('popset');
+    population.value = '2';
+    population.dispatchEvent(new Event('change', { bubbles: true }));
+    const configured = d.session.setup();
     const restarted = d.session.restart('0x1234abcd');
     const after = d.stats();
+    m.step(1);
+    const afterRuleTick = d.stats();
     const url = new URL(d.session.url());
     const input = document.getElementById('session-seed');
     input.value = 'not-a-seed';
@@ -259,7 +295,15 @@ try {
       frameAfterRestart: after.frame, seedAfterRestart: after.sessionSeed,
       packsAfterRestart: [after.hasGameData, after.hasPlayData],
       stockAfterRestart: after.player.stock,
+      popCapAfterRuleTick: afterRuleTick.player.popCap,
+      configured,
       urlSeed: url.searchParams.get('seed'), urlPlayer: url.searchParams.get('player'),
+      urlMap: url.searchParams.get('map'), urlSize: url.searchParams.get('size'),
+      urlNation: url.searchParams.get('nation'), urlTeam: url.searchParams.get('team'),
+      urlSlots: url.searchParams.get('slots'), urlAiSlots: url.searchParams.get('ai_slots'),
+      urlAiDifficulty: url.searchParams.get('ai_difficulty'),
+      urlIncome: url.searchParams.get('income'), urlPopulation: url.searchParams.get('population'),
+      urlVictory: url.searchParams.get('victory'),
       invalidPreserved, switched, returned,
       status: document.getElementById('session-status').textContent,
     });
@@ -271,10 +315,21 @@ try {
     ['restart retains the packed data tables', out.session.packsAfterRestart.every(Boolean)],
     ['restart exposes the initial player ledger without advancing',
       JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([200, 200, 100, 100, 100, 100])],
+    ['supported setup rules are applied to the replacement world',
+      out.session.configured.income === 'retail-cap' && out.session.configured.population === 75 &&
+      out.session.popCapAfterRuleTick === 75],
     ['the current seed-invariant initializer is exposed honestly',
       out.session.newDigest === out.session.oldDigest && out.session.status.includes('seed not yet consumed')],
     ['the share URL carries the canonical seed and player',
       out.session.urlSeed === '0x1234abcd' && out.session.urlPlayer === '0'],
+    ['the share URL records the fixed world and missing player systems',
+      out.session.urlMap === 'integration-land' && out.session.urlSize === '128x128' &&
+      out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unavailable' &&
+      out.session.urlSlots === '4-manual' && out.session.urlAiSlots === 'unavailable' &&
+      out.session.urlAiDifficulty === 'unavailable'],
+    ['the share URL records only the live rule values and the absent victory host',
+      out.session.urlIncome === 'retail-cap' && out.session.urlPopulation === '75' &&
+      out.session.urlVictory === 'unavailable'],
     ['a malformed seed preserves the live session', out.session.invalidPreserved],
     ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
     ['session status returns to player zero', out.session.status.includes('player 0')],

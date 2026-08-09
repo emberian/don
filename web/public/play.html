@@ -141,6 +141,17 @@
   #readiness-blockers code { color:var(--warn); }
   #palette-filter { width:100%; margin-bottom:6px; padding:4px 6px; }
   #session-status { user-select:text; -webkit-user-select:text; overflow-wrap:anywhere; }
+  .setup-heading { margin:8px 0 3px; color:var(--ink); font:600 9px var(--mono);
+    letter-spacing:.08em; text-transform:uppercase; }
+  .setup-heading:first-child { margin-top:0; }
+  .unavailable { opacity:.72; }
+  .unavailable select { border-style:dashed; color:var(--dim); cursor:not-allowed; }
+  #session-summary { margin:8px 0; padding:7px 8px; border:1px solid var(--line);
+    border-radius:5px; background:#0d1118; display:grid; gap:4px; }
+  .summary-row { display:grid; grid-template-columns:60px minmax(0,1fr); gap:7px;
+    font:9.5px/1.35 var(--mono); }
+  .summary-row span { color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .summary-row b { color:var(--ink); font-weight:500; overflow-wrap:anywhere; }
 
   @media (max-width:900px) {
     #app { grid-template-columns:minmax(400px,1fr) 290px; }
@@ -211,12 +222,82 @@
     <div id="readiness-head" class="status-note">Loading compiled readiness registry…</div>
 
     <fieldset id="session">
-      <legend>session</legend>
+      <legend>new game setup</legend>
+      <div class="setup-heading">session</div>
       <label>requested seed
         <input id="session-seed" type="text" value="0x00c0ffee" inputmode="text"
           autocomplete="off" spellcheck="false" aria-describedby="session-status">
       </label>
-      <label>you are player <select id="session-player" style="width:150px"></select></label>
+      <label>your perspective <select id="session-player" style="width:150px"></select></label>
+
+      <div class="setup-heading">world</div>
+      <label class="unavailable">map style
+        <select id="session-map" style="width:150px" disabled
+          title="Unavailable: the current WASM core exposes one integration map only">
+          <option value="integration-land">integration land — fixed</option>
+        </select>
+      </label>
+      <label class="unavailable">map size
+        <select id="session-size" style="width:150px" disabled
+          title="Unavailable: the current WASM core provisions one fixed map extent">
+          <option value="128x128">128 × 128 tiles — fixed</option>
+        </select>
+      </label>
+
+      <div class="setup-heading">players</div>
+      <label class="unavailable">nation
+        <select id="session-nation" style="width:150px" disabled
+          title="Unavailable: nation state is not accepted by the current WASM core">
+          <option value="unavailable">unavailable — no nation host</option>
+        </select>
+      </label>
+      <label class="unavailable">team
+        <select id="session-team" style="width:150px" disabled
+          title="Unavailable: team and diplomacy state are not accepted by the current WASM core">
+          <option value="unavailable">unavailable — no team host</option>
+        </select>
+      </label>
+      <label class="unavailable">AI slots
+        <select id="session-ai-slots" style="width:150px" disabled
+          title="Unavailable: no AI policy is attached to the playable WASM world">
+          <option value="unavailable">unavailable — manual slots</option>
+        </select>
+      </label>
+      <label class="unavailable">AI difficulty
+        <select id="session-ai-difficulty" style="width:150px" disabled
+          title="Unavailable: no AI policy or difficulty seam is attached">
+          <option value="unavailable">unavailable — no AI host</option>
+        </select>
+      </label>
+
+      <div class="setup-heading">supported rules</div>
+      <label>income
+        <select id="income" style="width:150px">
+          <option value="0" selected>retail cap step</option>
+          <option value="1">DoN experiment — uncapped</option>
+        </select>
+      </label>
+      <label>population limit
+        <select id="popset" style="width:150px">
+          <option value="0">25</option><option value="1">50</option>
+          <option value="2">75</option><option value="3" selected>100</option>
+          <option value="4">125</option><option value="5">150</option>
+          <option value="6">175</option><option value="7">200</option>
+        </select>
+      </label>
+      <label class="unavailable">victory
+        <select id="session-victory" style="width:150px" disabled
+          title="Unavailable: the current WASM world has no victory or endgame host">
+          <option value="unavailable">unavailable — no endgame</option>
+        </select>
+      </label>
+
+      <div id="session-summary" aria-label="Pregame summary">
+        <div class="summary-row"><span>world</span><b id="summary-world">loading…</b></div>
+        <div class="summary-row"><span>player</span><b id="summary-player">loading…</b></div>
+        <div class="summary-row"><span>slots</span><b id="summary-slots">loading…</b></div>
+        <div class="summary-row"><span>rules</span><b id="summary-rules">loading…</b></div>
+      </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap">
         <button id="session-new" class="primary">new game</button>
         <button id="session-share">copy session link</button>
@@ -225,9 +306,10 @@
         session loading…
       </div>
       <div class="hint" style="margin-top:4px">
-        The seed is passed into <code>GameWorld</code> and retained in a shareable session URL,
-        but the current initializer does not yet consume it for map/start generation. Map type,
-        nations, teams, and victory setup remain compiled readiness blockers.
+        Only population limit and income mode have live core setters. The seed reaches
+        <code>GameWorld</code>, but its current initializer does not consume it for map/start
+        generation. Disabled choices are encoded as unavailable in the session URL; they are not
+        frontend-only rules pretending to affect play.
       </div>
     </fieldset>
 
@@ -269,21 +351,7 @@
     </fieldset>
 
     <fieldset>
-      <legend>game</legend>
-      <label>income
-        <select id="income" style="width:150px">
-          <option value="0" selected>retail cap step</option>
-          <option value="1">DoN experiment — uncapped</option>
-        </select>
-      </label>
-      <label>population limit
-        <select id="popset" style="width:150px">
-          <option value="0">25</option><option value="1">50</option>
-          <option value="2">75</option><option value="3" selected>100</option>
-          <option value="4">125</option><option value="5">150</option>
-          <option value="6">175</option><option value="7">200</option>
-        </select>
-      </label>
+      <legend>runtime</legend>
       <label>speed <input id="speed" type="range" min="0.25" max="8" step="0.25" value="1" style="width:150px"></label>
       <div style="display:flex;gap:4px"><button id="pause">pause (P)</button><button id="halt">halt (H)</button></div>
     </fieldset>
