@@ -456,10 +456,14 @@ state left by the completed prior arm.
 The Rust preview transaction now resumes this dispatcher after a complete player or region
 pattern. `completed_placement_groups` records only arms that reached `0x006a8ee5`; the
 existing preparation receipt appends every subsequently visited daemon/progress event and
-selected group's exact clump arrays. The transaction remains fail-closed at the next
-placement kernel because the current public adapters intentionally accept one typed external
-effect stream at a time. Executing a second heterogeneous selected arm, rather than merely
-preparing and surfacing it, is the exact remaining composition boundary.
+selected group's exact clump arrays. A player-effect stream continues across any later
+pattern-0 groups, carrying preview World, RNG and mountain cursors while resetting the two
+group-local formation arrays at each native cleanup edge. Per-group receipts preserve those
+otherwise-lost local arrays and `placed` results. A region-effect stream likewise continues
+across later patterns 1--3, additionally carrying the returned helping-score table. The
+transaction remains fail-closed when the next selected arm changes between player and region
+families. Executing that heterogeneous edge requires a multiplexed typed input API and is the
+exact residual composition boundary.
 
 ### 7.2 Executable world-generation oracle boundary
 

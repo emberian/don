@@ -171,6 +171,8 @@ pub struct PlaceAllPreviewReceipt {
     pub region_group_continuation: Option<PlaceRegionGroupReceipt>,
     /// Exact pattern-1/2/3 eligible-region and clump loop.
     pub region_pattern: Option<RegionPatternReceipt>,
+    /// One receipt per attempted pattern-1/2/3 group in native group order.
+    pub region_pattern_dispatches: Vec<RegionPatternGroupReceipt>,
     /// Exact pattern-0 player/start-ring calls, including locally closed growth
     /// and mountain-template retry continuations.
     pub player_group_prefix: Option<Vec<PlacePlayerGroupReceipt>>,
@@ -181,9 +183,47 @@ pub struct PlaceAllPreviewReceipt {
     pub player_group_placed_after: Vec<i32>,
     pub player_group_formation_x: Vec<i32>,
     pub player_group_formation_y: Vec<i32>,
+    /// One receipt per fully attempted pattern-0 group in native group order.
+    /// Unlike the legacy flattened fields above, group-local formation and
+    /// `placed` arrays remain separated across the `0x006a8ee5` cleanup edge.
+    pub player_group_dispatches: Vec<PlayerPatternGroupReceipt>,
     /// Selected placement arms that reached their native group-local cleanup
     /// and `group_index++` edge at `0x006a8ee5`.
     pub completed_placement_groups: Vec<usize>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PlayerPatternGroupOutcome {
+    Complete,
+    ExternalResolutionRequired {
+        clump_index: usize,
+        player_index: usize,
+        request: PlayerGroupExternalRequest,
+    },
+    GrowthKernel {
+        clump_index: usize,
+        player_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerPatternGroupReceipt {
+    pub group_index: usize,
+    pub calls: Vec<PlacePlayerGroupReceipt>,
+    pub mountain_retries: Vec<PlayerMountainTemplateRetryReceipt>,
+    pub host_events: Vec<PlaceAllHostEvent>,
+    pub placed_after: Vec<i32>,
+    pub formation_x_after: Vec<i32>,
+    pub formation_y_after: Vec<i32>,
+    pub external_resolutions_consumed: usize,
+    pub outcome: PlayerPatternGroupOutcome,
+    pub rng_state_after: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionPatternGroupReceipt {
+    pub group_index: usize,
+    pub pattern: RegionPatternReceipt,
 }
 
 /// Outputs of the still-upstream unit-catalog and region-selection block in
@@ -339,12 +379,6 @@ pub enum TerrainPlacementBoundary {
         group_index: usize,
         clump_index: usize,
         player_index: usize,
-    },
-    PlayerGroupReturnControl {
-        group_index: usize,
-        clump_index: usize,
-        player_index: usize,
-        return_value: i32,
     },
     /// Patterns 1--3 first inspect the unit-type catalog and then call
     /// `place_region_group` (`0x006a2f60`).
@@ -833,221 +867,60 @@ impl TerrainGroups {
         let mut region_group_drop = None;
         let mut region_group_continuation = None;
         let mut region_pattern = None;
+        let mut region_pattern_dispatches = Vec::new();
         let mut player_group_prefix = None;
         let mut player_group_mountain_retries = Vec::new();
         let mut player_group_host_events = Vec::new();
         let mut player_group_placed_after = Vec::new();
         let mut player_group_formation_x = Vec::new();
         let mut player_group_formation_y = Vec::new();
+        let mut player_group_dispatches = Vec::new();
         let mut completed_placement_groups = Vec::new();
         let boundary = if let Some(externals) = player_group_externals {
-            let TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } = boundary
-            else {
+            if !matches!(
+                boundary,
+                TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { .. }
+            ) {
                 return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index: 0 });
-            };
-            let Some(prepared) = placement_preparation
-                .prepared_groups
-                .iter()
-                .find(|prepared| prepared.group_index == group_index)
-            else {
-                return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
-            };
-            if prepared.primary_sizes.is_empty()
-                || prepared.primary_sizes.len() != prepared.secondary_sizes.len()
-            {
-                return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
             }
-            if world.start_x.items.is_empty() {
-                completed_placement_groups.push(group_index);
-                self.prepare_placement_continuation(
-                    &group_selection.groups,
-                    &mut preview_random,
-                    progress,
-                    place_players,
-                    group_index + 1,
-                    &mut placement_preparation,
-                    &mut *host,
-                )
-                .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
-            } else {
-                let mut preview_world = world.clone();
-                let mut preview_group = self.groups[group_index].clone();
-                let mut calls = Vec::new();
-                let mut consumed = 0usize;
-                let mut next = TerrainPlacementBoundary::AddDoobers;
-                let mut complete = true;
-                'clumps: for (clump_index, (&target_tiles, &oil_deposits)) in prepared
-                    .primary_sizes
+            let mut preview_world = world.clone();
+            let mut preview_groups = self.groups.clone();
+            let mut consumed = 0usize;
+            let mut calls = Vec::new();
+            let mut next = boundary;
+            loop {
+                let TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } = next
+                else {
+                    break;
+                };
+                let Some(prepared) = placement_preparation
+                    .prepared_groups
                     .iter()
-                    .zip(&prepared.secondary_sizes)
-                    .enumerate()
-                {
-                    for player_index in 0..world.start_x.items.len() {
-                        let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
-                            group_index,
-                            clump_index,
-                            player_index,
-                        };
-                        host(event);
-                        player_group_host_events.push(event);
+                    .find(|prepared| prepared.group_index == group_index)
+                else {
+                    return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
+                };
+                let execution = Self::execute_player_pattern_group(
+                    &mut preview_groups[group_index],
+                    &mut preview_world,
+                    &mut preview_random,
+                    &mut preview_mountains,
+                    prepared,
+                    &externals[consumed..],
+                    &mut *host,
+                )?;
+                consumed += execution.external_resolutions_consumed;
+                calls.extend(execution.calls.iter().cloned());
+                player_group_mountain_retries.extend(execution.mountain_retries.iter().cloned());
+                player_group_host_events.extend(execution.host_events.iter().copied());
+                player_group_placed_after = execution.placed_after.clone();
+                player_group_formation_x = execution.formation_x_after.clone();
+                player_group_formation_y = execution.formation_y_after.clone();
 
-                        let land_subtype = if preview_group.group_type == 5 {
-                            preview_mountains.get_range_raw(target_tiles)
-                        } else {
-                            target_tiles
-                        };
-                        let first = preview_group
-                            .apply_place_player_group(
-                                &mut preview_world,
-                                &mut preview_random,
-                                PlacePlayerGroupCall {
-                                    target_tiles,
-                                    player_index,
-                                    land_subtype,
-                                    oil_deposits,
-                                    group_index,
-                                    strict_type_four: preview_group.group_type == 4,
-                                },
-                                &mut player_group_formation_x,
-                                &mut player_group_formation_y,
-                                &externals[consumed..],
-                            )
-                            .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
-                        consumed += first.external_resolutions_consumed;
-                        let mut outcome = first.outcome.clone();
-                        calls.push(first);
-
-                        // Pattern 0 retries a failed type-4 player call without
-                        // the strict 9x9 forest probe or another daemon pump.
-                        if preview_group.group_type == 4
-                            && matches!(outcome, PlacePlayerGroupOutcome::Returned(0))
-                        {
-                            let retry = preview_group
-                                .apply_place_player_group(
-                                    &mut preview_world,
-                                    &mut preview_random,
-                                    PlacePlayerGroupCall {
-                                        target_tiles,
-                                        player_index,
-                                        land_subtype,
-                                        oil_deposits,
-                                        group_index,
-                                        strict_type_four: false,
-                                    },
-                                    &mut player_group_formation_x,
-                                    &mut player_group_formation_y,
-                                    &externals[consumed..],
-                                )
-                                .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
-                            consumed += retry.external_resolutions_consumed;
-                            outcome = retry.outcome.clone();
-                            calls.push(retry);
-                        }
-
-                        match outcome {
-                            PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
-                                next = TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
-                                    group_index,
-                                    clump_index,
-                                    player_index,
-                                    request,
-                                };
-                                complete = false;
-                                break 'clumps;
-                            }
-                            PlacePlayerGroupOutcome::GrowthKernel { .. } => {
-                                next = TerrainPlacementBoundary::PlayerGroupGrowthKernel {
-                                    group_index,
-                                    clump_index,
-                                    player_index,
-                                };
-                                complete = false;
-                                break 'clumps;
-                            }
-                            PlacePlayerGroupOutcome::Returned(return_value) => {
-                                if preview_group.group_type == 5 && return_value == 0 {
-                                    let retry = preview_group
-                                        .apply_player_mountain_template_retry(
-                                            &mut preview_world,
-                                            &mut preview_random,
-                                            &mut preview_mountains,
-                                            PlacePlayerGroupCall {
-                                                target_tiles,
-                                                player_index,
-                                                land_subtype,
-                                                oil_deposits,
-                                                group_index,
-                                                strict_type_four: false,
-                                            },
-                                            land_subtype,
-                                            &mut player_group_formation_x,
-                                            &mut player_group_formation_y,
-                                            &externals[consumed..],
-                                            || {
-                                                let event =
-                                                    PlaceAllHostEvent::NetDaemonProcessAllPlayer {
-                                                        group_index,
-                                                        clump_index,
-                                                        player_index,
-                                                    };
-                                                host(event);
-                                                player_group_host_events.push(event);
-                                            },
-                                        )
-                                        .map_err(
-                                            PlaceAllError::InvalidPlayerMountainTemplateRetry,
-                                        )?;
-                                    consumed += retry.external_resolutions_consumed;
-                                    calls.extend(
-                                        retry
-                                            .attempts
-                                            .iter()
-                                            .map(|attempt| attempt.placement.clone()),
-                                    );
-                                    outcome = retry.outcome.clone();
-                                    player_group_mountain_retries.push(retry);
-                                }
-                                match outcome {
-                                    PlacePlayerGroupOutcome::Returned(return_value) => {
-                                        preview_group.placed.push(return_value);
-                                        next = TerrainPlacementBoundary::PlayerGroupReturnControl {
-                                            group_index,
-                                            clump_index,
-                                            player_index,
-                                            return_value,
-                                        };
-                                    }
-                                    PlacePlayerGroupOutcome::ExternalResolutionRequired {
-                                        request,
-                                    } => {
-                                        next = TerrainPlacementBoundary::
-                                            PlayerGroupExternalSubsystem {
-                                                group_index,
-                                                clump_index,
-                                                player_index,
-                                                request,
-                                            };
-                                        complete = false;
-                                        break 'clumps;
-                                    }
-                                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
-                                        next = TerrainPlacementBoundary::PlayerGroupGrowthKernel {
-                                            group_index,
-                                            clump_index,
-                                            player_index,
-                                        };
-                                        complete = false;
-                                        break 'clumps;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if complete {
-                    completed_placement_groups.push(group_index);
-                    next = self
-                        .prepare_placement_continuation(
+                next = match execution.outcome {
+                    PlayerPatternGroupOutcome::Complete => {
+                        completed_placement_groups.push(group_index);
+                        self.prepare_placement_continuation(
                             &group_selection.groups,
                             &mut preview_random,
                             progress,
@@ -1056,74 +929,110 @@ impl TerrainGroups {
                             &mut placement_preparation,
                             &mut *host,
                         )
-                        .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
-                }
-                player_group_placed_after = preview_group.placed.clone();
-                player_group_prefix = Some(calls);
-                next
+                        .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
+                    }
+                    PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                        clump_index,
+                        player_index,
+                        request,
+                    } => TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
+                        group_index,
+                        clump_index,
+                        player_index,
+                        request,
+                    },
+                    PlayerPatternGroupOutcome::GrowthKernel {
+                        clump_index,
+                        player_index,
+                    } => TerrainPlacementBoundary::PlayerGroupGrowthKernel {
+                        group_index,
+                        clump_index,
+                        player_index,
+                    },
+                };
+                player_group_dispatches.push(execution);
             }
+            player_group_prefix = Some(calls);
+            next
         } else if let Some((regions, helping, externals)) = region_pattern_inputs {
-            let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
-                group_index,
-                ..
-            } = boundary
-            else {
+            if !matches!(
+                boundary,
+                TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel { .. }
+            ) {
                 return Err(PlaceAllError::InvalidRegionPatternInputs { group_index: 0 });
-            };
-            let Some(prepared) = placement_preparation
-                .prepared_groups
-                .iter()
-                .find(|prepared| prepared.group_index == group_index)
-            else {
-                return Err(PlaceAllError::InvalidRegionPatternInputs { group_index });
-            };
-            let group_type = self.groups[group_index].group_type;
-            let type_slot = usize::try_from(group_type - 4)
-                .ok()
-                .filter(|&slot| slot < 5)
-                .ok_or(PlaceAllError::InvalidRegionPatternInputs { group_index })?;
-            let mut preview_world = world.clone();
-            let mut preview_group = self.groups[group_index].clone();
-            let receipt = preview_group
-                .apply_region_pattern(
-                    &mut preview_world,
-                    regions,
-                    &mut preview_random,
-                    &mut preview_mountains,
-                    prepared.pattern,
-                    &prepared.primary_sizes,
-                    &prepared.secondary_sizes,
-                    group_selection.normalized_clumps_by_type[type_slot],
-                    place_players,
-                    group_index,
-                    helping,
-                    externals,
-                )
-                .map_err(PlaceAllError::InvalidRegionPattern)?;
-            let next = match receipt.outcome {
-                RegionPatternOutcome::ExternalResolutionRequired { request } => {
-                    TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem { request }
-                }
-                RegionPatternOutcome::Complete => {
-                    completed_placement_groups.push(group_index);
-                    self.prepare_placement_continuation(
-                        &group_selection.groups,
-                        &mut preview_random,
-                        progress,
-                        place_players,
-                        group_index + 1,
-                        &mut placement_preparation,
-                        &mut *host,
-                    )
-                    .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
-                }
-            };
-            if let Some(first) = receipt.calls.first() {
-                region_group_prefix = Some(first.placement.prefix.clone());
-                region_group_drop = first.placement.drops.first().cloned();
-                region_group_continuation = Some(first.placement.clone());
             }
-            region_pattern = Some(receipt);
+            let mut preview_world = world.clone();
+            let mut preview_groups = self.groups.clone();
+            let mut current_helping = helping;
+            let mut consumed = 0usize;
+            let mut next = boundary;
+            loop {
+                let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
+                    group_index,
+                    ..
+                } = next
+                else {
+                    break;
+                };
+                let Some(prepared) = placement_preparation
+                    .prepared_groups
+                    .iter()
+                    .find(|prepared| prepared.group_index == group_index)
+                else {
+                    return Err(PlaceAllError::InvalidRegionPatternInputs { group_index });
+                };
+                let group_type = self.groups[group_index].group_type;
+                let type_slot = usize::try_from(group_type - 4)
+                    .ok()
+                    .filter(|&slot| slot < 5)
+                    .ok_or(PlaceAllError::InvalidRegionPatternInputs { group_index })?;
+                let receipt = preview_groups[group_index]
+                    .apply_region_pattern(
+                        &mut preview_world,
+                        regions,
+                        &mut preview_random,
+                        &mut preview_mountains,
+                        prepared.pattern,
+                        &prepared.primary_sizes,
+                        &prepared.secondary_sizes,
+                        group_selection.normalized_clumps_by_type[type_slot],
+                        place_players,
+                        group_index,
+                        current_helping,
+                        &externals[consumed..],
+                    )
+                    .map_err(PlaceAllError::InvalidRegionPattern)?;
+                consumed += receipt.external_resolutions_consumed;
+                current_helping = receipt.helping_after;
+                if let Some(first) = receipt.calls.first() {
+                    region_group_prefix = Some(first.placement.prefix.clone());
+                    region_group_drop = first.placement.drops.first().cloned();
+                    region_group_continuation = Some(first.placement.clone());
+                }
+                next = match receipt.outcome {
+                    RegionPatternOutcome::ExternalResolutionRequired { request } => {
+                        TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem { request }
+                    }
+                    RegionPatternOutcome::Complete => {
+                        completed_placement_groups.push(group_index);
+                        self.prepare_placement_continuation(
+                            &group_selection.groups,
+                            &mut preview_random,
+                            progress,
+                            place_players,
+                            group_index + 1,
+                            &mut placement_preparation,
+                            &mut *host,
+                        )
+                        .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
+                    }
+                };
+                region_pattern = Some(receipt.clone());
+                region_pattern_dispatches.push(RegionPatternGroupReceipt {
+                    group_index,
+                    pattern: receipt,
+                });
+            }
             next
         } else if let Some((regions, resolved)) = resolved_region_group {
             let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
@@ -1242,16 +1151,204 @@ impl TerrainGroups {
                 region_group_drop,
                 region_group_continuation,
                 region_pattern,
+                region_pattern_dispatches,
                 player_group_prefix,
                 player_group_mountain_retries,
                 player_group_host_events,
                 player_group_placed_after,
                 player_group_formation_x,
                 player_group_formation_y,
+                player_group_dispatches,
                 completed_placement_groups,
             },
             boundary,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_player_pattern_group(
+        group: &mut TerrainGroup,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        prepared: &TerrainGroupPlacementPreparation,
+        externals: &[PlayerGroupExternalResolution],
+        host: &mut impl FnMut(PlaceAllHostEvent),
+    ) -> Result<PlayerPatternGroupReceipt, PlaceAllError> {
+        let group_index = prepared.group_index;
+        if prepared.primary_sizes.is_empty()
+            || prepared.primary_sizes.len() != prepared.secondary_sizes.len()
+        {
+            return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
+        }
+
+        let mut receipt = PlayerPatternGroupReceipt {
+            group_index,
+            calls: Vec::new(),
+            mountain_retries: Vec::new(),
+            host_events: Vec::new(),
+            placed_after: group.placed.clone(),
+            formation_x_after: Vec::new(),
+            formation_y_after: Vec::new(),
+            external_resolutions_consumed: 0,
+            outcome: PlayerPatternGroupOutcome::Complete,
+            rng_state_after: random.state(),
+        };
+        if world.start_x.items.is_empty() {
+            return Ok(receipt);
+        }
+
+        'clumps: for (clump_index, (&target_tiles, &oil_deposits)) in prepared
+            .primary_sizes
+            .iter()
+            .zip(&prepared.secondary_sizes)
+            .enumerate()
+        {
+            for player_index in 0..world.start_x.items.len() {
+                let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                    group_index,
+                    clump_index,
+                    player_index,
+                };
+                host(event);
+                receipt.host_events.push(event);
+
+                let land_subtype = if group.group_type == 5 {
+                    mountains.get_range_raw(target_tiles)
+                } else {
+                    target_tiles
+                };
+                let first = group
+                    .apply_place_player_group(
+                        world,
+                        random,
+                        PlacePlayerGroupCall {
+                            target_tiles,
+                            player_index,
+                            land_subtype,
+                            oil_deposits,
+                            group_index,
+                            strict_type_four: group.group_type == 4,
+                        },
+                        &mut receipt.formation_x_after,
+                        &mut receipt.formation_y_after,
+                        &externals[receipt.external_resolutions_consumed..],
+                    )
+                    .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                receipt.external_resolutions_consumed += first.external_resolutions_consumed;
+                let mut outcome = first.outcome.clone();
+                receipt.calls.push(first);
+
+                if group.group_type == 4 && matches!(outcome, PlacePlayerGroupOutcome::Returned(0))
+                {
+                    let retry = group
+                        .apply_place_player_group(
+                            world,
+                            random,
+                            PlacePlayerGroupCall {
+                                target_tiles,
+                                player_index,
+                                land_subtype,
+                                oil_deposits,
+                                group_index,
+                                strict_type_four: false,
+                            },
+                            &mut receipt.formation_x_after,
+                            &mut receipt.formation_y_after,
+                            &externals[receipt.external_resolutions_consumed..],
+                        )
+                        .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                    receipt.external_resolutions_consumed += retry.external_resolutions_consumed;
+                    outcome = retry.outcome.clone();
+                    receipt.calls.push(retry);
+                }
+
+                match outcome {
+                    PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
+                        receipt.outcome = PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                            clump_index,
+                            player_index,
+                            request,
+                        };
+                        break 'clumps;
+                    }
+                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                        receipt.outcome = PlayerPatternGroupOutcome::GrowthKernel {
+                            clump_index,
+                            player_index,
+                        };
+                        break 'clumps;
+                    }
+                    PlacePlayerGroupOutcome::Returned(return_value) => {
+                        if group.group_type == 5 && return_value == 0 {
+                            let retry = group
+                                .apply_player_mountain_template_retry(
+                                    world,
+                                    random,
+                                    mountains,
+                                    PlacePlayerGroupCall {
+                                        target_tiles,
+                                        player_index,
+                                        land_subtype,
+                                        oil_deposits,
+                                        group_index,
+                                        strict_type_four: false,
+                                    },
+                                    land_subtype,
+                                    &mut receipt.formation_x_after,
+                                    &mut receipt.formation_y_after,
+                                    &externals[receipt.external_resolutions_consumed..],
+                                    || {
+                                        let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                                            group_index,
+                                            clump_index,
+                                            player_index,
+                                        };
+                                        host(event);
+                                        receipt.host_events.push(event);
+                                    },
+                                )
+                                .map_err(PlaceAllError::InvalidPlayerMountainTemplateRetry)?;
+                            receipt.external_resolutions_consumed +=
+                                retry.external_resolutions_consumed;
+                            receipt.calls.extend(
+                                retry
+                                    .attempts
+                                    .iter()
+                                    .map(|attempt| attempt.placement.clone()),
+                            );
+                            outcome = retry.outcome.clone();
+                            receipt.mountain_retries.push(retry);
+                        }
+                        match outcome {
+                            PlacePlayerGroupOutcome::Returned(return_value) => {
+                                group.placed.push(return_value);
+                            }
+                            PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
+                                receipt.outcome =
+                                    PlayerPatternGroupOutcome::ExternalResolutionRequired {
+                                        clump_index,
+                                        player_index,
+                                        request,
+                                    };
+                                break 'clumps;
+                            }
+                            PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                                receipt.outcome = PlayerPatternGroupOutcome::GrowthKernel {
+                                    clump_index,
+                                    player_index,
+                                };
+                                break 'clumps;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        receipt.placed_after = group.placed.clone();
+        receipt.rng_state_after = random.state();
+        Ok(receipt)
     }
 
     /// Exact placement preparation beginning with the former host boundary at

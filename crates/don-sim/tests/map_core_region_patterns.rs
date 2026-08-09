@@ -344,3 +344,70 @@ fn place_all_composes_pattern_loop_without_resolved_call_and_keeps_state_transac
     assert_eq!(mountains, before_mountains);
     assert_eq!(random, before_random);
 }
+
+#[test]
+fn same_kind_region_stream_carries_preview_state_across_selected_groups() {
+    let mut world = world(8, 8);
+    let mut regions = Regions::default();
+    region(&mut regions, 1, 6, &[(3, 3)]);
+    let terrain_group = TerrainGroup {
+        group_type: 6,
+        chance: 100,
+        min_clumps: 1,
+        max_clumps: 1,
+        pattern: 2,
+        min_size: 1,
+        max_size: 1,
+        ..TerrainGroup::default()
+    };
+    let mut groups = TerrainGroups {
+        groups: vec![terrain_group.clone(), terrain_group],
+        ..TerrainGroups::default()
+    };
+    let mut mountains = Mountains::default();
+    let mut random = Random::new(0x1357_2468);
+    let before_world = world.clone();
+    let before_groups = groups.clone();
+    let before_mountains = mountains.clone();
+    let before_random = random;
+    let mut host = Vec::new();
+
+    let error = groups
+        .place_all_with_regions(
+            &mut world,
+            &regions,
+            &mut random,
+            &mut mountains,
+            0,
+            0,
+            None,
+            &[],
+            |event| host.push(event),
+        )
+        .unwrap_err();
+    let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+
+    assert_eq!(boundary, TerrainPlacementBoundary::AddDoobers);
+    assert_eq!(preview.completed_placement_groups, [0, 1]);
+    assert_eq!(
+        preview
+            .region_pattern_dispatches
+            .iter()
+            .map(|dispatch| dispatch.group_index)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert!(preview
+        .region_pattern_dispatches
+        .iter()
+        .all(|dispatch| dispatch.pattern.outcome == RegionPatternOutcome::Complete));
+    assert_eq!(host.len(), 2);
+    assert_eq!(world.wdata, before_world.wdata);
+    assert_eq!(world.tdata, before_world.tdata);
+    assert_eq!(world.start_city_locs, before_world.start_city_locs);
+    assert_eq!(groups, before_groups);
+    assert_eq!(mountains, before_mountains);
+    assert_eq!(random, before_random);
+}
