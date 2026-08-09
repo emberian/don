@@ -660,6 +660,26 @@ impl ScenarioHost for Sim {
                     ((self.map.world.tdata[index] as u8 & 0x30) != 0x20) as i32,
                 ))
             }
+            // `map_is_passable` `0x009e4de0`: tile bounds, convert to the containing
+            // WCoord cell, then test `(WData::flags & 0x70) == 0`.
+            84 => {
+                let x = args[0].as_int();
+                let y = args[1].as_int();
+                if x < 0 || y < 0 || x >= self.map.world.tile_xs || y >= self.map.world.tile_ys {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(self.map.world.is_passable(x >> 2, y >> 2) as i32))
+            }
+            // `map_is_buildable` `0x009e4e50`: the same tile/WCoord conversion, then
+            // reject mountains, forest, ocean, rocks, or the unattributed 0x40 bit.
+            85 => {
+                let x = args[0].as_int();
+                let y = args[1].as_int();
+                if x < 0 || y < 0 || x >= self.map.world.tile_xs || y >= self.map.world.tile_ys {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(self.map.world.is_flat(x >> 2, y >> 2) as i32))
+            }
             // `num_players` `0x009e5df0`: count `Leader::flags & 1` across all slots.
             142 => Ok(Value::Int(
                 self.step8
@@ -719,6 +739,18 @@ impl ScenarioHost for Sim {
                 }
                 Ok(Value::Int(((flags >> 6) & 1) as i32))
             }
+            // `gather_rate` `0x009e90b0`: both Leader flags, primary-resource type,
+            // then the displayed income slot divided by 16 with signed truncation.
+            253 => {
+                let who = args[0].as_int();
+                let Some(who) = self.active_script_leader(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource_index(string_arg(args, 1)?)? else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(self.leaders[who].econ.displayed[resource] / 16))
+            }
             // `num_units` `0x009e9d60`: sum all 352 unsigned-short unit counters at
             // LeaderData +0x5762. The paired retail loop only unrolls that exact sum.
             273 => {
@@ -761,6 +793,26 @@ impl ScenarioHost for Sim {
                 }
                 leader.econ.stockpile[resource] =
                     leader.econ.stockpile[resource].wrapping_add(amount);
+                Ok(Value::Int(1))
+            }
+            // `take_good` `0x009fb630`: active Leader and primary resource, wrapping
+            // subtraction in the decoded stockpile followed by a clamp at zero.
+            662 => {
+                let (who, resource, amount) = leader_resource_args(args)?;
+                let Some(flags) = self.step8.leaders.get(who).map(|leader| leader.flags) else {
+                    return Ok(Value::Int(-1));
+                };
+                if flags & leaders::flag::IN_GAME == 0 {
+                    return Ok(Value::Int(-1));
+                }
+                let Some(leader) = self.leaders.get_mut(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource else {
+                    return Ok(Value::Int(-1));
+                };
+                let remaining = leader.econ.stockpile[resource].wrapping_sub(amount);
+                leader.econ.stockpile[resource] = remaining.max(0);
                 Ok(Value::Int(1))
             }
             // `set_good` `0x009fb6f0`: the same gates plus a non-negative value.
@@ -808,6 +860,33 @@ impl ScenarioHost for Sim {
                 };
                 Ok(Value::Int(
                     (self.step8.leaders[who].diplo[other] == victory_score::Diplo::Ally as i32)
+                        as i32,
+                ))
+            }
+            // `have_peace` `0x009fcfc0`: values 1 (peace) and 2 (alliance) both count.
+            707 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(other) = self.active_script_leader(args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let diplo = self.step8.leaders[who].diplo[other];
+                Ok(Value::Int(
+                    (diplo == victory_score::Diplo::Peace as i32
+                        || diplo == victory_score::Diplo::Ally as i32) as i32,
+                ))
+            }
+            // `have_war` `0x009fd040`: the same two active gates, then directed value 0.
+            708 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(other) = self.active_script_leader(args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(
+                    (self.step8.leaders[who].diplo[other] == victory_score::Diplo::War as i32)
                         as i32,
                 ))
             }

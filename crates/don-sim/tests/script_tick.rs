@@ -6,7 +6,10 @@ use don_sim::rng::Random;
 use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
 };
-use don_sim::systems::victory_score;
+use don_sim::systems::{
+    map_terrain::{land, wflag},
+    victory_score,
+};
 use don_sim::tick::{Sim, StepRun};
 use std::path::Path;
 
@@ -541,6 +544,63 @@ fn retail_chunk_executes_the_same_player_state_reads() {
         sim.leaders[0].econ.stockpile,
         [275, 1_234, 31, 1, 0, 0],
         "loaded chunks must read the same authoritative leader stores"
+    );
+}
+
+fn configure_map_resource_diplomacy_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    let rock = sim.map.world.wdata_mut(2, 2);
+    rock.flags = wflag::ROCKS;
+    rock.land = land::FERTILE;
+    sim.leaders[0].econ.displayed[2] = -31;
+    sim.step8.leaders[0].diplo[1] = victory_score::Diplo::Peace as i32;
+    sim.step8.leaders[1].diplo[0] = victory_score::Diplo::War as i32;
+}
+
+#[test]
+fn ordinary_source_executes_map_resource_and_diplomacy_queries() {
+    let program = compile_source_fixture("scenario_map_resource_diplomacy.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "map_resource_diplomacy_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8125, 8);
+    configure_map_resource_diplomacy_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 9, 13, 1, 1],
+        "WCoord masks, signed gather division, take/clamp/add, and directed diplomacy must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_map_resource_and_diplomacy_queries() {
+    let compiled = compile_source_fixture("scenario_map_resource_diplomacy.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "map_resource_diplomacy_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8126, 12);
+    configure_map_resource_diplomacy_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 9, 13, 1, 1],
+        "loaded chunks must retain the same live map, economy, and diplomacy reads"
     );
 }
 

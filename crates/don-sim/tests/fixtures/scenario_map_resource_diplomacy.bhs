@@ -1,0 +1,12 @@
+int scenario map_resource_diplomacy_tick()
+{
+    set_good(1, "Food", map_is_passable(8, 8));
+    set_good(1, "Timber", map_is_buildable(8, 8));
+    set_good(1, "Wealth", gather_rate(1, "Wealth") + 10);
+    set_good(1, "Knowledge", 20);
+    take_good(1, "Knowledge", 99);
+    take_good(1, "Knowledge", -13);
+    set_good(1, "Metal", have_peace(1, 2));
+    set_good(1, "Oil", have_war(2, 1));
+    return 1;
+}

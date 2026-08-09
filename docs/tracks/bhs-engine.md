@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Twenty-four
+`Program`, and `ScriptRuntime` runs either producer against that live host. Thirty
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -464,6 +464,8 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 79 | `timer_expired` | compare against `Game::seconds`; expired checks consume the timer |
 | 80 | `get_map_size` | `WorldData::xs << 2` (`0x009e4cb0`) |
 | 83 | `map_is_land` | tile bounds, then the exact `tdata` mask (`0x009e4d90`) |
+| 84 | `map_is_passable` | tile bounds, then containing `WData::flags & 0x70 == 0` (`0x009e4de0`) |
+| 85 | `map_is_buildable` | tile bounds, then reject mountain, forest, ocean, rocks, or bit `0x40` (`0x009e4e50`) |
 | 86 | `world_x_size` | direct `WorldData::tile_xs` read at `+0x18` (`0x009e4ee0`) |
 | 87 | `world_y_size` | direct `WorldData::tile_ys` read at `+0x1c` (`0x009e4ef0`) |
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
@@ -471,6 +473,7 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
 | 249 | `score` | active Leader's direct score field at `+0x18` (`0x009e8fa0`) |
 | 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
+| 253 | `gather_rate` | active Leader's displayed primary-resource income divided by 16 (`0x009e90b0`) |
 | 273 | `num_units` | sum all 352 `unsigned short` unit counters at `+0x5762` (`0x009e9d60`) |
 | 296 | `time` | signed `Game::seconds / 60` (`0x009ead00`) |
 | 297 | `time_min` | instruction-identical alias of `time` (`0x009ead20`) |
@@ -480,13 +483,16 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 411 | `object_position_x` | validate `(who,o)`, resolve captain and outer container, then `div_3_table[(x ^ 0x63637) >> 6]` (`0x009f1360`) |
 | 412 | `object_position_y` | the same object walk over the encrypted y coordinate (`0x009f1470`) |
 | 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
+| 662 | `take_good` | wrapping subtract from decoded stockpile, then clamp at zero (`0x009fb630`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
 | 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
 | 706 | `have_alliance` | both Leaders active, then directed diplomacy slot equals 2 (`0x009fcf50`) |
+| 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
+| 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 7,060 calls to those twenty-four registrations. Together
+The current 363-file census contains 7,332 calls to those thirty registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-7,851 of 39,957 measured shipped-corpus call sites (**19.65%**, up from **1.98%**).
+8,123 of 39,957 measured shipped-corpus call sites (**20.33%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
@@ -530,8 +536,16 @@ reproduces retail's paired loop over all 352 unsigned-short counters, and
 than replacing it with the later victory subsystem's mutual-alliance helper. The source
 and loaded-chunk tests cover an asymmetric alliance and the invalid-player `-1` sentinel.
 
+Six disjoint map, economy, and diplomacy handlers add 272 shipped calls while retaining
+the same authoritative stores. The map pair bounds tile coordinates before reading the
+containing four-tile `WData` cell. `gather_rate` exposes the signed `/16` displayed-income
+value; `take_good` preserves wrapping subtraction, the zero clamp, and negative-amount
+addition. Peace and war remain directed predicates, with alliance also satisfying peace.
+Source and loaded-chunk tests exercise rock that is passable but not buildable, negative
+income truncation, both stockpile edges, and asymmetric diplomacy.
+
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-818 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+812 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 
