@@ -43,6 +43,8 @@ pub mod casters_animals;
 /// per-guy footprint stamping, blocker detection, local detour/wait/repath resolver, and
 /// collision-block reaper; remaining integration boundaries are explicit in the module.
 pub mod collision;
+/// Persistent live bridge for retail's collision-block reaper cursor.
+pub mod collision_blocks_live;
 /// Added by `mech:combat`. `std`-only, no crate-root dependencies, so it builds as soon as
 /// `lib.rs` declares `pub mod systems;`. Verified standalone with
 /// `rustc --edition 2021 --test src/systems/combat.rs` — 66 tests, all green, including a
@@ -70,6 +72,8 @@ pub mod economy;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
 pub mod fight;
+/// Exact step-12 GameDaemon scheduler state and child-call transaction.
+pub mod game_daemon_step12;
 /// Exact ordinary Farm/Camp/Mine on-map attachment, building approach, queued movement,
 /// and payout-activation boundary. It composes the gathering chain with both retail
 /// collision views and never turns attachment into containment or teleportation.
@@ -148,6 +152,8 @@ pub mod tech_cities;
 /// typed opponent progress notices, and synchronous handoff to the terminal victory
 /// transaction. The step-14 production adapter remains an explicit live seam.
 pub mod tech_race;
+/// Exact planners for the terminal CHANGE_FORM and THINK order arms.
+pub mod terminal_order_plans;
 /// Exact first (bush-fringe) pass of `TerrainGroups::add_doobers`, through the
 /// second pass's external doober-occupancy query.
 pub mod terrain_doobers;
