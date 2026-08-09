@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use don_ai::arena::match_run::{load_world, MatchConfig};
+use don_ai::arena::retail_systems::ArenaPlacementVerdict;
 use don_ai::arena::world::{ConstructionMode, ConstructionRefusal, Job, World};
 use don_ai::arena::{Cmd, EntId};
 use don_ai::OrderResult;
@@ -399,6 +400,30 @@ fn plain_site_start_reject_and_completion_keep_live_identities_and_effects() {
 
     let completed = completed_world.ent(completed_site).unwrap();
     assert!(completed.complete);
+    let placement = completed
+        .last_construction_placement_receipt
+        .as_ref()
+        .expect("Barracks lifecycle did not retain its blocked_site claims");
+    assert_eq!(placement.site, site_key);
+    assert_eq!(placement.type_id, completed_type);
+    assert_eq!((placement.x_size, placement.y_size), (4, 4));
+    assert_eq!(placement.claims.len(), 16);
+    assert_eq!(placement.raw_code, 0);
+    assert!(placement.accepted);
+    assert_eq!(placement.verdict, ArenaPlacementVerdict::Admitted);
+    for (index, claim) in placement.claims.iter().enumerate() {
+        assert_eq!(
+            (claim.tile.x, claim.tile.y),
+            (
+                placement.corner.x + (index / 4) as i32,
+                placement.corner.y + (index % 4) as i32,
+            ),
+            "blocked_site did not walk x-outer/y-inner"
+        );
+        assert!(claim.in_bounds);
+        assert!(claim.explored);
+        assert!(claim.occupant.is_none());
+    }
     let final_receipt = completed.last_construction_receipt.unwrap();
     assert_eq!(
         (final_receipt.site, final_receipt.builder),
@@ -465,14 +490,32 @@ fn plain_site_start_reject_and_completion_keep_live_identities_and_effects() {
             uid: builder.object_uid,
         }
     };
-    rejected_world.ents[rejected_index].construction_admission_code = Some(1);
-
-    // Put the builder exactly one tile from the target so the next object pass enters
-    // do_build; this mutates every Arena position view consumed by that pass.
+    // Mutate a real completed building into the paid site's footprint *after* the
+    // command-time model accepted it. The construction call must ignore that stale
+    // decision, rescan live object/type footprints, and reject with the blocker's exact
+    // `(who,o,uid)` identity.
     let (site_x, site_y) = {
         let site = &rejected_world.ents[rejected_index];
         (site.x, site.y)
     };
+    let blocker_index = rejected_world
+        .ents
+        .iter()
+        .position(|ent| ent.alive && ent.complete && ent.building && ent.id != rejected_site)
+        .expect("Small Town start has a completed placement blocker");
+    let blocker_key = {
+        let blocker = &rejected_world.ents[blocker_index];
+        ObjectKey {
+            who: i32::from(blocker.who),
+            o: i32::from(blocker.object_o),
+            uid: blocker.object_uid,
+        }
+    };
+    rejected_world.ents[blocker_index].x = site_x;
+    rejected_world.ents[blocker_index].y = site_y;
+
+    // Put the builder exactly one tile from the target so the next object pass enters
+    // do_build; this mutates every Arena position view consumed by that pass.
     let builder_index = rejected_builder.index().unwrap();
     rejected_world.ents[builder_index].x = site_x + 192;
     rejected_world.ents[builder_index].y = site_y;
@@ -497,6 +540,17 @@ fn plain_site_start_reject_and_completion_keep_live_identities_and_effects() {
 
     assert!(rejected_world.ent(rejected_site).is_none());
     let rejected = &rejected_world.ents[rejected_index];
+    let placement = rejected
+        .last_construction_placement_receipt
+        .as_ref()
+        .expect("blocked placement did not retain its authoritative claims");
+    assert_eq!(placement.raw_code, 1);
+    assert!(!placement.accepted);
+    assert!(matches!(
+        placement.verdict,
+        ArenaPlacementVerdict::Occupied { object, .. } if object == blocker_key
+    ));
+    assert_eq!(placement.claims.len(), 16);
     let receipt = rejected
         .last_construction_receipt
         .expect("blocked admission did not execute rejected Object::disband");

@@ -50,11 +50,11 @@
 //! Construction no longer fabricates a builder-frame countdown. Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
 //! `don-sim`, and runs the retail unit-then-building object bands. `ResearchModel` routes
-//! the compact plain-building family through the recovered start/reject/activate
-//! transaction and retains an identity-bearing receipt on the site. Claim-bearing mode
-//! still records the first missing placement/animation/reswarm host input and stops before
-//! guessing. This is integration of recovered Tier-C structure, not a promotion of its
-//! fidelity tier.
+//! shipped Barracks through an identity-bearing terrain/occupancy placement claim and the
+//! recovered start/reject/activate transaction. The other type-specific placement and
+//! activation graphs remain visibly separate gameplay models, while claim-bearing mode
+//! still stops at its earlier animation/reswarm prerequisites. This is integration of
+//! recovered Tier-C structure, not a promotion of its fidelity tier.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,6 +68,10 @@ use don_sim::mechanics::{
 };
 use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BASE};
 use don_sim::rng::Random;
+use don_sim::systems::borders_fog::{
+    claim_tile, leader_border_params, BorderSource, BorderSourceKind, LeaderBorderInput,
+    LeaderBorderParams, TerritoryRules,
+};
 use don_sim::systems::casters_animals::{
     CLOAK_OBJECT_FLAG, CLOAK_SECONDARY_OBJECT_FLAG, CLOAK_TYPE_FLAG, CLOAK_WHILE_IDLE_TYPE_FLAG,
 };
@@ -111,7 +115,8 @@ use super::gather_runtime::{
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
     self, ArenaAttritionRecomputeHost, ArenaConstructionReceipt, ArenaHeroAuraHealingHost,
-    ArenaIroquoisHealingHost, ArenaPatriotHealingHost, ArenaReloadSupplyHost,
+    ArenaIroquoisHealingHost, ArenaPatriotHealingHost, ArenaPlacementReceipt,
+    ArenaPlacementTerritory, ArenaPlacementTileClaim, ArenaReloadSupplyHost,
     ArenaSupplyAttritionHost, ArenaSupplyHealingHost, ArenaWorkerHealingHost,
     AttritionRecomputeTransaction, DiplomacyState, HealingRepairMutation,
     HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord, IroquoisHealingTransaction,
@@ -238,7 +243,7 @@ pub enum Job {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstructionRefusal {
     /// `BuildTypeData::blocked_site` needs terrain, territory, city/dock and adjacency
-    /// stores which Arena does not yet materialise in the retail layout.
+    /// stores outside the shipped Barracks subdomain now owned by Arena.
     MissingBlockedSiteTransaction,
     /// The exact unit-side plan requested the temporary Group/reswarm transaction.  The
     /// arena movement host has not yet ported `action_swarm_around(BUILD_AT)`.
@@ -299,12 +304,10 @@ pub struct Ent {
     pub build_order: Option<BuildOrderTarget>,
     /// Fail-closed reason for a site whose next mandatory world transaction is absent.
     pub construction_refusal: Option<ConstructionRefusal>,
-    /// Result supplied to the recovered `Wall::do_construct` admission partition.
-    /// `Some(0)` is installed only by the explicitly labelled ResearchModel after its
-    /// own command-time placement test; claim-bearing sites retain `None` until the
-    /// separate retail blocked-site host exists. Tests may inject a non-admitted code to
-    /// exercise the real rejected-site transaction without reclassifying placement.
-    pub construction_admission_code: Option<i32>,
+    /// Last complete terrain/occupancy/visibility/territory claim consumed by the
+    /// recovered `BuildTypeData::blocked_site` subdomain. This is recomputed at the
+    /// construction call site; command-time `placement_ok` cannot populate it.
+    pub last_construction_placement_receipt: Option<ArenaPlacementReceipt>,
     /// Last mutation-bearing construction receipt for this site. It pins the site,
     /// builder and BUILD_AT identities beside the recovered outcome/checksum effects.
     pub last_construction_receipt: Option<ArenaConstructionReceipt>,
@@ -1522,7 +1525,6 @@ fn estimated_target_damage(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ArenaConstructionHostError {
     IdentityMismatch,
-    MissingAdmission,
     UnsupportedLifecycle(&'static str),
     LifecycleInvariant(&'static str),
 }
@@ -1638,13 +1640,125 @@ impl ArenaResearchConstructionHost<'_> {
 
     fn supports_compact_activation(&self) -> bool {
         let type_id = self.world.ents[self.site_index].type_id;
-        matches!(
-            type_id,
-            id if id == self.world.ids.barracks
-                || id == self.world.ids.tower
-                || id == self.world.ids.temple
-                || id == self.world.ids.market
-        )
+        type_id == self.world.ids.barracks
+    }
+
+    fn placement_occupant_at(
+        &self,
+        tile: TCoord,
+    ) -> Result<Option<ObjectKey>, ArenaConstructionHostError> {
+        let mut occupant = None;
+        for (index, ent) in self.world.ents.iter().enumerate() {
+            if index == self.site_index || !ent.alive || !ent.building {
+                continue;
+            }
+            let Some(ty) = self.world.types.get(ent.type_id) else {
+                return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                    "placement occupant type row is missing",
+                ));
+            };
+            let (tx, ty_coord) = ent.tile();
+            let corner_x = tx - ty.x_size / 2;
+            let corner_y = ty_coord - ty.y_size / 2;
+            if tile.x >= corner_x
+                && tile.x < corner_x + ty.x_size
+                && tile.y >= corner_y
+                && tile.y < corner_y + ty.y_size
+            {
+                // Retail start closes an overlapping unstarted site through a
+                // separate identity-bearing transaction.  Until that close is
+                // wired here, do not disguise it as ordinary completed-building
+                // occupancy and admit/reject through the wrong path.
+                if !ent.complete {
+                    return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                        "competing unfinished-site placement close is unavailable",
+                    ));
+                }
+                if occupant.is_some() {
+                    return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                        "multiple live buildings claim one placement tile",
+                    ));
+                }
+                occupant = Some(self.object_key(index));
+            }
+        }
+        Ok(occupant)
+    }
+
+    fn placement_territory(
+        &self,
+        site_key: ObjectKey,
+        tile: TCoord,
+    ) -> Result<ArenaPlacementTerritory, ArenaConstructionHostError> {
+        let wx = tile.x >> 2;
+        let wy = tile.y >> 2;
+        let owner = self.world.collision_world.get_who(wx, wy);
+        if owner == site_key.who {
+            return Ok(ArenaPlacementTerritory::Friendly);
+        }
+        if owner == -1 {
+            return Ok(ArenaPlacementTerritory::Neutral);
+        }
+        if owner < -1 {
+            return Ok(ArenaPlacementTerritory::Contested);
+        }
+        let site_owner = usize::try_from(site_key.who)
+            .map_err(|_| ArenaConstructionHostError::IdentityMismatch)?;
+        let owner =
+            usize::try_from(owner).map_err(|_| ArenaConstructionHostError::IdentityMismatch)?;
+        if self
+            .world
+            .diplomacy
+            .is_ally(site_owner, owner)
+            .map_err(|_| ArenaConstructionHostError::IdentityMismatch)?
+        {
+            Ok(ArenaPlacementTerritory::Allied)
+        } else {
+            Ok(ArenaPlacementTerritory::Enemy)
+        }
+    }
+
+    fn barracks_placement_claims(
+        &self,
+        site_key: ObjectKey,
+        corner: TCoord,
+        ty: &TypeRow,
+    ) -> Result<Vec<ArenaPlacementTileClaim>, ArenaConstructionHostError> {
+        let owner = usize::try_from(site_key.who)
+            .map_err(|_| ArenaConstructionHostError::IdentityMismatch)?;
+        let mut claims = Vec::with_capacity((ty.x_size * ty.y_size).max(0) as usize);
+        for dx in 0..ty.x_size {
+            for dy in 0..ty.y_size {
+                let tile = TCoord {
+                    x: corner.x + dx,
+                    y: corner.y + dy,
+                };
+                let in_bounds = self.world.collision_world.valid_t(tile.x, tile.y);
+                let terrain_mask = if in_bounds {
+                    self.world.collision_world.tmask(tile.x, tile.y)
+                } else {
+                    0
+                };
+                let occupant = if in_bounds {
+                    self.placement_occupant_at(tile)?
+                } else {
+                    None
+                };
+                claims.push(ArenaPlacementTileClaim {
+                    tile,
+                    in_bounds,
+                    terrain_mask,
+                    explored: in_bounds && self.world.explored(owner, tile.x, tile.y),
+                    territory: if in_bounds {
+                        self.placement_territory(site_key, tile)?
+                    } else {
+                        ArenaPlacementTerritory::Neutral
+                    },
+                    occupant,
+                });
+            }
+        }
+        Ok(claims)
     }
 }
 
@@ -1826,11 +1940,30 @@ impl ConstructionLifecycleHost for ArenaResearchConstructionHost<'_> {
         _site: &BuildData,
     ) -> Result<QueryReceipt<i32>, Self::Error> {
         self.require_key(self.site_index, site_key)?;
+        let ty = self.site_type()?;
+        let plan = self.start_plan(1)?;
+        let claims = self.barracks_placement_claims(site_key, plan.corner, &ty)?;
+        // `LeaderData::has_tribe_bonus(0x13)` is the sole neutral-territory bypass in
+        // this ordinary non-fort path. The PDB TribeTypes enum identifies slot 19 as
+        // Lakota; no unequal-owner shortcut is used here.
+        let neutral_territory_bonus = self.world.players[site_key.who as usize].tribe == 19;
+        let receipt = retail_systems::evaluate_barracks_blocked_site(
+            site_key,
+            &ty,
+            plan.corner,
+            neutral_territory_bonus,
+            claims,
+        )
+        .map_err(|_| {
+            ArenaConstructionHostError::UnsupportedLifecycle(
+                "authoritative Barracks placement claim is incomplete",
+            )
+        })?;
+        let raw_code = receipt.raw_code;
+        self.world.ents[self.site_index].last_construction_placement_receipt = Some(receipt);
         Ok(QueryReceipt {
-            value: self.world.ents[self.site_index]
-                .construction_admission_code
-                .ok_or(ArenaConstructionHostError::MissingAdmission)?,
-            effect: construction_effect(construction::ChecksumEffects::NONE),
+            value: raw_code,
+            effect: construction_effect(construction::ChecksumEffects::BUILDS),
         })
     }
 
@@ -2027,7 +2160,6 @@ impl ConstructionLifecycleHost for ArenaResearchConstructionHost<'_> {
             world.collision_world.set_building_at(tx, ty, false);
         });
         self.world.ents[self.site_index].alive = false;
-        self.world.ents[self.site_index].construction_admission_code = None;
         let flags_after = site.flags & !production::flag::VALID;
         Ok(CloseReceipt {
             flags_after,
@@ -2263,10 +2395,23 @@ impl World {
         let age_techs = types.age_techs();
         let spatial = map.spatial;
         let target_world = TargetWorld::new(((map.w + 3) / 4).max(1), ((map.h + 3) / 4).max(1));
-        let collision_world = don_sim::systems::map_terrain::World::init_default_rules(
+        let mut collision_world = don_sim::systems::map_terrain::World::init_default_rules(
             ((map.w + 3) / 4).max(1),
             ((map.h + 3) / 4).max(1),
         );
+        // Arena's generated bitmap is a declared map model, but once admitted it must
+        // have one authoritative retail-shaped TData image. Placement, pathing and
+        // collision therefore consume these exact setter projections rather than three
+        // independently reinterpreted `Terrain` predicates.
+        for tx in 0..map.w {
+            for ty in 0..map.h {
+                match map.at(tx, ty) {
+                    Terrain::Grass => {}
+                    Terrain::Forest => collision_world.set_tree_at(tx, ty, true),
+                    Terrain::Mountain => collision_world.set_mountain_at(tx, ty, true),
+                }
+            }
+        }
         let mut w = World {
             roster: tribes.iter().map(|&t| types.for_tribe(t)).collect(),
             players: tribes
@@ -2336,6 +2481,7 @@ impl World {
         for i in 0..w.players.len() {
             w.seed_start(i);
         }
+        w.settle_starting_territory();
         w.update_fog();
         Ok(w)
     }
@@ -2377,6 +2523,81 @@ impl World {
             self.spawn(pi as u8, self.ids.citizen, sx + dx, sy + dy, true);
         }
         let _ = city;
+    }
+
+    /// Arena settles its starting-capital territory before the first command.
+    /// The scoring and rotating eight-slot tie order are the recovered
+    /// `World::compute_reg_territory` implementation, not Arena's `CITY_CENTER_RADIUS`
+    /// placement model. Synchronous initial settlement is still an Arena setup choice;
+    /// retail's incremental invalidation/driver remains a named blocker.
+    fn settle_starting_territory(&mut self) {
+        // These initial leader inputs use the recovered TypeIndex tech slots
+        // and shipped TribeTypes enum values consumed by the border scorer.
+        let rules = TerritoryRules::default();
+        let mut inputs = [LeaderBorderInput::default(); 8];
+        let mut active = [false; 8];
+        for pi in 0..self.players.len().min(8) {
+            let player = &self.players[pi];
+            active[pi] = player.alive;
+            inputs[pi] = LeaderBorderInput {
+                active: player.alive,
+                temple_upgrade: [
+                    player.techs.contains(&0x2C8),
+                    player.techs.contains(&0x2C9),
+                    player.techs.contains(&0x2CA),
+                ],
+                fort_upgrade: [
+                    player.techs.contains(&0x2D1),
+                    player.techs.contains(&0x2D2),
+                    player.techs.contains(&0x2D3),
+                ],
+                gov_level: 0,
+                age: 0,
+                tribe_roman: player.tribe == 6,
+                tribe_russian: player.tribe == 13,
+                ..LeaderBorderInput::default()
+            };
+        }
+        let mut params = [LeaderBorderParams::default(); 8];
+        for pi in 0..8 {
+            params[pi] = leader_border_params(
+                &inputs[pi],
+                &rules,
+                self.collision_world.player_territory_limit,
+                self.collision_world.player_territory_limit_civic,
+                self.collision_world.player_territory_limit_city,
+            );
+        }
+        let mut slots: [Vec<BorderSource>; 8] = std::array::from_fn(|_| Vec::new());
+        for ent in self.ents.iter().filter(|ent| {
+            ent.alive && ent.complete && ent.type_id == self.ids.small_city && ent.spawn_frame == 0
+        }) {
+            let slot = usize::from(ent.who);
+            if slot >= slots.len() {
+                continue;
+            }
+            let (tile_x, tile_y) = ent.tile();
+            slots[slot].push(BorderSource {
+                kind: BorderSourceKind::City {
+                    level: 1,
+                    has_temple: false,
+                    capital: true,
+                },
+                slot: slot as i32,
+                who: i32::from(ent.who),
+                tile_x,
+                tile_y,
+                alive: true,
+            });
+        }
+        for wx in 0..self.collision_world.xs {
+            for wy in 0..self.collision_world.ys {
+                let claim = claim_tile(wx, wy, &slots, &params, &active, &rules);
+                let cell = self.collision_world.wdata_mut(wx, wy);
+                cell.who = claim.who;
+                cell.who2 = claim.who2;
+            }
+        }
     }
 
     fn spawn(&mut self, who: u8, type_id: i32, tx: i32, ty: i32, complete: bool) -> EntId {
@@ -2551,9 +2772,7 @@ impl World {
             build,
             build_order: None,
             construction_refusal: None,
-            construction_admission_code: (!complete
-                && self.params.construction_mode == ConstructionMode::ResearchModel)
-                .then_some(0),
+            last_construction_placement_receipt: None,
             last_construction_receipt: None,
             job: Job::Idle,
             cycle: AttackCycle::default(),
@@ -2572,6 +2791,18 @@ impl World {
             motion: motion.take(),
             guys,
         });
+        if t.kind_building && complete {
+            let corner_x = tx - t.x_size / 2;
+            let corner_y = ty - t.y_size / 2;
+            for dx in 0..t.x_size {
+                for dy in 0..t.y_size {
+                    self.collision_world
+                        .set_started_at(corner_x + dx, corner_y + dy, true);
+                    self.collision_world
+                        .set_building_at(corner_x + dx, corner_y + dy, true);
+                }
+            }
+        }
         if t.kind_unit && t.unit_flags2 & 0x40 != 0 {
             self.init_supply_record(who, object_o);
         }
@@ -3961,9 +4192,10 @@ impl World {
     ///
     /// The site BuildData is removed from its dense entity only for the duration of one
     /// borrow: every callback still addresses the live Arena object tables by the same
-    /// `(who,o,uid)`. Plain Barracks/Tower/Temple/Market sites use the executable
-    /// `Wall::start`/`Build::activate` host. Gather, Wonder and city families keep the old
-    /// explicitly modelled gameplay fallback until their mandatory registries exist.
+    /// `(who,o,uid)`. Shipped Barracks sites use the executable placement/
+    /// `Wall::start`/`Build::activate` host. The other activation families keep the old
+    /// explicitly modelled gameplay fallback until their placement dependency graphs
+    /// exist.
     fn apply_research_construction_lifecycle(
         &mut self,
         builder_index: usize,
@@ -3971,18 +4203,7 @@ impl World {
         gate: PreflightPlan,
     ) {
         let type_id = self.ents[site_index].type_id;
-        let compact_family = matches!(
-            type_id,
-            id if id == self.ids.barracks
-                || id == self.ids.tower
-                || id == self.ids.temple
-                || id == self.ids.market
-        );
-        let rejected_plain_site = self.ents[site_index]
-            .construction_admission_code
-            .is_some_and(|code| !matches!(code, 0 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2B))
-            && ordinary_gather_kind(&self.ids, type_id).is_none();
-        if !compact_family && !rejected_plain_site {
+        if type_id != self.ids.barracks {
             let PreflightPlan::AnimateFace {
                 animation,
                 set_angle,
@@ -5644,6 +5865,10 @@ mod supply_attrition_integration {
 
         // UnitData::recharge consults its narrower in_supply predicate after the volley:
         // neutral territory plus this registry hit keeps the live Catapult at base delay.
+        let (siege_tx, siege_ty) = world.ents[siege_index].tile();
+        let siege_wx = siege_tx.div_euclid(4);
+        let siege_wy = siege_ty.div_euclid(4);
+        world.collision_world.wdata_mut(siege_wx, siege_wy).who = -1;
         let base_recharge = world.types.get(0x109).unwrap().recharge;
         world.ents[siege_index].job = Job::Attack { target: enemy };
         world.tick_job(siege_index);
@@ -5683,9 +5908,6 @@ mod supply_attrition_integration {
         // Unit::process calls process_attrition on its independent 32-frame stagger. The
         // friendly return closes after the universal mask/period reset; neutral territory
         // exposes the typed non-friendly authority boundary but retains that exact prefix.
-        let (siege_tx, siege_ty) = world.ents[siege_index].tile();
-        let siege_wx = siege_tx.div_euclid(4);
-        let siege_wy = siege_ty.div_euclid(4);
         world.collision_world.wdata_mut(siege_wx, siege_wy).who = 0;
         {
             let siege_ent = &mut world.ents[siege_index];

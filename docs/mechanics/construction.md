@@ -176,26 +176,34 @@ Arena can remove MODEL 2 only after its adapter provides all of the following:
 Until these are satisfied, Arena should keep a loud fidelity blocker rather than adapting
 `build_left -= 1` to the new result enum.
 
-Arena's playable `ResearchModel` now exercises this boundary rather than duplicating its
-state machine for the plain Barracks/Tower/Temple/Market family.  It removes the live
-`BuildData` record only for the duration of one borrow, executes the recovered admission,
-`Wall::start`, progress, `Build::activate`, and builder-finish ordering, restores that same
-record, and stores an `ArenaConstructionReceipt` containing the site, builder, BUILD_AT
-target, outcome, RNG count, and checksum-effect set.  A non-admitted non-gather site takes
-the recovered rejected-disband/refund loop and invalidates the actual Arena target slot.
+Arena's playable `ResearchModel` now exercises this boundary for the shipped Barracks
+profile rather than duplicating its state machine. Before lifecycle entry it snapshots the
+live 4x4 footprint in `blocked_site`'s x-outer/y-inner order, retaining every TData terrain
+mask, explored bit, WData/diplomacy territory class and overlapping building identity in an
+`ArenaPlacementReceipt`. It then executes the recovered admission, `Wall::start`, progress,
+`Build::activate`, and builder-finish ordering and stores an `ArenaConstructionReceipt`
+containing the site, builder, BUILD_AT target, outcome, RNG count, and checksum-effect set.
+An occupied Barracks footprint takes the recovered rejected-disband/refund loop and
+invalidates the actual Arena target slot.
 
-That is an executable integration result, not a fidelity promotion.  ResearchModel's
-command-time `placement_ok` supplies code zero, its missing reswarm/animation bodies are
-still projected into the ready gate, and its compact leader/city callbacks do not implement
-the full retail activation graph.  `FailClosedRetail` still stops before those inputs.
-Gather buildings, cities, Wonders, captured sites, Farm animals, alternate-site
-`build_done`, and cancellation/death remain outside the integrated subdomain.
+That is an executable integration result, not a fidelity promotion. Command-time
+`placement_ok` is deliberately not an input to the new query: the focused test mutates a
+real completed building into the footprint after command acceptance and the construction
+call rejects the stale decision using that blocker's `(who,o,uid)`. Arena's generated map
+is still a declared map model, and initial capital territory is settled through the
+recovered border scorer rather than establishing whole-game border lifecycle fidelity.
+Missing reswarm/animation bodies remain compact projections and the activation host does
+not implement the full retail graph. `FailClosedRetail` still stops before those inputs.
+Tower/Temple/Market, gather buildings, cities, Wonders, captured sites, Farm animals,
+alternate-site `build_done`, incremental border invalidation and cancellation/death remain
+outside the integrated subdomain.
 
 ## 5. Open runtime blockers
 
-- Full `BuildTypeData::blocked_location` `0x006375B0`, `blocked_tcoord` `0x00636DB0`, and
-  the `blocked_site` dependency graph (terrain, territory, cliffs/water, adjacency, dock,
-  city limits).
+- The remaining `BuildTypeData::blocked_location` `0x006375B0` and `blocked_tcoord`
+  `0x00636DB0` type families: fort/city spacing, cliffs/water, adjacency, dock, gather and
+  city-limit graphs. The shipped Barracks terrain/occupancy/visibility/territory footprint
+  is executable and identity-bearing.
 - A claim-bearing Arena host for the ordered `construction_lifecycle` start, activation,
   rejection/refund, terrain, registry, city, leader, Farm-spawn and visibility calls. The
   live ResearchModel host covers a compact gameplay projection only.

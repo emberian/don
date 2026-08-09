@@ -15,9 +15,10 @@ use don_sim::systems::borders_fog::{
 };
 use don_sim::systems::combat::DamageOutcome;
 use don_sim::systems::construction::{self, ConstructionEffects};
+use don_sim::systems::construction_lifecycle;
 use don_sim::systems::economy::NUM_RESOURCES;
 use don_sim::systems::gathering::{self, GatherCount, GatherSite, GatherTile, GatherWorker};
-use don_sim::systems::map_terrain::World;
+use don_sim::systems::map_terrain::{tflag, World};
 use don_sim::systems::naval::{self, TransportNeed, WaterWorld};
 use don_sim::systems::production::{BuildData, ProdRules};
 use don_sim::systems::victory_score::{self, Diplo, NUM_LEADERS};
@@ -62,11 +63,15 @@ pub const LIFECYCLE_INVENTORY: &[LifecycleIntegrationItem] = &[
     },
     LifecycleIntegrationItem {
         subsystem: LifecycleSubsystem::ConstructionPlacement,
-        status: IntegrationStatus::Blocked,
-        recovered: &["blocked_site result contract and wonder-capacity gate"],
+        status: IntegrationStatus::AdapterOnly,
+        recovered: &[
+            "blocked_site x-outer/y-inner footprint walk and result precedence",
+            "identity-bearing Arena Barracks terrain, occupancy, visibility and territory claims",
+        ],
         missing: &[
-            "blocked_location and blocked_tcoord",
-            "terrain, territory, cliff/water, adjacency, dock and city-limit queries",
+            "non-Barracks blocked_location type families and competing unstarted-site close",
+            "incremental border invalidation, cliff/water, adjacency, dock and city-limit graphs",
+            "retail oracle over the complete placement return-code domain",
         ],
     },
     LifecycleIntegrationItem {
@@ -77,7 +82,7 @@ pub const LIFECYCLE_INVENTORY: &[LifecycleIntegrationItem] = &[
             "identity-bearing Arena receipt over the executable construction core",
         ],
         missing: &[
-            "claim-bearing Arena placement and builder-animation inputs",
+            "remaining type placement and claim-bearing builder-animation inputs",
             "complete retail city, leader, terrain, event and registry host bodies",
             "retail-oracle channel and RNG receipt coverage",
         ],
@@ -219,6 +224,278 @@ pub struct ArenaConstructionReceipt {
     pub builder: construction::ObjectKey,
     pub order_target: construction::ObjectKey,
     pub receipt: construction::BuildReceipt,
+}
+
+/// The territory classification already resolved from Arena's live WData and mutual
+/// diplomacy matrix. `BuildTypeData::non_friendly_territory` distinguishes neutral,
+/// allied and enemy ownership; collapsing these to `owner != who` changes return codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArenaPlacementTerritory {
+    Friendly,
+    Allied,
+    Neutral,
+    Contested,
+    Enemy,
+}
+
+/// One tile claim in the exact x-outer/y-inner `BuildTypeData::blocked_site` walk.
+/// The complete claim is retained in the site receipt so a successful admission proves
+/// which terrain, occupancy, visibility and territory facts it consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArenaPlacementTileClaim {
+    pub tile: construction_lifecycle::TCoord,
+    pub in_bounds: bool,
+    pub terrain_mask: u16,
+    pub explored: bool,
+    pub territory: ArenaPlacementTerritory,
+    pub occupant: Option<construction::ObjectKey>,
+}
+
+/// The first retail-coded reason selected by the supported placement walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArenaPlacementVerdict {
+    Admitted,
+    OffMap {
+        tile: construction_lifecycle::TCoord,
+    },
+    Occupied {
+        tile: construction_lifecycle::TCoord,
+        object: construction::ObjectKey,
+    },
+    Water {
+        tile: construction_lifecycle::TCoord,
+    },
+    Forest {
+        tile: construction_lifecycle::TCoord,
+    },
+    Mountain {
+        tile: construction_lifecycle::TCoord,
+    },
+    BlockedTerrain {
+        tile: construction_lifecycle::TCoord,
+    },
+    MostlyUnexplored,
+    NeutralTerritory,
+    ContestedTerritory,
+    EnemyTerritory,
+}
+
+/// Identity-bearing result of the currently complete shipped Barracks placement family.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArenaPlacementReceipt {
+    pub site: construction::ObjectKey,
+    pub type_id: i32,
+    pub corner: construction_lifecycle::TCoord,
+    pub x_size: i32,
+    pub y_size: i32,
+    pub raw_code: i32,
+    pub accepted: bool,
+    pub verdict: ArenaPlacementVerdict,
+    pub claims: Vec<ArenaPlacementTileClaim>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArenaPlacementError {
+    UnsupportedTypeProfile {
+        type_id: i32,
+        domain: i32,
+        build_flags: u32,
+        x_size: i32,
+        y_size: i32,
+    },
+    ClaimCount {
+        expected: usize,
+        actual: usize,
+    },
+    ClaimOrder {
+        expected: construction_lifecycle::TCoord,
+        actual: construction_lifecycle::TCoord,
+    },
+    UnattributedOccupancy {
+        tile: construction_lifecycle::TCoord,
+    },
+    UnsupportedTileState {
+        tile: construction_lifecycle::TCoord,
+        terrain_mask: u16,
+    },
+}
+
+/// Shipped Barracks (`TypeIndex 427`) placement over Arena's authoritative tile and object
+/// claims. The supported profile is deliberately literal: widening it to another building
+/// would silently skip that type's `blocked_location` city/fort/gather/dock arms.
+///
+/// Provenance is `BuildTypeData::blocked_site` `0x00636A50`,
+/// `blocked_tcoord` `0x00636DB0`, and `non_friendly_territory` `0x006389C0`.
+pub fn evaluate_barracks_blocked_site(
+    site: construction::ObjectKey,
+    ty: &TypeRow,
+    corner: construction_lifecycle::TCoord,
+    neutral_territory_bonus: bool,
+    claims: Vec<ArenaPlacementTileClaim>,
+) -> Result<ArenaPlacementReceipt, ArenaPlacementError> {
+    const BARRACKS_TYPE: i32 = 427;
+    const BARRACKS_BUILD_FLAGS: u32 = 0xC000_2011;
+    const BARRACKS_SIZE: i32 = 4;
+    if ty.id != BARRACKS_TYPE
+        || ty.domain != 0
+        || ty.build_flags != BARRACKS_BUILD_FLAGS
+        || ty.x_size != BARRACKS_SIZE
+        || ty.y_size != BARRACKS_SIZE
+    {
+        return Err(ArenaPlacementError::UnsupportedTypeProfile {
+            type_id: ty.id,
+            domain: ty.domain,
+            build_flags: ty.build_flags,
+            x_size: ty.x_size,
+            y_size: ty.y_size,
+        });
+    }
+    let expected_count = (ty.x_size * ty.y_size) as usize;
+    if claims.len() != expected_count {
+        return Err(ArenaPlacementError::ClaimCount {
+            expected: expected_count,
+            actual: claims.len(),
+        });
+    }
+
+    let finish = |raw_code, verdict, claims| ArenaPlacementReceipt {
+        site,
+        type_id: ty.id,
+        corner,
+        x_size: ty.x_size,
+        y_size: ty.y_size,
+        raw_code,
+        accepted: raw_code == 0,
+        verdict,
+        claims,
+    };
+
+    let mut unseen = 0usize;
+    let mut tile_blocker = None;
+    for index in 0..claims.len() {
+        let claim = claims[index];
+        let dx = index / ty.y_size as usize;
+        let dy = index % ty.y_size as usize;
+        let expected = construction_lifecycle::TCoord {
+            x: corner.x + dx as i32,
+            y: corner.y + dy as i32,
+        };
+        if claim.tile != expected {
+            return Err(ArenaPlacementError::ClaimOrder {
+                expected,
+                actual: claim.tile,
+            });
+        }
+        if !claim.in_bounds {
+            return Ok(finish(
+                0x22,
+                ArenaPlacementVerdict::OffMap { tile: claim.tile },
+                claims,
+            ));
+        }
+        if !claim.explored {
+            unseen += 1;
+        }
+        if claim.terrain_mask
+            & (tflag::STARTED
+                | tflag::STARTED2
+                | tflag::CITY
+                | tflag::RESOURCE
+                | tflag::RIVER
+                | tflag::GATHERED)
+            != 0
+            && claim.occupant.is_none()
+        {
+            return Err(ArenaPlacementError::UnsupportedTileState {
+                tile: claim.tile,
+                terrain_mask: claim.terrain_mask,
+            });
+        }
+        let candidate = if let Some(object) = claim.occupant {
+            Some((
+                if claim.explored { 1 } else { 0x24 },
+                ArenaPlacementVerdict::Occupied {
+                    tile: claim.tile,
+                    object,
+                },
+            ))
+        } else if claim.terrain_mask & tflag::BLOCKER_MASK == tflag::BLOCKER_BUILDING {
+            return Err(ArenaPlacementError::UnattributedOccupancy { tile: claim.tile });
+        } else if claim.terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_WATER {
+            Some((
+                if claim.explored { 0x0E } else { 0x24 },
+                ArenaPlacementVerdict::Water { tile: claim.tile },
+            ))
+        } else if claim.terrain_mask & tflag::SURFACE_MASK == tflag::SURFACE_TREES {
+            Some((
+                if claim.explored { 6 } else { 0x24 },
+                ArenaPlacementVerdict::Forest { tile: claim.tile },
+            ))
+        } else if claim.terrain_mask & tflag::BLOCKER_MASK == tflag::BLOCKER_MOUNTAIN {
+            Some((
+                if claim.explored { 2 } else { 0x24 },
+                ArenaPlacementVerdict::Mountain { tile: claim.tile },
+            ))
+        } else if claim.terrain_mask & (tflag::BLOCKER_MASK | tflag::BLOCKED) != 0 {
+            Some((
+                if claim.explored { 7 } else { 0x24 },
+                ArenaPlacementVerdict::BlockedTerrain { tile: claim.tile },
+            ))
+        } else {
+            None
+        };
+        if tile_blocker.is_none() {
+            tile_blocker = candidate;
+        }
+    }
+
+    if matches!(tile_blocker, Some((0x24, _))) {
+        let (raw, verdict) = tile_blocker.expect("matched Some");
+        return Ok(finish(raw, verdict, claims));
+    }
+    if unseen > expected_count / 2 {
+        return Ok(finish(
+            0x24,
+            ArenaPlacementVerdict::MostlyUnexplored,
+            claims,
+        ));
+    }
+    if matches!(tile_blocker, Some((0x0E, _))) {
+        let (raw, verdict) = tile_blocker.expect("matched Some");
+        return Ok(finish(raw, verdict, claims));
+    }
+
+    let mut neutral = false;
+    let mut contested = false;
+    for index in 0..claims.len() {
+        match claims[index].territory {
+            ArenaPlacementTerritory::Friendly | ArenaPlacementTerritory::Allied => {}
+            ArenaPlacementTerritory::Enemy => {
+                return Ok(finish(0x18, ArenaPlacementVerdict::EnemyTerritory, claims));
+            }
+            ArenaPlacementTerritory::Contested => contested = true,
+            ArenaPlacementTerritory::Neutral => neutral = true,
+        }
+    }
+    if contested {
+        return Ok(finish(
+            0x1A,
+            ArenaPlacementVerdict::ContestedTerritory,
+            claims,
+        ));
+    }
+    if neutral && !neutral_territory_bonus {
+        return Ok(finish(
+            0x1A,
+            ArenaPlacementVerdict::NeutralTerritory,
+            claims,
+        ));
+    }
+    if let Some((raw, verdict)) = tile_blocker {
+        Ok(finish(raw, verdict, claims))
+    } else {
+        Ok(finish(0, ArenaPlacementVerdict::Admitted, claims))
+    }
 }
 
 /// Explicit Arena-owned gathering state. Capacity and ordered tiles must already come from

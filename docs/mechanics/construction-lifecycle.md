@@ -70,20 +70,24 @@ runtime gate. A flags-only activation is not a supported implementation.
 
 ## Arena integration boundary
 
-Arena's `ResearchModel` now calls this executable transaction for plain
-Barracks/Tower/Temple/Market construction. The live host mutates persistent `BuildData`,
-world tile masks, own-seen state, leader dirty bits, the actual building object, and the
-builder's order/job state, then retains an identity-bearing aggregate receipt. A synthetic
-non-admitted code also drives the real six-good rejection loop, clears VALID, unlinks the
-target object, and refunds the paid Arena stockpile.
+Arena's `ResearchModel` now calls this executable transaction for the shipped Barracks
+profile. Its lifecycle entry is supplied by a fresh, identity-bearing `blocked_site` claim
+over the live 4x4 terrain/occupancy/visibility/territory footprint, not by a stored success
+scalar. The host mutates persistent `BuildData`, world tile masks, own-seen state, leader
+dirty bits, the actual building object, and the builder's order/job state, then retains an
+identity-bearing aggregate receipt. A real post-command overlapping building drives the
+rejected-site six-good loop, clears VALID, unlinks the target object, and refunds the paid
+Arena stockpile.
 
-The word *ResearchModel* is load-bearing. Its admission code comes from Arena's earlier
-custom placement test; reswarm and animation are compact projections; `mark_behind_tiles`
-lacks the live `behind_height`; and the broad city/leader/registry phases are Arena state
-projections rather than complete retail stores. Farm, Wonder, city, captured and other
-special activation families remain on the visibly separate gameplay fallback or fail
-closed. Consequently neither `construction_lifecycle::RUNTIME_FIDELITY_READY` nor the
-Arena product blocker is opened by this integration.
+The word *ResearchModel* is load-bearing. Arena's generated terrain and initial-capital
+setup are model inputs even though they are projected through recovered TData setters and
+the border scorer; later border invalidation is not wired. Reswarm and animation are compact
+projections; `mark_behind_tiles` lacks the live `behind_height`; and the broad
+city/leader/registry phases are Arena state projections rather than complete retail stores.
+Tower, Temple, Market, Farm, Wonder, city, captured and other special activation families
+remain on the visibly separate gameplay fallback or fail closed. Consequently neither
+`construction_lifecycle::RUNTIME_FIDELITY_READY` nor the full Arena placement/lifecycle
+product blockers are opened by this integration.
 
 ## Farm RNG
 

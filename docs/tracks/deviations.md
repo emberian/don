@@ -282,8 +282,8 @@ playable surface while their runtime path remains incomplete:
 | registry slug | declared model | literal remaining system |
 |---|---:|---|
 | `arena-construction-schedule-model` | 2a | **resolved**: persistent `BuildData`, `(who,o,uid)` identity, rotated unit-first then fixed build traversal |
-| `arena-construction-placement-model` | 2b | complete `blocked_site` terrain/territory/city/dock admission transaction |
-| `arena-construction-lifecycle-model` | 2c | claim-bearing reswarm/animation plus full city/leader/registry activation, special families and `build_done`; ResearchModel plain-site start/reject/activate has a live identity-bearing transaction |
+| `arena-construction-placement-model` | 2b | remaining fort/city/gather/dock/adjacency/water families and incremental border invalidation; shipped Barracks has a live identity-bearing terrain/occupancy/visibility/territory claim |
+| `arena-construction-lifecycle-model` | 2c | claim-bearing reswarm/animation plus full city/leader/registry activation, special families and `build_done`; ResearchModel Barracks start/reject/activate has a live identity-bearing transaction |
 | `arena-construction-interruption-model` | 2d | builder death/cancel and target close/disband transactions |
 | `arena-gather-capacity-model` | 3a | complete `calc_gather` terrain/type evaluator and signed-byte capacity refresh |
 | `arena-gather-occupancy-model` | 3b | persistent owner-local chain, generational order identity, attach/prune/detach and close paths |
