@@ -193,11 +193,13 @@ chunk header is 8 bytes, since `load_bytecode` is handed `*(int*)chunk - 8`.
 | 8 | `load_variable` `0x009c4e30` | a variable name record |
 | 9 | `load_struct_types` `0x009c4d70` | struct type definitions |
 
-`don_bhs::chunk::load_program` now parses the exact scalar/no-include subset: the
-tag-0 root and tags 2–8, including UTF-16 Strings and loader-created channel-15
-metadata. Tag 9 (the process-global struct type registry) and non-empty tag 6 links
-fail closed until their global resolution state is represented. Malformed sizes,
-child counts, ordering, and trailing payload are rejected.
+`don_bhs::chunk` now parses the exact scalar subset: the tag-0 root and tags 2–8,
+including UTF-16 Strings and loader-created channel-15 metadata.
+`load_program_files` resolves non-empty tag-6 links by scanning already-loaded source
+names backward, matching `ScriptFile::find_script_file` (`0x009c6a10`); the VM then
+resolves `OP_CALL_INCLUDE` through that table. Tag 9 (the process-global struct type
+registry) remains fail-closed. Malformed sizes, child counts, ordering, and trailing
+payload are rejected.
 
 ### 2.5 The free disassembly channel
 
@@ -534,9 +536,9 @@ non-empty directory argument rather than by hosting the compiler at all.
 2. **String and aggregate operator differentials.** Integer and float operators are
    Tier B after 6,993 retail cases with zero mismatches. Retail comparisons for
    strings and aggregates, including `ScriptObject::get_string`, remain open.
-3. **Finish the chunk container** (§2.4). Scalar files without includes now load
-   without a compiler. Struct type registration (tag 9) and include resolution
-   remain before arbitrary shipped compiled scripts can use this path.
+3. **Finish the chunk container** (§2.4). Scalar files and their include graph now
+   load without a compiler. Struct type registration (tag 9) remains before arbitrary
+   shipped compiled scripts can use this path.
 4. **Register game script qualifiers in the hbox compiler environment.** This is now the
    direct blocker to compiling a body and extracting reference bytecode.
 

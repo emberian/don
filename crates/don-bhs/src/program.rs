@@ -45,9 +45,10 @@
 //! | 8 | `load_variable`    `0x009c4e30` | a variable name record |
 //! | 9 | `load_struct_types``0x009c4d70` | struct type definitions |
 //!
-//! [`crate::chunk`] parses the scalar/no-include subset of that container and rejects
-//! the global struct registry and unresolved include table explicitly. This module is
-//! the *in-memory* shape the VM runs on, shared by that reader and the source compiler.
+//! [`crate::chunk`] parses the scalar subset of that container, including tag-6 links
+//! resolved in retail global-file order, and rejects the global struct registry
+//! explicitly. This module is the *in-memory* shape shared by that reader and the
+//! source compiler.
 
 use crate::value::Value;
 
@@ -260,6 +261,10 @@ impl ScriptFile {
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub files: Vec<ScriptFile>,
+    /// Resolved indices in [`Self::files`], parallel to each file's
+    /// [`ScriptFile::linked_file_names`]. `OP_CALL_INCLUDE` carries a slot in this
+    /// table, not a global file index.
+    linked_files: Vec<Vec<usize>>,
     walk_meta: Option<ProgramWalkMeta>,
 }
 
@@ -267,6 +272,7 @@ impl Program {
     pub fn single(file: ScriptFile) -> Program {
         Program {
             files: vec![file],
+            linked_files: vec![Vec::new()],
             walk_meta: None,
         }
     }
@@ -277,12 +283,32 @@ impl Program {
     /// walking. Attaching metadata is therefore not enough to make an incompatible
     /// program hashable; stale or partial sidecars fail closed.
     pub fn with_walk_meta(mut self, walk_meta: ProgramWalkMeta) -> Program {
-        self.walk_meta = Some(walk_meta);
+        self.set_walk_meta(walk_meta);
         self
     }
 
     pub fn set_walk_meta(&mut self, walk_meta: ProgramWalkMeta) {
+        // The recovered sidecar stores linked ScriptFile pointers as stable global
+        // indices. Preserve that same resolved table in the executable Program; an
+        // invalid negative keeps its slot as `usize::MAX`, which cannot name a file.
+        self.linked_files = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                walk_meta.files.get(index).map_or_else(Vec::new, |meta| {
+                    meta.linked_file_indices
+                        .iter()
+                        .map(|&index| usize::try_from(index).unwrap_or(usize::MAX))
+                        .collect()
+                })
+            })
+            .collect();
         self.walk_meta = Some(walk_meta);
+    }
+
+    pub fn resolved_links(&self, file: usize) -> Option<&[usize]> {
+        self.linked_files.get(file).map(Vec::as_slice)
     }
 
     pub fn walk_meta(&self) -> Option<&ProgramWalkMeta> {

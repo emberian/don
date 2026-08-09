@@ -4,8 +4,9 @@
 //! `[size: u32, tag: u16, children: u16]`; `size` includes that header. The retail
 //! compiler emits one tag-0 root containing the leaf chunks dispatched by
 //! `ScriptFile::read_script_chunk` (`0x009c5440`). This module implements the exact
-//! pointer-free subset needed by scalar scripts and rejects the still-global struct
-//! type registry (tag 9) and unresolved includes rather than manufacturing state.
+//! pointer-free subset needed by scalar scripts. Non-empty tag-6 include tables are
+//! resolved against the already-loaded file sequence exactly as `find_script_file`
+//! does; the still-global struct type registry (tag 9) remains fail-closed.
 
 use std::fmt;
 
@@ -45,7 +46,11 @@ pub enum ChunkError {
     UnsupportedTag(u16),
     UnsupportedStructTypes,
     UnsupportedConstantType(u32),
-    UnresolvedLinks(usize),
+    UnresolvedLink {
+        source_file: String,
+        linked_file: String,
+    },
+    NonAsciiLinkName(String),
     InvalidUtf16,
     CountExceedsInput {
         what: &'static str,
@@ -338,11 +343,6 @@ impl Loader {
         for _ in 0..count {
             links.push(cursor.string()?);
         }
-        if !links.is_empty() {
-            // ScriptFile::init resolves these names through the global loaded-file
-            // table. A standalone Program has no lawful substitute for that table.
-            return Err(ChunkError::UnresolvedLinks(links.len()));
-        }
         self.file.linked_file_names = links;
         Ok(())
     }
@@ -401,7 +401,7 @@ impl Loader {
         Ok(())
     }
 
-    fn finish(self) -> Result<Program, ChunkError> {
+    fn finish(self) -> LoadedFile {
         fn shape(count: usize) -> ArrayWalkMeta {
             ArrayWalkMeta {
                 // Every supported-image loader capture has capacity exactly count.
@@ -434,21 +434,90 @@ impl Loader {
                 .iter()
                 .map(|_| Some(ValueWalkMeta::scalar(2, 0)))
                 .collect(),
-            linked_files: shape(0),
+            linked_files: shape(self.file.linked_file_names.len()),
             linked_file_indices: Vec::new(),
         };
-        Ok(Program::single(self.file).with_walk_meta(ProgramWalkMeta {
-            files: vec![file_meta],
-        }))
+        LoadedFile {
+            file: self.file,
+            meta: file_meta,
+        }
     }
+}
+
+struct LoadedFile {
+    file: ScriptFile,
+    meta: ScriptFileWalkMeta,
+}
+
+/// One compiled file supplied in the same order it entered retail's global
+/// `ScriptFile::script_files` array.
+#[derive(Debug, Clone, Copy)]
+pub struct CompiledScriptFile<'a> {
+    pub source_file: &'a str,
+    pub bytes: &'a [u8],
 }
 
 /// Load one scalar/no-include compiled ScriptFile rooted at a retail tag-0 chunk.
 ///
 /// The resulting [`Program`] includes the same complete channel-15 sidecar as the
-/// normal source compiler path. Tag 9 and non-empty tag 6 require global registries
-/// not represented by a standalone Program and therefore return explicit errors.
+/// normal source compiler path. A non-empty tag 6 cannot resolve in a one-file load
+/// and therefore returns [`ChunkError::UnresolvedLink`]; use [`load_program_files`]
+/// with the included files first.
 pub fn load_program(bytes: &[u8], source_file: impl Into<String>) -> Result<Program, ChunkError> {
+    let source_file = source_file.into();
+    load_program_files(&[CompiledScriptFile {
+        source_file: &source_file,
+        bytes,
+    }])
+}
+
+/// Load and link compiled ScriptFiles in retail global-array order.
+///
+/// `ScriptFile::find_script_file` (`0x009c6a10`) scans already-loaded files from the
+/// end and compares source names case-insensitively. The shipped corpus uses ASCII
+/// paths, for which [`str::eq_ignore_ascii_case`] is byte-for-byte equivalent to its
+/// `_wcsicmp`; non-ASCII names fail closed until that locale-sensitive comparison is
+/// represented.
+pub fn load_program_files(files: &[CompiledScriptFile<'_>]) -> Result<Program, ChunkError> {
+    if files.len() > i32::MAX as usize {
+        return Err(ChunkError::ContainerTooLarge(files.len()));
+    }
+    if let Some(input) = files.iter().find(|input| !input.source_file.is_ascii()) {
+        return Err(ChunkError::NonAsciiLinkName(input.source_file.to_owned()));
+    }
+    let mut loaded_files: Vec<ScriptFile> = Vec::with_capacity(files.len());
+    let mut loaded_meta = Vec::with_capacity(files.len());
+    for input in files {
+        let mut loaded = load_file(input.bytes, input.source_file.to_owned())?;
+        let mut linked_indices = Vec::with_capacity(loaded.file.linked_file_names.len());
+        for linked_name in &loaded.file.linked_file_names {
+            if !linked_name.is_ascii() {
+                return Err(ChunkError::NonAsciiLinkName(linked_name.clone()));
+            }
+            let index = loaded_files
+                .iter()
+                .rposition(|file| file.source_file.eq_ignore_ascii_case(linked_name))
+                .ok_or_else(|| ChunkError::UnresolvedLink {
+                    source_file: input.source_file.to_owned(),
+                    linked_file: linked_name.clone(),
+                })?;
+            linked_indices.push(index);
+        }
+        loaded.meta.linked_file_indices = linked_indices
+            .into_iter()
+            .map(|index| i32::try_from(index).expect("file count is input bounded"))
+            .collect();
+        loaded_files.push(loaded.file);
+        loaded_meta.push(loaded.meta);
+    }
+
+    let mut program = Program::default();
+    program.files = loaded_files;
+    program.set_walk_meta(ProgramWalkMeta { files: loaded_meta });
+    Ok(program)
+}
+
+fn load_file(bytes: &[u8], source_file: String) -> Result<LoadedFile, ChunkError> {
     if bytes.len() > i32::MAX as usize {
         return Err(ChunkError::ContainerTooLarge(bytes.len()));
     }
@@ -469,7 +538,7 @@ pub fn load_program(bytes: &[u8], source_file: impl Into<String>) -> Result<Prog
         return Err(ChunkError::BadRootTag(root.tag));
     }
 
-    let mut loader = Loader::new(source_file.into(), bytes.len());
+    let mut loader = Loader::new(source_file, bytes.len());
     let mut at = HEADER_LEN;
     let mut children = 0usize;
     while at < root.size {
@@ -504,7 +573,7 @@ pub fn load_program(bytes: &[u8], source_file: impl Into<String>) -> Result<Prog
             actual: children,
         });
     }
-    loader.finish()
+    Ok(loader.finish())
 }
 
 #[cfg(test)]
@@ -587,6 +656,44 @@ mod tests {
                 decode_hex("47000000004400000040180000002600000020320000004028ad7b05003e"),
             ),
             chunk(8, variable),
+        ])
+    }
+
+    fn returning_container(script_name: &str, value: i32) -> Vec<u8> {
+        let mut script = Vec::new();
+        push_u32(&mut script, 0);
+        push_string(&mut script, script_name);
+        push_u32(&mut script, 0); // entry
+        push_u32(&mut script, 0); // script_type
+        push_u32(&mut script, ScriptTy::Int.tag());
+        push_u32(&mut script, 0); // trigger_count
+        push_u32(&mut script, 0); // param_count
+        let mut constant = Vec::new();
+        push_u32(&mut constant, ScriptTy::Int.tag());
+        push_u32(&mut constant, value as u32);
+        root(&[
+            chunk(2, script),
+            chunk(3, constant),
+            chunk(4, decode_hex("26000000203e")),
+        ])
+    }
+
+    fn include_caller_container(link_name: &str) -> Vec<u8> {
+        let mut links = Vec::new();
+        push_u32(&mut links, 1);
+        push_string(&mut links, link_name);
+        let mut script = Vec::new();
+        push_u32(&mut script, 0);
+        push_string(&mut script, "root");
+        push_u32(&mut script, 0); // entry
+        push_u32(&mut script, 0); // script_type
+        push_u32(&mut script, ScriptTy::Int.tag());
+        push_u32(&mut script, 0); // trigger_count
+        push_u32(&mut script, 0); // param_count
+        root(&[
+            chunk(6, links),
+            chunk(2, script),
+            chunk(4, decode_hex("3700000000000000003e")),
         ])
     }
 
@@ -691,6 +798,58 @@ mod tests {
     }
 
     #[test]
+    fn nonempty_links_resolve_backward_and_drive_call_include() {
+        let first = returning_container("helper", 7);
+        let second = returning_container("helper", 9);
+        let root = include_caller_container("LIB.BHS");
+        let mut program = load_program_files(&[
+            CompiledScriptFile {
+                source_file: "lib.bhs",
+                bytes: &first,
+            },
+            CompiledScriptFile {
+                source_file: "lib.bhs",
+                bytes: &second,
+            },
+            CompiledScriptFile {
+                source_file: "root.bhs",
+                bytes: &root,
+            },
+        ])
+        .unwrap();
+
+        // find_script_file scans the global array from the end, and OP_CALL_INCLUDE's
+        // second operand is slot zero in this resolved table—not global file zero.
+        assert_eq!(program.resolved_links(2).unwrap(), [1]);
+        assert_eq!(
+            program.walk_meta().unwrap().files[2].linked_file_indices,
+            [1]
+        );
+        let mut host = NullHost;
+        assert_eq!(
+            Vm::new(&mut program, &mut host)
+                .run_script(2, "root")
+                .unwrap()
+                .returned,
+            Some(Value::Int(9))
+        );
+
+        assert!(matches!(
+            load_program_files(&[
+                CompiledScriptFile {
+                    source_file: "root.bhs",
+                    bytes: &root,
+                },
+                CompiledScriptFile {
+                    source_file: "lib.bhs",
+                    bytes: &first,
+                },
+            ]),
+            Err(ChunkError::UnresolvedLink { .. })
+        ));
+    }
+
+    #[test]
     fn one_byte_header_mutations_fail_closed() {
         let valid = static_int_container();
 
@@ -717,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn global_struct_and_link_state_are_explicitly_unsupported() {
+    fn global_struct_state_and_standalone_links_fail_closed() {
         let struct_root = root(&[chunk(9, Vec::new())]);
         assert!(matches!(
             load_program(&struct_root, "struct.bhs"),
@@ -730,7 +889,7 @@ mod tests {
         let links_root = root(&[chunk(6, links)]);
         assert!(matches!(
             load_program(&links_root, "root.bhs"),
-            Err(ChunkError::UnresolvedLinks(1))
+            Err(ChunkError::UnresolvedLink { .. })
         ));
     }
 }

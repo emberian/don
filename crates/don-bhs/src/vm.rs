@@ -190,6 +190,7 @@ pub enum VmError {
     BadVarRef(VarRef),
     /// `VirtualMachine::call_func`'s `func_index >= funcs.count` check.
     BadBuiltinIndex(u32),
+    BadFileIndex(usize),
     BadScriptIndex(usize),
     /// An opcode this implementation has not recovered well enough to run. Named
     /// rather than silently wrong — the whole point of the coverage discipline.
@@ -323,11 +324,13 @@ impl<'a, H: Host> Vm<'a, H> {
     /// `RunTimeEnv::run_script(name, ...)` for the zero-argument, per-frame form
     /// that `Game::do_frame` uses: `run_script(&script_run_time, game+0x500, 0)`.
     pub fn run_script(&mut self, file: usize, name: &str) -> Result<RunOutcome, VmError> {
-        let idx = self
+        let file_ref = self
             .prog
             .files
             .get(file)
-            .and_then(|f| f.find_script(name))
+            .ok_or(VmError::BadFileIndex(file))?;
+        let idx = file_ref
+            .find_script(name)
             .ok_or(VmError::BadScriptIndex(usize::MAX))?;
         self.run_script_index(file, idx, &[])
     }
@@ -432,11 +435,14 @@ impl<'a, H: Host> Vm<'a, H> {
     // ---------------------------------------------------------------- frames
 
     fn push_frame(&mut self, file: usize, script: usize) -> Result<(), VmError> {
-        let s = self
+        let file_ref = self
             .prog
             .files
             .get(file)
-            .and_then(|f| f.scripts.get(script))
+            .ok_or(VmError::BadFileIndex(file))?;
+        let s = file_ref
+            .scripts
+            .get(script)
             .ok_or(VmError::BadScriptIndex(script))?;
         let void_return = s.return_type == ScriptTy::Void.tag();
         let arity = s.arity;
@@ -1061,9 +1067,18 @@ impl<'a, H: Host> Vm<'a, H> {
                 self.push_frame(file, script)?;
             }
             0x37 => {
-                // OP_CALL_INCLUDE: operands are [script_index][file_index].
+                // OP_CALL_INCLUDE: operands are [script_index][linked-file slot].
+                // RunTimeEnv::call_script resolves the latter through the current
+                // ScriptFile's linked_files pointer array before opening the frame.
                 let script = self.fetch_u32()? as usize;
-                let file = self.fetch_u32()? as usize;
+                let link = self.fetch_u32()? as usize;
+                let current_file = self.frames.last().unwrap().file;
+                let file = *self
+                    .prog
+                    .resolved_links(current_file)
+                    .ok_or(VmError::BadFileIndex(current_file))?
+                    .get(link)
+                    .ok_or(VmError::BadFileIndex(link))?;
                 self.push_frame(file, script)?;
             }
             0x38 => {

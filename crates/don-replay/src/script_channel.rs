@@ -190,6 +190,11 @@ pub enum ScriptChannelError {
         live: &'static str,
         metadata: &'static str,
     },
+    LinkedFileIndexMismatch {
+        slot: usize,
+        live: usize,
+        metadata: i32,
+    },
     CountDoesNotFitI32 {
         what: &'static str,
         actual: usize,
@@ -801,6 +806,7 @@ fn walk_bhs_file<S: WalkSink>(
     sink: &mut S,
     file: &BhsScriptFile,
     meta: &BhsScriptFileWalkMeta,
+    live_link_indices: &[usize],
 ) -> Result<(), ScriptChannelError> {
     walk_simple_u8(
         sink,
@@ -852,9 +858,27 @@ fn walk_bhs_file<S: WalkSink>(
     )?;
     require_parallel_len(
         "ScriptFile.linked_files",
-        file.linked_file_names.len(),
+        live_link_indices.len(),
         meta.linked_file_indices.len(),
     )?;
+    require_parallel_len(
+        "ScriptFile.linked_file_names",
+        file.linked_file_names.len(),
+        live_link_indices.len(),
+    )?;
+    for (slot, (&live, &metadata)) in live_link_indices
+        .iter()
+        .zip(&meta.linked_file_indices)
+        .enumerate()
+    {
+        if usize::try_from(metadata).ok() != Some(live) {
+            return Err(ScriptChannelError::LinkedFileIndexMismatch {
+                slot,
+                live,
+                metadata,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -874,8 +898,13 @@ pub fn checksum_program(program: &BhsProgram) -> Result<ScriptChannelChecksum, S
         &mut adler,
         checked_count("ScriptFile::script_files", program.files.len())?,
     );
-    for (file, file_meta) in program.files.iter().zip(&meta.files) {
-        walk_bhs_file(&mut adler, file, file_meta)?;
+    for (index, (file, file_meta)) in program.files.iter().zip(&meta.files).enumerate() {
+        walk_bhs_file(
+            &mut adler,
+            file,
+            file_meta,
+            program.resolved_links(index).unwrap_or(&[]),
+        )?;
     }
     Ok(ScriptChannelChecksum {
         checksum: adler.value(),
@@ -1367,6 +1396,49 @@ mod tests {
         let after = checksum_program(&after_program).unwrap();
         assert_ne!(before.checksum, after.checksum);
         assert_eq!(before.bytes_walked, after.bytes_walked);
+    }
+
+    #[test]
+    fn stale_live_link_resolution_is_rejected_before_hashing() {
+        let mut program = BhsProgram::default();
+        program.files = vec![
+            BhsScriptFile {
+                source_file: "lib.bhs".into(),
+                ..Default::default()
+            },
+            BhsScriptFile {
+                source_file: "root.bhs".into(),
+                linked_file_names: vec!["lib.bhs".into()],
+                ..Default::default()
+            },
+        ];
+        program.set_walk_meta(ProgramWalkMeta {
+            files: vec![
+                ScriptFileWalkMeta::default(),
+                ScriptFileWalkMeta {
+                    linked_files: ProgramArrayWalkMeta {
+                        capacity: 1,
+                        grow: u16::MAX,
+                        flags: 0,
+                    },
+                    linked_file_indices: vec![0],
+                    ..Default::default()
+                },
+            ],
+        });
+        assert!(checksum_program(&program).is_ok());
+
+        // The executable table is authoritative for OP_CALL_INCLUDE. If the checksum
+        // sidecar drifts from it, channel 15 must reject the stale projection.
+        program.walk_meta_mut().unwrap().files[1].linked_file_indices[0] = 1;
+        assert_eq!(
+            checksum_program(&program),
+            Err(ScriptChannelError::LinkedFileIndexMismatch {
+                slot: 0,
+                live: 0,
+                metadata: 1,
+            })
+        );
     }
 
     #[test]
