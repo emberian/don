@@ -2,6 +2,7 @@ use don_bhs::chunk::load_program;
 use don_bhs::disasm::{asm, asm_len};
 use don_bhs::{find_builtin, Program, Script, ScriptFile, ScriptTy, Value, VarRef, VmError};
 use don_bhs_cc::sema::{self, Severity};
+use don_sim::order::Order;
 use don_sim::rng::Random;
 use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
@@ -719,6 +720,82 @@ fn retail_chunk_executes_the_same_territory_and_building_reads() {
         sim.leaders[0].econ.stockpile,
         [2, 0, 12, 0, 31, 0],
         "loaded chunks must retain the same authoritative territory and building reads"
+    );
+}
+
+fn configure_unit_status_read_state(sim: &mut Sim) {
+    sim.activate(0);
+
+    let idle_captain = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let idle_subordinate = sim.spawn_unit(0, 7, 4 * 192, 5 * 192, 4).unwrap();
+    let garrisoned = sim.spawn_unit(0, 7, 6 * 192, 7 * 192, 4).unwrap();
+    let moving = sim.spawn_unit(0, 7, 8 * 192, 9 * 192, 4).unwrap();
+    let idle_captain_row = sim.world.row_of(idle_captain).unwrap();
+    let idle_subordinate_row = sim.world.row_of(idle_subordinate).unwrap();
+    let garrisoned_row = sim.world.row_of(garrisoned).unwrap();
+    let moving_row = sim.world.row_of(moving).unwrap();
+
+    sim.world.units.o_up_mut()[idle_captain_row] = -1;
+    sim.world.units.o_up_mut()[idle_subordinate_row] = 0;
+    sim.world.units.o_up_mut()[garrisoned_row] = -1;
+    sim.world.units.o_up_mut()[moving_row] = -1;
+    sim.world.units.inside_up_mut()[garrisoned_row] = 2000;
+    sim.world.units.inside_up_who_mut()[garrisoned_row] = 0;
+    assert!(sim
+        .world
+        .issue(moving, Order::move_to(12 * 192, 13 * 192, 0)));
+
+    let mut build = don_sim::systems::production::BuildData::default();
+    build.flags = don_sim::systems::production::flag::VALID;
+    build.other[don_sim::systems::production::off::OBJECT_ID
+        ..don_sim::systems::production::off::OBJECT_ID + 2]
+        .copy_from_slice(&2000i16.to_le_bytes());
+    sim.spawn_build(0, build);
+}
+
+#[test]
+fn ordinary_source_executes_unit_status_reads() {
+    let program = compile_source_fixture("scenario_unit_status_reads.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "unit_status_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x812b, 8);
+    configure_unit_status_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 0, 1, 1, 0],
+        "captain identity, current-order classification, and outer building containment must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_unit_status_reads() {
+    let compiled = compile_source_fixture("scenario_unit_status_reads.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "unit_status_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x812c, 12);
+    configure_unit_status_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 0, 1, 1, 0],
+        "loaded chunks must retain exact idle, move-order, and garrison reads"
     );
 }
 

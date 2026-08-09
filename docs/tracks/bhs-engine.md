@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Thirty-eight
+`Program`, and `ScriptRuntime` runs either producer against that live host. Forty-one
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -489,6 +489,9 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 352 | `time_earlier_than` | signed `Game::seconds / 60 < argument` (`0x009ee160`) |
 | 411 | `object_position_x` | validate `(who,o)`, resolve captain and outer container, then `div_3_table[(x ^ 0x63637) >> 6]` (`0x009f1360`) |
 | 412 | `object_position_y` | the same object walk over the encrypted y coordinate (`0x009f1470`) |
+| 446 | `is_garrisoned` | exact object validation and `get_inside` walk; true only for an outer building container (`0x009f2f20`) |
+| 583 | `is_idle` | no current order and the originally addressed unit is a captain (`0x009f9370`) |
+| 592 | `has_move_order` | current order's virtual `is_move`; exact seven-class override set (`0x009f9840`) |
 | 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
 | 662 | `take_good` | wrapping subtract from decoded stockpile, then clamp at zero (`0x009fb630`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
@@ -498,10 +501,17 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 7,554 calls to those thirty-eight registrations. Together
+The current 363-file census contains 7,612 calls to those forty-one registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,345 of 39,957 measured shipped-corpus call sites (**20.88%**, up from **1.98%**).
+8,403 of 39,957 measured shipped-corpus call sites (**21.03%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
+
+The unit-status cohort contributes 58 shipped calls. Its object gate is the exact
+`valid_object_o` body at `0x009e32a0`; missing object/container links fail closed. The
+idle reader deliberately tests the originally addressed unit's `o_up` rather than resolving
+its captain. `has_move_order` follows the current order's vtable `+0x14`: the recovered order
+vtables point the seven movement classes to the shared true stub at `0x0041e0e0` and all
+others to the false base implementation.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
 `add_timer` / `remove_timer` / `check` bodies at `0x00a049e0`, `0x00a04b20`, and
@@ -569,7 +579,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-804 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+801 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

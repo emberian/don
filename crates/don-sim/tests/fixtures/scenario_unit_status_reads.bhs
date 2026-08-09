@@ -1,0 +1,10 @@
+int scenario unit_status_reads_tick()
+{
+    set_good(1, "Food", is_idle(1, 0));
+    set_good(1, "Timber", has_move_order(1, 0));
+    set_good(1, "Wealth", is_idle(1, 1));
+    set_good(1, "Knowledge", is_garrisoned(1, 2));
+    set_good(1, "Metal", has_move_order(1, 3));
+    set_good(1, "Oil", is_idle(1, 3));
+    return 1;
+}

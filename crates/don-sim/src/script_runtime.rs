@@ -19,7 +19,7 @@ use don_bhs::{
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
-use crate::systems::{economy, leaders, victory_score};
+use crate::systems::{economy, leaders, order_dispatch, victory_score};
 use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
@@ -530,6 +530,27 @@ impl Sim {
         }
     }
 
+    /// `ScenarioFuncSet::valid_object_o` `0x009e32a0`: both Leader bits, the
+    /// owner-local object band below 3000, a non-null object slot, then `flags & 1`.
+    /// Unlike the position readers' `active_unit_slot`, this gate does not preserve
+    /// an inactive formation member solely because it has an `o_up` captain.
+    fn valid_script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
+        let flags = self.step8.leaders.get(who)?.flags;
+        if flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+            != (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+            || !(0..WALL_BAND_BASE as i32).contains(&o)
+        {
+            return None;
+        }
+        match self.script_object(who, o)? {
+            object @ ScriptObject::Unit { row, .. } if self.world.units.get_flags(row) & 1 != 0 => {
+                Some(object)
+            }
+            object @ ScriptObject::Build { row, .. } if self.builds[row].is_valid() => Some(object),
+            _ => None,
+        }
+    }
+
     /// `UnitData::get_captain` `0x00610ab0`. Non-unit objects inherit
     /// `ObjectData::get_captain` and return their own object index.
     fn script_captain(&self, mut object: ScriptObject) -> Result<ScriptObject, HostError> {
@@ -555,13 +576,13 @@ impl Sim {
 
     /// `ObjectData::get_inside` `0x00651a80`: follow `inside_up` while the container is
     /// itself a unit, stopping on the outermost unit or the first non-unit object.
-    fn script_outer_container(&self, object: ScriptObject) -> Result<ScriptObject, HostError> {
+    fn script_container(&self, object: ScriptObject) -> Result<Option<ScriptObject>, HostError> {
         let ScriptObject::Unit { row, .. } = object else {
-            return Ok(object);
+            return Ok(None);
         };
         let inside = self.world.units.inside_up()[row] as i32;
         if inside < 0 {
-            return Ok(object);
+            return Ok(None);
         }
         let inside_who = self.world.units.inside_up_who()[row] as u8 as usize;
         let mut container = self
@@ -570,11 +591,11 @@ impl Sim {
         let limit = self.world.objects.total_objects().saturating_add(1);
         for _ in 0..limit {
             let ScriptObject::Unit { row, .. } = container else {
-                return Ok(container);
+                return Ok(Some(container));
             };
             let next_o = self.world.units.inside_up()[row] as i32;
             if next_o < 0 {
-                return Ok(container);
+                return Ok(Some(container));
             }
             let next_who = self.world.units.inside_up_who()[row] as u8 as usize;
             let next = self
@@ -586,6 +607,10 @@ impl Sim {
             container = next;
         }
         Err(HostError::Unimplemented)
+    }
+
+    fn script_outer_container(&self, object: ScriptObject) -> Result<ScriptObject, HostError> {
+        Ok(self.script_container(object)?.unwrap_or(object))
     }
 
     /// `ScenarioFuncSet::object_position_{x,y}` (`0x009f1360` / `0x009f1470`).
@@ -863,6 +888,52 @@ impl ScenarioHost for Sim {
                 args[1].as_int(),
                 true,
             )?)),
+            // `is_garrisoned` `0x009f2f20`: exact `valid_object_o`, then
+            // `ObjectData::get_inside`; only a resolved outer building container counts.
+            446 => {
+                let who = args[0].as_int().wrapping_sub(1) as u32 as usize;
+                let Some(object) = self.valid_script_object(who, args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(matches!(
+                    self.script_container(object)?,
+                    Some(ScriptObject::Build { .. })
+                ) as i32))
+            }
+            // `is_idle` `0x009f9370`: an empty order list is not enough; retail calls
+            // `is_captain` on the originally addressed unit, without resolving `o_up`.
+            583 => {
+                let who = args[0].as_int().wrapping_sub(1) as u32 as usize;
+                let Some(object) = self.valid_script_object(who, args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let ScriptObject::Unit { row, .. } = object else {
+                    // The registered contract says `unit_o`; retail's direct UnitData
+                    // method call leaves valid non-unit input outside the recovered domain.
+                    return Err(HostError::Unimplemented);
+                };
+                Ok(Value::Int(
+                    (self.world.orders(row).is_empty() && self.world.units.o_up()[row] < 0) as i32,
+                ))
+            }
+            // `has_move_order` `0x009f9840`: a non-idle UnitData has a current order;
+            // dispatch its virtual `is_move` classification. The exact seven concrete
+            // overrides are the measured `MOVE_LIKE` set.
+            592 => {
+                let who = args[0].as_int().wrapping_sub(1) as u32 as usize;
+                let Some(object) = self.valid_script_object(who, args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let ScriptObject::Unit { row, .. } = object else {
+                    return Err(HostError::Unimplemented);
+                };
+                let is_move = self
+                    .world
+                    .orders(row)
+                    .current()
+                    .is_some_and(|order| order_dispatch::is_move_like(order.kind));
+                Ok(Value::Int(is_move as i32))
+            }
             // `give_good` `0x009fb590`: leader active, resource type index < 6,
             // wrapping add to the decoded stockpile.
             661 => {
