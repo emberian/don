@@ -69,12 +69,13 @@
 
 #![allow(clippy::needless_range_loop)]
 
+pub mod build_check_capture;
+pub mod cities_capture_prefix;
 /// Deterministic building/stat/event tails surrounding the recursive splash and capture walk.
 pub mod damage_fallthrough;
 /// Typed, fail-closed world mutations after `Object::take_damage` returns to
 /// `Object::do_damage`.
 pub mod damage_world;
-pub mod build_check_capture;
 
 // ===========================================================================================
 // 1. The rules.xml combat block
