@@ -31,6 +31,10 @@ pub mod armies;
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.
 pub mod attack_position;
 pub mod borders_fog;
+/// Exact completed-Farm arm of `BuildTypeData::calc_gather`: six-slot LandData/river
+/// evaluation, city/Japanese scaling, and the Egyptian Wealth side output. Unsupported
+/// building types and type-data shapes fail closed.
+pub mod building_gather;
 /// Tier-C spell-lifecycle and wildlife/RNG primitives recovered from the interrupted
 /// casters/animals lane. Full casting, object allocation, hunting, tick and checksum
 /// integration remain explicit boundaries; see `docs/mechanics/casters-animals.md`.
