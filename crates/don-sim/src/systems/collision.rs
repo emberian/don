@@ -47,7 +47,7 @@
 //! | `WorldData::get_coll_block` | `0x006B5350` | 65 | reused from `map_terrain` |
 //! | `World::new_coll_block` | `0x0046D250` | 179 | reused from `map_terrain` |
 //! | `Objects::find_collision` | `0x00682110` | — | **not ported** (the other `collide_here` caller) |
-//! | `Unit::detect_boat_collision` | `0x005FA8B0` | 1655 | required side-effecting trait hook |
+//! | `Unit::detect_boat_collision` | `0x005FA8B0` | 1655 | multi-circle solver ported; world mutations are required trait hooks |
 //!
 //! Data tables, read out of `.rdata` [measured]: `RING_X` `0x00ADCAF0`, `RING_Y` `0x00ADC400`
 //! (441 `int` each), `RING_COUNT` `0x00ADD1E0` (11 `int`), the 2x2 block offsets
@@ -55,8 +55,10 @@
 //! `movement::{ucell_of, tile_of, wcell_of}` over `div_3_table` — reused, not re-derived.
 
 use crate::rng::Random;
+use crate::systems::combat::vector_dist;
 use crate::systems::map_terrain::{tflag, wflag, CollBlock, World};
-use crate::systems::movement::{ucell_centre, ucell_of, PathData, PathStack, COORD_XOR};
+use crate::systems::movement::{tile_of, ucell_centre, ucell_of, PathData, PathStack, COORD_XOR};
+use crate::trig::{cosx, find_angle, sinx};
 
 // ---------------------------------------------------------------------------
 // 1. Grid constants and the shipped ring tables  [measured]
@@ -805,6 +807,14 @@ pub struct UnitRow {
     pub block_radius: i32,
     /// `ObjectTypeData+0x244 big_radius`, used by `move_step`'s stuck test.
     pub big_radius: i32,
+    /// `UnitTypeData+0x2F8/+0x2FC`: total bow-to-stern collision profile length and number
+    /// of tangent circles. `detect_boat_collision` divides the former by the latter.
+    pub push_size: i32,
+    pub push_circles: i32,
+    /// `UnitData+0x50 angle` and the first live guy's `GuyData+0x18 angle`. The boat solver
+    /// uses the guy angle to lay out both hull profiles and to constrain a pushed unit.
+    pub angle: i32,
+    pub first_guy_angle: i32,
     /// `UnitData+0x80 group`; `-1` is ungrouped.
     pub group: i16,
     /// `UnitData+0x88 collide` — consecutive collided frames.
@@ -841,13 +851,15 @@ pub struct UnitRow {
     pub path_top_flags: u8,
     /// `UnitTypeData+0x2B4 unit_flags`.
     pub unit_flags: u32,
+    /// `UnitTypeData+0x2B8 unit_flags2`; bit 2 selects the packed/unpacking exclusion.
+    pub unit_flags2: u32,
+    /// `ObjectTypeData+0x1E8 attack`; non-zero prevents a pusher carrying unit-flag 0x10
+    /// from displacing this candidate.
+    pub attack_value: i32,
     /// `SpellType` id when [`UnitRow::order`] is `CastSpell`, else `-1`.
     pub spell_id: i32,
-    /// `UnitData::is_hero` / `is_supply`, used by the boat-collision pre-check.
-    pub hero: bool,
-    pub supply: bool,
-    /// `UnitTypeData::is_siege` (type vtable `+0x10C`), also used by that pre-check.
-    pub siege: bool,
+    /// Dynamic predicate read through `UnitData::is_unpacking` in the land-domain arm.
+    pub unpacking: bool,
     /// `UnitData::is_captain` `0x0046CEB0`; retained for the object-side adapter even though
     /// the retail collision functions in this module do not branch on it.
     pub captain: bool,
@@ -866,6 +878,21 @@ pub struct CollGuy {
     pub block_radius: i32,
 }
 
+/// The exact `Objects::find_units` query issued by `Unit::detect_boat_collision`.
+///
+/// The omitted finder arguments are fixed by the callsite: search index 0, owner -1,
+/// maximum distance `0x200`, filter index 3, and the acting object's `(o, who)` exclusion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoatQuery {
+    pub x: i32,
+    pub y: i32,
+    pub radius: i32,
+    pub exclude_o: i32,
+    pub exclude_who: i32,
+    pub circles: i32,
+    pub water: bool,
+}
+
 /// The queries `detect_unit_collision` and `resolve_unit_collision` make of the world's
 /// object side. Every method names the retail function it stands in for.
 ///
@@ -878,17 +905,27 @@ pub trait CollUnits {
     /// non-null squad guys in pointer-array order and use each guy type's
     /// `new_block_radius`; [`unit_corner`] is the shared exact implementation.
     fn unit_corner(&self, who: i32, o: i32, cx: i32, cy: i32) -> i32;
-    /// `Unit::detect_boat_collision` `0x005FA8B0`. This is intentionally a required hook:
-    /// retail may relocate the other unit and update its collision partner while answering,
-    /// so reducing it to a geometry predicate would lose simulation state.
-    fn detect_boat_collision(
+    /// `Objects::find_units` `0x0065A620`, preserving the returned scratch-array order.
+    fn find_boat_units(&mut self, query: BoatQuery) -> Vec<(i32, i32)>;
+    /// `leaders[who].who`, which can differ from the slot under shared control.
+    fn effective_owner(&self, who: i32) -> i32;
+    /// `LeaderData+0x74 diplos[other]`.
+    fn diplomacy(&self, who: i32, other: i32) -> i32;
+    /// Candidate `UnitData::invalid_loc(tile_x, tile_y, 0, 0, 0, 0, 0, 0)`.
+    fn boat_invalid_loc(&self, who: i32, o: i32, tx: i32, ty: i32) -> bool;
+    /// Candidate `Unit::set_new_location(x, y, 0, 0)`, including world links, per-guy
+    /// destinations and collision stamps.
+    fn set_boat_location(&mut self, who: i32, o: i32, x: i32, y: i32);
+    /// The no-order turn tail: `Unit::set_angle(angle, pusher, 0)`, followed by first-guy
+    /// `turn_angles(angle, ..., 1, 1)` and `do_turn(angle, ..., 1, 1)`.
+    fn face_pushed_idle_unit(
         &mut self,
         who: i32,
         o: i32,
-        nx: i32,
-        ny: i32,
-        move_other: bool,
-    ) -> bool;
+        angle: i32,
+        pusher_who: i32,
+        pusher_o: i32,
+    );
     /// Write back a row mutated by [`Detect::apply`] / [`Resolve::apply`].
     fn write(&mut self, who: i32, o: i32, r: &UnitRow);
     /// `LeaderData::is_enemy` `0x006EBAA0`.
@@ -968,7 +1005,223 @@ pub fn unit_corner(cx: i32, cy: i32, guys: impl IntoIterator<Item = CollGuy>) ->
 }
 
 // ---------------------------------------------------------------------------
-// 7. `Unit::detect_unit_collision`  [measured]
+// 7. `Unit::detect_boat_collision`  [measured]
+// ---------------------------------------------------------------------------
+
+/// Project `(x, y)` by `dist` along a retail binary heading.
+///
+/// This is `project` `0x0092CF40`: `x + sinx(angle, dist)`,
+/// `y - cosx(angle, dist)`. All operations wrap as 32-bit coordinates do.
+#[inline]
+pub fn boat_project(x: i32, y: i32, angle: i32, dist: i32) -> (i32, i32) {
+    (
+        x.wrapping_add(sinx(angle, dist)),
+        y.wrapping_sub(cosx(angle, dist)),
+    )
+}
+
+/// Lay out the centres of a `push_circles` hull profile.
+///
+/// `push_size / push_circles` is each circle's radius. Profiles with two or more circles
+/// are centred on the object and spaced by twice that radius along its first guy's heading,
+/// making adjacent circles tangent. Division is intentionally unchecked: retail `idiv`
+/// traps when mod data supplies a non-zero `push_size` with zero circles.
+pub fn boat_hull_centres(
+    x: i32,
+    y: i32,
+    angle: i32,
+    push_size: i32,
+    push_circles: i32,
+) -> (i32, Vec<(i32, i32)>) {
+    let radius = push_size / push_circles;
+    if push_circles < 2 {
+        return (
+            radius,
+            if push_circles > 0 {
+                vec![(x, y)]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+    let (dx, dy) = boat_project(0, 0, angle, radius);
+    let mut cx = x.wrapping_sub((push_circles - 1).wrapping_mul(dx));
+    let mut cy = y.wrapping_sub((push_circles - 1).wrapping_mul(dy));
+    let sx = dx.wrapping_mul(2);
+    let sy = dy.wrapping_mul(2);
+    let mut out = Vec::with_capacity(push_circles as usize);
+    for _ in 0..push_circles {
+        out.push((cx, cy));
+        cx = cx.wrapping_add(sx);
+        cy = cy.wrapping_add(sy);
+    }
+    (radius, out)
+}
+
+/// `Unit::detect_boat_collision` `0x005FA8B0`.
+///
+/// Despite its name this is the engine's **multi-circle body-pushing solver**. Water units
+/// always enter it, while siege/hero/supply land units reach it through
+/// [`detect_unit_collision`]'s measured pre-gate. Each type describes a hull as
+/// `push_circles` tangent circles spanning `push_size`; the solver finds the minimum retail
+/// [`vector_dist`] between the acting profile at `(nx, ny)` and every finder candidate.
+/// A positive overlap pushes the candidate outward by at most one UCoord (`0x30`) unless an
+/// attack, diplomacy, packed-unit, unpacking, special-mask, tank, or heading constraint says
+/// the body is immovable. An immovable body returns `false` immediately so ordinary bitmap
+/// collision may handle it; a completed/no-op scan returns `true`.
+///
+/// Side effects are in shipped order:
+///
+/// 1. `Objects::find_units` fills its global scratch array and fixes candidate order.
+/// 2. A movable candidate passes `invalid_loc`, then `set_new_location` runs.
+/// 3. With `move_other` and either a one-circle target or a land pusher, its blocker IDs are
+///    set to the pusher; an idle target is turned, including its first guy.
+/// 4. Every candidate that did not force the early `false` exit receives
+///    `collide_frame = frame`, even if filtered, non-overlapping, or invalid at the proposed
+///    location. This surprising write is the common `0x005FAEEE` loop tail.
+///
+/// There is **no RNG call** anywhere in the 1,655-byte function. The exact state effect on
+/// `game_random` is therefore zero draws.
+pub fn detect_boat_collision<U: CollUnits>(
+    units: &mut U,
+    me: &UnitRow,
+    nx: i32,
+    ny: i32,
+    move_other: bool,
+) -> bool {
+    if me.who >= 8 || me.push_size == 0 {
+        return true;
+    }
+
+    let query = BoatQuery {
+        x: nx,
+        y: ny,
+        radius: me.push_size,
+        exclude_o: me.o,
+        exclude_who: me.who,
+        circles: me.push_circles,
+        water: me.domain == DOMAIN_WATER,
+    };
+    let candidates = units.find_boat_units(query);
+    let (my_radius, my_centres) =
+        boat_hull_centres(nx, ny, me.first_guy_angle, me.push_size, me.push_circles);
+
+    for (other_who, other_o) in candidates {
+        let mut other = units
+            .row(other_who, other_o)
+            .expect("find_boat_units returned a non-unit address");
+        let mut early_block = false;
+
+        let eligible = (me.domain == DOMAIN_LAND || other.who < 8)
+            && other.domain == me.domain
+            && !(other.who == me.who
+                && other.group == me.group
+                && me.group != -1
+                && move_other
+                && me.action != ORDER_ATTACK)
+            && !(me.collide_o as i32 == other.o
+                && me.collide_who as i32 == other.who
+                && me.collide_frame == units.frame());
+
+        if eligible && other.push_size != 0 {
+            let (their_radius, their_centres) = boat_hull_centres(
+                other.x,
+                other.y,
+                other.first_guy_angle,
+                other.push_size,
+                other.push_circles,
+            );
+            let mut minimum = 0x0fff_ffff;
+            let mut first = true;
+            for &(mx, my) in &my_centres {
+                for &(tx, ty) in &their_centres {
+                    let dist = vector_dist(mx.wrapping_sub(tx), my.wrapping_sub(ty));
+                    if first || dist < minimum {
+                        minimum = dist;
+                        first = false;
+                    }
+                }
+            }
+            let overlap = their_radius.wrapping_sub(minimum).wrapping_add(my_radius) / 2;
+
+            if overlap > 0 {
+                if me.unit_flags & 0x10 != 0 && other.attack_value != 0 {
+                    early_block = true;
+                }
+
+                let effective = units.effective_owner(me.who);
+                if !early_block
+                    && other.who != effective
+                    && (units.diplomacy(me.who, other.who) != 2
+                        || units.diplomacy(other.who, effective) != 2)
+                    && other.who < 8
+                {
+                    early_block = true;
+                }
+
+                if !early_block && me.domain == DOMAIN_LAND {
+                    if other.unit_flags2 & 4 != 0
+                        && (other.unit_masks & 0x0008_0000 == 0 || other.unpacking)
+                    {
+                        early_block = true;
+                    }
+                    if other.unit_masks & 0x0200_0000 != 0 || other.unit_flags & 0x0008_0000 != 0 {
+                        early_block = true;
+                    }
+                }
+
+                let mut push_angle = find_angle(other.x.wrapping_sub(nx), other.y.wrapping_sub(ny));
+                if !early_block {
+                    if !other.moving {
+                        let delta = (push_angle as u32).wrapping_sub(me.first_guy_angle as u32);
+                        if delta < 0x2000_0000 {
+                            push_angle = me.first_guy_angle.wrapping_add(0x2000_0000);
+                        } else if delta > 0xe000_0000 {
+                            push_angle = me.first_guy_angle.wrapping_sub(0x2000_0000);
+                        }
+                    } else {
+                        let window = (push_angle as u32)
+                            .wrapping_sub(me.first_guy_angle as u32)
+                            .wrapping_add(0xe000_0000);
+                        if window > 0xc000_0000 {
+                            early_block = true;
+                        }
+                    }
+                }
+
+                if !early_block {
+                    let step = overlap.min(0x30);
+                    let (tx, ty) = boat_project(other.x, other.y, push_angle, step);
+                    if !units.boat_invalid_loc(other.who, other.o, tile_of(tx), tile_of(ty)) {
+                        units.set_boat_location(other.who, other.o, tx, ty);
+                        other = units.row(other.who, other.o).unwrap_or(other);
+                        if move_other && (other.push_circles == 1 || me.domain == DOMAIN_LAND) {
+                            other.collide_o = me.o as i16;
+                            other.collide_who = me.who as i8;
+                            units.write(other.who, other.o, &other);
+                            if !other.has_orders {
+                                units.face_pushed_idle_unit(
+                                    other.who, other.o, push_angle, me.who, me.o,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if early_block {
+            return false;
+        }
+        other = units.row(other_who, other_o).unwrap_or(other);
+        other.collide_frame = units.frame();
+        units.write(other_who, other_o, &other);
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
+// 8. `Unit::detect_unit_collision`  [measured]
 // ---------------------------------------------------------------------------
 
 /// The five flag parameters of `Unit::detect_unit_collision(Coord, Coord, int, int, int, int, int)`.
@@ -1127,14 +1380,14 @@ pub fn detect_unit_collision<U: CollUnits>(
 
     // 2. pre-checks. Regular land units bypass the specialised boat-body solver. Water,
     // siege, hero and supply units enter it only on the non-probe/non-overlay move-step arm.
-    if !args.skip_pre
-        && (me.domain == DOMAIN_WATER || me.siege || me.hero || me.supply)
-        && !args.overlay
-    {
+    let siege = me.unit_flags & 0x0002_0000 != 0;
+    let hero = me.unit_flags2 & 0x20 != 0;
+    let supply = me.unit_flags2 & 0x40 != 0;
+    if !args.skip_pre && (me.domain == DOMAIN_WATER || siege || hero || supply) && !args.overlay {
         if args.probe || !args.boat {
             return Detect::ClearAndReset { yielded: false };
         }
-        if units.detect_boat_collision(me.who, me.o, nx, ny, true) {
+        if detect_boat_collision(units, me, nx, ny, true) {
             return Detect::ClearAndReset { yielded: false };
         }
     }
@@ -1311,6 +1564,8 @@ pub enum Resolve {
         /// `Random::get(0, 0xFFFF) % 9 + 1` was drawn and stored as the order's wait.
         /// **This is an RNG consumer on `game_random`.**
         wait_drawn: Option<i32>,
+        /// Whether `PathFinder::find_upath` returned non-zero. This includes retail's raw
+        /// `-1` suspended result as well as `1` found; only `0` failure is false.
         found: bool,
     },
     /// The per-owner repath budget or the modulo throttle refused this unit this frame.
@@ -1341,7 +1596,8 @@ pub enum Resolve {
 /// 4. **Repath.** Otherwise, and only if the owner's budget allows: pop waypoints until one
 ///    is "far enough" (`tolerance >= 0x60`, not a unit waypoint) or unoccupied, push it back,
 ///    snap to the cell centre via `Unit::set_new_location`, and re-run `find_upath`. If the
-///    search found something **and** the blocker is mutually blocked on me, draw
+///    search returned non-zero (**including its `-1` suspended result**) **and** the blocker
+///    is mutually blocked on me, draw
 ///    `Random::get(0, 0xFFFF) % 9 + 1` and store it as the order's wait.
 ///
 /// The throttle is worth stating on its own, because it shapes the whole crowd behaviour:
@@ -1362,6 +1618,8 @@ pub fn resolve_unit_collision<U, F>(
 ) -> Resolve
 where
     U: CollUnits,
+    // Retail tests only `find_upath(...) == 0`; adapters must map both Found and Suspended
+    // to `true`, and only Failed to `false`.
     F: FnMut(&mut PathStack, bool) -> bool,
 {
     let frame = units.frame();
@@ -1654,13 +1912,17 @@ pub fn unit_collides<U: CollUnits>(
 /// caller that only needs the bitmap can drive `collide_here` without wiring a world.
 ///
 /// Not a mirror of the tick's storage: it exists so the probe path is testable in isolation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct UnitTable {
     pub rows: Vec<UnitRow>,
     /// Live, non-null squad guys, kept in each unit's pointer-array order.
     pub guys: Vec<TableGuy>,
-    pub boat_calls: Vec<BoatCall>,
-    pub boat_result: bool,
+    pub boat_queries: Vec<BoatQuery>,
+    pub effective_owners: [i32; 10],
+    pub diplos: [[i32; 10]; 10],
+    pub invalid_boat_locations: Vec<(i32, i32, i32, i32)>,
+    pub boat_moves: Vec<BoatMove>,
+    pub boat_faces: Vec<BoatFace>,
     pub frame: i32,
     pub budget: [i32; 10],
 }
@@ -1673,12 +1935,39 @@ pub struct TableGuy {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BoatCall {
+pub struct BoatMove {
     pub who: i32,
     pub o: i32,
-    pub nx: i32,
-    pub ny: i32,
-    pub move_other: bool,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoatFace {
+    pub who: i32,
+    pub o: i32,
+    pub angle: i32,
+    pub pusher_who: i32,
+    pub pusher_o: i32,
+}
+
+impl Default for UnitTable {
+    fn default() -> Self {
+        let effective_owners = std::array::from_fn(|i| i as i32);
+        let diplos = std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 2 } else { 0 }));
+        Self {
+            rows: Vec::new(),
+            guys: Vec::new(),
+            boat_queries: Vec::new(),
+            effective_owners,
+            diplos,
+            invalid_boat_locations: Vec::new(),
+            boat_moves: Vec::new(),
+            boat_faces: Vec::new(),
+            frame: 0,
+            budget: [0; 10],
+        }
+    }
 }
 
 impl UnitTable {
@@ -1707,22 +1996,49 @@ impl CollUnits for UnitTable {
                 .map(|g| g.body),
         )
     }
-    fn detect_boat_collision(
+    fn find_boat_units(&mut self, query: BoatQuery) -> Vec<(i32, i32)> {
+        self.boat_queries.push(query);
+        self.rows
+            .iter()
+            .filter(|r| r.who != query.exclude_who || r.o != query.exclude_o)
+            .map(|r| (r.who, r.o))
+            .collect()
+    }
+    fn effective_owner(&self, who: i32) -> i32 {
+        self.effective_owners[who.clamp(0, 9) as usize]
+    }
+    fn diplomacy(&self, who: i32, other: i32) -> i32 {
+        self.diplos[who.clamp(0, 9) as usize][other.clamp(0, 9) as usize]
+    }
+    fn boat_invalid_loc(&self, who: i32, o: i32, tx: i32, ty: i32) -> bool {
+        self.invalid_boat_locations.contains(&(who, o, tx, ty))
+    }
+    fn set_boat_location(&mut self, who: i32, o: i32, x: i32, y: i32) {
+        self.boat_moves.push(BoatMove { who, o, x, y });
+        if let Some(i) = self.find(who, o) {
+            self.rows[i].x = x;
+            self.rows[i].y = y;
+        }
+    }
+    fn face_pushed_idle_unit(
         &mut self,
         who: i32,
         o: i32,
-        nx: i32,
-        ny: i32,
-        move_other: bool,
-    ) -> bool {
-        self.boat_calls.push(BoatCall {
+        angle: i32,
+        pusher_who: i32,
+        pusher_o: i32,
+    ) {
+        self.boat_faces.push(BoatFace {
             who,
             o,
-            nx,
-            ny,
-            move_other,
+            angle,
+            pusher_who,
+            pusher_o,
         });
-        self.boat_result
+        if let Some(i) = self.find(who, o) {
+            self.rows[i].angle = angle;
+            self.rows[i].first_guy_angle = angle;
+        }
     }
     fn write(&mut self, who: i32, o: i32, r: &UnitRow) {
         if let Some(i) = self.find(who, o) {
@@ -1849,6 +2165,26 @@ mod tests {
             x: ucell_centre(ux),
             y: ucell_centre(uy),
             block_radius: radius,
+        }
+    }
+
+    fn boat_row(who: i32, o: i32, x: i32, y: i32) -> UnitRow {
+        UnitRow {
+            who,
+            o,
+            x,
+            y,
+            down: -1,
+            down_who: -1,
+            domain: DOMAIN_WATER,
+            push_size: 96,
+            push_circles: 1,
+            group: -1,
+            collide_o: -1,
+            collide_who: -1,
+            on_map: true,
+            active: true,
+            ..UnitRow::default()
         }
     }
 
@@ -2034,25 +2370,30 @@ mod tests {
         for me in [
             UnitRow {
                 domain: DOMAIN_WATER,
+                push_size: 96,
+                push_circles: 1,
                 ..row(0, 1, 4, 4, 1)
             },
             UnitRow {
-                siege: true,
+                unit_flags: 0x0002_0000,
+                push_size: 96,
+                push_circles: 1,
                 ..row(0, 1, 4, 4, 1)
             },
             UnitRow {
-                hero: true,
+                unit_flags2: 0x20,
+                push_size: 96,
+                push_circles: 1,
                 ..row(0, 1, 4, 4, 1)
             },
             UnitRow {
-                supply: true,
+                unit_flags2: 0x40,
+                push_size: 96,
+                push_circles: 1,
                 ..row(0, 1, 4, 4, 1)
             },
         ] {
-            let mut units = UnitTable {
-                boat_result: true,
-                ..UnitTable::default()
-            };
+            let mut units = UnitTable::default();
             assert_eq!(
                 detect_unit_collision(
                     &mut w,
@@ -2065,15 +2406,13 @@ mod tests {
                 ),
                 Detect::ClearAndReset { yielded: false }
             );
-            assert_eq!(units.boat_calls.len(), 1);
-            assert!(units.boat_calls[0].move_other);
+            assert_eq!(units.boat_queries.len(), 1);
+            assert_eq!(units.boat_queries[0].exclude_o, me.o);
+            assert_eq!(units.boat_queries[0].exclude_who, me.who);
         }
 
         let me = row(0, 1, 4, 4, 1);
-        let mut units = UnitTable {
-            boat_result: true,
-            ..UnitTable::default()
-        };
+        let mut units = UnitTable::default();
         let _ = detect_unit_collision(
             &mut w,
             &mut cc,
@@ -2084,7 +2423,7 @@ mod tests {
             DetectArgs::MOVE_STEP,
         );
         assert!(
-            units.boat_calls.is_empty(),
+            units.boat_queries.is_empty(),
             "ordinary land units bypass the boat solver"
         );
 
@@ -2102,9 +2441,254 @@ mod tests {
             DetectArgs::VALID_UCOORD,
         );
         assert!(
-            units.boat_calls.is_empty(),
+            units.boat_queries.is_empty(),
             "overlay probes bypass the boat solver"
         );
+    }
+
+    #[test]
+    fn boat_hulls_are_tangent_circles_along_the_first_guy_heading() {
+        assert_eq!(boat_project(1000, 1000, 0, 96), (1000, 904));
+        assert_eq!(boat_project(1000, 1000, 0x4000_0000, 96), (1096, 1000));
+        let (radius, centres) = boat_hull_centres(1000, 1000, 0, 192, 2);
+        assert_eq!(radius, 96);
+        assert_eq!(centres, [(1000, 1096), (1000, 904)]);
+        let (radius, centres) = boat_hull_centres(1000, 1000, 0, 288, 3);
+        assert_eq!(radius, 96);
+        assert_eq!(centres, [(1000, 1192), (1000, 1000), (1000, 808)]);
+    }
+
+    #[test]
+    fn boat_solver_pushes_one_circle_candidate_and_writes_partner_turn_and_frame() {
+        let me = boat_row(0, 7, 1000, 1000);
+        let other = boat_row(0, 8, 1050, 1000);
+        let mut units = UnitTable {
+            rows: vec![other],
+            frame: 77,
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(
+            units.boat_queries,
+            [BoatQuery {
+                x: 1000,
+                y: 1000,
+                radius: 96,
+                exclude_o: 7,
+                exclude_who: 0,
+                circles: 1,
+                water: true,
+            }]
+        );
+        assert_eq!(
+            units.boat_moves,
+            [BoatMove {
+                who: 0,
+                o: 8,
+                x: 1098,
+                y: 1000
+            }]
+        );
+        let pushed = units.row(0, 8).unwrap();
+        assert_eq!((pushed.x, pushed.y), (1098, 1000));
+        assert_eq!((pushed.collide_who, pushed.collide_o), (0, 7));
+        assert_eq!(pushed.collide_frame, 77);
+        assert_eq!(units.boat_faces.len(), 1);
+        assert_eq!(units.boat_faces[0].angle, 0x4000_0000);
+        assert_eq!(
+            (units.boat_faces[0].pusher_who, units.boat_faces[0].pusher_o),
+            (0, 7)
+        );
+    }
+
+    #[test]
+    fn stationary_boat_push_angle_is_clamped_forty_five_degrees_from_pusher_heading() {
+        let me = boat_row(0, 7, 1000, 1000);
+        let other = boat_row(0, 8, 1000, 950);
+        let mut units = UnitTable {
+            rows: vec![other],
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(units.boat_faces[0].angle, 0x2000_0000);
+        let expected = boat_project(1000, 950, 0x2000_0000, 0x30);
+        assert_eq!(
+            (units.row(0, 8).unwrap().x, units.row(0, 8).unwrap().y),
+            expected
+        );
+    }
+
+    #[test]
+    fn moving_heading_rejection_and_attack_gate_return_false_without_frame_write() {
+        let me = boat_row(0, 7, 1000, 1000);
+        let moving = UnitRow {
+            moving: true,
+            ..boat_row(0, 8, 1000, 950)
+        };
+        let mut units = UnitTable {
+            rows: vec![moving],
+            frame: 91,
+            ..UnitTable::default()
+        };
+        assert!(!detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 0);
+        assert!(units.boat_moves.is_empty());
+
+        let armed_me = UnitRow {
+            unit_flags: 0x10,
+            ..me
+        };
+        let armed = UnitRow {
+            attack_value: 1,
+            ..boat_row(0, 9, 1050, 1000)
+        };
+        let mut units = UnitTable {
+            rows: vec![armed],
+            frame: 92,
+            ..UnitTable::default()
+        };
+        assert!(!detect_boat_collision(
+            &mut units, &armed_me, 1000, 1000, true
+        ));
+        assert_eq!(units.row(0, 9).unwrap().collide_frame, 0);
+    }
+
+    #[test]
+    fn invalid_or_filtered_boat_candidate_still_gets_the_common_frame_tail() {
+        let me = boat_row(0, 7, 1000, 1000);
+        let other = boat_row(0, 8, 1050, 1000);
+        let expected = boat_project(1050, 1000, 0x4000_0000, 0x30);
+        let mut units = UnitTable {
+            rows: vec![other],
+            invalid_boat_locations: vec![(0, 8, tile_of(expected.0), tile_of(expected.1))],
+            frame: 101,
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert!(units.boat_moves.is_empty());
+        assert_eq!(
+            (units.row(0, 8).unwrap().x, units.row(0, 8).unwrap().y),
+            (1050, 1000)
+        );
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 101);
+
+        let filtered = UnitRow {
+            domain: DOMAIN_LAND,
+            ..other
+        };
+        let mut units = UnitTable {
+            rows: vec![filtered],
+            frame: 102,
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 102);
+    }
+
+    #[test]
+    fn mutual_diplomacy_two_allows_cross_owner_push() {
+        let me = boat_row(0, 7, 1000, 1000);
+        let other = boat_row(1, 8, 1050, 1000);
+        let mut units = UnitTable {
+            rows: vec![other],
+            ..UnitTable::default()
+        };
+        assert!(!detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        units.rows[0] = other;
+        units.diplos[0][1] = 2;
+        units.diplos[1][0] = 2;
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(units.boat_moves.last().unwrap().who, 1);
+    }
+
+    #[test]
+    fn land_pusher_respects_packed_unpacking_special_mask_and_tank_vfunc_gates() {
+        let me = UnitRow {
+            domain: DOMAIN_LAND,
+            ..boat_row(0, 7, 1000, 1000)
+        };
+        let base = UnitRow {
+            domain: DOMAIN_LAND,
+            ..boat_row(0, 8, 1050, 1000)
+        };
+        let refused = [
+            UnitRow {
+                unit_flags2: 4,
+                ..base
+            },
+            UnitRow {
+                unit_flags2: 4,
+                unit_masks: 0x0008_0000,
+                unpacking: true,
+                ..base
+            },
+            UnitRow {
+                unit_masks: 0x0200_0000,
+                ..base
+            },
+            UnitRow {
+                unit_flags: 0x0008_0000,
+                ..base
+            },
+        ];
+        for candidate in refused {
+            let mut units = UnitTable {
+                rows: vec![candidate],
+                frame: 33,
+                ..UnitTable::default()
+            };
+            assert!(!detect_boat_collision(&mut units, &me, 1000, 1000, true));
+            assert!(units.boat_moves.is_empty());
+            assert_eq!(units.row(0, 8).unwrap().collide_frame, 0);
+        }
+
+        let packed = UnitRow {
+            unit_flags2: 4,
+            unit_masks: 0x0008_0000,
+            ..base
+        };
+        let mut units = UnitTable {
+            rows: vec![packed],
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert_eq!(units.boat_moves.len(), 1);
+    }
+
+    #[test]
+    fn same_group_skip_and_move_other_false_preserve_retail_side_effect_split() {
+        let me = UnitRow {
+            group: 4,
+            ..boat_row(0, 7, 1000, 1000)
+        };
+        let mate = UnitRow {
+            group: 4,
+            ..boat_row(0, 8, 1050, 1000)
+        };
+        let mut units = UnitTable {
+            rows: vec![mate],
+            frame: 55,
+            ..UnitTable::default()
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
+        assert!(units.boat_moves.is_empty());
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 55);
+
+        let me = UnitRow { group: -1, ..me };
+        units.rows[0] = UnitRow {
+            group: -1,
+            collide_frame: 0,
+            ..mate
+        };
+        assert!(detect_boat_collision(&mut units, &me, 1000, 1000, false));
+        assert_eq!(
+            units.boat_moves.len(),
+            1,
+            "param_3 does not gate relocation"
+        );
+        let pushed = units.row(0, 8).unwrap();
+        assert_eq!((pushed.collide_who, pushed.collide_o), (-1, -1));
+        assert!(units.boat_faces.is_empty());
     }
 
     #[test]
