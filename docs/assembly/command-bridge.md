@@ -30,6 +30,8 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
+* **Five inline state handlers** — speed set/up/down and all eight player-speed
+  accumulators are complete; pause's common state path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -46,18 +48,20 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,110 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 82 `OpDef` | 143 |
-| `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 102 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,273 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 5 `InlineDef` + 82 `OpDef` | 148 |
+| `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 52/53/54/76/79, 2 tests | 94 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
 **Shared-file edit, one line**: `crates/don-sim/src/lib.rs` gained `pub mod command;` with
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
-touched. The two test files are new paths no lane owns.
+touched.
 
-45 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+47 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
+`cargo test -p don-sim --test command_speed_state` 2/2,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -161,6 +165,28 @@ that is why these three rows remain `state_wired`, not `complete`.
 Diplomacy opcodes 37–45 remain inert. Their action bodies cross proposal/offer ownership,
 resource transfer, and target retasking; reducing those effects to a relation matrix would
 silently manufacture lockstep behavior that has not been recovered.
+
+### Inline speed/pause state tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 52 | `process_speed_set` `0x00946380` | signed dword `+1` → `TurnControl+0x30`, behind the exact network/speed-lock gate | `complete` |
+| 53 | `process_speed_up` `0x009461A0` | increment speed through Fast (index 3), with the same gate | `complete` |
+| 54 | `process_speed_down` `0x00946290` | decrement nonzero speed, with the same gate | `complete` |
+| 76 | `process_pause` `0x00944160` | raw byte `+1`, pause bit/delay and network allowance counter | `state_wired` |
+| 79 | `process_player_speed` `0x00943730` | eight `u8` deltas at `+1..+8` wrapping into player `u32` counters | `complete` |
+
+The speed handlers' deterministic mutation is only the speed index and its two game-state
+gates: network is `Game+0x820 & 4`, and the lock is `Game.info_flags+0x20 & 0x100`.
+Audio, UI messages, and the `timeGetTime` wall-clock pacing fields do not enter headless
+simulation state. Opcode 79 uses `CommandPackage::play`, not a byte in its own body, and
+all eight additions wrap as x86 `u32` arithmetic.
+
+Pause remains red on purpose. The solo toggle, duplicate-state no-op, immediate-process
+unpause gate, ten-pause network allowance, and per-player pause-count increment execute;
+the network restart tail (`Game+0x821` bits, callback frontier, and leader resumption) is
+not represented in this bridge. The metadata therefore says `state_wired`, never
+`complete`.
 
 ## Five things worth keeping
 

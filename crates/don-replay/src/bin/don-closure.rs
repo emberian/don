@@ -3,7 +3,7 @@
 use don_replay::checksum::{CHANNELS, CHANNEL_NAMES, NUM_WALKED};
 use don_replay::state::{SimBridge, CHANNEL_ELEMENT_CLASS, CHANNEL_WALKER_SYMBOL};
 use don_replay::wire::{classify, CommandClass};
-use don_sim::command::{Port, Receiver, WireLen, GROUP_ACTIONS, OPCODES};
+use don_sim::command::{InlineDef, InlinePort, Port, Receiver, WireLen, GROUP_ACTIONS, OPCODES};
 use don_sim::deviations::{ModeConfig, Surface};
 use don_sim::order::{ArmStatus, EXECUTORS};
 use don_sim::schedule::{StepStatus, DO_FRAME};
@@ -11,6 +11,13 @@ use std::collections::BTreeSet;
 
 fn clean(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
+}
+
+fn inline_status(port: InlinePort) -> &'static str {
+    match port {
+        InlinePort::Complete => "complete",
+        InlinePort::StateWired => "state_wired",
+    }
 }
 
 fn main() {
@@ -86,6 +93,8 @@ fn main() {
         };
         let bridge = if x.op == 0 {
             "selection_partial"
+        } else if let Some(inline) = InlineDef::find(x.op) {
+            inline_status(inline.port)
         } else if let Some(a) = x
             .action
             .and_then(|name| GROUP_ACTIONS.iter().find(|a| a.name == name))
@@ -171,6 +180,7 @@ mod tests {
     fn canonical_inventory_cardinalities() {
         assert_eq!((DO_FRAME.len(), EXECUTORS.len()), (29, 28));
         assert_eq!((GROUP_ACTIONS.len(), OPCODES.len()), (42, 82));
+        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 5);
         assert_eq!(NUM_WALKED, 15);
     }
 
@@ -183,5 +193,16 @@ mod tests {
             let action = op.action.expect("group opcode must name its action");
             assert!(GROUP_ACTIONS.iter().any(|x| x.name == action), "{action}");
         }
+    }
+
+    #[test]
+    fn inline_command_statuses_preserve_complete_vs_state_wired() {
+        for op in [52, 53, 54, 79] {
+            assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
+        }
+        assert_eq!(
+            inline_status(InlineDef::find(76).unwrap().port),
+            "state_wired"
+        );
     }
 }

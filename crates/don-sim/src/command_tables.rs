@@ -55,6 +55,11 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "begin", va: 0x00714100, size: 8, call_sites: 0, installs: &[], delegates: &[], port: Port::Complete },
 ];
 
+pub const NUM_INLINE_COMMANDS: usize = 5;
+
+/// Inline state-writing handlers recovered beyond the `action_*` receiver table.
+pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [InlineDef { op: 52, name: "speed_set", port: InlinePort::Complete }, InlineDef { op: 53, name: "speed_up", port: InlinePort::Complete }, InlineDef { op: 54, name: "speed_down", port: InlinePort::Complete }, InlineDef { op: 76, name: "pause", port: InlinePort::StateWired }, InlineDef { op: 79, name: "player_speed", port: InlinePort::Complete }];
+
 pub const NUM_OPCODES: usize = 82;
 
 pub static OPCODES: [OpDef; NUM_OPCODES] = [

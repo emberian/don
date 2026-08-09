@@ -270,6 +270,32 @@ impl ActionDef {
     }
 }
 
+/// How much of an inline `CommandPackage::process_*` state mutation the bridge carries.
+/// These handlers have [`Receiver::None`] because they write `Game` / `TurnControl` /
+/// per-player state directly rather than calling an `action_*` receiver.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InlinePort {
+    /// Every deterministic simulation-side state mutation and gate is reproduced.
+    /// Logging, UI, audio, and wall-clock pacing remain outside the headless core.
+    Complete,
+    /// The wire path and core state transition execute, but an adjacent product/runtime
+    /// side effect remains explicit and prevents a closure-green claim.
+    StateWired,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InlineDef {
+    pub op: u8,
+    pub name: &'static str,
+    pub port: InlinePort,
+}
+
+impl InlineDef {
+    pub fn find(op: u8) -> Option<&'static InlineDef> {
+        INLINE_COMMANDS.iter().find(|d| d.op == op)
+    }
+}
+
 include!("command_tables.rs");
 
 /// `Unit::add_<k>_order` → the `OrderIndex` it allocates from `OrdersMemManager::get_obj`
@@ -1031,6 +1057,8 @@ pub struct BridgeStats {
     /// Commands whose handler calls no `*::action_*` (lockstep, chat, camera, cheats we
     /// do not implement).
     pub inert: u64,
+    /// Inline `Game` / `TurnControl` / player-state handlers reproduced by this bridge.
+    pub inline_state: u64,
     /// Orders actually installed on a unit.
     pub orders_installed: u64,
     /// Order lists cleared (`action_halt`, `QueuePos::New`).
@@ -1053,6 +1081,7 @@ impl Default for BridgeStats {
             acted: 0,
             unported: 0,
             inert: 0,
+            inline_state: 0,
             orders_installed: 0,
             orders_cleared: 0,
             selections: 0,
@@ -1070,6 +1099,7 @@ impl BridgeStats {
         self.acted += o.acted;
         self.unported += o.unported;
         self.inert += o.inert;
+        self.inline_state += o.inline_state;
         self.orders_installed += o.orders_installed;
         self.orders_cleared += o.orders_cleared;
         self.selections += o.selections;
@@ -1094,6 +1124,42 @@ impl BridgeStats {
     }
 }
 
+pub const PLAYER_SPEED_FIELDS: usize = 8;
+
+/// State written inline by the speed/pause command family.
+///
+/// `speed` is `TurnControl+0x30`. `network`, `speed_locked`, and `immediate_process`
+/// name the exact `Game+0x820/0x20/0x821` gates read by the handlers. The eight player
+/// counters are the `u32` fields at `PlayerData+0x48..+0x68` [measured].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineCommandState {
+    pub speed: i32,
+    pub network: bool,
+    pub speed_locked: bool,
+    pub paused: bool,
+    pub pause_delay: i32,
+    pub immediate_process: bool,
+    pub pause_override: bool,
+    pub pauses: [u8; NUM_OWNER_SLOTS],
+    pub player_speed: [[u32; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+}
+
+impl Default for InlineCommandState {
+    fn default() -> Self {
+        InlineCommandState {
+            speed: crate::schedule::SPEED_NORMAL as i32,
+            network: false,
+            speed_locked: false,
+            paused: false,
+            pause_delay: 0,
+            immediate_process: false,
+            pause_override: false,
+            pauses: [0; NUM_OWNER_SLOTS],
+            player_speed: [[0; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+        }
+    }
+}
+
 /// The command→order bridge.
 pub struct Bridge {
     pub groups: Groups,
@@ -1102,6 +1168,7 @@ pub struct Bridge {
     /// `0x00CBEEB0` / `0x00CBF6B0` the two parallel arrays [structure].
     last_selection: [Vec<(i16, u16)>; NUM_OWNER_SLOTS],
     pub stats: BridgeStats,
+    pub inline: InlineCommandState,
     /// `Game::frame`, stamped into interned groups.
     pub frame: i32,
     /// The non-zero test recovered from `Group::action_set_transport` `0x007024B0`.
@@ -1121,6 +1188,7 @@ impl Bridge {
             groups: Groups::new(),
             last_selection: std::array::from_fn(|_| Vec::new()),
             stats: BridgeStats::default(),
+            inline: InlineCommandState::default(),
             frame: 0,
             transport_level: [0; NUM_OWNER_SLOTS],
         }
@@ -1174,6 +1242,11 @@ impl Bridge {
             self.process_group(pkg, cmd, f);
             return;
         }
+        if InlineDef::find(op).is_some() {
+            self.process_inline(pkg, cmd);
+            self.stats.inline_state += 1;
+            return;
+        }
         if !def.is_group_action() {
             self.stats.inert += 1;
             return;
@@ -1198,6 +1271,96 @@ impl Bridge {
         }
         self.stats.acted += 1;
         self.dispatch_action(pkg.group, name, cmd, f);
+    }
+
+    /// Inline `CommandPackage::process_*` handlers which mutate state without an
+    /// `action_*` receiver.
+    fn process_inline(&mut self, pkg: &Package, cmd: &[u8]) {
+        match cmd[0] {
+            // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
+            // wall-clock pacing, but `TurnControl+0x30` is the only deterministic state.
+            52 => {
+                if let Some(speed) = i32_at(cmd, 1) {
+                    self.set_speed(speed);
+                }
+            }
+            // The command handlers cap ordinary speed-up at Fast (index 3), not the
+            // Hyper Fast index accepted by TurnControl::speed_up's other caller.
+            53 => {
+                if self.inline.speed < 3 && self.speed_change_allowed() {
+                    self.inline.speed = self.inline.speed.wrapping_add(1);
+                }
+            }
+            54 => {
+                if self.inline.speed != 0 && self.speed_change_allowed() {
+                    self.inline.speed = self.inline.speed.wrapping_sub(1);
+                }
+            }
+            76 => {
+                if let Some(&state) = cmd.get(1) {
+                    self.process_pause(pkg.play, state);
+                }
+            }
+            79 => {
+                let Ok(play) = usize::try_from(pkg.play) else {
+                    return;
+                };
+                let Some(accum) = self.inline.player_speed.get_mut(play) else {
+                    return;
+                };
+                let Some(delta) = cmd.get(1..1 + PLAYER_SPEED_FIELDS) else {
+                    return;
+                };
+                for (total, &add) in accum.iter_mut().zip(delta) {
+                    *total = total.wrapping_add(add as u32);
+                }
+            }
+            _ => unreachable!("inline command table and dispatcher disagree"),
+        }
+    }
+
+    #[inline]
+    fn speed_change_allowed(&self) -> bool {
+        !self.inline.network || !self.inline.speed_locked
+    }
+
+    fn set_speed(&mut self, speed: i32) {
+        if self.inline.speed != speed && self.speed_change_allowed() {
+            self.inline.speed = speed;
+        }
+    }
+
+    /// Core state path of `TurnControl::pause` `0x00956990` / `0x00957AB0`.
+    ///
+    /// Retail compares the raw request byte with its one-bit paused flag and toggles only
+    /// when they differ. The common solo path and the network pause allowance/counter are
+    /// represented here. The network restart/callback tail remains `StateWired` metadata.
+    fn process_pause(&mut self, play: i32, requested: u8) {
+        if self.inline.paused as u8 == requested {
+            return;
+        }
+        if !self.inline.paused {
+            let play_slot = usize::try_from(play).ok().filter(|&p| p < NUM_OWNER_SLOTS);
+            let allowed = !self.inline.network
+                || play < 0
+                || play_slot.is_some_and(|p| self.inline.pauses[p] < 10)
+                || self.inline.pause_override;
+            if !allowed {
+                return;
+            }
+            self.inline.paused = true;
+            self.inline.pause_delay = 0;
+            if self.inline.network {
+                if let Some(p) = play_slot {
+                    self.inline.pauses[p] = self.inline.pauses[p].wrapping_add(1);
+                }
+            }
+        } else if !self.inline.immediate_process {
+            self.inline.paused = false;
+            if self.inline.pause_delay == 0 {
+                self.inline.pause_delay = 2;
+            }
+        }
     }
 
     /// `CommandPackage::process_group` `0x0094A0C0`, opcode 0.
