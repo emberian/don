@@ -50,6 +50,7 @@ pub mod replay;
 pub mod report;
 pub mod rules_channel;
 pub mod scenario_channel;
+pub mod script_channel;
 pub mod state;
 pub mod walk;
 pub mod wire;
