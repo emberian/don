@@ -103,11 +103,10 @@ pub enum Gap {
     LeadersEndProcessAll,
     LeaderProcessEventFrame,
     RoadsScanStray,
-    GameProcessEndGame,
 }
 
 impl Gap {
-    pub const COUNT: usize = Gap::GameProcessEndGame as usize + 1;
+    pub const COUNT: usize = Gap::RoadsScanStray as usize + 1;
     #[inline]
     pub fn index(self) -> usize {
         self as usize
@@ -140,7 +139,6 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 17 Leaders::end_process_all 0x006ED070 - uncited",
     "step 19 Leader::process_event_frame 0x006EC180 - uncited",
     "step 22 Roads::scan_and_kill_stray_roads 0x008956A0 - uncited",
-    "step 27 Game::process_end_game 0x00591CE0 - uncited; victory_score::check_victory runs at step 11 instead",
 ];
 
 // =======================================================================================
@@ -969,7 +967,19 @@ impl Sim {
         // 25..28.
         t.steps[25] = StepRun::OutOfScope;
         t.steps[26] = StepRun::OutOfScope;
-        t.steps[27] = StepRun::Unimplemented(Gap::GameProcessEndGame);
+        // 27 — `Game::do_frame` gates this call on semaphore bit 22. The headless
+        // state transition consumes that one-shot latch; statistics/UI/menu work is
+        // deliberately outside the simulation core.
+        let end_game_pending = self
+            .vic_match
+            .sem(victory_score::game_sem::VICTORY_RESOLVED);
+        let end_game_processed = self.vic_match.process_end_game();
+        t.steps[27] = if end_game_pending {
+            StepRun::Executed
+        } else {
+            StepRun::Vacuous
+        };
+        t.work[27] = end_game_processed as u32;
         t.steps[28] = StepRun::OutOfScope;
 
         self.cover.record(&t);
@@ -2110,6 +2120,22 @@ mod tests {
         assert_eq!(t.steps[24], StepRun::Vacuous);
         assert_eq!(sim.cannon_time.current_speed, 3);
         assert_eq!(sim.cannon_time.pending_speed, 1);
+    }
+
+    #[test]
+    fn process_end_game_consumes_the_exact_one_shot_latch() {
+        let mut sim = Sim::new(9, 8);
+        sim.vic_match
+            .set_sem(victory_score::game_sem::VICTORY_RESOLVED);
+
+        let first = sim.do_frame();
+        assert_eq!(first.steps[27], StepRun::Executed);
+        assert_eq!(first.work[27], 1);
+        assert!(!sim.vic_match.sem(victory_score::game_sem::VICTORY_RESOLVED));
+
+        let second = sim.do_frame();
+        assert_eq!(second.steps[27], StepRun::Vacuous);
+        assert_eq!(second.work[27], 0);
     }
 
     /// Construction is driven from inside the object traversal, so the `helpers` divisor

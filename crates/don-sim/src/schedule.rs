@@ -121,7 +121,7 @@ pub const DO_FRAME: [SubsystemStep; 29] = [
     SubsystemStep { idx: 26, name: "GameLog::end_frame", va: Some("0x009329D0"), source: "gamelog.cpp:354",
         status: StepStatus::OutOfScope, note: "" },
     SubsystemStep { idx: 27, name: "Game::process_end_game", va: Some("0x00591CE0"), source: "game.cpp:2182",
-        status: StepStatus::Stub, note: "" },
+        status: StepStatus::Implemented, note: "consumes semaphore bit 22; statistics/UI/menu effects stay outside the headless core" },
     SubsystemStep { idx: 28, name: "Scene::process_capture_sequence", va: Some("0x008C13C0"), source: "scene.cpp:137",
         status: StepStatus::OutOfScope, note: "cinematic capture" },
 ];

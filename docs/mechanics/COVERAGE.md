@@ -175,17 +175,12 @@ code actually does.
 | 24 | `TurnControl::check_cannon_time` | `0x009579E0` | runtime wired: exact 75-frame expiry and `end_cannon_time` state transition; UI/audio side effects out of scope | `tick.rs` |
 | 25 | `SaveGame` / `LoadGame` | `0x005A8220` | out of scope | |
 | 26 | `GameLog::end_frame` | `0x009329D0` | out of scope | |
-| 27 | `Game::process_end_game` | `0x00591CE0` | module exists, runtime call unverified | `victory_score.rs` |
+| 27 | `Game::process_end_game` | `0x00591CE0` | implemented: exact bit-22 call gate and one-shot latch consumption; product/UI tail excluded | `victory_score.rs`, `tick.rs` |
 | 28 | `Scene::process_capture_sequence` | `0x008C13C0` | out of scope | |
 
-**Hand-table tally: 3 implemented, 6 have a module whose runtime path is unverified, 5
-absent, 15 out of scope.** This classifies artifacts, not executable call paths.
-
-Of the 14 in-scope steps, three run. And the three that run — `Objects::process_all`'s
-rotation, the frame counter, the seconds counter — are the *ordering* of the tick, not its
-*content*. There is at present no execution path in the repository that performs the tick
-of §3.3: `World::step` (`crates/don-sim/src/world.rs:346`) is three placeholder SIMD
-kernels and `self.frame += 1`, and its own doc comment says so.
+**Schedule tally: 5 implemented, 9 stub, 15 out of scope.** `tick::Sim::do_frame` is the
+executable path and reports executed, vacuous, skipped, and out-of-scope work separately;
+the remaining in-scope denominator is kept by the generated simulation-closure gate.
 
 ---
 

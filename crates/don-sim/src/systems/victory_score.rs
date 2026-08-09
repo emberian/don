@@ -602,6 +602,25 @@ impl Match {
     pub fn set_sem(&mut self, bit: u32) {
         self.semaphore |= 1u32 << bit;
     }
+    #[inline]
+    pub fn clear_sem(&mut self, bit: u32) {
+        self.semaphore &= !(1u32 << bit);
+    }
+
+    /// The simulation-visible tail of `Game::process_end_game` @ `0x00591CE0`.
+    ///
+    /// `Game::do_frame` calls that function only while `Game+0x822 & 0x40` is set.
+    /// After the statistics, leaderboard and menu work, retail clears that exact bit.
+    /// Those other calls are product/presentation effects; consuming the one-shot
+    /// [`game_sem::VICTORY_RESOLVED`] latch is the state transition owned by the
+    /// headless simulation. Returns whether the latch was consumed.
+    pub fn process_end_game(&mut self) -> bool {
+        if !self.sem(game_sem::VICTORY_RESOLVED) {
+            return false;
+        }
+        self.clear_sem(game_sem::VICTORY_RESOLVED);
+        true
+    }
 
     /// `Game::get_armageddon` @ `0x00594020`. The nuke count at which the match ends
     /// in a universal defeat. Scales with the number of nations and teams, then with

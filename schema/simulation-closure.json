@@ -4,12 +4,12 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 195,
+  "red": 194,
   "summary": {
     "tick": {
       "total": 29,
-      "complete": 19,
-      "red": 10
+      "complete": 20,
+      "red": 9
     },
     "orders": {
       "total": 28,
@@ -292,9 +292,9 @@
         "name": "Game::process_end_game",
         "retail_va": "0x00591CE0",
         "source": "game.cpp:2182",
-        "status": "stub",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "consumes semaphore bit 22; statistics/UI/menu effects stay outside the headless core",
+        "complete": true
       },
       {
         "id": 28,
