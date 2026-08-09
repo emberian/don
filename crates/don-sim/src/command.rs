@@ -143,6 +143,8 @@ pub mod object_command_plans;
 pub mod setup_diplomacy;
 #[path = "systems/tail_command_transactions.rs"]
 pub mod tail_command_transactions;
+#[path = "systems/unimplemented_group_command_plans.rs"]
+pub mod unimplemented_group_command_plans;
 
 use self::diplomacy_command_plans::{
     DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
@@ -163,6 +165,11 @@ use self::object_command_plans::{
     RenameCityCommand, RenameCityTransactionReceipt, RenameCityTransactionStatus,
 };
 use self::tail_command_transactions::{TailCommandFacts, TailCommandReceipt, TailCommandRequest};
+use self::unimplemented_group_command_plans::{
+    decode_unimplemented_group_command, plan_unimplemented_group_command, DelegatedGroupAction,
+    PlanStatus as GroupCommandPrefixPlanStatus, UnimplementedGroupCommandFacts,
+    UnimplementedGroupCommandReceipt, UnimplementedGroupCommandRequest,
+};
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
@@ -813,6 +820,37 @@ impl GroupDisbandTransactionReceipt {
     }
 }
 
+fn planned_group_command_prefix_receipt(
+    request: UnimplementedGroupCommandRequest,
+    facts: UnimplementedGroupCommandFacts,
+) -> UnimplementedGroupCommandReceipt {
+    let Some(plan) = plan_unimplemented_group_command(request, &facts) else {
+        return UnimplementedGroupCommandReceipt::unavailable(request);
+    };
+    UnimplementedGroupCommandReceipt {
+        request,
+        facts: Some(facts),
+        status: GroupCommandPrefixPlanStatus::Planned,
+        plan: Some(plan),
+    }
+}
+
+fn group_command_prefix_needs_addressed_object(
+    request: UnimplementedGroupCommandRequest,
+    group_index: i32,
+) -> bool {
+    use UnimplementedGroupCommandRequest::{SiegeAttack, Spell, SwarmAround};
+
+    group_index >= 0
+        && matches!(
+            request,
+            SiegeAttack { ox, whom, .. }
+                | SwarmAround { ox, whom, .. }
+                | Spell { ox, whom, .. }
+                if ox >= 0 && whom >= 0
+        )
+}
+
 /// The object-side interface `Group::action_*` needs.
 ///
 /// The retail actions reach the world through `objects.lists[who][o]` and a pile of
@@ -1012,6 +1050,29 @@ pub trait Fleet {
         request: DirectEntityFleetRequest,
     ) -> DirectEntityFleetReceipt {
         DirectEntityFleetReceipt::unavailable(request)
+    }
+
+    /// Read-only atomic fact boundary for the addressed-object gate in group opcodes
+    /// 5/6/23. The bridge does not call this for exact branches which read no object.
+    ///
+    /// The returned receipt may prove a handler-level no-op or expose a typed
+    /// [`DelegatedGroupAction`]. `Planned` never authorizes the bridge to execute that
+    /// action: every reached `Group::action_*` body remains an explicit open tail.
+    fn group_command_prefix_receipt(
+        &self,
+        request: UnimplementedGroupCommandRequest,
+        group_index: i32,
+    ) -> UnimplementedGroupCommandReceipt {
+        if group_command_prefix_needs_addressed_object(request, group_index) {
+            return UnimplementedGroupCommandReceipt::unavailable(request);
+        }
+        planned_group_command_prefix_receipt(
+            request,
+            UnimplementedGroupCommandFacts {
+                group_index,
+                addressed_object_flag_1: None,
+            },
+        )
     }
 
     /// Atomic receiver boundary for complete `Group::action_stop_spell`.
@@ -1412,6 +1473,34 @@ impl Fleet for ObjectTable {
             s.group = -1;
             s.orders.clear();
         }
+    }
+
+    fn group_command_prefix_receipt(
+        &self,
+        request: UnimplementedGroupCommandRequest,
+        group_index: i32,
+    ) -> UnimplementedGroupCommandReceipt {
+        use UnimplementedGroupCommandRequest::{SiegeAttack, Spell, SwarmAround};
+
+        let addressed_object_flag_1 = match request {
+            SiegeAttack { ox, whom, .. }
+            | SwarmAround { ox, whom, .. }
+            | Spell { ox, whom, .. }
+                if group_index >= 0 && ox >= 0 && whom >= 0 =>
+            {
+                u8::try_from(whom)
+                    .ok()
+                    .zip(i16::try_from(ox).ok())
+                    .and_then(|(who, o)| self.get(who, o))
+                    .map(|slot| slot.object_flags & 1 != 0)
+            }
+            _ => None,
+        };
+        let facts = UnimplementedGroupCommandFacts {
+            group_index,
+            addressed_object_flag_1,
+        };
+        planned_group_command_prefix_receipt(request, facts)
     }
 
     fn apply_stop_spell_transaction(&mut self, request: StopSpellRequest) -> StopSpellReceipt {
@@ -2239,6 +2328,59 @@ impl Package {
     }
 }
 
+/// Runtime meaning of one validated 5/6/23/24/25/28/35 prefix receipt.
+///
+/// `OpenActionTail` is intentionally not `Applied`: it identifies the exact retail action
+/// call which must be implemented by a later action-body tranche.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupCommandPrefixDisposition {
+    /// The host could not supply a recomputable snapshot, or echoed the wrong package group.
+    Unavailable,
+    /// The exact retail gates suppress the action call, so this invocation is fully known.
+    ExactNoAction,
+    /// The exact prefix reaches an action body which this bridge does not execute.
+    OpenActionTail(DelegatedGroupAction),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupCommandPrefixReceiptRecord {
+    pub receipt: UnimplementedGroupCommandReceipt,
+    pub disposition: GroupCommandPrefixDisposition,
+}
+
+impl GroupCommandPrefixReceiptRecord {
+    fn validate(
+        expected: UnimplementedGroupCommandRequest,
+        expected_group_index: i32,
+        receipt: UnimplementedGroupCommandReceipt,
+    ) -> Self {
+        let disposition = if !receipt.validates(expected) {
+            GroupCommandPrefixDisposition::Unavailable
+        } else {
+            match (receipt.status, receipt.facts, receipt.plan) {
+                (GroupCommandPrefixPlanStatus::Planned, Some(facts), Some(plan))
+                    if facts.group_index == expected_group_index =>
+                {
+                    match plan.delegate {
+                        None if !plan.downstream_required => {
+                            GroupCommandPrefixDisposition::ExactNoAction
+                        }
+                        Some(delegate) if plan.downstream_required => {
+                            GroupCommandPrefixDisposition::OpenActionTail(delegate)
+                        }
+                        _ => GroupCommandPrefixDisposition::Unavailable,
+                    }
+                }
+                _ => GroupCommandPrefixDisposition::Unavailable,
+            }
+        };
+        Self {
+            receipt,
+            disposition,
+        }
+    }
+}
+
 /// What one command did, so a run can report the bridge's real yield rather than a guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BridgeStats {
@@ -2248,8 +2390,13 @@ pub struct BridgeStats {
     pub no_group: u64,
     /// Commands reaching a `Group::action_*` this module has ported.
     pub acted: u64,
-    /// Commands reaching a `Group::action_*` that is [`Port::Todo`].
+    /// Commands reaching a [`Port::Todo`] row, a typed open action tail, or failing a
+    /// mandatory prefix receipt.
     pub unported: u64,
+    /// Exact recovered group-handler prefixes which end in a retail no-op arm.
+    pub group_prefix_noops: u64,
+    /// Exact recovered group-handler prefixes which reach a typed, still-open action tail.
+    pub open_group_action_tails: u64,
     /// Commands whose handler calls no `*::action_*` (lockstep, chat, camera, cheats we
     /// do not implement).
     pub inert: u64,
@@ -2276,6 +2423,8 @@ impl Default for BridgeStats {
             no_group: 0,
             acted: 0,
             unported: 0,
+            group_prefix_noops: 0,
+            open_group_action_tails: 0,
             inert: 0,
             inline_state: 0,
             orders_installed: 0,
@@ -2294,6 +2443,8 @@ impl BridgeStats {
         self.no_group += o.no_group;
         self.acted += o.acted;
         self.unported += o.unported;
+        self.group_prefix_noops += o.group_prefix_noops;
+        self.open_group_action_tails += o.open_group_action_tails;
         self.inert += o.inert;
         self.inline_state += o.inline_state;
         self.orders_installed += o.orders_installed;
@@ -2310,7 +2461,8 @@ impl BridgeStats {
         }
     }
 
-    /// Share of group-addressed commands that reached a ported action.
+    /// Share of action-reaching group commands whose action body actually ran. Exact
+    /// handler no-ops are excluded; typed open action tails remain unported.
     pub fn ported_fraction(&self) -> f64 {
         let d = self.acted + self.unported;
         if d == 0 {
@@ -2827,6 +2979,7 @@ pub struct Bridge {
     last_selection: [Vec<(i16, u16)>; NUM_OWNER_SLOTS],
     pub stats: BridgeStats,
     pub inline: InlineCommandState,
+    group_command_prefix_receipts: Vec<GroupCommandPrefixReceiptRecord>,
     /// `Game::frame`, stamped into interned groups.
     pub frame: i32,
 }
@@ -2844,6 +2997,7 @@ impl Bridge {
             last_selection: std::array::from_fn(|_| Vec::new()),
             stats: BridgeStats::default(),
             inline: InlineCommandState::default(),
+            group_command_prefix_receipts: Vec::new(),
             frame: 0,
         }
     }
@@ -2871,6 +3025,12 @@ impl Bridge {
 
     pub fn take_command_side_effect_receipts(&mut self) -> Vec<CommandSideEffectReceipt> {
         std::mem::take(&mut self.inline.command_side_effect_receipts)
+    }
+
+    /// Drain validated exact-prefix/open-action-tail evidence for opcodes
+    /// 5/6/23/24/25/28/35.
+    pub fn take_group_command_prefix_receipts(&mut self) -> Vec<GroupCommandPrefixReceiptRecord> {
+        std::mem::take(&mut self.group_command_prefix_receipts)
     }
 
     /// `CommandPackage::process_all` `0x0094C500`: walk a payload, dispatching each
@@ -2918,6 +3078,10 @@ impl Bridge {
             self.stats.inline_state += 1;
             return;
         }
+        if unimplemented_group_command_plans::FRONTIER_OPCODES.contains(&op) {
+            self.process_group_command_prefix(pkg, cmd, f);
+            return;
+        }
         if !def.is_group_action() {
             self.stats.inert += 1;
             return;
@@ -2942,6 +3106,62 @@ impl Bridge {
         }
         self.stats.acted += 1;
         self.dispatch_action(pkg.group, name, cmd, f);
+    }
+
+    /// Execute the exact `CommandPackage::process_*` prefix for every formerly-Todo
+    /// group row. The atomic host callback supplies the addressed-object flag snapshot
+    /// when retail reads it. A reached action is emitted as a typed open tail and never
+    /// executed here.
+    fn process_group_command_prefix(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
+        let Some(request) = decode_unimplemented_group_command(cmd) else {
+            self.stats.unported += 1;
+            return;
+        };
+        let receipt = if group_command_prefix_needs_addressed_object(request, pkg.group) {
+            f.group_command_prefix_receipt(request, pkg.group)
+        } else {
+            planned_group_command_prefix_receipt(
+                request,
+                UnimplementedGroupCommandFacts {
+                    group_index: pkg.group,
+                    addressed_object_flag_1: None,
+                },
+            )
+        };
+        let record = GroupCommandPrefixReceiptRecord::validate(request, pkg.group, receipt);
+        self.group_command_prefix_receipts.push(record);
+
+        match record.disposition {
+            GroupCommandPrefixDisposition::Unavailable => {
+                self.stats.unported += 1;
+            }
+            GroupCommandPrefixDisposition::ExactNoAction => {
+                if pkg.group < 0 {
+                    self.stats.no_group += 1;
+                }
+                self.stats.group_prefix_noops += 1;
+            }
+            GroupCommandPrefixDisposition::OpenActionTail(delegate) => {
+                let Some(action_name) = OPCODES[request.opcode() as usize].action else {
+                    self.stats.unported += 1;
+                    return;
+                };
+                let Some(action_index) = GROUP_ACTIONS
+                    .iter()
+                    .position(|action| action.name == action_name)
+                else {
+                    self.stats.unported += 1;
+                    return;
+                };
+                if delegate.group_index != pkg.group {
+                    self.stats.unported += 1;
+                    return;
+                }
+                self.stats.by_action[action_index] += 1;
+                self.stats.open_group_action_tails += 1;
+                self.stats.unported += 1;
+            }
+        }
     }
 
     /// Non-group `CommandPackage::process_*` handlers. Rows with an external receiver
@@ -5592,19 +5812,25 @@ mod tests {
     }
 
     #[test]
-    fn an_unported_action_is_counted_not_faked() {
+    fn a_state_wired_action_emits_an_open_tail_without_faking_effects() {
         let mut b = Bridge::new();
         let mut f = fleet(4);
         let mut p = Package::new(1, 0);
         select(&mut b, &mut p, &mut f, &[0]);
-        // opcode 24 QUEUE_UP -> Group::action_queue_up, Port::Todo.
+        // opcode 24 QUEUE_UP -> exact handler prefix, then open Group::action_queue_up.
         let mut q = vec![24u8];
         q.extend_from_slice(&0i32.to_le_bytes());
         q.extend_from_slice(&1i32.to_le_bytes());
         b.process_all(&mut p, &q, &mut f).unwrap();
         assert_eq!(b.stats.unported, 1);
+        assert_eq!(b.stats.open_group_action_tails, 1);
+        assert_eq!(b.stats.acted, 0);
         assert_eq!(b.stats.orders_installed, 0);
-        assert!(b.stats.ported_fraction() < 1.0);
+        assert_eq!(b.stats.ported_fraction(), 0.0);
+        assert!(matches!(
+            b.take_group_command_prefix_receipts()[0].disposition,
+            GroupCommandPrefixDisposition::OpenActionTail(_)
+        ));
     }
 
     #[test]

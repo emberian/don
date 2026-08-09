@@ -582,7 +582,7 @@
         "delegates": [
           "return"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -610,7 +610,7 @@
           "guard",
           "launch_flight"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -702,7 +702,7 @@
         "call_sites": 6,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -714,7 +714,7 @@
           "CAST_SPELL"
         ],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -932,7 +932,7 @@
           "attack",
           "guard"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -957,7 +957,7 @@
         "delegates": [
           "swarm_around"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -1046,7 +1046,7 @@
           "halt",
           "move_to"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -1172,7 +1172,7 @@
         "action": "siege_attack",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1184,7 +1184,7 @@
         "action": "swarm_around",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1388,7 +1388,7 @@
         "action": "spell",
         "wire_bytes": "21",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1400,7 +1400,7 @@
         "action": "queue_up",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1412,7 +1412,7 @@
         "action": "build",
         "wire_bytes": "25",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1448,7 +1448,7 @@
         "action": "flight",
         "wire_bytes": "25",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1532,7 +1532,7 @@
         "action": "recall",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {

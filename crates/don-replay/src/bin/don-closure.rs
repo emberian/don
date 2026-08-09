@@ -268,6 +268,24 @@ mod tests {
                 }] += 1;
                 counts
             });
-        assert_eq!(counts, [9, 14, 0, 5, 7, 7]);
+        assert_eq!(counts, [9, 14, 0, 12, 0, 7]);
+    }
+
+    #[test]
+    fn exact_group_prefixes_are_wired_but_no_action_tail_is_complete() {
+        for name in [
+            "siege_attack",
+            "swarm_around",
+            "spell",
+            "queue_up",
+            "build",
+            "flight",
+            "recall",
+        ] {
+            assert_eq!(
+                don_sim::command::ActionDef::find(name).unwrap().port,
+                Port::StateWired
+            );
+        }
     }
 }

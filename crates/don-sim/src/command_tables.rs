@@ -27,7 +27,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[OrderIndex::Strafe],
         delegates: &["return"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "return",
@@ -45,7 +45,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 6,
         installs: &[OrderIndex::Strafe],
         delegates: &["attack", "guard", "launch_flight"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "launch_flight",
@@ -117,7 +117,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 6,
         installs: &[],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "spell",
@@ -126,7 +126,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 2,
         installs: &[OrderIndex::CastSpell],
         delegates: &[],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "gather_point",
@@ -284,7 +284,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 1,
         installs: &[],
         delegates: &["attack", "guard"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "form",
@@ -302,7 +302,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 1,
         installs: &[],
         delegates: &["swarm_around"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "halt",
@@ -373,7 +373,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
             OrderIndex::CastSpell,
         ],
         delegates: &["halt", "move_to"],
-        port: Port::Todo,
+        port: Port::StateWired,
     },
     ActionDef {
         name: "eject_all",
