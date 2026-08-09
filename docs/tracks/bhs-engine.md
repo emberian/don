@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Sixty
+`Program`, and `ScriptRuntime` runs either producer against that live host. Seventy
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -519,10 +519,20 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 706 | `have_alliance` | both Leaders active, then directed diplomacy slot equals 2 (`0x009fcf50`) |
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
+| 785 | `enable_production_ai` | valid Leader, then clear `leader_flags2` bit `0x04` (`0x009ff5e0`) |
+| 787 | `disable_production_ai` | valid Leader, then set `leader_flags2` bit `0x04` (`0x009ff7a0`) |
+| 789 | `enable_combat_ai` | valid Leader, then clear `leader_flags2` bit `0x08` (`0x009ff820`) |
+| 790 | `disable_combat_ai` | valid Leader, then set `leader_flags2` bit `0x08` (`0x009ff860`) |
+| 791 | `enable_all_unit_ai` | valid Leader, then clear `leader_flags2` bit `0x02` (`0x009ff8a0`) |
+| 792 | `disable_all_unit_ai` | valid Leader, then set `leader_flags2` bit `0x02` (`0x009ff8e0`) |
+| 796 | `enable_city_ai` | active non-human Leader, then clear `leader_flags2` bit `0x10` (`0x009ffba0`) |
+| 797 | `disable_city_ai` | active non-human Leader, then set `leader_flags2` bit `0x10` (`0x009ffbf0`) |
+| 798 | `enable_city_defeat` | active Leader, then clear `leader_flags2` bit `0x01` (`0x009ffc40`) |
+| 799 | `disable_city_defeat` | active Leader, then set `leader_flags2` bit `0x01` (`0x009ffc80`) |
 
-The current 363-file census contains 8,102 calls to those sixty registrations. Together
+The current 363-file census contains 8,380 calls to those seventy registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,893 of 39,957 measured shipped-corpus call sites (**22.26%**, up from **1.98%**).
+9,171 of 39,957 measured shipped-corpus call sites (**22.95%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
@@ -550,6 +560,29 @@ Adjacent fog registrations remain precise blockers rather than approximate handl
 `reg_forts`; those per-player 64-entry arrays have no authoritative `Sim` owner. #69 reveal
 buildings and #70/#71 reveal-point storage likewise own additional scenario/presentation
 state. None is synthesized from the nearby fog planes.
+
+The Leader policy effect cohort contributes 278 shipped calls across ten global indices.
+The raw per-registration counts are #785=10, #787=24, #789=5, #790=7, #791=10,
+#792=5, #796=0, #797=53, #798=3, and #799=161. Each retail body decrements the
+one-based player, rejects unsigned slots above 7, checks its Leader gate, performs exactly
+one `AND` or `OR` read-modify-write at `LeaderData+0x04`, then returns 1; every rejected
+path returns -1 without writing. Enable clears the corresponding `OFF` bit and disable sets
+it, so repeat calls are idempotent and preserve unrelated bits. Production, combat, and
+all-unit AI require only the one-bit valid gate. City AI additionally requires active and
+rejects human Leaders; city defeat requires active but remains legal for humans. The target
+is `vic_leaders.slots[who].leader_flags2`, whose bytes are already walked in checksum
+channel 8. The BHS gate continues to use the instruction-derived step-8 Leader flags,
+matching the existing runtime boundary; only the city-AI human test comes from the same
+checksum-owned Leader projection. Source and loaded-chunk fixtures mutation-test all five
+disable/enable pairs, unrelated-bit preservation, valid-but-non-processing acceptance,
+human city-AI rejection versus human city-defeat acceptance, and the invalid player 0/9
+`-1` sentinels.
+
+This is authoritative state mutation and persistence coverage, not a claim that every AI
+consumer is wired. `army_leader_flags2` is a separate unsynchronised step-13 facade and is
+deliberately not mirror-written. Adjacent #793/#794 require exact addressed-unit mutation;
+#795 `force_transport_ability` changes two Leader fields and scans every owned unit to set
+a third bit, so none is approximated as a single Leader flag write.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
@@ -667,7 +700,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-795 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+785 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

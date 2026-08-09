@@ -615,6 +615,84 @@ fn retail_chunk_executes_the_same_authoritative_fog_effects() {
     execute_fog_effect_sequence(&mut sim, &mut scripts);
 }
 
+fn configure_ai_policy_effect_state(sim: &mut Sim) {
+    for who in 0..3 {
+        sim.activate(who);
+        // Keep the later GameDaemon facade vacuous; these handlers gate on the exact
+        // step-8 flags and mutate checksum channel 8 directly.
+        sim.leaders[who].active = false;
+    }
+
+    // Script player 2 is valid but non-processing: the production/combat/unit AI pairs
+    // must still accept it through their one-bit gate.
+    sim.step8.leaders[1].flags &= !leaders::flag::PROCESS;
+    sim.vic_leaders.slots[1].leader_flags &= !victory_score::leader_flag::ACTIVE;
+
+    // Script player 3 is active but human. City AI must reject it while city defeat
+    // remains a legal mutation.
+    sim.vic_leaders.slots[2].leader_flags |= victory_score::leader_flag::HUMAN;
+
+    sim.vic_leaders.slots[0].leader_flags2 = 0x4000;
+    sim.vic_leaders.slots[1].leader_flags2 = 0x8000;
+    sim.vic_leaders.slots[2].leader_flags2 = 0x2010;
+}
+
+fn execute_ai_policy_effect_sequence(sim: &mut Sim, scripts: &mut ScriptRuntime) {
+    sim.world.seconds = 0;
+    let disabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(disabled.steps[4], StepRun::Executed);
+    assert!(disabled.work[4] > 0);
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x4011);
+    assert_eq!(sim.vic_leaders.slots[1].leader_flags2, 0x800e);
+    assert_eq!(
+        sim.vic_leaders.slots[2].leader_flags2, 0x2011,
+        "human city AI is rejected while human city defeat is disabled"
+    );
+
+    sim.world.seconds = 1;
+    let enabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(enabled.steps[4], StepRun::Executed);
+    assert!(enabled.work[4] > 0);
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x4000);
+    assert_eq!(sim.vic_leaders.slots[1].leader_flags2, 0x8000);
+    assert_eq!(
+        sim.vic_leaders.slots[2].leader_flags2, 0x2010,
+        "human city AI remains disabled while city defeat is re-enabled"
+    );
+}
+
+#[test]
+fn ordinary_source_executes_leader_ai_policy_effects() {
+    let program = compile_source_fixture("scenario_ai_policy_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "ai_policy_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8138, 8);
+    configure_ai_policy_effect_state(&mut sim);
+
+    execute_ai_policy_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_leader_ai_policy_effects() {
+    let compiled = compile_source_fixture("scenario_ai_policy_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "ai_policy_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8139, 8);
+    configure_ai_policy_effect_state(&mut sim);
+
+    execute_ai_policy_effect_sequence(&mut sim, &mut scripts);
+}
+
 fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
     use victory_score::Victory;
 

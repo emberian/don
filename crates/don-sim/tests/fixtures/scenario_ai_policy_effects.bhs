@@ -1,0 +1,23 @@
+int scenario ai_policy_effects_tick()
+{
+    if (time_sec() == 0) {
+        if (disable_production_ai(0) == -1 && disable_production_ai(9) == -1) {
+            disable_production_ai(2);
+            disable_combat_ai(2);
+            disable_all_unit_ai(2);
+            disable_city_ai(1);
+            disable_city_defeat(1);
+            disable_city_ai(3);
+            disable_city_defeat(3);
+        }
+    } else {
+        enable_production_ai(2);
+        enable_combat_ai(2);
+        enable_all_unit_ai(2);
+        enable_city_ai(1);
+        enable_city_defeat(1);
+        enable_city_ai(3);
+        enable_city_defeat(3);
+    }
+    return 1;
+}

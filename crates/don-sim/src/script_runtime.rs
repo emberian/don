@@ -476,6 +476,12 @@ enum ScriptObject {
     Wall { who: usize, o: i32, row: usize },
 }
 
+const SCRIPT_NO_CITY_DEFEAT: i32 = 0x01;
+const SCRIPT_UNIT_AI_OFF: i32 = 0x02;
+const SCRIPT_PRODUCTION_AI_OFF: i32 = 0x04;
+const SCRIPT_COMBAT_AI_OFF: i32 = 0x08;
+const SCRIPT_NO_EXPANSION: i32 = 0x10;
+
 impl Sim {
     /// The `flags & 1` Leader gate used by retail reads that remain valid while the
     /// slot is in-game but temporarily not processing.
@@ -575,6 +581,41 @@ impl Sim {
             return -1;
         };
         self.map.fog.leaders[who].see_all = enabled;
+        1
+    }
+
+    /// The ten direct `LeaderData::leader_flags2` scenario toggles at
+    /// `0x009ff5e0..0x009ffcba`. `enabled` clears the named "off" bit and
+    /// `disabled` sets it. The three gate shapes are retained explicitly: the broad
+    /// AI pairs need only VALID, city AI also needs ACTIVE and rejects HUMAN, while
+    /// city defeat needs VALID|ACTIVE but remains legal for humans.
+    fn script_set_leader_policy(
+        &mut self,
+        who: i32,
+        bit: i32,
+        enabled: bool,
+        require_active: bool,
+        reject_human: bool,
+    ) -> i32 {
+        let who = if require_active {
+            self.active_script_leader(who)
+        } else {
+            self.in_game_script_leader(who)
+        };
+        let Some(who) = who else {
+            return -1;
+        };
+        let Some(leader) = self.vic_leaders.slots.get_mut(who) else {
+            return -1;
+        };
+        if reject_human && leader.leader_flags & victory_score::leader_flag::HUMAN != 0 {
+            return -1;
+        }
+        if enabled {
+            leader.leader_flags2 &= !bit;
+        } else {
+            leader.leader_flags2 |= bit;
+        }
         1
     }
 
@@ -1499,6 +1540,31 @@ impl ScenarioHost for Sim {
                     (self.step8.leaders[who].diplo[other] == victory_score::Diplo::War as i32)
                         as i32,
                 ))
+            }
+            // Direct LeaderData+0x04 policy toggles. These are global builtin indices,
+            // not ScenarioFuncSet-local ordinals. Every successful body performs exactly
+            // one AND/OR mutation after its retail leader gate and then returns 1.
+            785 | 787 | 789 | 790 | 791 | 792 | 796 | 797 | 798 | 799 => {
+                let (bit, enabled, require_active, reject_human) = match decl.index {
+                    785 => (SCRIPT_PRODUCTION_AI_OFF, true, false, false),
+                    787 => (SCRIPT_PRODUCTION_AI_OFF, false, false, false),
+                    789 => (SCRIPT_COMBAT_AI_OFF, true, false, false),
+                    790 => (SCRIPT_COMBAT_AI_OFF, false, false, false),
+                    791 => (SCRIPT_UNIT_AI_OFF, true, false, false),
+                    792 => (SCRIPT_UNIT_AI_OFF, false, false, false),
+                    796 => (SCRIPT_NO_EXPANSION, true, true, true),
+                    797 => (SCRIPT_NO_EXPANSION, false, true, true),
+                    798 => (SCRIPT_NO_CITY_DEFEAT, true, true, false),
+                    799 => (SCRIPT_NO_CITY_DEFEAT, false, true, false),
+                    _ => unreachable!(),
+                };
+                Ok(Value::Int(self.script_set_leader_policy(
+                    args[0].as_int(),
+                    bit,
+                    enabled,
+                    require_active,
+                    reject_human,
+                )))
             }
             _ => Err(HostError::Unimplemented),
         }
