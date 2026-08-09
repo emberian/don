@@ -1,7 +1,7 @@
 # economy — the tick, executed
 
-Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,233 lines,
-90 in-module tests plus 5 caravan integration tests, **95 passed / 0 failed**). Checksum
+Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,649 lines,
+90 in-module tests plus 10 caravan integration tests, **100 passed / 0 failed**). Checksum
 channels served: **leaders** (channel 8),
 **goods** (channel 11).
 
@@ -17,8 +17,9 @@ and nothing here has been executed against retail. See §7 for the honest tier.
 
 The economy **tick** runs, end to end, as ported integer code: compose gross income →
 cap it → pay it out through the fractional accumulator → move the market → quote prices →
-trade → recompute caravan-route commerce. The focused caravan transaction adds five
-integration tests, including a route-to-city-to-gather-to-stockpile execution.
+trade → create, activate, recompute, tear down, and recycle caravan routes. The focused
+caravan transactions add ten integration tests, including a complete
+route-to-city-to-gather-to-stockpile execution.
 
 | mechanic | engine function | VA | state |
 |---|---|---|---|
@@ -43,6 +44,8 @@ integration tests, including a route-to-city-to-gather-to-stockpile execution.
 | caravan route value | `Caravan::trade_value` / `distance` | `0x0073D9D0` / `0x0073D300` | **ported** |
 | city caravan income | `City::compute_trade` | `0x00739640` | **ported** |
 | first-route wealth award | `City::new_caravan` | `0x00739750` | **ported** |
+| caravan pool allocation/recycling | `Caravans::init_caravan` / `close_caravan` | `0x0073E1F0` / `0x0073E350` | **ported** |
+| city route link creation/teardown | `Unit::do_trade` / `end_trade_route` | `0x005ED270` / `0x005E3BD0` | **ported** |
 | per-worker gather rate | `BuildTypeData::calc_gather` fragment | `0x00639E40` | **partial** — see §5.2 |
 | resource substitution | inside `calc_gather` | `0x006CF64C` | **ported** |
 | checksum images | `Leader::walk_data` / `Good::walk_data` | `0x006D6750` / `0x0066E5D0` | **framed**, see §6 |
@@ -67,7 +70,8 @@ integration tests, including a route-to-city-to-gather-to-stockpile execution.
 # in-tree, against the real crate (systems/mod.rs and lib.rs are now wired by siblings)
 cd /Users/ember/dev/don && cargo test -p don-sim --lib systems::economy
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_trade_transaction
-# -> 90 in-module + 5 integration tests passed; 0 failed.
+cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_route_lifecycle
+# -> 90 in-module + 10 integration tests passed; 0 failed.
 
 # constants cross-check (0 mismatches)
 cd /Users/ember/dev/don && python3 - <<'PY'
@@ -300,6 +304,18 @@ detached calculator. `City::new_caravan` also executes its first-contact transac
 bit per source-city slot and caravan owner, awarding `10*(age+1)` wealth domestically or
 `20*(age+1)` at a foreign destination exactly once.
 
+The route is no longer handed to that calculation as a detached fixture. Eight
+player-ordered `Caravan` pools now execute retail's stable-slot ownership rules: twenty
+records and pointer capacity are allocated initially, capacity doubles on demand, the
+first inactive record below the high-water mark is reused, and close shrinks only an
+inactive tail. `Unit::do_trade`'s transaction appends
+the `{caravan slot, owner}` identity to both cities in order, writes both endpoint object
+handles, and marks the route established. Destination arrival independently marks it
+earning. `Unit::end_trade_route` clears established/earning, removes the first exact link
+from each city while preserving suffix order, and feeds the resulting arrays directly
+back into `City::compute_trade`. The city arrays also retain retail's logical allocation
+sequence: capacity 0 → 4 → 8 → 16, with no shrink on removal.
+
 ---
 
 ## 4. Corrections and new findings
@@ -452,10 +468,11 @@ may remove a rare Good object.
 
 ### 5.4 Remaining caravan movement and merchant targeting
 
-Caravan **income** is reduced: both `distance` overloads, `trade_value`,
-`City::compute_trade`, and the `City::new_caravan` first-contact award execute. What remains
-is route establishment and unit choreography: `Caravan::restart_trade_route` `0x0073D070`,
-`Unit::think_caravan` `0x005F5650`, `Unit::do_trade` `0x005ED270`, road construction, and
+Caravan ownership, link establishment, income activation, city recomputation, teardown,
+record recycling, both `distance` overloads, `trade_value`, and the `City::new_caravan`
+first-contact award execute. What remains is autonomous route selection and physical unit
+choreography: `Caravan::restart_trade_route` `0x0073D070`, `Unit::think_caravan`
+`0x005F5650`, the movement arms of `Unit::do_trade` `0x005ED270`, road construction, and
 `PathFinder::astar_caravan_road` `0x00685990`. The road A\* draws RNG **per edge
 relaxation** (`calc_road_cost` `0x00686341`), so this remaining movement layer is a heavy
 lockstep-critical RNG consumer; it is no longer an income-formula gap.
@@ -577,10 +594,11 @@ lets a divergence be localised to the market instead of hunted through stockpile
 
 | path | what |
 |---|---|
-| `crates/don-sim/src/systems/economy.rs` | the module: 4,233 lines, 42 public functions, 90 tests, 138 cited VAs |
+| `crates/don-sim/src/systems/economy.rs` | the module: 4,649 lines, 90 in-module tests, 144 cited VAs |
 | `crates/don-sim/tests/caravan_trade_transaction.rs` | 5 executable caravan route, award, and stockpile integration tests |
+| `crates/don-sim/tests/caravan_route_lifecycle.rs` | 5 executable pool, ordered-link, route lifecycle, and income reachability tests |
 | `docs/mechanics/economy.md` | this report |
 
 Nothing else was written, nothing staged, nothing committed. The module is wired
 (`lib.rs` → `pub mod systems;`, `systems/mod.rs` → `pub mod economy;`, both landed by
-sibling lanes) and green in-tree: the two focused commands above pass **95 tests, 0 failed**.
+sibling lanes) and green in-tree: the three focused commands above pass **100 tests, 0 failed**.

@@ -2429,6 +2429,422 @@ pub fn award_new_caravan_contact(
     Some(award)
 }
 
+// ---------------------------------------------------------------------------------------
+// Caravan route ownership and city-link lifecycle
+// ---------------------------------------------------------------------------------------
+
+/// Number of `Caravan` records allocated per leader by `Caravans::init` `0x0073E870`.
+pub const INITIAL_CARAVAN_POOL_SIZE: usize = 20;
+
+/// The checksum-visible low bits of `Caravan + 0x0C`.
+pub const CARAVAN_ACTIVE: u8 = 0x01;
+pub const CARAVAN_ESTABLISHED: u8 = 0x02;
+pub const CARAVAN_EARNING: u8 = 0x04;
+
+/// Stable identity stored in each city's `Array<CaravanLink>`.
+///
+/// Retail stores both members as signed 32-bit integers even though the referenced
+/// `Caravan` record stores its own slot as an `i16` and owner as an `i8`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanLink {
+    pub slot: i32,
+    pub owner: i32,
+}
+
+/// One of the two city object handles embedded in a `Caravan` record.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CaravanEndpoint {
+    pub city: i16,
+    pub owner: i16,
+}
+
+impl CaravanEndpoint {
+    pub const NONE: Self = Self {
+        city: -1,
+        owner: -1,
+    };
+}
+
+impl Default for CaravanEndpoint {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+/// Executable state corresponding to the identity/lifecycle fields of retail's
+/// 0x50-byte `Caravan` record.
+///
+/// Road geometry remains in the movement system. `end_trade_route` clears it in retail,
+/// but the economy-visible state transition is exactly the flag and endpoint/link
+/// mutation represented here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CaravanRouteRecord {
+    pub endpoints: [CaravanEndpoint; 2],
+    pub slot: i16,
+    pub unit_object: i16,
+    pub flags: u8,
+    pub owner: i8,
+    pub cache_stamp: i32,
+}
+
+impl CaravanRouteRecord {
+    fn vacant() -> Self {
+        Self {
+            endpoints: [CaravanEndpoint::NONE; 2],
+            // Caravan::Caravan `0x0073D1E0` zeroes +0x08. The pool index is written
+            // only when this record is activated; twenty freshly allocated records
+            // therefore all serialize slot zero, not their pointer-array position.
+            slot: 0,
+            unit_object: -1,
+            flags: 0,
+            owner: -1,
+            cache_stamp: -1,
+        }
+    }
+
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.flags & CARAVAN_ACTIVE != 0
+    }
+
+    #[inline]
+    pub fn is_established(&self) -> bool {
+        self.flags & CARAVAN_ESTABLISHED != 0
+    }
+
+    #[inline]
+    pub fn is_earning(&self) -> bool {
+        self.flags & CARAVAN_EARNING != 0
+    }
+}
+
+/// Per-owner pointer-pool semantics from `Caravans::init_caravan` `0x0073E1F0` and
+/// `Caravans::close_caravan` `0x0073E350`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CaravanPool {
+    records: Vec<CaravanRouteRecord>,
+    capacity: usize,
+    high_water: usize,
+}
+
+impl Default for CaravanPool {
+    fn default() -> Self {
+        Self::retail_initial()
+    }
+}
+
+impl CaravanPool {
+    pub fn retail_initial() -> Self {
+        Self {
+            records: (0..INITIAL_CARAVAN_POOL_SIZE)
+                .map(|_| CaravanRouteRecord::vacant())
+                .collect(),
+            capacity: INITIAL_CARAVAN_POOL_SIZE,
+            high_water: 0,
+        }
+    }
+
+    /// Number of slots retail visits. Inactive tail slots are allocated but excluded.
+    #[inline]
+    pub fn high_water(&self) -> usize {
+        self.high_water
+    }
+
+    /// Number of allocated record objects, including the initial twenty vacant slots.
+    #[inline]
+    pub fn allocated_len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Logical pointer-array capacity. Retail starts at twenty and doubles on demand.
+    #[inline]
+    pub fn logical_capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Pointer-array order, including inactive records, for save/checksum walkers.
+    #[inline]
+    pub fn allocated_records(&self) -> &[CaravanRouteRecord] {
+        &self.records
+    }
+
+    #[inline]
+    pub fn record(&self, slot: usize) -> Option<&CaravanRouteRecord> {
+        (slot < self.high_water).then(|| &self.records[slot])
+    }
+
+    #[inline]
+    pub fn record_mut(&mut self, slot: usize) -> Option<&mut CaravanRouteRecord> {
+        (slot < self.high_water).then(|| &mut self.records[slot])
+    }
+
+    fn init_caravan(&mut self, owner: i32, unit_object: i16) -> CaravanLink {
+        let slot = (0..self.high_water)
+            .find(|&slot| !self.records[slot].is_active())
+            .unwrap_or(self.high_water);
+        if slot == self.records.len() {
+            if self.records.len() >= self.capacity {
+                self.capacity = if self.capacity == 0 {
+                    4
+                } else {
+                    self.capacity.wrapping_mul(2)
+                };
+            }
+            self.records.push(CaravanRouteRecord::vacant());
+        }
+        self.high_water = self.high_water.max(slot + 1);
+        self.records[slot] = CaravanRouteRecord {
+            endpoints: [CaravanEndpoint::NONE; 2],
+            slot: slot as i16,
+            unit_object,
+            flags: CARAVAN_ACTIVE,
+            owner: owner as i8,
+            cache_stamp: -1,
+        };
+        CaravanLink {
+            slot: slot as i32,
+            owner,
+        }
+    }
+
+    fn close_caravan(&mut self, slot: usize) {
+        let record = &mut self.records[slot];
+        // 0x0073E350 clears only the active bit. Normally Unit::end_trade_route has
+        // already cleared 0x02/0x04; preserving them here is observable for malformed or
+        // out-of-order calls and is therefore preferable to replacing the whole record.
+        record.flags &= !CARAVAN_ACTIVE;
+        record.owner = -1;
+        record.unit_object = -1;
+        record.endpoints = [CaravanEndpoint::NONE; 2];
+        record.cache_stamp = -1;
+        while self.high_water != 0 && !self.records[self.high_water - 1].is_active() {
+            self.high_water -= 1;
+        }
+    }
+}
+
+/// All eight retail leader pools in player-slot order.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CaravanPools {
+    pools: [CaravanPool; 8],
+}
+
+impl Default for CaravanPools {
+    fn default() -> Self {
+        Self {
+            pools: std::array::from_fn(|_| CaravanPool::retail_initial()),
+        }
+    }
+}
+
+impl CaravanPools {
+    #[inline]
+    pub fn pool(&self, owner: usize) -> Option<&CaravanPool> {
+        self.pools.get(owner)
+    }
+
+    #[inline]
+    pub fn pool_mut(&mut self, owner: usize) -> Option<&mut CaravanPool> {
+        self.pools.get_mut(owner)
+    }
+
+    /// Allocate/reuse the first inactive slot, exactly as `Caravans::init_caravan`.
+    pub fn init_caravan(
+        &mut self,
+        owner: i32,
+        unit_object: i16,
+    ) -> Result<CaravanLink, CaravanRouteError> {
+        let pool = self
+            .pools
+            .get_mut(owner as usize)
+            .ok_or(CaravanRouteError::InvalidOwner)?;
+        Ok(pool.init_caravan(owner, unit_object))
+    }
+
+    pub fn record(&self, link: CaravanLink) -> Result<&CaravanRouteRecord, CaravanRouteError> {
+        let pool = self
+            .pools
+            .get(link.owner as usize)
+            .ok_or(CaravanRouteError::InvalidOwner)?;
+        let record = pool
+            .record(link.slot as usize)
+            .ok_or(CaravanRouteError::InvalidSlot)?;
+        if !record.is_active() || record.owner as i32 != link.owner {
+            return Err(CaravanRouteError::Inactive);
+        }
+        Ok(record)
+    }
+
+    fn record_mut(
+        &mut self,
+        link: CaravanLink,
+    ) -> Result<&mut CaravanRouteRecord, CaravanRouteError> {
+        let pool = self
+            .pools
+            .get_mut(link.owner as usize)
+            .ok_or(CaravanRouteError::InvalidOwner)?;
+        let record = pool
+            .record_mut(link.slot as usize)
+            .ok_or(CaravanRouteError::InvalidSlot)?;
+        if !record.is_active() || record.owner as i32 != link.owner {
+            return Err(CaravanRouteError::Inactive);
+        }
+        Ok(record)
+    }
+
+    /// `Caravans::close_caravan`: reset the record, then shrink only inactive tail slots.
+    pub fn close_caravan(&mut self, link: CaravanLink) -> Result<(), CaravanRouteError> {
+        self.record(link)?;
+        self.pools[link.owner as usize].close_caravan(link.slot as usize);
+        Ok(())
+    }
+}
+
+/// City-owned `Array<CaravanLink>` including retail's logical allocation state.
+///
+/// A default city has grow=-1, length=capacity=0. Its first append allocates four
+/// entries; later appends double capacity. Removal shifts the suffix left, so link order
+/// (and therefore wrapped income accumulation order) remains deterministic.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct CaravanCityLinks {
+    links: Vec<CaravanLink>,
+    capacity: usize,
+}
+
+impl CaravanCityLinks {
+    #[inline]
+    pub fn as_slice(&self) -> &[CaravanLink] {
+        &self.links
+    }
+
+    #[inline]
+    pub fn logical_capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn add(&mut self, link: CaravanLink) {
+        if self.links.len() >= self.capacity {
+            self.capacity = if self.capacity == 0 {
+                4
+            } else {
+                self.capacity.wrapping_mul(2)
+            };
+        }
+        self.links.push(link);
+    }
+
+    /// Remove the first exact `{slot, owner}` pair and preserve insertion order.
+    pub fn remove(&mut self, link: CaravanLink) -> bool {
+        let Some(index) = self.links.iter().position(|&candidate| candidate == link) else {
+            return false;
+        };
+        self.links.remove(index);
+        true
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CaravanRouteError {
+    InvalidOwner,
+    InvalidSlot,
+    Inactive,
+    AlreadyEstablished,
+    NotEstablished,
+}
+
+/// Route-creation transaction in `Unit::do_trade` `0x005ED270`.
+///
+/// Retail appends the route identity to both city arrays, writes both endpoint handles,
+/// then sets bits 0 and 1. Bit 2 (`CARAVAN_EARNING`) is set only after the unit reaches
+/// the far city; until then both cities recompute with a zero contribution.
+pub fn establish_caravan_route(
+    pools: &mut CaravanPools,
+    link: CaravanLink,
+    first: CaravanEndpoint,
+    second: CaravanEndpoint,
+    first_city_links: &mut CaravanCityLinks,
+    second_city_links: &mut CaravanCityLinks,
+) -> Result<(), CaravanRouteError> {
+    if pools.record(link)?.is_established() {
+        return Err(CaravanRouteError::AlreadyEstablished);
+    }
+    first_city_links.add(link);
+    second_city_links.add(link);
+    let record = pools.record_mut(link)?;
+    record.endpoints = [first, second];
+    record.flags |= CARAVAN_ACTIVE | CARAVAN_ESTABLISHED;
+    Ok(())
+}
+
+/// Destination-arrival transition at `Unit::do_trade + 0xC02`: start paying income.
+pub fn activate_caravan_income(
+    pools: &mut CaravanPools,
+    link: CaravanLink,
+) -> Result<(), CaravanRouteError> {
+    let record = pools.record_mut(link)?;
+    if !record.is_established() {
+        return Err(CaravanRouteError::NotEstablished);
+    }
+    record.flags |= CARAVAN_EARNING;
+    Ok(())
+}
+
+/// Economy-visible part of `Unit::end_trade_route` `0x005E3BD0`.
+///
+/// This deliberately does not close the pool record: retail clears established/earning,
+/// removes both city links, and recomputes both cities here; unit destruction calls
+/// `Caravans::close_caravan` separately.
+pub fn end_caravan_route(
+    pools: &mut CaravanPools,
+    link: CaravanLink,
+    first_city_links: &mut CaravanCityLinks,
+    second_city_links: &mut CaravanCityLinks,
+) -> Result<[CaravanEndpoint; 2], CaravanRouteError> {
+    let endpoints = pools.record(link)?.endpoints;
+    let record = pools.record_mut(link)?;
+    record.flags &= !(CARAVAN_ESTABLISHED | CARAVAN_EARNING);
+    first_city_links.remove(link);
+    second_city_links.remove(link);
+    Ok(endpoints)
+}
+
+/// Resolve a city's ordered link array and execute `City::compute_trade` on live state.
+///
+/// `resolve_city` represents retail's object-table lookup by the endpoint's stored owner
+/// and city slot. A missing object becomes a non-live endpoint and is skipped, matching
+/// the validity checks before `Caravan::trade_value`.
+pub fn recompute_city_caravan_income_from_state<F>(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    receiving_owner: i32,
+    gates: &CaravanIncomeGates,
+    pools: &CaravanPools,
+    links: &CaravanCityLinks,
+    mut resolve_city: F,
+    trade_val: &mut i16,
+) -> Result<bool, CaravanRouteError>
+where
+    F: FnMut(CaravanEndpoint) -> Option<CaravanTradeCity>,
+{
+    let mut routes = Vec::with_capacity(links.as_slice().len());
+    for &link in links.as_slice() {
+        let record = pools.record(link)?;
+        routes.push(CaravanTradeRoute {
+            linked: record.is_earning(),
+            first: resolve_city(record.endpoints[0]).unwrap_or_default(),
+            second: resolve_city(record.endpoints[1]).unwrap_or_default(),
+        });
+    }
+    Ok(recompute_city_caravan_income(
+        rules,
+        map_width_wcells,
+        receiving_owner,
+        gates,
+        &routes,
+        trade_val,
+    ))
+}
+
 /// Per-leader gates for [`caravan_limit`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CaravanGates {
