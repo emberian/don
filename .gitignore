@@ -23,5 +23,7 @@ var/rontoy/
 *.donfeed
 schema/live/rontoy-*.json
 schema/live/rontoy-*.ndjson
+# Local playable-client smoke/performance reports contain timestamps and browser details.
+web/play-results*.json
 re/decomp-all/
 ron-data/replays/
