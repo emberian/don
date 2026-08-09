@@ -1,6 +1,6 @@
 # Bidirectional live retail control
 
-Status: **implemented and attach-probed; gameplay command exercise awaits a live match.**
+Status: **live-validated for pause and unit movement against a retail solo skirmish.**
 Target: the one supported `riseofnations.exe`, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
 
@@ -93,10 +93,23 @@ fresh external read proved the retail call bytes were restored exactly:
 00EF1686: E8 45 67 3C 00 85 C0 74 6D 8B ...
 ```
 
-This proves image gating, deployment, attachment, hook installation, the no-loop failure
-mode, and reversible removal. It is not evidence that a gameplay command was applied. The
-controlled live-match exercise must wait for a match loop; the
-required operator action is simply to launch/relaunch retail and enter a solo skirmish,
-then run `send observe`, `pause 1`, `pause 0`, and one known-unit `move`. Do not label the
-bridge gameplay-validated until those events contain both the retail packet and the
-corresponding `applied` observation.
+This proved image gating, deployment, attachment, hook installation, the no-loop failure
+mode, and reversible removal before any gameplay write was attempted.
+
+The requested fresh solo skirmish was then exercised as PID `12324`, at the same runtime
+base. This time `observe` ran on the retail main thread and reported frame `0`, paused `1`,
+speed `2`, and network `0`. The reversible command sequence produced:
+
+| operation | exact retail packet evidence | applied-state evidence |
+|---|---|---|
+| unpause | `4c00` appended at package `0..2` | pause bit `1 -> 0` |
+| move owner-0 unit index 0 from `(2712,31896)` to `(2904,31896)` | `000100000007580b0000987c000000000000000000000102ffff00` (group prefix + opcode `07`) | order length `0 -> 1`, runtime vtable `0x014AA12C` = rebased `MoveOrder`; an independent post-run read found exact position `(2904,31896)` and retired order length `0` |
+| re-pause | `4c01` appended at package `10..12` | pause bit `0 -> 1`; final frame `157`, seconds `10` |
+
+The checksum request in that same state recorded `network=0`, no bytes appended, and
+`phase=rejected`: this is retail's expected solo gate, not a missing packet silently called
+success. No 16-channel checksum vector has been claimed from this solo exercise. Finally,
+`STOP` parked the DLL and a fresh external read again reproduced the original call bytes
+`E8 45 67 3C 00`. The retail-control bridge is therefore gameplay-validated for the pause
+and move lifecycle; multiplayer checksum capture remains a separate, intentionally
+unexercised gate.

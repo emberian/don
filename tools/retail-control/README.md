@@ -1,6 +1,7 @@
 # Retail control probe
 
-This directory is the first bidirectional bridge to the supported retail game:
+This directory is the first live-validated bidirectional bridge to the supported retail
+game:
 
 - `retail_control.dll` attaches only to the executable identity already pinned by
   `donscan` and refuses a mismatched `TurnControl::do_frame` prologue.
