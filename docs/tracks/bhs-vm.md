@@ -340,9 +340,10 @@ committed.
    by zero, mixed types, bad opcode — need the `StringTable` at `[0x00C06378]` alive;
    that is the same blocker the compiler lane is working through, so the two should
    land together.
-3. **The chunk container** (`ScriptFile::read_script_chunk`, `0x009c5440`, nine
-   `load_*` loaders) is still unparsed. Parsing it means loading compiled scripts
-   without a compiler at all, and it is the input side of the `bhs.log` differential.
+3. **Finish the chunk container.** `don_bhs::chunk::load_program` now mirrors the
+   tag-0 root and scalar/no-include tags 2–8, producing checksum metadata without a
+   compiler. Tag 9's global struct registration and non-empty include resolution
+   remain, and are explicit errors rather than partial loads.
 4. **The `bhs.log` decode differential.** `OpCode::write_code` (`0x009c2d90`) emits a
    symbolic listing whenever handed a non-empty directory. It remains free the moment
    the compiler lane produces bytecode, and `disasm::format_all` is already shaped for

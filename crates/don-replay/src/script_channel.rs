@@ -1351,6 +1351,25 @@ mod tests {
     }
 
     #[test]
+    fn compiled_chunk_loader_installs_a_mutation_sensitive_program_channel() {
+        // Exact ChunkWrite header layout: one tag-0 root, one tag-4 bytecode leaf.
+        let mut chunks = vec![
+            17, 0, 0, 0, 0, 0, 1, 0, // root: size=17, tag=0, children=1
+            9, 0, 0, 0, 4, 0, 0, 0,    // leaf: size=9, tag=4, children=0
+            0x47, // OP_SCRIPT_MARKER
+        ];
+        let before_program = don_bhs::chunk::load_program(&chunks, "marker.bhs").unwrap();
+        let before = checksum_program(&before_program).unwrap();
+        assert!(before.bytes_walked > 4);
+
+        chunks[16] = 0x27; // OP_POP: one compiled-image byte, same container shape.
+        let after_program = don_bhs::chunk::load_program(&chunks, "marker.bhs").unwrap();
+        let after = checksum_program(&after_program).unwrap();
+        assert_ne!(before.checksum, after.checksum);
+        assert_eq!(before.bytes_walked, after.bytes_walked);
+    }
+
+    #[test]
     fn program_projection_rejects_missing_and_stale_sidecars() {
         let bare = BhsProgram::single(BhsScriptFile::default());
         assert_eq!(

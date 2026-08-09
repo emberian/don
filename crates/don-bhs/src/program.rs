@@ -45,9 +45,9 @@
 //! | 8 | `load_variable`    `0x009c4e30` | a variable name record |
 //! | 9 | `load_struct_types``0x009c4d70` | struct type definitions |
 //!
-//! We do not yet parse that container — see `docs/tracks/bhs-engine.md`. This module
-//! is the *in-memory* shape the VM runs on, which is what a compiler frontend or a
-//! chunk reader would both produce.
+//! [`crate::chunk`] parses the scalar/no-include subset of that container and rejects
+//! the global struct registry and unresolved include table explicitly. This module is
+//! the *in-memory* shape the VM runs on, shared by that reader and the source compiler.
 
 use crate::value::Value;
 

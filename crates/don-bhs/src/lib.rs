@@ -77,6 +77,7 @@
 
 pub mod builtin_table;
 pub mod builtins;
+pub mod chunk;
 pub mod corpus;
 pub mod disasm;
 pub mod host;
