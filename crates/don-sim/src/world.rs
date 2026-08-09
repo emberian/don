@@ -231,6 +231,8 @@ pub(crate) struct WorldSaveState {
     pub handle_of_row: Vec<u32>,
     pub generation: Vec<u32>,
     pub active_slots: [bool; OWNER_SLOTS],
+    /// Exact row traversal for each owner's retail band-2000 object range.
+    pub build_rows: [Vec<u32>; OWNER_SLOTS],
     pub live: u32,
     pub capacity: u32,
     pub frame: i32,
@@ -265,9 +267,9 @@ impl std::fmt::Display for WorldSaveError {
                 write!(f, "owner {owner} has duplicate object index {index}")
             }
             Self::RegistryMismatch => f.write_str("world object registry disagrees with unit rows"),
-            Self::UnsupportedObjectBand => {
-                f.write_str("world save adapter only owns the unit object band")
-            }
+            Self::UnsupportedObjectBand => f.write_str(
+                "world save adapter owns unit/build bands only, with builds in player slots 0..7",
+            ),
         }
     }
 }
@@ -347,7 +349,29 @@ impl WorldSaveState {
                     return Err(WorldSaveError::RegistryMismatch);
                 }
             }
-            objects.set_active(owner, self.active_slots[owner]);
+        }
+
+        let build_count: usize = self.build_rows.iter().map(Vec::len).sum();
+        let mut seen_build_rows = vec![false; build_count];
+        for (owner, rows) in self.build_rows.iter().enumerate() {
+            if owner >= crate::objects::BANDED_SLOTS && !rows.is_empty() {
+                return Err(WorldSaveError::UnsupportedObjectBand);
+            }
+            for (index, &row) in rows.iter().enumerate() {
+                let row_index = row as usize;
+                if row_index >= build_count
+                    || std::mem::replace(&mut seen_build_rows[row_index], true)
+                {
+                    return Err(WorldSaveError::RegistryMismatch);
+                }
+                let inserted = objects.insert(owner, Band::Build, row);
+                if inserted != crate::objects::BUILD_BAND_BASE + index as u32 {
+                    return Err(WorldSaveError::RegistryMismatch);
+                }
+            }
+        }
+        for (owner, active) in self.active_slots.iter().copied().enumerate() {
+            objects.set_active(owner, active);
         }
 
         let mut row_of_handle = vec![NO_ROW; cap];
@@ -403,13 +427,14 @@ impl World {
 
     /// Export the save-owned state after proving that all private/derived stores agree.
     ///
-    /// Buildings and walls are owned by [`crate::tick::Sim`], not by this adapter. A
-    /// caller must serialize them in the same transaction or (as the first save tranche
-    /// does) refuse them before reaching this method.
+    /// Building bodies are owned by [`crate::tick::Sim`]; this adapter carries only their
+    /// stable band traversal rows. The caller must validate and serialize the bodies in
+    /// the same transaction. Wall bodies remain outside this save tranche.
     pub(crate) fn export_save_state(&self) -> Result<WorldSaveState, WorldSaveError> {
         for owner in 0..OWNER_SLOTS {
-            if !self.objects.slot(owner).band(Band::Build).is_empty()
-                || !self.objects.slot(owner).band(Band::Wall).is_empty()
+            if !self.objects.slot(owner).band(Band::Wall).is_empty()
+                || (owner >= crate::objects::BANDED_SLOTS
+                    && !self.objects.slot(owner).band(Band::Build).is_empty())
             {
                 return Err(WorldSaveError::UnsupportedObjectBand);
             }
@@ -423,6 +448,7 @@ impl World {
             handle_of_row: self.handle_of_row.clone(),
             generation: self.generation.clone(),
             active_slots: std::array::from_fn(|i| self.objects.is_active(i)),
+            build_rows: std::array::from_fn(|i| self.objects.slot(i).band(Band::Build).to_vec()),
             live: self.live,
             capacity: self.capacity,
             frame: self.frame,
@@ -433,11 +459,14 @@ impl World {
         for owner in 0..OWNER_SLOTS {
             if rebuilt.is_active(owner) != self.objects.is_active(owner)
                 || rebuilt.slot(owner).band(Band::Unit) != self.objects.slot(owner).band(Band::Unit)
+                || rebuilt.slot(owner).band(Band::Build)
+                    != self.objects.slot(owner).band(Band::Build)
             {
                 return Err(WorldSaveError::RegistryMismatch);
             }
         }
-        if self.objects.total_objects() != self.live as usize {
+        let build_count: usize = state.build_rows.iter().map(Vec::len).sum();
+        if self.objects.total_objects() != self.live as usize + build_count {
             return Err(WorldSaveError::RegistryMismatch);
         }
         Ok(state)
@@ -527,6 +556,9 @@ impl World {
         self.units.set_who(row, owner);
         self.units.o_mut()[row] = o as i16;
         self.units.set_uid(row, (id & 0xFFFF) as u16);
+        self.units.o_up_mut()[row] = -1;
+        self.units.inside_up_mut()[row] = -1;
+        self.units.inside_up_who_mut()[row] = -1;
         self.units.tolerance_mut()[row] = SUBTILE;
         self.units.myhits_mut()[row] = stats.map_or(100, |s| s.hits.max(1));
         self.units.myarmor_mut()[row] = stats.map_or(0, |s| {
@@ -704,6 +736,21 @@ impl World {
     #[inline]
     pub fn handles(&self) -> &[u32] {
         &self.handle_of_row[..self.live as usize]
+    }
+    /// Stable generational identity for a live dense row.
+    ///
+    /// Product adapters use this after loading an opaque save: the public row/id columns
+    /// alone cannot safely reconstruct the generation component of a [`Handle`].
+    #[inline]
+    pub fn handle_at_row(&self, row: usize) -> Option<Handle> {
+        if row >= self.live as usize {
+            return None;
+        }
+        let id = self.handle_of_row[row];
+        Some(Handle {
+            id,
+            generation: self.generation[id as usize],
+        })
     }
     /// The whole id permutation, live region followed by the free pool.
     #[inline]
@@ -1236,6 +1283,26 @@ mod tests {
         assert!(w.is_alive(c));
     }
 
+    #[test]
+    fn live_rows_expose_their_exact_generational_handle() {
+        let mut w = World::with_capacity(4, 9);
+        let first = w.spawn(0).unwrap();
+        let second = w.spawn(1).unwrap();
+        assert_eq!(w.handle_at_row(0), Some(first));
+        assert_eq!(w.handle_at_row(1), Some(second));
+        assert_eq!(w.handle_at_row(2), None);
+
+        assert!(w.despawn(first));
+        assert_eq!(
+            w.handle_at_row(0),
+            Some(second),
+            "compacted rows keep identity"
+        );
+        let recycled = w.spawn(2).unwrap();
+        assert_eq!(w.handle_at_row(1), Some(recycled));
+        assert_ne!(recycled.generation, first.generation);
+    }
+
     /// The engine-visible `(who, o)` address must survive every despawn, for every
     /// survivor. This is the invariant a swap-remove is most likely to break, and losing
     /// it means an order can name an object that no longer exists.
@@ -1665,5 +1732,27 @@ mod tests {
         assert_eq!(w.digest(), before_digest);
         assert_eq!(w.random.state(), before_rng);
         assert_eq!(w.all_handle_ids(), before_handles);
+    }
+
+    #[test]
+    fn save_adapter_preserves_build_band_rows_and_rejects_non_permutations() {
+        let mut w = World::with_capacity(4, 0x2233);
+        w.objects.insert(2, Band::Build, 1);
+        w.objects.insert(2, Band::Build, 0);
+        let state = w.export_save_state().unwrap();
+        assert_eq!(state.build_rows[2], vec![1, 0]);
+
+        let mut loaded = World::with_capacity(1, 0);
+        loaded.import_save_state(state.clone()).unwrap();
+        assert_eq!(loaded.objects.slot(2).band(Band::Build), &[1, 0]);
+
+        let before = loaded.objects.slot(2).band(Band::Build).to_vec();
+        let mut corrupt = state;
+        corrupt.build_rows[2][1] = 1;
+        assert_eq!(
+            loaded.import_save_state(corrupt),
+            Err(WorldSaveError::RegistryMismatch)
+        );
+        assert_eq!(loaded.objects.slot(2).band(Band::Build), before);
     }
 }

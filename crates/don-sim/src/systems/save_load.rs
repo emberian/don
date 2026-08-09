@@ -16,7 +16,9 @@ use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
 };
 use crate::order::{Order, OrderIndex, OrderList};
-use crate::systems::{borders_fog, economy, items::Item, leaders as step8, map_terrain, movement};
+use crate::systems::{
+    borders_fog, economy, items::Item, leaders as step8, map_terrain, movement, production,
+};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 
@@ -26,6 +28,10 @@ const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
 const MAX_ITEM_SLOTS: usize = i16::MAX as usize + 1;
+const MAX_BUILDS: usize = crate::objects::BANDED_SLOTS * production::BUILD_POOL_SLOTS;
+const MAX_BUILD_QUEUE_ENTRIES: usize = 4096;
+const MAX_BUILD_MINING_TILES: usize = 1 << 20;
+const MAX_BUILD_GATHER_POINTS: usize = 1 << 16;
 
 const ROOT: u16 = 0x444e;
 const CORE: u16 = 0x0001;
@@ -34,7 +40,8 @@ const OBJECTS: u16 = 0x0003;
 const LEADERS: u16 = 0x0004;
 const PATHS: u16 = 0x0005;
 const ITEMS: u16 = 0x0006;
-const REQUIRED: [u16; 6] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS];
+const BUILDS: u16 = 0x0007;
+const REQUIRED: [u16; 7] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS, BUILDS];
 
 /// A bounded, fail-closed save/load failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +55,7 @@ pub enum SaveError {
     Limit(&'static str),
     World(String),
     Items(String),
+    Builds(String),
 }
 
 impl fmt::Display for SaveError {
@@ -62,6 +70,7 @@ impl fmt::Display for SaveError {
             Self::Limit(s) => write!(f, "save limit exceeded: {s}"),
             Self::World(s) => write!(f, "invalid world state: {s}"),
             Self::Items(s) => write!(f, "invalid item state: {s}"),
+            Self::Builds(s) => write!(f, "invalid construction/production state: {s}"),
         }
     }
 }
@@ -369,6 +378,12 @@ fn write_world_state(state: &WorldSaveState) -> Result<Vec<u8>, SaveError> {
             write_order(&mut w, order);
         }
     }
+    for rows in &state.build_rows {
+        w.len(rows.len(), "build registry rows")?;
+        for &row in rows {
+            w.u32(row);
+        }
+    }
     Ok(w.0)
 }
 
@@ -459,6 +474,18 @@ fn read_world_state(
         }
         unit_orders.push(list);
     }
+    let mut build_rows: [Vec<u32>; crate::objects::OWNER_SLOTS] =
+        std::array::from_fn(|_| Vec::new());
+    for rows in &mut build_rows {
+        let count = r.len(
+            crate::objects::BANDED_SLOTS * production::BUILD_POOL_SLOTS,
+            "build registry rows",
+        )?;
+        rows.reserve(count);
+        for _ in 0..count {
+            rows.push(r.u32()?);
+        }
+    }
     r.finish()?;
     Ok(WorldSaveState {
         units,
@@ -469,6 +496,7 @@ fn read_world_state(
         handle_of_row,
         generation,
         active_slots,
+        build_rows,
         live,
         capacity,
         frame,
@@ -557,6 +585,295 @@ fn read_paths(
     }
     r.finish()?;
     Ok((types, paths, path_units))
+}
+
+fn validate_build_state(
+    builds: &[production::BuildData],
+    world: &WorldSaveState,
+) -> Result<(), SaveError> {
+    if builds.len() > MAX_BUILDS {
+        return Err(SaveError::Limit("build records"));
+    }
+    let registry_count: usize = world.build_rows.iter().map(Vec::len).sum();
+    if registry_count != builds.len() {
+        return Err(SaveError::Builds(
+            "BuildData rows do not cover the build registry exactly".into(),
+        ));
+    }
+
+    let mut seen = vec![false; builds.len()];
+    for (owner, rows) in world.build_rows.iter().enumerate() {
+        if owner >= crate::objects::BANDED_SLOTS && !rows.is_empty() {
+            return Err(SaveError::Builds(
+                "build object exists outside retail player slots 0..7".into(),
+            ));
+        }
+        if rows.len() > production::BUILD_POOL_SLOTS {
+            return Err(SaveError::Limit("per-player build band"));
+        }
+        for (slot, &row) in rows.iter().enumerate() {
+            let row = row as usize;
+            let Some(build) = builds.get(row) else {
+                return Err(SaveError::Builds(
+                    "build registry row is outside the BuildData vector".into(),
+                ));
+            };
+            if std::mem::replace(&mut seen[row], true) {
+                return Err(SaveError::Builds(
+                    "BuildData row appears more than once in the registry".into(),
+                ));
+            }
+            if build.who as usize != owner
+                || build.object_id() as i32 != crate::objects::BUILD_BAND_BASE as i32 + slot as i32
+            {
+                return Err(SaveError::Builds(
+                    "BuildData (who,o) identity disagrees with the registry".into(),
+                ));
+            }
+            validate_supported_build(build)?;
+        }
+    }
+    if seen.iter().any(|seen| !seen) {
+        return Err(SaveError::Builds(
+            "BuildData vector contains an unregistered row".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_supported_build(build: &production::BuildData) -> Result<(), SaveError> {
+    if !build.is_valid() {
+        return Err(SaveError::Builds(
+            "closed/tombstone building slots are not yet reconstructible".into(),
+        ));
+    }
+    if build.queue.num() > MAX_BUILD_QUEUE_ENTRIES {
+        return Err(SaveError::Limit("build queue allocation"));
+    }
+    if build.queue.queued as usize > build.queue.num() {
+        return Err(SaveError::Builds(
+            "logical build queue exceeds its allocated records".into(),
+        ));
+    }
+    if build.queue.queued != 0 && !build.is_active() {
+        return Err(SaveError::Builds(
+            "an unfinished construction site owns a live production queue".into(),
+        ));
+    }
+    if build.queue.queued == 0 && build.build_masks & production::mask::REPEAT_QUEUE != 0 {
+        return Err(SaveError::Builds(
+            "repeat-production latch is set on an empty queue".into(),
+        ));
+    }
+    for entry in build.queue.entries.iter().take(build.queue.queued as usize) {
+        if entry.type_index < 0 || entry.elapsed < 0 {
+            return Err(SaveError::Builds(
+                "live build queue entry has invalid type/progress".into(),
+            ));
+        }
+        if matches!(entry.type_index as i32, 0x286 | 0x29a) {
+            return Err(SaveError::Builds(
+                "razing/special building queue state is not owned".into(),
+            ));
+        }
+    }
+    if build.gather_from.tiles.len() > MAX_BUILD_MINING_TILES {
+        return Err(SaveError::Limit("building mining tiles"));
+    }
+    if build.gather.len() > MAX_BUILD_GATHER_POINTS {
+        return Err(SaveError::Limit("building gather points"));
+    }
+
+    let inside_down = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
+    if build.flags & production::flag::CAPTURED != 0
+        || build.build_masks & (production::mask::EJECTING | production::mask::OWNERSHIP_LATCH) != 0
+        || build.demolition != 0
+        || build.gather_down >= 0
+        || build.city >= 0
+        || build.city_down >= 0
+        || build.wonder >= 0
+        || build.dock >= 0
+        || build.attack_ox >= 0
+        || build.attack_whom >= 0
+        || build.gather_max != 0
+        || build.infiltrate != 0
+        || build.infiltrate2 != 0
+        || build.gather_from.mtn != 0
+        || build.gather_from.cliff != 0
+        || !build.gather_from.tiles.is_empty()
+        || !build.gather.is_empty()
+        || inside_down >= 0
+    {
+        return Err(SaveError::Builds(
+            "captured/wonder/gather/garrison/special-family building state is not owned".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn write_builds(
+    builds: &[production::BuildData],
+    world: &WorldSaveState,
+) -> Result<Vec<u8>, SaveError> {
+    validate_build_state(builds, world)?;
+    let mut w = Writer::default();
+    w.len(builds.len(), "build records")?;
+    for build in builds {
+        w.bytes(&build.other);
+        w.u8(build.flags);
+        w.u8(build.who);
+        w.i32(build.myhits);
+        w.i32(build.damage);
+        w.u16(build.uid);
+        w.i8(build.damage_frac);
+        w.u32(build.job_counter);
+        w.u32(build.job_counter_2);
+        w.u32(build.constr_time);
+        w.i32(build.construct_hits);
+        w.i32(build.gpiece);
+        w.i32(build.frame_started);
+        w.u16(build.build_masks);
+        w.u8(build.ever_seen);
+        w.u8(build.ever_seen_completed);
+        w.u8(build.helpers);
+        w.u8(build.demolition);
+        w.i32(build.orig_type);
+        w.i16(build.gather_down);
+        w.i16(build.city);
+        w.i16(build.city_down);
+        w.i16(build.wonder);
+        w.i16(build.dock);
+        w.i16(build.recharging);
+        w.i16(build.attack_ox);
+        w.i8(build.stance);
+        w.i8(build.founder);
+        w.i8(build.gather_max);
+        w.i8(build.attack_whom);
+        w.u8(build.max_age);
+        w.u8(build.infiltrate);
+        w.u8(build.infiltrate2);
+
+        w.u8(build.queue.queued);
+        w.len(build.queue.entries.len(), "build queue allocation")?;
+        for entry in &build.queue.entries {
+            w.i32(entry.elapsed);
+            w.i16(entry.type_index);
+            for &resource in &entry.res {
+                w.i16(resource);
+            }
+            for &amount in &entry.amt {
+                w.i16(amount);
+            }
+            w.i16(entry.tail);
+        }
+
+        w.i8(build.gather_from.mtn);
+        w.i8(build.gather_from.cliff);
+        w.len(build.gather_from.tiles.len(), "building mining tiles")?;
+        for &tile in &build.gather_from.tiles {
+            w.u32(tile);
+        }
+        w.len(build.gather.len(), "building gather points")?;
+        for point in &build.gather {
+            w.i32(point.x);
+            w.i32(point.y);
+            w.u8(point.action);
+            w.u8(point.node_tag);
+        }
+    }
+    Ok(w.0)
+}
+
+fn read_builds(
+    data: &[u8],
+    world: &WorldSaveState,
+) -> Result<Vec<production::BuildData>, SaveError> {
+    let mut r = Reader::new(data);
+    let count = r.len(MAX_BUILDS, "build records")?;
+    let mut builds = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut build = production::BuildData::default();
+        build
+            .other
+            .copy_from_slice(r.take(production::BUILDDATA_SIZE)?);
+        build.flags = r.u8()?;
+        build.who = r.u8()?;
+        build.myhits = r.i32()?;
+        build.damage = r.i32()?;
+        build.uid = r.u16()?;
+        build.damage_frac = r.i8()?;
+        build.job_counter = r.u32()?;
+        build.job_counter_2 = r.u32()?;
+        build.constr_time = r.u32()?;
+        build.construct_hits = r.i32()?;
+        build.gpiece = r.i32()?;
+        build.frame_started = r.i32()?;
+        build.build_masks = r.u16()?;
+        build.ever_seen = r.u8()?;
+        build.ever_seen_completed = r.u8()?;
+        build.helpers = r.u8()?;
+        build.demolition = r.u8()?;
+        build.orig_type = r.i32()?;
+        build.gather_down = r.i16()?;
+        build.city = r.i16()?;
+        build.city_down = r.i16()?;
+        build.wonder = r.i16()?;
+        build.dock = r.i16()?;
+        build.recharging = r.i16()?;
+        build.attack_ox = r.i16()?;
+        build.stance = r.i8()?;
+        build.founder = r.i8()?;
+        build.gather_max = r.i8()?;
+        build.attack_whom = r.i8()?;
+        build.max_age = r.u8()?;
+        build.infiltrate = r.u8()?;
+        build.infiltrate2 = r.u8()?;
+
+        build.queue.queued = r.u8()?;
+        let queue_count = r.len(MAX_BUILD_QUEUE_ENTRIES, "build queue allocation")?;
+        build.queue.entries.reserve(queue_count);
+        for _ in 0..queue_count {
+            let elapsed = r.i32()?;
+            let type_index = r.i16()?;
+            let mut res = [0; 3];
+            for resource in &mut res {
+                *resource = r.i16()?;
+            }
+            let mut amt = [0; 3];
+            for amount in &mut amt {
+                *amount = r.i16()?;
+            }
+            build.queue.entries.push(production::BuildQueueEntry {
+                elapsed,
+                type_index,
+                res,
+                amt,
+                tail: r.i16()?,
+            });
+        }
+
+        build.gather_from.mtn = r.i8()?;
+        build.gather_from.cliff = r.i8()?;
+        let mining_count = r.len(MAX_BUILD_MINING_TILES, "building mining tiles")?;
+        build.gather_from.tiles.reserve(mining_count);
+        for _ in 0..mining_count {
+            build.gather_from.tiles.push(r.u32()?);
+        }
+        let gather_count = r.len(MAX_BUILD_GATHER_POINTS, "building gather points")?;
+        build.gather.reserve(gather_count);
+        for _ in 0..gather_count {
+            build.gather.push(production::GatherPoint {
+                x: r.i32()?,
+                y: r.i32()?,
+                action: r.u8()?,
+                node_tag: r.u8()?,
+            });
+        }
+        builds.push(build);
+    }
+    r.finish()?;
+    validate_build_state(&builds, world)?;
+    Ok(builds)
 }
 
 fn write_items(sim: &Sim) -> Result<Vec<u8>, SaveError> {
@@ -1473,9 +1790,6 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
     if sim.combat_rules != crate::systems::combat::CombatConstants::shipped() {
         return Err(SaveError::Unsupported("modified combat rules"));
     }
-    if !sim.builds.is_empty() {
-        return Err(SaveError::Unsupported("buildings"));
-    }
     if !sim.walls.is_empty() {
         return Err(SaveError::Unsupported("walls"));
     }
@@ -1522,6 +1836,12 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
     if sim.econ_rules != economy::EconRules::shipped() {
         return Err(SaveError::Unsupported("modified economy rules"));
     }
+    if production::SHIPPED_PRODUCTION_RULES
+        .iter()
+        .any(|&(offset, _, value)| sim.prod_rules.get(offset) != value)
+    {
+        return Err(SaveError::Unsupported("modified production rules"));
+    }
     Ok(())
 }
 
@@ -1533,6 +1853,7 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
 pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
     reject_unsupported(sim)?;
     let state = sim.world.export_save_state()?;
+    let builds = write_builds(&sim.builds, &state)?;
     let map = write_map(sim)?;
     // Validate the producer through the same bounded decoder used for untrusted input.
     // This catches an internally inconsistent public MapState before bytes escape.
@@ -1547,6 +1868,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(LEADERS, write_leaders(sim)?),
             Chunk::leaf(PATHS, write_paths(sim)?),
             Chunk::leaf(ITEMS, items),
+            Chunk::leaf(BUILDS, builds),
         ],
     )
     .encode()?;
@@ -1592,13 +1914,14 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             return Err(SaveError::MissingChunk(REQUIRED[index]));
         }
     }
-    let [core, map, objects, leaders, paths, items] = sections.map(Option::unwrap);
+    let [core, map, objects, leaders, paths, items, builds] = sections.map(Option::unwrap);
     let (seed, frame, seconds, random_state) = read_core(core)?;
     let map = read_map(map)?;
     if map.world.seed != seed {
         return Err(SaveError::Invalid("core/map seed mismatch"));
     }
     let world_state = read_world_state(objects, frame, seconds, random_state)?;
+    let builds = read_builds(builds, &world_state)?;
     let expected_types = world_state.unit_type_id.clone();
     let (leaders, market) = read_leaders(leaders)?;
     let (unit_type, paths, path_unit) = read_paths(paths, &expected_types)?;
@@ -1608,6 +1931,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     sim.map = map;
     sim.world.import_save_state(world_state)?;
     sim.world.item_runtime = item_runtime;
+    sim.builds = builds;
     sim.leaders = leaders;
     sim.market = market;
     sim.unit_type = unit_type;
@@ -1762,6 +2086,120 @@ mod tests {
         assert!(!runtime.items().get(1).unwrap().is_valid());
         assert!(runtime.items().get(2).unwrap().is_valid());
         sim
+    }
+
+    fn ordinary_build(active: bool) -> production::BuildData {
+        let mut build = production::BuildData {
+            flags: production::flag::VALID | production::flag::STARTED,
+            myhits: 640,
+            damage: 17,
+            uid: 0x3456,
+            job_counter: 321,
+            job_counter_2: 287,
+            constr_time: 20_000,
+            construct_hits: 37,
+            frame_started: 5,
+            build_masks: production::mask::WORKED_LAST_FRAME,
+            ever_seen: 4,
+            ever_seen_completed: 2,
+            helpers: 0,
+            recharging: 9,
+            stance: 3,
+            founder: 2,
+            max_age: 4,
+            ..Default::default()
+        };
+        if active {
+            build.flags |= production::flag::ACTIVE;
+        }
+        // These are real object/list links, not nullable Rust options. The supported
+        // ordinary family must carry retail's negative sentinel rather than Default's
+        // zero-filled test image.
+        build.gather_down = -1;
+        build.city = -1;
+        build.city_down = -1;
+        build.wonder = -1;
+        build.dock = -1;
+        build.attack_ox = -1;
+        build.attack_whom = -1;
+        build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+        build
+    }
+
+    fn install_build(sim: &mut Sim, owner: usize, build: production::BuildData) -> usize {
+        let row = sim.spawn_build(owner, build);
+        let slot = sim
+            .world
+            .objects
+            .slot(owner)
+            .band(crate::objects::Band::Build)
+            .len()
+            - 1;
+        let object_id = crate::objects::BUILD_BAND_BASE as i16 + slot as i16;
+        sim.builds[row].other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+            .copy_from_slice(&object_id.to_le_bytes());
+        row
+    }
+
+    fn assert_build_eq(actual: &production::BuildData, expected: &production::BuildData) {
+        assert_eq!(actual.image(), expected.image());
+        assert_eq!(actual.other, expected.other);
+        assert_eq!(actual.queue.queued, expected.queue.queued);
+        assert_eq!(actual.queue.entries, expected.queue.entries);
+        assert_eq!(actual.gather_from.tiles, expected.gather_from.tiles);
+        assert_eq!(actual.gather_from.mtn, expected.gather_from.mtn);
+        assert_eq!(actual.gather_from.cliff, expected.gather_from.cliff);
+        assert_eq!(actual.gather.len(), expected.gather.len());
+        for (actual, expected) in actual.gather.iter().zip(&expected.gather) {
+            assert_eq!(actual.x, expected.x);
+            assert_eq!(actual.y, expected.y);
+            assert_eq!(actual.action, expected.action);
+            assert_eq!(actual.node_tag, expected.node_tag);
+        }
+    }
+
+    fn sim_with_construction_and_queue() -> (Sim, usize, usize) {
+        let mut sim = supported_sim();
+        let site = install_build(&mut sim, 2, ordinary_build(false));
+
+        let mut producer = ordinary_build(true);
+        producer.job_counter = 0;
+        producer.job_counter_2 = 0;
+        producer.construct_hits = producer.myhits;
+        producer.build_masks |= production::mask::REPEAT_QUEUE;
+        producer.queue.queued = 2;
+        producer.queue.entries = vec![
+            production::BuildQueueEntry {
+                elapsed: 700,
+                type_index: 50,
+                res: [0, 1, -1],
+                amt: [30, 20, 0],
+                tail: 0x1234,
+            },
+            production::BuildQueueEntry {
+                elapsed: 900,
+                type_index: 551,
+                res: [3, -1, -1],
+                amt: [60, 0, 0],
+                tail: -7,
+            },
+            // Allocated stale tail is checksum-visible even though queued == 2.
+            production::BuildQueueEntry {
+                elapsed: 888,
+                type_index: 777,
+                res: [5, 4, 3],
+                amt: [1, 2, 3],
+                tail: 99,
+            },
+        ];
+        let producer = install_build(&mut sim, 2, producer);
+
+        let mut order = Order::default();
+        order.kind = OrderIndex::BuildAt;
+        order.target_who = 2;
+        order.target_o = site as i16;
+        sim.world.orders_mut(0).replace(order);
+        (sim, site, producer)
     }
 
     #[test]
@@ -1933,6 +2371,99 @@ mod tests {
             1
         );
         assert_eq!(save_sim(&loaded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn construction_queue_identity_and_resume_roundtrip() {
+        let (mut original, site, producer) = sim_with_construction_and_queue();
+        let bytes = save_sim(&original).unwrap();
+        let mut loaded = load_sim(&bytes).unwrap();
+
+        assert_eq!(loaded.builds.len(), 2);
+        assert_build_eq(&loaded.builds[site], &original.builds[site]);
+        assert_build_eq(&loaded.builds[producer], &original.builds[producer]);
+        assert_eq!(
+            loaded
+                .world
+                .objects
+                .slot(2)
+                .band(crate::objects::Band::Build),
+            &[site as u32, producer as u32]
+        );
+        assert_eq!(loaded.builds[site].object_id(), 2000);
+        assert_eq!(loaded.builds[producer].object_id(), 2001);
+        assert_eq!(loaded.builds[producer].queue.queued, 2);
+        assert_eq!(loaded.builds[producer].queue.entries[0].elapsed, 700);
+        assert_ne!(
+            loaded.builds[producer].build_masks & production::mask::REPEAT_QUEUE,
+            0
+        );
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        // Resume the live construction timeline through Sim's object scheduler.
+        original.do_frame();
+        loaded.do_frame();
+        assert_eq!(loaded.channel_digest(), original.channel_digest());
+        assert_eq!(
+            loaded.builds[site].job_counter,
+            original.builds[site].job_counter
+        );
+        assert_build_eq(&loaded.builds[site], &original.builds[site]);
+
+        // Queue completion needs mandatory external hosts, but the owned progress kernel
+        // can resume immediately from both a unit and a research record.
+        for (slot, kind, total) in [
+            (0, production::QueueKind::Unit, 2_000),
+            (1, production::QueueKind::Research, 3_000),
+        ] {
+            let original_step = production::queue_step(
+                original.builds[producer].queue.queued,
+                slot,
+                original.builds[producer].queue.num(),
+                original.builds[producer].queue.entries[slot].elapsed,
+                total,
+                kind,
+                1,
+                &original.prod_rules,
+            )
+            .unwrap();
+            let loaded_step = production::queue_step(
+                loaded.builds[producer].queue.queued,
+                slot,
+                loaded.builds[producer].queue.num(),
+                loaded.builds[producer].queue.entries[slot].elapsed,
+                total,
+                kind,
+                1,
+                &loaded.prod_rules,
+            )
+            .unwrap();
+            assert_eq!(loaded_step, original_step);
+            original.builds[producer].queue.entries[slot].elapsed = original_step.elapsed;
+            loaded.builds[producer].queue.entries[slot].elapsed = loaded_step.elapsed;
+        }
+        assert_build_eq(&loaded.builds[producer], &original.builds[producer]);
+    }
+
+    #[test]
+    fn build_registry_corruption_and_special_families_fail_closed() {
+        let (sim, _, _) = sim_with_construction_and_queue();
+        let bytes = save_sim(&sim).unwrap();
+        let builds = section_offset(&bytes, BUILDS);
+        // payload: build count (4), first BuildData.other starts immediately afterward,
+        // and SubObjectData::o is the short at +0x0a.
+        let first_object_id = builds + 8 + 4 + production::off::OBJECT_ID;
+        let mut corrupt = bytes.clone();
+        corrupt[first_object_id..first_object_id + 2].copy_from_slice(&2001i16.to_le_bytes());
+        assert!(matches!(load_error(&corrupt), SaveError::Builds(_)));
+
+        let mut special = sim;
+        special.builds[0].wonder = 0;
+        assert!(matches!(save_sim(&special), Err(SaveError::Builds(_))));
+
+        let (mut malformed, _, producer) = sim_with_construction_and_queue();
+        malformed.builds[producer].queue.queued = 4;
+        assert!(matches!(save_sim(&malformed), Err(SaveError::Builds(_))));
     }
 
     #[test]

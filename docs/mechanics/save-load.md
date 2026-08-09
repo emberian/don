@@ -25,15 +25,20 @@ The first supported tranche contains:
   state;
 - checksum channel 10's authoritative item runtime, including producer absence versus
   initialized-empty, every live and dead stable slot, and its checksum channel 12
-  `WData` occupancy coupling.
+  `WData` occupancy coupling;
+- ordinary construction and production records: the full `BuildData` image, construction
+  counters/HP/masks/helpers, exact `(who,o,uid)` identity, logical and allocated queue
+  lengths, every live or stale queue record, elapsed progress, repeat latch, and the
+  per-player band-2000 traversal rows.
 
 The save call rejects a live section before returning bytes when that section cannot yet
-be restored exactly. Current explicit refusals include active leader/step-8 hosts,
-buildings, walls, herds, groups, Wonders, projectiles, death records, crash hosts,
+be restored exactly. Current explicit refusals include active leader/step-8 hosts, walls,
+herds, groups, Wonders, projectiles, death records, crash hosts,
 unsupported static-world rules, modified economy/territory rules, and modified circle
-tables. Heterogeneous item/object occupancy is also refused until the object-chain owner
-can preserve its links. This is a bounded tranche, not an allow-list intended to make
-unsupported games look saveable.
+tables. Heterogeneous item/object occupancy and captured, Wonder, gather, garrison,
+razing, or externally linked building families are refused until their mandatory world
+owners can preserve the complete transaction. This is a bounded tranche, not an
+allow-list intended to make unsupported games look saveable.
 
 ## Recovered retail primitives
 
@@ -65,7 +70,7 @@ object-graph coverage.
 
 ## Container and validation
 
-The root chunk (`0x444e`) has six required leaf children in deterministic order. The
+The root chunk (`0x444e`) has seven required leaf children in deterministic order. The
 current DoN format version is 2; version 1 predates authoritative item state and is
 rejected rather than being interpreted as an absent producer.
 
@@ -77,6 +82,7 @@ rejected rather than being interpreted as an absent producer.
 | `0x0004` | leader economy and market |
 | `0x0005` | unit type/path state |
 | `0x0006` | item-producer state and exact stable-slot records |
+| `0x0007` | `BuildData`, construction state, and production queues |
 
 Loading rejects unknown, missing, duplicate, nested top-level, escaping, truncated, or
 trailing chunks. It also bounds the total stream, map geometry, population, order count,
@@ -111,6 +117,26 @@ stable slot and whose coordinates match its snapped center. Orphan slots, duplic
 out-of-range references, malformed records, mismatched map shapes, and item flags behind
 a nonnegative heterogeneous object head all fail closed.
 
+The object section also stores every owner's band-2000 row vector. Those vectors must be
+a permutation of the `BuildData` array, are limited to retail's eight building-owner
+slots and 601 slots per player, and are rebuilt in the same order. Each body must agree
+with the resulting absolute `(who,o)` address (`o = 2000 + band slot`). This preserves
+both stable target identity and the fixed per-player traversal/checksum order rather than
+reconstructing buildings from a global vector order.
+
+The Builds leaf stores the complete Rust-owned `BuildData` state plus each dynamic
+allocation. In particular, queue `num` remains distinct from the `u8 queued` logical
+length, records after `queued` remain present, the non-walked two-byte record tail is
+preserved, and `REPEAT_QUEUE` is not derived. Loading bounds every allocation and rejects
+logical lengths beyond their physical arrays, negative live type/progress values,
+unregistered or multiply registered bodies, and queues attached to unfinished sites.
+
+Queue completion still requires type classification, `Build::finished`, stockpile,
+per-player/type queued-counter, and repeat-payment hosts. Those owners are not fabricated
+or serialized as a shadow. A loaded queue can resume the exact owned progress kernel, but
+the complete finish/unqueue transaction remains fail-closed until a caller supplies the
+same mandatory hosts.
+
 ## Dynamic-array metadata
 
 Retail `SimpleArray<T>::walk_data` writes a nonempty array as length, capacity (`size`),
@@ -140,12 +166,20 @@ leader economy/market values, terrain/fog bytes, a collision block, and nontrivi
 6. absent and initialized-empty item producers remain distinct, while live/dead stable
    slots, channel-10 evidence, channel-12 checksum, and first-dead-slot reuse roundtrip;
 7. corrupt item identity, orphan map markers, and heterogeneous object/item occupancy are
-   rejected.
+   rejected;
+8. an in-progress construction site resumes through the object scheduler with identical
+   checksum state, while unit and research queue progress, allocated stale records,
+   repeat state, and byte-for-byte resave output agree;
+9. corrupt band identity, impossible queue lengths, and unsupported special building
+   families are rejected.
 
 ## Next ownership cuts
 
 Retail-complete saves require the remaining owners to join one receipt-checked
-transaction, especially active step-8 leaders/victory, buildings and walls, groups,
-projectile/death pools, Wonders and their mandatory world host, static type tables, and
-script/runtime state. Adding a chunk without both exact export and exact import is not
-progress: the correct behavior remains refusal until the complete lifecycle is owned.
+transaction, especially active step-8 leaders/victory, special-family buildings and
+walls, groups,
+projectile/death pools, Wonders and their mandatory world host, captured/gather/garrison
+building families, production completion's leader/type/stockpile counter hosts, static
+type tables, and script/runtime state. Adding a chunk without both exact export and exact
+import is not progress: the correct behavior remains refusal until the complete lifecycle
+is owned.
