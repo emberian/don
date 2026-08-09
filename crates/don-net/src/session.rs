@@ -30,7 +30,7 @@
 //! peer's `CommandPackage` for the turn covering `f`. [`Session::turn_ready`]
 //! is that predicate and nothing more — the simulation lives in `don-sim`.
 
-use crate::internal::{InternalPacket, MAX_PLAYERS};
+use crate::internal::{InternalError, InternalPacket, MAX_PLAYERS};
 use crate::msg::{Framed, MsgError, NetMsg};
 use crate::transport::{Datagram, Dest, Transport};
 use std::collections::BTreeMap;
@@ -77,6 +77,12 @@ pub enum Event {
         unique_id: i32,
         ready: bool,
     },
+    /// A setup/control packet was malformed or contradicted transport/host
+    /// authority. The packet is consumed without mutating membership.
+    SetupRefused {
+        from: i32,
+        reason: SetupRefusal,
+    },
     /// A peer reported a desync at `frame` (`IPT_DSYNCMSG`).
     Desync {
         unique_id: i32,
@@ -87,6 +93,20 @@ pub enum Event {
         from: i32,
         msg: OwnedMsg,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupRefusal {
+    Malformed(InternalError),
+    SenderIdMismatch { announced: i32 },
+    UnexpectedHostClaim,
+    DuplicateAddConflict { unique_id: i32 },
+    PlayerListFromNonHost,
+    PlayerListHostMismatch { expected: i32 },
+    HostMissingFromSlotZero,
+    LocalMissingFromRoster,
+    ReadyBeforeAdd,
+    DestroySenderMismatch { announced: i32 },
 }
 
 /// An owned copy of a decoded game message, so events can outlive the buffer.
@@ -390,8 +410,15 @@ impl<T: Transport> Session<T> {
             return Ok(());
         };
         if first >= crate::internal::IPT_BASE {
-            let Ok(p) = InternalPacket::decode(&d.bytes) else {
-                return Ok(());
+            let p = match InternalPacket::decode(&d.bytes) {
+                Ok(packet) => packet,
+                Err(error) => {
+                    self.events.push(Event::SetupRefused {
+                        from: d.from,
+                        reason: SetupRefusal::Malformed(error),
+                    });
+                    return Ok(());
+                }
             };
             self.handle_internal(d.from, p)
         } else {
@@ -407,11 +434,40 @@ impl<T: Transport> Session<T> {
                 unique_id,
                 is_hosting,
             } => {
+                if unique_id != from {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::SenderIdMismatch {
+                            announced: unique_id,
+                        },
+                    });
+                    return Ok(());
+                }
+                if is_hosting {
+                    let known_host = self.players.iter().find(|p| p.is_host);
+                    if self.role == Role::Host
+                        || known_host.is_some_and(|host| host.unique_id != unique_id)
+                    {
+                        self.events.push(Event::SetupRefused {
+                            from,
+                            reason: SetupRefusal::UnexpectedHostClaim,
+                        });
+                        return Ok(());
+                    }
+                }
                 let mut grew = false;
                 match self.players.iter_mut().find(|p| p.unique_id == unique_id) {
                     // A peer we already know from `IPT_PLAYERLIST` has no name
                     // yet — the roster packet carries ids only. Fill it in.
                     Some(p) => {
+                        if (!p.name.is_empty() && p.name != player_name) || p.is_host != is_hosting
+                        {
+                            self.events.push(Event::SetupRefused {
+                                from,
+                                reason: SetupRefusal::DuplicateAddConflict { unique_id },
+                            });
+                            return Ok(());
+                        }
                         if p.name.is_empty() {
                             p.name = player_name;
                         }
@@ -465,16 +521,51 @@ impl<T: Transport> Session<T> {
                 unique_ids,
             } => {
                 if self.role == Role::Host {
-                    return Ok(()); // host-authoritative; ignore inbound lists
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::PlayerListFromNonHost,
+                    });
+                    return Ok(());
                 }
-                let n = (num_players as usize).min(MAX_PLAYERS);
+                if let Some(expected) = self
+                    .players
+                    .iter()
+                    .find(|player| player.is_host)
+                    .map(|player| player.unique_id)
+                {
+                    if expected != from {
+                        self.events.push(Event::SetupRefused {
+                            from,
+                            reason: SetupRefusal::PlayerListHostMismatch { expected },
+                        });
+                        return Ok(());
+                    }
+                }
+                let n = num_players as usize;
+                if unique_ids[0] != from {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::HostMissingFromSlotZero,
+                    });
+                    return Ok(());
+                }
+                if !unique_ids[..n].contains(&self.local_id()) {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::LocalMissingFromRoster,
+                    });
+                    return Ok(());
+                }
                 let mut grew = false;
                 for (slot, &id) in unique_ids.iter().take(n).enumerate() {
                     if id == 0 {
                         continue;
                     }
                     match self.players.iter_mut().find(|p| p.unique_id == id) {
-                        Some(p) => p.slot = slot,
+                        Some(p) => {
+                            p.slot = slot;
+                            p.is_host = id == from;
+                        }
                         None => {
                             self.players.push(Player {
                                 unique_id: id,
@@ -518,6 +609,11 @@ impl<T: Transport> Session<T> {
                             ready,
                         });
                     }
+                } else {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::ReadyBeforeAdd,
+                    });
                 }
                 Ok(())
             }
@@ -538,6 +634,15 @@ impl<T: Transport> Session<T> {
             }
             // `process_destroy_player_message`
             InternalPacket::DestroyPlayer { unique_id } => {
+                if unique_id != from {
+                    self.events.push(Event::SetupRefused {
+                        from,
+                        reason: SetupRefusal::DestroySenderMismatch {
+                            announced: unique_id,
+                        },
+                    });
+                    return Ok(());
+                }
                 // This id may reconnect on a fresh TCP channel. Forget the
                 // previous greeting even if another authoritative roster
                 // transition already removed its player object.

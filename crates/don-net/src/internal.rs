@@ -80,6 +80,12 @@ pub enum InternalError {
     NotInternal(u8),
     UnknownType(u8),
     Short { id: u8, need: usize, have: usize },
+    Trailing { id: u8, need: usize, have: usize },
+    BadPlayerCount(u8),
+    ZeroPlayerId { slot: usize },
+    DuplicatePlayerId(i32),
+    InvalidPlayerId(i32),
+    InvalidBool { id: u8, value: u8 },
 }
 
 impl core::fmt::Display for InternalError {
@@ -89,6 +95,22 @@ impl core::fmt::Display for InternalError {
             InternalError::UnknownType(b) => write!(f, "no InternalPacketType {b}"),
             InternalError::Short { id, need, have } => {
                 write!(f, "internal packet {id}: need {need}, have {have}")
+            }
+            InternalError::Trailing { id, need, have } => {
+                write!(f, "internal packet {id}: exact size {need}, have {have}")
+            }
+            InternalError::BadPlayerCount(count) => {
+                write!(f, "player list count {count} exceeds {MAX_PLAYERS}")
+            }
+            InternalError::ZeroPlayerId { slot } => {
+                write!(f, "active player-list slot {slot} has id zero")
+            }
+            InternalError::DuplicatePlayerId(id) => {
+                write!(f, "player list repeats id {id}")
+            }
+            InternalError::InvalidPlayerId(id) => write!(f, "invalid player id {id}"),
+            InternalError::InvalidBool { id, value } => {
+                write!(f, "internal packet {id} has non-bool byte {value}")
             }
         }
     }
@@ -134,11 +156,32 @@ impl InternalPacket {
                 have: buf.len(),
             });
         }
+        if buf.len() > need {
+            return Err(InternalError::Trailing {
+                id,
+                need,
+                have: buf.len(),
+            });
+        }
         Ok(match id {
             IPT_PLAYERLIST => {
+                let count = buf[1] as usize;
+                if count > MAX_PLAYERS {
+                    return Err(InternalError::BadPlayerCount(buf[1]));
+                }
                 let mut ids = [0i32; MAX_PLAYERS];
                 for (i, slot) in ids.iter_mut().enumerate() {
                     *slot = i32le(buf, 2 + i * 4);
+                }
+                for (slot, id) in ids.iter().copied().enumerate() {
+                    if slot < count {
+                        if id == 0 {
+                            return Err(InternalError::ZeroPlayerId { slot });
+                        }
+                        if ids[..slot].contains(&id) {
+                            return Err(InternalError::DuplicatePlayerId(id));
+                        }
+                    }
                 }
                 InternalPacket::PlayerList {
                     num_players: buf[1],
@@ -152,21 +195,39 @@ impl InternalPacket {
                 unique_id: i32le(buf, 1),
             },
             IPT_PULSEPACKET => InternalPacket::Pulse,
-            IPT_ADDPLAYER => InternalPacket::AddPlayer {
-                player_name: crate::msg::read_narrow(buf, 1, ADD_PLAYER_NAME_LEN),
-                unique_id: i32le(buf, 65),
-                is_hosting: buf[69] != 0,
-            },
-            IPT_DESTROYPLAYER => InternalPacket::DestroyPlayer {
-                unique_id: i32le(buf, 1),
-            },
+            IPT_ADDPLAYER => {
+                let unique_id = i32le(buf, 65);
+                if unique_id == 0 {
+                    return Err(InternalError::InvalidPlayerId(unique_id));
+                }
+                if buf[69] > 1 {
+                    return Err(InternalError::InvalidBool { id, value: buf[69] });
+                }
+                InternalPacket::AddPlayer {
+                    player_name: crate::msg::read_narrow(buf, 1, ADD_PLAYER_NAME_LEN),
+                    unique_id,
+                    is_hosting: buf[69] != 0,
+                }
+            }
+            IPT_DESTROYPLAYER => {
+                let unique_id = i32le(buf, 1);
+                if unique_id == 0 {
+                    return Err(InternalError::InvalidPlayerId(unique_id));
+                }
+                InternalPacket::DestroyPlayer { unique_id }
+            }
             IPT_MIGRATEHOST => InternalPacket::MigrateHost {
                 new_host: i32le(buf, 1),
             },
             IPT_DSYNCMSG => InternalPacket::Dsync {
                 frame: i32le(buf, 1),
             },
-            IPT_READYFLAG => InternalPacket::ReadyFlag { ready: buf[1] != 0 },
+            IPT_READYFLAG => {
+                if buf[1] > 1 {
+                    return Err(InternalError::InvalidBool { id, value: buf[1] });
+                }
+                InternalPacket::ReadyFlag { ready: buf[1] != 0 }
+            }
             other => return Err(InternalError::UnknownType(other)),
         })
     }
@@ -283,5 +344,57 @@ mod tests {
             assert!(InternalPacket::decode(&[id; 80]).is_err());
         }
         assert!(InternalPacket::decode(&[IPT_PULSEPACKET]).is_ok());
+    }
+
+    #[test]
+    fn setup_packets_are_exact_and_fail_closed() {
+        let mut add = Vec::new();
+        InternalPacket::AddPlayer {
+            player_name: "Ai".into(),
+            unique_id: 2,
+            is_hosting: false,
+        }
+        .encode(&mut add);
+        let mut trailing = add.clone();
+        trailing.push(0);
+        assert_eq!(
+            InternalPacket::decode(&trailing),
+            Err(InternalError::Trailing {
+                id: IPT_ADDPLAYER,
+                need: 70,
+                have: 71,
+            })
+        );
+        add[69] = 2;
+        assert_eq!(
+            InternalPacket::decode(&add),
+            Err(InternalError::InvalidBool {
+                id: IPT_ADDPLAYER,
+                value: 2,
+            })
+        );
+
+        let mut list = Vec::new();
+        InternalPacket::PlayerList {
+            num_players: 2,
+            unique_ids: [1, 2, 0, 0, 0, 0, 0, 0],
+        }
+        .encode(&mut list);
+        list[1] = 9;
+        assert_eq!(
+            InternalPacket::decode(&list),
+            Err(InternalError::BadPlayerCount(9))
+        );
+        list[1] = 2;
+        list[6..10].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            InternalPacket::decode(&list),
+            Err(InternalError::DuplicatePlayerId(1))
+        );
+        // The shipped sender writes only the active prefix; inactive tail
+        // dwords may retain stack bytes and are deliberately ignored.
+        list[6..10].copy_from_slice(&2i32.to_le_bytes());
+        list[10..14].copy_from_slice(&3i32.to_le_bytes());
+        assert!(InternalPacket::decode(&list).is_ok());
     }
 }

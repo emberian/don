@@ -41,12 +41,12 @@ pub mod setup;
 pub mod stream;
 pub mod transport;
 
-pub use internal::InternalPacket;
+pub use internal::{InternalError, InternalPacket};
 pub use msg::{Framed, MsgType, NetMsg};
 pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
 pub use retail::{decode_retail_checksum_package, DecodedRetailChecksum, RetailChecksumError};
-pub use session::{Event, Player, Role, Session, TurnPackage};
+pub use session::{Event, Player, Role, Session, SetupRefusal, TurnPackage};
 pub use setup::{
     GameConnectionData, GameConnectionDataFull, PlayerConnectionData, PlayerSlotPod,
     ScenFilePreviewData,

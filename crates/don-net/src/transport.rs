@@ -13,6 +13,8 @@
 //! * [`TcpTransport`] — a real socket. Host listens, peers connect, the host
 //!   relays. Works on a LAN, over a VPN, or across the internet with one
 //!   forwarded port; the framing is `u32` little-endian length then payload.
+//!   The high length bit marks a host-relayed frame whose payload is prefixed
+//!   by the original sender's `i32` id.
 //!
 //! The relay topology is not an invention: `NetDaemon::process` case 7 does
 //! `netsys->send_all(packet, size, 1)` when the local peer is the host and the
@@ -134,6 +136,7 @@ impl Transport for LoopTransport {
 /// `CommandPackage::data[512]`, so this is three orders of magnitude of slack
 /// and still bounds a hostile peer.
 const MAX_FRAME: usize = 512 * 1024;
+const RELAYED_FRAME: u32 = 1 << 31;
 
 struct Peer {
     id: i32,
@@ -238,6 +241,19 @@ fn write_frame(sock: &mut TcpStream, payload: &[u8]) -> io::Result<()> {
     let mut buf = Vec::with_capacity(4 + payload.len());
     buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     buf.extend_from_slice(payload);
+    write_buffer(sock, &buf)
+}
+
+fn write_relayed_frame(sock: &mut TcpStream, origin: i32, payload: &[u8]) -> io::Result<()> {
+    let wire_len = 4 + payload.len();
+    let mut buf = Vec::with_capacity(4 + wire_len);
+    buf.extend_from_slice(&((wire_len as u32) | RELAYED_FRAME).to_le_bytes());
+    buf.extend_from_slice(&origin.to_le_bytes());
+    buf.extend_from_slice(payload);
+    write_buffer(sock, &buf)
+}
+
+fn write_buffer(sock: &mut TcpStream, buf: &[u8]) -> io::Result<()> {
     // The socket is non-blocking; a short write on a healthy socket is rare at
     // these sizes, but must still be handled rather than silently truncated.
     let mut off = 0;
@@ -318,15 +334,19 @@ impl Transport for TcpTransport {
                     if p.rx.len() < 4 {
                         break;
                     }
-                    let len = u32::from_le_bytes(p.rx[0..4].try_into().unwrap()) as usize;
-                    if len > MAX_FRAME {
+                    let header = u32::from_le_bytes(p.rx[0..4].try_into().unwrap());
+                    let relayed = header & RELAYED_FRAME != 0;
+                    let len = (header & !RELAYED_FRAME) as usize;
+                    if len > MAX_FRAME + usize::from(relayed) * 4
+                        || (relayed && (self.is_host || len < 4))
+                    {
                         p.dead = true;
                         break;
                     }
                     if p.rx.len() < 4 + len {
                         break;
                     }
-                    let body = p.rx[4..4 + len].to_vec();
+                    let mut body = p.rx[4..4 + len].to_vec();
                     p.rx.drain(..4 + len);
                     if !p.identified {
                         if body.len() == 4 {
@@ -337,13 +357,17 @@ impl Transport for TcpTransport {
                         }
                         continue;
                     }
+                    let from = if relayed {
+                        let origin = i32::from_le_bytes(body[0..4].try_into().unwrap());
+                        body.drain(..4);
+                        origin
+                    } else {
+                        p.id
+                    };
                     if self.is_host {
                         relay.push((p.id, body.clone()));
                     }
-                    self.inbox.push_back(Datagram {
-                        from: p.id,
-                        bytes: body,
-                    });
+                    self.inbox.push_back(Datagram { from, bytes: body });
                 }
             }
             // Host relay: everything a client sends reaches every other client.
@@ -354,10 +378,9 @@ impl Transport for TcpTransport {
                     if p.dead || !p.identified || p.id == origin {
                         continue;
                     }
-                    let mut framed = Vec::with_capacity(4 + body.len());
-                    framed.extend_from_slice(&(body.len() as u32).to_le_bytes());
-                    framed.extend_from_slice(&body);
-                    let _ = p.sock.write_all(&framed);
+                    if write_relayed_frame(&mut p.sock, origin, &body).is_err() {
+                        p.dead = true;
+                    }
                 }
             }
             self.peers.retain(|p| {
@@ -474,6 +497,42 @@ mod tests {
             Some(Datagram {
                 from: 1,
                 bytes: b"turn-1".to_vec()
+            })
+        );
+    }
+
+    #[test]
+    fn tcp_host_relay_preserves_the_original_sender() {
+        let mut host = TcpTransport::host(1, "127.0.0.1:0").unwrap();
+        let addr = host.local_addr().unwrap();
+        let mut a = TcpTransport::join(2, addr).unwrap();
+        let mut b = TcpTransport::join(3, addr).unwrap();
+
+        for _ in 0..100 {
+            host.poll(Duration::from_millis(5)).unwrap();
+            a.poll(Duration::from_millis(5)).unwrap();
+            b.poll(Duration::from_millis(5)).unwrap();
+            if host.peers().len() == 2 && a.peers() == vec![1] && b.peers() == vec![1] {
+                break;
+            }
+        }
+        assert_eq!(host.peers().len(), 2);
+
+        a.send(Dest::All, b"from-two").unwrap();
+        let mut got = None;
+        for _ in 0..100 {
+            host.poll(Duration::from_millis(5)).unwrap();
+            b.poll(Duration::from_millis(5)).unwrap();
+            if let Some(datagram) = b.recv().unwrap() {
+                got = Some(datagram);
+                break;
+            }
+        }
+        assert_eq!(
+            got,
+            Some(Datagram {
+                from: 2,
+                bytes: b"from-two".to_vec(),
             })
         );
     }
