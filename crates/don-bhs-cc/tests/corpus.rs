@@ -1,9 +1,9 @@
 //! The shipped-corpus gate.
 //!
 //! `ron-data/bhs-corpus/` is 363 `.bhs` files, 93,649 lines, written by Big Huge Games —
-//! simultaneously this lane's language specification and its test suite. The gate accepts
-//! every recovered construct except one shipped `.lenght` typo whose retail treatment is
-//! not measured; that file must fail explicitly rather than compile via an invented field.
+//! simultaneously this lane's language specification and its test suite. Retail's array
+//! member lowering explains the shipped `.lenght` typo, so every recovered source now
+//! compiles without a fidelity exception.
 //!
 //! The corpus is **gitignored game content**. When it is absent the tests print a loud
 //! SKIPPED line and pass; a skipped case is not evidence of anything and must never be
@@ -73,7 +73,7 @@ fn parses_every_shipped_script() {
 }
 
 #[test]
-fn compiles_every_shipped_script_except_the_known_unresolved_lenght_typo() {
+fn compiles_every_shipped_script_with_no_errors() {
     let Some(root) = corpus_root() else {
         eprintln!("SKIPPED: ron-data/bhs-corpus is absent (gitignored game content)");
         return;
@@ -97,17 +97,11 @@ fn compiles_every_shipped_script_except_the_known_unresolved_lenght_typo() {
             }
         }
     }
-    assert_eq!(fails.len(), 1, "unexpected compile errors:\n{}", {
-        let mut v = fails.clone();
+    assert!(fails.is_empty(), "{} compile errors:\n{}", fails.len(), {
+        let mut v = fails;
         v.truncate(30);
         v.join("\n")
     });
-    assert!(
-        fails[0].contains("napoleon_diplo.bhs:182:43")
-            && fails[0].contains("cannot resolve field `.lenght`"),
-        "the only accepted compile refusal is the measured corpus typo: {}",
-        fails[0]
-    );
 }
 
 /// Walk every emitted byte with the engine's own opcode table.
@@ -219,6 +213,20 @@ fn static_and_trigger_tables_are_consistent() {
         };
         let (prog, _, _) = don_bhs_cc::codegen::compile(&unit);
         for s in &prog.files[0].scripts {
+            assert_eq!(
+                s.params.len(),
+                s.arity,
+                "{}: script `{}` parameter type table mismatch",
+                f.display(),
+                s.name
+            );
+            assert_eq!(
+                s.refs.len(),
+                s.arity,
+                "{}: script `{}` ref table mismatch",
+                f.display(),
+                s.name
+            );
             assert_eq!(
                 s.statics.len(),
                 s.static_var_names.len(),

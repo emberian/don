@@ -191,6 +191,10 @@ Counts: `conquest` 262, `scenario` 63, `ai` 11 in the three-word form. 148 forwa
 declarations, 230 definitions, 319 anonymous entries. 51 parameters carry no type; 75 are
 `ref`.
 
+Retail's default-type reduction gives every omitted type root `int` (`0x00057bad`),
+including an omitted return type and an untyped parameter or variable. The later switch to
+`void` when entering a script body is scope setup, not the signature's return type.
+
 `(void)` is the empty parameter list.
 
 **The anonymous entry script's name is unresolved.** Attachment is a `Game`/`GameInfo`

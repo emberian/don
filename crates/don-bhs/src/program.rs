@@ -57,6 +57,15 @@ pub struct Script {
     pub name: String,
     /// `Script::params.count` — the declared arity.
     pub arity: usize,
+    /// Serialized `SymType.type` tag for each parameter (`Script::params`, +4).
+    /// Retail writes each tag as the first dword of a parameter record and the loader
+    /// restores this table before compacting the adjacent ref dword into [`Self::refs`].
+    pub params: Vec<u32>,
+    /// `Script::refs` (+32), one byte per parameter. Retail's chunk writer emits a
+    /// dword `0` or `1` beside each parameter type and the loader compacts its low byte
+    /// into this array. Runtime aliasing for `ref` calls is not recovered yet, so the VM
+    /// refuses scripts containing a set bit rather than passing them by value.
+    pub refs: Vec<u8>,
     /// Byte offset of this function's entry point in [`ScriptFile::code`]
     /// (`Script::offset`, +192).
     pub entry: u32,
@@ -64,7 +73,9 @@ pub struct Script {
     /// `VirtualMachine::init` set the void-return flag, which suppresses the
     /// return-slot reservation in `RunTimeEnv::call_script`.
     pub return_type: u32,
-    /// `Script::script_type` (+200).
+    /// `Script::script_type` (+200). Retail's local-script writer stores literal zero
+    /// here for every `ai` / `scenario` / `conquest` qualifier; the qualifier itself is
+    /// compiler-only metadata, not a runtime ID.
     pub script_type: u32,
     /// Names of the local slots, for disassembly (`Script::var_names`).
     pub var_names: Vec<String>,

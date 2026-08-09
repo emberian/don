@@ -46,6 +46,19 @@ fn arithmetic_and_return() {
     assert_eq!(run_once(&mut p), Some(Value::Int(42)));
 }
 
+#[test]
+fn ref_parameters_fail_closed_until_aliasing_is_recovered() {
+    let mut p = prog(asm(&[(0x3e, &[])]), Vec::new(), 0);
+    p.files[0].scripts[0].arity = 1;
+    p.files[0].scripts[0].refs = vec![1];
+    let mut host = NullHost;
+    let mut vm = Vm::new(&mut p, &mut host);
+    assert!(matches!(
+        vm.run_script(0, "tick"),
+        Err(VmError::Unimplemented("ref script parameters"))
+    ));
+}
+
 /// The defining property of a per-frame script: `Game::do_frame` calls it once per
 /// frame with zero arguments, so all memory is in `Script::static_vars`, guarded by
 /// `OP_JUMP_IF_INITED`.

@@ -57,7 +57,9 @@ impl Mapped {
             return Err(format!("mapping landed above 4GiB at {actual:#x}"));
         }
         let slice = unsafe { std::slice::from_raw_parts_mut(base, len) };
-        let fixups = pe.relocate(slice, actual as u32).map_err(|e| e.to_string())?;
+        let fixups = pe
+            .relocate(slice, actual as u32)
+            .map_err(|e| e.to_string())?;
         eprintln!("[bhs] mapped at {actual:#010x}, {fixups} relocations applied");
 
         // Everything RWX. The IAT sits inside .rdata and we rewrite it; the import
@@ -296,7 +298,51 @@ pub static mut WATCH: [u32; 4] = [0; 4];
 pub const WATCH_MAX: usize = 64;
 /// Per hit: `[which, eax, ecx, edx, ebx, esi, edi, esp, [esp+4], [esp+8], [esp+12]]`.
 pub static mut WATCH_LOG: [[u32; 11]; WATCH_MAX] = [[0; 11]; WATCH_MAX];
+/// UTF-16 snapshot of the retail `String` visible at each watchpoint. Stack-local
+/// strings are destroyed before `Compiler::compile` returns, so recording only their
+/// pointer leaves the most useful diagnostic undecodable. The SIGTRAP handler copies
+/// it while it is live: watch 0 uses the first stack argument, watch 1 uses EAX,
+/// and watch 2 uses ESI.
+pub const WATCH_TEXT_MAX: usize = 256;
+pub static mut WATCH_TEXT: [[u16; WATCH_TEXT_MAX]; WATCH_MAX] = [[0; WATCH_TEXT_MAX]; WATCH_MAX];
+pub static mut WATCH_TEXT_LEN: [usize; WATCH_MAX] = [0; WATCH_MAX];
+pub static mut WATCH_STRING_RAW: [[u32; 5]; WATCH_MAX] = [[0; 5]; WATCH_MAX];
 pub static mut WATCH_HITS: usize = 0;
+
+unsafe fn snapshot_retail_string(dst: usize, object: u32) {
+    if object < 0x1000 || dst >= WATCH_MAX {
+        return;
+    }
+    // String layout from rise.pdb: data +0, const_len +4, offset +6,
+    // curr_len +8, flags +10. A const String points directly at UTF-16; an owned
+    // String points at a small data object whose first dword is the UTF-16 buffer.
+    let p = object as *const u8;
+    for i in 0..5 {
+        WATCH_STRING_RAW[dst][i] = std::ptr::read_unaligned(p.add(i * 4) as *const u32);
+    }
+    let raw = std::ptr::read_unaligned(p as *const u32);
+    let const_len = std::ptr::read_unaligned(p.add(4) as *const u16) as usize;
+    let offset = std::ptr::read_unaligned(p.add(6) as *const u16) as usize;
+    let curr_len = std::ptr::read_unaligned(p.add(8) as *const u16) as usize;
+    let flags = *p.add(10);
+    let n = if curr_len != 0 { curr_len } else { const_len };
+    if raw < 0x1000 || n == 0 || n >= WATCH_TEXT_MAX {
+        return;
+    }
+    let chars = if flags & 1 != 0 {
+        raw
+    } else {
+        std::ptr::read_unaligned(raw as *const u32)
+    };
+    if chars < 0x1000 {
+        return;
+    }
+    for i in 0..n {
+        WATCH_TEXT[dst][i] =
+            std::ptr::read_unaligned((chars as usize + (offset + i) * 2) as *const u16);
+    }
+    WATCH_TEXT_LEN[dst] = n;
+}
 
 unsafe extern "C" fn step_handler(_s: i32, _i: *mut libc::siginfo_t, uc: *mut c_void) {
     let eip = std::ptr::read_unaligned((uc as *const u8).add(O_EIP) as *const u32);
@@ -307,10 +353,27 @@ unsafe extern "C" fn step_handler(_s: i32, _i: *mut libc::siginfo_t, uc: *mut c_
             let g = |o: usize| std::ptr::read_unaligned((uc as *const u8).add(o) as *const u32);
             let esp = g(O_ESP);
             let rd = |off: u32| std::ptr::read_unaligned((esp + off) as *const u32);
-            WATCH_LOG[WATCH_HITS] = [
-                w as u32, g(O_EAX), g(O_ECX), g(O_EDX), g(O_EBX), g(O_ESI), g(O_EDI), esp,
-                rd(4), rd(8), rd(12),
+            let hit = WATCH_HITS;
+            WATCH_LOG[hit] = [
+                w as u32,
+                g(O_EAX),
+                g(O_ECX),
+                g(O_EDX),
+                g(O_EBX),
+                g(O_ESI),
+                g(O_EDI),
+                esp,
+                rd(4),
+                rd(8),
+                rd(12),
             ];
+            let string_object = match w {
+                0 => rd(4),
+                1 => g(O_EAX),
+                2 => g(O_ESI),
+                _ => 0,
+            };
+            snapshot_retail_string(hit, string_object);
             WATCH_HITS += 1;
         }
     }

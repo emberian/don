@@ -367,6 +367,12 @@ impl<'a, H: Host> Vm<'a, H> {
         let void_return = s.return_type == ScriptTy::Void.tag();
         let arity = s.arity;
         let entry = s.entry as usize;
+        if s.refs.iter().any(|&r| r != 0) {
+            // Retail's parameter writer/loader encoding is measured, but the compiler's
+            // copy-versus-alias lowering and the VM ownership transition are not. Passing
+            // these as ordinary values would look plausible while discarding mutations.
+            return Err(VmError::Unimplemented("ref script parameters"));
+        }
         // `expected_stack_size = stack.len() - nparams (+1 if non-void)`.
         let expected = self.stack.len().saturating_sub(arity) + usize::from(!void_return);
         // Arguments occupy the lowest local slots; `check_params` (`0x009c3b00`)

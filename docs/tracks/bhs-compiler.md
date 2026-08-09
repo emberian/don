@@ -1,8 +1,7 @@
 # BHS compiler
 
-**363/363 shipped scripts parse. 362/363 compile cleanly; the remaining shipped
-`.lenght` typo is an explicit fidelity refusal until retail behavior is measured. Zero
-decode failures across 309,344 executable instructions from the 362 clean roots.**
+**All 363/363 shipped scripts parse and compile cleanly. Zero decode failures across
+314,184 executable instructions from all 363 roots.**
 
 The corpus is `ron-data/bhs-corpus/` — 363 `.bhs` files, 93,649 lines, written by Big Huge
 Games across the `ai/`, `conquest/` and `scenario/` trees. It is this lane's language
@@ -96,8 +95,8 @@ below.
 ### Emitted code
 
 ```
-542 script slots across 362 executable roots
-1,263,524 bytes · 309,344 instructions · 48 of 73 opcodes used
+557 script slots across 363 executable roots
+1,281,756 bytes · 314,184 instructions · 48 of 73 opcodes used
 0 decode failures · 0 out-of-range jump targets · 33 auto-casts · 14,356 implicit declarations
 ```
 
@@ -105,9 +104,7 @@ The counts are self-checking. `OP_BIT_UNSET` 1,635 is exactly the corpus's
 `enable_trigger` count and `OP_BIT_SET` 436 its `disable_trigger` count;
 `OP_JUMP_IF_BITSET` 1,554 is the trigger count; `OP_JUMP_IF_INITED` 2,615 is 2,433
 statics + 182 `run_once`; `OP_CAST` 173 is 140 written casts + 33 inserted ones. Those
-constructs are absent from the refused Napoleon root, so the equalities survive its
-exclusion. Any of those could have
-disagreed.
+Any of those could have disagreed.
 
 Top of the histogram: `OP_PUSH` 151,176 · `OP_CALL_GAME` 39,896 · `OP_POP` 39,269 ·
 `OP_ASSIGN` 14,332 · `OP_JUMP_IF_NOT` 13,537 · `OP_JUMP` 8,763 · `OP_EQ_OP` 5,308 ·
@@ -156,14 +153,18 @@ compiler reproduces that; it does not insert the comma the author meant.
 ### 3. A second shipped typo: `.lenght`
 
 `conquest/Napoleon/napoleon_diplo.bhs:182` reads
-`for (z = 0; z < offer.tribe_terr.lenght; z++)`. It is the **single** compile error our
-compiler emits across the whole corpus. Earlier code warned and emitted field zero;
-that could run plausible but invented behavior, so fidelity mode now refuses it. What
-retail does with it is unresolved, and the two
-possibilities are far apart: either its compiler is lax here, or `napoleon_diplo.bhs`
-**never compiled in the shipped game**, which per `bhs-what-we-know.md` fails almost
-silently and would have disabled the Napoleon diplomacy script for the whole session. That
-is a ten-minute experiment in the live game and worth doing.
+`for (z = 0; z < offer.tribe_terr.lenght; z++)`. `tribe_terr` is `string[]`, and retail's
+behavior is now settled at the instruction level: `STRUCT_ACCESS` evaluation
+(`0x009ddda4`) calls the base type's `is_array` before scanning any member name. An array
+bypasses the field-name scan. `STRUCT_GET` (`0x009dde50`, array branch at `0x009dde88`)
+then emits `OP_PUSH_ARRAY_LENGTH` (`0x30`) without comparing the spelling at all.
+
+This is a general type-directed retail quirk, not a special typo alias: any rvalue
+`array.<identifier>` means array length. Struct fields still use the case-insensitive name
+scan in `eval_struct_direct_access` (`0x009dfcb0`). The compiler reproduces that measured
+behavior, including `.lenght`, and the shipped gate is consequently 363/363. Array-member
+assignment remains narrower: only `.length = value` is emitted because the arbitrary-name
+setter path has not been measured; every other spelling fails explicitly.
 
 ### 4. Things the brief had wrong
 
@@ -227,10 +228,10 @@ that must be checked rather than assumed.
 
 ## Evidence, and what it is worth
 
-**Strong.** 363/363 parse, 362/363 compile cleanly, and all structurally emitted output
-has zero decode failures over 309,344 executable instructions, with every jump target bound-checked
-and every script entry asserted to land on an instruction boundary. The only refusal is
-the exact unresolved `.lenght` site above. This is not "parses to EOF with no residue" — the parser was
+**Strong.** 363/363 parse and compile cleanly, and all structurally emitted output has zero
+decode failures over 314,184 executable instructions, with every jump target bound-checked
+and every script entry asserted to land on an instruction boundary. This is not "parses
+to EOF with no residue" — the parser was
 deliberately tightened until it *broke*, and each break was a real language fact:
 
 1. Requiring `;` after every statement dropped the rate to 360/363. Two of the three
@@ -242,6 +243,23 @@ deliberately tightened until it *broke*, and each break was a real language fact
 4. The AST census cross-checks against greps of the same corpus, and its two disagreements
    were corrections to the brief.
 
+**Measured type metadata.** `LocalScriptType::write` (`0x009da900`) serializes literal
+zero to `Script::script_type` for every qualifier; `ai`, `scenario`, and `conquest` stay
+compile-time strings at `LocalScriptType+0x7c`. Parameter records are exactly
+`[SymType.type, is_ref ? 1 : 0]`; the in-memory image now retains both the type-tag table
+and the compact ref-byte table. The grammar's omitted-type production selects root `int`
+(`0x00057bad`) for parameters, variables, and script returns; it is not `Any` or `void`.
+Concrete array types do *not* use the generic builtin
+`array` tag: `ArrayType::get_unique_token` (`0x009da620`) hashes
+`"@" + element.get_name()`, giving `int[]=0x0009a23b`, `float[]=0x001cbf9d`, and
+`String[]=0x0020d693`. A struct's tag is likewise not the bare-name hash: retail hashes
+`<StructName>$<field1 display-type>^<field2 display-type>^...`. A fixed array field uses
+the display type `T[]` while its numeric bound is omitted. `OP_CREATE_STRUCT` is exactly
+`[0x2c][member_count:u32][that unique-token hash:u32]`. The compiler now writes these
+measured values; an aggregate whose display token has not been recovered is a hard compile
+error, and the VM refuses a script with any `ref` bit until aliasing is recovered rather
+than degrading it to pass-by-value.
+
 **Weak or absent.** Focused emitted bytecode now executes under our VM for an array
 literal, a sized-array indexed assignment, and a default-constructed struct field
 assignment. No byte of our output has been compared against retail's compiler. The lowering choices marked
@@ -251,8 +269,9 @@ divergence unmeasured. Nothing in this lane is verified.
 
 **Fidelity gate.** Any semantic/codegen error replaces every emitted file body with
 `OP_ERROR_TOKEN`, and `bhsc compile` exits nonzero; ignoring diagnostics cannot execute a
-fallback lowering. Even clean output remains research/Tier C until the retail bytecode,
-`script_type`, and `ref` encodings are measured. A retail-fidelity consumer must load a
+fallback lowering. Even clean output remains research/Tier C until retail bytecode is
+compared and remaining lowering choices are measured. `Script::script_type` and the
+on-disk `ref` parameter bit are now decoded; they no longer justify invented IDs. A retail-fidelity consumer must load a
 retail-compiled image or refuse, not silently treat this compiler's clean output as
 byte-identical retail output.
 
@@ -285,11 +304,9 @@ lane, or by one run under the oracle.
    string-on-the-left, which the corpus needs and which is unambiguous — 33 insertions.
    Int/real mixing is left alone because the corpus writes those casts by hand, which is
    itself evidence the compiler declines them.
-6. **`Script::script_type` and `return_type` encodings.** Our `script_type` ids for
-   `ai`/`scenario`/`conquest` are ours; `return_type` uses the measured `SymType` tags.
-7. **The anonymous entry script's registered name.** We use the file stem.
-8. **`labels` starting value** (§5 above).
-9. **Container capacity and grow values.** These are checksummed. Even byte-identical code
+6. **The anonymous entry script's registered name.** We use the file stem.
+7. **`labels` starting value** (§5 above).
+8. **Container capacity and grow values.** These are checksummed. Even byte-identical code
    will not reproduce channel 15 without matching what retail's loaders allocate — the same
    `Array<T>` hazard `CODEX.md` flags for the rest of the sim.
 
@@ -305,9 +322,10 @@ in this crate implements a builtin.
 
 **Output type** is `don_bhs::program::Program` — `ScriptFile` with `code`, `const_pool`,
 `scripts`, `linked_file_names`, `line_to_op`; `Script` with `entry`, `arity`,
-`return_type`, `script_type`, `var_names`, `static_var_names`, `statics`, `trigger_names`,
-`trigger_bits`. Those are the shipped field names and offsets from the PDB, so the VM lane
-can run our output and the chunk-file reader can produce the same shape.
+`params`, `refs`, `return_type`, `script_type`, `var_names`, `static_var_names`,
+`statics`, `trigger_names`, `trigger_bits`. Those are the shipped field names and offsets
+from the PDB, so the VM lane can run our output and the chunk-file reader can produce the
+same shape.
 
 **Files this lane owns:** `crates/don-bhs-cc/**`, `docs/tracks/bhs-grammar.md`,
 `docs/tracks/bhs-compiler.md`, and one line of the workspace `Cargo.toml` members list.
@@ -323,5 +341,7 @@ can run our output and the chunk-file reader can produce the same shape.
    count how far each script gets. Strict execution stops at the first unimplemented
    builtin; survey mode produces the ranked boundary-debt list.
 3. Diff aggregate-heavy reference bytecode from retail against our valid executable
-   lowering, including struct type hashes and constructor prototypes.
-4. Settle `.lenght` in the live game.
+   lowering, including constructor prototypes (struct schema-signature hashes are now
+   decoded and emitted).
+4. Measure the arbitrary-name array-member *setter* path before widening assignment past
+   the recovered `.length = value` form.

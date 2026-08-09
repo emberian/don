@@ -316,10 +316,7 @@ fn cmd_info() {
     }
     let imports = win::parse_imports(&m);
     println!("{} imports", imports.len());
-    println!(
-        "XC initialisers: {}",
-        (VA_XC_Z - VA_XC_A) / 4
-    );
+    println!("XC initialisers: {}", (VA_XC_Z - VA_XC_A) / 4);
 }
 
 fn cmd_imports(args: &[String]) {
@@ -347,7 +344,9 @@ fn cmd_opnames() {
     let m = load();
     let _env = setup(&m);
 
-    print!("[bhs] running `dynamic initializer for OpCode::op_string` @ {VA_OPSTRING_INIT:#010x} ... ");
+    print!(
+        "[bhs] running `dynamic initializer for OpCode::op_string` @ {VA_OPSTRING_INIT:#010x} ... "
+    );
     let _ = std::io::stdout().flush();
     let f = m.at(VA_OPSTRING_INIT) as u32;
     match guard_for(10, || unsafe {
@@ -365,11 +364,7 @@ fn cmd_opnames() {
     for i in 0..73u32 {
         let p = m.at(VA_OPSTRING + i * 20);
         let s = read_string(p);
-        println!(
-            "{i:3}  {:<24?} raw={}",
-            string_text(&s),
-            hexdump(p, 20)
-        );
+        println!("{i:3}  {:<24?} raw={}", string_text(&s), hexdump(p, 20));
     }
 
     println!("\n-- OpCode::get_op_name(i) executed --");
@@ -445,7 +440,10 @@ fn cmd_initterm(args: &[String]) {
     let _env = setup(&m);
     let verbose = args.iter().any(|a| a == "-v");
     let (total, ok, bad) = run_initializers(&m, verbose);
-    println!("\n{ok}/{total} dynamic initialisers ran clean, {} faulted", bad.len());
+    println!(
+        "\n{ok}/{total} dynamic initialisers ran clean, {} faulted",
+        bad.len()
+    );
     for (va, f) in &bad {
         println!(
             "  {va:#010x}  {} at {} touching {:#010x}",
@@ -471,7 +469,10 @@ fn report_missing() {
             uniq.push(n);
         }
     }
-    println!("\n-- imports actually reached but not implemented ({}) --", uniq.len());
+    println!(
+        "\n-- imports actually reached but not implemented ({}) --",
+        uniq.len()
+    );
     for n in uniq {
         println!("  {n}");
     }
@@ -538,6 +539,63 @@ fn fabricate_messages(m: &Mapped) -> u32 {
     table as u32
 }
 
+/// Build the separate `internal_strings.xml` table consumed through
+/// `StringTable+0x10`. The retail process keeps this distinct from the translated
+/// diagnostic table behind `gErrorSystem`; aliasing the two happened to avoid a null
+/// dereference, but concealed which dependency was still missing.
+///
+/// These six indices were read directly from the retail install. Five are copied by
+/// `ScriptGameInterfaceBase::init` (`0x009d5a60`) as the language's builtin scalar
+/// names; `UseBytecodeDump` is queried by `Compiler::init` (`0x009bea00`). All other
+/// entries remain empty and therefore fail closed instead of acquiring a plausible
+/// invented spelling.
+fn fabricate_internal_strings(m: &Mapped) -> u32 {
+    let table = unsafe { libc::calloc(MSG_COUNT, 20) } as *mut u8;
+    assert!(!table.is_null());
+    for (idx, value) in [
+        (6114, "string"),
+        (6115, "int"),
+        (6966, "float"),
+        (7177, "UseBytecodeDump"),
+        (7192, "void"),
+        (7193, "bool"),
+    ] {
+        make_string(m, unsafe { table.add(idx * 20) }, value);
+    }
+    table as u32
+}
+
+fn apply_string_overrides(m: &Mapped, table: u32, env_name: &str, noun: &str) {
+    let Ok(spec) = std::env::var(env_name) else {
+        return;
+    };
+    for item in spec.split(',') {
+        let Some((k, v)) = item.split_once('=') else {
+            continue;
+        };
+        // `idx=text` or `lo:hi=text`. The range form makes it possible to bisect an
+        // unresolved resource-table lookup without rebuilding the oracle.
+        let (lo, hi) = match k.trim().split_once(':') {
+            Some((a, b)) => (
+                a.parse::<usize>().unwrap_or(0),
+                b.parse::<usize>().unwrap_or(0),
+            ),
+            None => {
+                let i = k.trim().parse::<usize>().unwrap_or(usize::MAX);
+                (i, i)
+            }
+        };
+        if lo >= MSG_COUNT {
+            continue;
+        }
+        let hi = hi.min(MSG_COUNT - 1);
+        for idx in lo..=hi {
+            make_string(m, unsafe { (table as *mut u8).add(idx * 20) }, v);
+        }
+        println!("  {noun}[{lo}..={hi}] <- {v:?}");
+    }
+}
+
 /// Our own `ScriptGameInterfaceBase::text_message`, installed over vtable slot +0x0c.
 /// Everything the compiler wants to tell us comes through here.
 extern "C" fn hook_text_message(msg: *const u8, a: u32, b: *const u8, c: u32) {
@@ -559,48 +617,16 @@ fn fabricate(m: &Mapped) {
         let t = fabricate_messages(m);
         m.write_u32(VA_ERRSYS_MSGS, t);
         println!("  message table [{VA_ERRSYS_MSGS:#010x}] <- {t:#010x} ({MSG_COUNT} entries)");
-        // `BHS_STRINGS=6115=int,6966=void,...` overrides individual slots. The five
-        // entries `ScriptGameInterfaceBase::init` (0x009d5a60) copies out of the table are
-        // the names the parser matches script/type keywords against, and they live in
-        // `internal_strings.xml`, which we do not have. Being able to set them without a
-        // rebuild is what makes identifying them a search rather than a guess.
-        if let Ok(spec) = std::env::var("BHS_STRINGS") {
-            for item in spec.split(',') {
-                let Some((k, v)) = item.split_once('=') else {
-                    continue;
-                };
-                // `idx=text` or `lo:hi=text`. The range form is a shotgun: setting a
-                // whole span to one word answers "does the compiler look this keyword up
-                // in the string table at all?" in a single run, which is the difference
-                // between bisecting for the index and guessing at it forever.
-                let (lo, hi) = match k.trim().split_once(':') {
-                    Some((a, b)) => (
-                        a.parse::<usize>().unwrap_or(0),
-                        b.parse::<usize>().unwrap_or(0),
-                    ),
-                    None => {
-                        let i = k.trim().parse::<usize>().unwrap_or(usize::MAX);
-                        (i, i)
-                    }
-                };
-                if lo >= MSG_COUNT {
-                    continue;
-                }
-                let hi = hi.min(MSG_COUNT - 1);
-                for idx in lo..=hi {
-                    make_string(m, unsafe { (t as *mut u8).add(idx * 20) }, v);
-                }
-                println!("  string[{lo}..={hi}] <- {v:?}");
-            }
-        }
+        apply_string_overrides(m, t, "BHS_MESSAGES", "message");
     }
     let st = m.read_u32(VA_STRINGTABLE_PTR);
     if st != 0 {
         let strings = unsafe { std::ptr::read_unaligned((st + 0x10) as *const u32) };
         if strings == 0 {
-            let t = m.read_u32(VA_ERRSYS_MSGS);
+            let t = fabricate_internal_strings(m);
+            apply_string_overrides(m, t, "BHS_STRINGS", "internal string");
             unsafe { std::ptr::write_unaligned((st + 0x10) as *mut u32, t) };
-            println!("  StringTable+0x10 <- {t:#010x} (same fabricated table)");
+            println!("  StringTable+0x10 <- {t:#010x} (measured internal-string indices)");
         }
     }
     if m.read_u32(VA_SGI_PTR) == 0 {
@@ -647,10 +673,7 @@ fn cmd_compile(args: &[String]) {
             std::process::exit(2);
         }
     };
-    let reload: u32 = args
-        .get(3)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+    let reload: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
     if std::env::var("BHS_TRACE_IO").is_ok() {
         unsafe { win::TRACE_IO = true };
     }
@@ -660,7 +683,10 @@ fn cmd_compile(args: &[String]) {
 
     println!("[bhs] running dynamic initialisers");
     let (total, ok, bad) = run_initializers(&m, false);
-    println!("[bhs] {ok}/{total} initialisers clean, {} faulted", bad.len());
+    println!(
+        "[bhs] {ok}/{total} initialisers clean, {} faulted",
+        bad.len()
+    );
     report_missing();
     probe_globals(&m);
 
@@ -721,6 +747,9 @@ fn cmd_compile(args: &[String]) {
             // Just after `call 0x009c1ae0` inside yyerror: %eax holds the String the
             // parser built to describe the offending token, %esi the same after the move.
             image::WATCH[1] = m.at(0x009b_a39f) as u32;
+            // Inside `lexer::token_text`, immediately after the live token String was
+            // copied into ESI and before its temporary is destroyed.
+            image::WATCH[2] = m.at(0x009c_1bb0) as u32;
         }
         println!("[bhs] watching Compiler::comp_error and yyerror while stepping");
     }
@@ -757,16 +786,35 @@ fn report_watches(m: &Mapped) {
     println!("\n-- watchpoint hits ({hits}) --");
     for i in 0..hits {
         let r = unsafe { image::WATCH_LOG[i] };
-        let names = ["comp_error@0x9bed80", "yyerror-token@0x9ba39f", "watch2", "watch3"];
+        let names = [
+            "comp_error@0x9bed80",
+            "yyerror-token@0x9ba39f",
+            "watch2",
+            "watch3",
+        ];
         println!(
             "  {} eax={:08x} ecx={:08x} edx={:08x} ebx={:08x} esi={:08x} edi={:08x} esp={:08x} s0={:08x} s1={:08x} s2={:08x}",
             names[r[0] as usize & 3], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]
         );
+        let raw = unsafe { image::WATCH_STRING_RAW[i] };
+        println!(
+            "      watched String raw = {:08x} {:08x} {:08x} {:08x} {:08x}",
+            raw[0], raw[1], raw[2], raw[3], raw[4]
+        );
+        let text_len = unsafe { image::WATCH_TEXT_LEN[i] };
+        if text_len != 0 {
+            let text = unsafe { String::from_utf16_lossy(&image::WATCH_TEXT[i][..text_len]) };
+            println!("      live String snapshot = {text:?}");
+        }
         // Any of these could be a String*; decoding dereferences addresses recorded
         // mid-flight, so it runs guarded and degrades to a note instead of a crash.
         for (label, v) in [
-            ("eax", r[1]), ("ecx", r[2]), ("edx", r[3]), ("ebx", r[4]),
-            ("esi", r[5]), ("s0", r[8]),
+            ("eax", r[1]),
+            ("ecx", r[2]),
+            ("edx", r[3]),
+            ("ebx", r[4]),
+            ("esi", r[5]),
+            ("s0", r[8]),
         ] {
             if v < 0x1000 {
                 continue;
@@ -799,9 +847,7 @@ fn dump_script_files(m: &Mapped) {
         if sf == 0 {
             continue;
         }
-        let rd = |off: u32| unsafe {
-            std::ptr::read_unaligned((sf + off) as *const u32)
-        };
+        let rd = |off: u32| unsafe { std::ptr::read_unaligned((sf + off) as *const u32) };
         // ScriptFile: +0 Buffer code {size +4, cap +8, data +0x10}, +0x1c PtrArray<Script>,
         // +108 String source_file [layout measured from rise.pdb]
         let size = rd(4);
@@ -812,8 +858,9 @@ fn dump_script_files(m: &Mapped) {
             string_text(&name)
         );
         if bufp != 0 && size > 0 && size < 1 << 20 {
-            let bytes: Vec<u8> =
-                (0..size).map(|k| unsafe { *((bufp + k) as *const u8) }).collect();
+            let bytes: Vec<u8> = (0..size)
+                .map(|k| unsafe { *((bufp + k) as *const u8) })
+                .collect();
             let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
             println!("  bytecode ({size} bytes): {hex}");
             let out = format!("bhs-bytecode-{i}.bin");
@@ -825,9 +872,7 @@ fn dump_script_files(m: &Mapped) {
         println!("  scripts: count={nscripts} data={sdata:#010x}");
         if sdata != 0 && nscripts > 0 && nscripts < 4096 {
             for k in 0..nscripts {
-                let sc = unsafe {
-                    std::ptr::read_unaligned((sdata as *const u32).add(k as usize))
-                };
+                let sc = unsafe { std::ptr::read_unaligned((sdata as *const u32).add(k as usize)) };
                 if sc == 0 {
                     continue;
                 }

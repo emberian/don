@@ -303,7 +303,7 @@ pub enum Expr {
         index: Box<Expr>,
         pos: Pos,
     },
-    /// `s.field`, and the built-in pseudo-field `a.length`.
+    /// `s.field`, and retail's array-length pseudo-field `a.<any_identifier>`.
     Member {
         base: Box<Expr>,
         name: String,

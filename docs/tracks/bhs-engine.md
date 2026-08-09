@@ -481,11 +481,22 @@ truth: `script_compiler` at `0x00eb6a90`, `Compiler::compile` at `0x009bf160`
 (returns 0 on success), `Compiler::eval_command` at `0x009befe0`,
 `ScriptGameInterface::init` at `0x009e1a20`, `real_script_game_interface` at
 `0x00eb1ac8`, `script_game_interface` at `0x00cab36c`,
-`ScriptFile::script_files` at `0x00c8cba0`, and the `bhs.log` channel of §2.5. A
-bounded run mapped retail, ran 1,115 of 1,117 process initializers cleanly, installed
-the fabricated environment, initialized `ScriptGameInterface` and the compiler, and
-entered recursive include traversal. It did not produce a compiled image before the
-30-second bound, so reference bytecode and byte-identity comparison remain open.
+`ScriptFile::script_files` at `0x00c8cba0`, and the `bhs.log` channel of §2.5. The
+harness maps retail, runs 1,115 of 1,117 process initializers cleanly, installs the
+fabricated environment, and initializes both `ScriptGameInterface` and the compiler.
+The five scalar keyword slots read from the retail `internal_strings.xml` are now
+installed as a table separate from translated diagnostics: `6114=string`, `6115=int`,
+`6966=float`, `7192=void`, `7193=bool` (plus `7177=UseBytecodeDump`). A labels-only file
+returns success from retail `Compiler::compile` and creates a `ScriptFile`; no script body
+has yet compiled, so reference bytecode and byte-identity comparison remain open.
+
+The current dynamic blocker is precise rather than silent: the half-built environment has
+not registered the game-specific `scenario` / `conquest` script qualifiers. A bounded
+single-step run snapshots live retail `String` objects in the SIGTRAP handler before their
+stack temporaries are destroyed. For `scenario {}`, it records `"{"` in both the lexer and
+`yyerror`, followed by diagnostic slot 3739 in `Compiler::comp_error`. That proves the
+parser consumed `scenario` as an unresolved identifier and failed at the following brace;
+it is not an initializer crash or a missing scalar keyword.
 
 The escalation ladder it was given, cheapest first: (1) call
 `OpCode::get_op_name(0..73)` and recover the 73 mnemonics as an independent
@@ -521,11 +532,23 @@ non-empty directory argument rather than by hosting the compiler at all.
    strings and aggregates, including `ScriptObject::get_string`, remain open.
 3. **The chunk container** (§2.4) is unparsed. Needed to load compiled scripts
    without going through a compiler at all.
-4. **`Script::script_type` (+200)** distinguishes the AI-script form
-   (`int ai name(int who, ref int step, …)`) from the game-script form. The values
-   are not decoded.
-5. **`ref` parameters.** The language has them (`ref int step`), and the shipped AI
-   entry points use them; the encoding is not yet identified.
+4. **Register game script qualifiers in the hbox compiler environment.** This is now the
+   direct blocker to compiling a body and extracting reference bytecode.
+
+Two formerly open fields are decoded from the retail writer/loader pair. Despite its name,
+`LocalScriptType::write` (`0x009da900`, store at `0x009daa91`) serializes literal zero to
+`Script::script_type` for `ai`, `scenario`, and `conquest`; those words remain compile-time
+strings at `LocalScriptType+0x7c`, not runtime IDs. Each parameter is serialized as two
+dwords `[SymType.type, is_ref]`, where the second is exactly `0` or `1`; the loader at
+`0x009c51c0` restores the first into `Script::params` and compacts the second's low byte
+into `Script::refs`; both tables are retained by the recovered program image. The
+default-type grammar reduction loads root `int` for omitted parameter, variable, and
+return types. Concrete array tags hash `"@" + element.get_name()`. Struct tags and `OP_CREATE_STRUCT`'s second
+operand hash the full unique token
+`<StructName>$<field1 display-type>^<field2 display-type>^...`, not the bare struct name;
+a fixed array field contributes `T[]^` without its bound. The caller-side lowering that
+preserves a mutable alias is still open, so the VM now refuses a script with any set ref
+bit instead of approximating it as pass-by-value.
 
 ---
 

@@ -67,7 +67,7 @@ VM_CLEARED = 4, VM_ARRAY = 128`.
 | 0x29 | `OP_CREATE_ARRAY` | `0x009e0aa4` | pop prototype; empty array, `blank_base = prototype` |
 | 0x2a | `OP_CREATE_ARRAY_DYN` | `0x009e0ac2` | **size on top**, prototype beneath; array of `size` copies |
 | 0x2b | `OP_CREATE_ARRAY_INITER` | `0x009e0b47` | operands `[count][type]`; pops `count` values, `values[0]` is the **top of stack**; `blank_base = values[0]->duplicate()->clear()`; `count == 0` is a runtime error |
-| 0x2c | `OP_CREATE_STRUCT` | `0x009e0b67` | same, via `ScriptObject::init_struct` `0x009d8410`; no `blank_base` |
+| 0x2c | `OP_CREATE_STRUCT` | `0x009e0b67` | operands `[member_count][struct_unique_hash]`, then `ScriptObject::init_struct` `0x009d8410`; the hash token is `<name>$<field display type>^...`; no `blank_base` |
 | 0x2d | `OP_PUSH_ARRAY_INDEX` | `0x009e0b87` | rvalue subscript. **Never grows**; `idx >= count` or `idx < 0` is a runtime error. Does *not* check `is_array()` |
 | 0x2e | `OP_CREATE_ARRAY_INDEX` | `0x009e0cc3` | lvalue subscript. Checks `is_array()`; past the end it calls `resize_array(idx+1, /*grow_only=*/1)` |
 | 0x2f | `OP_PUSH_STRUCT_FIELD` | `0x009e0dc5` | one operand = field index; `idx >= count` is an error; **no negative check** |
@@ -348,8 +348,12 @@ committed.
    the compiler lane produces bytecode, and `disasm::format_all` is already shaped for
    it. This lane could not run it: there is no compiled `.bhs` anywhere to compare
    against yet, and inventing one would have tested nothing.
-5. **`ref` parameters** and **`Script::script_type` (+200)** are still undecoded, and
-   the shipped AI entry points use `ref`.
+5. **`ref` call aliasing.** The retail writer/loader pair now settles the metadata as
+   `[SymType.type, is_ref ? 1 : 0]`, and `Script::script_type` is literal zero for every
+   local script. The caller lowering and ownership transition that preserve a mutable
+   argument alias are not recovered. `don-bhs` records the bits and refuses such calls;
+   it does not silently pass them by value. A reference compiled image must settle both
+   that lowering and the surrounding chunk details byte-for-byte.
 6. **`ScriptObject::get_string`** (`0x009d6370`, 353 bytes) — the aggregate's string
    rendering. It is not recovered, so aggregate-to-string conversion now fails
    explicitly instead of inventing a comma-joined representation.

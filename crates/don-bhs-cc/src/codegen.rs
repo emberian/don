@@ -518,9 +518,16 @@ impl<'a> FileGen<'a> {
             self.code[at..at + 4].copy_from_slice(&target.to_le_bytes());
         }
 
-        let return_type = self.resolved_type_tag(&ret);
+        let return_type = self.resolved_type_tag(&ret, body.pos);
+        let mut params = Vec::with_capacity(sig.params.len());
+        for param in &sig.params {
+            let ty = self.unit.resolve_type(param.ty.as_ref());
+            params.push(self.resolved_type_tag(&ty, param.pos));
+        }
         let s = &mut self.scripts[si];
         s.arity = sig.params.len();
+        s.params = params;
+        s.refs = sig.params.iter().map(|p| u8::from(p.by_ref)).collect();
         s.entry = entry;
         s.return_type = return_type;
         s.script_type = script_type_tag(sig.script_type.as_deref());
@@ -846,10 +853,11 @@ impl<'a> FileGen<'a> {
                         "an array initializer cannot be empty",
                     );
                 }
+                let element_tag = self.array_element_tag(ty, *pos);
                 self.emit2(
                     op::CREATE_ARRAY_INITER,
                     items.len() as u32,
-                    self.array_element_tag(ty),
+                    element_tag,
                     *pos,
                 );
                 false
@@ -861,12 +869,14 @@ impl<'a> FileGen<'a> {
             (None, Some(ArraySuffix::Sized(n))) => {
                 self.emit_default_value(g, array_inner(ty), d.pos);
                 self.expr(g, n);
-                self.emit1(op::CREATE_ARRAY_DYN, self.array_element_tag(ty), d.pos);
+                let element_tag = self.array_element_tag(ty, d.pos);
+                self.emit1(op::CREATE_ARRAY_DYN, element_tag, d.pos);
                 false
             }
             (None, Some(ArraySuffix::Dynamic)) => {
                 self.emit_default_value(g, array_inner(ty), d.pos);
-                self.emit1(op::CREATE_ARRAY, self.array_element_tag(ty), d.pos);
+                let element_tag = self.array_element_tag(ty, d.pos);
+                self.emit1(op::CREATE_ARRAY, element_tag, d.pos);
                 false
             }
             (None, None) => {
@@ -888,34 +898,99 @@ impl<'a> FileGen<'a> {
                         self.emit_default_value(g, &field.ty, pos);
                         let c = self.intern(Value::Int(n as i32));
                         self.emit1(op::PUSH, Slot::Const(c).encode(), pos);
-                        self.emit1(op::CREATE_ARRAY_DYN, self.resolved_type_tag(&field.ty), pos);
+                        let element_tag = self.resolved_type_tag(&field.ty, pos);
+                        self.emit1(op::CREATE_ARRAY_DYN, element_tag, pos);
                     } else {
                         self.emit_default_value(g, &field.ty, pos);
                     }
                 }
-                // Both operands are measured: [member count][struct type tag].
-                // SymTable assigns user types String::generate_hash's
-                // case-insensitive word, the same scheme as the ten builtin tags.
-                let tag = bhs_type_hash(&self.unit.structs[*si].name);
+                // Both operands are measured: [member count][struct unique-token tag].
+                // The token is `<name>$<field display type>^...`; a fixed array field
+                // contributes `T[]^`, but its numeric bound is not part of the token.
+                // [measured: StructType::init 0x009db5a0 and get_unique_token
+                // 0x009db280; `$`/`^` delimiters read from a live retail StringTable]
+                let tag = self.resolved_type_tag(ty, pos);
                 self.emit2(op::CREATE_STRUCT, fields.len() as u32, tag, pos);
             }
             Ty::Array(inner) => {
                 self.emit_default_value(g, inner, pos);
-                self.emit1(op::CREATE_ARRAY, self.resolved_type_tag(inner), pos);
+                let element_tag = self.resolved_type_tag(inner, pos);
+                self.emit1(op::CREATE_ARRAY, element_tag, pos);
             }
-            _ => self.emit1(op::CREATE_SIMPLE, self.resolved_type_tag(ty), pos),
+            _ => {
+                let tag = self.resolved_type_tag(ty, pos);
+                self.emit1(op::CREATE_SIMPLE, tag, pos);
+            }
         }
     }
 
-    fn resolved_type_tag(&self, ty: &Ty) -> u32 {
+    fn resolved_type_tag(&mut self, ty: &Ty, pos: Pos) -> u32 {
+        let token = match ty {
+            Ty::Struct(si) => self.struct_unique_token(*si),
+            // `ArrayType::get_unique_token` hashes `"@" + element.get_name()`;
+            // `get_name` itself renders an array element with a trailing `[]`.
+            // [measured: 0x009da620 / 0x009da720 and live retail String table]
+            Ty::Array(inner) => self.retail_type_name(inner).map(|name| format!("@{name}")),
+            Ty::Scalar(_) => return ty.tag(),
+            Ty::Untyped => None,
+        };
+        match token {
+            Some(token) => bhs_type_hash(&token),
+            None => {
+                self.diag(
+                    Severity::Error,
+                    pos,
+                    "the retail type identity for this declaration is not recovered",
+                );
+                // `compile` poisons every file with OP_ERROR_TOKEN when this diagnostic
+                // is present, so this sentinel can never become executable output.
+                0
+            }
+        }
+    }
+
+    /// Retail `SymType::get_name`, but only for types whose spelling is evidenced by
+    /// the root type table or the StructType/ArrayType implementations. Returning
+    /// `None` is intentional: guessing a display name changes aggregate type identity.
+    fn retail_type_name(&self, ty: &Ty) -> Option<String> {
         match ty {
-            Ty::Struct(si) => bhs_type_hash(&self.unit.structs[*si].name),
-            _ => ty.tag(),
+            Ty::Scalar(s) => match s {
+                ScriptTy::Int => Some("int".into()),
+                ScriptTy::Real => Some("float".into()),
+                ScriptTy::Str => Some("string".into()),
+                ScriptTy::Void => Some("void".into()),
+                // These are builtin-signature categories, not registered root data
+                // types. No retail `get_name()` spelling has been measured for them.
+                ScriptTy::Any
+                | ScriptTy::Params
+                | ScriptTy::Group
+                | ScriptTy::Array
+                | ScriptTy::StringArray
+                | ScriptTy::Offer => None,
+            },
+            Ty::Struct(si) => Some(self.unit.structs[*si].name.clone()),
+            Ty::Array(inner) => self.retail_type_name(inner).map(|name| format!("{name}[]")),
+            Ty::Untyped => None,
         }
     }
 
-    fn array_element_tag(&self, ty: &Ty) -> u32 {
-        self.resolved_type_tag(array_inner(ty))
+    fn struct_unique_token(&self, si: usize) -> Option<String> {
+        let info = self.unit.structs.get(si)?;
+        let mut token = format!("{}$", info.name);
+        for field in &info.fields {
+            let name = if field.fixed_len.is_some() {
+                self.retail_type_name(&Ty::Array(Box::new(field.ty.clone())))?
+            } else {
+                self.retail_type_name(&field.ty)?
+            };
+            token.push_str(&name);
+            token.push('^');
+        }
+        Some(token)
+    }
+
+    fn array_element_tag(&mut self, ty: &Ty, pos: Pos) -> u32 {
+        self.resolved_type_tag(array_inner(ty), pos)
     }
 
     // --------------------------------------------------------- expressions
@@ -993,7 +1068,7 @@ impl<'a> FileGen<'a> {
                 let elem_tag = items
                     .first()
                     .and_then(|e| self.static_ty(g, e))
-                    .map(|t| self.resolved_type_tag(&t));
+                    .map(|t| self.resolved_type_tag(&t, pos));
                 if items.is_empty() {
                     self.diag(
                         Severity::Error,
@@ -1011,7 +1086,8 @@ impl<'a> FileGen<'a> {
             Expr::Cast { ty, expr, .. } => {
                 self.expr(g, expr);
                 let t = self.unit.resolve_type(Some(ty));
-                self.emit1(op::CAST, self.resolved_type_tag(&t), pos);
+                let tag = self.resolved_type_tag(&t, pos);
+                self.emit1(op::CAST, tag, pos);
             }
             Expr::Unary { op: p, expr, .. } => {
                 self.expr(g, expr);
@@ -1061,8 +1137,13 @@ impl<'a> FileGen<'a> {
     }
 
     fn member(&mut self, g: &mut ScriptGen, base: &Expr, name: &str, pos: Pos) {
-        // `a.length` is not a field: it is `OP_PUSH_ARRAY_LENGTH`. [measured]
-        if name.eq_ignore_ascii_case("length") && !self.is_struct_with_field(g, base, name) {
+        // Retail `STRUCT_ACCESS` tests the base type's `is_array` before it ever scans
+        // the member spelling. On an array, *any* member identifier is the length
+        // pseudo-field; this is why the shipped `.lenght` typo compiles. [measured:
+        // SyntaxNode::eval 0x009ddda4 -> STRUCT_GET 0x009dde50/0x009dde88]
+        if self.is_array(g, base)
+            || (name.eq_ignore_ascii_case("length") && !self.is_struct_with_field(g, base, name))
+        {
             self.expr(g, base);
             self.emit(op::PUSH_ARRAY_LENGTH, pos);
             return;
@@ -1084,12 +1165,12 @@ impl<'a> FileGen<'a> {
         let ty = self.static_ty(g, e)?;
         match ty {
             Ty::Struct(i) => self.unit.structs.get(i),
-            Ty::Array(inner) => match *inner {
-                Ty::Struct(i) => self.unit.structs.get(i),
-                _ => None,
-            },
             _ => None,
         }
+    }
+
+    fn is_array(&self, g: &ScriptGen, e: &Expr) -> bool {
+        matches!(self.static_ty(g, e), Some(Ty::Array(_)))
     }
 
     /// The declared type of an expression, where one is knowable. BHS does not check
@@ -1117,9 +1198,17 @@ impl<'a> FileGen<'a> {
                 _ => None,
             },
             Expr::Member { base, name, .. } => {
+                if self.is_array(g, base) {
+                    return Some(Ty::Scalar(ScriptTy::Int));
+                }
                 let s = self.struct_of(g, base)?;
                 let i = s.field_index(name)?;
-                Some(s.fields[i].ty.clone())
+                let field = &s.fields[i];
+                Some(if field.fixed_len.is_some() {
+                    Ty::Array(Box::new(field.ty.clone()))
+                } else {
+                    field.ty.clone()
+                })
             }
             Expr::Call { name, args, .. } => self
                 .unit
@@ -1246,15 +1335,20 @@ impl<'a> FileGen<'a> {
                 return;
             }
         };
-        // `a.length = n` is the one assignment that is not `OP_ASSIGN`.
+        // `a.length = n` is the one measured assignment that is not `OP_ASSIGN`.
         if let Expr::Member { base, name, .. } = target {
-            if p == P::Assign
-                && name.eq_ignore_ascii_case("length")
-                && !self.is_struct_with_field(g, base, name)
-            {
-                self.expr(g, value);
-                self.expr(g, base);
-                self.emit(op::SET_ARRAY_LENGTH, pos);
+            if self.is_array(g, base) {
+                if p == P::Assign && name.eq_ignore_ascii_case("length") {
+                    self.expr(g, value);
+                    self.expr(g, base);
+                    self.emit(op::SET_ARRAY_LENGTH, pos);
+                } else {
+                    self.diag(
+                        Severity::Error,
+                        pos,
+                        "only `.length = value` is recovered for array-member assignment",
+                    );
+                }
                 return;
             }
         }
@@ -1492,16 +1586,12 @@ fn bhs_type_hash(name: &str) -> u32 {
     hash
 }
 
-/// `Script::script_type` (+200). The three qualifiers the corpus uses are given stable
-/// small ids; the retail encoding is unread, so this is ours until it can be diffed.
-/// [inferred]
-fn script_type_tag(s: Option<&str>) -> u32 {
-    match s.map(|x| x.to_ascii_lowercase()).as_deref() {
-        Some("ai") => 1,
-        Some("scenario") => 2,
-        Some("conquest") => 3,
-        _ => 0,
-    }
+/// `Script::script_type` (+200). Despite the name, retail serializes literal zero for
+/// every local script. `ai` / `scenario` / `conquest` remain compile-time qualifier
+/// strings in `LocalScriptType::script_type` (+0x7c); they are not runtime IDs.
+/// [measured: `LocalScriptType::write` 0x009da900, store at 0x009daa91]
+fn script_type_tag(_s: Option<&str>) -> u32 {
+    0
 }
 
 #[cfg(test)]
@@ -1593,11 +1683,20 @@ mod tests {
             Value::Int(7)
         );
         assert_eq!(
+            run_src("int scenario { int a[] = [ 10, 20, 30 ]; return a.lenght; }"),
+            Value::Int(3),
+            "retail treats every array member spelling as its length pseudo-field"
+        );
+        assert_eq!(
             run_src(
                 "struct Pair { int a; int b; }; \
                  int scenario { Pair p; p.b = 7; return p.b; }"
             ),
             Value::Int(7)
+        );
+        assert_eq!(
+            run_src("struct Box { int grid[3]; }; int scenario { Box b; return b.grid.lenght; }"),
+            Value::Int(3)
         );
     }
 
@@ -1607,6 +1706,127 @@ mod tests {
         assert_eq!(bhs_type_hash("FLOAT"), ScriptTy::Real.tag());
         assert_eq!(bhs_type_hash("String"), ScriptTy::Str.tag());
         assert_eq!(bhs_type_hash("Pair"), bhs_type_hash("pair"));
+        assert_eq!(bhs_type_hash("@int"), 0x0009_a23b);
+        assert_eq!(bhs_type_hash("@float"), 0x001c_bf9d);
+        assert_eq!(bhs_type_hash("@String"), ScriptTy::StringArray.tag());
+    }
+
+    #[test]
+    fn concrete_array_return_types_use_retail_unique_tokens() {
+        let (prog, diags, _) = compile_src(
+            "int[] scenario ints() { int a[] = [ 1 ]; return a; }\n\
+             float[] scenario floats() { float a[] = [ 1.0 ]; return a; }\n\
+             scenario { }",
+        );
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
+        let rt = |name: &str| {
+            prog.files[0]
+                .scripts
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .return_type
+        };
+        assert_eq!(rt("ints"), 0x0009_a23b);
+        assert_eq!(rt("floats"), 0x001c_bf9d);
+    }
+
+    #[test]
+    fn struct_tags_include_the_retail_schema_signature() {
+        let (prog, diags, _) = compile_src(
+            "struct Box { int grid[8]; string[] names; };\n\
+             Box scenario make() { Box value; return value; }\n\
+             scenario { }",
+        );
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
+        let expected = bhs_type_hash("Box$int[]^string[]^");
+        let make = prog.files[0]
+            .scripts
+            .iter()
+            .find(|s| s.name == "make")
+            .unwrap();
+        assert_eq!(make.return_type, expected);
+
+        let code = &prog.files[0].code;
+        let mut at = 0usize;
+        let mut create = None;
+        while at < code.len() {
+            let decoded = opcode::decode(code[at]).unwrap();
+            if decoded.code == op::CREATE_STRUCT {
+                create = Some((
+                    u32::from_le_bytes(code[at + 1..at + 5].try_into().unwrap()),
+                    u32::from_le_bytes(code[at + 5..at + 9].try_into().unwrap()),
+                ));
+                break;
+            }
+            at += 1 + 4 * decoded.operands.len();
+        }
+        assert_eq!(create, Some((2, expected)));
+        assert_ne!(expected, bhs_type_hash("Box"));
+    }
+
+    #[test]
+    fn aggregate_tokens_are_not_guessed_for_builtin_signature_categories() {
+        let (prog, diags, _) = compile_src(
+            "group[] scenario values() { group result[]; return result; } scenario { }",
+        );
+        assert!(diags
+            .iter()
+            .any(|d| { d.severity == Severity::Error && d.msg.contains("type identity") }));
+        assert_eq!(prog.files[0].code, vec![op::ERROR_TOKEN]);
+    }
+
+    #[test]
+    fn omitted_signature_types_use_retails_default_int() {
+        let (prog, diags, _) = compile_src(
+            "scenario passthrough(value) { return value; }\n\
+             scenario { have_objective = false; }",
+        );
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
+        let pass = prog.files[0]
+            .scripts
+            .iter()
+            .find(|s| s.name == "passthrough")
+            .unwrap();
+        assert_eq!(pass.return_type, ScriptTy::Int.tag());
+        assert_eq!(pass.params, [ScriptTy::Int.tag()]);
+    }
+
+    #[test]
+    fn script_qualifiers_do_not_become_runtime_ids() {
+        let (prog, diags, _) = compile_src(
+            "int ai think(int who) { return who; }\n\
+             void conquest setup() { }\n\
+             scenario { }",
+        );
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
+        assert!(
+            prog.files[0].scripts.iter().all(|s| s.script_type == 0),
+            "LocalScriptType::write serializes literal zero regardless of qualifier"
+        );
+    }
+
+    #[test]
+    fn ref_parameters_use_the_retail_zero_one_table() {
+        let (prog, diags, _) = compile_src(
+            "int ai think(int who, ref int step, string label) { return who; }\n\
+             scenario { }",
+        );
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
+        let think = prog.files[0]
+            .scripts
+            .iter()
+            .find(|s| s.name == "think")
+            .unwrap();
+        assert_eq!(
+            think.params,
+            [
+                ScriptTy::Int.tag(),
+                ScriptTy::Int.tag(),
+                ScriptTy::Str.tag()
+            ]
+        );
+        assert_eq!(think.refs, [0, 1, 0]);
     }
 
     #[test]

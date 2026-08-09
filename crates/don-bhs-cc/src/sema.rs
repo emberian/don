@@ -71,8 +71,8 @@ pub enum Ty {
     Struct(usize),
     /// `T[]`.
     Array(Box<Ty>),
-    /// No type was written. The engine has no "untyped" tag; we treat it as
-    /// `ScriptTy::Any`, which is what `OP_CREATE_SIMPLE` falls through to.
+    /// A written type name that did not resolve. An omitted type is not represented by
+    /// this variant: retail's grammar selects root `int` for that production.
     Untyped,
 }
 
@@ -200,7 +200,12 @@ impl Unit {
     }
 
     pub fn resolve_type(&self, t: Option<&TypeRef>) -> Ty {
-        let Some(t) = t else { return Ty::Untyped };
+        // The grammar's default-type reduction loads root[0] (`int`) before it creates
+        // an untyped VarType or LocalScriptType. This covers omitted local/parameter
+        // types and omitted script returns. [measured: yyparse 0x009bafcb-0x009bafe3]
+        let Some(t) = t else {
+            return Ty::Scalar(ScriptTy::Int);
+        };
         let base = match scalar_from_name(&t.name) {
             Some(s) => Ty::Scalar(s),
             None => match self.struct_by_name(&t.name) {
