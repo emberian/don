@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://descentofnations.invalid/schema/independent-content-v1.json",
+  "title": "Descent of Nations independent content manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "package", "asset_roots", "licenses", "assets"],
+  "properties": {
+    "schema": { "const": "don.independent-content.v1" },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonempty" },
+        "version": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "asset_roots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "licenses": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/license" }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/asset" }
+    }
+  },
+  "$defs": {
+    "nonempty": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\s)(?:[^\\u0000-\\u001f]*[^\\s\\u0000-\\u001f])$|^[^\\s\\u0000-\\u001f]$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!\\s)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[<>:\"|?*])(?!.*[ .](?:/|$))(?!.*/$)[^\\u0000-\\u001f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "size", "sha256"],
+      "properties": {
+        "id": {
+          "enum": ["Apache-2.0", "CC-BY-4.0", "CC0-1.0", "GPL-3.0-or-later", "MIT", "OFL-1.1"]
+        },
+        "path": { "$ref": "#/$defs/path" },
+        "size": { "type": "integer", "minimum": 256 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "kind", "role", "size", "sha256", "author",
+        "source_url", "license", "attribution", "modifications"
+      ],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "kind": { "enum": ["art", "audio", "font", "model", "video"] },
+        "role": { "$ref": "#/$defs/nonempty" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "author": { "$ref": "#/$defs/nonempty" },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?![^/?#]*@)(?!.*[\\s\\\\])"
+        },
+        "license": {
+          "enum": ["Apache-2.0", "CC-BY-4.0", "CC0-1.0", "GPL-3.0-or-later", "MIT", "OFL-1.1"]
+        },
+        "attribution": { "$ref": "#/$defs/nonempty" },
+        "modifications": { "$ref": "#/$defs/nonempty" }
+      }
+    }
+  }
+}
