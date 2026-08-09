@@ -1,7 +1,7 @@
 # economy — the tick, executed
 
-Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,985 lines,
-90 in-module tests plus 13 caravan integration tests, **103 passed / 0 failed**). Checksum
+Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (5,116 lines,
+90 in-module tests plus 15 economy integration tests, **105 passed / 0 failed**). Checksum
 channels served: **leaders** (channel 8),
 **goods** (channel 11).
 
@@ -24,8 +24,9 @@ route-to-city-to-gather-to-stockpile execution.
 | mechanic | engine function | VA | state |
 |---|---|---|---|
 | resource tick period & scheduling | `Leader::calc_gather` head | `0x006CEEE0` | **ported** |
-| gross-income composition | `Leader::calc_gather` | `0x006CEEE0` | **ported** (object loops are inputs) |
+| gross-income composition | `Leader::calc_gather` | `0x006CEEE0` | **ported** (CityPool loop executes; three object loops remain inputs) |
 | per-city yield | `LeaderData::calc_city_resources` | `0x006D5530` | **ported** (enhancer sum is an input) |
+| live-city income collection | city loop inside `Leader::calc_gather` | `0x006CF12A` | **ported against checksum-owned CityPool** |
 | per-node rare yield | `LeaderData::calc_rare` | `0x006E08D0` | **ported** |
 | worker crowding divisor | `UnitData::calc_gather` | `0x00609180` | **ported** (spatial search is an input) |
 | leader-wide bonuses | `LeaderData::calc_resource_bonuses` | `0x006DB030` | **ported** |
@@ -73,7 +74,8 @@ cd /Users/ember/dev/don && cargo test -p don-sim --lib systems::economy
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_trade_transaction
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_route_lifecycle
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_city_unit_lifecycle
-# -> 90 in-module + 13 integration tests passed; 0 failed.
+cd /Users/ember/dev/don && cargo test -p don-sim --test city_income_lifecycle
+# -> 90 in-module + 15 integration tests passed; 0 failed.
 
 # constants cross-check (0 mismatches)
 cd /Users/ember/dev/don && python3 - <<'PY'
@@ -330,6 +332,21 @@ flags `0x02/0x04`, removes the exact ordered link from both real City arrays, an
 both `trade_val` fields. A focused test proves the Cities checksum returns to its baseline
 after route creation, income activation, unit death, and teardown.
 
+The last parallel cache between that field and gathering is gone. The city object loop at
+`Leader::calc_gather +0x24A` walks exactly `0..city_mark` in increasing slot order, skips
+inactive City records, invokes the per-city calculator, and wrapping-adds all six dwords.
+The executable collector now does that against `tech_cities::CityPool`; in particular,
+caravan wealth is sign-extended directly from the checksum-owned `CityRecord::trade_val`,
+not supplied by a host-side fixture. Object/type facts that are not fields of City remain
+an explicit fail-closed resolver input.
+
+`City::compute_trade`'s other side effect is now connected too: it sets the owning
+leader's `0x02000000` economy-dirty bit only when the signed trade cache changes. Route
+creation and teardown therefore reach the eight-frame dirty recomposition schedule, then
+the ordinary fractional gather accumulator and stockpile. The lifecycle test proves the
+whole route → City cache → dirty frame 8 → gross wealth → stockpile path, plus the inverse
+dirty/recompute on route end.
+
 ---
 
 ## 4. Corrections and new findings
@@ -439,14 +456,13 @@ unreachable. Both are implemented and both are tested in the off *and* forced-on
 
 Listed rather than guessed, per the charter. Each has a real gap behind it.
 
-### 5.1 The four object-graph loops inside `calc_gather`
+### 5.1 The three remaining object-graph loops inside `calc_gather`
 
-Cities, gather-enhancing buildings, the band-2000 special builds of type `0x1A2`/`0x1A3`,
-and gathering units. Each needs the world grid, the object registry and per-owner object
-bands. They are summed into one accumulator with no intervening arithmetic, so the module
-takes a single six-slot `object_income` total — which is faithful, not a simplification.
-`calc_city_resources` covers the *first* of the four completely except for its own inner
-`BuildData::calc_gather` sum.
+The checksum-owned CityPool loop now executes. Gather-enhancing buildings, the band-2000
+special builds of type `0x1A2`/`0x1A3`, and gathering units still need the world grid,
+object registry and per-owner object bands. They are summed into one accumulator with no
+intervening arithmetic, so the module retains one six-slot input for those three paths.
+Inside each City, `BuildData::calc_gather` remains an explicit resolved sum.
 
 ### 5.2 `BuildTypeData::calc_gather` `0x00639E40` — the per-worker payout
 
@@ -608,13 +624,14 @@ lets a divergence be localised to the market instead of hunted through stockpile
 
 | path | what |
 |---|---|
-| `crates/don-sim/src/systems/economy.rs` | the module: 4,985 lines, 90 in-module tests, 149 cited VAs |
+| `crates/don-sim/src/systems/economy.rs` | the module: 5,116 lines, 90 in-module tests, 149 cited VAs |
 | `crates/don-sim/src/systems/tech_cities.rs` | fixes constructor `CaravanLinkArray::grow = -1` for the real Cities checksum state |
 | `crates/don-sim/tests/caravan_trade_transaction.rs` | 5 executable caravan route, award, and stockpile integration tests |
 | `crates/don-sim/tests/caravan_route_lifecycle.rs` | 5 executable pool, ordered-link, route lifecycle, and income reachability tests |
 | `crates/don-sim/tests/caravan_city_unit_lifecycle.rs` | 3 executable ordinary-CityPool, checksum-restoration, and unit-death-order tests |
+| `crates/don-sim/tests/city_income_lifecycle.rs` | 2 executable CityPool-order, trade-dirty, gather-schedule, and stockpile tests |
 | `docs/mechanics/economy.md` | this report |
 
 Nothing else was written, nothing staged, nothing committed. The module is wired
 (`lib.rs` → `pub mod systems;`, `systems/mod.rs` → `pub mod economy;`, both landed by
-sibling lanes) and green in-tree: the four focused commands above pass **103 tests, 0 failed**.
+sibling lanes) and green in-tree: the five focused commands above pass **105 tests, 0 failed**.

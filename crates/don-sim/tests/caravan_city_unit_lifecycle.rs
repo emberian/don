@@ -102,6 +102,7 @@ fn ordinary_city_route_death_closes_pool_then_uses_order_endpoints_to_restore_ch
     assert_ne!(check_cities(&cities, &leaders), baseline_city_checksum);
 
     let mut unit_flags = UNIT_HAS_TRADE_ROUTE | 0x40;
+    let mut leader_dirty = [false; 8];
     let receipt = close_caravan_unit_in_city_pool(
         &rules,
         40,
@@ -111,6 +112,7 @@ fn ordinary_city_route_death_closes_pool_then_uses_order_endpoints_to_restore_ch
         Some([source, destination]),
         true,
         &mut unit_flags,
+        &mut leader_dirty,
         resolved,
         |_| CaravanIncomeGates::default(),
     )
@@ -121,6 +123,8 @@ fn ordinary_city_route_death_closes_pool_then_uses_order_endpoints_to_restore_ch
     assert_eq!(end.links_removed, [true, true]);
     assert_eq!(end.income_changed, [true, true]);
     assert_eq!(unit_flags, 0x40);
+    assert!(leader_dirty[0]);
+    assert!(leader_dirty[1]);
 
     // This lookup is deliberately allocation-based: close_caravan already shrank the
     // high-water mark to zero before close_orders reached end_trade_route.
@@ -180,6 +184,7 @@ fn death_removes_only_its_exact_link_and_recomputes_the_surviving_route() {
     let both = cities.slots[0][3].trade_val;
 
     let mut unit_flags = UNIT_HAS_TRADE_ROUTE;
+    let mut leader_dirty = [false; 8];
     close_caravan_unit_in_city_pool(
         &rules,
         40,
@@ -189,6 +194,7 @@ fn death_removes_only_its_exact_link_and_recomputes_the_surviving_route() {
         Some([source, first_destination]),
         true,
         &mut unit_flags,
+        &mut leader_dirty,
         resolved,
         |_| CaravanIncomeGates::default(),
     )
@@ -217,6 +223,7 @@ fn inactive_simulation_gate_leaves_order_cleanup_for_the_later_close_orders_pass
     activate_caravan_income(&mut pools, route).unwrap();
 
     let mut unit_flags = UNIT_HAS_TRADE_ROUTE;
+    let mut leader_dirty = [false; 8];
     let receipt = close_caravan_unit_in_city_pool(
         &rules,
         40,
@@ -226,6 +233,7 @@ fn inactive_simulation_gate_leaves_order_cleanup_for_the_later_close_orders_pass
         Some([source, destination]),
         false,
         &mut unit_flags,
+        &mut leader_dirty,
         resolved,
         |_| CaravanIncomeGates::default(),
     )
@@ -238,6 +246,7 @@ fn inactive_simulation_gate_leaves_order_cleanup_for_the_later_close_orders_pass
         CARAVAN_ESTABLISHED | CARAVAN_EARNING
     );
     assert_eq!(cities.slots[0][3].vans.items.len(), 1);
+    assert_eq!(leader_dirty, [false; 8]);
 
     let mut resolve = resolved;
     let mut gates = |_| CaravanIncomeGates::default();
@@ -249,10 +258,16 @@ fn inactive_simulation_gate_leaves_order_cleanup_for_the_later_close_orders_pass
         route,
         [source, destination],
         &mut unit_flags,
+        &mut leader_dirty,
         &mut resolve,
         &mut gates,
     )
     .unwrap();
     assert_eq!(end.links_removed, [true, true]);
     assert_eq!(unit_flags, 0);
+    assert_eq!(end.income_changed, [false, false]);
+    assert_eq!(
+        leader_dirty, [false; 8],
+        "both never-computed trade caches stayed zero, so retail dirties neither owner"
+    );
 }

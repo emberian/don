@@ -77,6 +77,7 @@
 
 use super::tech_cities::{
     CaravanLink as CityCaravanLink, CaravanLinkArray as CityCaravanLinkArray, CityPool, CityRecord,
+    NUM_PLAYERS as NUM_CITY_PLAYERS,
 };
 use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
 use crate::rng::Random;
@@ -1090,6 +1091,93 @@ pub fn calc_city_resources(
     out[RES_KNOWLEDGE] = out[RES_KNOWLEDGE].wrapping_add(c.literacy.wrapping_mul(16));
 
     out
+}
+
+/// Live facts used by the inner `LeaderData::calc_city_resources` call which do not live
+/// on the checksum-owned [`CityRecord`] itself.
+///
+/// `city_wealth_field` is intentionally absent: retail reads it directly from
+/// `CityData + 0x52`, the [`CityRecord::trade_val`] field. Keeping that value out of the
+/// host facts prevents a caller from accidentally feeding caravan income from a parallel
+/// cache while the Cities checksum owns a different value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CityPoolIncomeFacts {
+    pub enhancer_income: [i32; NUM_RESOURCES],
+    pub forbidden_city: bool,
+    pub ceo_present: bool,
+    pub roman: bool,
+    pub german: bool,
+    pub metal_available: bool,
+    pub taxes: i32,
+    pub literacy: i32,
+}
+
+impl CityPoolIncomeFacts {
+    fn inputs_for(&self, city: &CityRecord) -> CityResourceInputs {
+        CityResourceInputs {
+            city_wealth_field: i32::from(city.trade_val),
+            enhancer_income: self.enhancer_income,
+            forbidden_city: self.forbidden_city,
+            ceo_present: self.ceo_present,
+            roman: self.roman,
+            german: self.german,
+            metal_available: self.metal_available,
+            taxes: self.taxes,
+            literacy: self.literacy,
+        }
+    }
+}
+
+/// Failure to materialize the city object loop in `Leader::calc_gather`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CityPoolIncomeError {
+    InvalidOwner,
+    CityMarkOutsidePool,
+    MissingCityFacts { city: usize },
+}
+
+/// Execute the first of the four object loops in `Leader::calc_gather` against the real
+/// checksum-owned [`CityPool`].
+///
+/// `0x006CF12A` walks exactly `0..LeaderData::city_mark`, in increasing city-slot order,
+/// skips records whose active bit is clear, calls `City::calc_gather` `0x00737C60`, then
+/// wrapping-adds the six returned dwords. `facts_for_city` supplies only the object/type
+/// queries that are not stored in `CityRecord`; returning `None` fails closed before any
+/// externally visible mutation. The cached signed `trade_val` always comes from the
+/// visited City record itself.
+pub fn collect_city_pool_income<F>(
+    rules: &EconRules,
+    cities: &CityPool,
+    owner: i32,
+    mut facts_for_city: F,
+) -> Result<[i32; NUM_RESOURCES], CityPoolIncomeError>
+where
+    F: FnMut(usize, &CityRecord) -> Option<CityPoolIncomeFacts>,
+{
+    let owner = usize::try_from(owner)
+        .ok()
+        .filter(|&owner| owner < NUM_CITY_PLAYERS)
+        .ok_or(CityPoolIncomeError::InvalidOwner)?;
+    let mark = usize::try_from(cities.city_mark[owner])
+        .map_err(|_| CityPoolIncomeError::CityMarkOutsidePool)?;
+    let slots = &cities.slots[owner];
+    if mark > slots.len() {
+        return Err(CityPoolIncomeError::CityMarkOutsidePool);
+    }
+
+    let mut out = [0i32; NUM_RESOURCES];
+    for (city_index, city) in slots[..mark].iter().enumerate() {
+        if !city.active() {
+            continue;
+        }
+        let facts = facts_for_city(city_index, city)
+            .ok_or(CityPoolIncomeError::MissingCityFacts { city: city_index })?;
+        let income = calc_city_resources(rules, Some(&facts.inputs_for(city)));
+        for res in 0..NUM_RESOURCES {
+            out[res] = out[res].wrapping_add(income[res]);
+        }
+    }
+    Ok(out)
 }
 
 /// Leader-wide wonder / tech / civ multipliers, `LeaderData::calc_resource_bonuses`
@@ -3072,6 +3160,45 @@ where
     Ok(changed)
 }
 
+/// `City::compute_trade` plus its only leader-side mutation.
+///
+/// Retail compares the old and new signed `CityData::trade_val` values and ORs
+/// `0x02000000` into the owning leader only when they differ (`0x0073972B`). The bool is
+/// the port's split representation of that economy-dirty bit; [`calc_gather_due`] then
+/// consumes it on the owner's next eight-frame phase.
+#[allow(clippy::too_many_arguments)]
+pub fn recompute_city_pool_caravan_income_and_dirty<F>(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    endpoint: CaravanEndpoint,
+    gates: &CaravanIncomeGates,
+    pools: &CaravanPools,
+    cities: &mut CityPool,
+    leader_dirty: &mut [bool; NUM_CITY_PLAYERS],
+    resolve_city: F,
+) -> Result<bool, CaravanRouteError>
+where
+    F: FnMut(CaravanEndpoint) -> Option<CaravanTradeCity>,
+{
+    let dirty_owner = usize::try_from(city_record(cities, endpoint)?.who)
+        .ok()
+        .filter(|&owner| owner < NUM_CITY_PLAYERS)
+        .ok_or(CaravanRouteError::InvalidOwner)?;
+    let changed = recompute_city_pool_caravan_income(
+        rules,
+        map_width_wcells,
+        endpoint,
+        gates,
+        pools,
+        cities,
+        resolve_city,
+    )?;
+    if changed {
+        leader_dirty[dirty_owner] = true;
+    }
+    Ok(changed)
+}
+
 /// Observable result of the order-side half of route teardown.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct CaravanRouteEndReceipt {
@@ -3092,6 +3219,7 @@ pub fn end_caravan_route_in_city_pool_from_order<F, G>(
     link: CaravanLink,
     order_endpoints: [CaravanEndpoint; 2],
     unit_flags: &mut u32,
+    leader_dirty: &mut [bool; NUM_CITY_PLAYERS],
     resolve_city: &mut F,
     gates_for_owner: &mut G,
 ) -> Result<CaravanRouteEndReceipt, CaravanRouteError>
@@ -3115,13 +3243,14 @@ where
         receipt.links_removed[index] =
             remove_city_caravan_link(&mut city_record_mut(cities, endpoint)?.vans, link);
         let gates = gates_for_owner(endpoint.owner as i32);
-        receipt.income_changed[index] = recompute_city_pool_caravan_income(
+        receipt.income_changed[index] = recompute_city_pool_caravan_income_and_dirty(
             rules,
             map_width_wcells,
             endpoint,
             &gates,
             pools,
             cities,
+            leader_dirty,
             &mut *resolve_city,
         )?;
     }
@@ -3149,6 +3278,7 @@ pub fn close_caravan_unit_in_city_pool<F, G>(
     current_trade_order: Option<[CaravanEndpoint; 2]>,
     simulation_active: bool,
     unit_flags: &mut u32,
+    leader_dirty: &mut [bool; NUM_CITY_PLAYERS],
     mut resolve_city: F,
     mut gates_for_owner: G,
 ) -> Result<CaravanUnitCloseReceipt, CaravanRouteError>
@@ -3173,6 +3303,7 @@ where
                 link,
                 endpoints,
                 unit_flags,
+                leader_dirty,
                 &mut resolve_city,
                 &mut gates_for_owner,
             )?);
