@@ -63,9 +63,9 @@
 //!
 //! * `TRAJ_SPLINE` (aircraft crashes, nukes, cruise missiles) — `Spline::calc_from_dir`
 //!   /`calc_nuke_spline` are unread. Spline ammo is modelled as an opaque path.
-//! * `find_angle` (`0x0092D130`) — the binary-angle helper is not derived; the impact
-//!   angle is passed through from the caller so the flanking term in the damage pipeline
-//!   still gets a value.
+//! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
+//!   still accepts the already-computed angle because attack-ground and spline callers
+//!   select different source points.
 //! * The full body of `Object::do_damage` (`0x0064A480`, 9,214 bytes). This module derives
 //!   and implements only the **projectile-specific** head of it — the argument packing and
 //!   the `ammo_per_att` / `uber_size` / 1-16th split, which is the part the ammo channel
@@ -496,6 +496,9 @@ impl AmmoPool {
 /// The `ObjectType` / `UnitType` fields the ammo path reads, with their offsets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShooterRules {
+    /// `ObjectType + 0x1E4` — the `A..Z,1..6` mask alphabet. The anti-air gate consumes
+    /// the `'2'` missile and `'6'` anti-air bits through [`super::air::AirTypeData`].
+    pub obj_masks: u32,
     /// `ObjectType + 0x1EC` — base accuracy percent.
     pub to_hit: i32,
     /// `ObjectType + 0x1F0` — accuracy lost **per tile** of range.
@@ -515,6 +518,13 @@ pub struct ShooterRules {
     pub x_size: i32,
     /// `ObjectType + 0x238`
     pub y_size: i32,
+    /// `ObjectType + 0x250` — high-band hit/evasion percentage used by the anti-air gate.
+    pub fly_high: i32,
+    /// `ObjectType + 0x254` — low-band hit/evasion percentage used by the anti-air gate.
+    pub fly_low: i32,
+    /// `UnitType + 0x2B4` — the lower-case unit flag alphabet. Bit `f` exempts
+    /// helicopters from the anti-air roll.
+    pub unit_flags: u32,
     /// `UnitType + 0x300` — hit radius for a unit target.
     pub target_size: i32,
     /// `UnitType + 0x308` — the second damage divisor for a unit shooter.
@@ -840,10 +850,127 @@ pub struct LaunchOrder {
     pub whom: i32,
     /// See [`LaunchOrder::whom`].
     pub ox: i32,
-    /// `find_angle(ex - sx, ey - sy)` — **UNDERIVED**, supplied by the caller.
+    /// `find_angle(ex - sx, ey - sy)`, supplied by the caller because ordinary target,
+    /// attack-ground, spline, and offset-muzzle arms choose different source points.
     pub angle: i32,
     /// From the ammo graphic table (`graphic_pieces + 0xF70`, bit `0x80`).
     pub cosmetic: bool,
+}
+
+/// Dynamic state read by the anti-air portion of `Ammo::init`.
+///
+/// The type fields live in [`ShooterRules`]. These two values cannot: the order is the
+/// shooter's current order and the target's flight band depends on its live order and
+/// position. Callers obtain `target_flying_low` from [`super::air::is_flying_low`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AntiAirLaunch {
+    /// `UnitData::order_type()` on the shooter. Only read for unit shooters.
+    pub shooter_order: i32,
+    /// `UnitData::is_flying_low()` on the target.
+    pub target_flying_low: bool,
+}
+
+/// Outcome of the complete ordinary targeted launch adapter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AmmoInitOutcome {
+    /// `None` when retail returns from `Ammo::init` before constructing a projectile
+    /// because the target identity is negative or the target slot is inactive.
+    pub ammo: Option<Ammo>,
+    /// Exact anti-air arm and RNG draw count. This makes stream-position assertions
+    /// mutation-sensitive instead of inferring them from the final dud bit.
+    pub anti_air: super::air::AntiAirGate,
+}
+
+#[inline]
+fn air_type(r: &ShooterRules) -> super::air::AirTypeData {
+    super::air::AirTypeData {
+        obj_masks: r.obj_masks,
+        domain: r.domain,
+        fly_high: r.fly_high,
+        fly_low: r.fly_low,
+        unit_flags: r.unit_flags,
+        ..Default::default()
+    }
+}
+
+/// Run the recovered `Ammo::init` anti-air gate on the ammo subsystem's RNG view.
+///
+/// [`Rng`] and [`crate::rng::Random`] are the same one-word retail `Random` object. The
+/// conversion is deliberately state-only: it lets the already-derived air gate own its
+/// intricate short-circuit while preserving one authoritative simulation stream.
+#[inline]
+pub fn apply_antiair_gate(
+    flags: &mut u8,
+    shot: &super::air::AntiAirShot<'_>,
+    rng: &mut Rng,
+) -> super::air::AntiAirGate {
+    let mut stream = crate::rng::Random::new(rng.0 as i32);
+    let gate = super::air::apply_antiair_gate(flags, shot, &mut stream);
+    rng.0 = stream.state() as u32;
+    gate
+}
+
+/// Complete ordinary targeted `Ammo::init` path, including the anti-air dud gate.
+///
+/// The dud gate runs before aim scatter, exactly at `0x0067BE49..0x0067C16A`; therefore
+/// its zero, one, or two draws change which subsequent values scatter `ex` and `ey`.
+/// A dud remains a live, checksummed projectile with [`FLAG_NO_DAMAGE`] set. Invalid or
+/// inactive targets return before scatter but after `Objects::ammo_index` advances, matching
+/// `Objects::add_ammo` `0x00658B10` (the increment is outside `Ammo::init`).
+#[allow(clippy::too_many_arguments)]
+pub fn ammo_init_targeted(
+    slot: usize,
+    ammo_index: &mut i32,
+    ord: &LaunchOrder,
+    shooter: &ObjView,
+    target: Option<&ObjView>,
+    anti_air: AntiAirLaunch,
+    radius_kind: MissRadius,
+    dist_for_accuracy: i32,
+    rng: &mut Rng,
+) -> AmmoInitOutcome {
+    // Objects::add_ammo passes the old counter into Ammo::init and increments it after the
+    // call unconditionally, including every early return inside init.
+    let graph_index = *ammo_index;
+    *ammo_index = ammo_index.wrapping_add(1);
+
+    let shooter_type = air_type(&shooter.rules);
+    let target_type = target.map(|t| air_type(&t.rules)).unwrap_or_default();
+    let shot = super::air::AntiAirShot {
+        whom: ord.whom,
+        ox: ord.ox,
+        target_active: target.is_some_and(|t| t.alive),
+        target_is_unit: target.is_some_and(|t| t.is_unit),
+        target_type: &target_type,
+        target_flying_low: anti_air.target_flying_low,
+        shooter_is_unit: shooter.is_unit,
+        shooter_order: anti_air.shooter_order,
+        shooter_type: &shooter_type,
+    };
+    let mut gate_flags = 0;
+    let gate = apply_antiair_gate(&mut gate_flags, &shot, rng);
+    if gate.init_aborted {
+        return AmmoInitOutcome {
+            ammo: None,
+            anti_air: gate,
+        };
+    }
+
+    let mut ammo = ammo_init_post_gate(
+        slot,
+        graph_index,
+        ord,
+        shooter,
+        target,
+        radius_kind,
+        dist_for_accuracy,
+        rng,
+    );
+    ammo.w.flags |= gate_flags;
+    AmmoInitOutcome {
+        ammo: Some(ammo),
+        anti_air: gate,
+    }
 }
 
 /// `Ammo::init` (`0x0067BBF0`), the ordinary targeted-arc path.
@@ -852,7 +979,8 @@ pub struct LaunchOrder {
 ///
 /// 1. `flags &= 0xE3` (clears `OVERSHOOT | MISSED | NO_DAMAGE`, keeps `ALIVE | FLYING`);
 /// 2. `who`/`o`/`whom`/`ox` from the package;
-/// 3. anti-air dud roll — **not implemented**, see the module docs, it draws 1–2 times;
+/// 3. anti-air dud roll — owned by [`ammo_init_targeted`], which draws 0–2 times before
+///    entering this post-gate body;
 /// 4. `index = slot`, `graph_index = Objects::ammo_index++`;
 /// 5. `num_guys = shooter.guy_mark` (units) or 0 (buildings);
 /// 6. muzzle `sx/sy/sz` from the package;
@@ -869,6 +997,31 @@ pub struct LaunchOrder {
 pub fn ammo_init(
     slot: usize,
     ammo_index: &mut i32,
+    ord: &LaunchOrder,
+    shooter: &ObjView,
+    target: Option<&ObjView>,
+    radius_kind: MissRadius,
+    dist_for_accuracy: i32,
+    rng: &mut Rng,
+) -> Ammo {
+    let graph_index = *ammo_index;
+    *ammo_index = ammo_index.wrapping_add(1);
+    ammo_init_post_gate(
+        slot,
+        graph_index,
+        ord,
+        shooter,
+        target,
+        radius_kind,
+        dist_for_accuracy,
+        rng,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ammo_init_post_gate(
+    slot: usize,
+    graph_index: i32,
     ord: &LaunchOrder,
     shooter: &ObjView,
     target: Option<&ObjView>,
@@ -893,8 +1046,7 @@ pub fn ammo_init(
     }
 
     a.index = slot as i32;
-    a.graph_index = *ammo_index;
-    *ammo_index += 1;
+    a.graph_index = graph_index;
 
     a.num_guys = if shooter.is_unit { shooter.guy_mark } else { 0 };
 
@@ -1604,6 +1756,233 @@ mod tests {
         assert_eq!(r.0, before, "lo == hi must not consume a draw");
         r.in_range(0, 10);
         assert_ne!(r.0, before);
+    }
+
+    fn targeted_launch_fixture(
+        shooter_masks: u32,
+        shooter_fly_high: i32,
+        target_fly_high: i32,
+    ) -> (ObjView, ObjView, LaunchOrder) {
+        let shooter = ObjView {
+            alive: true,
+            is_unit: true,
+            x: 100,
+            y: 200,
+            z: 10,
+            guy_mark: 1,
+            rules: ShooterRules {
+                obj_masks: shooter_masks,
+                to_hit: 50,
+                attenuate: 0,
+                ammo_per_att: 1,
+                proj_speed: 20,
+                domain: DOMAIN_LAND,
+                fly_high: shooter_fly_high,
+                fly_low: shooter_fly_high,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let target = ObjView {
+            alive: true,
+            is_unit: true,
+            x: 2100,
+            y: 1300,
+            z: 700,
+            guy0_z: 760,
+            rules: ShooterRules {
+                domain: DOMAIN_AIR,
+                fly_high: target_fly_high,
+                fly_low: target_fly_high,
+                target_size: 50,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let ord = LaunchOrder {
+            gpiece: 7,
+            start: SpawnPoint {
+                x: shooter.x,
+                y: shooter.y,
+                z: shooter.z + MUZZLE_Z_UNIT,
+            },
+            who: 0,
+            o: 4,
+            whom: 1,
+            ox: 9,
+            angle: 0x1234_5678,
+            cosmetic: false,
+        };
+        (shooter, target, ord)
+    }
+
+    #[test]
+    fn targeted_anti_air_roll_precedes_both_scatter_draws() {
+        let (shooter, target, ord) =
+            targeted_launch_fixture(super::super::air::OBJ_ANTI_AIR, 100, 100);
+        let seed = 0xCAFE_BABE;
+        let mut rng = Rng(seed);
+        let mut ammo_index = 12;
+        let out = ammo_init_targeted(
+            3,
+            &mut ammo_index,
+            &ord,
+            &shooter,
+            Some(&target),
+            AntiAirLaunch::default(),
+            MissRadius::Formula,
+            2_000,
+            &mut rng,
+        );
+        let ammo = out.ammo.expect("active target creates a projectile");
+        assert_eq!(out.anti_air.draws, 1, "ground anti-air rolls once");
+        assert!(!out.anti_air.dud, "100 percent accepts every 0..99 roll");
+        assert_eq!(ammo.w.flags & FLAG_NO_DAMAGE, 0);
+        assert_eq!(ammo_index, 13);
+        assert_eq!(ammo.w.graph_index, 12);
+
+        // Mutation guard: if the dud draw is moved after scatter, ex/ey consume draw 1/2
+        // instead of 2/3 and both the walked projectile bytes and RNG stream diverge.
+        let mut expected = Rng(seed);
+        expected.draw16(); // anti-air gate
+        let mut ex = target.x;
+        let mut ey = target.y;
+        let r = miss_radius(MissRadius::Formula, ammo.w.accuracy as i32);
+        apply_aim_scatter(&mut ex, &mut ey, r, &mut expected);
+        assert_eq!((ammo.w.ex, ammo.w.ey), (ex, ey));
+        assert_eq!(rng, expected, "one gate draw followed by x/y scatter");
+    }
+
+    #[test]
+    fn plain_air_target_gate_short_circuits_or_draws_twice_before_scatter() {
+        // Target percentage zero: the first roll always fails and the second is skipped.
+        let (shooter, target, ord) = targeted_launch_fixture(0, 100, 0);
+        let mut one_draw_rng = Rng(0x1020_3040);
+        let mut one_index = 0;
+        let one = ammo_init_targeted(
+            0,
+            &mut one_index,
+            &ord,
+            &shooter,
+            Some(&target),
+            AntiAirLaunch::default(),
+            MissRadius::Formula,
+            2_000,
+            &mut one_draw_rng,
+        );
+        let one_ammo = one.ammo.unwrap();
+        assert_eq!(one.anti_air.draws, 1);
+        assert!(one.anti_air.dud);
+        assert_ne!(one_ammo.w.flags & FLAG_NO_DAMAGE, 0);
+        let mut expected_one = Rng(0x1020_3040);
+        for _ in 0..3 {
+            expected_one.draw16();
+        }
+        assert_eq!(one_draw_rng, expected_one, "one gate + two scatter draws");
+
+        // Both percentages 100: first passes, second happens and passes.
+        let (shooter, target, ord) = targeted_launch_fixture(0, 100, 100);
+        let mut two_draw_rng = Rng(0x1020_3040);
+        let mut two_index = 0;
+        let two = ammo_init_targeted(
+            0,
+            &mut two_index,
+            &ord,
+            &shooter,
+            Some(&target),
+            AntiAirLaunch::default(),
+            MissRadius::Formula,
+            2_000,
+            &mut two_draw_rng,
+        );
+        let two_ammo = two.ammo.unwrap();
+        assert_eq!(two.anti_air.draws, 2);
+        assert!(!two.anti_air.dud);
+        assert_eq!(two_ammo.w.flags & FLAG_NO_DAMAGE, 0);
+        let mut expected_two = Rng(0x1020_3040);
+        for _ in 0..4 {
+            expected_two.draw16();
+        }
+        assert_eq!(two_draw_rng, expected_two, "two gate + two scatter draws");
+        assert_ne!(
+            (one_ammo.w.ex, one_ammo.w.ey),
+            (two_ammo.w.ex, two_ammo.w.ey),
+            "the short-circuit changes which stream values aim the projectile"
+        );
+    }
+
+    #[test]
+    fn invalid_target_aborts_after_counter_increment_without_rng_or_projectile() {
+        let (shooter, mut target, ord) =
+            targeted_launch_fixture(super::super::air::OBJ_ANTI_AIR, 100, 100);
+        target.alive = false;
+        let mut rng = Rng(77);
+        let before = rng;
+        let mut ammo_index = i32::MAX;
+        let out = ammo_init_targeted(
+            8,
+            &mut ammo_index,
+            &ord,
+            &shooter,
+            Some(&target),
+            AntiAirLaunch::default(),
+            MissRadius::Formula,
+            2_000,
+            &mut rng,
+        );
+        assert!(out.anti_air.init_aborted);
+        assert!(out.ammo.is_none());
+        assert_eq!(out.anti_air.draws, 0);
+        assert_eq!(rng, before);
+        assert_eq!(
+            ammo_index,
+            i32::MIN,
+            "Objects::add_ammo increments outside init, with 32-bit wrapping"
+        );
+    }
+
+    #[test]
+    fn dud_bit_is_a_non_vacuous_ammo_checksum_mutation() {
+        let (hit_shooter, target, ord) =
+            targeted_launch_fixture(super::super::air::OBJ_ANTI_AIR, 100, 100);
+        let mut dud_shooter = hit_shooter;
+        dud_shooter.rules.fly_high = 0;
+        dud_shooter.rules.fly_low = 0;
+
+        let launch = |shooter: &ObjView| {
+            let mut rng = Rng(5);
+            let mut index = 0;
+            ammo_init_targeted(
+                0,
+                &mut index,
+                &ord,
+                shooter,
+                Some(&target),
+                AntiAirLaunch::default(),
+                MissRadius::Formula,
+                2_000,
+                &mut rng,
+            )
+            .ammo
+            .unwrap()
+        };
+        let hit = launch(&hit_shooter);
+        let mut dud = launch(&dud_shooter);
+        assert_eq!(hit.w.flags ^ dud.w.flags, FLAG_NO_DAMAGE);
+        let mut hit_pool = AmmoPool::new();
+        hit_pool.slots[0] = hit;
+        let mut dud_pool = AmmoPool::new();
+        dud_pool.slots[0] = dud;
+        assert_ne!(hit_pool.checksum(), dud_pool.checksum());
+
+        let env = FlatWorld { w: 64, h: 64, z: 0 };
+        dud.w.cur_time = dud.w.total_time - 1;
+        assert_eq!(
+            ammo_inc_time(&mut dud, &env, |_| true, |_| true),
+            Step::Closed,
+            "arrival closes a dud before the Object::do_damage handoff"
+        );
+        assert!(!dud.occupied());
     }
 
     #[test]

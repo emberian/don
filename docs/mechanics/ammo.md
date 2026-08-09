@@ -11,16 +11,15 @@ and `ron-bin/sbl/rise.pdb` unless it says `UNDERIVED`. No community documentatio
 
 ## 1. What now works, and how it was measured
 
-37 tests, all passing. Build and run without touching the shared crate:
+The focused crate gate is:
 
 ```sh
-rustc --edition 2021 --test -O -o /tmp/ammo_test \
-  /Users/ember/dev/don/crates/don-sim/src/systems/ammo.rs && /tmp/ammo_test
-# test result: ok. 37 passed; 0 failed
+cargo test -p don-sim --lib systems::ammo
+# test result: ok. 41 passed; 0 failed
 ```
 
-The module is self-contained (no `super::`, no deps), so it compiles standalone. It is **not**
-yet referenced from `lib.rs` — see §8.
+The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
+gate in `systems::air`; it is referenced by the real tick driver.
 
 | capability | function | how it was derived | how it is checked |
 |---|---|---|---|
@@ -33,6 +32,7 @@ yet referenced from `lib.rs` — see §8.
 | Spawn count + muzzle points | `fire_ammo_spawns` | `Object::fire_ammo` `0x0064C8B0` | unit path RNG-free; building path exactly 2 draws/round |
 | Range attenuation of accuracy | `accuracy` | `Ammo::init`, MSVC magic-divide by −192 decoded | per-tile loss and the floor of 5 |
 | Aim scatter radius | `miss_radius_formula` | `Ammo::init` `0x0067C5C5` | monotone in accuracy; the `>100` quarter |
+| Anti-air dud gate in the launch path | `ammo_init_targeted` | `Ammo::init` `0x0067BE49`–`0x0067C16A`, composed with `systems::air::antiair_dud_gate` | exact 0/1/2-draw short-circuit before scatter, invalid-target early return, dud checksum mutation |
 | Ballistic solve | `arc_total_time`, `arc_ballistics`, `z_at`, `xy_at` | `Ammo::init` `0x0067CF1A`ff | `z(T) == ez` to 0.05; arcs above both ends |
 | Flight integration + terrain clip | `ammo_inc_time` | `Ammo::inc_time` `0x0067D380` | impacts exactly at `total_time`; hillside clip rewrites `total_time` |
 | Hit tests | `hit_target`, `check_hit` | `0x00678F90`, `0x00678D90` | building rectangle vs unit radius; `accuracy > 100` doubling |
@@ -360,28 +360,23 @@ Ordered by how much they would cost a replay harness.
    arguments, would go straight to Tier B), the accuracy magic-divide, `splash_scale`, and
    `split_damage`. `vector_dist` alone is used by half the combat code and is a ~20-line
    registry entry in `crates/oracle/src/registry.rs`.
-2. **`find_angle` (`0x0092D130`) is UNDERIVED.** 264 bytes. The impact angle feeds the flanking
-   term in `get_damage`, so this is a real hole in the damage pipeline, not just cosmetic. The
-   port passes the angle through from the caller.
-3. **The anti-air dud roll is not implemented.** `Ammo::init` rolls one or two
-   `Random::get(0,0xFFFF) % 100` against `ObjectType::fly_high` (`+0x250`) / `fly_low`
-   (`+0x254`) — first the target's, then the shooter's — and sets `FLAG_NO_DAMAGE` on failure.
-   The branch structure is intricate and I did not want to guess it. **This is an RNG consumer
-   on the spawn path**, so it must be closed before any lockstep replay validates: it changes
-   stream position for every shot at an air unit.
-4. **`TRAJ_SPLINE` is not modelled.** Aircraft crashes, nukes and cruise missiles go through
+2. **The complete launch path must call `ammo_init_targeted`.** Its anti-air gate is executable
+   and mutation-tested, but the tick driver's current compatibility call still uses the older
+   post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
+   target's recovered flight band, live air combat still bypasses the gate.
+3. **`TRAJ_SPLINE` is not modelled.** Aircraft crashes, nukes and cruise missiles go through
    `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`), unread. `Ammo`
    with a spline hashes an extra `Spline::walk_data` block, so those projectiles will diverge
    on the channel. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never
    set by `init`, which is worth confirming independently.
-5. **The splash ring tile-offset tables** (`DAT_00ADC400`, `DAT_00ADCAF0`, `DAT_00ADD1E0`) are
+4. **The splash ring tile-offset tables** (`DAT_00ADC400`, `DAT_00ADCAF0`, `DAT_00ADD1E0`) are
    not extracted, so victim *selection* for splash is the caller's problem; only the per-victim
    arithmetic is ported.
-6. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
+5. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
    (`0x006541E0`) and therefore whether it is on any channel. It monotonically increases and
    never rewinds, so if it *is* walked, save/load round-tripping must preserve it.
-7. `Ammo::init_crash` (`0x0067B800`) — the aircraft-crash constructor — is not ported.
-8. The exact `DataWalk` section-mask value `check_all` installs before the ammo channel is not
+6. `Ammo::init_crash` (`0x0067B800`) — the aircraft-crash constructor — is not ported.
+7. The exact `DataWalk` section-mask value `check_all` installs before the ammo channel is not
    confirmed; `AmmoData::walk_data` reads the *direction* field (`+4`), not the mask (`+0xC`),
    so it should not matter, but it is unverified.
 
@@ -389,13 +384,9 @@ Ordered by how much they would cost a replay harness.
 
 ## 8. Integration notes for the orchestrator
 
-- **`lib.rs` needs `pub mod systems;`** — I did not edit it, per the file-ownership rule.
-- **`crates/don-sim/src/systems/mod.rs` did not exist and I created it.** It is a shared file:
-  four other lanes had already dropped modules into `systems/` (`borders_fog.rs`,
-  `economy.rs`, `map_terrain.rs`, `movement.rs`), so `mod.rs` declares all five rather than
-  stranding them. **Only `ammo` is verified by this lane** — the other four import crate-root
-  items that do not exist yet (`crate::rng`, …) and cannot compile until the `lib.rs` owner
-  lands them. If the tree does not build, comment out the unfinished siblings, not `ammo`.
+- `systems::ammo` and `systems::air` are both exported by the crate. The remaining immediate
+  integration seam is the tick launch call described in §7.2; callers that have live order and
+  flight-band state should use `ammo_init_targeted`, not the post-gate compatibility adapter.
 - The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
   world bounds, unit/building search, water test) rather than reaching into the SoA world, so
   it will not collide with the `world.rs` rewrite. Whoever owns the world implements `AmmoEnv`.
