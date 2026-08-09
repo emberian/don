@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Twelve
+`Program`, and `ScriptRuntime` runs either producer against that live host. Fourteen
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -468,13 +468,15 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
 | 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
 | 351 | `time_later_than` | signed `Game::seconds / 60 >= argument` (`0x009ee120`) |
+| 411 | `object_position_x` | validate `(who,o)`, resolve captain and outer container, then `div_3_table[(x ^ 0x63637) >> 6]` (`0x009f1360`) |
+| 412 | `object_position_y` | the same object walk over the encrypted y coordinate (`0x009f1470`) |
 | 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
 | 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
 
-The current 363-file census contains 4,824 calls to those twelve registrations. Together
+The current 363-file census contains 6,258 calls to those fourteen registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-5,615 of 39,957 measured shipped-corpus call sites (**14.05%**, up from **1.98%**).
+7,049 of 39,957 measured shipped-corpus call sites (**17.64%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
@@ -492,8 +494,20 @@ builds the recovered tag-0/tag-2/tag-3/tag-4 retail container, loads it through
 `don_bhs::chunk::load_program`, requires its channel-15 walk metadata, and executes its
 `give_good` call through the same mandatory host.
 
+The position pair is the highest-frequency coherent read-only cohort whose required state
+already has an authoritative simulation owner: 717 shipped calls apiece. The bodies were
+recovered from `0x009f1360` / `0x009f1470`, with their shared
+`active_unit_slot` (`0x009e3160`), `valid_build_o` (`0x009e3300`),
+`UnitData::get_captain` (`0x00610ab0`), and `ObjectData::get_inside`
+(`0x00651a80`) callees checked independently. The host follows owner-local object bands,
+formation captain links, and nested `inside_up` links before converting the resolved
+world coordinate to a tile. Missing link targets, cycles, and negative coordinates fail
+closed instead of producing a synthetic location. Ordinary source executes direct unit
+and building reads; a loaded retail chunk proves captain-to-container redirection through
+the same handler.
+
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-830 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+828 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

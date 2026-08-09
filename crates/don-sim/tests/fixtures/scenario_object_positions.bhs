@@ -1,0 +1,8 @@
+int scenario object_position_tick()
+{
+    set_good(1, "Food", object_position_x(1, 0));
+    set_good(1, "Timber", object_position_y(1, 0));
+    set_good(1, "Wealth", object_position_x(1, 2000));
+    set_good(1, "Knowledge", object_position_y(1, 2000));
+    return 1;
+}

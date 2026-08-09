@@ -18,6 +18,7 @@ use don_bhs::{
     call_util, BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
 };
 
+use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use crate::systems::{economy, leaders};
 use crate::tick::Sim;
 
@@ -448,6 +449,158 @@ fn leader_resource_args(args: &[Value]) -> Result<(usize, Option<usize>, i32), H
     Ok((who as usize, resource, args[2].as_int()))
 }
 
+/// A resolved entry in retail's `(who, o)` object table.
+///
+/// `ObjectRegistry` carries the same owner-local band identity while the simulation's
+/// actual records live in their respective dense stores. Keeping the kind and row
+/// together prevents a script lookup from accidentally treating a band offset as a
+/// dense row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScriptObject {
+    Unit { who: usize, o: i32, row: usize },
+    Build { who: usize, o: i32, row: usize },
+    Wall { who: usize, o: i32, row: usize },
+}
+
+impl Sim {
+    fn script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
+        if who >= crate::objects::OWNER_SLOTS || o < 0 {
+            return None;
+        }
+        let slot = self.world.objects.slot(who);
+        if o < BUILD_BAND_BASE as i32 {
+            let row = *slot.band(Band::Unit).get(o as usize)? as usize;
+            (row < self.world.units.len()).then_some(ScriptObject::Unit { who, o, row })
+        } else if o < WALL_BAND_BASE as i32 {
+            let index = o.checked_sub(BUILD_BAND_BASE as i32)? as usize;
+            let row = *slot.band(Band::Build).get(index)? as usize;
+            (row < self.builds.len()).then_some(ScriptObject::Build { who, o, row })
+        } else {
+            let index = o.checked_sub(WALL_BAND_BASE as i32)? as usize;
+            let row = *slot.band(Band::Wall).get(index)? as usize;
+            (row < self.walls.len()).then_some(ScriptObject::Wall { who, o, row })
+        }
+    }
+
+    /// The `active_unit_slot` / `valid_build_o` gate shared by the two retail handlers.
+    fn valid_script_position_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
+        let flags = self.step8.leaders.get(who)?.flags;
+        if flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+            != (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+        {
+            return None;
+        }
+        match self.script_object(who, o)? {
+            object @ ScriptObject::Unit { row, .. }
+                if self.world.units.get_flags(row) & 1 != 0
+                    || self.world.units.o_up()[row] >= 0 =>
+            {
+                Some(object)
+            }
+            object @ ScriptObject::Build { row, .. } if self.builds[row].is_valid() => Some(object),
+            _ => None,
+        }
+    }
+
+    /// `UnitData::get_captain` `0x00610ab0`. Non-unit objects inherit
+    /// `ObjectData::get_captain` and return their own object index.
+    fn script_captain(&self, mut object: ScriptObject) -> Result<ScriptObject, HostError> {
+        let limit = self.world.objects.total_objects().saturating_add(1);
+        for _ in 0..limit {
+            let ScriptObject::Unit { who, row, .. } = object else {
+                return Ok(object);
+            };
+            let captain = self.world.units.o_up()[row] as i32;
+            if captain < 0 {
+                return Ok(object);
+            }
+            let next = self
+                .script_object(who, captain)
+                .ok_or(HostError::Unimplemented)?;
+            if next == object {
+                return Err(HostError::Unimplemented);
+            }
+            object = next;
+        }
+        Err(HostError::Unimplemented)
+    }
+
+    /// `ObjectData::get_inside` `0x00651a80`: follow `inside_up` while the container is
+    /// itself a unit, stopping on the outermost unit or the first non-unit object.
+    fn script_outer_container(&self, object: ScriptObject) -> Result<ScriptObject, HostError> {
+        let ScriptObject::Unit { row, .. } = object else {
+            return Ok(object);
+        };
+        let inside = self.world.units.inside_up()[row] as i32;
+        if inside < 0 {
+            return Ok(object);
+        }
+        let inside_who = self.world.units.inside_up_who()[row] as u8 as usize;
+        let mut container = self
+            .script_object(inside_who, inside)
+            .ok_or(HostError::Unimplemented)?;
+        let limit = self.world.objects.total_objects().saturating_add(1);
+        for _ in 0..limit {
+            let ScriptObject::Unit { row, .. } = container else {
+                return Ok(container);
+            };
+            let next_o = self.world.units.inside_up()[row] as i32;
+            if next_o < 0 {
+                return Ok(container);
+            }
+            let next_who = self.world.units.inside_up_who()[row] as u8 as usize;
+            let next = self
+                .script_object(next_who, next_o)
+                .ok_or(HostError::Unimplemented)?;
+            if next == container {
+                return Err(HostError::Unimplemented);
+            }
+            container = next;
+        }
+        Err(HostError::Unimplemented)
+    }
+
+    /// `ScenarioFuncSet::object_position_{x,y}` (`0x009f1360` / `0x009f1470`).
+    fn script_object_position(&self, who: i32, o: i32, y_axis: bool) -> Result<i32, HostError> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(object) = self.valid_script_position_object(who, o) else {
+            return Ok(-1);
+        };
+        let object = self.script_captain(object)?;
+        let object = self.script_outer_container(object)?;
+        let coord = match object {
+            ScriptObject::Unit { row, .. } => {
+                if y_axis {
+                    self.world.units.y_internal()[row]
+                } else {
+                    self.world.units.x_internal()[row]
+                }
+            }
+            ScriptObject::Build { row, .. } => {
+                let (x, y) = self.builds[row].position();
+                if y_axis {
+                    y
+                } else {
+                    x
+                }
+            }
+            ScriptObject::Wall { row, .. } => {
+                if y_axis {
+                    self.walls[row].y()
+                } else {
+                    self.walls[row].x()
+                }
+            }
+        };
+        if coord < 0 {
+            // Retail indexes the finite non-negative `div_3_table` after an arithmetic
+            // shift. A negative coordinate is corrupt host state, not a value to invent.
+            return Err(HostError::Unimplemented);
+        }
+        Ok(coord / crate::systems::production::COORD_PER_TILE)
+    }
+}
+
 impl ScenarioHost for Sim {
     fn script_frame(&self) -> i32 {
         self.world.frame
@@ -520,6 +673,19 @@ impl ScenarioHost for Sim {
                 }
                 Ok(Value::Int(((flags >> 6) & 1) as i32))
             }
+            // Both handlers share the exact address validation, captain resolution,
+            // outer-container walk, coordinate deobfuscation, and `div_3_table` tile
+            // conversion recovered at `0x009f1360` / `0x009f1470`.
+            411 => Ok(Value::Int(self.script_object_position(
+                args[0].as_int(),
+                args[1].as_int(),
+                false,
+            )?)),
+            412 => Ok(Value::Int(self.script_object_position(
+                args[0].as_int(),
+                args[1].as_int(),
+                true,
+            )?)),
             // `give_good` `0x009fb590`: leader active, resource type index < 6,
             // wrapping add to the decoded stockpile.
             661 => {

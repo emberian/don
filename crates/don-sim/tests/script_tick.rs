@@ -91,14 +91,19 @@ fn chunk(tag: u16, payload: Vec<u8>) -> Vec<u8> {
 
 fn loaded_one_builtin_program(name: &str, args: &[Value]) -> Program {
     let compiled = one_builtin_program(name, args);
+    loaded_scalar_program(compiled)
+}
+
+fn loaded_scalar_program(compiled: Program) -> Program {
     let file = &compiled.files[0];
+    let entry = &file.scripts[0];
 
     let mut script = Vec::new();
     push_u32(&mut script, 0);
-    push_chunk_string(&mut script, "game_tick");
-    push_u32(&mut script, 0); // entry
-    push_u32(&mut script, 0); // script_type
-    push_u32(&mut script, ScriptTy::Void.tag());
+    push_chunk_string(&mut script, &entry.name);
+    push_u32(&mut script, entry.entry);
+    push_u32(&mut script, entry.script_type);
+    push_u32(&mut script, entry.return_type);
     push_u32(&mut script, 0); // trigger_count
     push_u32(&mut script, 0); // param_count
 
@@ -129,6 +134,29 @@ fn loaded_one_builtin_program(name: &str, args: &[Value]) -> Program {
         root.extend_from_slice(&child);
     }
     load_program(&root, "loaded_scenario_runtime.bhs").unwrap()
+}
+
+fn position_to_stockpile_program() -> Program {
+    let position = find_builtin("object_position_x").unwrap();
+    let set_good = find_builtin("set_good").unwrap();
+    // `set_good(1, "Food", object_position_x(1, 1))`. The inner return remains on the
+    // stack while the outer call's remaining arguments are emitted right-to-left.
+    Program::single(ScriptFile {
+        code: asm(&[
+            (0x47, &[0]),
+            (0x26, &[VarRef::Const(1).encode()]),
+            (0x26, &[VarRef::Const(0).encode()]),
+            (0x38, &[position.index]),
+            (0x26, &[VarRef::Const(2).encode()]),
+            (0x26, &[VarRef::Const(0).encode()]),
+            (0x38, &[set_good.index]),
+            (0x27, &[]),
+            (0x3e, &[]),
+        ]),
+        const_pool: vec![Value::Int(1), Value::Int(1), Value::str("Food")],
+        scripts: vec![void_script("game_tick", 0)],
+        ..Default::default()
+    })
 }
 
 fn game_runtime(program: Program) -> ScriptRuntime {
@@ -327,6 +355,86 @@ fn retail_chunk_loader_program_uses_the_same_mandatory_world_host() {
     assert_eq!(trace.steps[4], StepRun::Executed);
     assert!(trace.work[4] > 0);
     assert_eq!(sim.leaders[0].econ.stockpile[0], 9);
+}
+
+#[test]
+fn ordinary_source_executes_unit_and_building_position_readers() {
+    let program = compile_source_fixture("scenario_object_positions.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "object_position_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8119, 8);
+    sim.activate(0);
+    let unit = sim
+        .spawn_unit(0, 7, 11 * 192 + 191, 13 * 192 + 1, 4)
+        .unwrap();
+    let unit_row = sim.world.row_of(unit).unwrap();
+    sim.world.units.o_up_mut()[unit_row] = -1;
+    sim.world.units.inside_up_mut()[unit_row] = -1;
+    sim.world.units.inside_up_who_mut()[unit_row] = -1;
+
+    let mut build = don_sim::systems::production::BuildData::default();
+    build.flags = don_sim::systems::production::flag::VALID;
+    build.other[don_sim::systems::production::off::OBJECT_ID
+        ..don_sim::systems::production::off::OBJECT_ID + 2]
+        .copy_from_slice(&2000i16.to_le_bytes());
+    build.other[don_sim::systems::production::off::X_INTERNAL
+        ..don_sim::systems::production::off::X_INTERNAL + 4]
+        .copy_from_slice(&((17 * 192) ^ 0x63637i32).to_le_bytes());
+    build.other[don_sim::systems::production::off::Y_INTERNAL
+        ..don_sim::systems::production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&((19 * 192 + 191) ^ 0x63637i32).to_le_bytes());
+    sim.spawn_build(0, build);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile[..4],
+        [11, 13, 17, 19],
+        "the source compiler must execute both unit and building address paths"
+    );
+}
+
+#[test]
+fn retail_chunk_position_reader_resolves_captain_and_outer_container() {
+    let program = loaded_scalar_program(position_to_stockpile_program());
+    assert!(program.walk_meta().is_some());
+    let mut scripts = game_runtime(program);
+    let mut sim = Sim::new(0x8120, 8);
+    sim.activate(0);
+
+    let queried = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let captain = sim.spawn_unit(0, 7, 5 * 192, 7 * 192, 4).unwrap();
+    let queried_row = sim.world.row_of(queried).unwrap();
+    let captain_row = sim.world.row_of(captain).unwrap();
+    sim.world.units.o_up_mut()[queried_row] = 1;
+    sim.world.units.inside_up_mut()[queried_row] = -1;
+    sim.world.units.inside_up_who_mut()[queried_row] = -1;
+    sim.world.units.o_up_mut()[captain_row] = -1;
+    sim.world.units.inside_up_mut()[captain_row] = 2000;
+    sim.world.units.inside_up_who_mut()[captain_row] = 0;
+
+    let mut build = don_sim::systems::production::BuildData::default();
+    build.flags = don_sim::systems::production::flag::VALID;
+    build.other[don_sim::systems::production::off::OBJECT_ID
+        ..don_sim::systems::production::off::OBJECT_ID + 2]
+        .copy_from_slice(&2000i16.to_le_bytes());
+    build.other[don_sim::systems::production::off::X_INTERNAL
+        ..don_sim::systems::production::off::X_INTERNAL + 4]
+        .copy_from_slice(&((23 * 192 + 191) ^ 0x63637i32).to_le_bytes());
+    build.other[don_sim::systems::production::off::Y_INTERNAL
+        ..don_sim::systems::production::off::Y_INTERNAL + 4]
+        .copy_from_slice(&((29 * 192) ^ 0x63637i32).to_le_bytes());
+    sim.spawn_build(0, build);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(sim.leaders[0].econ.stockpile[0], 23);
 }
 
 #[test]
