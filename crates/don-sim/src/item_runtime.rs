@@ -14,8 +14,8 @@
 
 use crate::systems::items::{
     channel_size, checksum_items, goody_amount, pick_goody_resource, snap_center, wcoord_of,
-    GoodyAward, GoodyRules, Items, LeaderGoody, DOWN_ITEM, DOWN_NONE, LAND_REJECT_A, LAND_REJECT_B,
-    TYPE_GOODY, WFLAG_ITEM, WFLAG_OVERRIDE_LAND,
+    GoodyAward, GoodyRules, Item, Items, LeaderGoody, DOWN_ITEM, DOWN_NONE, LAND_REJECT_A,
+    LAND_REJECT_B, TYPE_GOODY, WFLAG_ITEM, WFLAG_OVERRIDE_LAND,
 };
 use crate::systems::map_terrain::World as TerrainWorld;
 
@@ -25,6 +25,57 @@ pub struct ItemRuntime {
     items: Items,
     xs: i32,
     ys: i32,
+}
+
+/// Pointer-free stable-slot image owned by deterministic save/load.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct ItemRuntimeSaveState {
+    pub map_xs: i32,
+    pub map_ys: i32,
+    pub slots: Vec<Item>,
+}
+
+/// A save/load invariant failure across checksum channels 10 (items) and 12 (world).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ItemRuntimeSaveError {
+    MapShape,
+    SlotLimit,
+    SlotIdentity(usize),
+    SlotRecord(usize),
+    ItemCoordinate(usize),
+    HeterogeneousOccupancy { wx: i32, wy: i32 },
+    MapCoupling { wx: i32, wy: i32 },
+    DuplicateMapReference(usize),
+    UnmappedLiveSlot(usize),
+}
+
+impl std::fmt::Display for ItemRuntimeSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MapShape => f.write_str("item runtime/map shape mismatch"),
+            Self::SlotLimit => f.write_str("item stable-slot count exceeds signed object index"),
+            Self::SlotIdentity(slot) => write!(f, "item slot {slot} has mismatched identity"),
+            Self::SlotRecord(slot) => write!(f, "item slot {slot} is not a runtime record"),
+            Self::ItemCoordinate(slot) => {
+                write!(f, "item slot {slot} has an invalid snapped map coordinate")
+            }
+            Self::HeterogeneousOccupancy { wx, wy } => {
+                write!(
+                    f,
+                    "item at ({wx},{wy}) is behind a heterogeneous object head"
+                )
+            }
+            Self::MapCoupling { wx, wy } => {
+                write!(f, "item registry and WData disagree at ({wx},{wy})")
+            }
+            Self::DuplicateMapReference(slot) => {
+                write!(f, "item slot {slot} is referenced by multiple WData cells")
+            }
+            Self::UnmappedLiveSlot(slot) => {
+                write!(f, "live item slot {slot} has no WData sentinel")
+            }
+        }
+    }
 }
 
 /// Evidence emitted alongside the channel word so an empty/absent producer cannot be
@@ -78,6 +129,50 @@ impl ItemRuntime {
     #[inline]
     pub fn map_shape(&self) -> (i32, i32) {
         (self.xs, self.ys)
+    }
+
+    pub(crate) fn export_save_state(
+        &self,
+        map: &TerrainWorld,
+    ) -> Result<ItemRuntimeSaveState, ItemRuntimeSaveError> {
+        if self.items.len() > i16::MAX as usize + 1 {
+            return Err(ItemRuntimeSaveError::SlotLimit);
+        }
+        let state = ItemRuntimeSaveState {
+            map_xs: self.xs,
+            map_ys: self.ys,
+            slots: (0..self.items.len())
+                .map(|slot| *self.items.get(slot).expect("slot is below Items::len"))
+                .collect(),
+        };
+        validate_item_state(&state, map)?;
+        Ok(state)
+    }
+
+    pub(crate) fn import_save_state(
+        state: ItemRuntimeSaveState,
+        map: &TerrainWorld,
+    ) -> Result<Self, ItemRuntimeSaveError> {
+        validate_item_state(&state, map)?;
+
+        // Keep every placeholder live while growing: `Items::init_record` reuses the
+        // first dead slot, so overwriting dead records before the final length exists
+        // would collapse stable identities.
+        let mut items = Items::new();
+        let (x, y) = snap_center(0, 0);
+        for _ in 0..state.slots.len() {
+            items.init_record(TYPE_GOODY, x, y, 0);
+        }
+        for (slot, record) in state.slots.iter().copied().enumerate() {
+            *items
+                .get_mut(slot)
+                .expect("all stable slots were provisioned above") = record;
+        }
+        Ok(Self {
+            items,
+            xs: state.map_xs,
+            ys: state.map_ys,
+        })
     }
 
     /// Exact current channel evidence. Unlike a bare checksum word, `bytes_walked`
@@ -209,6 +304,105 @@ impl ItemRuntime {
             draws,
         }))
     }
+}
+
+/// Prove that an absent producer is not paired with channel-12 item sentinels.
+pub(crate) fn validate_absent_items_map(map: &TerrainWorld) -> Result<(), ItemRuntimeSaveError> {
+    validate_map_geometry(map)?;
+    for (index, cell) in map.wdata.iter().enumerate() {
+        if cell.flags & WFLAG_ITEM == 0 && cell.down != DOWN_ITEM {
+            continue;
+        }
+        let wx = index as i32 % map.xs;
+        let wy = index as i32 / map.xs;
+        if cell.down >= 0 {
+            return Err(ItemRuntimeSaveError::HeterogeneousOccupancy { wx, wy });
+        }
+        return Err(ItemRuntimeSaveError::MapCoupling { wx, wy });
+    }
+    Ok(())
+}
+
+fn validate_map_geometry(map: &TerrainWorld) -> Result<(), ItemRuntimeSaveError> {
+    let size = map
+        .xs
+        .checked_mul(map.ys)
+        .and_then(|size| usize::try_from(size).ok())
+        .ok_or(ItemRuntimeSaveError::MapShape)?;
+    if map.xs <= 0 || map.ys <= 0 || map.wdata.len() != size {
+        return Err(ItemRuntimeSaveError::MapShape);
+    }
+    Ok(())
+}
+
+fn validate_item_state(
+    state: &ItemRuntimeSaveState,
+    map: &TerrainWorld,
+) -> Result<(), ItemRuntimeSaveError> {
+    validate_map_geometry(map)?;
+    if (state.map_xs, state.map_ys) != (map.xs, map.ys) {
+        return Err(ItemRuntimeSaveError::MapShape);
+    }
+    if state.slots.len() > i16::MAX as usize + 1 {
+        return Err(ItemRuntimeSaveError::SlotLimit);
+    }
+
+    let mut expected_cell = vec![None; state.slots.len()];
+    for (slot, item) in state.slots.iter().enumerate() {
+        if item.o != slot as i16 {
+            return Err(ItemRuntimeSaveError::SlotIdentity(slot));
+        }
+        if !matches!(item.flags, 0 | 1)
+            || item.who != 0xff
+            || !item.has_type
+            || item.type_index != TYPE_GOODY
+        {
+            return Err(ItemRuntimeSaveError::SlotRecord(slot));
+        }
+        let (wx, wy) = (wcoord_of(item.x()), wcoord_of(item.y()));
+        if !in_w_bounds(map, wx, wy) || snap_center(wx, wy) != (item.x(), item.y()) {
+            return Err(ItemRuntimeSaveError::ItemCoordinate(slot));
+        }
+        if item.is_valid() {
+            let cell = map.wdata(wx, wy);
+            if cell.down >= 0 {
+                return Err(ItemRuntimeSaveError::HeterogeneousOccupancy { wx, wy });
+            }
+            expected_cell[slot] = Some((wx, wy));
+        }
+    }
+
+    let mut mapped = vec![false; state.slots.len()];
+    for (index, cell) in map.wdata.iter().enumerate() {
+        let has_flag = cell.flags & WFLAG_ITEM != 0;
+        if !has_flag && cell.down != DOWN_ITEM {
+            continue;
+        }
+        let wx = index as i32 % map.xs;
+        let wy = index as i32 / map.xs;
+        if cell.down >= 0 {
+            return Err(ItemRuntimeSaveError::HeterogeneousOccupancy { wx, wy });
+        }
+        if !has_flag || cell.down != DOWN_ITEM || cell.down_who < 0 {
+            return Err(ItemRuntimeSaveError::MapCoupling { wx, wy });
+        }
+        let slot = cell.down_who as usize;
+        let Some(item) = state.slots.get(slot) else {
+            return Err(ItemRuntimeSaveError::MapCoupling { wx, wy });
+        };
+        if !item.is_valid() || expected_cell[slot] != Some((wx, wy)) {
+            return Err(ItemRuntimeSaveError::MapCoupling { wx, wy });
+        }
+        if std::mem::replace(&mut mapped[slot], true) {
+            return Err(ItemRuntimeSaveError::DuplicateMapReference(slot));
+        }
+    }
+    for (slot, item) in state.slots.iter().enumerate() {
+        if item.is_valid() && !mapped[slot] {
+            return Err(ItemRuntimeSaveError::UnmappedLiveSlot(slot));
+        }
+    }
+    Ok(())
 }
 
 #[inline]

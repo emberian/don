@@ -22,14 +22,18 @@ The first supported tranche contains:
 - the object registry facts derivable from each live unit's `(who, o)` address, plus the
   ten owner-active bits;
 - the eight inactive leader economy blocks, recompute stamps/dirty flags, and market
-  state.
+  state;
+- checksum channel 10's authoritative item runtime, including producer absence versus
+  initialized-empty, every live and dead stable slot, and its checksum channel 12
+  `WData` occupancy coupling.
 
 The save call rejects a live section before returning bytes when that section cannot yet
 be restored exactly. Current explicit refusals include active leader/step-8 hosts,
 buildings, walls, herds, groups, Wonders, projectiles, death records, crash hosts,
-installed item/static-world data, modified economy/territory rules, and modified circle
-tables. This is a bounded tranche, not an allow-list intended to make unsupported games
-look saveable.
+unsupported static-world rules, modified economy/territory rules, and modified circle
+tables. Heterogeneous item/object occupancy is also refused until the object-chain owner
+can preserve its links. This is a bounded tranche, not an allow-list intended to make
+unsupported games look saveable.
 
 ## Recovered retail primitives
 
@@ -61,7 +65,9 @@ object-graph coverage.
 
 ## Container and validation
 
-The root chunk (`0x444e`) has five required leaf children in deterministic order:
+The root chunk (`0x444e`) has six required leaf children in deterministic order. The
+current DoN format version is 2; version 1 predates authoritative item state and is
+rejected rather than being interpreted as an absent producer.
 
 | id | section |
 |---:|---|
@@ -70,6 +76,7 @@ The root chunk (`0x444e`) has five required leaf children in deterministic order
 | `0x0003` | generated unit columns, objects, handles, orders |
 | `0x0004` | leader economy and market |
 | `0x0005` | unit type/path state |
+| `0x0006` | item-producer state and exact stable-slot records |
 
 Loading rejects unknown, missing, duplicate, nested top-level, escaping, truncated, or
 trailing chunks. It also bounds the total stream, map geometry, population, order count,
@@ -88,6 +95,21 @@ Only then does it rebuild `row_of_handle` and `ObjectRegistry` into a replacemen
 The live value is swapped at the end, so malformed state cannot leave a partially mutated
 world. Registry traversal scratch and coverage counters are derived/instrumentation and
 are reset rather than serialized.
+
+The Items leaf starts with an explicit producer-state byte. `0` means the runtime is
+absent and requires that the map contain no item flags or sentinels. `1` means the
+runtime is initialized, even when its stable-slot count is zero; this preserves the
+difference between an unavailable channel and retail Adler-32's initialized-empty value
+of `1`. Present state stores the attached map shape and every checksum/lifecycle field
+from each retail 44-byte `Item` object, including dead records. Dead slot identity is
+observable because the next item creation reuses the first dead slot before growing the
+registry.
+
+Save and load both reconcile all live slots with the channel-12 map plane: each live
+record must have one and only one `WFLAG_ITEM` / `DOWN_ITEM` cell whose `down_who` is that
+stable slot and whose coordinates match its snapped center. Orphan slots, duplicate or
+out-of-range references, malformed records, mismatched map shapes, and item flags behind
+a nonnegative heterogeneous object head all fail closed.
 
 ## Dynamic-array metadata
 
@@ -114,12 +136,16 @@ leader economy/market values, terrain/fog bytes, a collision block, and nontrivi
 4. corrupt sizes, ids, duplication, trailing bytes, handle permutations, order tags, and
    unsupported live sections fail closed;
 5. a failed private-world import leaves the original digest, RNG, and handle permutation
-   unchanged.
+   unchanged;
+6. absent and initialized-empty item producers remain distinct, while live/dead stable
+   slots, channel-10 evidence, channel-12 checksum, and first-dead-slot reuse roundtrip;
+7. corrupt item identity, orphan map markers, and heterogeneous object/item occupancy are
+   rejected.
 
 ## Next ownership cuts
 
 Retail-complete saves require the remaining owners to join one receipt-checked
 transaction, especially active step-8 leaders/victory, buildings and walls, groups,
-projectile/death pools, Wonders and their mandatory world host, items/static type tables,
-and script/runtime state. Adding a chunk without both exact export and exact import is not
+projectile/death pools, Wonders and their mandatory world host, static type tables, and
+script/runtime state. Adding a chunk without both exact export and exact import is not
 progress: the correct behavior remains refusal until the complete lifecycle is owned.

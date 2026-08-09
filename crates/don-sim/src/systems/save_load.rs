@@ -12,16 +12,20 @@
 use std::fmt;
 
 use crate::generated::state::unit::{UnitCols, W1_PLANES, W2_PLANES, W4_PLANES, WF_PLANES};
+use crate::item_runtime::{
+    validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
+};
 use crate::order::{Order, OrderIndex, OrderList};
-use crate::systems::{borders_fog, economy, leaders as step8, map_terrain, movement};
+use crate::systems::{borders_fog, economy, items::Item, leaders as step8, map_terrain, movement};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
+const MAX_ITEM_SLOTS: usize = i16::MAX as usize + 1;
 
 const ROOT: u16 = 0x444e;
 const CORE: u16 = 0x0001;
@@ -29,7 +33,8 @@ const MAP: u16 = 0x0002;
 const OBJECTS: u16 = 0x0003;
 const LEADERS: u16 = 0x0004;
 const PATHS: u16 = 0x0005;
-const REQUIRED: [u16; 5] = [CORE, MAP, OBJECTS, LEADERS, PATHS];
+const ITEMS: u16 = 0x0006;
+const REQUIRED: [u16; 6] = [CORE, MAP, OBJECTS, LEADERS, PATHS, ITEMS];
 
 /// A bounded, fail-closed save/load failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +47,7 @@ pub enum SaveError {
     UnknownChunk(u16),
     Limit(&'static str),
     World(String),
+    Items(String),
 }
 
 impl fmt::Display for SaveError {
@@ -55,6 +61,7 @@ impl fmt::Display for SaveError {
             Self::UnknownChunk(id) => write!(f, "unknown chunk 0x{id:04x}"),
             Self::Limit(s) => write!(f, "save limit exceeded: {s}"),
             Self::World(s) => write!(f, "invalid world state: {s}"),
+            Self::Items(s) => write!(f, "invalid item state: {s}"),
         }
     }
 }
@@ -64,6 +71,12 @@ impl std::error::Error for SaveError {}
 impl From<WorldSaveError> for SaveError {
     fn from(value: WorldSaveError) -> Self {
         Self::World(value.to_string())
+    }
+}
+
+impl From<ItemRuntimeSaveError> for SaveError {
+    fn from(value: ItemRuntimeSaveError) -> Self {
+        Self::Items(value.to_string())
     }
 }
 
@@ -544,6 +557,78 @@ fn read_paths(
     }
     r.finish()?;
     Ok((types, paths, path_units))
+}
+
+fn write_items(sim: &Sim) -> Result<Vec<u8>, SaveError> {
+    let mut w = Writer::default();
+    let Some(runtime) = sim.world.item_runtime.as_ref() else {
+        // Absence is a distinct producer state, not shorthand for an empty registry.
+        // It is only coherent when channel 12 has no item sentinels either.
+        validate_absent_items_map(&sim.map.world)?;
+        w.u8(0);
+        return Ok(w.0);
+    };
+
+    let state = runtime.export_save_state(&sim.map.world)?;
+    w.u8(1);
+    w.i32(state.map_xs);
+    w.i32(state.map_ys);
+    if state.slots.len() > MAX_ITEM_SLOTS {
+        return Err(SaveError::Limit("item stable slots"));
+    }
+    w.len(state.slots.len(), "item stable slots")?;
+    for item in state.slots {
+        w.u8(item.flags);
+        w.u8(item.who);
+        w.i16(item.o);
+        w.i32(item.z_internal);
+        w.i32(item.x_internal);
+        w.i32(item.y_internal);
+        w.i32(item.type_index);
+        w.bool(item.has_type);
+        w.u8(item.ever_seen);
+    }
+    Ok(w.0)
+}
+
+fn read_items(data: &[u8], map: &map_terrain::World) -> Result<Option<ItemRuntime>, SaveError> {
+    let mut r = Reader::new(data);
+    match r.u8()? {
+        0 => {
+            r.finish()?;
+            validate_absent_items_map(map)?;
+            Ok(None)
+        }
+        1 => {
+            let map_xs = r.i32()?;
+            let map_ys = r.i32()?;
+            let count = r.len(MAX_ITEM_SLOTS, "item stable slots")?;
+            let mut slots = Vec::with_capacity(count);
+            for _ in 0..count {
+                slots.push(Item {
+                    flags: r.u8()?,
+                    who: r.u8()?,
+                    o: r.i16()?,
+                    z_internal: r.i32()?,
+                    x_internal: r.i32()?,
+                    y_internal: r.i32()?,
+                    type_index: r.i32()?,
+                    has_type: r.bool()?,
+                    ever_seen: r.u8()?,
+                });
+            }
+            r.finish()?;
+            Ok(Some(ItemRuntime::import_save_state(
+                ItemRuntimeSaveState {
+                    map_xs,
+                    map_ys,
+                    slots,
+                },
+                map,
+            )?))
+        }
+        _ => Err(SaveError::Invalid("unknown item producer state")),
+    }
 }
 
 fn write_walked_i32(w: &mut Writer, a: &map_terrain::WalkedArray<i32>) -> Result<(), SaveError> {
@@ -1428,12 +1513,11 @@ fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
     {
         return Err(SaveError::Unsupported("groups"));
     }
-    if sim.world.item_runtime.is_some()
-        || sim.world.rules.balance.is_some()
+    if sim.world.rules.balance.is_some()
         || !sim.world.rules.unit_stats.is_empty()
         || sim.world.rules.combat != crate::mechanics::CombatRules::default()
     {
-        return Err(SaveError::Unsupported("installed World rules/items"));
+        return Err(SaveError::Unsupported("installed World rules"));
     }
     if sim.econ_rules != economy::EconRules::shipped() {
         return Err(SaveError::Unsupported("modified economy rules"));
@@ -1453,6 +1537,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
     // Validate the producer through the same bounded decoder used for untrusted input.
     // This catches an internally inconsistent public MapState before bytes escape.
     let _ = read_map(&map)?;
+    let items = write_items(sim)?;
     let root = Chunk::branch(
         ROOT,
         vec![
@@ -1461,6 +1546,7 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
             Chunk::leaf(OBJECTS, write_world_state(&state)?),
             Chunk::leaf(LEADERS, write_leaders(sim)?),
             Chunk::leaf(PATHS, write_paths(sim)?),
+            Chunk::leaf(ITEMS, items),
         ],
     )
     .encode()?;
@@ -1506,7 +1592,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
             return Err(SaveError::MissingChunk(REQUIRED[index]));
         }
     }
-    let [core, map, objects, leaders, paths] = sections.map(Option::unwrap);
+    let [core, map, objects, leaders, paths, items] = sections.map(Option::unwrap);
     let (seed, frame, seconds, random_state) = read_core(core)?;
     let map = read_map(map)?;
     if map.world.seed != seed {
@@ -1516,10 +1602,12 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
     let expected_types = world_state.unit_type_id.clone();
     let (leaders, market) = read_leaders(leaders)?;
     let (unit_type, paths, path_unit) = read_paths(paths, &expected_types)?;
+    let item_runtime = read_items(items, &map.world)?;
 
     let mut sim = Sim::new(seed as u32 as u64, map.world.xs as u16);
     sim.map = map;
     sim.world.import_save_state(world_state)?;
+    sim.world.item_runtime = item_runtime;
     sim.leaders = leaders;
     sim.market = market;
     sim.unit_type = unit_type;
@@ -1536,6 +1624,7 @@ pub fn load_sim(bytes: &[u8]) -> Result<Sim, SaveError> {
 mod tests {
     use super::*;
     use crate::order::OrderIndex;
+    use crate::systems::items::{self, GoodyRules, LeaderGoody, DOWN_ITEM, WFLAG_ITEM};
 
     fn supported_sim() -> Sim {
         let mut sim = Sim::new(0x1234_5678, 4);
@@ -1643,6 +1732,38 @@ mod tests {
         }
     }
 
+    fn sim_with_stable_items() -> Sim {
+        let mut sim = supported_sim();
+        for (wx, wy) in [(0, 0), (1, 1), (2, 2)] {
+            sim.map.world.wdata_mut(wx, wy).land = 0;
+        }
+        sim.world.configure_items(&sim.map.world);
+        assert_eq!(sim.world.place_goody(&mut sim.map.world, 0, 0, 5), Ok(0));
+        assert_eq!(sim.world.place_goody(&mut sim.map.world, 1, 1, 9), Ok(1));
+        assert_eq!(sim.world.place_goody(&mut sim.map.world, 2, 2, 13), Ok(2));
+        sim.world.reveal_goody(&sim.map.world, 2, 2, 3).unwrap();
+
+        let mut leader = LeaderGoody::default();
+        let (x, y) = items::snap_center(1, 1);
+        assert!(sim
+            .world
+            .collect_goody(
+                &mut sim.map.world,
+                &mut leader,
+                &GoodyRules::default(),
+                x,
+                y,
+            )
+            .unwrap()
+            .is_some());
+        let runtime = sim.world.item_runtime.as_ref().unwrap();
+        assert_eq!(runtime.items().len(), 3);
+        assert!(runtime.items().get(0).unwrap().is_valid());
+        assert!(!runtime.items().get(1).unwrap().is_valid());
+        assert!(runtime.items().get(2).unwrap().is_valid());
+        sim
+    }
+
     #[test]
     fn chunk_headers_use_retail_size_and_child_count_semantics() {
         let bytes = save_sim(&supported_sim()).unwrap();
@@ -1691,6 +1812,127 @@ mod tests {
         for row in 0..original.world.live_count() as usize {
             assert_eq!(loaded.world.orders(row), original.world.orders(row));
         }
+    }
+
+    #[test]
+    fn item_producer_absence_and_initialized_empty_are_distinct() {
+        let absent = supported_sim();
+        let absent_bytes = save_sim(&absent).unwrap();
+        let absent_loaded = load_sim(&absent_bytes).unwrap();
+        assert!(absent_loaded.world.item_runtime.is_none());
+        assert!(absent_loaded.world.items_channel().is_err());
+
+        let mut empty = supported_sim();
+        empty.world.configure_items(&empty.map.world);
+        let empty_report = empty.world.items_channel().unwrap();
+        assert_eq!(empty_report.checksum, 1);
+        assert_eq!(empty_report.elements, 0);
+        assert_eq!(empty_report.bytes_walked, 0);
+        let empty_bytes = save_sim(&empty).unwrap();
+        assert_ne!(empty_bytes, absent_bytes);
+
+        let empty_loaded = load_sim(&empty_bytes).unwrap();
+        assert!(empty_loaded.world.item_runtime.is_some());
+        assert_eq!(empty_loaded.world.items_channel().unwrap(), empty_report);
+        assert_eq!(save_sim(&empty_loaded).unwrap(), empty_bytes);
+    }
+
+    #[test]
+    fn item_slots_and_channel_10_12_coupling_roundtrip_exactly() {
+        let mut original = sim_with_stable_items();
+        let item_report = original.world.items_channel().unwrap();
+        let map_checksum = original.map.world.checksum();
+        assert_eq!(item_report.elements, 2);
+        assert_eq!(item_report.bytes_walked, 44);
+
+        let bytes = save_sim(&original).unwrap();
+        let mut loaded = load_sim(&bytes).unwrap();
+        assert_eq!(loaded.world.items_channel().unwrap(), item_report);
+        assert_eq!(loaded.map.world.checksum(), map_checksum);
+        assert_eq!(
+            loaded.world.item_runtime.as_ref().unwrap().items(),
+            original.world.item_runtime.as_ref().unwrap().items()
+        );
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
+
+        // The exact dead slot is authoritative state: both timelines must reuse slot 1
+        // before growing and must change channels 10 and 12 identically.
+        assert_eq!(
+            original
+                .world
+                .place_goody(&mut original.map.world, 1, 2, 17),
+            Ok(1)
+        );
+        assert_eq!(
+            loaded.world.place_goody(&mut loaded.map.world, 1, 2, 17),
+            Ok(1)
+        );
+        assert_eq!(loaded.world.items_channel(), original.world.items_channel());
+        assert_eq!(loaded.map.world.checksum(), original.map.world.checksum());
+    }
+
+    #[test]
+    fn item_map_mismatch_and_heterogeneous_occupancy_fail_closed() {
+        let mut absent = supported_sim();
+        let cell = absent.map.world.wdata_mut(0, 0);
+        cell.flags |= WFLAG_ITEM;
+        cell.down = DOWN_ITEM;
+        cell.down_who = 0;
+        assert!(matches!(save_sim(&absent), Err(SaveError::Items(_))));
+
+        let mut heterogeneous = supported_sim();
+        heterogeneous
+            .world
+            .configure_items(&heterogeneous.map.world);
+        heterogeneous
+            .world
+            .place_goody(&mut heterogeneous.map.world, 0, 0, 5)
+            .unwrap();
+        heterogeneous.map.world.wdata_mut(0, 0).down = 0;
+        let error = save_sim(&heterogeneous).unwrap_err();
+        assert!(matches!(error, SaveError::Items(ref s) if s.contains("heterogeneous")));
+    }
+
+    #[test]
+    fn corrupt_item_slot_identity_is_rejected_on_load() {
+        let bytes = save_sim(&sim_with_stable_items()).unwrap();
+        let items = section_offset(&bytes, ITEMS);
+        // payload: present (1), map shape (8), slot count (4), then flags/who/o.
+        let first_o = items + 8 + 1 + 8 + 4 + 2;
+        let mut corrupt = bytes.clone();
+        corrupt[first_o..first_o + 2].copy_from_slice(&7i16.to_le_bytes());
+        assert!(matches!(load_error(&corrupt), SaveError::Items(_)));
+    }
+
+    #[test]
+    fn item_walked_byte_mutation_changes_only_channel_10() {
+        let original = sim_with_stable_items();
+        let original_items = original.world.items_channel().unwrap();
+        let original_map = original.map.world.checksum();
+        let mut bytes = save_sim(&original).unwrap();
+        let items = section_offset(&bytes, ITEMS);
+        // payload: present/shape/count (13), then a 22-byte record whose last byte is
+        // ItemData::ever_seen. This field is walked by channel 10 but not channel 12.
+        let first_ever_seen = items + 8 + 13 + 21;
+        assert_eq!(bytes[first_ever_seen], 0);
+        bytes[first_ever_seen] = 1;
+
+        let loaded = load_sim(&bytes).unwrap();
+        assert_ne!(loaded.world.items_channel().unwrap(), original_items);
+        assert_eq!(loaded.map.world.checksum(), original_map);
+        assert_eq!(
+            loaded
+                .world
+                .item_runtime
+                .as_ref()
+                .unwrap()
+                .items()
+                .get(0)
+                .unwrap()
+                .ever_seen,
+            1
+        );
+        assert_eq!(save_sim(&loaded).unwrap(), bytes);
     }
 
     #[test]
