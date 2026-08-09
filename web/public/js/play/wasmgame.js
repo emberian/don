@@ -58,9 +58,34 @@ export class GameModule {
       new Uint8Array(this.mem.buffer, p, playdataBytes.length).set(playdataBytes);
     }
     this.g = this.x.game_create(seed >>> 0, 0);
+    this.seed = seed >>> 0;
     this._submitted = 0;
     this._buf = null;
+    // `Game::players` is an exported snapshot populated by `game_step`, rather than the
+    // live ledger itself. A zero-frame step refreshes that snapshot without advancing the
+    // world, so callers can inspect a newly-created session immediately.
+    if (this.g) this.x.game_step(this.g, 0);
     return this.g !== 0;
+  }
+
+  /**
+   * Replace the current world with a fresh world over the already staged data packs.
+   * Create first and destroy second so an allocation failure cannot discard the live
+   * session. The temporary second world may grow wasm memory, so all views are retired.
+   */
+  restart(seed) {
+    const normalized = seed >>> 0;
+    const next = this.x.game_create(normalized, 0);
+    if (!next) return false;
+    const previous = this.g;
+    this.g = next;
+    this.seed = normalized;
+    this._submitted = 0;
+    this._buf = null;
+    this._v = {};
+    this.x.game_step(this.g, 0);
+    if (previous) this.x.game_destroy(previous);
+    return true;
   }
 
   _staticText(ptr, len) {

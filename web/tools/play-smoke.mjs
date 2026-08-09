@@ -165,6 +165,11 @@ try {
       blockerItems: document.querySelectorAll('#readiness-blockers li').length,
       incomeOptions: [...document.querySelectorAll('#income option')].map(o => o.textContent),
       commandButtons: document.querySelectorAll('#command-dock button').length,
+      sessionSeed: document.getElementById('session-seed')?.value ?? '',
+      sessionPlayers: document.querySelectorAll('#session-player option').length,
+      sessionStatus: document.getElementById('session-status')?.textContent ?? '',
+      sessionStatusLive: document.getElementById('session-status')?.getAttribute('aria-live') ?? '',
+      sessionShare: !!document.getElementById('session-share'),
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -183,6 +188,12 @@ try {
     ['the local boundary and compiled blockers are inspectable', out.ui.blockerItems > 1],
     ['no whole-world fidelity option is advertised', out.ui.incomeOptions.every((x) => !/^fidelity\b/i.test(x))],
     ['the touch command dock is complete', out.ui.commandButtons >= 9],
+    ['session setup exposes the deterministic seed', out.ui.sessionSeed === '0x00c0ffee'],
+    ['session setup exposes every player perspective', out.ui.sessionPlayers >= 2],
+    ['session identity and seed boundary are visible', out.ui.sessionStatus.includes('0x00c0ffee') &&
+      out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('seed not yet consumed')],
+    ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
+    ['session links are shareable', out.ui.sessionShare],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -222,6 +233,54 @@ try {
   }
   await c.send('Emulation.clearDeviceMetricsOverride');
   await sleep(250);
+
+  // A playable page needs a reproducible session boundary, not a hard-coded seed that can
+  // only be reset by throwing the tab away. Restart the real Wasm world, reject a malformed
+  // seed without losing it, exercise player perspective, and leave player zero selected for
+  // the gameplay script below.
+  out.session = await c.eval(`(() => {
+    const d = window.don, m = d.state.mod;
+    m.step(9);
+    const dirtyFrame = m.frame;
+    const oldDigest = d.state.sessionInitialDigest;
+    const restarted = d.session.restart('0x1234abcd');
+    const after = d.stats();
+    const url = new URL(d.session.url());
+    const input = document.getElementById('session-seed');
+    input.value = 'not-a-seed';
+    document.getElementById('session-new').click();
+    const invalidPreserved = d.state.sessionSeed === 0x1234abcd && input.validationMessage.length > 0;
+    input.setCustomValidity('');
+    input.value = '0x1234abcd';
+    const switched = d.session.player(1);
+    const returned = d.session.player(0);
+    return JSON.stringify({
+      dirtyFrame, restarted, oldDigest, newDigest: d.state.sessionInitialDigest,
+      frameAfterRestart: after.frame, seedAfterRestart: after.sessionSeed,
+      packsAfterRestart: [after.hasGameData, after.hasPlayData],
+      stockAfterRestart: after.player.stock,
+      urlSeed: url.searchParams.get('seed'), urlPlayer: url.searchParams.get('player'),
+      invalidPreserved, switched, returned,
+      status: document.getElementById('session-status').textContent,
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the pre-restart world advanced', out.session.dirtyFrame >= 9],
+    ['new game replaced the Wasm world', out.session.restarted && out.session.frameAfterRestart === 0],
+    ['the selected seed reached session state', out.session.seedAfterRestart === 0x1234abcd],
+    ['restart retains the packed data tables', out.session.packsAfterRestart.every(Boolean)],
+    ['restart exposes the initial player ledger without advancing',
+      JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([200, 200, 100, 100, 100, 100])],
+    ['the current seed-invariant initializer is exposed honestly',
+      out.session.newDigest === out.session.oldDigest && out.session.status.includes('seed not yet consumed')],
+    ['the share URL carries the canonical seed and player',
+      out.session.urlSeed === '0x1234abcd' && out.session.urlPlayer === '0'],
+    ['a malformed seed preserves the live session', out.session.invalidPreserved],
+    ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
+    ['session status returns to player zero', out.session.status.includes('player 0')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
 
   // ---- 1. does it actually draw? -------------------------------------------------------
   out.readback = await c.eval('window.don.snapshot().then(r => JSON.stringify(r))').then(JSON.parse);

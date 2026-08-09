@@ -19,10 +19,13 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 /** Ticks per second at Normal speed: `TurnControl::timings` 0x00AFC4A4 is 67 ms. */
 const TICK_MS = 67;
+const DEFAULT_SEED = 0x00c0ffee;
 
 const state = {
   mod: null, gfx: null, data: null, play: null,
   who: 0,
+  sessionSeed: DEFAULT_SEED,
+  sessionInitialDigest: '',
   cam: { x: 0, y: 0, tilePx: 22 },
   drag: null, panning: null,
   groups: new Map(),
@@ -62,7 +65,11 @@ async function boot() {
   }
   state.play = playjson;
 
-  if (!mod.create(gamedata, playdata, 0xc0ffee)) throw new Error('game_create failed');
+  const seed = parseSessionSeed(params.get('seed') ?? DEFAULT_SEED);
+  if (!mod.create(gamedata, playdata, seed)) throw new Error('game_create failed');
+  state.sessionSeed = seed;
+  state.sessionInitialDigest = mod.digest();
+  state.who = parseSessionPlayer(params.get('player'), mod.playerCount);
   if (!mod.hasGameData || !mod.hasPlayData) {
     throw new Error('packed retail-derived tables failed validation');
   }
@@ -85,6 +92,7 @@ async function boot() {
   // the renderer's live canvas, not the now-detached element captured at boot.
   wireInput($('gl'));
   wirePanels();
+  initializeSessionPanel();
   buildPalette();
   renderMenus();
   requestAnimationFrame(frame);
@@ -104,6 +112,29 @@ async function fetchJson(url) {
     return await r.json();
   } catch { return null; }
 }
+
+function parseSessionSeed(value) {
+  const text = String(value).trim();
+  const radix = /^0x/i.test(text) ? 16 : 10;
+  const digits = radix === 16 ? text.slice(2) : text;
+  const valid = radix === 16 ? /^[0-9a-f]{1,8}$/i.test(digits) : /^\d{1,10}$/.test(digits);
+  if (!valid) {
+    throw new Error(`invalid session seed ${JSON.stringify(text)}; use uint32 decimal or 0x hexadecimal`);
+  }
+  const seed = Number.parseInt(digits, radix);
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) {
+    throw new Error(`session seed outside uint32: ${text}`);
+  }
+  return seed >>> 0;
+}
+
+function parseSessionPlayer(value, count) {
+  if (value === null || value === undefined || value === '') return 0;
+  const player = Number(value);
+  return Number.isInteger(player) && player >= 0 && player < count ? player : 0;
+}
+
+function formatSeed(seed) { return `0x${(seed >>> 0).toString(16).padStart(8, '0')}`; }
 
 // ---------------------------------------------------------------------------------------
 // camera
@@ -535,6 +566,141 @@ function anchorFor(w, b) {
 
 let paletteItems = [];
 
+function initializeSessionPanel() {
+  const players = $('session-player');
+  const colours = ['blue', 'red', 'green', 'amber'];
+  players.replaceChildren();
+  for (let i = 0; i < state.mod.playerCount; i++) {
+    const option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = `player ${i}${colours[i] ? ` (${colours[i]})` : ''}`;
+    players.appendChild(option);
+  }
+  players.value = String(state.who);
+  $('session-seed').value = formatSeed(state.sessionSeed);
+
+  $('session-new').addEventListener('click', restartSessionFromPanel);
+  $('session-seed').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') restartSessionFromPanel();
+  });
+  players.addEventListener('change', () => switchPlayer(Number(players.value)));
+  $('session-share').addEventListener('click', shareSessionLink);
+  syncSessionUrl();
+  renderSessionStatus();
+}
+
+function restartSessionFromPanel() {
+  const input = $('session-seed');
+  let seed;
+  try {
+    seed = parseSessionSeed(input.value);
+    input.setCustomValidity('');
+  } catch (error) {
+    input.setCustomValidity(error.message);
+    input.reportValidity();
+    $('session-status').textContent = error.message;
+    say(error.message, 'warn');
+    return false;
+  }
+
+  if (!state.mod.restart(seed)) {
+    const message = 'new game allocation failed; the previous session is still live';
+    $('session-status').textContent = message;
+    say(message, 'warn');
+    return false;
+  }
+  state.sessionSeed = seed;
+  state.selection = [];
+  state.groups.clear();
+  state.lastGroupKey = { key: null, t: 0 };
+  state.buildType = null;
+  state.commandMode = null;
+  state.drag = null;
+  state.panning = null;
+  state.edge = null;
+  state.idleCursor = 0;
+  state.terrainVersion = -1;
+  state.mod.setIncomeMode(Number($('income').value));
+  state.mod.setPopSetting(Number($('popset').value));
+  state.sessionInitialDigest = state.mod.digest();
+  miniVersion = -1;
+  miniTerrain = null;
+  previousGaps = null;
+  pings.length = 0;
+  acc = 0;
+  last = performance.now();
+  state.gfx.provision(state.mod.tiles, state.mod.x.game_capacity(state.mod.g));
+  const [sx, sy] = state.mod.startOf(state.who);
+  centreOn(sx, sy);
+  setPaused(false, false);
+  input.value = formatSeed(seed);
+  syncSessionUrl();
+  renderMenus();
+  renderSelection();
+  renderSessionStatus();
+  say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
+    'seed-dependent map generation remains blocked', 'ok');
+  return true;
+}
+
+function switchPlayer(player) {
+  const next = parseSessionPlayer(player, state.mod.playerCount);
+  if (next === state.who) return;
+  state.mod.group(state.who, []);
+  state.who = next;
+  state.selection = [];
+  state.mod.group(state.who, []);
+  state.buildType = null;
+  state.commandMode = null;
+  const [sx, sy] = state.mod.startOf(state.who);
+  centreOn(sx, sy);
+  syncSessionUrl();
+  renderMenus();
+  renderSelection();
+  renderSessionStatus();
+  say(`player perspective changed to ${state.who}`, 'hi');
+}
+
+function sessionUrl() {
+  const url = new URL(location.href);
+  url.searchParams.set('seed', formatSeed(state.sessionSeed));
+  url.searchParams.set('player', String(state.who));
+  return url;
+}
+
+function syncSessionUrl() {
+  history.replaceState(null, '', sessionUrl());
+}
+
+async function shareSessionLink() {
+  const url = sessionUrl().href;
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(url);
+    copied = true;
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = url;
+    area.style.cssText = 'position:fixed;left:-10000px;top:0';
+    document.body.appendChild(area);
+    area.select();
+    copied = document.execCommand('copy');
+    area.remove();
+  }
+  if (copied) say('session link copied — requested seed and player are encoded in the URL', 'ok');
+  else {
+    $('session-status').textContent = `copy unavailable — ${url}`;
+    say('clipboard unavailable; session link is shown in the session panel', 'warn');
+  }
+}
+
+function renderSessionStatus() {
+  if (!$('session-status') || !state.mod) return;
+  $('session-status').textContent =
+    `${formatSeed(state.sessionSeed)} · player ${state.who} · frame ${state.mod.frame} · ` +
+    `initial digest ${state.sessionInitialDigest} · seed not yet consumed by world setup`;
+}
+
 function wirePanels() {
   for (const id of ['tab-build', 'tab-train']) {
     $(id).addEventListener('click', () => {
@@ -580,7 +746,7 @@ function zoomCentre(factor) {
   zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
 }
 
-function setPaused(paused) {
+function setPaused(paused, announce = true) {
   state.paused = paused;
   const el = $('pause');
   if (el) el.textContent = paused ? 'resume (P)' : 'pause (P)';
@@ -590,7 +756,9 @@ function setPaused(paused) {
     dock.classList.toggle('active', paused);
     dock.setAttribute('aria-pressed', String(paused));
   }
-  say(paused ? 'simulation paused — commands remain queued for the next tick' : 'simulation resumed');
+  if (announce) {
+    say(paused ? 'simulation paused — commands remain queued for the next tick' : 'simulation resumed');
+  }
 }
 
 function setSpeed(speed) {
@@ -814,7 +982,7 @@ function renderHud() {
   const ageName = me.age === 0 ? 'Ancient Age'
     : (state.play?.ages?.[me.age - 1]?.name ?? `age ${me.age}`);
   $('meta').textContent =
-    `pop ${me.pop}/${me.popCap}   ${ageName}` +
+    `P${state.who}   ${formatSeed(state.sessionSeed)}   pop ${me.pop}/${me.popCap}   ${ageName}` +
     (me.research ? `   researching ${(me.research / 600 * 100) | 0}%` : '');
 
   const stat = $('stat');
@@ -825,6 +993,7 @@ function renderHud() {
     `x${state.speed}${state.paused ? '  PAUSED' : ''}`;
 
   renderSelection();
+  renderSessionStatus();
   renderCoverage();
   renderTransport();
 }
@@ -1167,6 +1336,19 @@ window.don = {
   state,
   select: selectIds,
   order: { move: issueMove, build: placeBuilding },
+  session: {
+    restart(seed) {
+      $('session-seed').value = formatSeed(parseSessionSeed(seed));
+      return restartSessionFromPanel();
+    },
+    player(player) {
+      const select = $('session-player');
+      select.value = String(parseSessionPlayer(player, state.mod.playerCount));
+      switchPlayer(Number(select.value));
+      return state.who;
+    },
+    url: () => sessionUrl().href,
+  },
   activate,
   info: (id) => state.mod.info(id),
   player: (p = 0) => state.mod.player(p),
@@ -1189,6 +1371,7 @@ window.don = {
     stepMs: state.stepMs, uploadMs: state.uploadMs, drawMs: state.drawMs,
     backend: state.gfx.kind, backendErrors: state.gfx.errors.slice(),
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
+    sessionSeed: state.sessionSeed, playerPerspective: state.who,
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),

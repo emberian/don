@@ -106,11 +106,14 @@
   button { background:#1b2130; color:var(--ink); border:1px solid var(--line);
     border-radius:5px; padding:4px 7px; font:10px var(--mono); cursor:pointer; }
   button:hover { border-color:var(--accent); }
+  button.primary { background:#16354d; border-color:#2b6d99; }
   label { display:grid; grid-template-columns:1fr auto; gap:6px; align-items:center;
     margin:4px 0; font-size:10.5px; color:var(--dim); }
-  select,input[type=range] { background:#0d0f16; color:var(--ink); border:1px solid var(--line);
+  select,input[type=range],input[type=text] { background:#0d0f16; color:var(--ink); border:1px solid var(--line);
     border-radius:4px; font:10px var(--mono); }
   select { padding:2px 4px; }
+  input[type=text] { min-width:0; width:150px; padding:3px 5px; user-select:text;
+    -webkit-user-select:text; }
   input[type=range] { accent-color:var(--accent); }
   #log { font:9.5px/1.45 var(--mono); color:var(--dim); white-space:pre-wrap;
     max-height:150px; overflow-y:auto; }
@@ -137,6 +140,7 @@
   #readiness-blockers li { margin:3px 0; }
   #readiness-blockers code { color:var(--warn); }
   #palette-filter { width:100%; margin-bottom:6px; padding:4px 6px; }
+  #session-status { user-select:text; -webkit-user-select:text; overflow-wrap:anywhere; }
 
   @media (max-width:900px) {
     #app { grid-template-columns:minmax(400px,1fr) 290px; }
@@ -205,6 +209,27 @@
       <span class="badge off">integration build</span>
     </div>
     <div id="readiness-head" class="status-note">Loading compiled readiness registry…</div>
+
+    <fieldset id="session">
+      <legend>session</legend>
+      <label>requested seed
+        <input id="session-seed" type="text" value="0x00c0ffee" inputmode="text"
+          autocomplete="off" spellcheck="false" aria-describedby="session-status">
+      </label>
+      <label>you are player <select id="session-player" style="width:150px"></select></label>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button id="session-new" class="primary">new game</button>
+        <button id="session-share">copy session link</button>
+      </div>
+      <div id="session-status" class="hint" style="margin-top:6px" aria-live="polite">
+        session loading…
+      </div>
+      <div class="hint" style="margin-top:4px">
+        The seed is passed into <code>GameWorld</code> and retained in a shareable session URL,
+        but the current initializer does not yet consume it for map/start generation. Map type,
+        nations, teams, and victory setup remain compiled readiness blockers.
+      </div>
+    </fieldset>
 
     <fieldset id="readiness">
       <legend>runtime &amp; evidence</legend>
