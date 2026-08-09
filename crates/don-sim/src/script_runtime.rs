@@ -809,6 +809,82 @@ impl Sim {
         self.script_object_max_health(object)
     }
 
+    /// The point used by the addressed-object proximity readers. These handlers call
+    /// `UnitData::get_captain`, but unlike `object_position_{x,y}` they do not redirect
+    /// through `ObjectData::get_inside` before reading the encrypted coordinates.
+    fn script_object_tile_point(&self, object: ScriptObject) -> Result<(i32, i32), HostError> {
+        let object = self.script_captain(object)?;
+        let (x, y) = match object {
+            ScriptObject::Unit { row, .. } => (
+                self.world.units.x_internal()[row],
+                self.world.units.y_internal()[row],
+            ),
+            ScriptObject::Build { row, .. } => self.builds[row].position(),
+            // Both callers apply `valid_object_o`, whose owner-local domain stops
+            // before the wall band at 3000.
+            ScriptObject::Wall { .. } => return Err(HostError::Unimplemented),
+        };
+        if x < 0 || y < 0 {
+            // Retail indexes `div_3_table` after an arithmetic shift. Negative host
+            // coordinates fall outside that recovered finite lookup domain.
+            return Err(HostError::Unimplemented);
+        }
+        Ok((
+            x / production::COORD_PER_TILE,
+            y / production::COORD_PER_TILE,
+        ))
+    }
+
+    /// Integer point distance at `0x0046cff0`. This is the engine's fast approximation:
+    /// `major + minor^2 / (2*major)`, switching to `(minor + 2*major) / 2` before the
+    /// square can overflow. Its callers compare the result strictly below the radius.
+    fn script_point_distance(dx: i32, dy: i32) -> Result<i32, HostError> {
+        let dx = dx.checked_abs().ok_or(HostError::Unimplemented)?;
+        let dy = dy.checked_abs().ok_or(HostError::Unimplemented)?;
+        let (major, minor) = if dx >= dy { (dx, dy) } else { (dy, dx) };
+        if major == 0 {
+            return Ok(0);
+        }
+        if minor >= 60_000 {
+            let distance = (minor as u32).wrapping_add((major as u32).wrapping_mul(2)) >> 1;
+            return Ok(distance as i32);
+        }
+        let correction = (minor as u32).wrapping_mul(minor as u32) / (major as u32).wrapping_mul(2);
+        Ok(correction.wrapping_add(major as u32) as i32)
+    }
+
+    /// `ScenarioFuncSet::is_object_at` `0x009f0b70`.
+    fn script_is_object_at(&self, who: i32, o: i32, x: i32, y: i32) -> Result<i32, HostError> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(object) = self.valid_script_object(who, o) else {
+            return Ok(-1);
+        };
+        let point = self.script_object_tile_point(object)?;
+        Ok((point == (x, y)) as i32)
+    }
+
+    /// `ScenarioFuncSet::object_near` `0x009f0c30`.
+    fn script_object_near(
+        &self,
+        who: i32,
+        o: i32,
+        x: i32,
+        y: i32,
+        radius: i32,
+    ) -> Result<i32, HostError> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(object) = self.valid_script_object(who, o) else {
+            return Ok(-1);
+        };
+        if radius <= 0 {
+            return Ok(-1);
+        }
+        let (object_x, object_y) = self.script_object_tile_point(object)?;
+        let distance =
+            Self::script_point_distance(object_x.wrapping_sub(x), object_y.wrapping_sub(y))?;
+        Ok((distance < radius) as i32)
+    }
+
     /// `ScenarioFuncSet::object_position_{x,y}` (`0x009f1360` / `0x009f1470`).
     fn script_object_position(&self, who: i32, o: i32, y_axis: bool) -> Result<i32, HostError> {
         let who = who.wrapping_sub(1) as u32 as usize;
@@ -1071,6 +1147,22 @@ impl ScenarioHost for Sim {
                         .sum(),
                 ))
             }
+            // The addressed-object location cohort shares `valid_object_o`, direct
+            // captain-coordinate reads, and the retail integer distance approximation.
+            // Radius comparisons are strict; a non-positive radius is an invalid call.
+            402 => Ok(Value::Int(self.script_is_object_at(
+                args[0].as_int(),
+                args[1].as_int(),
+                args[2].as_int(),
+                args[3].as_int(),
+            )?)),
+            403 => Ok(Value::Int(self.script_object_near(
+                args[0].as_int(),
+                args[1].as_int(),
+                args[2].as_int(),
+                args[3].as_int(),
+                args[4].as_int(),
+            )?)),
             // Both handlers share the exact address validation, captain resolution,
             // outer-container walk, coordinate deobfuscation, and `div_3_table` tile
             // conversion recovered at `0x009f1360` / `0x009f1470`.

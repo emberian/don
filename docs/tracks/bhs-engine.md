@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Forty-three
+`Program`, and `ScriptRuntime` runs either producer against that live host. Forty-five
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -487,6 +487,8 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 298 | `time_sec` | direct `Game::seconds` read (`0x009ead40`) |
 | 351 | `time_later_than` | signed `Game::seconds / 60 >= argument` (`0x009ee120`) |
 | 352 | `time_earlier_than` | signed `Game::seconds / 60 < argument` (`0x009ee160`) |
+| 402 | `is_object_at` | valid object, unit-captain point, then exact tile-coordinate equality (`0x009f0b70`) |
+| 403 | `object_near` | the same point and retail approximate distance, strictly below a positive radius (`0x009f0c30`) |
 | 411 | `object_position_x` | validate `(who,o)`, resolve captain and outer container, then `div_3_table[(x ^ 0x63637) >> 6]` (`0x009f1360`) |
 | 412 | `object_position_y` | the same object walk over the encrypted y coordinate (`0x009f1470`) |
 | 446 | `is_garrisoned` | exact object validation and `get_inside` walk; true only for an outer building container (`0x009f2f20`) |
@@ -503,9 +505,9 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 7,807 calls to those forty-three registrations. Together
+The current 363-file census contains 7,904 calls to those forty-five registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,598 of 39,957 measured shipped-corpus call sites (**21.52%**, up from **1.98%**).
+8,695 of 39,957 measured shipped-corpus call sites (**21.76%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The unit-status cohort contributes 58 shipped calls. Its object gate is the exact
@@ -527,6 +529,26 @@ interpolation before either query. Missing unit-type `uber_size`, razing train t
 formation links, and cycles fail closed. The ordinary-source and loaded-chunk fixture tests
 cover all three distinctions: captain aggregation versus direct subordinate maximum,
 construction-scaled health, and active razing-scaled health.
+
+The addressed-object proximity pair contributes 97 shipped calls: 2 `is_object_at`
+and 95 `object_near`. Both use `valid_object_o`. A unit is redirected to its captain,
+but these handlers intentionally do not follow the outer
+container used by `object_position_{x,y}`. Fine coordinates pass through the retail
+`div_3_table` tile conversion before the integer distance approximation at `0x0046cff0`:
+`major + minor^2 / (2*major)`, with its 60,000-unit overflow branch. Near means strictly
+less than a positive radius, not less-than-or-equal. Negative coordinates outside the
+recovered table domain and broken captain links fail closed. The ordinary-source and
+loaded-chunk fixtures mutation-test captain redirection, the approximation's 3-by-4 = 5
+case, and the strict 5-false/6-true boundary.
+
+The adjacent `object_near_build` and `any_object_*` scan registrations remain deliberately
+unsupported. `object_near_build` subtracts half of the target building type's summed
+`ObjectTypeData::{x_size,y_size}` footprint after measuring point distance. Retail's
+`ScenarioFuncSet::find_objects` calls both `Objects::find_units` and
+`Objects::find_builds`; beyond live/on-map state and positions, those searches subtract
+unit collision radii and the same building footprint extents. Those per-type spatial facts
+do not yet have an authoritative `Sim` owner, so counting points alone would silently
+overcount and is not accepted as an exact handler.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
 `add_timer` / `remove_timer` / `check` bodies at `0x00a049e0`, `0x00a04b20`, and

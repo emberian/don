@@ -924,6 +924,102 @@ fn object_health_fails_closed_without_unit_type_uber_size() {
     ));
 }
 
+fn configure_object_proximity_state(sim: &mut Sim) {
+    sim.activate(0);
+
+    // Query subordinate 1. Every addressed-object location handler must redirect it
+    // to captain 0, while retaining the captain's own point rather than an outer
+    // containment point.
+    let captain = sim.spawn_unit(0, 7, 10 * 192, 20 * 192, 4).unwrap();
+    let subordinate = sim.spawn_unit(0, 7, 90 * 192, 90 * 192, 4).unwrap();
+    let captain_row = sim.world.row_of(captain).unwrap();
+    let subordinate_row = sim.world.row_of(subordinate).unwrap();
+    sim.world.units.o_up_mut()[captain_row] = -1;
+    sim.world.units.inside_up_mut()[captain_row] = -1;
+    sim.world.units.inside_up_who_mut()[captain_row] = -1;
+    sim.world.units.o_up_mut()[subordinate_row] = 0;
+    sim.world.units.inside_up_mut()[subordinate_row] = -1;
+    sim.world.units.inside_up_who_mut()[subordinate_row] = -1;
+
+    // The fixture also probes a 3-by-4 tile delta from the captain, whose retail
+    // approximate distance is 5. Radius 5 must therefore be false and radius 6 true;
+    // this catches an accidental <= comparison or Euclidean replacement.
+}
+
+#[test]
+fn ordinary_source_executes_addressed_object_proximity_reads() {
+    let program = compile_source_fixture("scenario_object_proximity.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "object_proximity_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8130, 8);
+    configure_object_proximity_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 1, 0, 1, -1],
+        "captain redirection, approximate distance, strict radius, and invalid radius must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_addressed_object_proximity_reads() {
+    let compiled = compile_source_fixture("scenario_object_proximity.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "object_proximity_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8131, 12);
+    configure_object_proximity_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [1, 0, 1, 0, 1, -1],
+        "loaded chunks must retain exact addressed-object proximity semantics"
+    );
+}
+
+#[test]
+fn object_near_fails_closed_outside_the_recovered_coordinate_table() {
+    let mut scripts = game_runtime(one_builtin_program(
+        "object_near",
+        &[
+            Value::Int(1),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(1),
+        ],
+    ));
+    let mut sim = Sim::new(0x8132, 8);
+    sim.activate(0);
+    let unit = sim.spawn_unit(0, 7, -192, 3 * 192, 4).unwrap();
+    let row = sim.world.row_of(unit).unwrap();
+    sim.world.units.o_up_mut()[row] = -1;
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "object_near",
+            ..
+        })
+    ));
+}
+
 #[test]
 fn unsupported_scenario_builtin_stops_before_the_rest_of_the_tick() {
     let mut scripts = game_runtime(one_builtin_program("num_cities", &[Value::Int(1)]));

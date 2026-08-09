@@ -1,0 +1,10 @@
+int scenario object_proximity_tick()
+{
+    set_good(1, "Food", is_object_at(1, 1, 10, 20));
+    set_good(1, "Timber", is_object_at(1, 1, 90, 90));
+    set_good(1, "Wealth", object_near(1, 1, 10, 20, 1));
+    set_good(1, "Knowledge", object_near(1, 1, 13, 24, 5));
+    set_good(1, "Metal", object_near(1, 1, 13, 24, 6));
+    give_good(1, "Oil", object_near(1, 1, 10, 20, 0));
+    return 1;
+}
