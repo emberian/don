@@ -983,6 +983,159 @@ class RetailCtlTests(unittest.TestCase):
         )
         retailctl.validate_netsys_bridge_off_frontier(bridge_off)
 
+    def test_netsys_live_run_resumes_at_the_only_human_ui_pause_and_cleans_up(self):
+        source = netsys_manifest_fixture()
+        source["generation"] = 2
+        current = {
+            "path": "host-current",
+            "size": 200_704,
+            "sha256": "c" * 64,
+        }
+        peer = {"path": "host-peer", "size": 892_704, "sha256": "d" * 64}
+        manifest = copy.deepcopy(source)
+        calls = []
+
+        def rollover(*_args):
+            calls.append("rollover")
+            manifest.update({
+                "generation": 3,
+                "shim": {
+                    "path": retailctl.NETSYS_STAGED,
+                    "size": current["size"],
+                    "sha256": current["sha256"],
+                },
+            })
+            return {"operation": "next-generation", "current": copy.deepcopy(manifest)}
+
+        def configure(bind):
+            calls.append(f"configure:{bind}")
+            manifest.update({
+                "mode": "host-bridge",
+                "environment": retailctl.netsys_environment("host-bridge", bind),
+                "launcher_sha256": "e" * 64,
+            })
+            return {"operation": "configure", "current": copy.deepcopy(manifest)}
+
+        def load_proof(path, _timeout):
+            calls.append(f"proof:{Path(path).name}")
+            return {"generation": manifest["generation"], "artifact": str(path)}
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            state_path = root / "state.json"
+            generation2 = root / "generation2.json"
+            latest = root / "latest.json"
+            host_capture = root / "host.json"
+            evidence = root / "run.donlstp"
+            arguments = (
+                state_path, Path("shim"), Path("peer"), "0.0.0.0:31337",
+                "10.211.55.6:31337", 4, 300, 3, generation2, latest,
+                host_capture, evidence,
+            )
+            with (
+                mock.patch.object(retailctl, "host_netsys_identity", return_value=current),
+                mock.patch.object(retailctl, "host_owned_peer_identity", return_value=peer),
+                mock.patch.object(retailctl, "read_netsys_manifest",
+                                  side_effect=lambda: copy.deepcopy(manifest)),
+                mock.patch.object(retailctl, "guest_file_record", return_value={
+                    "present": True, "path": retailctl.RETAIL_NETSYS_DLL,
+                    "size": source["shim"]["size"],
+                    "sha256": source["shim"]["sha256"],
+                }),
+                mock.patch.object(retailctl, "netsys_live_load_proof",
+                                  side_effect=load_proof),
+                mock.patch.object(retailctl, "netsys_next_generation",
+                                  side_effect=rollover),
+                mock.patch.object(retailctl, "netsys_configure_bridge_from_load_only",
+                                  side_effect=configure),
+                mock.patch.object(retailctl, "process_pids", side_effect=[([], ""), ([77], "")]),
+                mock.patch.object(retailctl, "netsys_launch", return_value={
+                    "mode": "host-bridge", "process": {"pid": 77},
+                }),
+                mock.patch.object(retailctl, "netsys_friend_game_gate",
+                                  return_value={"ns_host_observed": True}),
+                mock.patch.object(retailctl, "run_owned_peer_live",
+                                  return_value={"evidence_identity": {"sha256": "f" * 64}}),
+                mock.patch.object(retailctl, "netsys_capture", return_value={
+                    "mode": "host-bridge",
+                }),
+                mock.patch.object(retailctl, "validated_local_netsys_capture",
+                                  return_value={"artifact": {"sha256": "1" * 64}}),
+                mock.patch.object(retailctl, "netsys_stop_retail",
+                                  return_value={"forced": False}),
+                mock.patch.object(retailctl, "netsys_restore",
+                                  return_value={"state": "restored"}),
+                mock.patch("builtins.print"),
+            ):
+                paused = retailctl.netsys_live_run(
+                    *arguments, confirm_friend_game_ready=False, cleanup=False
+                )
+                self.assertEqual(paused["status"], "paused-for-user")
+                state = retailctl.read_netsys_live_state(state_path)
+                self.assertEqual(state["phase"], "awaiting-friend-game-ui")
+                self.assertEqual(state["active_pid"], 77)
+                complete = retailctl.netsys_live_run(
+                    *arguments, confirm_friend_game_ready=True, cleanup=False
+                )
+            self.assertEqual(complete["status"], "complete")
+            state = retailctl.read_netsys_live_state(state_path)
+            self.assertEqual(state["phase"], "complete")
+            self.assertIsNone(state["active_pid"])
+            self.assertEqual(calls, [
+                "proof:generation2.json", "rollover", "proof:latest.json",
+                "configure:0.0.0.0:31337",
+            ])
+
+    def test_netsys_live_resume_refuses_host_artifact_identity_drift(self):
+        state = {
+            "shim": {"path": "shim", "size": 100, "sha256": "a" * 64},
+            "owned_peer": {"path": "peer", "size": 200, "sha256": "b" * 64},
+        }
+        with (
+            mock.patch.object(retailctl, "host_netsys_identity", return_value={
+                "path": "shim", "size": 101, "sha256": "c" * 64,
+            }),
+            mock.patch.object(retailctl, "host_owned_peer_identity",
+                              return_value=state["owned_peer"]),
+        ):
+            with self.assertRaisesRegex(SystemExit, "identity drift"):
+                retailctl.verify_netsys_live_host_identities(
+                    state, Path("shim"), Path("peer")
+                )
+
+    def test_direct_live_bridge_configuration_requires_current_load_proof_only(self):
+        manifest = netsys_manifest_fixture()
+        manifest["generation"] = 3
+        proof = {"generation": 3, "factory_ready": "exact"}
+        written = []
+        launchers = []
+        with (
+            mock.patch.object(retailctl, "require_retail_absent"),
+            mock.patch.object(retailctl, "read_netsys_manifest", return_value=manifest),
+            mock.patch.object(retailctl, "validated_netsys_load_only_proof",
+                              return_value=proof),
+            mock.patch.object(retailctl, "guest_file_record", return_value={
+                "present": False, "path": retailctl.NETSYS_BRIDGE_TRACE,
+            }),
+            mock.patch.object(retailctl, "guest_write_bytes",
+                              side_effect=lambda path, data: launchers.append((path, data))),
+            mock.patch.object(retailctl, "write_netsys_manifest",
+                              side_effect=lambda value: written.append(copy.deepcopy(value))),
+            mock.patch("builtins.print"),
+        ):
+            result = retailctl.netsys_configure_bridge_from_load_only(
+                "0.0.0.0:31337"
+            )
+        self.assertEqual(result["load_only_proof"], proof)
+        self.assertEqual(result["current"]["mode"], "host-bridge")
+        self.assertEqual(
+            result["current"]["environment"],
+            retailctl.netsys_environment("host-bridge", "0.0.0.0:31337"),
+        )
+        self.assertEqual(written[-1], result["current"])
+        self.assertEqual(launchers[0][0], retailctl.NETSYS_LAUNCHER)
+        self.assertIn(b'DON_NET_SETUP_BRIDGE=1', launchers[0][1])
+
     def test_encoded_guest_powershell_preserves_quotes_without_shell_reparsing(self):
         completed = mock.Mock(stdout="ok\r\n")
         with mock.patch.object(retailctl, "run", return_value=completed) as invoked:

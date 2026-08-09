@@ -63,7 +63,28 @@ DEFAULT_NETSYS_SHIM = (
     HERE.parents[1] / "crates/netsys-shim/target/i686-pc-windows-msvc/release/"
     "CrossplayNetLib.dll"
 )
+DEFAULT_OWNED_PEER = (
+    HERE.parents[1] / "tools/owned-peer/target/release/don-owned-peer"
+)
+DEFAULT_NETSYS_LIVE_STATE = (
+    HERE.parents[1] / "schema/live/retail-netsys-live-run-v1.state.json"
+)
+DEFAULT_NETSYS_LIVE_GENERATION2_CAPTURE = (
+    HERE.parents[1] / "schema/live/retail-netsys-generation-2-load-only-v1.json"
+)
+DEFAULT_NETSYS_LIVE_LATEST_LOAD_CAPTURE = (
+    HERE.parents[1] / "schema/live/retail-netsys-current-load-only-v1.json"
+)
+DEFAULT_NETSYS_LIVE_HOST_CAPTURE = (
+    HERE.parents[1] / "schema/live/retail-netsys-live-host-bridge-v1.json"
+)
+DEFAULT_NETSYS_LIVE_EVIDENCE = (
+    HERE.parents[1] / "schema/live/retail-netsys-live-lockstep-v1.donlstp"
+)
 NETSYS_SCHEMA = "don.retail-netsys-experiment.v1"
+NETSYS_LIVE_SCHEMA = "don.retail-netsys-live-run.v1"
+NETSYS_LIVE_MAX_TURNS = 1_000
+NETSYS_LIVE_MAX_TIMEOUT_SECS = 3_600
 NETSYS_JSON_BEGIN = "DON_NETSYS_JSON_BEGIN"
 NETSYS_JSON_END = "DON_NETSYS_JSON_END"
 GUEST_COMMAND_TIMEOUT_SECONDS = 45
@@ -4984,6 +5005,77 @@ def netsys_configure_bridge() -> dict:
     return manifest
 
 
+def validated_netsys_load_only_proof(manifest: dict) -> dict:
+    """Return one exact, flushed load-only frontier bound to the installed shim."""
+    validate_netsys_manifest(manifest)
+    if (manifest["state"] != "installed" or manifest["mode"] != "load-only" or
+            manifest["rollover"] is not None):
+        raise SystemExit("REFUSING load-only proof outside an installed stable generation")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (not target["present"] or target.get("size") != manifest["shim"]["size"] or
+            target.get("sha256") != manifest["shim"]["sha256"]):
+        raise SystemExit("REFUSING load-only proof: installed DLL identity changed")
+    trace_record = guest_file_record(NETSYS_LOAD_TRACE)
+    exit_record = guest_file_record(NETSYS_LOAD_EXIT)
+    if not trace_record["present"] or not exit_record["present"]:
+        raise SystemExit("REFUSING load-only proof without flushed trace and exit records")
+    try:
+        trace = parse_netsys_trace(
+            guest_read_bytes(NETSYS_LOAD_TRACE, 1024 * 1024).decode("utf-8")
+        )
+        validate_netsys_load_only_frontier(trace)
+        exit_value = parse_netsys_exit(guest_read_bytes(NETSYS_LOAD_EXIT, 1024))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING malformed load-only proof: {exc}") from exc
+    if exit_value["exit_code"] not in NETSYS_NORMAL_EXIT_CODES:
+        raise SystemExit(
+            f"REFUSING load-only proof after exit code {exit_value['exit_code']}"
+        )
+    return {
+        "generation": manifest["generation"],
+        "shim": copy.deepcopy(manifest["shim"]),
+        "trace": {key: trace_record[key] for key in ("path", "size", "sha256")},
+        "exit": {
+            **{key: exit_record[key] for key in ("path", "size", "sha256")},
+            **exit_value,
+        },
+        "factory_ready": trace["factory_ready"],
+    }
+
+
+def netsys_configure_bridge_from_load_only(bind: str) -> dict:
+    """Narrow live-run seam: one current-generation load proof, then bridge mode.
+
+    This does not invoke ns_host or click retail UI.  The separate live-run gate
+    still requires a real ns_host trace and local listener after the user creates
+    their Friend Game before the owned peer may connect.
+    """
+    require_retail_absent("NetSys setup-bridge configuration")
+    manifest = read_netsys_manifest()
+    proof = validated_netsys_load_only_proof(manifest)
+    if guest_file_record(NETSYS_BRIDGE_TRACE)["present"]:
+        raise SystemExit("REFUSING to append to an existing setup-bridge trace")
+    environment = netsys_environment("host-bridge", bind)
+    launcher = netsys_launcher_text("host-bridge", environment).encode("ascii")
+    guest_write_bytes(NETSYS_LAUNCHER, launcher)
+    manifest.update({
+        "mode": "host-bridge",
+        "environment": environment,
+        "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
+    })
+    write_netsys_manifest(manifest)
+    result = {
+        "schema": NETSYS_SCHEMA,
+        "operation": "configure-host-bridge-from-load-only",
+        "credential_material": "none",
+        "load_only_proof": proof,
+        "current": manifest,
+        "host_activation": "awaiting explicit user Friend Game UI; no UI was invoked",
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
 def delete_netsys_task() -> None:
     guest_cmd(
         f'schtasks.exe /delete /tn "\\{NETSYS_TASK_NAME}" /f >nul 2>nul & exit /b 0',
@@ -5386,6 +5478,852 @@ Remove-Item -LiteralPath $replace_backup -Force
     return result
 
 
+NETSYS_LIVE_PHASES = frozenset({
+    "generation-2-load-proof", "rollover-current-shim", "latest-load-proof",
+    "configure-host-bridge", "launch-host-bridge", "awaiting-friend-game-ui",
+    "run-owned-peer", "capture-host-bridge", "cleanup", "complete", "cleaned",
+})
+
+
+def host_owned_peer_identity(peer: Path) -> dict:
+    peer = peer.resolve()
+    if peer != DEFAULT_OWNED_PEER.resolve():
+        raise SystemExit("owned peer must be the current repository release target")
+    build = run([
+        "cargo", "build", "--release", "--locked", "--manifest-path",
+        str(HERE.parents[1] / "tools/owned-peer/Cargo.toml"),
+    ])
+    if build.returncode != 0:
+        raise SystemExit("current owned peer release build did not complete")
+    if not peer.is_file() or peer.name != "don-owned-peer":
+        raise SystemExit("owned peer must be an existing don-owned-peer executable")
+    if not os.access(peer, os.X_OK):
+        raise SystemExit("owned peer is not executable")
+    size = peer.stat().st_size
+    if not 64 * 1024 <= size <= 64 * 1024 * 1024:
+        raise SystemExit("owned peer executable size is outside the bounded range")
+    identity = run(["file", str(peer)]).stdout.strip()
+    if not any(kind in identity for kind in ("Mach-O", "ELF")):
+        raise SystemExit(f"owned peer is not a native host executable: {identity}")
+    return {"path": str(peer), "size": size, "sha256": sha256_file(peer)}
+
+
+def local_file_identity(path: Path, maximum: int) -> dict:
+    path = path.resolve()
+    if not path.is_file():
+        raise SystemExit(f"required local artifact is missing: {path}")
+    size = path.stat().st_size
+    if not 0 < size <= maximum:
+        raise SystemExit(f"local artifact size is outside its bound: {path}")
+    return {"path": str(path), "size": size, "sha256": sha256_file(path)}
+
+
+def atomic_write_local_json(path: Path, value: dict, *, replace: bool) -> dict:
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(encoded) > 1024 * 1024:
+        raise SystemExit("local orchestration JSON exceeds 1 MiB")
+    if path.exists() and not replace:
+        raise SystemExit(f"REFUSING to replace existing local artifact {path}")
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    if temp.exists():
+        raise SystemExit(f"REFUSING orphaned local temporary file {temp}")
+    try:
+        with temp.open("xb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
+    return local_file_identity(path, 1024 * 1024)
+
+
+def validate_netsys_live_state(state: object) -> dict:
+    if not isinstance(state, dict) or set(state) != {
+            "schema", "phase", "created_unix_ms", "updated_unix_ms",
+            "credential_material", "source_generation", "target_generation", "shim",
+            "owned_peer", "bind", "peer_endpoint", "turns", "timeout_secs",
+            "reconnect_after", "paths", "active_pid", "checkpoints"}:
+        raise ValueError("live-run state fields are incomplete or unexpected")
+    if (state["schema"] != NETSYS_LIVE_SCHEMA or
+            state["phase"] not in NETSYS_LIVE_PHASES or
+            state["credential_material"] != "none" or
+            state["source_generation"] != 2 or state["target_generation"] != 3 or
+            not isinstance(state["created_unix_ms"], int) or
+            isinstance(state["created_unix_ms"], bool) or
+            not isinstance(state["updated_unix_ms"], int) or
+            isinstance(state["updated_unix_ms"], bool) or
+            state["updated_unix_ms"] < state["created_unix_ms"] or
+            not isinstance(state["checkpoints"], dict)):
+        raise ValueError("live-run state header is invalid")
+    for label in ("shim", "owned_peer"):
+        identity = state[label]
+        if (not isinstance(identity, dict) or set(identity) != {"path", "size", "sha256"} or
+                not isinstance(identity["path"], str) or
+                not isinstance(identity["size"], int) or identity["size"] <= 0 or
+                not isinstance(identity["sha256"], str) or
+                not re.fullmatch(r"[0-9a-f]{64}", identity["sha256"])):
+            raise ValueError(f"live-run {label} identity is invalid")
+    try:
+        environment = netsys_environment("host-bridge", state["bind"])
+        endpoint_host, endpoint_port = state["peer_endpoint"].rsplit(":", 1)
+        endpoint_address = ipaddress.ip_address(endpoint_host)
+        endpoint_port_value = int(endpoint_port)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("live-run bind or peer endpoint is invalid") from exc
+    bind_port = int(environment["DON_NET_BIND"].rsplit(":", 1)[1])
+    if (endpoint_address.version != 4 or
+            not (endpoint_address.is_loopback or endpoint_address.is_private) or
+            endpoint_port_value != bind_port):
+        raise ValueError("live-run peer endpoint is not bounded to the owned host port")
+    if (not isinstance(state["turns"], int) or isinstance(state["turns"], bool) or
+            not 1 <= state["turns"] <= NETSYS_LIVE_MAX_TURNS or
+            not isinstance(state["timeout_secs"], int) or
+            isinstance(state["timeout_secs"], bool) or
+            not 1 <= state["timeout_secs"] <= NETSYS_LIVE_MAX_TIMEOUT_SECS or
+            (state["reconnect_after"] is not None and
+             (not isinstance(state["reconnect_after"], int) or
+              isinstance(state["reconnect_after"], bool) or
+              not 1 <= state["reconnect_after"] < state["turns"])) or
+            (state["active_pid"] is not None and
+             (not isinstance(state["active_pid"], int) or
+              isinstance(state["active_pid"], bool) or state["active_pid"] <= 0))):
+        raise ValueError("live-run numeric bounds are invalid")
+    paths = state["paths"]
+    if (not isinstance(paths, dict) or set(paths) !=
+            {"generation2_capture", "latest_load_capture", "host_capture", "evidence"} or
+            any(not isinstance(value, str) or not Path(value).is_absolute()
+                for value in paths.values()) or len(set(paths.values())) != 4):
+        raise ValueError("live-run artifact paths are invalid")
+    prohibited = {"ticket", "token", "secret", "lobby_id", "platform_id", "steam_id"}
+
+    def has_prohibited_key(value: object) -> bool:
+        if isinstance(value, dict):
+            return any(
+                str(key).lower() in prohibited or has_prohibited_key(child)
+                for key, child in value.items()
+            )
+        if isinstance(value, list):
+            return any(has_prohibited_key(child) for child in value)
+        return False
+
+    if has_prohibited_key(state["checkpoints"]):
+        raise ValueError("live-run checkpoints contain prohibited identity material")
+    return state
+
+
+def read_netsys_live_state(path: Path) -> dict:
+    path = path.resolve()
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError("live-run state exceeds 1 MiB")
+        raw = path.read_bytes()
+        state = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"live-run state is unreadable: {exc}") from exc
+    return validate_netsys_live_state(state)
+
+
+def write_netsys_live_state(path: Path, state: dict) -> dict:
+    state["updated_unix_ms"] = max(
+        state["created_unix_ms"], int(time.time() * 1000)
+    )
+    validate_netsys_live_state(state)
+    atomic_write_local_json(path, state, replace=path.exists())
+    return state
+
+
+def netsys_stop_retail(target_pid: int, expected_shim_sha256: str,
+                       timeout: float) -> dict:
+    actual_pid = pid()
+    if actual_pid != target_pid:
+        raise SystemExit(
+            f"REFUSING scoped retail stop: active PID {actual_pid} != {target_pid}"
+        )
+    process = netsys_process_record(target_pid)
+    manifest = read_netsys_manifest()
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (manifest["shim"] is None or manifest["shim"]["sha256"] != expected_shim_sha256 or
+            target.get("sha256") != expected_shim_sha256):
+        raise SystemExit("REFUSING scoped retail stop after shim identity drift")
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$process = Get-Process -Id {target_pid}
+$record = [pscustomobject]@{{ pid = [int]$process.Id; close_requested = [bool]$process.CloseMainWindow() }}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    result = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+    )
+    if (not isinstance(result, dict) or result.get("pid") != target_pid or
+            not isinstance(result.get("close_requested"), bool)):
+        raise SystemExit("scoped retail close returned an invalid identity record")
+    deadline = time.monotonic() + min(timeout, 10.0)
+    while time.monotonic() < deadline:
+        pids, _ = process_pids()
+        if not pids:
+            return {"process": process, "close_requested": result["close_requested"],
+                    "forced": False}
+        if pids != [target_pid]:
+            raise SystemExit(f"REFUSING scoped retail close after PID drift: {pids}")
+        time.sleep(0.1)
+    guest_ps_encoded(
+        f"$ErrorActionPreference = 'Stop'; Stop-Process -Id {target_pid} -Force"
+    )
+    deadline = time.monotonic() + min(timeout, 10.0)
+    while time.monotonic() < deadline:
+        pids, _ = process_pids()
+        if not pids:
+            return {"process": process, "close_requested": result["close_requested"],
+                    "forced": True}
+        if pids != [target_pid]:
+            raise SystemExit(f"REFUSING scoped force-stop after PID drift: {pids}")
+        time.sleep(0.1)
+    raise SystemExit("retail process remained after bounded scoped stop")
+
+
+def netsys_live_load_proof(output: Path, timeout: float) -> dict:
+    manifest = read_netsys_manifest()
+    output = output.resolve()
+    if output.exists():
+        local_file_identity(output, 4 * 1024 * 1024)
+        try:
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"REFUSING malformed existing load-proof artifact: {exc}") from exc
+        current = validated_netsys_load_only_proof(manifest)
+        if (not isinstance(artifact, dict) or
+                artifact.get("schema") != "don.retail-netsys-load-proof.v1" or
+                artifact.get("credential_material") != "none" or
+                artifact.get("generation") != manifest["generation"] or
+                artifact.get("proof") != current or
+                set(artifact) != {"schema", "credential_material", "generation", "proof",
+                                  "live_capture"}):
+            raise SystemExit("REFUSING stale or identity-mismatched load-proof artifact")
+        artifact["artifact"] = local_file_identity(output, 4 * 1024 * 1024)
+        return artifact
+    trace = guest_file_record(NETSYS_LOAD_TRACE)
+    exit_record = guest_file_record(NETSYS_LOAD_EXIT)
+    capture = None
+    if trace["present"] and exit_record["present"]:
+        proof = validated_netsys_load_only_proof(manifest)
+    else:
+        if exit_record["present"]:
+            raise SystemExit("REFUSING load-only exit record without its trace")
+        if trace["present"]:
+            pids, _ = process_pids()
+            if len(pids) != 1:
+                raise SystemExit(
+                    "REFUSING partial load-only trace without one resumable retail process"
+                )
+            target_pid = pids[0]
+            process = netsys_process_record(target_pid)
+        else:
+            launched = netsys_launch(timeout)
+            target_pid = launched["process"]["pid"]
+            process = launched["process"]
+        deadline = time.monotonic() + timeout
+        parsed = None
+        while time.monotonic() < deadline:
+            trace = guest_file_record(NETSYS_LOAD_TRACE)
+            if trace["present"]:
+                try:
+                    parsed = parse_netsys_trace(
+                        guest_read_bytes(NETSYS_LOAD_TRACE, 1024 * 1024).decode("utf-8"),
+                        target_pid,
+                    )
+                    validate_netsys_load_only_frontier(parsed)
+                    break
+                except (UnicodeDecodeError, ValueError):
+                    pass
+            time.sleep(0.1)
+        if parsed is None:
+            raise SystemExit("load-only launch did not reach the exact loader frontier")
+        temp_capture = output.resolve().with_name(f".{output.name}.{os.getpid()}.capture.tmp")
+        if output.exists() or temp_capture.exists():
+            raise SystemExit("REFUSING existing load-only capture or temporary artifact")
+        try:
+            capture_result = netsys_capture(temp_capture, None, timeout)
+            temp_identity = local_file_identity(temp_capture, 4 * 1024 * 1024)
+        finally:
+            if temp_capture.exists():
+                temp_capture.unlink()
+        capture = {
+            "captured_json_size": temp_identity["size"],
+            "captured_json_sha256": temp_identity["sha256"],
+            "mode": capture_result["mode"],
+            "loaded_module": capture_result["loaded_module"],
+            "trace": {
+                key: capture_result["trace"][key]
+                for key in ("path", "size", "sha256", "factory_ready")
+            },
+        }
+        if process["pid"] != target_pid:
+            raise SystemExit("load-only process identity changed during capture")
+        netsys_stop_retail(target_pid, manifest["shim"]["sha256"], timeout)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not guest_file_record(NETSYS_LOAD_EXIT)["present"]:
+            time.sleep(0.1)
+        proof = validated_netsys_load_only_proof(read_netsys_manifest())
+    artifact = {
+        "schema": "don.retail-netsys-load-proof.v1",
+        "credential_material": "none",
+        "generation": manifest["generation"],
+        "proof": proof,
+        "live_capture": capture,
+    }
+    atomic_write_local_json(output, artifact, replace=False)
+    artifact["artifact"] = local_file_identity(output, 4 * 1024 * 1024)
+    return artifact
+
+
+def netsys_friend_game_gate(target_pid: int, bind: str, expected_shim: dict) -> dict:
+    manifest = read_netsys_manifest()
+    if (manifest["state"] != "installed" or manifest["generation"] != 3 or
+            manifest["mode"] != "host-bridge" or
+            manifest["shim"]["size"] != expected_shim["size"] or
+            manifest["shim"]["sha256"] != expected_shim["sha256"]):
+        raise SystemExit("REFUSING Friend Game gate after manifest identity/mode drift")
+    if pid() != target_pid:
+        raise SystemExit("REFUSING Friend Game gate after retail PID drift")
+    process = netsys_process_record(target_pid)
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (target.get("size") != expected_shim["size"] or
+            target.get("sha256") != expected_shim["sha256"]):
+        raise SystemExit("REFUSING Friend Game gate after installed DLL drift")
+    listing = remote_modules(target_pid)
+    matches = [module for module in listing.get("modules", [])
+               if module.get("name", "").lower() == "crossplaynetlib.dll"]
+    if listing.get("status") != "ok" or len(matches) != 1:
+        raise SystemExit("REFUSING Friend Game gate without one mapped CrossplayNetLib")
+    mapped = matches[0]
+    if normalize_windows_path(mapped["path"]) != normalize_windows_path(RETAIL_NETSYS_DLL):
+        raise SystemExit("REFUSING Friend Game gate for an unexpected mapped DLL path")
+    trace_record = guest_file_record(NETSYS_BRIDGE_TRACE)
+    if not trace_record["present"]:
+        raise SystemExit("REFUSING Friend Game gate before host-bridge trace exists")
+    try:
+        trace = parse_netsys_trace(
+            guest_read_bytes(NETSYS_BRIDGE_TRACE, 1024 * 1024).decode("utf-8"),
+            target_pid,
+        )
+        validate_netsys_bridge_off_frontier(trace)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING Friend Game gate: {exc}") from exc
+    details = [record["detail"] for record in trace["records"]]
+    if any(detail.startswith("setup_bridge=refused ") for detail in details):
+        raise SystemExit("REFUSING Friend Game gate after a setup-bridge refusal")
+    port = int(bind.rsplit(":", 1)[1])
+    listeners = netsys_listener_records(target_pid)
+    matching = [row for row in listeners if row["local_port"] == port and
+                row["state"].lower() == "listen"]
+    if len(matching) != 1:
+        raise SystemExit("REFUSING Friend Game gate without one exact owned TCP listener")
+    return {
+        "process": process,
+        "mapped_module": mapped,
+        "trace": {key: trace_record[key] for key in ("path", "size", "sha256")},
+        "factory_ready": trace["factory_ready"],
+        "listener": matching[0],
+        "ns_host_observed": True,
+        "local_player_callback_observed": True,
+    }
+
+
+def fnv1a64(data: bytes) -> int:
+    value = 0xcbf29ce484222325
+    for byte in data:
+        value ^= byte
+        value = (value * 0x00000100000001b3) & 0xffffffffffffffff
+    return value
+
+
+def validate_owned_peer_evidence(path: Path, report: dict) -> dict:
+    identity = local_file_identity(path, 8 * 1024 * 1024)
+    data = path.read_bytes()
+    if len(data) < 40 or data[:8] != b"DONLSTP\0" or int.from_bytes(
+            data[8:10], "little") != 1 or int.from_bytes(data[10:12], "little") != 0:
+        raise SystemExit("owned-peer evidence has an invalid DONLSTP v1 header")
+    action_count = int.from_bytes(data[12:16], "little")
+    outcome_len = int.from_bytes(data[16:20], "little")
+    stored_outcome_hash = int.from_bytes(data[20:28], "little")
+    if action_count > 65_536 or outcome_len > 4 * 1024 * 1024:
+        raise SystemExit("owned-peer evidence exceeds canonical action/outcome bounds")
+    offset = 40
+    for _ in range(action_count):
+        if offset + 5 > len(data):
+            raise SystemExit("owned-peer evidence truncates an action header")
+        length = int.from_bytes(data[offset + 1:offset + 5], "little")
+        offset += 5 + length
+        if offset > len(data):
+            raise SystemExit("owned-peer evidence truncates an action payload")
+    if offset + outcome_len != len(data):
+        raise SystemExit("owned-peer evidence outcome/trailing length is not canonical")
+    if fnv1a64(data[offset:]) != stored_outcome_hash:
+        raise SystemExit("owned-peer evidence outcome hash does not match its bytes")
+    expected_binary = report["evidence"]["binary_fnv1a64"]
+    expected_outcome = report["evidence"]["outcome_fnv1a64"]
+    if (f"{fnv1a64(data):016x}" != expected_binary or
+            f"{stored_outcome_hash:016x}" != expected_outcome):
+        raise SystemExit("owned-peer report/evidence hashes disagree")
+    return {**identity, "binary_fnv1a64": expected_binary,
+            "outcome_fnv1a64": expected_outcome}
+
+
+def parse_owned_peer_output(raw: str, expected: dict) -> dict:
+    if len(raw.encode("utf-8")) > 4 * 1024 * 1024:
+        raise SystemExit("owned-peer output exceeds 4 MiB")
+    records = []
+    prohibited = ("ticket", "token", "secret", "steam_id", "lobby_id", "platform_id")
+
+    def validate_material(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered = str(key).lower()
+                if any(word in lowered for word in prohibited):
+                    raise SystemExit(
+                        "owned-peer output contains prohibited identity material"
+                    )
+                if key == "credential_material" and child != "none":
+                    raise SystemExit("owned-peer output reports credential material")
+                validate_material(child)
+        elif isinstance(value, list):
+            for child in value:
+                validate_material(child)
+
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit("owned-peer output contains a non-JSON record") from exc
+        if not isinstance(record, dict):
+            raise SystemExit("owned-peer output record is not an object")
+        validate_material(record)
+        records.append(record)
+    finals = [record for record in records
+              if record.get("schema") == "don.owned-peer.retail.v2"]
+    if len(finals) != 1:
+        raise SystemExit("owned-peer output lacks one v2 terminal report")
+    report = finals[0]
+    if (report.get("status") != "pass" or report.get("credential_material") != "none" or
+            report.get("simulation_equivalence_claimed") is not False or
+            report.get("local_id") != 2 or report.get("local_slot") != 1 or
+            report.get("checksum_turns") != expected["turns"] or
+            report.get("packages_sent") != expected["turns"] or
+            report.get("reconnects") != (1 if expected["reconnect_after"] else 0) or
+            report.get("orderly_disconnect_sent") is not True or
+            not isinstance(report.get("evidence"), dict)):
+        raise SystemExit("owned-peer terminal report violates the bounded run contract")
+    evidence = report["evidence"]
+    if (evidence.get("schema") != "don.lockstep-evidence.v1" or
+            Path(evidence.get("path", "")).resolve() != Path(expected["evidence"]).resolve() or
+            not isinstance(evidence.get("bytes"), int) or evidence["bytes"] <= 0 or
+            not re.fullmatch(r"[0-9a-f]{16}", evidence.get("binary_fnv1a64", "")) or
+            not re.fullmatch(r"[0-9a-f]{16}", evidence.get("outcome_fnv1a64", ""))):
+        raise SystemExit("owned-peer evidence report identity is invalid")
+    return {"report": report, "records": records}
+
+
+def run_owned_peer_live(state: dict) -> dict:
+    evidence = Path(state["paths"]["evidence"])
+    report_path = Path(str(evidence) + ".report.json")
+    if evidence.exists() or report_path.exists():
+        if not evidence.is_file() or not report_path.is_file():
+            raise SystemExit("REFUSING partial owned-peer evidence/report state")
+        local_file_identity(report_path, 1024 * 1024)
+        try:
+            proof = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"REFUSING malformed owned-peer proof: {exc}") from exc
+        if (not isinstance(proof, dict) or set(proof) != {
+                "schema", "credential_material", "report", "evidence_identity",
+                "event_count", "stdout_sha256"} or
+                proof.get("schema") != "don.owned-peer-live-proof.v1" or
+                proof.get("credential_material") != "none"):
+            raise SystemExit("REFUSING invalid owned-peer proof fields")
+        actual = validate_owned_peer_evidence(evidence, proof["report"])
+        if actual != proof["evidence_identity"]:
+            raise SystemExit("REFUSING owned-peer proof after evidence identity drift")
+        return {**proof, "proof_artifact": local_file_identity(report_path, 1024 * 1024)}
+    command = [
+        state["owned_peer"]["path"], "--retail-connect", state["peer_endpoint"],
+        "--id", "2", "--turns", str(state["turns"]), "--timeout-secs",
+        str(state["timeout_secs"]), "--evidence", str(evidence),
+    ]
+    if state["reconnect_after"] is not None:
+        command += ["--reconnect-after", str(state["reconnect_after"])]
+    print(json.dumps({
+        "schema": NETSYS_LIVE_SCHEMA,
+        "operation": "owned-peer-starting",
+        "instruction": "In your already-open Friend Game, wait for owned Ai slot 1/readiness, then click Start. Do not invite or join strangers.",
+        "credential_material": "none",
+    }, indent=2, sort_keys=True))
+    completed = subprocess.run(
+        command, cwd=HERE.parents[1], text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, timeout=state["timeout_secs"] + 30, check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(
+            f"owned peer failed with code {completed.returncode}: "
+            f"{completed.stderr[-2000:]}"
+        )
+    parsed = parse_owned_peer_output(completed.stdout, {
+        "turns": state["turns"],
+        "reconnect_after": state["reconnect_after"],
+        "evidence": str(evidence),
+    })
+    evidence_identity = validate_owned_peer_evidence(
+        evidence, parsed["report"]
+    )
+    proof = {
+        "schema": "don.owned-peer-live-proof.v1",
+        "credential_material": "none",
+        "report": parsed["report"],
+        "evidence_identity": evidence_identity,
+        "event_count": len(parsed["records"]),
+        "stdout_sha256": hashlib.sha256(completed.stdout.encode("utf-8")).hexdigest(),
+    }
+    atomic_write_local_json(report_path, proof, replace=False)
+    return {**proof, "proof_artifact": local_file_identity(report_path, 1024 * 1024)}
+
+
+def validated_local_netsys_capture(path: Path, state: dict, mode: str) -> dict:
+    local_file_identity(path, 4 * 1024 * 1024)
+    try:
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"REFUSING malformed existing NetSys capture: {exc}") from exc
+    if (not isinstance(artifact, dict) or artifact.get("schema") != NETSYS_SCHEMA or
+            artifact.get("operation") != "capture" or artifact.get("mode") != mode or
+            artifact.get("credential_material") != "none" or
+            artifact.get("installed_dll", {}).get("size") != state["shim"]["size"] or
+            artifact.get("installed_dll", {}).get("sha256") != state["shim"]["sha256"]):
+        raise SystemExit("REFUSING stale or identity-mismatched NetSys capture")
+    return {
+        "artifact": local_file_identity(path, 4 * 1024 * 1024),
+        "mode": artifact["mode"],
+        "loaded_module": artifact["loaded_module"],
+        "trace": {
+            key: artifact["trace"][key]
+            for key in ("path", "size", "sha256", "factory_ready")
+        },
+    }
+
+
+def netsys_live_pause(state_path: Path, state: dict) -> dict:
+    result = {
+        "schema": NETSYS_LIVE_SCHEMA,
+        "status": "paused-for-user",
+        "phase": state["phase"],
+        "state_path": str(state_path.resolve()),
+        "credential_material": "none",
+        "instructions": [
+            "In the already-launched disposable retail process, click Multiplayer Game.",
+            "Create your own Friend Game and leave exactly one human slot open.",
+            "Do not invite, join, or start a stranger match.",
+            "Rerun this same command with --confirm-friend-game-ready; the owned Ai peer will connect, then click Start only after slot 1 is visible and ready.",
+        ],
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def netsys_live_terminal(state_path: Path, state: dict) -> dict:
+    result = {
+        "schema": NETSYS_LIVE_SCHEMA,
+        "status": state["phase"],
+        "phase": state["phase"],
+        "state_path": str(state_path.resolve()),
+        "credential_material": "none",
+        "checkpoints": state["checkpoints"],
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def netsys_live_cleanup(state_path: Path, state: dict, *, completed: bool,
+                        timeout: float) -> dict:
+    try:
+        pids, _ = process_pids()
+    except RuntimeError as exc:
+        raise SystemExit(f"REFUSING live-run cleanup: {exc}") from exc
+    if pids:
+        if len(pids) != 1 or state["active_pid"] != pids[0]:
+            raise SystemExit(
+                f"REFUSING live-run cleanup for unexpected retail identities {pids}"
+            )
+        stop_result = netsys_stop_retail(
+            pids[0], state["shim"]["sha256"], timeout
+        )
+    else:
+        stop_result = {"status": "already-absent"}
+    state["active_pid"] = None
+    restore_result = netsys_restore()
+    state["checkpoints"]["cleanup"] = {
+        "stop": stop_result,
+        "restore": restore_result,
+    }
+    state["phase"] = "complete" if completed else "cleaned"
+    write_netsys_live_state(state_path, state)
+    result = {
+        "schema": NETSYS_LIVE_SCHEMA,
+        "status": state["phase"],
+        "state_path": str(state_path.resolve()),
+        "credential_material": "none",
+        "checkpoints": state["checkpoints"],
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def new_netsys_live_state(
+    shim: Path,
+    peer: Path,
+    bind: str,
+    peer_endpoint: str,
+    turns: int,
+    timeout_secs: int,
+    reconnect_after: int | None,
+    generation2_capture: Path,
+    latest_load_capture: Path,
+    host_capture: Path,
+    evidence: Path,
+) -> dict:
+    shim_identity = host_netsys_identity(shim)
+    peer_identity = host_owned_peer_identity(peer)
+    manifest = read_netsys_manifest()
+    if (manifest["state"] != "installed" or manifest["generation"] != 2 or
+            manifest["mode"] != "load-only" or manifest["rollover"] is not None):
+        raise SystemExit(
+            "REFUSING new live run outside the exact installed generation-2 load-only boundary"
+        )
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (target.get("size") != manifest["shim"]["size"] or
+            target.get("sha256") != manifest["shim"]["sha256"]):
+        raise SystemExit("REFUSING new live run after generation-2 target drift")
+    if (shim_identity["size"] == manifest["shim"]["size"] and
+            shim_identity["sha256"] == manifest["shim"]["sha256"]):
+        raise SystemExit("REFUSING live run: current parity shim is already generation 2")
+    paths = {
+        "generation2_capture": str(generation2_capture.resolve()),
+        "latest_load_capture": str(latest_load_capture.resolve()),
+        "host_capture": str(host_capture.resolve()),
+        "evidence": str(evidence.resolve()),
+    }
+    derived_peer_report = Path(paths["evidence"] + ".report.json")
+    if any(Path(path).exists() for path in paths.values()) or derived_peer_report.exists():
+        raise SystemExit("REFUSING new live run over an existing output artifact")
+    now = int(time.time() * 1000)
+    state = {
+        "schema": NETSYS_LIVE_SCHEMA,
+        "phase": "generation-2-load-proof",
+        "created_unix_ms": now,
+        "updated_unix_ms": now,
+        "credential_material": "none",
+        "source_generation": 2,
+        "target_generation": 3,
+        "shim": shim_identity,
+        "owned_peer": peer_identity,
+        "bind": bind,
+        "peer_endpoint": peer_endpoint,
+        "turns": turns,
+        "timeout_secs": timeout_secs,
+        "reconnect_after": reconnect_after,
+        "paths": paths,
+        "active_pid": None,
+        "checkpoints": {
+            "generation_2_manifest": copy.deepcopy(manifest),
+        },
+    }
+    return validate_netsys_live_state(state)
+
+
+def verify_netsys_live_host_identities(state: dict, shim: Path, peer: Path) -> None:
+    current_shim = host_netsys_identity(shim)
+    current_peer = host_owned_peer_identity(peer)
+    if current_shim != state["shim"] or current_peer != state["owned_peer"]:
+        raise SystemExit("REFUSING resumed live run after host artifact identity drift")
+
+
+def netsys_live_run(
+    state_path: Path,
+    shim: Path,
+    peer: Path,
+    bind: str,
+    peer_endpoint: str,
+    turns: int,
+    timeout_secs: int,
+    reconnect_after: int | None,
+    generation2_capture: Path,
+    latest_load_capture: Path,
+    host_capture: Path,
+    evidence: Path,
+    *,
+    confirm_friend_game_ready: bool,
+    cleanup: bool,
+) -> dict:
+    state_path = state_path.resolve()
+    output_paths = {
+        generation2_capture.resolve(), latest_load_capture.resolve(),
+        host_capture.resolve(), evidence.resolve(),
+        Path(str(evidence.resolve()) + ".report.json"),
+    }
+    if state_path in output_paths or len(output_paths) != 5:
+        raise SystemExit("REFUSING aliased live-run state/artifact paths")
+    state_existed = state_path.exists()
+    if cleanup and not state_existed:
+        raise SystemExit("REFUSING live-run cleanup without an existing state file")
+    if state_existed:
+        state = read_netsys_live_state(state_path)
+        verify_netsys_live_host_identities(state, shim, peer)
+        requested = {
+            "bind": bind,
+            "peer_endpoint": peer_endpoint,
+            "turns": turns,
+            "timeout_secs": timeout_secs,
+            "reconnect_after": reconnect_after,
+            "paths": {
+                "generation2_capture": str(generation2_capture.resolve()),
+                "latest_load_capture": str(latest_load_capture.resolve()),
+                "host_capture": str(host_capture.resolve()),
+                "evidence": str(evidence.resolve()),
+            },
+        }
+        if any(state[key] != requested[key] for key in
+               ("bind", "peer_endpoint", "turns", "timeout_secs",
+                "reconnect_after", "paths")):
+            raise SystemExit("REFUSING resumed live run with changed arguments or paths")
+    else:
+        state = new_netsys_live_state(
+            shim, peer, bind, peer_endpoint, turns, timeout_secs, reconnect_after,
+            generation2_capture, latest_load_capture, host_capture, evidence,
+        )
+        write_netsys_live_state(state_path, state)
+    if cleanup:
+        if state["phase"] in {"complete", "cleaned"}:
+            return netsys_live_terminal(state_path, state)
+        return netsys_live_cleanup(state_path, state, completed=False, timeout=timeout_secs)
+    if state["phase"] in {"complete", "cleaned"}:
+        return netsys_live_terminal(state_path, state)
+
+    while True:
+        phase = state["phase"]
+        if phase == "generation-2-load-proof":
+            manifest = read_netsys_manifest()
+            if manifest["generation"] != 2 or manifest["mode"] != "load-only":
+                raise SystemExit("generation-2 load-only phase observed manifest drift")
+            state["checkpoints"]["generation_2_load_proof"] = netsys_live_load_proof(
+                Path(state["paths"]["generation2_capture"]), timeout_secs
+            )
+            state["phase"] = "rollover-current-shim"
+            write_netsys_live_state(state_path, state)
+        elif phase == "rollover-current-shim":
+            manifest = read_netsys_manifest()
+            if (manifest["state"] == "installed" and manifest["generation"] == 3 and
+                    manifest["mode"] == "load-only" and
+                    manifest["shim"]["size"] == state["shim"]["size"] and
+                    manifest["shim"]["sha256"] == state["shim"]["sha256"]):
+                result = {"operation": "next-generation-resumed", "current": manifest}
+            else:
+                result = netsys_next_generation(Path(state["shim"]["path"]), 8765)
+            current = result["current"]
+            if (current["generation"] != 3 or current["mode"] != "load-only" or
+                    current["shim"]["size"] != state["shim"]["size"] or
+                    current["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("current-shim rollover did not reach exact generation 3")
+            state["checkpoints"]["rollover"] = result
+            state["phase"] = "latest-load-proof"
+            write_netsys_live_state(state_path, state)
+        elif phase == "latest-load-proof":
+            manifest = read_netsys_manifest()
+            if (manifest["generation"] != 3 or manifest["mode"] != "load-only" or
+                    manifest["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("latest load-only phase observed manifest drift")
+            state["checkpoints"]["latest_load_proof"] = netsys_live_load_proof(
+                Path(state["paths"]["latest_load_capture"]), timeout_secs
+            )
+            state["phase"] = "configure-host-bridge"
+            write_netsys_live_state(state_path, state)
+        elif phase == "configure-host-bridge":
+            manifest = read_netsys_manifest()
+            if (manifest["state"] == "installed" and manifest["generation"] == 3 and
+                    manifest["mode"] == "host-bridge" and
+                    manifest["shim"]["sha256"] == state["shim"]["sha256"]):
+                launcher = guest_file_record(NETSYS_LAUNCHER)
+                if (not launcher["present"] or
+                        launcher.get("sha256") != manifest["launcher_sha256"]):
+                    raise SystemExit("resumed host-bridge launcher identity changed")
+                result = {"operation": "configure-host-bridge-resumed",
+                          "current": manifest}
+            else:
+                result = netsys_configure_bridge_from_load_only(bind)
+            if (result["current"]["generation"] != 3 or
+                    result["current"]["mode"] != "host-bridge" or
+                    result["current"]["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("host-bridge configuration identity changed")
+            state["checkpoints"]["host_bridge_configuration"] = result
+            state["phase"] = "launch-host-bridge"
+            write_netsys_live_state(state_path, state)
+        elif phase == "launch-host-bridge":
+            pids, _ = process_pids()
+            if len(pids) == 1:
+                manifest = read_netsys_manifest()
+                if (manifest["mode"] != "host-bridge" or
+                        manifest["shim"]["sha256"] != state["shim"]["sha256"]):
+                    raise SystemExit("resumed host-bridge process has manifest drift")
+                launched = {
+                    "mode": "host-bridge",
+                    "process": netsys_process_record(pids[0]),
+                    "operation": "launch-resumed",
+                }
+            elif pids:
+                raise SystemExit(f"resumed host-bridge launch has ambiguous PIDs: {pids}")
+            else:
+                launched = netsys_launch(timeout_secs)
+            if launched["mode"] != "host-bridge":
+                raise SystemExit("host-bridge launch returned another mode")
+            state["active_pid"] = launched["process"]["pid"]
+            state["checkpoints"]["host_bridge_launch"] = launched
+            state["phase"] = "awaiting-friend-game-ui"
+            write_netsys_live_state(state_path, state)
+            return netsys_live_pause(state_path, state)
+        elif phase == "awaiting-friend-game-ui":
+            if not confirm_friend_game_ready:
+                return netsys_live_pause(state_path, state)
+            state["checkpoints"]["friend_game_gate"] = netsys_friend_game_gate(
+                state["active_pid"], bind, state["shim"]
+            )
+            state["phase"] = "run-owned-peer"
+            write_netsys_live_state(state_path, state)
+        elif phase == "run-owned-peer":
+            state["checkpoints"]["owned_peer"] = run_owned_peer_live(state)
+            state["phase"] = "capture-host-bridge"
+            write_netsys_live_state(state_path, state)
+        elif phase == "capture-host-bridge":
+            output = Path(state["paths"]["host_capture"])
+            if output.exists():
+                summary = validated_local_netsys_capture(output, state, "host-bridge")
+            else:
+                netsys_capture(output, None, timeout_secs)
+                summary = validated_local_netsys_capture(output, state, "host-bridge")
+            state["checkpoints"]["host_bridge_capture"] = summary
+            state["phase"] = "cleanup"
+            write_netsys_live_state(state_path, state)
+        elif phase == "cleanup":
+            return netsys_live_cleanup(
+                state_path, state, completed=True, timeout=timeout_secs
+            )
+        else:
+            raise SystemExit(f"unsupported live-run phase {phase!r}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="action", required=True)
@@ -5457,6 +6395,34 @@ def main() -> None:
         "netsys-restore",
         help="atomically restore the hash-bound shipped CrossplayNetLib.dll",
     )
+    netsys_live_parser = sub.add_parser(
+        "netsys-live-run",
+        help=("resume the generation-2 load gate, current shim rollover, Friend Game "
+              "owned-peer evidence, capture, and restore path"),
+    )
+    netsys_live_parser.add_argument("--state", type=Path,
+                                    default=DEFAULT_NETSYS_LIVE_STATE)
+    netsys_live_parser.add_argument("--shim", type=Path, default=DEFAULT_NETSYS_SHIM)
+    netsys_live_parser.add_argument("--peer", type=Path, default=DEFAULT_OWNED_PEER)
+    netsys_live_parser.add_argument(
+        "--bind", choices=["127.0.0.1:31337", "0.0.0.0:31337"],
+        default="0.0.0.0:31337",
+    )
+    netsys_live_parser.add_argument("--peer-endpoint", default="10.211.55.6:31337")
+    netsys_live_parser.add_argument("--turns", type=int, default=4)
+    netsys_live_parser.add_argument("--timeout-secs", type=int, default=300)
+    netsys_live_parser.add_argument("--reconnect-after", type=int, default=3)
+    netsys_live_parser.add_argument("--generation-2-capture", type=Path,
+                                    default=DEFAULT_NETSYS_LIVE_GENERATION2_CAPTURE)
+    netsys_live_parser.add_argument("--latest-load-capture", type=Path,
+                                    default=DEFAULT_NETSYS_LIVE_LATEST_LOAD_CAPTURE)
+    netsys_live_parser.add_argument("--host-capture", type=Path,
+                                    default=DEFAULT_NETSYS_LIVE_HOST_CAPTURE)
+    netsys_live_parser.add_argument("--evidence", type=Path,
+                                    default=DEFAULT_NETSYS_LIVE_EVIDENCE)
+    live_action = netsys_live_parser.add_mutually_exclusive_group()
+    live_action.add_argument("--confirm-friend-game-ready", action="store_true")
+    live_action.add_argument("--cleanup", action="store_true")
     d = sub.add_parser("deploy")
     d.add_argument("--pid", type=int)
     d.add_argument("--port", type=int, default=18082)
@@ -5557,6 +6523,13 @@ def main() -> None:
         a.output.resolve(), a.generation, a.timeout
     )
     elif a.action == "netsys-restore": netsys_restore()
+    elif a.action == "netsys-live-run": netsys_live_run(
+        a.state, a.shim, a.peer, a.bind, a.peer_endpoint, a.turns,
+        a.timeout_secs, a.reconnect_after, a.generation_2_capture,
+        a.latest_load_capture, a.host_capture, a.evidence,
+        confirm_friend_game_ready=a.confirm_friend_game_ready,
+        cleanup=a.cleanup,
+    )
     elif a.action == "deploy": deploy(
         a.pid or pid(), a.port, a.generation, a.max_generations, a.injector_port
     )

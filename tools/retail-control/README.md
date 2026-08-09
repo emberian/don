@@ -89,3 +89,54 @@ python3 tools/retail-control/retailctl.py marshal-loop --apply --decisions 1 \
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before
 `send` can complete. See `docs/tooling/live-control.md` for the protocol and evidence.
+
+## Resumable owned Friend Game experiment
+
+`netsys-live-run` is the single post-unlock orchestration path. It starts only from the exact
+installed generation-2 load-only manifest. It proves and locally captures that generation,
+archives it, rolls to the current export/ABI-parity-checked shim as generation 3, proves the new
+load-only boundary, configures the setup bridge, and launches retail. Every mutation is followed
+by an atomically persisted state checkpoint bound to the shim, owned-peer executable, guest DLL,
+manifest generation, launcher, PID, trace, and output hashes.
+
+Build the current shim and owned peer first, then run:
+
+```sh
+python3 tools/retail-control/retailctl.py netsys-live-run
+```
+
+The first invocation stops at `awaiting-friend-game-ui`. This is the only intentional pause. The
+tool does not click retail UI, create a lobby, invite anyone, or start a match. In the already-open
+retail process:
+
+1. click **Multiplayer Game**;
+2. create your own **Friend Game** with exactly one open human slot;
+3. do not join or invite strangers;
+4. resume the exact saved run:
+
+```sh
+python3 tools/retail-control/retailctl.py netsys-live-run \
+  --confirm-friend-game-ready
+```
+
+Resume first verifies the same PID/module/shim, an exact `ns_host` plus local-player callback
+trace, and one listener on the configured owned TCP port. It then starts only the hash-pinned local
+`don-owned-peer`. When owned `Ai` appears in slot 1 and is ready, click **Start** in your Friend
+Game. The peer remains reactive: it sends no game package before retail's first authoritative
+package. The default bounded run records four stamps, performs one orderly same-ID reconnect after
+stamp three, and atomically writes/replays the shared DONLSTP evidence.
+
+After the peer exits, the controller captures the host-bridge module/trace/listener evidence,
+closes only the identity-bound disposable retail PID, and restores the immutable shipped
+`CrossplayNetLib.dll`. Re-running the same command resumes the first incomplete checkpoint instead
+of repeating completed mutations. If the parked UI experiment should be abandoned, use:
+
+```sh
+python3 tools/retail-control/retailctl.py netsys-live-run --cleanup
+```
+
+Cleanup refuses unknown PIDs or DLL hashes, then stops the scoped process and restores the shipped
+DLL. Neither the state nor captures contain tickets, tokens, lobby IDs, platform IDs, Steam IDs,
+non-owned remote endpoints, or stranger data. Default outputs are under `schema/live/`; existing outputs are
+never silently reused unless their exact schema and hashes validate as the checkpoint being
+resumed.
