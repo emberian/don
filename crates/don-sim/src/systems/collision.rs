@@ -1110,7 +1110,6 @@ pub fn detect_boat_collision<U: CollUnits>(
         let mut other = units
             .row(other_who, other_o)
             .expect("find_boat_units returned a non-unit address");
-        let mut early_block = false;
 
         let eligible = (me.domain == DOMAIN_LAND || other.who < 8)
             && other.domain == me.domain
@@ -1146,50 +1145,47 @@ pub fn detect_boat_collision<U: CollUnits>(
 
             if overlap > 0 {
                 if me.unit_flags & 0x10 != 0 && other.attack_value != 0 {
-                    early_block = true;
+                    return false;
                 }
 
                 let effective = units.effective_owner(me.who);
-                if !early_block
-                    && other.who != effective
+                if other.who != effective
                     && (units.diplomacy(me.who, other.who) != 2
                         || units.diplomacy(other.who, effective) != 2)
                     && other.who < 8
                 {
-                    early_block = true;
+                    return false;
                 }
 
-                if !early_block && me.domain == DOMAIN_LAND {
+                if me.domain == DOMAIN_LAND {
                     if other.unit_flags2 & 4 != 0
                         && (other.unit_masks & 0x0008_0000 == 0 || other.unpacking)
                     {
-                        early_block = true;
+                        return false;
                     }
                     if other.unit_masks & 0x0200_0000 != 0 || other.unit_flags & 0x0008_0000 != 0 {
-                        early_block = true;
+                        return false;
                     }
                 }
 
                 let mut push_angle = find_angle(other.x.wrapping_sub(nx), other.y.wrapping_sub(ny));
-                if !early_block {
-                    if !other.moving {
-                        let delta = (push_angle as u32).wrapping_sub(me.first_guy_angle as u32);
-                        if delta < 0x2000_0000 {
-                            push_angle = me.first_guy_angle.wrapping_add(0x2000_0000);
-                        } else if delta > 0xe000_0000 {
-                            push_angle = me.first_guy_angle.wrapping_sub(0x2000_0000);
-                        }
-                    } else {
-                        let window = (push_angle as u32)
-                            .wrapping_sub(me.first_guy_angle as u32)
-                            .wrapping_add(0xe000_0000);
-                        if window > 0xc000_0000 {
-                            early_block = true;
-                        }
+                if !other.moving {
+                    let delta = (push_angle as u32).wrapping_sub(me.first_guy_angle as u32);
+                    if delta < 0x2000_0000 {
+                        push_angle = me.first_guy_angle.wrapping_add(0x2000_0000);
+                    } else if delta > 0xe000_0000 {
+                        push_angle = me.first_guy_angle.wrapping_sub(0x2000_0000);
+                    }
+                } else {
+                    let window = (push_angle as u32)
+                        .wrapping_sub(me.first_guy_angle as u32)
+                        .wrapping_add(0xe000_0000);
+                    if window > 0xc000_0000 {
+                        return false;
                     }
                 }
 
-                if !early_block {
+                {
                     let step = overlap.min(0x30);
                     let (tx, ty) = boat_project(other.x, other.y, push_angle, step);
                     if !units.boat_invalid_loc(other.who, other.o, tile_of(tx), tile_of(ty)) {
@@ -1211,10 +1207,6 @@ pub fn detect_boat_collision<U: CollUnits>(
                     }
                 }
             }
-        }
-
-        if early_block {
-            return false;
         }
     }
     true
