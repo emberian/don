@@ -55,7 +55,7 @@ uncited retail code (`Armies::process_all`, `Leaders::end_process_all`,
 
 | # | step | ported calls now driven | named gaps inside it |
 |--:|---|---|---|
-| 8 | `Leaders::process_all` `0x006ED2A0` | `economy::leader_gather` → `calc_gather` / `calc_resource_caps` / `do_gather`; `victory_score::process_elimination` | `calc_wall_stats`, `calc_unit_stats`, `process_taunt` |
+| 8 | `Leaders::process_all` `0x006ED2A0` | recovered whole dispatcher; hostile scan; `leader_gather`; rare-mask dirty protocol; wall/unit stat-band traversals; `process_elimination`; grace timers; taunt-table dispatch | object vtable bodies `+0x4C/+0xE8/+0x15C/+0x160`; `process_taunt` AI-chat body |
 | 11 | `Leaders::strategy_all` `0x006ED430` | `victory_score::compute_score`, `check_victory` | `check_explore`, `plan_strategy`, `diplomacy` |
 | 12 | `GameDaemon::process_all` `0x00732700` | `victory_score::process_victory`; `map_terrain::World::clear_seen` + `borders_fog::update_seen` per object; `economy::calc_markets` (**on the sim RNG stream**); `borders_fog::check_borders`; `groups_guys::Groups::process` | `calc_danger`, `process_coll_blocks` |
 | 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | `Guy::process`, `suffer_attrition`, `process_supply`, `detect_unit_collision`, `needs_transport`, wildlife spawn, anti-air dud roll |
@@ -63,9 +63,10 @@ uncited retail code (`Armies::process_all`, `Leaders::end_process_all`,
 | 20 | `Game::frame++` `0x005924BF` | the counter, after the object pass | — |
 | 23 | `frame % 15 → seconds++` | the counter | — |
 
-Eleven modules are now reached from the tick: `ammo`, `borders_fog`, `casters_animals`,
-`combat`, `economy`, `groups_guys`, `map_terrain`, `movement`, `production`, `victory_score`,
-`walls`, plus crate-level `mechanics`, `objects`, `order`, `rng`, `trig`, `balance` and the new
+Twelve modules are now reached from the tick: `ammo`, `borders_fog`, `casters_animals`,
+`combat`, `economy`, `groups_guys`, `leaders`, `map_terrain`, `movement`, `production`,
+`victory_score`, `walls`, plus crate-level `mechanics`, `objects`, `order`, `rng`, `trig`,
+`balance` and the new
 shared `checksum`. Still isolated: `air`, `items`, `naval`, `tech_cities`.
 
 ## 3. The ordering facts the driver is obliged to honour, and how each is enforced

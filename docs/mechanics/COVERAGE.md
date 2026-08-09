@@ -409,9 +409,12 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    The port reads `final_balance_table` directly; the engine reads it through
    `type_damage` + `compute_modifier` + `return_pack`. Whether those agree is untested, and
    it is the input to the one mechanic we claim to have.
-8. **`Leaders::process_all` step 8 second level** — `Leader::gather` → `calc_wall_stats` →
-   `calc_unit_stats` → `process_elimination` → `process_taunt`. `economy.rs` exists and is
-   isolated; this is the per-player economy and it is step 8 of 29, before anything moves.
+8. **`Leaders::process_all` step 8 object bodies** — the recovered 387-byte dispatcher now
+   runs in `Sim::do_frame`, including its distinct outer/inner gates, hostile scan, gather,
+   rare-mask dirty protocol, stat-band traversals, elimination call site, grace timers and
+   taunt-table scan. Remaining are the object-data virtual bodies behind `+0x4C`, `+0xE8`,
+   `+0x15C`, `+0x160` and `Leader::process_taunt`'s AI-chat body; coverage charges only the
+   actual active-object/taunt call sites.
 9. **A `check_all` equivalent.** One function returning the 15 per-channel values plus the
    sum, in retail's order and wire layout (§1.1). This is what turns every other item into
    something measurable against a real game instead of against our own tests.

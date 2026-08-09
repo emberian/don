@@ -20,9 +20,11 @@
 //! | [`StepRun::Unimplemented`] | no port; the retail function that belongs here is named in [`Gap`] |
 //! | [`StepRun::OutOfScope`] | presentation, telemetry or session management: correctly absent from a headless core |
 //!
-//! Sub-calls inside a step are counted the same way (`Leaders::process_all` is five retail
-//! calls, of which two are ported), so "step 8 executed" never hides "three of its five
-//! children do not exist". [`Coverage::gaps`] is that ledger.
+//! Sub-calls inside a step are counted the same way. `Leaders::process_all` now executes
+//! its recovered dispatcher and object-band traversals; unresolved object virtual bodies
+//! and actual taunt-body dispatches are charged at the call sites, so "step 8 executed"
+//! does not silently mean "every second-level body exists". [`Coverage::gaps`] is that
+//! ledger.
 //!
 //! # Ordering facts this driver is obliged to honour
 //!
@@ -56,8 +58,8 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, casters_animals, combat, economy, groups_guys, movement, production,
-    victory_score, walls,
+    ammo, borders_fog, casters_animals, combat, economy, groups_guys, leaders, movement,
+    production, victory_score, walls,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -120,9 +122,9 @@ impl Gap {
 /// One line per [`Gap`], in enum order: the retail function and why it is absent.
 pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 4  RunTimeEnv::run_script 0x0043D0E0 - runtime is wired; unrecovered ScenarioFuncSet builtins fail the tick closed",
-    "step 8  Leader::calc_wall_stats leaders.cpp:13858 - uncited",
-    "step 8  Leader::calc_unit_stats leaders.cpp:13831 - uncited",
-    "step 8  Leader::process_taunt leaders.cpp:28050 - AI chat",
+    "step 8  calc_wall_stats object vtable bodies +0x4c/+0x15c/+0x160 - traversal executes; bodies unresolved",
+    "step 8  calc_unit_stats object vtable bodies +0xe8/+0x15c/+0x160 - traversal executes; bodies unresolved",
+    "step 8  Leader::process_taunt 0x006b8cc0 - exact table dispatch executes; AI-chat body absent",
     "step 11 Leader::check_explore leaders.cpp:26413 - uncited",
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
@@ -291,6 +293,12 @@ pub struct Coverage {
     pub border_tiles: u64,
     pub group_normalises: u64,
     pub leader_gathers: u64,
+    pub leader_hostile_frames: u64,
+    pub leader_wall_stat_passes: u64,
+    pub leader_unit_stat_passes: u64,
+    pub leader_stat_objects_visited: u64,
+    pub leader_timer_creeps: u64,
+    pub leader_taunt_dispatches: u64,
     pub market_cycles: u64,
     pub paths_searched: u64,
     pub path_search_failures: u64,
@@ -326,6 +334,12 @@ impl Default for Coverage {
             border_tiles: 0,
             group_normalises: 0,
             leader_gathers: 0,
+            leader_hostile_frames: 0,
+            leader_wall_stat_passes: 0,
+            leader_unit_stat_passes: 0,
+            leader_stat_objects_visited: 0,
+            leader_timer_creeps: 0,
+            leader_taunt_dispatches: 0,
             market_cycles: 0,
             paths_searched: 0,
             path_search_failures: 0,
@@ -659,6 +673,13 @@ pub struct Sim {
 
     // ---- step 8 / 12: the economy -----------------------------------------------------
     pub econ_rules: economy::EconRules,
+    /// The instruction-derived `Leader` slice driven by retail step 8. `LeaderSlot`
+    /// remains the shared economy/border façade used by the later tick steps; economy
+    /// inputs and outputs are synchronized at the step-8 boundary until those consumers
+    /// migrate onto this exact layout.
+    pub step8: leaders::Leaders,
+    pub step8_env: leaders::Step8Env,
+    pub step8_rules: leaders::Step8Rules,
     pub leaders: [LeaderSlot; NUM_LEADERS],
     pub market: economy::MarketState,
 
@@ -720,6 +741,9 @@ impl Sim {
         Sim {
             world: World::new(seed),
             econ_rules: economy::EconRules::shipped(),
+            step8: leaders::Leaders::new(),
+            step8_env: leaders::Step8Env::default(),
+            step8_rules: leaders::Step8Rules::shipped(),
             leaders: Default::default(),
             market: economy::MarketState::default(),
             vic_match,
@@ -751,6 +775,7 @@ impl Sim {
     /// Activate a player slot everywhere the tick tests for it.
     pub fn activate(&mut self, who: usize) {
         self.leaders[who].active = true;
+        self.step8.leaders[who].activate();
         self.leaders[who].border.active = true;
         self.vic_leaders.slots[who].leader_flags |=
             victory_score::leader_flag::VALID | victory_score::leader_flag::ACTIVE;
@@ -1055,46 +1080,140 @@ impl Sim {
 
     // -- step 8 -----------------------------------------------------------------------
 
-    /// `Leaders::process_all` `0x006ED2A0` — for each active player, in **slot order**:
-    /// `Leader::gather` -> `calc_wall_stats` -> `calc_unit_stats` -> `process_elimination`
-    /// -> `process_taunt`. Two of the five are ported.
+    /// Synchronize the shared tick state into step 8's instruction-derived layout.
+    ///
+    /// This is an adapter, not a second implementation. The exact dispatcher owns flags,
+    /// diplomacy, timers, rare-mask edge state and stat-pass history. `LeaderSlot` remains
+    /// authoritative only for the economy fields that steps 11/12 still consume. The
+    /// object bands are rebuilt from `ObjectRegistry` so the stat passes visit the same
+    /// owner-local rows as the real object tick; unresolved virtual answers and their call
+    /// counters are preserved in place.
+    fn sync_step8_inputs(&mut self) {
+        for who in 0..NUM_LEADERS {
+            let src = &self.leaders[who];
+            let dst = &mut self.step8.leaders[who];
+            dst.econ = src.econ;
+            dst.last_calc_frame = src.last_calc_frame;
+            dst.econ_dirty = src.dirty;
+
+            let env = &mut self.step8_env.leaders[who];
+            env.gather = src.gather_inputs.clone();
+            env.caps = src.cap_gates;
+            env.payout = src.gather_ctx;
+
+            // `GatherInputs::rares` mirrors the payload at Leader+0x6DCC. The effective
+            // mask and the other union operand stay persistent on the exact Leader.
+            let mut rare_b = leaders::RareMask::empty();
+            for (bit, present) in src.gather_inputs.rares.iter().copied().enumerate() {
+                rare_b.set(bit, present);
+            }
+            dst.rare_b = rare_b;
+        }
+
+        for who in 0..NUM_LEADERS {
+            let slot = self.world.objects.slot(who);
+            let objects = &mut self.step8_env.leaders[who].objects;
+
+            let unit_rows = slot.band(Band::Unit);
+            objects
+                .units
+                .resize(unit_rows.len(), leaders::StatObject::default());
+            for (view, &row) in objects.units.iter_mut().zip(unit_rows) {
+                view.active = self.world.units.get_flags(row as usize) & OBJ_FLAG_ACTIVE != 0;
+            }
+
+            let build_rows = slot.band(Band::Build);
+            objects
+                .band_2000
+                .resize(build_rows.len(), leaders::StatObject::default());
+            for (view, &row) in objects.band_2000.iter_mut().zip(build_rows) {
+                view.active = self
+                    .builds
+                    .get(row as usize)
+                    .is_some_and(production::BuildData::is_valid);
+            }
+
+            let wall_rows = slot.band(Band::Wall);
+            objects
+                .band_3000
+                .resize(wall_rows.len(), leaders::StatObject::default());
+            for (view, &row) in objects.band_3000.iter_mut().zip(wall_rows) {
+                view.active = self
+                    .walls
+                    .get(row as usize)
+                    .is_some_and(walls::WallState::is_alive);
+            }
+        }
+    }
+
+    /// `Leaders::process_all` `0x006ED2A0`, the recovered 387-byte dispatcher: outer
+    /// `flags & 2` gate, per-frame resets, hostile scan, gather, edge-triggered wall/unit
+    /// stat traversals, elimination, grace timers, taunt-table dispatch, and tail-bit clear.
+    /// The four object virtual bodies and `Leader::process_taunt`'s AI-chat body remain
+    /// explicit gaps; their actual call sites are counted rather than charged once per tick.
     fn leaders_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
-        let mut n = 0u32;
-        for who in 0..NUM_LEADERS {
-            if !self.leaders[who].active {
-                continue;
-            }
-            let l = &mut self.leaders[who];
-            // Leader::gather 0x006CE280 -> calc_gather / calc_resource_caps / do_gather.
-            let inputs = l.gather_inputs.clone();
-            let gates = l.cap_gates;
-            let ctx = l.gather_ctx;
-            let mut last = l.last_calc_frame;
-            let mut dirty = l.dirty;
-            economy::leader_gather(
-                &self.econ_rules,
-                &mut l.econ,
-                frame,
-                who as i32,
-                &mut last,
-                &mut dirty,
-                &inputs,
-                &gates,
-                &ctx,
-            );
-            l.last_calc_frame = last;
-            l.dirty = dirty;
-            self.cover.leader_gathers += 1;
-            // Leader::process_elimination 0x006EC?? -- victory_score owns it.
+        self.sync_step8_inputs();
+        let trace = leaders::process_all(
+            &mut self.step8,
+            frame,
+            &self.step8_rules,
+            &self.econ_rules,
+            &mut self.step8_env,
+        );
+
+        // `process_all` records this boundary instead of duplicating the already-ported
+        // elimination function. Invoke it here, at its exact place and in retail slot order.
+        for &who in trace.elimination_calls.iter() {
             self.vic_leaders
                 .process_elimination(&mut self.vic_match, who);
-            n += 1;
         }
-        // The three children with no port.
-        self.cover.gaps[Gap::LeaderCalcWallStats.index()] += 1;
-        self.cover.gaps[Gap::LeaderCalcUnitStats.index()] += 1;
-        self.cover.gaps[Gap::LeaderProcessTaunt.index()] += 1;
+
+        // Later tick steps still read `LeaderSlot`; return the economy transaction to that
+        // shared façade before step 11 begins.
+        for who in 0..NUM_LEADERS {
+            let src = &self.step8.leaders[who];
+            let dst = &mut self.leaders[who];
+            dst.econ = src.econ;
+            dst.last_calc_frame = src.last_calc_frame;
+            dst.dirty = src.econ_dirty;
+        }
+
+        let n = trace.leaders_processed() as u32;
+        self.cover.leader_gathers += n as u64;
+        self.cover.leader_hostile_frames +=
+            trace.hostile_seen.iter().filter(|seen| **seen).count() as u64;
+        self.cover.leader_wall_stat_passes +=
+            trace.wall_stats_ran.iter().filter(|ran| **ran).count() as u64;
+        self.cover.leader_unit_stat_passes +=
+            trace.unit_stats_ran.iter().filter(|ran| **ran).count() as u64;
+        self.cover.leader_stat_objects_visited += trace
+            .wall_pass
+            .iter()
+            .chain(trace.unit_pass.iter())
+            .map(|pass| pass.visited as u64)
+            .sum::<u64>();
+        self.cover.leader_timer_creeps += trace
+            .timers_crept
+            .iter()
+            .map(|count| *count as u64)
+            .sum::<u64>();
+        self.cover.leader_taunt_dispatches += trace.taunts.len() as u64;
+
+        // The traversals now execute against the real owner bands. What remains missing is
+        // the object data's virtual work, so charge only active objects on a pass that ran.
+        self.cover.gaps[Gap::LeaderCalcWallStats.index()] += trace
+            .wall_pass
+            .iter()
+            .map(|pass| pass.active as u64)
+            .sum::<u64>();
+        self.cover.gaps[Gap::LeaderCalcUnitStats.index()] += trace
+            .unit_pass
+            .iter()
+            .map(|pass| pass.active as u64)
+            .sum::<u64>();
+        self.cover.gaps[Gap::LeaderProcessTaunt.index()] += trace.taunts.len() as u64;
+
         if n == 0 {
             (StepRun::Vacuous, 0)
         } else {
@@ -1940,6 +2059,12 @@ impl Sim {
             ("territory tiles claimed", c.border_tiles),
             ("Groups::process passes", c.group_normalises),
             ("Leader::gather calls", c.leader_gathers),
+            ("leader hostile frames", c.leader_hostile_frames),
+            ("Leader wall-stat passes", c.leader_wall_stat_passes),
+            ("Leader unit-stat passes", c.leader_unit_stat_passes),
+            ("leader stat objects visited", c.leader_stat_objects_visited),
+            ("leader grace-timer creeps", c.leader_timer_creeps),
+            ("leader taunt dispatches", c.leader_taunt_dispatches),
             ("market cycles", c.market_cycles),
             ("pathfinder searches", c.paths_searched),
             ("pathfinder failures", c.path_search_failures),

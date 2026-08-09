@@ -262,9 +262,7 @@ constants come from a JSON file rather than from the process.
 
 ## 6. The tick integration, exactly
 
-`tick.rs` is the wire-tick lane's file and is being written concurrently, so it is **not**
-edited here — an exact-match edit into a file changing under me is how two lanes lose work.
-The drop-in is small. `Sim` gains
+This integration is now live in `Sim::do_frame`. `Sim` owns
 
 ```rust
 pub step8: leaders::Leaders,
@@ -272,8 +270,8 @@ pub step8_env: leaders::Step8Env,
 pub step8_rules: leaders::Step8Rules,
 ```
 
-`Sim::activate(who)` gains `self.step8.leaders[who].activate();`, and `leaders_process_all`
-becomes
+`Sim::activate(who)` activates the exact leader too, and `leaders_process_all` invokes the
+dispatcher at the real pre-increment step-8 boundary:
 
 ```rust
 fn leaders_process_all(&mut self) -> (StepRun, u32) {
@@ -291,21 +289,24 @@ fn leaders_process_all(&mut self) -> (StepRun, u32) {
 }
 ```
 
-Three notes for whoever applies it.
+The landed adapter also synchronizes `LeaderSlot`'s economy inputs/outputs at this boundary
+and rebuilds each `OwnerObjects` band from the live `ObjectRegistry`, preserving the
+unresolved virtual answers and their counters.
 
-* `Gap::LeaderCalcWallStats` and `Gap::LeaderCalcUnitStats` stop being unconditional bumps.
-  They now belong on the *object-graph* boundary — count them when a stat pass runs with an
-  empty `OwnerObjects`, which is the honest statement (`the traversal ran, it had nothing to
-  traverse`), not when the pass is skipped, which is retail behaviour rather than a gap.
+Three integration facts remain load-bearing.
+
+* `Gap::LeaderCalcWallStats` and `Gap::LeaderCalcUnitStats` are no longer unconditional.
+  They now count active objects whose unresolved virtual bodies were reached by a stat pass,
+  not frames on which retail correctly skipped the edge-triggered traversal.
 * `Gap::LeaderProcessTaunt` becomes accurate rather than per-frame: it should count actual
   dispatches, which with a zeroed taunt table is zero.
 * The `frame` passed in must be the **pre-increment** `Game::frame`. Step 20 (`0x005924BF`)
   is where it moves, and `Step8Driver` in `leaders.rs` shows the bracket.
 
-`leaders::Leaders` deliberately owns its own `economy::LeaderEcon`, so adopting it means
-`LeaderSlot`'s `econ` / `last_calc_frame` / `dirty` / `gather_inputs` / `cap_gates` /
-`gather_ctx` fields move into `leaders::Leader` and `leaders::LeaderEnv`. That is the only
-part of the patch that is not mechanical.
+`leaders::Leaders` deliberately owns its own `economy::LeaderEcon`. The current adapter
+keeps `LeaderSlot` as the later tick steps' shared façade and synchronizes it before and
+after step 8; removing that adapter requires migrating those later consumers, not another
+copy of the economy algorithm.
 
 ---
 
