@@ -71,6 +71,43 @@ Neither evaluator draws RNG. Wood capacity requires real `LandData`; forest tile
 not a substitute. Mine requires Mountain/Cliff identity and ordered coordinates; a
 connected-component reconstruction is not a substitute.
 
+### Source materialization
+
+The required payloads now have a concrete fail-closed ingestion boundary in
+`systems::gather_terrain`:
+
+- the supported installed `rules.xml` is 88,632 bytes with SHA-256
+  `2cad6156f257c2faf79c3fa2de293a249f61ae245160b92fb5a76d0dbf3a9988`;
+- its ordered `<LANDS>` section produces the nine `LandData` rows `Land`, `Sandy`,
+  `Ocean`, `Coast`, `Forest`, `Mountains`, `Rocks`, `Oil`, `Cliffs`, each with exactly
+  four ordered `<MAKE num,type>` entries;
+- the PDB's 304-byte `LandData` puts `make[4]` at `+0x04` and `num_make[4]` at `+0x14`.
+  `MaterializedGatherHost::land_gather_data` selects one retained row with the live
+  `WorldData::get_land(wcoord,1)` result. A per-cell tree count is never converted into a
+  synthetic row;
+- `MountainRangeData` retains `mount_tx/mount_ty`, `mount_wx/mount_wy`,
+  `solid_mount_wx/solid_mount_wy`, and the independent `mountain_size` scalar at `+0xAC`.
+  The materializer therefore requires separate ordered search WCoords, absolute mining
+  TCoords, solid WCoords, and `mountain_size`; the scalar is not a point count;
+- `CliffMiningData` is 72 bytes and independently stores `wcoords` at `+0x00` and
+  `tcoords` at `+0x1C`. Both arrays survive materialization in their source order;
+- null entries in the Mountain/Cliff pointer arrays remain `None` holes. Compacting them
+  would change the signed object id persisted in `MiningList`.
+
+`MountainsData::find_nearest` `0x0089CD30` and `CliffsData::find_nearest` `0x008A8DA0`
+region-gate on the first search WCoord, scan object order and point order, and compare
+retail `vector_dist` to the physical cell centre `(wx*0x300+0x180,
+wy*0x300+0x180)`. Only a strictly smaller distance replaces the current result, so equal
+distances retain the first object. The search consumes no RNG.
+
+The source stamp binds installed-rules identity, world seed, and one coherent terrain
+generation/extraction transaction. Host construction rechecks world dimensions and seed;
+terrain edits that rebuild object arrays must atomically replace the materialization.
+Missing hashes, incomplete arrays, unknown resource tokens, out-of-bounds coordinates, or
+stale world identity return errors. Arena's anonymous forest/mountain circles do not carry
+these records and therefore remain intentionally unwired: stamp traversal or connected
+components cannot be relabeled as retail object order.
+
 Capacity refresh and attachment are separate. The caller stores the evaluator result with
 `GatherSite::set_authoritative_capacity`; `attach_worker` reads that persistent value, as
 retail does. The building-center terrain update byte drives two independent operations:

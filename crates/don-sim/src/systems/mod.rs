@@ -54,6 +54,10 @@ pub mod economy;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
 pub mod fight;
+/// Source-backed `rules.xml` LandData and generated Mountain/Cliff object materialization
+/// for gathering. This is deliberately separate from Arena map storage: object identity,
+/// list order and four-slot land payloads must survive ingestion before Arena can adapt it.
+pub mod gather_terrain;
 /// Retail gathering-site capacity boundary, owner-local worker chains, worker/order
 /// lifecycle, rate scaling, and checksum-visible GatherOrder payload.
 pub mod gathering;
