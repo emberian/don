@@ -15,8 +15,10 @@ use super::map_terrain::World;
 use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::regions::WCoordList;
 use super::terrain_doobers::{
-    plan_bush_fringe_with_host, BushDooberPlacement, BushFringeError, BushFringeReceipt,
-    DooberTilesetRules,
+    plan_bush_fringe_with_host, plan_mountain_rock_fringe_with_host, validate_bush_fringe_inputs,
+    validate_mountain_rock_fringe_inputs, BushDooberPlacement, BushFringeError, BushFringeReceipt,
+    DooberTilesetRules, MountainRockDooberPlacement, MountainRockFringeError,
+    MountainRockFringeReceipt,
 };
 use crate::rng::Random;
 
@@ -137,6 +139,7 @@ pub struct PlaceAllPreviewReceipt {
     /// Present when the caller supplied the `TileSetGroupData` doober rules and
     /// placement reached the common post-group `add_doobers` stage.
     pub bush_fringe: Option<BushFringeReceipt>,
+    pub mountain_rock_fringe: Option<MountainRockFringeReceipt>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -148,6 +151,10 @@ pub enum PlaceAllHostEvent {
     ProgressDisplay { group_index: usize, pattern: i32 },
     /// `Doober::add_doober("bush", ...)` calls in the first `add_doobers` pass.
     AddBushDoober { placement: BushDooberPlacement },
+    /// The same shipped `"bush"` add call from the mountain-rock fringe pass.
+    AddMountainRockDoober {
+        placement: MountainRockDooberPlacement,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,9 +209,10 @@ pub enum TerrainPlacementBoundary {
     /// All selected groups were branch-skipped; retail next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
-    /// The bush-fringe pass completed.  Retail's mountain-rock pass next queries
-    /// the external doober registry through `Doober::has_doobers` (`0x008466d0`).
-    DooberOccupancyRegistryAndRockFringe,
+    /// Both `add_doobers` passes completed. Retail next conditionally calls
+    /// `TerrainGroups::treeify_mountains` (`0x006a1cc0`) using game-mode and
+    /// tileset probability state not yet supplied to this prefix.
+    TreeifyMountainsGameModeAndProbability,
 }
 
 /// First unresolved dependency in `TerrainGroups::place_all`.
@@ -213,6 +221,7 @@ pub enum PlaceAllError {
     InvalidTerrainGroupSelection(TerrainGroupSelectionError),
     InvalidTerrainPlacementPreparation(TerrainPlacementPreparationError),
     InvalidBushFringe(BushFringeError),
+    InvalidMountainRockFringe(MountainRockFringeError),
     /// The exact randomization, selection, host-event order, and clump-size
     /// preparation prefix completed.  `boundary` is the first missing gameplay
     /// input/kernel on the path selected by the group data and call flags.
@@ -318,14 +327,13 @@ impl TerrainGroups {
         )
     }
 
-    /// Advances the common `place_all` path through the complete deterministic
-    /// bush-fringe pass of `TerrainGroups::add_doobers`.
+    /// Advances the common `place_all` path through both complete deterministic
+    /// passes of `TerrainGroups::add_doobers`.
     ///
     /// `rules` are the eight recovered `TileSetGroupData` doober fields owned by
     /// the active tileset.  Bush creation is simulation-external and is surfaced
-    /// as [`PlaceAllHostEvent::AddBushDoober`].  The transaction remains
-    /// fail-closed at the next missing gameplay input, the doober occupancy
-    /// registry needed by the mountain-rock pass.
+    /// as ordered host events. The transaction remains fail-closed at the next
+    /// stage, `TerrainGroups::treeify_mountains`.
     pub fn place_all_with_doober_rules(
         &mut self,
         world: &mut World,
@@ -358,6 +366,11 @@ impl TerrainGroups {
         doober_rules: Option<DooberTilesetRules>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
+        if let Some(rules) = doober_rules {
+            validate_bush_fringe_inputs(world, rules).map_err(PlaceAllError::InvalidBushFringe)?;
+            validate_mountain_rock_fringe_inputs(world, rules)
+                .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+        }
         let mut preview_random = *random;
         let mut preview_mountains = mountains.clone();
         let mountain_randomization = preview_mountains.randomize_mountains(&mut preview_random);
@@ -374,6 +387,7 @@ impl TerrainGroups {
             )
             .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
         let mut bush_fringe = None;
+        let mut mountain_rock_fringe = None;
         let boundary = if boundary == TerrainPlacementBoundary::AddDoobers {
             if let Some(rules) = doober_rules {
                 let receipt =
@@ -382,7 +396,15 @@ impl TerrainGroups {
                     })
                     .map_err(PlaceAllError::InvalidBushFringe)?;
                 bush_fringe = Some(receipt);
-                TerrainPlacementBoundary::DooberOccupancyRegistryAndRockFringe
+                let receipt = plan_mountain_rock_fringe_with_host(
+                    world,
+                    rules,
+                    &mut preview_random,
+                    |placement| host(PlaceAllHostEvent::AddMountainRockDoober { placement }),
+                )
+                .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+                mountain_rock_fringe = Some(receipt);
+                TerrainPlacementBoundary::TreeifyMountainsGameModeAndProbability
             } else {
                 boundary
             }
@@ -395,6 +417,7 @@ impl TerrainGroups {
                 group_selection,
                 placement_preparation,
                 bush_fringe,
+                mountain_rock_fringe,
             },
             boundary,
         })
