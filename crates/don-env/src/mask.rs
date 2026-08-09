@@ -2,10 +2,12 @@
 //!
 //! # Invariants this module promises
 //!
-//! 1. **A masked-in action is applicable.** If a head value's bit is set, `action::apply_*`
-//!    will not classify the action `illegal` for *that* head. Cross-head conjunctions the
-//!    factored form cannot express (e.g. "this target is in range of this attacker") are
-//!    the documented exception, listed in [`CROSS_HEAD_GAPS`].
+//! 1. **A masked-in action has dynamics.** If a Verb bit is set, `action::apply_*` has an
+//!    executable body for it in the ordinary environment, and a sampled application does
+//!    not become `accepted_no_effect`. A derived transition whose mandatory host is absent
+//!    is masked out too. Cross-head conjunctions the factored form cannot express (e.g.
+//!    "this target is in range of this attacker") are the documented exception, listed in
+//!    [`CROSS_HEAD_GAPS`].
 //! 2. **Never all-zero.** Every head of an emittable verb has at least one legal value, and
 //!    the Verb head always has NOOP. A policy that samples under the mask can therefore
 //!    never be stuck, which is the failure mode that makes masked training diverge.
@@ -14,10 +16,7 @@
 use crate::generated as g;
 use crate::spec::{fill_bits, set_bit, EnvConfig, MaskLayout};
 use crate::state::EnvWorld;
-use crate::typecaps::{
-    F_ATTACK, F_BUILDING, F_CASTER, F_CIVILIAN, F_GARR_FORT, F_GARR_TOWN, F_MOVE, F_PRODUCER,
-    F_SIEGE, F_TRANSPORT,
-};
+use crate::typecaps::{F_ATTACK, F_BUILDING, F_CIVILIAN, F_MOVE, F_PRODUCER, F_SIEGE};
 
 /// Conjunctions a factored mask cannot express. Each is a real, quantified looseness in
 /// invariant 1, not a hand-wave.
@@ -109,13 +108,11 @@ impl MaskWriter {
         self.hostile.fill(0);
         self.friendly.fill(0);
         let mut any_hostile = false;
-        let mut any_friendly = false;
         for (slot, &r) in entity_rows.iter().enumerate().take(cfg.max_entities) {
             let o = w.sim.owner()[r];
             match w.relation(who, o) {
                 0 | 1 => {
                     set_bit(&mut self.friendly, slot + 1);
-                    any_friendly = true;
                 }
                 _ => {
                     set_bit(&mut self.hostile, slot + 1);
@@ -129,6 +126,12 @@ impl MaskWriter {
             if w.sim.owner()[row] != who as i8 {
                 continue;
             }
+            // Padding starts with value zero on every head, but a live record must be
+            // rebuilt from state. Retaining those padding bits would silently make
+            // TargetEntity=none and Type=0 legal even when real values exist, defeating
+            // the per-parameter contract. Verb=NOOP is the sole unconditional fallback.
+            r.fill(0);
+            set_bit(self.unit.head(r, g::UnitHead::Verb as usize), 0);
             let t = w.type_index[row];
             let c = *w.rules.caps.get(t);
             let is_building = c.has(F_BUILDING);
@@ -163,59 +166,42 @@ impl MaskWriter {
             {
                 let vh = self.unit.head(r, g::UnitHead::Verb as usize);
                 let mut allow = |v: usize| set_bit(vh, v + 1);
-                // Always available to anything the player owns.
+                // Every bit below has an executable `apply_unit` body in the ordinary
+                // environment. Keep unsupported taxonomy entries in `generated.rs`, but
+                // do not advertise them to a policy until their mandatory host exists.
                 allow(g::uv::HALT);
                 allow(g::uv::STANCE);
                 allow(g::uv::DISBAND);
                 if c.has(F_MOVE) && !is_building {
                     allow(g::uv::MOVE_TO);
                     allow(g::uv::MOVE_NEAR);
-                    allow(g::uv::PATROL);
-                    // `Group::action_launch_patrol` only installs an order on true
-                    // planes. Air-domain helicopters deliberately fail this predicate.
-                    if c.is_plane {
-                        allow(g::uv::LAUNCH_PATROL);
+                    // Ground GROUP_PATROL executes through the recovered local
+                    // transition. True planes route this same opcode to AIR_PATROL,
+                    // whose mandatory physics/type/search host is unavailable in the
+                    // ordinary VecEnv. LAUNCH_PATROL is therefore also masked out.
+                    if !w.rules.caps.is_permissive() && !c.is_plane {
+                        allow(g::uv::PATROL);
                     }
                     allow(g::uv::FORM);
-                    if any_friendly {
-                        allow(g::uv::FOLLOW);
-                        allow(g::uv::GUARD);
-                    }
                 }
                 if c.has(F_ATTACK) && any_hostile {
                     allow(g::uv::ATTACK);
                     if c.has(F_SIEGE) {
                         allow(g::uv::SIEGE_ATTACK);
-                        allow(g::uv::ATTACK_GROUND);
                     }
                 }
                 if c.has(F_CIVILIAN) && !is_building {
-                    allow(g::uv::GATHER);
-                    allow(g::uv::REPAIR);
+                    // GATHER stays masked out. don-sim exposes the recovered order and
+                    // lifecycle primitives, but EnvWorld does not yet own the mandatory
+                    // authoritative terrain/capacity, persistent GatherSite/GatherWorker,
+                    // per-worker evaluator, and Leader::do_gather payout hosts. Crediting
+                    // resources here would manufacture the missing transaction.
                     if type_any {
                         allow(g::uv::BUILD);
                     }
                 }
-                if c.has(F_CASTER) {
-                    allow(g::uv::SPELL);
-                    allow(g::uv::STOP_SPELL);
-                }
-                if c.has(F_TRANSPORT) {
-                    allow(g::uv::TRANSPORT);
-                    allow(g::uv::SET_TRANSPORT);
-                    allow(g::uv::EJECTALL);
-                }
-                if (c.has(F_GARR_TOWN) || c.has(F_GARR_FORT)) && any_friendly {
-                    allow(g::uv::GARRISON);
-                }
-                if c.has(F_PRODUCER) {
-                    if type_any {
-                        allow(g::uv::QUEUE_UP);
-                    }
-                    allow(g::uv::UNQUEUE);
-                    allow(g::uv::COME_OUT);
-                    allow(g::uv::GATHER_POINT);
-                    allow(g::uv::CITY_GATHER);
+                if c.has(F_PRODUCER) && type_any {
+                    allow(g::uv::QUEUE_UP);
                 }
             }
 
@@ -272,21 +258,12 @@ impl MaskWriter {
         {
             let vh = self.player.head(r, g::PlayerHead::Verb as usize);
             let mut allow = |v: usize| set_bit(vh, v + 1);
+            // As above, the mask is a dynamics contract rather than an inventory of the
+            // generated opcode taxonomy. Unsupported player verbs remain representable
+            // for future hosts, but are not sampled as accepted no-ops.
             allow(g::pv::RESIGN);
-            allow(g::pv::ALARM);
-            allow(g::pv::UNITMASK);
-            allow(g::pv::BUILDMASK);
             allow(g::pv::TREATY);
             allow(g::pv::DECLARE);
-            allow(g::pv::ACCEPT);
-            allow(g::pv::REJECT);
-            allow(g::pv::PROPOSE_ATTACK);
-            allow(g::pv::CLEAR_ALL);
-            allow(g::pv::CLEAR_TRIBUTES);
-            allow(g::pv::DEMAND_TRIBUTE);
-            allow(g::pv::LEADER_OPTIONS);
-            allow(g::pv::BUY);
-            allow(g::pv::SELL);
             if w.players[who as usize]
                 .econ
                 .iter()

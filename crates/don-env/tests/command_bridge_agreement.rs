@@ -302,8 +302,11 @@ fn env_patrol_routing_uses_retail_is_plane() {
     };
     assert!(allows(0, g::uv::PATROL));
     assert!(!allows(0, g::uv::LAUNCH_PATROL));
-    assert!(allows(1, g::uv::PATROL));
-    assert!(allows(1, g::uv::LAUNCH_PATROL));
+    assert!(
+        !allows(1, g::uv::PATROL),
+        "ordinary VecEnv has no mandatory AIR_PATROL physics/search host"
+    );
+    assert!(!allows(1, g::uv::LAUNCH_PATROL));
     assert!(allows(2, g::uv::PATROL));
     assert!(!allows(2, g::uv::LAUNCH_PATROL));
 }
