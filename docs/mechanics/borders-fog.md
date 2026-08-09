@@ -387,8 +387,19 @@ The supply-specific arm of `Unit::process_healing` is at
 `0x005E0F1A..0x005E0FFC`. Its shipped base rate is zero; the French bonus adds 20 frames,
 and completed Versailles contributes 20 alone or combines as `(rate + 20) / 4`. On the
 per-object due phase it requires `Supplies::find_supply >= 0` and calls
-`Unit::repair_damage(1, 1, 1)`. Other healing families earlier in the function can
-pre-empt or compose with this arm and must remain separate host inputs.
+`Unit::repair_damage(1, 1, 1)`. The postlude stores
+`ObjectData::healing = max(healing, rate)` and, for a fully repaired root unit, clears
+`unit_masks & 0x4000`.
+
+The final civilian arm is at `0x005E1000..0x005E110D`. Its shipped rate is 45 frames; the
+due call rejects `unit_masks2 & 1`, accepts the four literal worker TypeIndexes
+`0x32..=0x35` plus separate caravan/merchant predicates, and calls
+`Unit::repair_damage(1, 0, 1)` on sea or allied territory. Its postlude stores the same
+healing maximum but does **not** clear `0x4000`. `Unit::execute_events` at
+`0x00610BC0..0x00610C30` decrements a non-zero healing word later in the same frame. Arena
+now executes the same-owner land-worker singleton and that marker clock. Foreign ownership
+stops at a typed diplomacy boundary; the caravan, merchant and earlier healing families
+remain separate inputs.
 
 ---
 
@@ -449,11 +460,11 @@ still useful but the combination is not.
    kernels take resolved inputs. The Arena world now owns and walks those live registries
    for process-supply, recharge and the isolated supply-healing arm; other hosts must still
    provide the same ordered object lookup.
-4. **Non-friendly attrition-period selection and the other healing families remain open.**
+4. **Non-friendly attrition-period selection and the remaining healing families remain open.**
    Arena executes the exact 32-frame reset/friendly-territory return and fails closed at
-   the diplomacy/leader/object-graph boundary. Its healing host likewise rejects cases
-   where an unintegrated earlier healing family or multi-slot object could compose with the
-   isolated supply arm.
+   the diplomacy/leader/object-graph boundary. Its healing host executes the same-owner
+   singleton-worker arm, but rejects foreign/allied worker decisions, unintegrated
+   hero/Iroquois/caravan/merchant composition and multi-slot objects.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.

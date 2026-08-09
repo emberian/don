@@ -40,9 +40,10 @@
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
 //! 6. No water, naval, air or diplomacy. Supply source traversal, siege reload selection,
-//!    isolated French/Versailles healing, the 32-frame attrition reset/friendly return and
-//!    due-frame attrition mutation are wired into the live unit band. Non-friendly period
-//!    selection and other healing families remain explicit blockers.
+//!    isolated French/Versailles healing, same-owner worker healing, the 32-frame attrition
+//!    reset/friendly return and due-frame attrition mutation are wired into the live unit
+//!    band. Non-friendly period selection and the remaining healing families stay explicit
+//!    blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -102,10 +103,11 @@ use super::gather_runtime::{
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
     self, ArenaAttritionRecomputeHost, ArenaReloadSupplyHost, ArenaSupplyAttritionHost,
-    ArenaSupplyHealingHost, AttritionRecomputeTransaction, HeroRadiusFacts, HeroRegistryRecord,
-    ReloadSupplyState, SupplyAttritionTransaction, SupplyAttritionUnitState,
-    SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject,
-    RESUPPLIED_THIS_TICK, SUPPORT_REGISTRY_ACTIVE,
+    ArenaSupplyHealingHost, ArenaWorkerHealingHost, AttritionRecomputeTransaction,
+    HealingRepairMutation, HeroRadiusFacts, HeroRegistryRecord, ReloadSupplyState,
+    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyHealingTransaction,
+    SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject, WorkerHealingTransaction,
+    SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -307,6 +309,10 @@ pub struct Ent {
     pub assigned_to: EntId,
     pub last_damaged: i64,
     pub spawn_frame: i64,
+    /// `ObjectData::healing` `+0x38`. Each successful healing arm stores the maximum of
+    /// the current marker and that arm's rate; `Unit::execute_events` decrements it once
+    /// later in the same retail frame.
+    pub healing: i16,
     /// `UnitData::attrition` `+0x9E`, the due period in frames. It is real per-unit state;
     /// zero disables the due branch. Arena executes the 32-frame universal reset and
     /// friendly-territory return; ordinary spawns retain zero because non-friendly period
@@ -581,10 +587,12 @@ enum ArenaSupplyHostError {
     MissingType(i32),
     StaleUnitMasks2 { expected: u32, found: u32 },
     StaleDamage { expected: i32, found: i32 },
+    StaleHealing { expected: i16, found: i16 },
     StaleUnitMasks { expected: u32, found: u32 },
     StaleAttritionPeriod { expected: i16, found: i16 },
     UnsupportedUberDamage { type_id: i32, uber_size: i32 },
     UnsupportedUberHealing { type_id: i32, uber_size: i32 },
+    InvalidHealingRate(i32),
     PositionOutsideWorld { x: i32, y: i32 },
 }
 
@@ -634,6 +642,76 @@ impl ArenaSupplyHost<'_> {
             .filter(|type_id| self.players[owner].techs.contains(type_id))
             .count() as i32
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn repair_and_mark_healing(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+        clear_full_damage_mask: bool,
+    ) -> Result<HealingRepairMutation, ArenaSupplyHostError> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let type_id = self.ents[index].type_id;
+        let uber_size = self
+            .types
+            .get(type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(type_id))?
+            .uber_size;
+        if uber_size != 1 {
+            return Err(ArenaSupplyHostError::UnsupportedUberHealing { type_id, uber_size });
+        }
+        let healing_rate = i16::try_from(healing_rate)
+            .map_err(|_| ArenaSupplyHostError::InvalidHealingRate(healing_rate))?;
+        let ent = &mut self.ents[index];
+        if ent.hp.damage != damage_before {
+            return Err(ArenaSupplyHostError::StaleDamage {
+                expected: damage_before,
+                found: ent.hp.damage,
+            });
+        }
+        if ent.healing != healing_before {
+            return Err(ArenaSupplyHostError::StaleHealing {
+                expected: healing_before,
+                found: ent.healing,
+            });
+        }
+        let motion = ent
+            .motion
+            .as_mut()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        if motion.unit_masks != unit_masks_before {
+            return Err(ArenaSupplyHostError::StaleUnitMasks {
+                expected: unit_masks_before,
+                found: motion.unit_masks,
+            });
+        }
+
+        let (damage_after, damage_frac) =
+            production::repair_damage(ent.hp.damage, amount, ent.hp.myhits);
+        ent.hp.damage = damage_after;
+        ent.hp.damage_frac = damage_frac;
+        ent.healing = ent.healing.max(healing_rate);
+        if clear_full_damage_mask && damage_after == 0 {
+            // Arena's supported singleton object is the root (`inside_up == -1`), the
+            // exact `UnitData::is_captain` arm at 0x005E0FD8.
+            motion.unit_masks &= !0x4000;
+        }
+        Ok(HealingRepairMutation {
+            damage_before,
+            damage_after,
+            healing_before,
+            healing_after: ent.healing,
+            unit_masks_before,
+            unit_masks_after: motion.unit_masks,
+        })
+    }
 }
 
 impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
@@ -667,8 +745,10 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
                 y: ent.y,
             },
             unit_id: ent.object_o,
+            type_id: ent.type_id,
             attrition_period: ent.attrition_period,
             damage: ent.hp.damage,
+            healing: ent.healing,
             unit_masks: motion.unit_masks,
             unit_masks2: motion.unit_masks2,
             is_supply: ty.unit_flags2 & 0x40 != 0,
@@ -875,32 +955,51 @@ impl ArenaSupplyHealingHost for ArenaSupplyHost<'_> {
         &mut self,
         who: i32,
         o: i32,
-        before: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
         amount: i32,
-    ) -> Result<i32, Self::Error> {
-        let index = self
-            .object_index(who, o)?
-            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
-        let type_id = self.ents[index].type_id;
-        let uber_size = self
-            .types
-            .get(type_id)
-            .ok_or(ArenaSupplyHostError::MissingType(type_id))?
-            .uber_size;
-        if uber_size != 1 {
-            return Err(ArenaSupplyHostError::UnsupportedUberHealing { type_id, uber_size });
-        }
-        let ent = &mut self.ents[index];
-        if ent.hp.damage != before {
-            return Err(ArenaSupplyHostError::StaleDamage {
-                expected: before,
-                found: ent.hp.damage,
-            });
-        }
-        let (damage, damage_frac) = production::repair_damage(ent.hp.damage, amount, ent.hp.myhits);
-        ent.hp.damage = damage;
-        ent.hp.damage_frac = damage_frac;
-        Ok(damage)
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error> {
+        self.repair_and_mark_healing(
+            who,
+            o,
+            damage_before,
+            healing_before,
+            unit_masks_before,
+            amount,
+            healing_rate,
+            true,
+        )
+    }
+}
+
+impl ArenaWorkerHealingHost for ArenaSupplyHost<'_> {
+    fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error> {
+        let owner = self.owner(who)?;
+        Ok(self.players[owner].tribe == 0x12)
+    }
+
+    fn repair_worker_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error> {
+        self.repair_and_mark_healing(
+            who,
+            o,
+            damage_before,
+            healing_before,
+            unit_masks_before,
+            amount,
+            healing_rate,
+            false,
+        )
     }
 }
 
@@ -1632,6 +1731,7 @@ impl World {
             assigned_to: EntId::NONE,
             last_damaged: -1,
             spawn_frame: self.frame,
+            healing: 0,
             attrition_period: 0,
             motion: motion.take(),
             guys,
@@ -2478,8 +2578,10 @@ impl World {
             self.tick_job(i);
             if !buildings && self.ents[i].alive {
                 self.tick_supply_healing(i);
+                self.tick_worker_healing(i);
                 self.tick_attrition_recompute(i);
                 self.tick_supply_attrition(i);
+                self.tick_healing_clock(i);
             }
         }
     }
@@ -2514,6 +2616,45 @@ impl World {
             self.sync_target_damage(id);
         }
         transaction
+    }
+
+    /// The exact same-owner land-worker subdomain of the final civilian-healing arm.
+    /// Foreign territory reports the missing diplomacy matrix; earlier healing families
+    /// and multi-slot object graphs are retained as typed blockers by the adapter.
+    fn tick_worker_healing(&mut self, i: usize) -> WorkerHealingTransaction {
+        if self.ents[i].hp.damage <= 0 {
+            return WorkerHealingTransaction::NoDamage;
+        }
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let id = self.ents[i].id;
+        let transaction = {
+            let mut host = ArenaSupplyHost {
+                ents: &mut self.ents,
+                types: &self.types,
+                players: &self.players,
+                supply_records: &self.supply_records,
+                hero_records: &self.hero_records,
+                territory: &self.collision_world,
+                frame: self.frame,
+            };
+            retail_systems::execute_worker_healing(self.frame as i32, who, o, &mut host)
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena worker-healing transaction failed for ({who},{o}): {error:?}")
+        });
+        if matches!(transaction, WorkerHealingTransaction::Healed { .. }) {
+            self.sync_target_damage(id);
+        }
+        transaction
+    }
+
+    /// `Unit::execute_events` `0x00610BC0` decrements the unsigned view of the signed
+    /// `ObjectData::healing` word after `Unit::process_healing` in the same frame.
+    fn tick_healing_clock(&mut self, i: usize) {
+        if self.ents[i].healing != 0 {
+            self.ents[i].healing = self.ents[i].healing.wrapping_sub(1);
+        }
     }
 
     /// The exact 32-frame call site before the due attrition tail. Arena closes the
@@ -4388,6 +4529,7 @@ impl WorkWorld for ArenaMoveWorld<'_> {
 mod supply_attrition_integration {
     use super::*;
     use crate::arena::match_run::{load_world, MatchConfig};
+    use crate::arena::retail_systems::{WorkerHealingBlocker, RESUPPLIED_THIS_TICK};
 
     #[test]
     fn live_unit_band_applies_reload_healing_attrition_and_source_lifetime() {
@@ -4438,12 +4580,20 @@ mod supply_attrition_integration {
         // radius and prove World::step calls repair_damage before the attrition tail.
         world.ents[source_index].x -= RANGE_UNITS_PER_TILE;
         world.ents[siege_index].job = Job::Idle;
-        world.ents[siege_index].hp.damage = 2;
+        world.ents[siege_index].hp.damage = 1;
+        world.ents[siege_index].healing = 3;
+        world.ents[siege_index].motion.as_mut().unwrap().unit_masks |= 0x4000;
         world.players[0].tribe = 0x0A;
         let heal_due = (-i64::from(world.ents[siege_index].object_o)).rem_euclid(20);
         world.frame = heal_due;
         world.step();
-        assert_eq!(world.ents[siege_index].hp.damage, 1);
+        assert_eq!(world.ents[siege_index].hp.damage, 0);
+        assert_eq!(world.ents[siege_index].healing, 19);
+        assert_eq!(
+            world.ents[siege_index].motion.as_ref().unwrap().unit_masks & 0x4000,
+            0,
+            "the supply arm clears the root-unit mask after full repair"
+        );
 
         // Unit::process calls process_attrition on its independent 32-frame stagger. The
         // friendly return closes after the universal mask/period reset; neutral territory
@@ -4546,6 +4696,95 @@ mod supply_attrition_integration {
         assert!(!world.supply_records[0].iter().any(|record| {
             record.supply_flags & SUPPORT_REGISTRY_ACTIVE != 0 && record.o == source_o
         }));
+    }
+
+    #[test]
+    fn friendly_worker_healing_preserves_phase_masks_clock_and_authority_boundaries() {
+        let Ok(mut world) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        let center = world.map.w / 2;
+        let worker = world.spawn(0, world.ids.citizen, center, center, true);
+        let wi = worker.index().expect("spawn returned a dense Arena handle");
+        let worker_o = world.ents[wi].object_o;
+        let (tx, ty) = world.ents[wi].tile();
+        let (wx, wy) = (tx.div_euclid(4), ty.div_euclid(4));
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        world.players[0].tribe = 0;
+        world.hero_records[0].clear();
+
+        world.ents[wi].hp.damage = 2;
+        world.ents[wi].healing = 3;
+        world.ents[wi].motion.as_mut().unwrap().unit_masks |= 0x4000;
+        let due = (-i64::from(worker_o)).rem_euclid(45);
+        world.frame = due;
+        world.step();
+
+        assert_eq!(world.ents[wi].hp.damage, 1);
+        assert_eq!(
+            world.ents[wi].healing, 44,
+            "process_healing stores 45 before execute_events decrements it"
+        );
+        assert_ne!(
+            world.ents[wi].motion.as_ref().unwrap().unit_masks & 0x4000,
+            0,
+            "the civilian arm does not execute the supply arm's mask clear"
+        );
+
+        world.step();
+        assert_eq!(world.ents[wi].hp.damage, 1, "the next phase is not due");
+        assert_eq!(world.ents[wi].healing, 43);
+
+        world.ents[wi].hp.damage = 2;
+        world.ents[wi].healing = 0;
+        world.ents[wi].motion.as_mut().unwrap().unit_masks2 |= 1;
+        world.frame = due + 45;
+        assert_eq!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::UnderAttack { rate: 45 }
+        );
+        assert_eq!(world.ents[wi].hp.damage, 2);
+
+        world.ents[wi].motion.as_mut().unwrap().unit_masks2 &= !1;
+        world.collision_world.wdata_mut(wx, wy).who = -1;
+        world.frame = due + 90;
+        assert_eq!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::UnownedTerritory { rate: 45 }
+        );
+        assert_eq!(world.ents[wi].hp.damage, 2);
+
+        world.collision_world.wdata_mut(wx, wy).who = 1;
+        world.frame = due + 135;
+        assert_eq!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::BlockedForeignTerritory {
+                rate: 45,
+                territory_owner: 1,
+            }
+        );
+        assert_eq!(world.ents[wi].hp.damage, 2);
+
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        world
+            .types
+            .rows
+            .get_mut(&world.ids.citizen)
+            .unwrap()
+            .uber_size = 2;
+        world.frame = due + 180;
+        assert_eq!(
+            world.tick_worker_healing(wi),
+            WorkerHealingTransaction::BlockedPriorFamily {
+                rate: 45,
+                blocker: WorkerHealingBlocker::MultiSlot {
+                    type_id: world.ids.citizen,
+                    uber_size: 2,
+                },
+            }
+        );
+        assert_eq!(world.ents[wi].hp.damage, 2);
+        assert_eq!(world.ents[wi].healing, 0);
     }
 }
 

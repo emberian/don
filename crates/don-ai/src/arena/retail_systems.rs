@@ -355,10 +355,12 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "due-tick UnitData unit_masks2 resupplied write",
             "live Arena support registries, object-table host and unit-band call site",
             "live UnitData::in_supply query at the post-volley siege recharge call site",
-            "French and completed-Versailles supply-healing arm with live repair mutation",
+            "French and completed-Versailles supply-healing arm with full repair postlude",
+            "same-owner land-worker healing, marker clock and singleton repair mutation",
         ],
         missing: &[
-            "other Unit::process_healing families which can pre-empt or compose with supply healing",
+            "foreign/allied worker healing needs the diplomacy matrix",
+            "hero, Iroquois, caravan and merchant healing families and their composition",
             "multi-slot captain repair for ObjectType uber_size greater than one",
         ],
     },
@@ -1041,8 +1043,10 @@ pub struct HeroRadiusFacts {
 pub struct SupplyAttritionUnitState {
     pub unit: SupplyUnitKey,
     pub unit_id: i16,
+    pub type_id: i32,
     pub attrition_period: i16,
     pub damage: i32,
+    pub healing: i16,
     pub unit_masks: u32,
     pub unit_masks2: u32,
     pub is_supply: bool,
@@ -1119,9 +1123,30 @@ pub trait ArenaSupplyHealingHost: ArenaSupplyAttritionHost {
         &mut self,
         who: i32,
         o: i32,
-        before: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
         amount: i32,
-    ) -> Result<i32, Self::Error>;
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error>;
+}
+
+/// Live facts and the atomic repair write for the final worker arm of
+/// `Unit::process_healing` (`0x005E1000..0x005E110D`). The worker predicate is recovered
+/// as the four literal TypeIndexes `0x32..=0x35`; caravan and merchant virtual predicates
+/// deliberately remain outside this boundary.
+pub trait ArenaWorkerHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHost {
+    fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error>;
+    fn repair_worker_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
 /// The universal live-world prefix of `Unit::process_attrition` plus the territory read
@@ -1200,8 +1225,60 @@ pub enum SupplyHealingTransaction {
     Healed {
         rate: i32,
         source_index: i32,
-        damage_before: i32,
-        damage_after: i32,
+        repair: HealingRepairMutation,
+    },
+}
+
+/// Compare-and-swap-shaped receipt for `Unit::repair_damage` plus the caller's exact
+/// `ObjectData::healing = max(healing, rate)` postlude. Only the supply arm clears
+/// `unit_masks & 0x4000` after a root unit reaches zero damage; the worker arm retains it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HealingRepairMutation {
+    pub damage_before: i32,
+    pub damage_after: i32,
+    pub healing_before: i16,
+    pub healing_after: i16,
+    pub unit_masks_before: u32,
+    pub unit_masks_after: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerHealingBlocker {
+    LiveHeroRegistry,
+    IroquoisHealing,
+    SupplyHealing,
+    MultiSlot { type_id: i32, uber_size: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerHealingTransaction {
+    NoDamage,
+    NotDue {
+        rate: i32,
+    },
+    UnderAttack {
+        rate: i32,
+    },
+    NotWorker {
+        rate: i32,
+    },
+    NotLand {
+        rate: i32,
+    },
+    UnownedTerritory {
+        rate: i32,
+    },
+    BlockedForeignTerritory {
+        rate: i32,
+        territory_owner: i32,
+    },
+    BlockedPriorFamily {
+        rate: i32,
+        blocker: WorkerHealingBlocker,
+    },
+    Healed {
+        rate: i32,
+        repair: HealingRepairMutation,
     },
 }
 
@@ -1541,14 +1618,149 @@ pub fn execute_supply_healing<H: ArenaSupplyHealingHost>(
     {
         return Err(SupplyAttritionTransactionError::UnsupportedPriorHealingSource { who, o });
     }
-    let damage_after = host
-        .repair_supply_damage(who, o, state.damage, 1)
+    let repair = host
+        .repair_supply_damage(
+            who,
+            o,
+            state.damage,
+            state.healing,
+            state.unit_masks,
+            1,
+            rate,
+        )
         .map_err(SupplyAttritionTransactionError::Host)?;
     Ok(SupplyHealingTransaction::Healed {
         rate,
         source_index,
-        damage_before: state.damage,
-        damage_after,
+        repair,
+    })
+}
+
+/// Execute the exact friendly-land worker subdomain of the final civilian arm in
+/// `Unit::process_healing` (`0x005E1000..0x005E110D`).
+///
+/// The shipped rate is 45 frames. Retail rejects the due call while under attack, accepts
+/// four literal worker TypeIndexes, then repairs on sea or allied territory. Arena has no
+/// diplomacy matrix, so same-owner land is exact, unowned land is an exact no-op, and a
+/// foreign owner is a typed authority boundary. Earlier hero/Iroquois/supply families and
+/// multi-slot repair likewise remain explicit instead of being silently composed.
+pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<WorkerHealingTransaction, SupplyAttritionTransactionError<H::Error>> {
+    const CIVILIAN_HEAL_RATE: i32 = 45;
+
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.damage <= 0 {
+        return Ok(WorkerHealingTransaction::NoDamage);
+    }
+    if frame.wrapping_add(i32::from(state.unit_id)) % CIVILIAN_HEAL_RATE != 0 {
+        return Ok(WorkerHealingTransaction::NotDue {
+            rate: CIVILIAN_HEAL_RATE,
+        });
+    }
+    if state.unit_masks2 & 1 != 0 {
+        return Ok(WorkerHealingTransaction::UnderAttack {
+            rate: CIVILIAN_HEAL_RATE,
+        });
+    }
+    if !matches!(state.type_id, 0x32..=0x35) {
+        return Ok(WorkerHealingTransaction::NotWorker {
+            rate: CIVILIAN_HEAL_RATE,
+        });
+    }
+    if state.domain != 0 {
+        return Ok(WorkerHealingTransaction::NotLand {
+            rate: CIVILIAN_HEAL_RATE,
+        });
+    }
+    if state.type_308 != 1 || state.curr_uber_size != 1 {
+        return Ok(WorkerHealingTransaction::BlockedPriorFamily {
+            rate: CIVILIAN_HEAL_RATE,
+            blocker: WorkerHealingBlocker::MultiSlot {
+                type_id: state.type_id,
+                uber_size: state.type_308,
+            },
+        });
+    }
+    if host
+        .hero_records(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .iter()
+        .any(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0)
+    {
+        return Ok(WorkerHealingTransaction::BlockedPriorFamily {
+            rate: CIVILIAN_HEAL_RATE,
+            blocker: WorkerHealingBlocker::LiveHeroRegistry,
+        });
+    }
+    if host
+        .iroquois_healing_bonus(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(WorkerHealingTransaction::BlockedPriorFamily {
+            rate: CIVILIAN_HEAL_RATE,
+            blocker: WorkerHealingBlocker::IroquoisHealing,
+        });
+    }
+    if host
+        .french_supply_bonus(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        || host
+            .completed_versailles(who)
+            .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(WorkerHealingTransaction::BlockedPriorFamily {
+            rate: CIVILIAN_HEAL_RATE,
+            blocker: WorkerHealingBlocker::SupplyHealing,
+        });
+    }
+
+    let territory_owner = host
+        .territory_owner_at(state.unit.x, state.unit.y)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if territory_owner < 0 {
+        return Ok(WorkerHealingTransaction::UnownedTerritory {
+            rate: CIVILIAN_HEAL_RATE,
+        });
+    }
+    if territory_owner != who {
+        return Ok(WorkerHealingTransaction::BlockedForeignTerritory {
+            rate: CIVILIAN_HEAL_RATE,
+            territory_owner,
+        });
+    }
+
+    let repair = host
+        .repair_worker_damage(
+            who,
+            o,
+            state.damage,
+            state.healing,
+            state.unit_masks,
+            1,
+            CIVILIAN_HEAL_RATE,
+        )
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    Ok(WorkerHealingTransaction::Healed {
+        rate: CIVILIAN_HEAL_RATE,
+        repair,
     })
 }
 
@@ -2513,8 +2725,10 @@ mod tests {
             unit: SupplyAttritionUnitState {
                 unit,
                 unit_id: 0,
+                type_id: 0x32,
                 attrition_period: 48,
                 damage: 0,
+                healing: 0,
                 unit_masks: 0,
                 unit_masks2: 0x20,
                 is_supply: false,
