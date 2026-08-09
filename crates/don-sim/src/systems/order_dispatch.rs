@@ -151,11 +151,16 @@
 //!   not ported.
 //! * 21 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
+use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
 use crate::systems::groups_guys::{GuyData, GuyEnv, UnitTypeStats};
 use crate::systems::movement::{
     self, vector_dist, Body, MoveStep, MoveTurnProfile, PathData, PathFinder, PathStack, PathUnit,
     SearchArgs, SearchResult, UPathOutcome, UnitWorld,
+};
+use crate::systems::patrol::{
+    self, AirPatrolAction, AirPatrolAfterPhysics, AirPatrolOrder, AirPatrolTarget,
+    GroundPatrolAction, GroupMoveRequest, GroupPatrolOrder, StrafeOrder,
 };
 
 // ---------------------------------------------------------------------------
@@ -361,7 +366,7 @@ pub fn is_targeted(k: OrderIndex) -> bool {
 ///                     coll_x@60 coll_y@64 orig_x@68 orig_y@72 off_x@76 off_y@78 }
 /// TargetOrder 32 B  { ox@8, whom@12, uid@16 }
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct OrderRec {
     pub kind: OrderIndex,
     /// `UnitOrder::flags` at `+4`. See `crate::order::ORDER_*`.
@@ -397,6 +402,15 @@ pub struct OrderRec {
     /// `MoveOrder::last_x` / `::last_y` at `+52` / `+56`. Set to `-1` by the retry arm.
     pub last_x: i32,
     pub last_y: i32,
+    /// `MoveOrder::coll_x/coll_y` at `+60/+64` and `orig_x/orig_y` at `+68/+72`.
+    pub coll_x: i32,
+    pub coll_y: i32,
+    pub orig_x: i32,
+    pub orig_y: i32,
+    /// Signed remainders of the initial destination modulo one WCoord cell (`0x300`), at
+    /// `+76/+78`. The ground-patrol executor writes these directly.
+    pub off_x: i16,
+    pub off_y: i16,
 
     // ---- TargetOrder ----
     /// `TargetOrder::ox` at `+8` — the target's index in its owner's object band.
@@ -406,6 +420,27 @@ pub struct OrderRec {
     /// `TargetOrder::uid` at `+16` — `ObjectData::uid`, the staleness token. A mismatch is
     /// what `Unit::work`'s tail treats as "the target you named is not there any more".
     pub target_uid: u16,
+
+    /// Concrete fields carried only by the three order classes patrol creates or executes.
+    /// Retail stores these in dynamically-sized class instances; keeping the payload on the
+    /// queue node preserves the same per-order ownership and permits routes of any length.
+    pub patrol_payload: PatrolPayload,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PatrolPayload {
+    #[default]
+    None,
+    Group(GroupPatrolOrder),
+    Air(AirPatrolOrder),
+    Strafe(StrafeOrder),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatrolInstall {
+    Replaced,
+    AppendedOrder,
+    ExtendedWaypoints,
 }
 
 impl Default for OrderRec {
@@ -427,9 +462,16 @@ impl Default for OrderRec {
             dest_y: 0,
             last_x: -1,
             last_y: -1,
+            coll_x: 0,
+            coll_y: 0,
+            orig_x: 0,
+            orig_y: 0,
+            off_x: 0,
+            off_y: 0,
             target_o: -1,
             target_who: -1,
             target_uid: 0,
+            patrol_payload: PatrolPayload::None,
         }
     }
 }
@@ -474,6 +516,35 @@ impl OrderRec {
         }
     }
 
+    pub fn group_patrol(order: GroupPatrolOrder) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::GroupPatrol,
+            flags: ORDER_GROUP,
+            patrol_payload: PatrolPayload::Group(order),
+            ..OrderRec::default()
+        }
+    }
+
+    pub fn air_patrol(order: AirPatrolOrder, group: bool) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::AirPatrol,
+            flags: if group { ORDER_GROUP } else { 0 },
+            patrol_payload: PatrolPayload::Air(order),
+            ..OrderRec::default()
+        }
+    }
+
+    pub fn strafe(order: StrafeOrder) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::Strafe,
+            target_o: order.target_o,
+            target_who: order.target_who,
+            target_uid: order.target_uid,
+            patrol_payload: PatrolPayload::Strafe(order),
+            ..OrderRec::default()
+        }
+    }
+
     #[inline]
     pub fn has(&self, bit: u8) -> bool {
         self.flags & bit != 0
@@ -502,6 +573,108 @@ impl OrderRec {
     pub fn is_pathed(&self) -> bool {
         self.has(ORDER_PATHED)
     }
+}
+
+/// The measured `Group::action_patrol` / `Unit::add_patrol_order` installation semantics.
+///
+/// Patrol is one of the exceptions to the generic group insert dance: `QUEUE_FIRST` is
+/// normalized to `QUEUE_NEW`. `QUEUE_LAST` extends the active `GROUP_PATROL` when there is
+/// one; otherwise it appends a distinct patrol order.
+#[allow(clippy::too_many_arguments)]
+pub fn install_group_patrol(
+    u: &mut UnitWork,
+    start_x: i32,
+    start_y: i32,
+    target_x: i32,
+    target_y: i32,
+    id: i32,
+    form_id: i32,
+    oxx: i32,
+    whose: i32,
+    queue: QueuePos,
+) -> PatrolInstall {
+    if queue == QueuePos::Last {
+        let action = update_action(u);
+        if action
+            .as_ref()
+            .is_some_and(|o| o.kind == OrderIndex::GroupPatrol)
+        {
+            if let Some(current) = u.orders.current_mut() {
+                if let PatrolPayload::Group(order) = &mut current.patrol_payload {
+                    // Group::action_patrol's extension arm writes the command Coord
+                    // directly; it does not repeat add_patrol_order's UCoord centering.
+                    order.points.push(target_x, target_y);
+                    current.flags |= ORDER_GROUP;
+                    update_action(u);
+                    return PatrolInstall::ExtendedWaypoints;
+                }
+            }
+        }
+    }
+
+    let order = OrderRec::group_patrol(patrol::new_group_patrol(
+        start_x, start_y, target_x, target_y, id, form_id, oxx, whose,
+    ));
+    let result = if queue == QueuePos::Last {
+        u.orders.push_back(order);
+        PatrolInstall::AppendedOrder
+    } else {
+        u.orders.replace(order);
+        clear_partial_path(u);
+        PatrolInstall::Replaced
+    };
+    update_action(u);
+    result
+}
+
+/// The measured `Group::action_air_patrol` / `Unit::add_air_patrol_order` installation
+/// semantics. A compatible `QUEUE_LAST` grows the active waypoint array. Every other case
+/// replaces the unit queue because the true-plane installer ignores its `QueuePos` argument
+/// and calls `close_orders(0)` unconditionally.
+#[allow(clippy::too_many_arguments)]
+pub fn install_air_patrol(
+    u: &mut UnitWork,
+    target_x: i32,
+    target_y: i32,
+    home_o: i32,
+    home_who: i32,
+    home_pos: Option<(i32, i32)>,
+    group: bool,
+    queue: QueuePos,
+) -> PatrolInstall {
+    if queue == QueuePos::Last {
+        let action = update_action(u);
+        if action
+            .as_ref()
+            .is_some_and(|o| o.kind == OrderIndex::AirPatrol)
+        {
+            if let Some(current) = u.orders.current_mut() {
+                if let PatrolPayload::Air(order) = &mut current.patrol_payload {
+                    let (x, y) = match home_pos {
+                        Some((hx, hy)) => (target_x.wrapping_sub(hx), target_y.wrapping_sub(hy)),
+                        None => (target_x, target_y),
+                    };
+                    order.points.push(x, y);
+                    if group {
+                        current.flags |= ORDER_GROUP;
+                    } else {
+                        current.flags &= !ORDER_GROUP;
+                    }
+                    update_action(u);
+                    return PatrolInstall::ExtendedWaypoints;
+                }
+            }
+        }
+    }
+
+    let order = OrderRec::air_patrol(
+        patrol::new_air_patrol(target_x, target_y, home_o, home_who, home_pos),
+        group,
+    );
+    u.orders.replace(order);
+    clear_partial_path(u);
+    update_action(u);
+    PatrolInstall::Replaced
 }
 
 impl From<Order> for OrderRec {
@@ -694,6 +867,9 @@ pub struct UnitWork {
     pub visible: u8,
     /// `ObjectData::uid` `+48`. The token a `TargetOrder` stores to detect staleness.
     pub uid: u16,
+    /// `ObjectData::inside_down` `+40`. `Unit::do_patrol` may scramble the contained
+    /// aircraft named here after scheduling the next patrol leg.
+    pub inside_down: i16,
     /// Stands in for `SubObjectData::ptype` `+24` (`ObjectType*`); a pointer cannot be a
     /// value, so the referent's global type id is carried instead.
     pub ptype: i32,
@@ -764,6 +940,9 @@ pub struct UnitWork {
     /// of `Unit::work` sets [`masks::WANTS_WORK`].
     pub type_wants_work: bool,
     pub type_blocks_work: bool,
+    /// Virtual `SubObjectData::is_animal()` at vtable `+0x30`. Bird overrides take the
+    /// short spell-time arm after air physics; ordinary aircraft do not.
+    pub type_is_animal: bool,
 }
 
 impl UnitWork {
@@ -793,6 +972,7 @@ impl UnitWork {
             flags: obj_flags::ACTIVE,
             visible: 1,
             uid: 0,
+            inside_down: -1,
             ptype: 0,
             body: Body {
                 x,
@@ -827,6 +1007,7 @@ impl UnitWork {
             type_ignores_recharge: false,
             type_wants_work: false,
             type_blocks_work: false,
+            type_is_animal: false,
         }
     }
 
@@ -850,7 +1031,7 @@ impl Default for UnitWork {
 #[inline]
 pub fn update_order(u: &mut UnitWork) -> Option<OrderRec> {
     u.orders.reset();
-    u.orders.current().copied()
+    u.orders.current().cloned()
 }
 
 /// `Unit::update_action` `0x0060A870` and its const twin `UnitData::get_action`
@@ -875,7 +1056,7 @@ pub fn update_action(u: &mut UnitWork) -> Option<OrderRec> {
         return None;
     }
     loop {
-        let cur = u.orders.current().copied()?;
+        let cur = u.orders.current().cloned()?;
         let skip = (cur.is_move() && !cur.is_group()) || cur.kind == OrderIndex::ChangeForm;
         if !skip {
             return Some(cur);
@@ -925,7 +1106,7 @@ pub fn repath(u: &mut UnitWork) -> u32 {
     let mut stripped = 0;
     loop {
         u.orders.reset();
-        let Some(cur) = u.orders.current().copied() else {
+        let Some(cur) = u.orders.current().cloned() else {
             return stripped;
         };
         if !is_move_like(cur.kind) {
@@ -1053,6 +1234,16 @@ pub enum GatherOutcome {
     SlotsFull,
 }
 
+/// Which retail target search `Unit::do_air_patrol` calls first on its mod-16 scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPatrolSearch {
+    /// Ordinary fighters: `find_new_air_target`, with the retail game-option fallback to
+    /// `find_new_bomber_target` owned by the world callback.
+    AirFirst,
+    /// `TypeIndex::BOMBER` (304): `find_new_bomber_target`, with the inverse fallback.
+    BomberFirst,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1079,6 +1270,57 @@ pub trait WorkWorld: UnitWorld {
     /// as a retry delay. A host with a real stream must draw here; a host without one must
     /// say so, because skipping it desyncs every later draw in the tick.
     fn draw_path_retry_delay(&mut self) -> i32;
+
+    /// The virtual `Unit::think_bird(UnitOrder*, 0)` call at the head of
+    /// `Unit::do_air_patrol`. It is empty for `Unit`, but animal subclasses override it.
+    fn patrol_think_bird(&mut self, actor: &mut UnitWork, order: &mut AirPatrolOrder);
+
+    /// `Unit::do_air_physics` `0x005E86D0`. Return its integer result: zero stops the
+    /// patrol executor for this frame; non-zero opens waypoint/target processing.
+    fn air_patrol_physics(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &mut AirPatrolOrder,
+        _target_x: i32,
+        _target_y: i32,
+    ) -> bool;
+
+    /// The mod-16 `find_new_air_target` / `find_new_bomber_target` boundary. The callback
+    /// owns both the primary search and retail's game-option-controlled fallback.
+    fn air_patrol_unit_target(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &AirPatrolOrder,
+        _search_x: i32,
+        _search_y: i32,
+        _search: AirPatrolSearch,
+    ) -> Option<AirPatrolTarget> {
+        None
+    }
+
+    /// The mod-32 `ObjectsData::find_building_at(..., SearchIndexBH(3), actor.who, 0, 0)`
+    /// boundary, including the building type's owner-target bit in the returned record.
+    fn air_patrol_building_target(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &AirPatrolOrder,
+        _waypoint_x: i32,
+        _waypoint_y: i32,
+    ) -> Option<AirPatrolTarget> {
+        None
+    }
+
+    /// `Group::action_move_to(x,y,QUEUE_FIRST,0,0,ATTACK_TO,0,-1,-1,0)` from the grouped
+    /// arm of `Unit::do_patrol`.
+    fn group_patrol_move(&mut self, actor: &mut UnitWork, request: GroupMoveRequest);
+
+    /// Virtual `ObjectData::is(TypeIndex, strict)`, used for BOMBER/FIGHTERBOMBER patrol
+    /// search selection. Upgrade-line membership belongs to the type system, not this arm.
+    fn patrol_actor_is_type(&self, actor: &UnitWork, type_id: i32, strict: bool) -> bool;
+
+    /// The trailing contained-aircraft predicate and singleton `Group::action_scramble`.
+    fn patrol_inside_is_scramblable(&self, actor_who: u8, inside_o: i16) -> bool;
+    fn patrol_scramble_inside(&mut self, actor: &mut UnitWork, inside_o: i16);
 
     /// The side-effecting `detect_unit_collision` -> `resolve_unit_collision` bridge used by
     /// `Unit::move_step`. The default preserves the older boolean occupancy host, but a
@@ -1131,12 +1373,12 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Unimplemented,   // 14 CAST_SPELL      Unit::do_cast 0x005EBFE0
     ArmStatus::Unimplemented,   // 15 TRADE_ROUTE     Unit::do_trade 0x005ED270
     ArmStatus::Unimplemented,   // 16 STRAFE          Unit::do_strafe 0x005EAB00
-    ArmStatus::Unimplemented,   // 17 AIR_PATROL      Unit::do_air_patrol 0x005EA620
+    ArmStatus::Implemented,     // 17 AIR_PATROL      Unit::do_air_patrol 0x005EA620
     ArmStatus::Unimplemented,   // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
     ArmStatus::Unimplemented,   // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
     ArmStatus::Unimplemented,   // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
     ArmStatus::Unimplemented,   // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
-    ArmStatus::Unimplemented,   // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
+    ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
     ArmStatus::Unimplemented,   // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
     ArmStatus::Unimplemented,   // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
     ArmStatus::Unimplemented,   // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
@@ -1366,6 +1608,9 @@ pub enum ArmResult {
     Gathered(i32),
     /// The arm could not run because the order was gone.
     NoOrder,
+    /// The order kind and concrete payload disagree. Retail cannot construct this state;
+    /// it is reported explicitly for malformed recovered/save input.
+    MalformedOrder,
 }
 
 /// `Unit::do_move(MoveOrder*)` `0x005F7B30` (4,582 B), arms 1 (`MOVE_TO`) and 4 (`FLEE_TO`).
@@ -1454,7 +1699,7 @@ pub fn do_move<W: WorkWorld>(
     // of `do_move`. `find_upath_restore` continues the same trees with its smaller per-frame
     // budget; it does not restart from the unit's new position. [measured]
     if u.parked_search {
-        let outcome = find_path(pf, w, u, ord.dest_x, ord.dest_y, 0);
+        let outcome = find_path(pf, w, u, ord.x, ord.y, 0);
         if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
             return done;
         }
@@ -1491,7 +1736,11 @@ pub fn do_move<W: WorkWorld>(
         }
     }
 
-    let dest = (ord.dest_x, ord.dest_y);
+    // `MoveOrder::x/y` (+4/+8) remain the ultimate order destination. `dest_x/dest_y`
+    // (+0x2c/+0x30) are the current path/collision step and may be overwritten by
+    // `resolve_unit_collision::set_order_detour`. Retail's order-arrival test starts from
+    // `piVar4[1]/[2]`, so completing a detour must never complete the whole move.
+    let dest = (ord.x, ord.y);
     let dx = dest.0 - u.body.x;
     let dy = dest.1 - u.body.y;
 
@@ -1712,6 +1961,194 @@ pub fn do_gather<W: WorkWorld>(
     }
 }
 
+fn store_patrol_payload(u: &mut UnitWork, payload: PatrolPayload) -> bool {
+    u.orders.reset();
+    let Some(front) = u.orders.current_mut() else {
+        return false;
+    };
+    front.patrol_payload = payload;
+    true
+}
+
+/// `Unit::do_patrol` `0x005F1910` (`GROUP_PATROL`, order 22).
+pub fn do_group_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
+    u.orders.reset();
+    let Some(front) = u.orders.current() else {
+        return ArmResult::NoOrder;
+    };
+    let PatrolPayload::Group(mut order) = front.patrol_payload.clone() else {
+        return ArmResult::MalformedOrder;
+    };
+
+    let scramblable = u.inside_down >= 0 && w.patrol_inside_is_scramblable(u.who, u.inside_down);
+    let step = patrol::step_group_patrol(
+        &mut order,
+        u.body.x,
+        u.body.y,
+        u.o,
+        u.who,
+        u.group,
+        u.inside_down,
+        scramblable,
+    );
+    if !store_patrol_payload(u, PatrolPayload::Group(order)) {
+        return ArmResult::NoOrder;
+    }
+
+    match step.action {
+        GroundPatrolAction::InsertAttackTo(m) => {
+            let leg = OrderRec {
+                kind: OrderIndex::AttackTo,
+                // `do_patrol` explicitly clears PATHED, GROUP and DISEMBARK.
+                flags: 0,
+                x: m.x,
+                y: m.y,
+                angle: m.angle,
+                dest: m.dest,
+                tolerance: m.tolerance,
+                pause: m.pause,
+                retry: m.retry,
+                attempts: m.attempts,
+                timer: m.timer,
+                facing: m.facing,
+                dest_x: m.dest_x,
+                dest_y: m.dest_y,
+                last_x: m.last_x,
+                last_y: m.last_y,
+                off_x: m.off_x,
+                off_y: m.off_y,
+                ..OrderRec::default()
+            };
+            // LinkListBase::add, clear_partial_path, reset current to head, update_action.
+            u.orders.push_front(leg);
+            clear_partial_path(u);
+            update_action(u);
+        }
+        GroundPatrolAction::MoveGroup(request) => w.group_patrol_move(u, request),
+        GroundPatrolAction::IdleAnimation => {
+            // Retail calls set_anim(0,0,1); idle remains an animation concern rather than
+            // pretending the order left the queue.
+        }
+    }
+    if let Some(inside_o) = step.scramble_inside_down {
+        w.patrol_scramble_inside(u, inside_o);
+    }
+    ArmResult::Working
+}
+
+fn relative_scan_point(
+    point: (i32, i32),
+    home: Option<(i32, i32)>,
+    max_x: i32,
+    max_y: i32,
+    relative_to_home: bool,
+) -> (i32, i32) {
+    // Both scan-origin blocks test TypeIndex::FIGHTERBOMBER (0x134), not the broader
+    // is-plane or non-animal predicate used for the flight target.
+    if relative_to_home {
+        if let Some((hx, hy)) = home {
+            return (
+                point.0.wrapping_add(hx).clamp(0, max_x.saturating_sub(1)),
+                point.1.wrapping_add(hy).clamp(0, max_y.saturating_sub(1)),
+            );
+        }
+    }
+    point
+}
+
+/// `Unit::do_air_patrol` `0x005EA620` (`AIR_PATROL`, order 17).
+pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
+    u.orders.reset();
+    let Some(front) = u.orders.current() else {
+        return ArmResult::NoOrder;
+    };
+    let PatrolPayload::Air(mut order) = front.patrol_payload.clone() else {
+        return ArmResult::MalformedOrder;
+    };
+
+    w.patrol_think_bird(u, &mut order);
+    let home = if order.air.oxx >= 0 && order.air.whose >= 0 {
+        w.target(order.air.whose, order.air.oxx)
+            .filter(|t| t.active)
+            .map(|t| (t.x, t.y))
+    } else {
+        None
+    };
+    let max_x = w.tiles_w().saturating_mul(movement::TILE);
+    let max_y = w.tiles_h().saturating_mul(movement::TILE);
+    let flight_target = patrol::air_patrol_target(&mut order, u.type_is_animal, home, max_x, max_y);
+    if !w.air_patrol_physics(u, &mut order, flight_target.0, flight_target.1) {
+        store_patrol_payload(u, PatrolPayload::Air(order));
+        return ArmResult::Working;
+    }
+
+    let frame = w.frame();
+    let phase = (u.o as i32).wrapping_add(frame);
+    let fighter_bomber = w.patrol_actor_is_type(u, 0x134, false);
+    let mut unit_target = None;
+    if !u.type_is_animal && order.air.returning == 0 && phase % 16 == 0 {
+        let n = order.points.len();
+        let last = (order.points.x[n - 1], order.points.y[n - 1]);
+        let (sx, sy) = relative_scan_point(last, home, max_x, max_y, fighter_bomber);
+        let search = if w.patrol_actor_is_type(u, 0x130, false) {
+            AirPatrolSearch::BomberFirst
+        } else {
+            AirPatrolSearch::AirFirst
+        };
+        unit_target = w.air_patrol_unit_target(u, &order, sx, sy, search);
+    }
+
+    let mut building_target = None;
+    if !u.type_is_animal && phase % 32 == 0 {
+        let cursor = order.points.clamp_air_cursor();
+        let point = (order.points.x[cursor], order.points.y[cursor]);
+        let (sx, sy) = relative_scan_point(point, home, max_x, max_y, fighter_bomber);
+        building_target = w.air_patrol_building_target(u, &order, sx, sy);
+    }
+
+    let input = AirPatrolAfterPhysics {
+        actor_x: u.body.x,
+        actor_y: u.body.y,
+        actor_o: u.o,
+        frame,
+        is_animal: u.type_is_animal,
+        spell_time: u.spell_time,
+        order_list_len: u.orders.len(),
+        unit_target,
+        building_target,
+    };
+    let action = patrol::step_air_patrol_after_physics(&mut order, flight_target, &input);
+
+    match action {
+        AirPatrolAction::KillCurrent => {
+            kill_current_order(u, KillReason::Completed);
+            ArmResult::Retired(KillReason::Completed)
+        }
+        AirPatrolAction::InsertStrafe { target, mandatory } => {
+            let strafe =
+                patrol::patrol_strafe_order(target, order.air.oxx, order.air.whose, mandatory);
+            if !store_patrol_payload(u, PatrolPayload::Air(order)) {
+                return ArmResult::NoOrder;
+            }
+            // add_strafe_order(..., QUEUE_FIRST, group=0): append, then reset current to
+            // the newly inserted head. OrderQueue::push_front is that measured effect.
+            u.orders.push_front(OrderRec::strafe(strafe));
+            clear_partial_path(u);
+            update_action(u);
+            ArmResult::Working
+        }
+        AirPatrolAction::PrimeAnimalSpellTime => {
+            u.spell_time = 1;
+            store_patrol_payload(u, PatrolPayload::Air(order));
+            ArmResult::Working
+        }
+        AirPatrolAction::Continue => {
+            store_patrol_payload(u, PatrolPayload::Air(order));
+            ArmResult::Working
+        }
+    }
+}
+
 /// `Unit::do_job(enum OrderIndex, class UnitOrder*)` `0x00617A10`, the 28-entry jump table at
 /// `0x00617B94`. [measured — the `switch` has 27 case labels; `PATROL` (5) has none.]
 ///
@@ -1736,6 +2173,8 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
+        OrderIndex::AirPatrol => do_air_patrol(u, w),
+        OrderIndex::GroupPatrol => do_group_patrol(u, w),
         // Arm 5 has no case label. Doing nothing here is faithful, not missing.
         OrderIndex::Patrol => ArmResult::Empty,
         _ => {
@@ -1837,7 +2276,7 @@ pub fn work<W: WorkWorld>(
 
     // --- A ---
     let mut order = update_order(u);
-    let mut kind = order.map_or(OrderIndex::None, |o| o.kind);
+    let mut kind = order.as_ref().map_or(OrderIndex::None, |o| o.kind);
 
     // --- B ---
     let periodic_32 = phase_due(frame, u.o, 32);
@@ -1852,7 +2291,7 @@ pub fn work<W: WorkWorld>(
     if kind != OrderIndex::CastSpell {
         u.flags &= !obj_flags::CASTING;
         if (u.unit_masks & masks::GROUP_PENDING) != 0
-            && order.is_some_and(|o| o.is_group())
+            && order.as_ref().is_some_and(|o| o.is_group())
             && kind != OrderIndex::ExploreTo
         {
             u.unit_masks &= !masks::GROUP_PENDING;
@@ -1909,7 +2348,7 @@ pub fn work<W: WorkWorld>(
         }
         if rescanned {
             order = update_order(u);
-            kind = order.map_or(OrderIndex::None, |o| o.kind);
+            kind = order.as_ref().map_or(OrderIndex::None, |o| o.kind);
         }
     }
 
@@ -1919,7 +2358,7 @@ pub fn work<W: WorkWorld>(
     }
 
     // --- G ---
-    if u.parked_search && order.is_some_and(|o| !o.is_move()) {
+    if u.parked_search && order.as_ref().is_some_and(|o| !o.is_move()) {
         clear_partial_path(u);
     }
 
@@ -2082,7 +2521,7 @@ pub fn adopt(list: &crate::order::OrderList) -> OrderQueue {
 pub fn publish(q: &OrderQueue, list: &mut crate::order::OrderList) {
     list.clear();
     for o in q.iter() {
-        list.push(Order::from(*o));
+        list.push(Order::from(o.clone()));
     }
 }
 
@@ -2105,6 +2544,12 @@ mod tests {
         attack: AttackOutcome,
         gather: GatherOutcome,
         draws: u32,
+        air_physics: bool,
+        air_target: Option<AirPatrolTarget>,
+        building_target: Option<AirPatrolTarget>,
+        last_air_destination: Option<(i32, i32)>,
+        group_moves: Vec<GroupMoveRequest>,
+        scrambled: Vec<i16>,
     }
 
     impl TestWorld {
@@ -2118,6 +2563,12 @@ mod tests {
                 attack: AttackOutcome::Fired(7),
                 gather: GatherOutcome::Yield(3),
                 draws: 0,
+                air_physics: true,
+                air_target: None,
+                building_target: None,
+                last_air_destination: None,
+                group_moves: vec![],
+                scrambled: vec![],
             }
         }
         fn with_object(mut self, who: i32, o: i32, t: TargetState) -> TestWorld {
@@ -2172,6 +2623,48 @@ mod tests {
             self.draws += 1;
             6
         }
+        fn patrol_think_bird(&mut self, _: &mut UnitWork, _: &mut AirPatrolOrder) {}
+        fn air_patrol_physics(
+            &mut self,
+            _: &mut UnitWork,
+            _: &mut AirPatrolOrder,
+            target_x: i32,
+            target_y: i32,
+        ) -> bool {
+            self.last_air_destination = Some((target_x, target_y));
+            self.air_physics
+        }
+        fn air_patrol_unit_target(
+            &mut self,
+            _: &UnitWork,
+            _: &AirPatrolOrder,
+            _: i32,
+            _: i32,
+            _: AirPatrolSearch,
+        ) -> Option<AirPatrolTarget> {
+            self.air_target
+        }
+        fn air_patrol_building_target(
+            &mut self,
+            _: &UnitWork,
+            _: &AirPatrolOrder,
+            _: i32,
+            _: i32,
+        ) -> Option<AirPatrolTarget> {
+            self.building_target
+        }
+        fn group_patrol_move(&mut self, _: &mut UnitWork, request: GroupMoveRequest) {
+            self.group_moves.push(request);
+        }
+        fn patrol_actor_is_type(&self, actor: &UnitWork, type_id: i32, _: bool) -> bool {
+            actor.ptype == type_id
+        }
+        fn patrol_inside_is_scramblable(&self, _: u8, inside_o: i16) -> bool {
+            inside_o >= 0
+        }
+        fn patrol_scramble_inside(&mut self, _: &mut UnitWork, inside_o: i16) {
+            self.scrambled.push(inside_o);
+        }
     }
 
     fn live(t: TargetState) -> TargetState {
@@ -2212,7 +2705,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_implements_seven_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_eight_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -2225,8 +2718,8 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // NONE, MOVE_TO, FLEE_TO, GATHER, ATTACK = 5 implemented; PATROL faithfully empty.
-        assert_eq!((implemented, empty, absent), (5, 1, 22));
+        // Seven implemented, including the two live patrols; PATROL remains faithfully empty.
+        assert_eq!((implemented, empty, absent), (7, 1, 20));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -2259,6 +2752,44 @@ mod tests {
         q.replace(OrderRec::attack(0, 0, 1));
         assert_eq!(q.len(), 1);
         assert_eq!(q.front().unwrap().kind, OrderIndex::Attack);
+    }
+
+    #[test]
+    fn patrol_queue_positions_follow_the_two_retail_exceptions() {
+        let mut ground = UnitWork::at(1, 4, 24, 24);
+        ground
+            .orders
+            .push_back(OrderRec::of_kind(OrderIndex::Guard));
+        assert_eq!(
+            install_group_patrol(&mut ground, 24, 24, 120, 72, 0, 0, 4, 1, QueuePos::First,),
+            PatrolInstall::Replaced
+        );
+        assert_eq!(ground.orders.len(), 1, "QUEUE_FIRST is normalized to NEW");
+        assert_eq!(
+            install_group_patrol(&mut ground, 120, 72, 300, 400, 0, 0, 4, 1, QueuePos::Last,),
+            PatrolInstall::ExtendedWaypoints
+        );
+        let PatrolPayload::Group(g) = &ground.orders.front().unwrap().patrol_payload else {
+            panic!("missing group patrol payload");
+        };
+        assert_eq!(g.points.x, vec![24, 120, 300]);
+
+        let mut air = UnitWork::at(1, 5, 0, 0);
+        air.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
+        assert_eq!(
+            install_air_patrol(&mut air, 500, 600, -1, -1, None, false, QueuePos::Last,),
+            PatrolInstall::Replaced,
+            "add_air_patrol_order ignores QueuePos when no patrol can be extended"
+        );
+        assert_eq!(air.orders.len(), 1);
+        assert_eq!(
+            install_air_patrol(&mut air, 700, 800, -1, -1, None, false, QueuePos::Last,),
+            PatrolInstall::ExtendedWaypoints
+        );
+        let PatrolPayload::Air(a) = &air.orders.front().unwrap().patrol_payload else {
+            panic!("missing air patrol payload");
+        };
+        assert_eq!(a.points.x, vec![500, 700]);
     }
 
     #[test]
@@ -2558,6 +3089,45 @@ mod tests {
     }
 
     #[test]
+    fn reaching_collision_detour_does_not_complete_the_original_destination() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 220, 24);
+        u.body.angle = movement::find_angle(0, 0);
+        u.myspeed = 48;
+        u.tolerance = 1;
+        let mut order = OrderRec::move_to(600, 24, 1);
+        order.dest = 1;
+        // Collision's set_order_detour writes only the current step fields.
+        order.dest_x = 220;
+        order.dest_y = 24;
+        u.orders.push_back(order);
+        u.path.push(PathData {
+            to_x: 600,
+            to_y: 24,
+            tolerance: 1,
+            flags: PathData::FLAG_MORE,
+        });
+        u.path.push(PathData {
+            to_x: 220,
+            to_y: 24,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.unit_masks |= masks::PATH_EXHAUSTED;
+
+        assert_eq!(
+            do_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.len(), 1);
+        assert_eq!(u.orders.front().unwrap().dest, 1);
+        assert_eq!(u.path.len(), 1, "only the detour waypoint is consumed");
+        assert_eq!(u.path.peek().unwrap().to_x, 600);
+    }
+
+    #[test]
     fn a_queued_order_becomes_current_when_the_move_retires() {
         let mut w = TestWorld::open(16).with_object(1, 3, tgt(24, 24, 42));
         let mut pf = PathFinder::new();
@@ -2743,6 +3313,95 @@ mod tests {
         assert_eq!(u.flags & obj_flags::GATHER_REFUSED, 0);
     }
 
+    #[test]
+    fn group_patrol_inserts_the_retail_attack_to_leg_ahead_of_itself() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(1, 4, 24, 24);
+        let patrol = patrol::new_group_patrol(24, 24, 120, 72, 0, 0, 4, 1);
+        u.orders.push_back(OrderRec::group_patrol(patrol));
+        w.frame = 1;
+
+        let r = work(&mut u, &mut w, &mut pf, &mut cov);
+        assert_eq!(r.dispatched, OrderIndex::GroupPatrol);
+        assert_eq!(r.result, ArmResult::Working);
+        assert_eq!(u.orders.len(), 2);
+        let leg = u.orders.front().unwrap();
+        assert_eq!(leg.kind, OrderIndex::AttackTo);
+        assert_eq!((leg.x, leg.y), (120, 72));
+        assert_eq!(
+            leg.flags & (ORDER_PATHED | ORDER_GROUP | crate::order::ORDER_DISEMBARK),
+            0
+        );
+        let PatrolPayload::Group(saved) = &u.orders.iter().nth(1).unwrap().patrol_payload else {
+            panic!("patrol payload did not survive executor insertion");
+        };
+        assert_eq!(saved.points.waypoint, 1);
+    }
+
+    #[test]
+    fn air_patrol_retires_at_the_last_waypoint_only_with_follow_on_work() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(1, 2, 100, 100);
+        u.orders.push_back(OrderRec::air_patrol(
+            patrol::new_air_patrol(100, 100, -1, -1, None),
+            false,
+        ));
+        u.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
+        w.frame = 1;
+
+        let r = work(&mut u, &mut w, &mut pf, &mut cov);
+        assert_eq!(r.dispatched, OrderIndex::AirPatrol);
+        assert_eq!(
+            r.result,
+            ArmResult::Retired(KillReason::Completed),
+            "order-list length, not an invented loop counter, retires the patrol"
+        );
+        assert_eq!(u.order_type(), OrderIndex::Guard);
+        assert_eq!(w.last_air_destination, Some((100, 100)));
+    }
+
+    #[test]
+    fn air_patrol_scan_inserts_a_checksum_complete_strafe_front_order() {
+        let target = AirPatrolTarget {
+            o: 7,
+            who: 2,
+            uid: 99,
+            x: 800,
+            y: 900,
+            domain: 2,
+            owner_target_bit: true,
+        };
+        let mut w = TestWorld::open(16);
+        w.air_target = Some(target);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(1, 3, 0, 0);
+        u.orders.push_back(OrderRec::air_patrol(
+            patrol::new_air_patrol(1000, 1000, -1, -1, None),
+            false,
+        ));
+        w.frame = 13; // (o + frame) % 16 == 0
+
+        let r = work(&mut u, &mut w, &mut pf, &mut cov);
+        assert_eq!(r.dispatched, OrderIndex::AirPatrol);
+        assert_eq!(u.order_type(), OrderIndex::Strafe);
+        assert_eq!(u.orders.len(), 2);
+        let PatrolPayload::Strafe(strafe) = &u.orders.front().unwrap().patrol_payload else {
+            panic!("patrol target scan did not create a StrafeOrder payload");
+        };
+        assert_eq!(
+            (strafe.target_o, strafe.target_who, strafe.target_uid),
+            (7, 2, 99)
+        );
+        assert_eq!((strafe.xx, strafe.yy), (800, 900));
+        assert_eq!(strafe.air.cruising_alt, 0x640);
+        assert_eq!(strafe.mandatory, 0);
+    }
+
     // -- the driver --------------------------------------------------------
 
     #[test]
@@ -2805,9 +3464,9 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 22 unimplemented arms, each hit once.
-        assert_eq!(cov.unimplemented, 22);
-        assert!((cov.covered_fraction() - 6.0 / 28.0).abs() < 1e-12);
+        // 20 unimplemented arms, each hit once. AIR_PATROL and GROUP_PATROL are live.
+        assert_eq!(cov.unimplemented, 20);
+        assert!((cov.covered_fraction() - 8.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]
@@ -2875,7 +3534,7 @@ mod tests {
     #[test]
     fn order_rec_round_trips_through_the_descriptive_order_type() {
         let r = OrderRec::attack(3, 12, 55);
-        let o: Order = r.into();
+        let o: Order = r.clone().into();
         assert_eq!(o.kind, OrderIndex::Attack);
         assert_eq!((o.target_who, o.target_o), (3, 12));
         let back: OrderRec = o.into();

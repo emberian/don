@@ -63,6 +63,10 @@ pub mod naval;
 /// `0x00617A10` dispatch over an `OrderList` with retail's cursor semantics — the driver
 /// `docs/mechanics/COVERAGE.md` §3 records as uncited. It is [`movement`]'s first caller.
 pub mod order_dispatch;
+/// `AirPatrolOrder` / `GroupPatrolOrder` dynamic waypoint payloads and the exact
+/// `Unit::do_air_patrol` / `Unit::do_patrol` state transitions. Kept separate from the
+/// dispatcher because air physics and group movement are explicit host boundaries.
+pub mod patrol;
 /// Added by `build:sim-core` when wiring `systems` into `lib.rs`: both modules were
 /// present on disk with no `pub mod` line, which is exactly the silent stranding this
 /// file's header warns about.
