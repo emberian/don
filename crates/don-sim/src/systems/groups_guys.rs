@@ -2246,7 +2246,8 @@ pub enum GroupActionPlanError {
 ///
 /// The remaining body is exact:
 ///
-/// - building selections do nothing;
+/// - `Group::action_begin` clears `disband` before the building gate;
+/// - building selections stop after that one state change;
 /// - otherwise `form` becomes `-1` even for an empty group;
 /// - members are visited in forward list order;
 /// - airborne planes (`is_plane && domain == 2 && !(unit_flags & 0x20)`) are skipped;
@@ -2260,17 +2261,17 @@ pub fn plan_action_halt(
     let n = group_after_ignore_orders
         .num
         .clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
-    if group_after_ignore_orders.buildings != 0 {
+    let mut group = group_after_ignore_orders.clone();
+    group.disband = 0;
+    if group.buildings != 0 {
         return Ok(HaltPlan {
-            group: group_after_ignore_orders.clone(),
+            group,
             steps: Vec::new(),
         });
     }
     if members.len() != n {
         return Err(GroupActionPlanError::MemberCount);
     }
-
-    let mut group = group_after_ignore_orders.clone();
     group.form = -1;
     let mut steps = Vec::with_capacity(n.saturating_mul(6));
     for (index, facts) in members.iter().enumerate() {
@@ -4315,6 +4316,7 @@ mod tests {
     fn action_halt_plans_forward_retail_order_and_resets_form() {
         let mut g = GroupData {
             form: 4,
+            disband: 9,
             ..Default::default()
         };
         g.add(7, 2, false, 0, 0);
@@ -4322,7 +4324,9 @@ mod tests {
         let plan = plan_action_halt(&g, 0, &[halt_facts(7), halt_facts(9)]).unwrap();
 
         assert_eq!(g.form, 4, "planning is mutation-free");
+        assert_eq!(g.disband, 9, "planning is mutation-free");
         assert_eq!(plan.group.form, -1);
+        assert_eq!(plan.group.disband, 0);
         assert_eq!(plan.steps.len(), 12);
         assert_eq!(
             &plan.steps[..6],
@@ -4391,11 +4395,14 @@ mod tests {
         let building = GroupData {
             buildings: 1,
             form: 3,
+            disband: 7,
             num: 1,
             ..Default::default()
         };
         let plan = plan_action_halt(&building, 0, &[]).unwrap();
-        assert_eq!(plan.group, building);
+        assert_eq!(plan.group.form, 3);
+        assert_eq!(plan.group.disband, 0);
+        assert_eq!(building.disband, 7, "planning is mutation-free");
         assert!(plan.steps.is_empty());
 
         let mut group = GroupData::default();

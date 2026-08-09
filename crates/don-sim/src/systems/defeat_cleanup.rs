@@ -1,6 +1,9 @@
 //! Defeated-player Unit-band transaction from `Leader::defeat`.
 //!
-//! Retail does not raze every owned object here. After the Build-band
+//! Retail does not raze every owned object here. Before the Build/Unit sweeps,
+//! `Armies::leader_defeated` runs `Army::stop` over every valid standing Army. Contrary to
+//! its name, stop preserves the Army and its membership: it resets each nonempty Group's
+//! action state and clears eligible member orders. After the Build-band
 //! `Build::clean_queue(0)` sweep, `0x006ECC1C..0x006ECCAF` walks the owner's Unit band:
 //!
 //! ```text
@@ -44,6 +47,9 @@ pub const fn plan_defeated_unit(valid: bool, is_plane: bool) -> Option<DefeatedU
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DefeatCleanupReceipt {
     pub owner: usize,
+    pub armies_stopped: usize,
+    pub groups_stopped: usize,
+    pub army_members_halted: usize,
     pub slots_visited: usize,
     pub invalid_skipped: usize,
     pub planes_killed: usize,
@@ -54,6 +60,27 @@ pub struct DefeatCleanupReceipt {
 /// Missing live facts that prevent an owner sweep from being classified before mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DefeatCleanupError {
+    MissingArmyGroup {
+        owner: usize,
+        army_slot: usize,
+        group_id: i32,
+    },
+    ArmyGroupOwnerMismatch {
+        owner: usize,
+        army_slot: usize,
+        group_id: i32,
+        group_owner: u8,
+    },
+    ArmyGroupPlan {
+        owner: usize,
+        army_slot: usize,
+        group_id: i32,
+        error: crate::systems::groups_guys::GroupActionPlanError,
+    },
+    UnsupportedSpecialAnimSubtype {
+        owner: usize,
+        object_id: usize,
+    },
     MissingUnitType {
         owner: usize,
         object_id: usize,

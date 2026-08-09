@@ -139,7 +139,6 @@ pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
     "Army::use_scouts 0x006F49A0",
     "Army::find_muster_spot 0x006F5CC0",
     "Army::find_target body 0x006F69B0",
-    "Army::stop 0x006F9180",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1448,6 +1447,26 @@ pub struct Armies {
     pub find_dist: i32,
 }
 
+/// One non-negative global Group id reached by `Armies::leader_defeated` -> `Army::stop`.
+///
+/// The Army slot is retained because the live adapter reports malformed membership against
+/// the exact standing formation that supplied it. `Army::stop` does not close that Army or
+/// unlink the Group; it only runs the Group halt transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeaderDefeatedGroup {
+    pub army_slot: usize,
+    pub group_id: i32,
+}
+
+/// Exact outer traversal selected by `Armies::leader_defeated` `0x006F2F90`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LeaderDefeatedTargets {
+    /// Number of valid Army slots which receive `Army::stop`, including empty Armies.
+    pub valid_armies: usize,
+    /// Non-negative Group ids, in Army-slot then live-prefix order.
+    pub groups: Vec<LeaderDefeatedGroup>,
+}
+
 impl Default for Armies {
     fn default() -> Self {
         Armies::new()
@@ -1644,20 +1663,33 @@ impl Armies {
         best
     }
 
-    /// `Armies::leader_defeated` `0x006F2F90` — `Army::stop` for every valid army.
+    /// `Armies::leader_defeated` `0x006F2F90` plus the deterministic membership scan at
+    /// the head of `Army::stop` `0x006F9180`.
     ///
-    /// `Army::stop` `0x006F9180` (580 B) clears every member's orders through
-    /// `Unit::close_orders` / `Unit::clear_partial_path` / `Unit::update_action` and honours
-    /// `ScenarioData::ignore_orders`; it is not ported. This entry point therefore only
-    /// counts, and says so.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn leader_defeated_research_gap_count(&mut self, who: usize, stopped: &mut u64) {
-        for a in &self.lists[who] {
-            if a.valid != 0 {
-                *stopped += 1;
+    /// Retail visits all 16 preallocated slots, calls `Army::stop` only for `valid != 0`,
+    /// then walks each live `ArmyData::list` prefix in order. Negative sentinels are skipped.
+    /// Empty Group filtering and the concrete Group/Unit transaction require the global
+    /// Group store and therefore belong to the live owner-cleanup adapter.
+    pub fn leader_defeated_targets(&self, who: usize) -> LeaderDefeatedTargets {
+        let mut targets = LeaderDefeatedTargets::default();
+        for (army_slot, army) in self.lists[who].iter().enumerate() {
+            if army.valid == 0 {
+                continue;
             }
+            targets.valid_armies += 1;
+            let n = army.num_groups.clamp(0, ARMY_MAX_GROUPS as i16) as usize;
+            targets.groups.extend(
+                army.list[..n]
+                    .iter()
+                    .copied()
+                    .filter(|group_id| *group_id >= 0)
+                    .map(|group_id| LeaderDefeatedGroup {
+                        army_slot,
+                        group_id,
+                    }),
+            );
         }
+        targets
     }
 
     /// `Armies::diplo_change` `0x006F30F0` — same owner gate as `process_all`, then a
@@ -3023,6 +3055,59 @@ mod tests {
     }
 
     // --- container queries -------------------------------------------------------------
+
+    #[test]
+    fn leader_defeated_selects_valid_armies_and_preserves_group_order() {
+        let mut armies = Armies::new();
+        armies.lists[2][1].valid = 1;
+        armies.lists[2][1].num_groups = 4;
+        armies.lists[2][1].list[..4].copy_from_slice(&[131, -1, 129, 190]);
+        armies.lists[2][7].valid = 1;
+        armies.lists[2][7].num_groups = 1;
+        armies.lists[2][7].list[0] = 133;
+        armies.lists[2][4].num_groups = 1;
+        armies.lists[2][4].list[0] = 999;
+
+        assert_eq!(
+            armies.leader_defeated_targets(2),
+            LeaderDefeatedTargets {
+                valid_armies: 2,
+                groups: vec![
+                    LeaderDefeatedGroup {
+                        army_slot: 1,
+                        group_id: 131,
+                    },
+                    LeaderDefeatedGroup {
+                        army_slot: 1,
+                        group_id: 129,
+                    },
+                    LeaderDefeatedGroup {
+                        army_slot: 1,
+                        group_id: 190,
+                    },
+                    LeaderDefeatedGroup {
+                        army_slot: 7,
+                        group_id: 133,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn leader_defeated_scan_does_not_mutate_standing_armies() {
+        let mut armies = Armies::new();
+        armies.lists[0][3].valid = 1;
+        armies.lists[0][3].status = ST_MARCHING | ST_FORMING;
+        armies.lists[0][3].num_groups = 1;
+        armies.lists[0][3].list[0] = 4;
+        let before = armies.lists[0][3].clone();
+
+        let targets = armies.leader_defeated_targets(0);
+
+        assert_eq!(targets.valid_armies, 1);
+        assert_eq!(armies.lists[0][3], before);
+    }
 
     #[test]
     fn num_armies_and_find_city_read_the_status_mask() {

@@ -1439,7 +1439,8 @@ impl Sim {
 
     // -- step 11 ----------------------------------------------------------------------
 
-    /// Apply `Leader::defeat`'s Unit-band sweep after preflighting the complete owner band.
+    /// Apply `Armies::leader_defeated`/`Army::stop` and `Leader::defeat`'s Unit-band sweep
+    /// after preflighting the complete owner transaction.
     pub(crate) fn clean_defeated_unit_band(
         &mut self,
         runtime: &production::runtime::LiveProductionRuntime,
@@ -1447,9 +1448,120 @@ impl Sim {
     ) -> Result<defeat_cleanup::DefeatCleanupReceipt, defeat_cleanup::DefeatCleanupError> {
         use defeat_cleanup::{DefeatCleanupError as Error, DefeatedUnitAction as Action};
 
-        // Resolve every fallible type/path fact before touching a live row. Retail's type
-        // pointers are total; the Sim equivalent must fail the whole owner sweep closed
-        // rather than clear half a defeated army and guess at the first unknown aircraft.
+        // `Armies::leader_defeated` is first in retail. Resolve its complete Group/member
+        // transaction without changing an Army, Group, Unit, order, or path byte.
+        let army_targets = self.armies.leader_defeated_targets(owner);
+        let mut army_plans = Vec::with_capacity(army_targets.groups.len());
+        for target in army_targets.groups.iter().copied() {
+            let group_id = target.group_id as usize;
+            let Some(group) = self.groups.list.get(group_id).cloned() else {
+                return Err(Error::MissingArmyGroup {
+                    owner,
+                    army_slot: target.army_slot,
+                    group_id: target.group_id,
+                });
+            };
+            // `Army::stop` skips an empty Group before `Group::action_begin`.
+            if group.num == 0 {
+                continue;
+            }
+            if group.who as usize != owner {
+                return Err(Error::ArmyGroupOwnerMismatch {
+                    owner,
+                    army_slot: target.army_slot,
+                    group_id: target.group_id,
+                    group_owner: group.who,
+                });
+            }
+            if group.buildings != 0 {
+                let plan = groups_guys::plan_action_halt(&group, 0, &[]).map_err(|error| {
+                    Error::ArmyGroupPlan {
+                        owner,
+                        army_slot: target.army_slot,
+                        group_id: target.group_id,
+                        error,
+                    }
+                })?;
+                army_plans.push((group_id, plan));
+                continue;
+            }
+
+            let n = group.num.clamp(0, groups_guys::GROUP_MAX_MEMBERS as i32) as usize;
+            let mut members = Vec::with_capacity(n);
+            for &member_o in &group.list[..n] {
+                let mut facts = groups_guys::HaltMemberFacts {
+                    o: member_o,
+                    ..Default::default()
+                };
+                let Ok(object_id) = usize::try_from(member_o) else {
+                    members.push(facts);
+                    continue;
+                };
+                let Some(row) = self
+                    .world
+                    .objects
+                    .slot(owner)
+                    .band(Band::Unit)
+                    .get(object_id)
+                    .copied()
+                    .map(|row| row as usize)
+                else {
+                    members.push(facts);
+                    continue;
+                };
+                if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                    members.push(facts);
+                    continue;
+                }
+
+                facts.valid_unit = true;
+                facts.on_map = crate::systems::air::is_on_map(self.world.units.inside_up()[row]);
+                if !facts.on_map {
+                    members.push(facts);
+                    continue;
+                }
+                let Some(&type_index) = self.unit_type.get(row) else {
+                    return Err(Error::MissingUnitType { owner, object_id });
+                };
+                let Some(is_plane) = runtime.installed_unit_is_plane(type_index) else {
+                    return Err(Error::UnsupportedUnitType {
+                        owner,
+                        object_id,
+                        type_index,
+                    });
+                };
+                facts.is_plane = is_plane;
+                if is_plane {
+                    // `installed_unit_is_plane` already excludes the UnitType 0x20
+                    // helicopter exception, so a true result is precisely this stop arm.
+                    facts.domain = 2;
+                } else {
+                    // Generic Order preserves the order class but not SpecialAnimOrder.type.
+                    // ENTER/EXIT must be skipped while SPECIAL_UNIT must be halted, so there
+                    // is no state-equivalent guess for mask 0x100.
+                    if self.world.orders(row).order_type() == OrderIndex::SpecialAnim {
+                        return Err(Error::UnsupportedSpecialAnimSubtype { owner, object_id });
+                    }
+                    if self.paths.get(row).is_none() {
+                        return Err(Error::MissingPathState { owner, object_id });
+                    }
+                }
+                members.push(facts);
+            }
+            let plan = groups_guys::plan_action_halt(&group, 0, &members).map_err(|error| {
+                Error::ArmyGroupPlan {
+                    owner,
+                    army_slot: target.army_slot,
+                    group_id: target.group_id,
+                    error,
+                }
+            })?;
+            army_plans.push((group_id, plan));
+        }
+
+        // Resolve every fallible Unit-band type/path fact before touching a live row.
+        // Retail's type pointers are total; the Sim equivalent must fail the whole owner
+        // transaction closed rather than stop half an Army and guess at an aircraft.
         let object_rows = self.world.objects.slot(owner).band(Band::Unit).to_vec();
         let mut plan = Vec::with_capacity(object_rows.len());
         let mut invalid_skipped = 0usize;
@@ -1479,10 +1591,47 @@ impl Sim {
 
         let mut receipt = defeat_cleanup::DefeatCleanupReceipt {
             owner,
+            armies_stopped: army_targets.valid_armies,
+            groups_stopped: army_plans.len(),
             slots_visited: object_rows.len(),
             invalid_skipped,
             ..Default::default()
         };
+        for (group_id, halt) in army_plans {
+            self.groups.list[group_id] = halt.group;
+            for step in halt.steps {
+                let (who, object_id) = match step {
+                    groups_guys::HaltStep::ClearUnitMask { who, o, .. }
+                    | groups_guys::HaltStep::ClearPathAnchor { who, o }
+                    | groups_guys::HaltStep::CloseOrders { who, o, .. }
+                    | groups_guys::HaltStep::ClearPartialPath { who, o }
+                    | groups_guys::HaltStep::UpdateAction { who, o } => (who as usize, o as usize),
+                };
+                let row = self.world.objects.slot(who).band(Band::Unit)[object_id] as usize;
+                match step {
+                    groups_guys::HaltStep::ClearUnitMask { mask, .. } => {
+                        let masks = self.world.units.get_unit_masks(row) & !mask;
+                        self.world.units.set_unit_masks(row, masks);
+                    }
+                    groups_guys::HaltStep::ClearPathAnchor { .. }
+                    | groups_guys::HaltStep::ClearPartialPath { .. } => {
+                        self.paths[row].clear();
+                    }
+                    groups_guys::HaltStep::CloseOrders { .. } => {
+                        self.world.orders_mut(row).clear();
+                    }
+                    groups_guys::HaltStep::UpdateAction { .. } => {
+                        let x = self.world.units.x_internal()[row];
+                        let y = self.world.units.y_internal()[row];
+                        let angle = self.world.units.angle()[row];
+                        self.world.units.orders_x_mut()[row] = x;
+                        self.world.units.orders_y_mut()[row] = y;
+                        self.world.units.dest_angle_mut()[row] = angle;
+                        receipt.army_members_halted += 1;
+                    }
+                }
+            }
+        }
         for (row, action) in plan {
             match action {
                 Action::DiePlane => {
@@ -3599,6 +3748,113 @@ mod tests {
             .iter()
             .any(|death| { death.valid != 0 && death.who == 0 && death.o == plane_o }));
         assert_eq!(sim.vic_leaders.take_defeat_unit_cleanup(), 0);
+    }
+
+    #[test]
+    fn defeated_owner_stops_standing_army_groups_without_closing_the_army() {
+        let mut sim = Sim::new(13, 8);
+        let unit_type = 109;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::ordinary_unit(unit_type, 1, 1),
+        );
+        let unit = sim.spawn_unit(0, unit_type, 321, 654, 4).unwrap();
+        let row = sim.world.row_of(unit).unwrap();
+        let object_id = sim.world.units.o()[row];
+        sim.world
+            .orders_mut(row)
+            .replace(Order::move_to(900, 901, 48));
+        sim.paths[row].push(movement::PathData::default());
+        sim.world.units.set_unit_masks(
+            row,
+            defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100 | 0x20,
+        );
+
+        let group_id = groups_guys::Groups::index(0, 3);
+        let mut group = groups_guys::GroupData {
+            id: group_id as i32,
+            form: 4,
+            disband: 7,
+            ..Default::default()
+        };
+        assert!(group.add(object_id, 0, false, 0, 0));
+        sim.groups.list[group_id] = group;
+        sim.armies.lists[0][5].valid = 1;
+        sim.armies.lists[0][5].who = 0;
+        sim.armies.lists[0][5].num_groups = 1;
+        sim.armies.lists[0][5].list[0] = group_id as i32;
+        let army_before = sim.armies.lists[0][5].clone();
+
+        let runtime = std::mem::take(&mut sim.production_runtime);
+        let receipt = sim.clean_defeated_unit_band(&runtime, 0).unwrap();
+        sim.production_runtime = runtime;
+
+        assert_eq!(receipt.armies_stopped, 1);
+        assert_eq!(receipt.groups_stopped, 1);
+        assert_eq!(receipt.army_members_halted, 1);
+        assert_eq!(sim.armies.lists[0][5], army_before);
+        assert_eq!(sim.groups.list[group_id].form, -1);
+        assert_eq!(sim.groups.list[group_id].disband, 0);
+        assert!(sim.world.orders(row).is_empty());
+        assert!(sim.paths[row].is_empty());
+        assert_eq!(
+            sim.world.units.get_unit_masks(row)
+                & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100),
+            0
+        );
+    }
+
+    #[test]
+    fn unknown_special_anim_subtype_keeps_the_whole_defeat_transaction_unmutated() {
+        let mut sim = Sim::new(14, 8);
+        let unit_type = 119;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::ordinary_unit(unit_type, 1, 1),
+        );
+        let unit = sim.spawn_unit(0, unit_type, 10, 20, 4).unwrap();
+        let row = sim.world.row_of(unit).unwrap();
+        let object_id = sim.world.units.o()[row];
+        sim.world.orders_mut(row).replace(Order {
+            kind: OrderIndex::SpecialAnim,
+            ..Order::default()
+        });
+        sim.paths[row].push(movement::PathData::default());
+        sim.world.units.set_unit_masks(
+            row,
+            defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100,
+        );
+
+        let group_id = groups_guys::Groups::index(0, 2);
+        let mut group = groups_guys::GroupData {
+            id: group_id as i32,
+            form: 6,
+            disband: 8,
+            ..Default::default()
+        };
+        assert!(group.add(object_id, 0, false, 0, 0));
+        sim.groups.list[group_id] = group.clone();
+        sim.armies.lists[0][1].valid = 1;
+        sim.armies.lists[0][1].num_groups = 1;
+        sim.armies.lists[0][1].list[0] = group_id as i32;
+
+        let runtime = std::mem::take(&mut sim.production_runtime);
+        let error = sim.clean_defeated_unit_band(&runtime, 0).unwrap_err();
+        sim.production_runtime = runtime;
+
+        assert_eq!(
+            error,
+            defeat_cleanup::DefeatCleanupError::UnsupportedSpecialAnimSubtype {
+                owner: 0,
+                object_id: object_id as usize,
+            }
+        );
+        assert_eq!(sim.groups.list[group_id], group);
+        assert_eq!(sim.world.orders(row).order_type(), OrderIndex::SpecialAnim);
+        assert_eq!(sim.paths[row].len(), 1);
+        assert_eq!(
+            sim.world.units.get_unit_masks(row)
+                & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100),
+            defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x0000_0100
+        );
     }
 
     #[test]

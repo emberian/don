@@ -32,10 +32,15 @@ The following retail bodies are reached by the step-13 control flow and remain a
 - `Army::use_scouts` `0x006F49A0`
 - `Army::find_muster_spot` `0x006F5CC0`
 - the body of `Army::find_target` `0x006F69B0`
-- `Army::stop` `0x006F9180`
 
 `Army::find_target` is especially load-bearing: it is 7,571 bytes and is the class's only
 consumer of `game_random`. Counting its skipped calls does not preserve RNG position.
+
+`Armies::leader_defeated` and the state-changing ordinary-multiplayer body of `Army::stop`
+are executable through the defeated-owner drain. The outer scan preserves Army-slot and
+Group-list order; the live adapter applies `Group::action_begin`/halt and Unit order/path
+effects without changing `ArmyData`. The remaining stop-only boundary is the scenario
+`ignore_orders` prelude and the missing ENTER/EXIT/UNIT subtype of generic `SPECIAL_ANIM`.
 
 ## Executable boundary
 
@@ -53,9 +58,10 @@ oracle work close.
 
 ## Verification
 
-Forty-nine focused module tests cover the PDB image, save walk, container lifecycle,
+Focused module tests cover the PDB image, save walk, container lifecycle,
 membership and aggregates, group sorting, movement/engagement tests, action fan-out,
 targeting prologue, owner gates, both phase schedules, hurry, retirement, merge, retarget and
-the production dispatcher trace. Four real-tick tests pin active/vacuous dispatch, the
+the production dispatcher trace. Real-tick tests pin active/vacuous dispatch, the
 `leader_flags2 & 0xA` gate, 16 slots per enabled owner, and transactional preservation of a
-valid Army when its live host is unavailable.
+valid Army when its live host is unavailable; defeated-owner tests additionally pin
+standing-Army preservation and Group/member stop effects.

@@ -656,9 +656,11 @@ lane-local regression hash until a full `LeaderData` layout exists.
 * `LeaderData::type_avail`, `has_tech`, `researching`, `get_economic` and
   `find_capital` are modelled as **plain input fields**, not ported. `type_avail`
   (`0x006E33A0`) is 1,091 bytes of prerequisite logic and belongs to the tech lane.
-* `Leader::defeat`'s Build and Unit traversals are live. The remaining deterministic
-  continuation is `Armies::leader_defeated`: `Army::stop` is identified, but its complete
-  standing-army/Group state transaction is not yet connected to this owner sweep.
+* `Leader::defeat`'s Build, standing-Army stop, and Unit traversals are live in one
+  preflighted owner transaction. `Army::stop` preserves `ArmyData` while halting eligible
+  Group members. A non-plane generic `SPECIAL_ANIM` remains typed and deferred because its
+  ENTER/EXIT/UNIT subtype is not represented; scenario `ignore_orders` stays outside the
+  ordinary multiplayer adapter.
 * `get_team_terr` has a `team_style == 7` / frame-0 branch I collapsed to the
   common `is_ally` path; that branch only fires in the neutral-player game style.
 * `Game::check_victory`'s early section counts connected human players and has a
