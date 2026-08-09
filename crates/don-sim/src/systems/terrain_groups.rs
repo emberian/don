@@ -11,7 +11,7 @@
 //! `TerrainGroups::init_tileset_data`; this module deliberately does not invent
 //! a fractal generator or tileset frequencies.
 
-use super::map_terrain::World;
+use super::map_terrain::{land, tflag, wflag, World};
 use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::regions::WCoordList;
 use super::terrain_doobers::{
@@ -140,6 +140,64 @@ pub struct PlaceAllPreviewReceipt {
     /// placement reached the common post-group `add_doobers` stage.
     pub bush_fringe: Option<BushFringeReceipt>,
     pub mountain_rock_fringe: Option<MountainRockFringeReceipt>,
+    pub treeify_mountains: Option<TreeifyMountainsGateReceipt>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TreeifyOpenNeighbor {
+    East,
+    South,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TreeifyMutationKind {
+    /// The cell contains mountain TCoords but lacks the WData mountain class.
+    Forest,
+    /// The cell has the WData mountain class and the named forward neighbor has
+    /// no mountain TCoords.
+    Trees { open_neighbor: TreeifyOpenNeighbor },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TreeifyMutation {
+    pub world_x: i32,
+    pub world_y: i32,
+    pub kind: TreeifyMutationKind,
+    pub flags_before: u16,
+    pub flags_after: u16,
+    pub land_before: i8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeifyMountainsReceipt {
+    pub mountain_tcoord_queries: u32,
+    pub chance_draws: u32,
+    pub mutations: Vec<TreeifyMutation>,
+    pub rng_state_after: i32,
+}
+
+/// Exact call gate at `TerrainGroups::place_all` `0x006a8ef7`--`0x006a8f12`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeifyMountainsGateReceipt {
+    pub map_style: u8,
+    /// Retail skips `treeify_mountains` only for map style 9.
+    pub called: bool,
+    pub treeify: Option<TreeifyMountainsReceipt>,
+    pub rng_state_after: i32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TreeifyMountainsError {
+    InvalidWorldShape {
+        xs: i32,
+        ys: i32,
+        size: i32,
+        wdata_len: usize,
+        tile_xs: i32,
+        tile_ys: i32,
+        tile_size: i32,
+        tdata_len: usize,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -209,10 +267,12 @@ pub enum TerrainPlacementBoundary {
     /// All selected groups were branch-skipped; retail next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
-    /// Both `add_doobers` passes completed. Retail next conditionally calls
-    /// `TerrainGroups::treeify_mountains` (`0x006a1cc0`) using game-mode and
-    /// tileset probability state not yet supplied to this prefix.
-    TreeifyMountainsGameModeAndProbability,
+    /// Both `add_doobers` passes completed. Retail next reads `GameInfo::map_style`
+    /// and `TileSetGroupData::mnt_fringe_tree_prob` to gate `treeify_mountains`.
+    TreeifyMountainsMapStyle,
+    /// Treeification (or the exact map-style-9 skip) completed. Retail's remaining
+    /// tail is localized reporting/formatting before returning one.
+    PostPlacementReporting,
 }
 
 /// First unresolved dependency in `TerrainGroups::place_all`.
@@ -222,6 +282,7 @@ pub enum PlaceAllError {
     InvalidTerrainPlacementPreparation(TerrainPlacementPreparationError),
     InvalidBushFringe(BushFringeError),
     InvalidMountainRockFringe(MountainRockFringeError),
+    InvalidTreeifyMountains(TreeifyMountainsError),
     /// The exact randomization, selection, host-event order, and clump-size
     /// preparation prefix completed.  `boundary` is the first missing gameplay
     /// input/kernel on the path selected by the group data and call flags.
@@ -323,6 +384,7 @@ impl TerrainGroups {
             progress,
             place_players,
             None,
+            None,
             &mut host,
         )
     }
@@ -330,7 +392,7 @@ impl TerrainGroups {
     /// Advances the common `place_all` path through both complete deterministic
     /// passes of `TerrainGroups::add_doobers`.
     ///
-    /// `rules` are the eight recovered `TileSetGroupData` doober fields owned by
+    /// `rules` are the recovered `TileSetGroupData` tree/doober fields owned by
     /// the active tileset.  Bush creation is simulation-external and is surfaced
     /// as ordered host events. The transaction remains fail-closed at the next
     /// stage, `TerrainGroups::treeify_mountains`.
@@ -351,8 +413,162 @@ impl TerrainGroups {
             progress,
             place_players,
             Some(rules),
+            None,
             &mut host,
         )
+    }
+
+    /// Extends [`Self::place_all_with_doober_rules`] through the exact map-style
+    /// gate and `TerrainGroups::treeify_mountains` body.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_treeify_inputs(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        rules: DooberTilesetRules,
+        map_style: u8,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_preview(
+            world,
+            random,
+            mountains,
+            progress,
+            place_players,
+            Some(rules),
+            Some(map_style),
+            &mut host,
+        )
+    }
+
+    /// Exact `GameInfo::map_style` gate immediately preceding
+    /// `TerrainGroups::treeify_mountains` in `place_all`.
+    ///
+    /// Retail skips the call only for map style 9. Because that path neither
+    /// reads the world nor advances the RNG, malformed world storage is also
+    /// unobserved on the skip path.
+    pub fn treeify_mountains_for_map_style(
+        world: &mut World,
+        random: &mut Random,
+        map_style: u8,
+        chance: i32,
+    ) -> Result<TreeifyMountainsGateReceipt, TreeifyMountainsError> {
+        if map_style == 9 {
+            return Ok(TreeifyMountainsGateReceipt {
+                map_style,
+                called: false,
+                treeify: None,
+                rng_state_after: random.state(),
+            });
+        }
+
+        let treeify = Self::treeify_mountains(world, random, chance)?;
+        Ok(TreeifyMountainsGateReceipt {
+            map_style,
+            called: true,
+            rng_state_after: treeify.rng_state_after,
+            treeify: Some(treeify),
+        })
+    }
+
+    /// Complete deterministic body of `TerrainGroups::treeify_mountains`
+    /// (`0x006a1cc0`--`0x006a1eb5`).
+    ///
+    /// The scan is X-major. Every world cell first calls
+    /// `WorldData::has_mountain_tcoords` (`0x006b3050`) over its 4x4 tile block.
+    /// Mountain-tile fringe cells become forest after SOUTH-then-EAST WData
+    /// exclusions; WData mountain cells become the `0x30` class when the first
+    /// open tile neighbor is EAST or SOUTH. Candidate cells always consume one
+    /// percentile draw, including when `chance` is zero.
+    pub fn treeify_mountains(
+        world: &mut World,
+        random: &mut Random,
+        chance: i32,
+    ) -> Result<TreeifyMountainsReceipt, TreeifyMountainsError> {
+        validate_treeify_world(world)?;
+
+        let mut receipt = TreeifyMountainsReceipt {
+            mountain_tcoord_queries: 0,
+            chance_draws: 0,
+            mutations: Vec::new(),
+            rng_state_after: random.state(),
+        };
+
+        for x in 0..world.xs {
+            for y in 0..world.ys {
+                let has_mountain_tiles =
+                    has_mountain_tcoords(world, x, y, &mut receipt.mountain_tcoord_queries);
+                let flags = world.wdata(x, y).flags;
+
+                if has_mountain_tiles && flags & wflag::MOUNTAINS == 0 {
+                    // The native branch checks SOUTH before EAST and skips on a
+                    // neighboring WData mountain class without examining TData.
+                    if y + 1 < world.ys && world.wdata(x, y + 1).flags & wflag::MOUNTAINS != 0 {
+                        continue;
+                    }
+                    if x + 1 < world.xs && world.wdata(x + 1, y).flags & wflag::MOUNTAINS != 0 {
+                        continue;
+                    }
+                    if flags & (wflag::COAST | wflag::ORIG_COAST) != 0 {
+                        continue;
+                    }
+
+                    receipt.chance_draws += 1;
+                    if random.get(0, 0xffff) % 100 < chance {
+                        apply_treeify_mutation(
+                            world,
+                            x,
+                            y,
+                            TreeifyMutationKind::Forest,
+                            wflag::FOREST,
+                            &mut receipt,
+                        );
+                    }
+                    continue;
+                }
+
+                if flags & wflag::MOUNTAINS == 0 {
+                    continue;
+                }
+
+                // PDB globals `orthog_x`/`orthog_y` are indexed 1..4 here,
+                // but retail explicitly skips indices 1 (NORTH) and 4 (WEST).
+                let mut open_neighbor = None;
+                if x + 1 < world.xs
+                    && !has_mountain_tcoords(world, x + 1, y, &mut receipt.mountain_tcoord_queries)
+                {
+                    open_neighbor = Some(TreeifyOpenNeighbor::East);
+                } else if y + 1 < world.ys
+                    && !has_mountain_tcoords(world, x, y + 1, &mut receipt.mountain_tcoord_queries)
+                {
+                    open_neighbor = Some(TreeifyOpenNeighbor::South);
+                }
+                let Some(open_neighbor) = open_neighbor else {
+                    continue;
+                };
+                if flags & (wflag::COAST | wflag::ORIG_COAST) != 0 {
+                    continue;
+                }
+
+                receipt.chance_draws += 1;
+                if random.get(0, 0xffff) % 100 < chance {
+                    apply_treeify_mutation(
+                        world,
+                        x,
+                        y,
+                        TreeifyMutationKind::Trees { open_neighbor },
+                        wflag::MOUNTAINS | wflag::FOREST,
+                        &mut receipt,
+                    );
+                }
+            }
+        }
+
+        receipt.rng_state_after = random.state();
+        Ok(receipt)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -364,12 +580,16 @@ impl TerrainGroups {
         progress: i32,
         place_players: i32,
         doober_rules: Option<DooberTilesetRules>,
+        map_style: Option<u8>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
         if let Some(rules) = doober_rules {
             validate_bush_fringe_inputs(world, rules).map_err(PlaceAllError::InvalidBushFringe)?;
             validate_mountain_rock_fringe_inputs(world, rules)
                 .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+            if map_style.is_some_and(|style| style != 9) {
+                validate_treeify_world(world).map_err(PlaceAllError::InvalidTreeifyMountains)?;
+            }
         }
         let mut preview_random = *random;
         let mut preview_mountains = mountains.clone();
@@ -388,6 +608,7 @@ impl TerrainGroups {
             .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
         let mut bush_fringe = None;
         let mut mountain_rock_fringe = None;
+        let mut treeify_mountains = None;
         let boundary = if boundary == TerrainPlacementBoundary::AddDoobers {
             if let Some(rules) = doober_rules {
                 let receipt =
@@ -404,7 +625,21 @@ impl TerrainGroups {
                 )
                 .map_err(PlaceAllError::InvalidMountainRockFringe)?;
                 mountain_rock_fringe = Some(receipt);
-                TerrainPlacementBoundary::TreeifyMountainsGameModeAndProbability
+                if let Some(map_style) = map_style {
+                    let mut preview_world = world.clone();
+                    treeify_mountains = Some(
+                        Self::treeify_mountains_for_map_style(
+                            &mut preview_world,
+                            &mut preview_random,
+                            map_style,
+                            rules.mountain_fringe_tree_prob,
+                        )
+                        .map_err(PlaceAllError::InvalidTreeifyMountains)?,
+                    );
+                    TerrainPlacementBoundary::PostPlacementReporting
+                } else {
+                    TerrainPlacementBoundary::TreeifyMountainsMapStyle
+                }
             } else {
                 boundary
             }
@@ -418,6 +653,7 @@ impl TerrainGroups {
                 placement_preparation,
                 bush_fringe,
                 mountain_rock_fringe,
+                treeify_mountains,
             },
             boundary,
         })
@@ -809,4 +1045,71 @@ fn validate_world(world: &World) -> Result<(), FillFertileError> {
         });
     }
     Ok(())
+}
+
+fn validate_treeify_world(world: &World) -> Result<(), TreeifyMountainsError> {
+    let world_size = world.xs.checked_mul(world.ys);
+    let tile_xs = world.xs.checked_mul(4);
+    let tile_ys = world.ys.checked_mul(4);
+    let tile_size = world.tile_xs.checked_mul(world.tile_ys);
+    if world.xs < 0
+        || world.ys < 0
+        || world_size != Some(world.size)
+        || usize::try_from(world.size).ok() != Some(world.wdata.len())
+        || tile_xs != Some(world.tile_xs)
+        || tile_ys != Some(world.tile_ys)
+        || tile_size != Some(world.tile_size)
+        || usize::try_from(world.tile_size).ok() != Some(world.tdata.len())
+    {
+        return Err(TreeifyMountainsError::InvalidWorldShape {
+            xs: world.xs,
+            ys: world.ys,
+            size: world.size,
+            wdata_len: world.wdata.len(),
+            tile_xs: world.tile_xs,
+            tile_ys: world.tile_ys,
+            tile_size: world.tile_size,
+            tdata_len: world.tdata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn has_mountain_tcoords(world: &World, x: i32, y: i32, queries: &mut u32) -> bool {
+    *queries += 1;
+    let tile_x = x * 4;
+    let tile_y = y * 4;
+    for local_y in 0..4 {
+        for local_x in 0..4 {
+            let index = (tile_y + local_y) * world.tile_xs + tile_x + local_x;
+            if world.tdata[index as usize] & tflag::BLOCKER_MASK == tflag::BLOCKER_MOUNTAIN {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn apply_treeify_mutation(
+    world: &mut World,
+    x: i32,
+    y: i32,
+    kind: TreeifyMutationKind,
+    class_flags: u16,
+    receipt: &mut TreeifyMountainsReceipt,
+) {
+    let cell = world.wdata_mut(x, y);
+    let flags_before = cell.flags;
+    let land_before = cell.land;
+    cell.flags &= !wflag::LAND_CLASS_MASK;
+    cell.land = land::FERTILE;
+    cell.flags |= class_flags;
+    receipt.mutations.push(TreeifyMutation {
+        world_x: x,
+        world_y: y,
+        kind,
+        flags_before,
+        flags_after: cell.flags,
+        land_before,
+    });
 }

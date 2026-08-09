@@ -18,9 +18,11 @@ use crate::rng::Random;
 const MOVE_X: [i32; 8] = [0, -1, 0, 1, 1, 1, 0, -1];
 const MOVE_Y: [i32; 8] = [0, -1, -1, -1, 0, 1, 1, 1];
 
-/// The eight `TileSetGroupData` fields at offsets `+32` through `+60`.
+/// The tree/doober subset of `TileSetGroupData`: `mnt_fringe_tree_prob` at
+/// `+20`, followed by the eight doober fields at `+32` through `+60`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DooberTilesetRules {
+    pub mountain_fringe_tree_prob: i32,
     pub bush_clump_prob: i32,
     pub bush_spacing: i32,
     pub bush_min: i32,

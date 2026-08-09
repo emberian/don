@@ -3,7 +3,7 @@
 //! Mutation-sensitive tests for the first `TerrainGroups::add_doobers` pass.
 
 use don_sim::rng::Random;
-use don_sim::systems::map_terrain::{wflag, World};
+use don_sim::systems::map_terrain::{land, tflag, wflag, World};
 use don_sim::systems::mountains::Mountains;
 use don_sim::systems::terrain_doobers::{
     has_doobers, plan_bush_fringe, plan_bush_fringe_with_host, plan_mountain_rock_fringe,
@@ -13,6 +13,7 @@ use don_sim::systems::terrain_doobers::{
 };
 use don_sim::systems::terrain_groups::{
     PlaceAllError, PlaceAllHostEvent, TerrainGroup, TerrainGroups, TerrainPlacementBoundary,
+    TreeifyMountainsError, TreeifyMutationKind, TreeifyOpenNeighbor,
 };
 
 fn rules() -> DooberTilesetRules {
@@ -352,10 +353,8 @@ fn place_all_advances_from_group_pump_through_both_doober_passes() {
         panic!("unexpected place_all result: {error:?}");
     };
 
-    assert_eq!(
-        boundary,
-        TerrainPlacementBoundary::TreeifyMountainsGameModeAndProbability
-    );
+    assert_eq!(boundary, TerrainPlacementBoundary::TreeifyMountainsMapStyle);
+    assert!(preview.treeify_mountains.is_none());
     assert_eq!(
         host.first(),
         Some(&PlaceAllHostEvent::NetDaemonProcessAll { group_index: 0 })
@@ -385,5 +384,212 @@ fn place_all_advances_from_group_pump_through_both_doober_passes() {
     assert_eq!(random.state(), before_random);
     assert_eq!(mountains, before_mountains);
     assert_eq!(world.wdata, before_world.wdata);
+    assert_eq!(groups, before_groups);
+}
+
+#[test]
+fn treeify_map_style_nine_skips_world_validation_and_rng() {
+    let mut world = World::init_default_rules(1, 1);
+    world.tile_size = 15;
+    let before_world = world.clone();
+    let mut random = Random::new(0x1357_2468);
+    let before_random = random.state();
+
+    let receipt =
+        TerrainGroups::treeify_mountains_for_map_style(&mut world, &mut random, 9, 100).unwrap();
+
+    assert_eq!(receipt.map_style, 9);
+    assert!(!receipt.called);
+    assert!(receipt.treeify.is_none());
+    assert_eq!(receipt.rng_state_after, before_random);
+    assert_eq!(random.state(), before_random);
+    assert_eq!(world.tile_size, before_world.tile_size);
+    assert_eq!(world.wdata, before_world.wdata);
+    assert_eq!(world.tdata, before_world.tdata);
+}
+
+#[test]
+fn mountain_tcoord_fringe_becomes_forest_with_exact_class_write() {
+    let mut world = World::init_default_rules(2, 2);
+    world.tdata[0] = tflag::BLOCKER_MOUNTAIN;
+    world.wdata_mut(0, 0).flags = wflag::ROCKS | wflag::HAS_RIVER;
+    world.wdata_mut(0, 0).land = land::OCEAN;
+    let mut random = Random::new(77);
+
+    let receipt = TerrainGroups::treeify_mountains(&mut world, &mut random, 100).unwrap();
+
+    assert_eq!(receipt.mountain_tcoord_queries, 4);
+    assert_eq!(receipt.chance_draws, 1);
+    assert_eq!(receipt.mutations.len(), 1);
+    assert_eq!(receipt.mutations[0].world_x, 0);
+    assert_eq!(receipt.mutations[0].world_y, 0);
+    assert_eq!(receipt.mutations[0].kind, TreeifyMutationKind::Forest);
+    assert_eq!(
+        receipt.mutations[0].flags_before,
+        wflag::ROCKS | wflag::HAS_RIVER
+    );
+    assert_eq!(receipt.mutations[0].land_before, land::OCEAN);
+    assert_eq!(world.wdata(0, 0).flags, wflag::FOREST | wflag::HAS_RIVER);
+    assert_eq!(world.wdata(0, 0).land, land::FERTILE);
+    assert_eq!(receipt.rng_state_after, random.state());
+}
+
+#[test]
+fn mountain_class_checks_open_tile_neighbors_east_then_south() {
+    let mut east_open = World::init_default_rules(2, 2);
+    east_open.wdata_mut(0, 0).flags = wflag::MOUNTAINS;
+    east_open.wdata_mut(0, 0).land = land::OCEAN;
+    let mut east_random = Random::new(0x2468_1357);
+
+    let east = TerrainGroups::treeify_mountains(&mut east_open, &mut east_random, 100).unwrap();
+
+    assert_eq!(east.mutations.len(), 1);
+    assert_eq!(
+        east.mutations[0].kind,
+        TreeifyMutationKind::Trees {
+            open_neighbor: TreeifyOpenNeighbor::East,
+        }
+    );
+    assert_eq!(
+        east_open.wdata(0, 0).flags & wflag::LAND_CLASS_MASK,
+        wflag::MOUNTAINS | wflag::FOREST
+    );
+    assert_eq!(east_open.wdata(0, 0).land, land::FERTILE);
+
+    let mut south_open = World::init_default_rules(2, 2);
+    south_open.wdata_mut(0, 0).flags = wflag::MOUNTAINS;
+    // Mountain TCoords to the east force the native loop to inspect SOUTH.
+    south_open.tdata[4] = tflag::BLOCKER_MOUNTAIN;
+    // This WData mutation makes that eastern TCoord cell take its skip branch
+    // when it is reached later in the X-major scan.
+    south_open.wdata_mut(1, 1).flags = wflag::MOUNTAINS;
+    let mut south_random = Random::new(0x2468_1357);
+
+    let south = TerrainGroups::treeify_mountains(&mut south_open, &mut south_random, 100).unwrap();
+
+    assert_eq!(south.mutations.len(), 1);
+    assert_eq!(
+        south.mutations[0].kind,
+        TreeifyMutationKind::Trees {
+            open_neighbor: TreeifyOpenNeighbor::South,
+        }
+    );
+    assert_eq!(east.chance_draws, 1);
+    assert_eq!(south.chance_draws, 1);
+}
+
+#[test]
+fn treeify_coast_skip_and_rejected_candidate_preserve_draw_order() {
+    let mut coast = World::init_default_rules(1, 1);
+    coast.tdata[0] = tflag::BLOCKER_MOUNTAIN;
+    coast.wdata_mut(0, 0).flags = wflag::COAST | wflag::ORIG_COAST;
+    let mut coast_random = Random::new(91);
+    let before_coast = coast_random.state();
+
+    let skipped = TerrainGroups::treeify_mountains(&mut coast, &mut coast_random, 100).unwrap();
+
+    assert_eq!(skipped.chance_draws, 0);
+    assert!(skipped.mutations.is_empty());
+    assert_eq!(coast_random.state(), before_coast);
+
+    let mut rejected = World::init_default_rules(1, 1);
+    rejected.tdata[0] = tflag::BLOCKER_MOUNTAIN;
+    let mut rejected_random = Random::new(91);
+    let before_rejected = rejected_random.state();
+
+    let receipt = TerrainGroups::treeify_mountains(&mut rejected, &mut rejected_random, 0).unwrap();
+
+    assert_eq!(receipt.chance_draws, 1);
+    assert!(receipt.mutations.is_empty());
+    assert_ne!(rejected_random.state(), before_rejected);
+}
+
+#[test]
+fn malformed_treeify_shape_fails_before_rng_or_world_mutation() {
+    let mut world = World::init_default_rules(2, 2);
+    world.tdata[0] = tflag::BLOCKER_MOUNTAIN;
+    world.tile_size -= 1;
+    let before_world = world.clone();
+    let mut random = Random::new(7);
+    let before_random = random.state();
+
+    assert_eq!(
+        TerrainGroups::treeify_mountains(&mut world, &mut random, 100),
+        Err(TreeifyMountainsError::InvalidWorldShape {
+            xs: 2,
+            ys: 2,
+            size: 4,
+            wdata_len: 4,
+            tile_xs: 8,
+            tile_ys: 8,
+            tile_size: 63,
+            tdata_len: 64,
+        })
+    );
+    assert_eq!(random.state(), before_random);
+    assert_eq!(world.wdata, before_world.wdata);
+    assert_eq!(world.tdata, before_world.tdata);
+}
+
+#[test]
+fn place_all_treeify_is_composed_but_owned_state_stays_transactional() {
+    let mut world = World::init_default_rules(2, 2);
+    world.tdata[0] = tflag::BLOCKER_MOUNTAIN;
+    let before_world = world.clone();
+    let mut groups = TerrainGroups {
+        groups: vec![TerrainGroup {
+            group_type: 4,
+            chance: 100,
+            min_clumps: 0,
+            max_clumps: 0,
+            pattern: 99,
+            ..TerrainGroup::default()
+        }],
+        ..TerrainGroups::default()
+    };
+    let before_groups = groups.clone();
+    let mut mountains = Mountains::default();
+    let before_mountains = mountains.clone();
+    let mut random = Random::new(0x1234_5678);
+    let before_random = random.state();
+    let mut host = Vec::new();
+    let rules = DooberTilesetRules {
+        mountain_fringe_tree_prob: 100,
+        ..DooberTilesetRules::default()
+    };
+
+    let error = groups
+        .place_all_with_treeify_inputs(
+            &mut world,
+            &mut random,
+            &mut mountains,
+            0,
+            0,
+            rules,
+            0,
+            |event| host.push(event),
+        )
+        .unwrap_err();
+    let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
+        panic!("unexpected place_all result: {error:?}");
+    };
+
+    assert_eq!(boundary, TerrainPlacementBoundary::PostPlacementReporting);
+    assert_eq!(
+        host,
+        vec![PlaceAllHostEvent::NetDaemonProcessAll { group_index: 0 }]
+    );
+    let gate = preview
+        .treeify_mountains
+        .expect("treeify gate must be present");
+    assert!(gate.called);
+    let treeify = gate.treeify.expect("treeify receipt must be present");
+    assert_eq!(treeify.mutations.len(), 1);
+    assert_eq!(treeify.mutations[0].kind, TreeifyMutationKind::Forest);
+
+    assert_eq!(random.state(), before_random);
+    assert_eq!(mountains, before_mountains);
+    assert_eq!(world.wdata, before_world.wdata);
+    assert_eq!(world.tdata, before_world.tdata);
     assert_eq!(groups, before_groups);
 }
