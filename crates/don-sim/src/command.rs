@@ -109,7 +109,9 @@
 //! dynamic patrol payloads that cannot be represented by a flat order tag.
 
 use crate::order::{Order, OrderIndex};
-use crate::systems::groups_guys::{GroupData, GROUP_MAX_MEMBERS};
+use crate::systems::groups_guys::{
+    resolve_form, vector_dist, GroupData, MemberState, GROUP_MAX_MEMBERS,
+};
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
 };
@@ -433,6 +435,34 @@ pub trait Fleet {
     /// refuse the movement ones.
     fn is_unit(&self, who: u8, o: i16) -> bool;
     fn is_building(&self, who: u8, o: i16) -> bool;
+    /// `UnitData::is_on_map` (virtual `+0xBC`). Formation actions use it both to reject
+    /// wholly off-map groups and in the first pass of `GroupData::find_leader`.
+    fn is_on_map(&self, who: u8, o: i16) -> bool {
+        self.alive(who, o)
+    }
+    /// `UnitData::is_captain` (virtual `+0xE8`), the formation-leader eligibility bit.
+    fn is_captain(&self, who: u8, o: i16) -> bool {
+        self.is_unit(who, o)
+    }
+    /// `ObjectData`'s virtual `+0x20`, used by `Group::normalize` to evict objects which
+    /// no longer belong in selections.
+    fn leaves_groups(&self, _who: u8, _o: i16) -> bool {
+        false
+    }
+    /// `FormData::type_cat(type.form_type, who, who)`. `find_leader` selects the lowest
+    /// category, retaining list order on ties; retail initializes the best category to 18.
+    fn form_category(&self, _who: u8, _o: i16) -> i32 {
+        0
+    }
+    /// `UnitData::form`, the signed byte at `+0xAA`.
+    fn form(&self, _who: u8, _o: i16) -> i8 {
+        0
+    }
+    fn set_form(&mut self, _who: u8, _o: i16, _form: i8) {}
+    /// `UnitData::angle`, the dword at `+0x50`.
+    fn angle(&self, _who: u8, _o: i16) -> i32 {
+        0
+    }
     /// `UnitTypeData::role`, OR-ed into `GroupData::role` by `Group::add`.
     fn role(&self, who: u8, o: i16) -> i32 {
         let _ = (who, o);
@@ -462,6 +492,40 @@ pub trait Fleet {
     fn uid(&self, who: u8, o: i16) -> u16;
     /// World coordinates, already un-XORed (`ObjectData` stores them `^ 0x00063637`).
     fn pos(&self, who: u8, o: i16) -> (i32, i32);
+    /// `WorldData::valid` as observed by `UnitData::get_final_loc`. A rejected order
+    /// destination falls back to the unit's current position.
+    fn valid_pos(&self, _x: i32, _y: i32) -> bool {
+        true
+    }
+    /// `UnitData::get_final_loc` `0x00608040`: the first move destination or live target
+    /// location in queue order, falling back to the unit's current location.
+    fn final_pos(&self, who: u8, o: i16) -> (i32, i32) {
+        let current = self.pos(who, o);
+        let Some(queue) = self.orders(who, o) else {
+            return current;
+        };
+        for order in queue.iter() {
+            let candidate = if order.is_move() {
+                Some((order.x, order.y))
+            } else if order.is_targeted()
+                && order.target_who >= 0
+                && order.target_o >= 0
+                && self.alive(order.target_who as u8, order.target_o as i16)
+            {
+                Some(self.pos(order.target_who as u8, order.target_o as i16))
+            } else {
+                None
+            };
+            if let Some((x, y)) = candidate {
+                return if self.valid_pos(x, y) {
+                    (x, y)
+                } else {
+                    current
+                };
+            }
+        }
+        current
+    }
     fn orders(&self, who: u8, o: i16) -> Option<&OrderQueue>;
     fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderQueue>;
     /// `Unit::set_stance` — `action_stance` writes it and installs no order.
@@ -478,6 +542,12 @@ pub struct Slot {
     pub is_building: bool,
     pub can_move: bool,
     pub is_plane: bool,
+    pub is_on_map: bool,
+    pub is_captain: bool,
+    pub leaves_groups: bool,
+    pub form_category: i32,
+    pub form: i8,
+    pub angle: i32,
     pub role: i32,
     pub group: i16,
     pub uid: u16,
@@ -494,6 +564,8 @@ impl Slot {
             alive: true,
             is_unit: true,
             can_move: true,
+            is_on_map: true,
+            is_captain: true,
             group: -1,
             uid,
             x,
@@ -570,6 +642,29 @@ impl Fleet for ObjectTable {
     }
     fn is_building(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.is_building)
+    }
+    fn is_on_map(&self, who: u8, o: i16) -> bool {
+        self.get(who, o).is_some_and(|s| s.is_on_map)
+    }
+    fn is_captain(&self, who: u8, o: i16) -> bool {
+        self.get(who, o).is_some_and(|s| s.is_captain)
+    }
+    fn leaves_groups(&self, who: u8, o: i16) -> bool {
+        self.get(who, o).is_some_and(|s| s.leaves_groups)
+    }
+    fn form_category(&self, who: u8, o: i16) -> i32 {
+        self.get(who, o).map_or(18, |s| s.form_category)
+    }
+    fn form(&self, who: u8, o: i16) -> i8 {
+        self.get(who, o).map_or(0, |s| s.form)
+    }
+    fn set_form(&mut self, who: u8, o: i16, form: i8) {
+        if let Some(s) = self.get_mut(who, o) {
+            s.form = form;
+        }
+    }
+    fn angle(&self, who: u8, o: i16) -> i32 {
+        self.get(who, o).map_or(0, |s| s.angle)
     }
     fn role(&self, who: u8, o: i16) -> i32 {
         self.get(who, o).map_or(0, |s| s.role)
@@ -1051,6 +1146,10 @@ impl Action<'_> {
     /// reaches here — [`Self::with_queue_first`] converts it at the group layer, exactly
     /// as retail does.
     fn install(&mut self, who: u8, o: i16, order: Order, q: QueuePos, f: &mut dyn Fleet) {
+        self.install_rec(who, o, OrderRec::from(order), q, f);
+    }
+
+    fn install_rec(&mut self, who: u8, o: i16, order: OrderRec, q: QueuePos, f: &mut dyn Fleet) {
         let Some(list) = f.orders_mut(who, o) else {
             return;
         };
@@ -1060,9 +1159,10 @@ impl Action<'_> {
             }
             list.clear();
         }
-        list.push_back(OrderRec::from(order));
+        let kind = order.kind;
+        list.push_back(order);
         self.stats.orders_installed += 1;
-        self.stats.by_order[order.kind.index()] += 1;
+        self.stats.by_order[kind.index()] += 1;
     }
 
     /// `Group::set_up_insert` `0x0070E520` / `action_halt(0)` / re-enter with `QUEUE_NEW`
@@ -1118,9 +1218,11 @@ impl Action<'_> {
                 let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
                     return;
                 };
+                let set_angle = i32_at(cmd, 9).unwrap_or(0) != 0;
+                let angle = i32_at(cmd, 13).unwrap_or(0);
                 let orders = i8_at(cmd, 17).unwrap_or(0) as i64;
                 let q = QueuePos::from_i64(i8_at(cmd, 18).unwrap_or(0) as i64);
-                self.action_move_near(x, y, 0, q, orders, f);
+                self.action_move_near(x, y, 0, q, set_angle, angle, orders, f);
             }
             "move_near" => {
                 // MoveNearCommand adds tolerance@9 and shifts the tail by four
@@ -1130,9 +1232,11 @@ impl Action<'_> {
                 else {
                     return;
                 };
+                let set_angle = i32_at(cmd, 13).unwrap_or(0) != 0;
+                let angle = i32_at(cmd, 17).unwrap_or(0);
                 let orders = i8_at(cmd, 21).unwrap_or(0) as i64;
                 let q = QueuePos::from_i64(i8_at(cmd, 22).unwrap_or(0) as i64);
-                self.action_move_near(x, y, tol, q, orders, f);
+                self.action_move_near(x, y, tol, q, set_angle, angle, orders, f);
             }
             "attack" => {
                 // AttackCommand: ox@1 whom@5 ignore@9 queued@13; the handler calls
@@ -1154,6 +1258,17 @@ impl Action<'_> {
             "stance" => {
                 let s = i32_at(cmd, 1).unwrap_or(0);
                 self.action_stance(s, f);
+            }
+            "form" => {
+                // FormCommand (13 B): form:i32@1, rotate:i32@5, queued:i32@9.
+                // `process_form` forwards all three unchanged and supplies the package's
+                // group plus a zero recursion guard [measured, 0x00949D90].
+                let (Some(form), Some(rotate), Some(queued)) =
+                    (i32_at(cmd, 1), i32_at(cmd, 5), i32_at(cmd, 9))
+                else {
+                    return;
+                };
+                self.action_form(form, rotate, queued, f);
             }
             "follow" => {
                 let (Some(ox), Some(whom)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
@@ -1237,6 +1352,281 @@ impl Action<'_> {
         }
     }
 
+    /// `GroupData::is_on_map` `0x0070C450`, the first guard in `Group::action_form`.
+    fn group_is_on_map(&self, f: &dyn Fleet) -> bool {
+        let Some(g) = self.groups.get(self.slot) else {
+            return false;
+        };
+        if g.num == 0 {
+            return false;
+        }
+        if g.buildings != 0 {
+            return true;
+        }
+        let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        g.list[..n]
+            .iter()
+            .copied()
+            .any(|o| f.alive(g.who, o) && f.is_captain(g.who, o) && f.is_on_map(g.who, o))
+    }
+
+    /// The `Group::normalize` virtual call at `0x0070724D`, before formation leader
+    /// selection. The object-side predicates are all explicit [`Fleet`] hosts.
+    fn normalize_for_action(&mut self, f: &dyn Fleet) {
+        let Some(g) = self.groups.get(self.slot) else {
+            return;
+        };
+        let who = g.who;
+        let group_id = g.id;
+        let priority = g.priority;
+        let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let states: Vec<(i16, MemberState)> = g.list[..n]
+            .iter()
+            .copied()
+            .map(|o| {
+                let state = if !f.alive(who, o) {
+                    MemberState::Dead
+                } else if f.leaves_groups(who, o) {
+                    MemberState::LeavesGroups
+                } else if priority == 0
+                    && group_id >= 0
+                    && (!f.is_unit(who, o) || f.group_of(who, o) != group_id as i16)
+                {
+                    MemberState::NotOurUnit
+                } else {
+                    MemberState::Keep
+                };
+                (o, state)
+            })
+            .collect();
+        if let Some(g) = self.groups.get_mut(self.slot) {
+            g.normalize(&|o| {
+                states
+                    .iter()
+                    .find_map(|&(member, state)| (member == o).then_some(state))
+                    .unwrap_or(MemberState::Dead)
+            });
+        }
+    }
+
+    /// `GroupData::find_leader` `0x0070CCB0`: prefer the lowest `FormCatIndex`, first
+    /// requiring an on-map captain and then retrying without the on-map predicate.
+    fn form_leader(&self, f: &dyn Fleet) -> Option<i16> {
+        let g = self.groups.get(self.slot)?;
+        let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        for require_on_map in [true, false] {
+            let mut leader = None;
+            let mut best_category = 18;
+            for &o in &g.list[..n] {
+                if !f.alive(g.who, o)
+                    || !f.is_captain(g.who, o)
+                    || (require_on_map && !f.is_on_map(g.who, o))
+                {
+                    continue;
+                }
+                let category = f.form_category(g.who, o);
+                if leader.is_none() || category < best_category {
+                    leader = Some(o);
+                    best_category = category;
+                }
+            }
+            if leader.is_some() {
+                return leader;
+            }
+        }
+        None
+    }
+
+    /// `GroupData::get_form_option` `0x0070BEB0`. Multi-member groups use the most
+    /// frequent form in `0..5`, retaining the lower form on ties; a singular group uses
+    /// the selected leader's signed `UnitData::form` byte directly.
+    fn form_option(&self, leader: i16, f: &dyn Fleet) -> i32 {
+        let Some(g) = self.groups.get(self.slot) else {
+            return 0;
+        };
+        let n = g.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let live = g.list[..n].iter().filter(|&&o| f.alive(g.who, o)).count();
+        if live == 0 {
+            return 0;
+        }
+        if live == 1 {
+            return if f.alive(g.who, leader) && f.is_unit(g.who, leader) {
+                f.form(g.who, leader) as i32
+            } else {
+                0
+            };
+        }
+        let mut counts = [0i32; 6];
+        for &o in &g.list[..n] {
+            if !f.is_unit(g.who, o) {
+                continue;
+            }
+            let form = f.form(g.who, o) as i32;
+            if (0..6).contains(&form) {
+                counts[form as usize] += 1;
+            }
+        }
+        let mut best = 0usize;
+        for candidate in 1..5 {
+            if counts[candidate] > counts[best] {
+                best = candidate;
+            }
+        }
+        best as i32
+    }
+
+    fn write_member_forms(&self, form: i32, f: &mut dyn Fleet) {
+        let (who, list) = self.members();
+        for o in list {
+            if f.alive(who, o) && f.is_unit(who, o) && !f.is_building(who, o) {
+                f.set_form(who, o, form as i8);
+            }
+        }
+    }
+
+    /// `GroupData::get_loc_to` `0x0070C5D0` for the unit-group path used by
+    /// `action_form`: the leader's final queued destination, except that a nearby saved
+    /// group origin (strictly less than 385 Coord units away) wins.
+    fn form_destination(&self, leader: i16, f: &dyn Fleet) -> Option<(i32, i32)> {
+        let g = self.groups.get(self.slot)?;
+        let mut destination = f.final_pos(g.who, leader);
+        if g.ox >= 0
+            && g.oy >= 0
+            && vector_dist(
+                g.ox.wrapping_sub(destination.0),
+                g.oy.wrapping_sub(destination.1),
+            ) < 0x181
+        {
+            destination = (g.ox, g.oy);
+        }
+        Some(destination)
+    }
+
+    /// `Group::action_form` `0x00707220`, recovered through its state write and the
+    /// exact parameters of its `action_halt` / `action_move_to` delegates.
+    ///
+    /// `action_move_to` remains the bridge's documented order-installation spine: the
+    /// downstream `action_move_near` formation-layout half is not represented here, so
+    /// this action deliberately remains [`Port::Orders`] rather than claiming complete
+    /// positional fidelity.
+    fn action_form(&mut self, form: i32, rotate: i32, queued: i32, f: &mut dyn Fleet) {
+        if !self.group_is_on_map(f) {
+            return;
+        }
+        self.normalize_for_action(f);
+        let Some(group) = self.groups.get(self.slot) else {
+            return;
+        };
+        if group.buildings != 0 || group.num < 1 {
+            return;
+        }
+        let who = group.who;
+        let Some(leader) = self.form_leader(f) else {
+            return;
+        };
+        if f.is_building(who, leader) {
+            return;
+        }
+
+        let current = self.form_option(leader, f);
+        if form == -2 {
+            // This write precedes `get_unit()` and therefore survives even if that lookup
+            // fails in retail. The earlier leader guard makes the lookup succeed here.
+            if let Some(g) = self.groups.get_mut(self.slot) {
+                g.form = -2;
+            }
+        }
+        let resolved = resolve_form(form, current, f.form(who, leader) as i32);
+
+        // Unlike the other queue-first actions, FORM runs this insert dance for both
+        // QUEUE_FIRST and QUEUE_NEW. `set_up_insert` copies only the leader's GROUP-flagged
+        // orders; a non-empty copy suppresses the recursive move and is replayed after the
+        // form write. We retain each member's corresponding group nodes so the flattened
+        // queues preserve their already-materialized per-member destinations.
+        if queued == QueuePos::First as i32 || queued == QueuePos::New as i32 {
+            if let Some(g) = self.groups.get_mut(self.slot) {
+                g.form = -1;
+            }
+            let (who, members) = self.members();
+            let leader_has_group_order = f
+                .orders(who, leader)
+                .is_some_and(|orders| orders.iter().any(OrderRec::is_group));
+            let saved: Vec<(i16, Vec<OrderRec>)> = members
+                .iter()
+                .copied()
+                .map(|o| {
+                    let orders = f
+                        .orders(who, o)
+                        .map(|queue| {
+                            queue
+                                .iter()
+                                .filter(|order| order.is_group())
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (o, orders)
+                })
+                .collect();
+            self.action_halt(0, f);
+            self.write_member_forms(resolved, f);
+            if leader_has_group_order {
+                for (o, orders) in saved {
+                    let Some(queue) = f.orders_mut(who, o) else {
+                        continue;
+                    };
+                    for order in orders {
+                        let kind = order.kind;
+                        queue.push_back(order);
+                        self.stats.orders_installed += 1;
+                        self.stats.by_order[kind.index()] += 1;
+                    }
+                }
+            } else if let Some((x, y)) = self.form_destination(leader, f) {
+                // Recursive `action_form(..., QUEUE_NEW, ..., guard=1)` always delegates
+                // as `action_move_to(x, y, QUEUE_LAST, rotate!=0, angle, MOVE_TO, ...)`.
+                let angle = if rotate == 0 {
+                    0
+                } else {
+                    let g = self
+                        .groups
+                        .get(self.slot)
+                        .expect("formation group vanished");
+                    let base = if (x, y) == (g.ox, g.oy) {
+                        g.o_angle
+                    } else {
+                        f.angle(who, leader)
+                    };
+                    base.wrapping_add(rotate)
+                };
+                self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, f);
+            }
+            return;
+        }
+
+        self.write_member_forms(resolved, f);
+        if queued != QueuePos::Last as i32 && queued != QueuePos::New as i32 {
+            return;
+        }
+        if let Some((x, y)) = self.form_destination(leader, f) {
+            let angle = if rotate == 0 {
+                0
+            } else {
+                let g = self
+                    .groups
+                    .get(self.slot)
+                    .expect("formation group vanished");
+                let base = if (x, y) == (g.ox, g.oy) {
+                    g.o_angle
+                } else {
+                    f.angle(g.who, leader)
+                };
+                base.wrapping_add(rotate)
+            };
+            self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, f);
+        }
+    }
+
     /// `Group::action_move_near` `0x00704990` (9,205 B, 23 call sites), order-installation
     /// spine only.
     ///
@@ -1262,6 +1652,8 @@ impl Action<'_> {
         y: i32,
         tolerance: i32,
         q: QueuePos,
+        set_angle: bool,
+        angle: i32,
         orders: i64,
         f: &mut dyn Fleet,
     ) {
@@ -1279,7 +1671,10 @@ impl Action<'_> {
                     tolerance,
                     ..Order::default()
                 };
-                a.install(who, o, ord, q, f);
+                let mut ord = OrderRec::from(ord);
+                ord.angle = angle;
+                ord.facing = i32::from(set_angle);
+                a.install_rec(who, o, ord, q, f);
             }
         };
         if self.with_queue_first(q, f, &mut body) {
@@ -1585,6 +1980,15 @@ pub mod build {
         for o in list {
             v.extend_from_slice(&o.to_le_bytes());
         }
+        v
+    }
+
+    /// `FormCommand` (3): `op | i32 form | i32 rotate | i32 queued`.
+    pub fn form(form: i32, rotate: i32, q: QueuePos) -> Vec<u8> {
+        let mut v = vec![3u8];
+        v.extend_from_slice(&form.to_le_bytes());
+        v.extend_from_slice(&rotate.to_le_bytes());
+        v.extend_from_slice(&(q as i32).to_le_bytes());
         v
     }
 

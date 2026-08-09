@@ -40,7 +40,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "attack_ground", va: 0x00704520, size: 1133, call_sites: 3, installs: &[OrderIndex::AttackGround], delegates: &["air_attack_ground"], port: Port::Orders },
     ActionDef { name: "move_near", va: 0x00704990, size: 9205, call_sites: 23, installs: &[OrderIndex::MoveTo, OrderIndex::AttackTo, OrderIndex::ExploreTo, OrderIndex::FleeTo, OrderIndex::GroupMove, OrderIndex::GroupAttackTo, OrderIndex::Garrison], delegates: &["halt"], port: Port::Orders },
     ActionDef { name: "siege_attack", va: 0x00706FF0, size: 549, call_sites: 1, installs: &[], delegates: &["attack", "guard"], port: Port::Todo },
-    ActionDef { name: "form", va: 0x00707220, size: 746, call_sites: 6, installs: &[], delegates: &["halt", "move_to"], port: Port::Todo },
+    ActionDef { name: "form", va: 0x00707220, size: 746, call_sites: 6, installs: &[], delegates: &["halt", "move_to"], port: Port::Orders },
     ActionDef { name: "build", va: 0x00707510, size: 1256, call_sites: 1, installs: &[], delegates: &["swarm_around"], port: Port::Todo },
     ActionDef { name: "halt", va: 0x0070D0C0, size: 685, call_sites: 14, installs: &[], delegates: &[], port: Port::State },
     ActionDef { name: "stance", va: 0x0070D440, size: 928, call_sites: 8, installs: &[], delegates: &[], port: Port::State },
