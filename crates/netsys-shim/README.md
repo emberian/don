@@ -15,7 +15,8 @@ PlayFab, **with no patching of the game**.
 
 ```sh
 cd /Users/ember/dev/don/crates/netsys-shim
-XWIN_ARCH=x86 cargo xwin build --release
+XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 \
+  XWIN_ARCH=x86 cargo xwin build --release
 # -> target/i686-pc-windows-msvc/release/CrossplayNetLib.dll   (PE32 i386 DLL)
 
 uv run --with pefile --with capstone python check-exports.py
@@ -29,13 +30,15 @@ MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
 
 # Compile focused unit tests for the retail target. They cannot execute on the
 # arm64 host; the layout assertions also run during the DLL build above.
-XWIN_ARCH=x86 cargo xwin test --no-run
+XWIN_CACHE_DIR=/Users/ember/Library/Caches/cargo-xwin-x86 \
+  XWIN_ARCH=x86 cargo xwin test --no-run
 ```
 
-`XWIN_ARCH=x86` is required the first time: `cargo-xwin`'s cache is per
-architecture and a tree that has only built `donscan` has `aarch64` and `x86_64`
-splatted, not `x86`. Without it the link fails with `could not open
-'kernel32.lib'`.
+Both variables are intentional on the current build host. `cargo-xwin` splats one architecture
+set per cache; the shared default cache currently contains `aarch64` and `x86_64` libraries but
+not the complete x86 desktop CRT/SDK. The pinned cache contains the complete x86 set. Selecting
+only `XWIN_ARCH=x86` against the mixed cache still fails closed at the linker with missing
+`kernel32.lib`, `ntdll.lib`, and related imports.
 
 Excluded from the root workspace (see `../../Cargo.toml`), so `cargo test` at
 the repo root never touches it.

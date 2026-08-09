@@ -64,6 +64,14 @@ The client performs the replacement transport's exact direct contract:
 7. it sends a slot-1 package for that same first stamp containing only a byte-identical copy of the
    retail checksum command.
 
+Direct host/client frames retain the original `u32 length + payload` TCP contract. When the host
+relays one client's packet to another client, the shared transport sets the high length bit and
+prefixes the payload with the original sender's `i32` ID. The receiving transport removes that
+four-byte envelope before setup or game decoding. This keeps `AddPlayer`, readiness, destruction,
+and host-authority checks tied to the actual origin in sessions with more than two peers. The shim
+and owned-peer binaries must therefore be rebuilt from the same `don-net` revision; a host rejects
+a client-supplied relayed-frame marker instead of accepting a forged origin.
+
 The first package is fail-closed: if its key cannot be recovered, use `--game-key`; if it has no
 checksum command, the client stops instead of skipping the stamp or fabricating a reply.
 
