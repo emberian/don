@@ -1419,6 +1419,19 @@ impl Sim {
 
     // -- step 11 ----------------------------------------------------------------------
 
+    /// Apply the concrete no-refund `Build::clean_queue(0)` sweeps requested by terminal
+    /// leader transitions. Requests accumulate in the victory lane because both step 11
+    /// and step 12 can resolve a match; this is the sole bridge into Sim-owned Build rows.
+    fn flush_terminal_queue_cleanup(&mut self) {
+        let owners = self.vic_leaders.take_terminal_queue_cleanup();
+        for owner in 0..NUM_LEADERS {
+            if owners & (1u8 << owner) != 0 {
+                self.production_runtime
+                    .clean_terminal_build_queues(&mut self.builds, owner);
+            }
+        }
+    }
+
     /// `Leaders::strategy_all` `0x006ED430` — `check_explore`, `plan_strategy`,
     /// `compute_score`, `diplomacy`, `Game::check_victory`. The exact dispatcher and
     /// exploration body run here; only the two large AI bodies remain call-counted gaps.
@@ -1471,6 +1484,7 @@ impl Sim {
                 }
             }
         }
+        self.flush_terminal_queue_cleanup();
 
         let work = trace.calls.len() as u32;
         if work == 0 {
@@ -1557,6 +1571,14 @@ impl Sim {
             return (StepRun::Vacuous, 0);
         }
 
+        // `GameDaemon::process_victory` queries `LeaderData::has_preq(0x2B9)` live for
+        // each qualifying Wonder alliance. Resolve the installed Bonus row against the
+        // production runtime's current TechState immediately before that sweep.
+        for who in 0..NUM_LEADERS {
+            self.vic_leaders.slots[who].has_preq_2b9 =
+                self.production_runtime.leader_has_prerequisites(who, 0x2b9);
+        }
+
         // GameDaemon::process_victory gamedaemon.cpp:585. Wonder points are queried only
         // in Standard/SuddenDeath/Wonder modes. With an active registry their object/type
         // host is mandatory: skipping the whole victory sweep is safer than cancelling a
@@ -1583,6 +1605,7 @@ impl Sim {
                 self.wonder_error = None;
                 self.vic_leaders
                     .process_victory(&mut self.vic_match, &wonder_net, &wonder_value);
+                self.flush_terminal_queue_cleanup();
                 work += 1;
             }
             Err(error) => {
@@ -3065,6 +3088,108 @@ mod tests {
         sim.do_frame();
         assert!(sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
         assert!(sim.wonder_error.is_none());
+    }
+
+    #[test]
+    fn live_world_government_prerequisite_bypasses_the_wonder_countdown() {
+        let value = Arc::new(AtomicI32::new(1));
+        let mut sim = Sim::new(11, 8);
+        sim.activate(0);
+        sim.activate(1);
+        sim.vic_match.options.victory = victory_score::Victory::Standard as u8;
+        sim.wonder_world = Some(Box::new(TickWonderWorld {
+            who: 0,
+            o: 12,
+            value,
+            prerequisite_set: false,
+        }));
+        assert_eq!(sim.init_completed_wonder(0, 12), Ok(0));
+
+        let world_government = 600;
+        let mut instant_timer_bonus = production::runtime::LiveProductionType::research(0x2b9, 1);
+        instant_timer_bonus.prerequisites = vec![world_government];
+        sim.production_runtime.install_type(instant_timer_bonus);
+        sim.production_runtime.leaders[0]
+            .tech
+            .tech
+            .set(world_government, true);
+        let queued_type = 601;
+        let row = sim.spawn_build(
+            0,
+            production::BuildData {
+                flags: production::flag::VALID | production::flag::ACTIVE,
+                build_masks: production::mask::REPEAT_QUEUE,
+                queue: production::BuildQueue {
+                    queued: 1,
+                    entries: vec![production::BuildQueueEntry {
+                        elapsed: 31,
+                        type_index: queued_type as i16,
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        );
+        sim.production_runtime.leaders[0].queued_counts[queued_type as usize] = 1;
+
+        sim.do_frame();
+
+        assert!(sim.vic_leaders.slots[0].has_preq_2b9);
+        assert!(sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+        assert_eq!(sim.vic_leaders.slots[0].wonderwin_timer, 0);
+        assert_ne!(
+            sim.vic_leaders.slots[0].leader_flags2 & victory_score::leader_flag2::INSTANT_VICTORY,
+            0
+        );
+        assert_eq!(sim.builds[row].queue.queued, 0);
+        assert_eq!(sim.builds[row].queue.entries[0].elapsed, 0);
+        assert_eq!(
+            sim.production_runtime.leaders[0].queued_counts[queued_type as usize],
+            0
+        );
+    }
+
+    #[test]
+    fn step11_victory_flushes_concrete_build_queues_before_step12() {
+        let mut sim = Sim::new(12, 8);
+        sim.activate(0);
+        sim.activate(1);
+        sim.vic_match
+            .set_sem(victory_score::game_sem::CHECK_VICTORY_MODE);
+        sim.vic_leaders.slots[1].leader_flags &= !victory_score::leader_flag::ACTIVE;
+        sim.vic_leaders.slots[1].leader_flags |= victory_score::leader_flag::DEFEATED;
+
+        let queued_type = 600;
+        let build = production::BuildData {
+            flags: production::flag::VALID | production::flag::ACTIVE,
+            build_masks: production::mask::REPEAT_QUEUE,
+            queue: production::BuildQueue {
+                queued: 1,
+                entries: vec![production::BuildQueueEntry {
+                    elapsed: 23,
+                    type_index: queued_type as i16,
+                    ..Default::default()
+                }],
+            },
+            ..Default::default()
+        };
+        let row = sim.spawn_build(0, build);
+        sim.production_runtime.leaders[0].queued_counts[queued_type as usize] = 1;
+
+        sim.do_frame();
+
+        assert!(sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+        assert_eq!(sim.builds[row].queue.queued, 0);
+        assert_eq!(sim.builds[row].queue.entries[0].elapsed, 0);
+        assert_eq!(
+            sim.builds[row].build_masks & production::mask::REPEAT_QUEUE,
+            0
+        );
+        assert_eq!(
+            sim.production_runtime.leaders[0].queued_counts[queued_type as usize],
+            0
+        );
+        assert_eq!(sim.vic_leaders.take_terminal_queue_cleanup(), 0);
     }
 
     #[test]

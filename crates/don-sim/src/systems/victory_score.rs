@@ -969,6 +969,11 @@ pub struct Leaders {
     pub types: TypeTable,
     /// Events emitted by the last `process_victory` / `check_victory` call.
     pub events: Vec<MatchEvent>,
+    /// Owners whose concrete `Build` queues must receive retail's terminal
+    /// `Build::clean_queue(0)` sweep. Unlike [`Self::events`], this accumulator is not
+    /// cleared at the head of `process_victory`: step 11 and step 12 may both resolve
+    /// leaders before the live object adapter gets a chance to drain the requests.
+    terminal_queue_cleanup: u8,
 }
 
 impl Leaders {
@@ -983,7 +988,25 @@ impl Leaders {
             slots,
             types,
             events: Vec::new(),
+            terminal_queue_cleanup: 0,
         }
+    }
+
+    /// Drain the owner mask for concrete, no-refund terminal queue cleanup.
+    ///
+    /// `Leader::victory` and `Leader::defeat` each walk every live owned Build and call
+    /// `Build::clean_queue(0)`. The victory lane owns *when* that traversal is requested;
+    /// the object/production adapter owns the actual Build rows. Requests accumulate
+    /// until drained so recursive allied victories and enemy defeats cannot overwrite
+    /// one another, nor can step 12 erase a step-11 resolution.
+    pub fn take_terminal_queue_cleanup(&mut self) -> u8 {
+        std::mem::take(&mut self.terminal_queue_cleanup)
+    }
+
+    #[inline]
+    fn request_terminal_queue_cleanup(&mut self, who: usize) {
+        debug_assert!(who < NUM_LEADERS);
+        self.terminal_queue_cleanup |= 1u8 << who;
     }
 
     // -- diplomacy -----------------------------------------------------------
@@ -1412,6 +1435,7 @@ impl Leaders {
         // `Build::clean_queue(0)`. `num_queued` is the aggregate side effect of those
         // per-building queues and therefore becomes exactly zero after the sweep.
         self.slots[who].num_queued.fill(0);
+        self.request_terminal_queue_cleanup(who);
         self.events.push(MatchEvent::Victory {
             who,
             victory_type: vt,
@@ -1452,6 +1476,7 @@ impl Leaders {
         m.musical_chairs = m.frame;
         self.slots[who].defeat_type = dt as i32;
         self.slots[who].num_queued.fill(0);
+        self.request_terminal_queue_cleanup(who);
         self.events.push(MatchEvent::Defeat {
             who,
             defeat_type: dt,
@@ -2179,6 +2204,8 @@ mod tests {
         assert!(ls.slots[..4]
             .iter()
             .all(|leader| leader.num_queued.iter().all(|queued| *queued == 0)));
+        assert_eq!(ls.take_terminal_queue_cleanup(), 0b0000_1111);
+        assert_eq!(ls.take_terminal_queue_cleanup(), 0);
         assert!(m.sem(game_sem::GAME_OVER));
         assert!(m.sem(game_sem::VICTORY_RESOLVED));
     }
@@ -2267,6 +2294,7 @@ mod tests {
         assert_eq!(m.musical_chairs, 1234);
         assert!(!ls.slots[0].is_active());
         assert!(ls.slots[0].flag(leader_flag::DEFEATED));
+        assert_eq!(ls.take_terminal_queue_cleanup(), 1);
     }
 
     #[test]

@@ -237,6 +237,91 @@ impl LiveProductionRuntime {
             .and_then(|index| self.types.get(index))
             .and_then(Option::as_ref)
     }
+
+    /// Live `LeaderData::has_preq(type_index)` for an installed ordinary prerequisite
+    /// row.
+    ///
+    /// This is the exact bounded query needed by `GameDaemon::process_victory` for bonus
+    /// type `0x2B9` (World Government's instant-timer effect): the queried type's complete
+    /// prerequisite list must be held by the leader. Missing type/leader facts fail closed
+    /// rather than manufacturing the countdown bypass.
+    pub fn leader_has_prerequisites(&self, owner: usize, type_index: i32) -> bool {
+        let Some(leader) = self.leaders.get(owner) else {
+            return false;
+        };
+        let Some(facts) = self.facts(type_index) else {
+            return false;
+        };
+        facts
+            .prerequisites
+            .iter()
+            .all(|&preq| prerequisite_held(&leader.tech, preq))
+    }
+
+    /// Execute the concrete Build-state half of terminal `Build::clean_queue(0)` for one
+    /// owner.
+    ///
+    /// `Leader::victory` (`0x006ECA04..0x006ECA5C`) and `Leader::defeat`
+    /// (`0x006ECBB7..0x006ECC1C`) traverse valid objects in the owner's Build band and call
+    /// no-refund cleanup. Repeated `Build::unqueue(last, 0)` leaves the allocated records
+    /// in place, zeroes each former logical entry's progress, decrements positive queued
+    /// counters, takes the logical length to zero, and clears `REPEAT_QUEUE`. This adapter
+    /// reproduces that terminal net transition directly over the Sim's concrete Build rows.
+    pub fn clean_terminal_build_queues(
+        &mut self,
+        builds: &mut [BuildData],
+        owner: usize,
+    ) -> TerminalQueueCleanupReceipt {
+        let mut receipt = TerminalQueueCleanupReceipt {
+            owner,
+            ..Default::default()
+        };
+        let Ok(owner_byte) = u8::try_from(owner) else {
+            return receipt;
+        };
+        let Some(leader) = self.leaders.get_mut(owner) else {
+            return receipt;
+        };
+
+        for build in builds
+            .iter_mut()
+            .filter(|build| build.is_valid() && build.who == owner_byte)
+        {
+            receipt.builds_visited += 1;
+            let logical = build.queue.queued as usize;
+            if logical != 0 {
+                receipt.queues_cleaned += 1;
+                receipt.entries_removed += logical;
+                leader.queue_dirty = true;
+            }
+            for entry in build.queue.entries.iter_mut().take(logical) {
+                entry.elapsed = 0;
+                if let Ok(type_index) = usize::try_from(entry.type_index) {
+                    if let Some(queued) = leader.queued_counts.get_mut(type_index) {
+                        if *queued != 0 {
+                            *queued -= 1;
+                        }
+                    }
+                }
+            }
+            build.queue.queued = 0;
+            build.build_masks &= !mask::REPEAT_QUEUE;
+        }
+        receipt
+    }
+}
+
+/// Concrete terminal queue-cleanup work performed for one leader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalQueueCleanupReceipt {
+    pub owner: usize,
+    /// Valid owned Build rows reached by the retail band traversal.
+    pub builds_visited: usize,
+    /// Reached Build rows whose logical queue was non-empty.
+    pub queues_cleaned: usize,
+    /// Logical slots removed. This can exceed allocated records for a malformed retail
+    /// image because `BuildData::queued` and `BuildQueue::num` are independent fields.
+    pub entries_removed: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1476,6 +1561,77 @@ mod tests {
         assert!(runtime.leaders[0].tech.tech.get(second));
         assert_eq!(runtime.leaders[0].tech.counters.discovered, 2);
         assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn live_prerequisite_query_reads_installed_type_requirements_and_tech_bits() {
+        let mut runtime = LiveProductionRuntime::default();
+        let mut instant_timer_bonus = LiveProductionType::research(0x2b9, 1);
+        instant_timer_bonus.prerequisites = vec![600, -1, 12];
+        runtime.install_type(instant_timer_bonus);
+
+        // Owning the queried row's raw bit is not the `has_preq` result: its installed
+        // prerequisite still has to be held.
+        runtime.leaders[0].tech.tech.set(0x2b9, true);
+        assert!(!runtime.leader_has_prerequisites(0, 0x2b9));
+        runtime.leaders[0].tech.tech.set(600, true);
+        assert!(runtime.leader_has_prerequisites(0, 0x2b9));
+
+        assert!(!runtime.leader_has_prerequisites(1, 0x2b9));
+        assert!(!runtime.leader_has_prerequisites(0, 0x2ba));
+        assert!(!runtime.leader_has_prerequisites(NUM_LEADERS, 0x2b9));
+    }
+
+    #[test]
+    fn terminal_cleanup_traverses_only_valid_owned_builds_without_refunds() {
+        let mut runtime = LiveProductionRuntime::default();
+        runtime.leaders[0].queued_counts[60] = 1;
+        runtime.leaders[0].queued_counts[61] = 1;
+        runtime.leaders[0].resources = [100, 200, 300, 400, 500, 600];
+
+        let mut owned = queue_build(&[60, 61]);
+        owned.queue.entries[0].elapsed = 17;
+        owned.queue.entries[1].elapsed = 29;
+        owned.build_masks |= mask::REPEAT_QUEUE;
+        let mut owned_empty = queue_build(&[]);
+        owned_empty.build_masks |= mask::REPEAT_QUEUE;
+        let mut invalid = queue_build(&[62]);
+        invalid.flags &= !flag::VALID;
+        invalid.build_masks |= mask::REPEAT_QUEUE;
+        let mut enemy = queue_build(&[63]);
+        enemy.who = 1;
+        enemy.build_masks |= mask::REPEAT_QUEUE;
+        let mut builds = vec![owned, owned_empty, invalid, enemy];
+
+        let receipt = runtime.clean_terminal_build_queues(&mut builds, 0);
+
+        assert_eq!(
+            receipt,
+            TerminalQueueCleanupReceipt {
+                owner: 0,
+                builds_visited: 2,
+                queues_cleaned: 1,
+                entries_removed: 2,
+            }
+        );
+        assert_eq!(builds[0].queue.queued, 0);
+        assert_eq!(builds[0].queue.entries.len(), 2);
+        assert_eq!(builds[0].queue.entries[0].type_index, 60);
+        assert_eq!(builds[0].queue.entries[1].type_index, 61);
+        assert_eq!(builds[0].queue.entries[0].elapsed, 0);
+        assert_eq!(builds[0].queue.entries[1].elapsed, 0);
+        assert_eq!(builds[0].build_masks & mask::REPEAT_QUEUE, 0);
+        assert_eq!(builds[1].build_masks & mask::REPEAT_QUEUE, 0);
+        assert_eq!(runtime.leaders[0].queued_counts[60], 0);
+        assert_eq!(runtime.leaders[0].queued_counts[61], 0);
+        assert!(runtime.leaders[0].queue_dirty);
+        assert_eq!(runtime.leaders[0].resources, [100, 200, 300, 400, 500, 600]);
+
+        // Invalid and other-owner rows are outside retail's leader Build-band sweep.
+        assert_eq!(builds[2].queue.queued, 1);
+        assert_ne!(builds[2].build_masks & mask::REPEAT_QUEUE, 0);
+        assert_eq!(builds[3].queue.queued, 1);
+        assert_ne!(builds[3].build_masks & mask::REPEAT_QUEUE, 0);
     }
 
     #[test]

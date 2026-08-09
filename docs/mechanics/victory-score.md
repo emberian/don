@@ -563,6 +563,22 @@ clean_queue(0) on every live owned Build
 if GAME_OVER is not set: Game::check_victory()
 ```
 
+The victory state now accumulates an eight-bit terminal-cleanup owner mask rather than
+pretending the aggregate `LeaderData::num_queued` array is the concrete queue store. The
+live production adapter drains each requested owner with the no-refund net transition of
+`Build::clean_queue(0)`: visit valid owned Builds, zero progress in the former logical
+prefix, decrement positive per-type queued counters, set logical `queued` to zero, and
+clear `REPEAT_QUEUE`, while leaving allocated records and resources intact. The mask is
+not cleared by the step-12 victory sweep, so a step-11 resolution cannot be lost before
+the object store is flushed.
+
+The World Government bypass is likewise no longer intended as a manually injected test
+fact. `LiveProductionRuntime::leader_has_prerequisites(owner, 0x2B9)` resolves the
+installed bonus row's prerequisite list against that owner's live `TechState`; missing
+leader/type facts fail closed. The tick refreshes all eight derived `has_preq_2b9` values
+immediately before `process_victory`, and drains the terminal-cleanup mask after either a
+step-11 `check_victory` or the step-12 victory sweep.
+
 `Leader::process_elimination` @ `0x006B8A20`, called per active leader from
 `Leaders::process_all`:
 

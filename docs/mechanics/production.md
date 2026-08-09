@@ -437,6 +437,15 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
   initial-construction transaction is still not ported. `Build::close` begins with
   `Build::clean_queue`, i.e. the queue is refunded on destruction. The plunder,
   city-membership and road-unmasking side effects are not ported.
+- **Terminal no-refund cleanup is executable on concrete Build rows.**
+  `LiveProductionRuntime::clean_terminal_build_queues` is the adapter for the
+  `Build::clean_queue(0)` sweeps in `Leader::victory` (`0x006ECA04..0x006ECA5C`) and
+  `Leader::defeat` (`0x006ECBB7..0x006ECC1C`). It visits only valid Builds owned by the
+  terminal leader, preserves the allocated record array and paid costs, zeroes progress
+  in the former logical prefix, decrements positive live queued counters, takes logical
+  `queued` to zero, marks the queue dirty when work occurred, and clears `REPEAT_QUEUE`
+  even on an already-empty queue. The victory lane supplies an accumulated owner mask,
+  which the tick drains after both the step-11 and step-12 match-resolution boundaries.
 - **Upgrades.** The brief asked for "upgrades and their cost formula". I found the surface —
   `ObjectType::load_upgrade` `0x006615B0`, `ObjectTypeData::upgrade_level` `0x00661090`,
   `TypeData::upgrade` (`Type+0x44`), `Leader::produce_upgrade` `0x006CB5D0`,
