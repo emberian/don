@@ -44,6 +44,27 @@
 //! lives in [`crate::rules`], never in the value string.
 
 use crate::rules::Parser;
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckedIntegerError {
+    /// The supported `_wtoi` domain ends at signed 32-bit values. Retail CRT saturation for
+    /// larger text has not been differentially measured.
+    WtoiOverflow,
+    /// Retail reaches an x86 `idiv` exception for `i32::MIN / -1`.
+    DivisionOverflow,
+}
+
+impl fmt::Display for CheckedIntegerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WtoiOverflow => write!(f, "leading integer is outside the recovered i32 domain"),
+            Self::DivisionOverflow => write!(f, "retail integer division would raise #DE"),
+        }
+    }
+}
+
+impl std::error::Error for CheckedIntegerError {}
 
 /// A numeric literal exactly as it appeared: either a plain decimal or a rational `a/b`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -206,6 +227,52 @@ pub fn wtoi(s: &str) -> i32 {
     }
 }
 
+/// Fail-closed `_wtoi` for content admission.
+///
+/// [`wtoi`] retains the historical wrapping implementation used by the already-validated
+/// shipped corpus. This checked form rejects the only input family for which the MSVC CRT
+/// leaf remains underived: a leading decimal magnitude outside `i32`. No shipped rule value
+/// approaches the boundary.
+pub fn checked_wtoi(s: &str) -> Result<i32, CheckedIntegerError> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        i += 1;
+    }
+    let negative = if i < bytes.len() && (bytes[i] == b'-' || bytes[i] == b'+') {
+        let negative = bytes[i] == b'-';
+        i += 1;
+        negative
+    } else {
+        false
+    };
+    let mut magnitude = 0_u64;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        magnitude = magnitude
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(bytes[i] - b'0')))
+            .ok_or(CheckedIntegerError::WtoiOverflow)?;
+        i += 1;
+    }
+    let limit = if negative {
+        i32::MAX as u64 + 1
+    } else {
+        i32::MAX as u64
+    };
+    if magnitude > limit {
+        return Err(CheckedIntegerError::WtoiOverflow);
+    }
+    if negative {
+        if magnitude == i32::MAX as u64 + 1 {
+            Ok(i32::MIN)
+        } else {
+            Ok(-(magnitude as i32))
+        }
+    } else {
+        Ok(magnitude as i32)
+    }
+}
+
 /// `RString::AsScaled(scale)` — `riseofnations.exe` VA `0x00A1D110`, `__thiscall`, `ret 4`.
 ///
 /// The 40 scaled fields in `rules.xml` go through here; everything else goes through
@@ -259,6 +326,28 @@ pub fn as_scaled(raw: &str, scale: i32) -> i32 {
         panic!("retail raises #DE here: idiv {n} / {den} at 0x00A1D178");
     }
     n / den // 0x00A1D178, truncates toward zero
+}
+
+/// Checked admission form of [`as_scaled`]. It preserves retail's wrapping multiply and
+/// zero-denominator result, while rejecting underived CRT overflow and the one x86 `idiv`
+/// trap instead of panicking or approximating.
+pub fn checked_as_scaled(raw: &str, scale: i32) -> Result<i32, CheckedIntegerError> {
+    let numerator = checked_wtoi(raw)?;
+    let denominator = match raw.find('/') {
+        None => 1,
+        Some(index) => {
+            let denominator = checked_wtoi(&raw[index + 1..])?;
+            if denominator == 0 {
+                return Ok(0);
+            }
+            denominator
+        }
+    };
+    let scaled = numerator.wrapping_mul(scale);
+    if scaled == i32::MIN && denominator == -1 {
+        return Err(CheckedIntegerError::DivisionOverflow);
+    }
+    Ok(scaled / denominator)
 }
 
 /// The scale-1 path: `_wtoi`, used by 661 of the loader's 701 scalar sites and most arrays.
@@ -343,6 +432,26 @@ mod engine_tokenizer {
         assert_eq!(
             as_scaled("3/4 progression (See BR before adjusting)", 100),
             75
+        );
+    }
+
+    #[test]
+    fn checked_admission_rejects_only_the_underived_or_trapping_integer_domain() {
+        assert_eq!(checked_wtoi("2147483647 prose"), Ok(i32::MAX));
+        assert_eq!(checked_wtoi("-2147483648 prose"), Ok(i32::MIN));
+        assert_eq!(
+            checked_wtoi("2147483648"),
+            Err(CheckedIntegerError::WtoiOverflow)
+        );
+        assert_eq!(
+            checked_wtoi("-2147483649"),
+            Err(CheckedIntegerError::WtoiOverflow)
+        );
+        assert_eq!(checked_as_scaled("1/16 tile", 192), Ok(12));
+        assert_eq!(checked_as_scaled("1/0", 256), Ok(0));
+        assert_eq!(
+            checked_as_scaled("-2147483648/-1", 1),
+            Err(CheckedIntegerError::DivisionOverflow)
         );
     }
 

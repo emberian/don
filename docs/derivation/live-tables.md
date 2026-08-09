@@ -50,10 +50,9 @@ A re-run of this lane re-derived the pointer chain independently and then pushed
 residuals. It **corrects two conclusions of the first pass** and adds three rules. Read
 these before using §4:
 
-* **§4a is `GRAFT`, not "same-`NAME` canonicalisation", and the German XML rows are not
-  "edited but ineffective".** The live `graft` field at `+0x25C` resolves to the source
-  type id in **364/364** cases, and every §4a divergence is that source's value. §4a is
-  rewritten below.
+* **Historical §4a correction, now superseded by the loader reconciliation below.** This
+  pass established that live `graft +0x25C` resolves the XML target in **364/364** cases,
+  but incorrectly inferred that `GRAFT` caused the six correlated scalar differences.
 * **§4e is wrong about `CIRCLE_RADIUS`.** `CIRCLE_RADIUS` lands in **`x_size +0x234` and
   `y_size +0x238`, ×1, 364/364** `[measured]`. `guy_radius`/`block_radius`/`big_radius`
   are all `48 × BLOCK_RADIUS`, 364/364, and are equal to each other for every unit. The
@@ -66,6 +65,14 @@ these before using §4:
 * **New: the static image independently bounds `final_balance_table`** (§5).
 
 Second-pass artifacts are the `schema/live/live-tables-*` set in §7.
+
+### Loader reconciliation — 2026-08-09
+
+Static recovery of the five-pass `Types::init` loop corrects the second pass's attribution
+of §4a. The scalar values are reused from the first row of a **consecutive equal-`NAME`
+run** in passes 2 through 4 (`0x0066B620..0x0066B647`). `GRAFT` is resolved independently
+from each row's own XML in pass 1. The six observed rows made the two mechanisms correlate;
+the instruction sequence distinguishes them. §4a below records the corrected mechanism.
 
 ---
 
@@ -240,19 +247,25 @@ I could **not** pin the exact rounding — see §6.
 
 ## 4. Every mismatch, explained
 
-### 4a. `GRAFT` copies stats from the grafted-from unit (6 cells) — **corrected**
+### 4a. Consecutive equal-`NAME` rows reuse the first scalar source (6 cells) — **corrected again**
 
-*(First pass called this "same-`NAME` canonicalisation". The mechanism is the `GRAFT`
-column, which is *specified* by display `NAME` — so the first pass's correlate was real
-but the cause was misnamed, and the conclusion drawn from it was wrong.)*
+The first live-table pass observed the right correlation and called it same-name
+canonicalisation. The second pass noticed that all six rows also resolve `GRAFT` to the
+same source and incorrectly reassigned causality to a graft copy. The loader settles it:
 
-194 of 364 units carry a non-`none` `<GRAFT>`. The live `graft` field at `+0x25C`
-resolves to that unit's **global type id in 364/364 cases** `[measured]` — so the runtime
-records the graft relationship explicitly, it is not an incidental name collision. Where a
-grafted unit's own XML value differs from its graft source, the live table holds the
-**source's** value:
+- `Types::init` passes 0 and 1 use the current XML row;
+- in passes 2 through 4, `0x0066B620..0x0066B647` retains the prior source element and
+  source TypeIndex while `String::operator==` says its `NAME` equals the current row;
+- because retained state is not advanced on equality, a consecutive run reuses its first
+  row; a non-consecutive equal name does not;
+- `GRAFT` is parsed independently in pass 1 and does not drive these scalar reads.
 
-| unit | field | own XML | graft source (live `+0x25C`) | live value |
+194 of 364 units carry a non-`none` `<GRAFT>`. The independent live `graft` field at
+`+0x25C` still resolves to the XML target's global type id in **364/364 cases** `[measured]`.
+For the six scalar differences below, that target happens also to be the first source row
+of the consecutive equal-name run:
+
+| unit | field | own XML | pass-2 source row | live value |
 |---|---|---|---|---|
 | 101 `RIFLEMENGERMAN` | `armor` | 1 | 100 `RIFLEMEN`, armor 3 | **3** |
 | 138 `ANTITANKRIFLEGERMAN` | `los` | 12 | 137 `ANTITANKRIFLE`, los 11 | **11** |
@@ -260,19 +273,11 @@ grafted unit's own XML value differs from its graft source, the live table holds
 | 272 `HUMMEL` | `splash_percent` | 33 | 271 `HOWITZER`, sp 25 | **25** |
 | 57 `GENERALGERMAN` | `unit_flags` | `lmhc` = `0x1884` | 54 `GENERAL`, flags `0x1886` | **`0x1886`** |
 
-Across every field checked, **all six divergences are graft-inherited and none is
-anything else** — no unexplained "first row wins" effect remains.
-
-The practical consequence stands and is now sharper: **you cannot load unit stats
-row-wise from `unitrules.xml`; the graft pass must be applied**, or German Riflemen get 1
-armour where the game gives 3. `ron-data/unitrules.xml` is byte-identical to the shipped
-file (MD5 `dd249e429f74c73b2e1c57547c4a6033`), so this is engine behaviour, not version
-drift — but "the XML rows are edited but ineffective" was the wrong reading: the rows are
-effective for every non-grafted field, and it is `GRAFT` that overrides the rest.
-
-What `GRAFT` copies and what it leaves alone is **not** established here — only that the
-six observed divergences are all graft-consistent. Deriving the exact copied-field set
-needs the loader, not the table.
+Across every recovered pass-2 field, the materializer using that source rule matches all
+364 live rows. The practical consequence stands: loading scalar values row-wise gets German
+Riflemen armor wrong. The precise correction is to execute the pass schedule, not to invent
+a graft copy set. `ron-data/unitrules.xml` is byte-identical to the shipped file (MD5
+`dd249e429f74c73b2e1c57547c4a6033`), so this is engine behavior, not version drift.
 
 ### 4b. `TRIBE_MASK` inherited along the upgrade chain (1 cell)
 
@@ -311,7 +316,8 @@ pass; one is still open.
   big_radius +0x244 == 48 × BLOCK_RADIUS` for **364/364** units, with
   `new_block_radius +0x248 == new_big_radius +0x24C == 1 × BLOCK_RADIUS`. Nothing here
   comes from art data. **`CIRCLE_RADIUS` is safe to use.**
-* `PUSH_SIZE` → `push_size +0x2F8`. 327/364 fit `×48` and 4 more are graft-inherited;
+* `PUSH_SIZE` → `push_size +0x2F8`. 327/364 fit `×48` and 4 more reuse their equal-name
+  run's pass-2 source;
   the remaining **33** (all Generals, the machine-gun line, mortars, Fishermen, every
   hero/government unit, Herd Bison) do not — e.g. `FISHERMEN` XML 3 → 192, `HERDBISON`
   XML 1 → 96, `GENERAL` XML 7 → 48. In every one of those 33 the live value equals that
@@ -367,7 +373,7 @@ post-load pass, and they are identifiable:
 * `unit_flags` bit 4 = `e` on 5 units — and `unitrules.xml`'s own legend says
   `e = (This flag is set in the program)`. Independent confirmation that the mechanism is
   real and not a capture artefact. The one other extra bit (bit 1 = `b` on unit 57) is
-  graft-inherited (§4a).
+  inherited from the equal-name run's pass-2 source (§4a).
 * `build_flags` bits 26–31 (the `1`..`6` characters) on 25/16/3/1/6/11 buildings. Bit 28
   (`0x10000000`) appears on **exactly 3** buildings — and `FUN_0065F4A0` contains
   `or dword ptr [esi+0x2C0], 0x10000000` guarded by abil queries `0x1A1`/`0x1A5`/`0x1A6`.
@@ -598,7 +604,7 @@ Second pass (machine-readable, TSV with a header row unless noted):
 | `schema/live/live-tables-tech.tsv` | 85 techs |
 | `schema/live/live-tables-good.tsv` | 50 goods |
 | `schema/live/live-tables-unit-relative-value.tsv` | the 364 × 352 `relative_value` int16 matrix |
-| `schema/live/live-tables-validation.tsv` / `.json` | per field: offset, width, scale, n, direct match, graft-inherited, unexplained |
+| `schema/live/live-tables-validation.tsv` / `.json` | per field: offset, width, scale, n, direct match, legacy `graft-inherited` label, unexplained |
 | `schema/live/live-tables-balance-493x493.bin` | 493×493 int16 at the corrected base |
 
 The validation file is the auditable form of the second pass's headline number: **19 293
@@ -607,7 +613,8 @@ cells (§4e) and the one `PIKEMENELITE` `tribe_mask` cell (§4b). It is not dire
 comparable to the lead table's 15 247 + 1 647 — the two passes chose different field sets
 and different mask/flag pass criteria. Where they cover the same field they agree, **with
 the two documented exceptions the second pass corrects**: `CIRCLE_RADIUS` (§4e) and the
-attribution of §4a.
+attribution of §4a. The artifact's `graft-inherited` column predates the loader reconciliation;
+for the unit scalar cells in §4a, read it as consecutive equal-name source reuse.
 
 ## 8. Reproduction
 

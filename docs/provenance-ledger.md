@@ -499,14 +499,21 @@ Scale factors *fitted from the live/XML ratio*, not assumed: `ATTACK` ×10 (364/
 
 Three mismatch classes, all explained and all findings rather than noise:
 
-- **Same-`NAME` canonicalisation.** German national variants are *edited but ineffective*:
-  `RIFLEMENGERMAN` XML `ARMOR 1`, live 3 (= `RIFLEMEN`'s). A sim reading `unitrules.xml`
-  naively gets it wrong.
+- **Consecutive equal-`NAME` pass-2 source reuse.** `Types::init`
+  `0x0066B620..0x0066B647` retains the first XML element and TypeIndex in a consecutive
+  equal-name run for passes 2 through 4. German `RIFLEMENGERMAN` therefore reads scalar
+  `ARMOR 3` from `RIFLEMEN`, not its own XML `ARMOR 1`. `GRAFT` resolves independently in
+  pass 1 and does not cause this scalar reuse. `UnitRuntimeCatalog` reproduces the recovered
+  scalar tranche for all 364 captured live rows. Fidelity tier C: static instruction
+  recovery plus captured live-state comparison, not a retail differential.
 - **`RANGE` zeroed on crew-carrier units** (the three Mahouts) — hypothesis, not measured.
 - **`GRID_X` reassigned** for three units — unexplained.
 
-Fields that are **not sourced from `unitrules.xml` at all**: `CIRCLE_RADIUS` (only 208/364 fit
-×48), `PUSH_SIZE` (327/364), and `PREQ1` on units (125/364). Do not read them from the XML.
+Three formerly opaque fields now have loader rules. `CIRCLE_RADIUS` stores directly into
+`x_size`/`y_size`; `PUSH_SIZE` is clamped to 1..100 and scaled by `UNIT_BLOCK_RADIUS`, except
+that a clamped `PUSH_CIRCLES == 1` selects the row's `BLOCK_RADIUS` before scaling; and
+`PREQ1` is later synthesized from `military_level` for most units. Do not treat any of them
+as a raw field-to-offset copy.
 
 Live heap census via `donscan`: **the entity classes are fixed-size preallocated pools, not
 live counts.** `Unit` 600, `Build` 601, `Animal` 400, `Ammo` 400, `City` 160 were bit-identical

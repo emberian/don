@@ -76,8 +76,9 @@ pub use string_table::{
     StringTableRegistry, StringTablesSnapshot,
 };
 pub use unitrules::{
-    parse_unitrules_xml, read_unitrules_xml, UnitCanonicalKey, UnitRuleCatalog, UnitRuleField,
-    UnitRuleRow, UnitRulesError, UnitRulesReadError,
+    parse_unitrules_xml, read_unitrules_xml, UnitCanonicalKey, UnitInitPass, UnitRuleCatalog,
+    UnitRuleField, UnitRuleRow, UnitRulesError, UnitRulesReadError, UnitRuntimeCatalog,
+    UnitRuntimeConstants, UnitRuntimeError, UnitRuntimeRow, UnitRuntimeScalars,
 };
 pub use vfs::{
     classify, is_map_forbidden, ContentStack, ModCategory, ModPackage, Resolved, StorageLocation,

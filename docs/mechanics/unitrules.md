@@ -1,8 +1,9 @@
 # `unitrules.xml` structural binder
 
-Status: the source registry boundary is implemented and fail-closed. The 55 text cells are
-retained exactly, but the full `UnitType::init` text-to-memory transforms and the later graft
-copy set are not yet claimed.
+Status: the source registry boundary and the recovered pass-2 scalar materializer are
+implemented and fail-closed. The 55 text cells are retained exactly. The materializer covers
+the instruction-backed scalar tranche listed below; it does not claim the remaining
+`UnitType::init` transforms or later relative/link passes.
 
 Implementation: `crates/don-content/src/unitrules.rs`.
 
@@ -41,16 +42,42 @@ identities:
 
 Lookup is exact and case-sensitive. No row is merged or overwritten by a name-keyed map.
 
-## Important correction: `GRAFT`, not same-name inheritance
+## Five passes, consecutive-name reuse, and independent `GRAFT`
 
-The live-table derivation originally called several inherited runtime values “same-`NAME`
-canonicalisation.” Subsequent value-level comparison resolved the mechanism: the runtime
-`graft` field matches the XML `GRAFT` target in all 364 rows, and all six observed scalar
-divergences are consistent with copying from that graft source. This is not a generic
-first-same-name-wins rule.
+This corrects both earlier explanations of the six German-variant/live-table scalar
+differences. `GRAFT` correlates with those rows, but it does not cause the scalar reuse.
 
-The structural binder retains the exact `GRAFT` cell and all rows. It does not yet apply a
-graft pass because the precise set and order of fields copied by retail remain underived.
-Likewise it does not turn prose-bearing cells such as `SUPPORT`, `RANGE`, or `JOB_EXTRA_TIME`
-into approximate numbers. Callers that need a runtime `UnitTypeData` image must fail closed
-until those loader transforms and post-load passes are recovered.
+`Types::init` calls `UnitType::init` five times for every TypeIndex 50..413, with pass values
+0 through 4. Passes 0 and 1 use each row's own XML element. For passes 2 through 4,
+`0x0066B620..0x0066B647` compares the current and retained source `NAME` through
+`String::operator==` (`0x00A1F140`). An equal name preserves the retained element and source
+TypeIndex; a different name replaces both with the current row. The retained state persists
+across the loop, so every consecutive equal-name run uses its first row. A later,
+non-consecutive occurrence begins a new run. This is an instruction-level property, not a
+name-keyed catalog merge: runtime identity remains the row's own TypeIndex.
+
+Pass 1 independently parses `GRAFT`. `Types::unit_key` searches `TYPENAME` in TypeIndex
+50..401 order and returns the first case-insensitive match; Gaia rows are not candidates.
+`none` and `disable` resolve to `-1` and `-2`. The implementation matches the captured live
+`graft +0x25C` value for all 364 rows. The six formerly attributed scalar differences occur
+where this separate graft target happens also to be the first row of the equal-`NAME` run.
+
+## Recovered scalar tranche
+
+`UnitRuntimeCatalog::materialize_runtime_scalars` applies the pass-2 source rule and the
+recovered integer transforms for job time; object/unit masks; attack, hit, armor, LOS,
+recharge, splash, ammo and projectile fields; spacing and radii; movement/carry; premium
+cost/time; job-extra time; mana/control/progression; push/target size; and uber/crew size.
+It takes the three size constants from parsed `rules.xml`, rejects zero/trapping derived
+radius division, and uses checked `_wtoi`/`AsScaled` admission at the still-underived CRT
+overflow boundary.
+
+Against the retained live table, all compared values match for all 364 shipped records.
+This is Tier C instruction recovery plus a captured live-state comparison, not a retail
+differential. `unit_flags_from_xml` is deliberately only the XML bit subset;
+`UnitType::init_final_flags` adds five shipped helicopter bits later.
+
+Still outside the runtime catalog are `SUPPORT`, `COST`, `RANGE`, `TURN_SPEED`, domain and
+reference/link fields, tribe masks, grid placement, and the complete effects of passes 3 and
+4. Consumers needing a full `UnitTypeData` image must continue to fail closed at those
+boundaries.

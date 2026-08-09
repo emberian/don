@@ -3,8 +3,9 @@
 //! Retail's `UnitType` registry contains 364 consecutive records at global `TypeIndex`
 //! 50 through 413. The shipped file has one `UNIT` per record, in that exact order, and
 //! every record has the same closed 55-field schema. [`UnitRuleCatalog`] retains that
-//! positional identity and every decoded field as text; it deliberately does not guess the
-//! field-specific transforms performed by `UnitType::init` (`0x0061_AB50`).
+//! positional identity and every decoded field as text. [`UnitRuntimeCatalog`] implements
+//! the recovered scalar subset of `UnitType::init` (`0x0061_AB50`) and leaves the remaining
+//! transforms explicit rather than guessing them.
 //!
 //! `NAME` is not unique: the shipped 364 rows contain only 300 distinct names. `TYPENAME`
 //! and `GRAPH` are also non-unique. A row's stable content identity is therefore its
@@ -13,10 +14,9 @@
 //! positional `TypeIndex`. No map in this module silently overwrites a same-name row.
 //!
 //! This boundary is intentionally fail-closed. Unknown, missing, reordered, attributed, or
-//! nested fields are errors, as is any record count other than 364. Runtime graft inheritance
-//! is a later loader pass: live evidence shows that the formerly described "same-NAME
-//! canonicalisation" is actually driven by the `GRAFT` column. This parser preserves `GRAFT`
-//! but does not manufacture the still-underived copied-field set.
+//! nested fields are errors, as is any record count other than 364. [`UnitRuntimeCatalog`]
+//! implements the instruction-backed pass-2 scalar transforms and exact same-name source-row
+//! reuse. `GRAFT` is independently resolved in pass 1; it does not copy those scalar fields.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,8 +27,11 @@ use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
+use don_rules::{checked_as_scaled, checked_wtoi, offsets, CheckedIntegerError, Rules};
+
 pub const UNIT_TYPE_BASE: u16 = 50;
 pub const UNIT_TYPE_END_EXCLUSIVE: u16 = 414;
+pub const UNIT_TYPE_GAIA_BASE: u16 = 402;
 pub const UNIT_RULE_ROWS: usize = 364;
 pub const UNIT_RULE_FIELD_COUNT: usize = 55;
 
@@ -302,6 +305,430 @@ impl UnitRuleCatalog {
         self.rows
             .iter()
             .filter(move |row| row.get(UnitRuleField::Name) == name)
+    }
+
+    /// XML element supplied to one `UnitType::init` pass.
+    ///
+    /// Passes 0 and 1 always use the row's own element. In passes 2 through 4,
+    /// `Types::init` (`0x0066_B620..0x0066_B676`) compares `TypeData::name` through
+    /// case-insensitive `String::operator==` and reuses the first element of a consecutive
+    /// equal-name run. Non-ASCII names are refused because retail delegates them to the host
+    /// CRT's `_wcsicmp` locale, which is not a portable recovered contract.
+    pub fn source_row_for_pass(
+        &self,
+        type_index: u16,
+        pass: UnitInitPass,
+    ) -> Result<&UnitRuleRow, UnitRuntimeError> {
+        let row = type_index
+            .checked_sub(UNIT_TYPE_BASE)
+            .map(usize::from)
+            .filter(|&row| row < self.rows.len())
+            .ok_or(UnitRuntimeError::UnknownTypeIndex(type_index))?;
+        if pass < UnitInitPass::Scalars {
+            return Ok(&self.rows[row]);
+        }
+        let name = self.rows[row].get(UnitRuleField::Name);
+        let mut source = row;
+        while source > 0 {
+            let previous = self.rows[source - 1].get(UnitRuleField::Name);
+            match case_insensitive_equality_proof(previous, name) {
+                Some(true) => source -= 1,
+                Some(false) => break,
+                None => return Err(UnitRuntimeError::NonAsciiName { type_index }),
+            }
+        }
+        Ok(&self.rows[source])
+    }
+
+    /// Resolve pass-1 `GRAFT` through retail `Types::unit_key` ordering.
+    ///
+    /// The resolver compares `TYPENAME` case-insensitively and returns the first match in
+    /// TypeIndex 50..402; Gaia rows are not searched. `none` and `disable` are the two exact
+    /// sentinels (`-1` and `-2`).
+    pub fn resolve_graft(&self, type_index: u16) -> Result<i32, UnitRuntimeError> {
+        let row = self
+            .by_type_index(type_index)
+            .ok_or(UnitRuntimeError::UnknownTypeIndex(type_index))?;
+        let graft = row.get(UnitRuleField::Graft);
+        if case_insensitive_equality_proof(graft, "none") == Some(true) {
+            return Ok(-1);
+        }
+        if case_insensitive_equality_proof(graft, "disable") == Some(true) {
+            return Ok(-2);
+        }
+        for candidate in &self.rows[..usize::from(UNIT_TYPE_GAIA_BASE - UNIT_TYPE_BASE)] {
+            let type_name = candidate.get(UnitRuleField::TypeName);
+            match case_insensitive_equality_proof(type_name, graft) {
+                Some(true) => return Ok(i32::from(candidate.type_index())),
+                Some(false) => {}
+                None if !graft.is_ascii() => {
+                    return Err(UnitRuntimeError::NonAsciiGraft { type_index })
+                }
+                None => {
+                    return Err(UnitRuntimeError::NonAsciiTypeName {
+                        type_index: candidate.type_index(),
+                    })
+                }
+            }
+        }
+        Err(UnitRuntimeError::UnknownGraft {
+            type_index,
+            value: graft.to_string(),
+        })
+    }
+
+    /// Materialize the exact, recovered pass-2 scalar tranche for all 364 records.
+    pub fn materialize_runtime_scalars(
+        &self,
+        constants: UnitRuntimeConstants,
+    ) -> Result<UnitRuntimeCatalog, UnitRuntimeError> {
+        if constants.unit_block_radius == 0 {
+            return Err(UnitRuntimeError::ZeroUnitBlockRadius);
+        }
+        let mut rows = Vec::with_capacity(self.rows.len());
+        for row in self.rows() {
+            let type_index = row.type_index();
+            let source = self.source_row_for_pass(type_index, UnitInitPass::Scalars)?;
+            let int = |field| checked_field(source, field);
+            let scaled = |field, scale| checked_scaled_field(source, field, scale);
+            let block_radius_raw = int(UnitRuleField::BlockRadius)?;
+            let circle_radius = int(UnitRuleField::CircleRadius)?.min(10);
+            let push_circles = int(UnitRuleField::PushCircles)?.clamp(1, 100);
+            let mut push_size = int(UnitRuleField::PushSize)?.clamp(1, 100);
+            if push_circles == 1 {
+                push_size = block_radius_raw;
+            }
+            let guy_radius = block_radius_raw.wrapping_mul(constants.unit_block_radius);
+            let new_big_radius = guy_radius
+                .checked_div(constants.unit_block_radius)
+                .ok_or(UnitRuntimeError::DerivedRadiusDivisionOverflow { type_index })?;
+            let unit_flags_from_xml = don_rules::unit::unit_flags(source.get(UnitRuleField::Flags))
+                .ok_or_else(|| UnitRuntimeError::InvalidMask {
+                    type_index,
+                    field: UnitRuleField::Flags,
+                    value: source.get(UnitRuleField::Flags).to_string(),
+                })?;
+            let obj_masks = don_rules::unit::object_mask(source.get(UnitRuleField::ObjMask))
+                .ok_or_else(|| UnitRuntimeError::InvalidMask {
+                    type_index,
+                    field: UnitRuleField::ObjMask,
+                    value: source.get(UnitRuleField::ObjMask).to_string(),
+                })?;
+            let attenuate = int(UnitRuleField::Attenuate)?;
+            let attenuate = (attenuate ^ (attenuate >> 31)).wrapping_sub(attenuate >> 31);
+            rows.push(UnitRuntimeRow {
+                type_index,
+                pass2_source_type_index: source.type_index(),
+                graft: self.resolve_graft(type_index)?,
+                scalars: UnitRuntimeScalars {
+                    job_time: int(UnitRuleField::JobTime)?,
+                    obj_masks,
+                    unit_flags_from_xml,
+                    attack: int(UnitRuleField::Attack)?.wrapping_mul(10),
+                    to_hit: int(UnitRuleField::ToHit)?,
+                    attenuate,
+                    recharge: int(UnitRuleField::Recharge)?,
+                    splash_area: int(UnitRuleField::Splash)?,
+                    splash_percent: int(UnitRuleField::SplashPercent)?,
+                    ammo_per_att: int(UnitRuleField::AmmoPerAtt)?,
+                    proj_speed: int(UnitRuleField::ProjSpeed)?,
+                    hits: int(UnitRuleField::Hits)?,
+                    armor: int(UnitRuleField::Armor)?,
+                    los: int(UnitRuleField::Los)?,
+                    science_los: int(UnitRuleField::ScienceLos)?,
+                    guy_spacing: int(UnitRuleField::GuySpacing)?
+                        .wrapping_mul(constants.unit_guy_spacing),
+                    x_spacing: int(UnitRuleField::XSpacing)?
+                        .wrapping_mul(constants.unit_formation_spacing),
+                    y_spacing: int(UnitRuleField::YSpacing)?
+                        .wrapping_mul(constants.unit_formation_spacing),
+                    x_size: circle_radius,
+                    y_size: circle_radius,
+                    guy_radius,
+                    block_radius: guy_radius,
+                    big_radius: guy_radius,
+                    new_block_radius: block_radius_raw,
+                    new_big_radius,
+                    fly_high: int(UnitRuleField::FlyHigh)?,
+                    fly_low: int(UnitRuleField::FlyLow)?,
+                    moves: int(UnitRuleField::Moves)?,
+                    carry: int(UnitRuleField::Carry)?,
+                    carry_size: int(UnitRuleField::CarrySize)?,
+                    research_premium_cost: scaled(UnitRuleField::ResearchPremiumCost, 256)?,
+                    research_premium_time: scaled(UnitRuleField::ResearchPremiumTime, 256)?,
+                    job_extra_time: scaled(UnitRuleField::JobExtraTime, 100)?,
+                    mana: int(UnitRuleField::Mana)?,
+                    control_cost: int(UnitRuleField::Pop)?,
+                    progression: int(UnitRuleField::Progression)?,
+                    push_size: push_size.wrapping_mul(constants.unit_block_radius),
+                    push_circles,
+                    target_size: int(UnitRuleField::TargetSize)?
+                        .wrapping_mul(constants.unit_block_radius),
+                    uber_size: int(UnitRuleField::UberSize)?,
+                    crew_size: int(UnitRuleField::CrewSize)?,
+                },
+            });
+        }
+        Ok(UnitRuntimeCatalog {
+            rows: rows.into_boxed_slice(),
+        })
+    }
+}
+
+/// The five `param_3` values passed to `UnitType::init` by `Types::init`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum UnitInitPass {
+    Identity = 0,
+    References = 1,
+    Scalars = 2,
+    TribeGrafts = 3,
+    Links = 4,
+}
+
+/// Constants read by the pass-2 size transforms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitRuntimeConstants {
+    pub unit_formation_spacing: i32,
+    pub unit_guy_spacing: i32,
+    pub unit_block_radius: i32,
+}
+
+impl UnitRuntimeConstants {
+    pub const SHIPPED: Self = Self {
+        unit_formation_spacing: 12,
+        unit_guy_spacing: 12,
+        unit_block_radius: 48,
+    };
+
+    pub fn from_rules(rules: &Rules) -> Self {
+        use offsets::fun_00570170 as rule;
+        Self {
+            unit_formation_spacing: rules.raw[(rule::UNIT_FORMATION_SPACING / 4) as usize],
+            unit_guy_spacing: rules.raw[(rule::UNIT_GUY_SPACING / 4) as usize],
+            unit_block_radius: rules.raw[(rule::UNIT_BLOCK_RADIUS / 4) as usize],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitRuntimeScalars {
+    pub job_time: i32,
+    pub obj_masks: u32,
+    /// Pass-2 XML bits only. `UnitType::init_final_flags` adds five shipped helicopter bits.
+    pub unit_flags_from_xml: u32,
+    pub attack: i32,
+    pub to_hit: i32,
+    pub attenuate: i32,
+    pub recharge: i32,
+    pub splash_area: i32,
+    pub splash_percent: i32,
+    pub ammo_per_att: i32,
+    pub proj_speed: i32,
+    pub hits: i32,
+    pub armor: i32,
+    pub los: i32,
+    pub science_los: i32,
+    pub guy_spacing: i32,
+    pub x_spacing: i32,
+    pub y_spacing: i32,
+    pub x_size: i32,
+    pub y_size: i32,
+    pub guy_radius: i32,
+    pub block_radius: i32,
+    pub big_radius: i32,
+    pub new_block_radius: i32,
+    pub new_big_radius: i32,
+    pub fly_high: i32,
+    pub fly_low: i32,
+    pub moves: i32,
+    pub carry: i32,
+    pub carry_size: i32,
+    pub research_premium_cost: i32,
+    pub research_premium_time: i32,
+    pub job_extra_time: i32,
+    pub mana: i32,
+    /// XML `POP`, stored as `UnitTypeData::control_cost +0x2F0`.
+    pub control_cost: i32,
+    pub progression: i32,
+    pub push_size: i32,
+    pub push_circles: i32,
+    pub target_size: i32,
+    pub uber_size: i32,
+    pub crew_size: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitRuntimeRow {
+    type_index: u16,
+    pass2_source_type_index: u16,
+    graft: i32,
+    scalars: UnitRuntimeScalars,
+}
+
+impl UnitRuntimeRow {
+    pub fn type_index(&self) -> u16 {
+        self.type_index
+    }
+
+    pub fn pass2_source_type_index(&self) -> u16 {
+        self.pass2_source_type_index
+    }
+
+    pub fn graft(&self) -> i32 {
+        self.graft
+    }
+
+    pub fn scalars(&self) -> &UnitRuntimeScalars {
+        &self.scalars
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitRuntimeCatalog {
+    rows: Box<[UnitRuntimeRow]>,
+}
+
+impl UnitRuntimeCatalog {
+    pub fn rows(&self) -> &[UnitRuntimeRow] {
+        &self.rows
+    }
+
+    pub fn by_type_index(&self, type_index: u16) -> Option<&UnitRuntimeRow> {
+        let row = usize::from(type_index.checked_sub(UNIT_TYPE_BASE)?);
+        self.rows.get(row)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnitRuntimeError {
+    UnknownTypeIndex(u16),
+    NonAsciiName {
+        type_index: u16,
+    },
+    NonAsciiTypeName {
+        type_index: u16,
+    },
+    NonAsciiGraft {
+        type_index: u16,
+    },
+    UnknownGraft {
+        type_index: u16,
+        value: String,
+    },
+    InvalidInteger {
+        type_index: u16,
+        field: UnitRuleField,
+        source: CheckedIntegerError,
+    },
+    InvalidMask {
+        type_index: u16,
+        field: UnitRuleField,
+        value: String,
+    },
+    ZeroUnitBlockRadius,
+    DerivedRadiusDivisionOverflow {
+        type_index: u16,
+    },
+}
+
+impl fmt::Display for UnitRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTypeIndex(index) => write!(f, "TypeIndex {index} is not a unit"),
+            Self::NonAsciiName { type_index } => write!(
+                f,
+                "unit {type_index} NAME is non-ASCII; host _wcsicmp behavior is not certified"
+            ),
+            Self::NonAsciiTypeName { type_index } => write!(
+                f,
+                "unit {type_index} TYPENAME is non-ASCII; host _wcsicmp behavior is not certified"
+            ),
+            Self::NonAsciiGraft { type_index } => write!(
+                f,
+                "unit {type_index} GRAFT is non-ASCII; host _wcsicmp behavior is not certified"
+            ),
+            Self::UnknownGraft { type_index, value } => {
+                write!(
+                    f,
+                    "unit {type_index} GRAFT target {value:?} does not resolve"
+                )
+            }
+            Self::InvalidInteger {
+                type_index,
+                field,
+                source,
+            } => write!(
+                f,
+                "unit {type_index} field {} cannot be admitted: {source}",
+                field.tag()
+            ),
+            Self::InvalidMask {
+                type_index,
+                field,
+                value,
+            } => write!(
+                f,
+                "unit {type_index} field {} contains an unsupported mask {value:?}",
+                field.tag()
+            ),
+            Self::ZeroUnitBlockRadius => {
+                write!(
+                    f,
+                    "UNIT_BLOCK_RADIUS is zero; retail derived-radius division traps"
+                )
+            }
+            Self::DerivedRadiusDivisionOverflow { type_index } => write!(
+                f,
+                "unit {type_index} derived-radius division would raise retail #DE"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UnitRuntimeError {}
+
+fn checked_field(row: &UnitRuleRow, field: UnitRuleField) -> Result<i32, UnitRuntimeError> {
+    checked_wtoi(row.get(field)).map_err(|source| UnitRuntimeError::InvalidInteger {
+        type_index: row.type_index(),
+        field,
+        source,
+    })
+}
+
+fn checked_scaled_field(
+    row: &UnitRuleRow,
+    field: UnitRuleField,
+    scale: i32,
+) -> Result<i32, UnitRuntimeError> {
+    checked_as_scaled(row.get(field), scale).map_err(|source| UnitRuntimeError::InvalidInteger {
+        type_index: row.type_index(),
+        field,
+        source,
+    })
+}
+
+/// Prove the result of retail `_wcsicmp` without assuming a host Unicode locale.
+/// Identical non-ASCII code points are safe; a differing non-ASCII pair is deliberately
+/// unknown. The shipped `Advisor Fouché` comparison is decided by an earlier ASCII mismatch.
+fn case_insensitive_equality_proof(left: &str, right: &str) -> Option<bool> {
+    if left == right {
+        return Some(true);
+    }
+    let mut left = left.chars();
+    let mut right = right.chars();
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return Some(true),
+            (None, Some(_)) | (Some(_), None) => return Some(false),
+            (Some(a), Some(b)) if a == b => {}
+            (Some(a), Some(b)) if a.is_ascii() && b.is_ascii() => {
+                if !a.eq_ignore_ascii_case(&b) {
+                    return Some(false);
+                }
+            }
+            (Some(_), Some(_)) => return None,
+        }
     }
 }
 
@@ -896,5 +1323,172 @@ mod tests {
             .collect();
         assert_eq!(distinct_type_names.len(), 352);
         assert_eq!(distinct_graphs.len(), 351);
+    }
+
+    #[test]
+    fn same_name_pass_reuse_and_graft_resolution_are_independent() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ron-data/unitrules.xml");
+        let Ok(text) = fs::read_to_string(&path) else {
+            eprintln!("skipping: {} is an extracted local asset", path.display());
+            return;
+        };
+        let catalog = parse_unitrules_xml(&text).unwrap();
+
+        // Identity/reference pass keeps the German row, scalar pass reuses Riflemen.
+        assert_eq!(
+            catalog
+                .source_row_for_pass(101, UnitInitPass::References)
+                .unwrap()
+                .type_index(),
+            101
+        );
+        assert_eq!(
+            catalog
+                .source_row_for_pass(101, UnitInitPass::Scalars)
+                .unwrap()
+                .type_index(),
+            100
+        );
+        // GRAFT came from row 101 in pass 1 and independently resolves by TYPENAME.
+        assert_eq!(catalog.resolve_graft(101), Ok(100));
+        assert_eq!(catalog.resolve_graft(138), Ok(137));
+        assert_eq!(catalog.resolve_graft(272), Ok(271));
+        assert_eq!(catalog.resolve_graft(50), Ok(-1));
+    }
+
+    #[test]
+    fn scalar_source_reuse_is_consecutive_not_a_global_name_lookup() {
+        let catalog =
+            parse_with_expected_rows(&fixture_rows(&["Same", "Same", "Different", "Same"]), 4)
+                .unwrap();
+
+        assert_eq!(
+            catalog
+                .source_row_for_pass(51, UnitInitPass::References)
+                .unwrap()
+                .type_index(),
+            51
+        );
+        assert_eq!(
+            catalog
+                .source_row_for_pass(51, UnitInitPass::Scalars)
+                .unwrap()
+                .type_index(),
+            50
+        );
+        assert_eq!(
+            catalog
+                .source_row_for_pass(52, UnitInitPass::Scalars)
+                .unwrap()
+                .type_index(),
+            52
+        );
+        assert_eq!(
+            catalog
+                .source_row_for_pass(53, UnitInitPass::Scalars)
+                .unwrap()
+                .type_index(),
+            53,
+            "a later non-consecutive equal NAME begins a new source run"
+        );
+    }
+
+    #[test]
+    fn recovered_scalar_tranche_matches_all_364_live_records() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let unit_path = root.join("ron-data/unitrules.xml");
+        let Ok(unit_text) = fs::read_to_string(&unit_path) else {
+            eprintln!(
+                "skipping: {} is an extracted local asset",
+                unit_path.display()
+            );
+            return;
+        };
+        let rules_path = root.join("ron-data/rules.xml");
+        let Ok(rules_text) = fs::read_to_string(&rules_path) else {
+            eprintln!(
+                "skipping: {} is an extracted local asset",
+                rules_path.display()
+            );
+            return;
+        };
+        let parsed_rules = crate::runtime::parse_rules_xml(&rules_text).unwrap();
+        let constants = UnitRuntimeConstants::from_rules(parsed_rules.rules());
+        assert_eq!(constants, UnitRuntimeConstants::SHIPPED);
+
+        let catalog = parse_unitrules_xml(&unit_text).unwrap();
+        let runtime = catalog.materialize_runtime_scalars(constants).unwrap();
+        let live_path = root.join("schema/live/live-tables-unit.tsv");
+        let live = fs::read_to_string(&live_path).unwrap();
+        let mut lines = live.lines();
+        let headers: Vec<_> = lines.next().unwrap().split('\t').collect();
+        let live_rows: Vec<_> = lines.collect();
+        assert_eq!(runtime.rows().len(), 364);
+        assert_eq!(live_rows.len(), 364);
+
+        for (runtime_row, line) in runtime.rows().iter().zip(live_rows) {
+            let values: Vec<_> = line.split('\t').collect();
+            let get = |name: &str| -> i64 {
+                let index = headers.iter().position(|header| *header == name).unwrap();
+                values[index].parse().unwrap()
+            };
+            let scalars = runtime_row.scalars();
+            macro_rules! matches_live {
+                ($field:ident, $column:literal) => {
+                    assert_eq!(
+                        i64::from(scalars.$field),
+                        get($column),
+                        "TypeIndex {} {}",
+                        runtime_row.type_index(),
+                        $column
+                    );
+                };
+            }
+            assert_eq!(i64::from(runtime_row.graft()), get("graft"));
+            matches_live!(job_time, "job_time");
+            assert_eq!(u64::from(scalars.obj_masks), get("obj_masks") as u64);
+            assert_eq!(
+                scalars.unit_flags_from_xml & get("unit_flags") as u32,
+                scalars.unit_flags_from_xml
+            );
+            matches_live!(attack, "attack");
+            matches_live!(to_hit, "to_hit");
+            matches_live!(attenuate, "attenuate");
+            matches_live!(recharge, "recharge");
+            matches_live!(splash_area, "splash_area");
+            matches_live!(splash_percent, "splash_percent");
+            matches_live!(ammo_per_att, "ammo_per_att");
+            matches_live!(proj_speed, "proj_speed");
+            matches_live!(hits, "hits");
+            matches_live!(armor, "armor");
+            matches_live!(los, "los");
+            matches_live!(science_los, "science_los");
+            matches_live!(guy_spacing, "guy_spacing");
+            matches_live!(x_spacing, "x_spacing");
+            matches_live!(y_spacing, "y_spacing");
+            matches_live!(x_size, "x_size");
+            matches_live!(y_size, "y_size");
+            matches_live!(guy_radius, "guy_radius");
+            matches_live!(block_radius, "block_radius");
+            matches_live!(big_radius, "big_radius");
+            matches_live!(new_block_radius, "new_block_radius");
+            matches_live!(new_big_radius, "new_big_radius");
+            matches_live!(fly_high, "fly_high");
+            matches_live!(fly_low, "fly_low");
+            matches_live!(moves, "moves");
+            matches_live!(carry, "carry");
+            matches_live!(carry_size, "carry_size");
+            matches_live!(research_premium_cost, "research_premium_cost");
+            matches_live!(research_premium_time, "research_premium_time");
+            matches_live!(job_extra_time, "job_extra_time");
+            matches_live!(mana, "mana");
+            matches_live!(control_cost, "control_cost");
+            matches_live!(progression, "progression");
+            matches_live!(push_size, "push_size");
+            matches_live!(push_circles, "push_circles");
+            matches_live!(target_size, "target_size");
+            matches_live!(uber_size, "uber_size");
+            matches_live!(crew_size, "crew_size");
+        }
     }
 }
