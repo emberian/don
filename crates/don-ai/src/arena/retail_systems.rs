@@ -251,6 +251,9 @@ pub enum Model6Subsystem {
 pub enum IntegrationStatus {
     /// Exact local kernels have an arena-shaped, fail-closed adapter, but no arena tick caller.
     AdapterOnly,
+    /// The recovered transaction is called by the live Arena world path. The inventory's
+    /// explicit residuals still prevent treating the whole subsystem as complete.
+    WorldIntegrated,
     /// Recovery exists only as isolated primitives/proxies; product integration is forbidden.
     Blocked,
 }
@@ -329,32 +332,30 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
     },
     IntegrationItem {
         subsystem: Model6Subsystem::Attrition,
-        status: IntegrationStatus::AdapterOnly,
+        status: IntegrationStatus::WorldIntegrated,
         recovered: &[
             "calc_anti_attrition and get_attrition arithmetic",
             "period phase and suffer-attrition damage shape",
             "object-backed due-tick supply/attrition mutation transaction",
+            "live Arena unit-band host, singleton damage mutation and death close path",
         ],
         missing: &[
-            "arena per-unit attrition-period state and retail recomputation sites",
-            "runtime type virtuals get_bonus(0x42), +0x10c and +0x308",
-            "arena Object::take_damage implementation and death cascade",
+            "retail attrition-period recomputation sites (ordinary Arena spawns remain disabled)",
+            "multi-slot captain damage cascade for ObjectType uber_size greater than one",
             "removal of arena combat's unconditional in_supply=true input",
         ],
     },
     IntegrationItem {
         subsystem: Model6Subsystem::Supply,
-        status: IntegrationStatus::AdapterOnly,
+        status: IntegrationStatus::WorldIntegrated,
         recovered: &[
             "ordered Unit::process_supply host-query adapter",
             "walked SupplyData and HeroData registry traversal with exact range metric",
             "due-tick UnitData unit_masks2 resupplied write",
+            "live Arena support registries, object-table host and unit-band call site",
             "out-of-supply reload arithmetic and constants",
         ],
-        missing: &[
-            "arena SupplyAttritionHost implementation over its live object tables",
-            "located reload call site and supply healing",
-        ],
+        missing: &["located reload call site and supply healing"],
     },
 ];
 
@@ -968,6 +969,7 @@ pub struct SupplyRegistryRecord {
 /// aura-radius calculation and is deliberately accessed through the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeroRegistryRecord {
+    pub hero: i16,
     pub o: i16,
     pub hero_flags: u8,
     pub who: i8,
@@ -975,12 +977,12 @@ pub struct HeroRegistryRecord {
 
 /// Object fields and virtual results read by both registry traversals. This is an object
 /// snapshot, not a pre-combined "in supply" answer: the adapter still resolves every
-/// record, checks liveness and `is_supply`, computes distance, and preserves the first
+/// record, checks liveness and `is_unit`, computes distance, and preserves the first
 /// source identity itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SupplySearchObject {
     pub active: bool,
-    pub is_supply: bool,
+    pub is_unit: bool,
     pub x: i32,
     pub y: i32,
 }
@@ -1254,7 +1256,7 @@ fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
                 who: state.unit.who,
                 o: record.o,
             })?;
-        if !object.active || !object.is_supply {
+        if !object.active || !object.is_unit {
             continue;
         }
         let radius = host
@@ -1294,7 +1296,7 @@ fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
                     o: record.o,
                 })?;
             if !object.active
-                || !object.is_supply
+                || !object.is_unit
                 || !host
                     .object_is(state.unit.who, record.o as i32, type_id, 0)
                     .map_err(SupplyAttritionTransactionError::Host)?
@@ -2195,13 +2197,13 @@ mod tests {
         // Exact axis boundary: vector_dist is 14 * 0xC0, so this source is included.
         objects[10] = Some(SupplySearchObject {
             active: true,
-            is_supply: true,
+            is_unit: true,
             x: unit.x + 14 * SUPPORT_RANGE_UNITS_PER_TILE,
             y: unit.y,
         });
         objects[11] = Some(SupplySearchObject {
             active: true,
-            is_supply: true,
+            is_unit: true,
             x: unit.x + 8 * SUPPORT_RANGE_UNITS_PER_TILE,
             y: unit.y,
         });
@@ -2234,6 +2236,7 @@ mod tests {
                 },
             ],
             heroes: vec![HeroRegistryRecord {
+                hero: 0,
                 o: 11,
                 hero_flags: SUPPORT_REGISTRY_ACTIVE,
                 who: 2,

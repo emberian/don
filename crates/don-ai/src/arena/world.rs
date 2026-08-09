@@ -39,7 +39,9 @@
 //!
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
-//! 6. No water, no naval, no air, no diplomacy, no attrition, no supply.
+//! 6. No water, naval, air or diplomacy. Supply source traversal and the due-frame
+//!    attrition mutation are wired into the live unit band; attrition-period recomputation,
+//!    supply reload penalties and healing remain separate blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -68,8 +70,8 @@ use don_sim::systems::collision::{
 };
 use don_sim::systems::combat::{
     below_min_range, circle_table, in_attack_range, poor_target, scale_damage_build,
-    scale_damage_unit, vector_dist_between, AttackCycle, CircleTable, CombatConstants, HitPoints,
-    PoorTargetInput, RANGE_UNITS_PER_TILE,
+    scale_damage_unit, vector_dist_between, AttackCycle, CircleTable, CombatConstants,
+    DamageOutcome, HitPoints, PoorTargetInput, RANGE_UNITS_PER_TILE,
 };
 use don_sim::systems::construction::{
     self, BuildOrderRegions, BuildOrderTarget, ConstructionFrame, ObjectKey,
@@ -97,6 +99,11 @@ use super::gather_runtime::{
     ArenaGatherRuntime, GatherCapacityAuthority, GatherObjectKey, GatherPrerequisiteRefusal,
 };
 use super::map::{Map, Spatial, Terrain};
+use super::retail_systems::{
+    self, ArenaSupplyAttritionHost, HeroRadiusFacts, HeroRegistryRecord,
+    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyRadiusFacts, SupplyRegistryRecord,
+    SupplySearchObject, RESUPPLIED_THIS_TICK, SUPPORT_REGISTRY_ACTIVE,
+};
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
 use crate::rules::NRES;
@@ -297,6 +304,10 @@ pub struct Ent {
     pub assigned_to: EntId,
     pub last_damaged: i64,
     pub spawn_frame: i64,
+    /// `UnitData::attrition` `+0x9E`, the due period in frames. It is real per-unit state;
+    /// zero disables the due branch. Arena does not yet implement the separate
+    /// `Unit::process_attrition` recomputation sites, so ordinary spawns retain zero.
+    pub attrition_period: i16,
     /// The persistent retail `UnitData` slice consumed by `Unit::do_move`: order queue,
     /// waypoint stack, parked A* state, body, collision bookkeeping, and movement masks.
     /// Buildings have no unit-motion state.
@@ -463,6 +474,11 @@ pub struct World {
     /// `World::wdata`'s target-acquisition chains and checksummed near/targeted fields.
     target_world: TargetWorld,
     target_circle: CircleTable,
+    /// Owner-local walked registries used by `Supplies::find_supply` and
+    /// `HeroesData::find_hero`. Slots are stable and inactive holes are reused before the
+    /// arrays grow, matching the retail init/close transactions.
+    supply_records: Vec<Vec<SupplyRegistryRecord>>,
+    hero_records: Vec<Vec<HeroRegistryRecord>>,
     age_techs: Vec<i32>,
     /// Per-owner source for `ObjectData::uid`. `Objects::clear`/`Objects::init` zero the
     /// ten counters and `Object::init` 0x00647750 increments the selected `u16` counter.
@@ -551,6 +567,248 @@ fn type_chain_has_build_flag(types: &Types, mut type_id: i32, flag: u32) -> bool
         type_id = row.from;
     }
     false
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArenaSupplyHostError {
+    InvalidOwner(i32),
+    MissingObject { who: i32, o: i32 },
+    MissingMotion { who: i32, o: i32 },
+    MissingType(i32),
+    StaleUnitMasks2 { expected: u32, found: u32 },
+    UnsupportedUberDamage { type_id: i32, uber_size: i32 },
+}
+
+/// A direct view of the live Arena object tables for one retail supply/attrition
+/// transaction. No result is cached across the transaction's mutation boundary.
+struct ArenaSupplyHost<'a> {
+    ents: &'a mut [Ent],
+    types: &'a Types,
+    players: &'a [PlayerState],
+    supply_records: &'a [Vec<SupplyRegistryRecord>],
+    hero_records: &'a [Vec<HeroRegistryRecord>],
+    frame: i64,
+}
+
+impl ArenaSupplyHost<'_> {
+    fn owner(&self, who: i32) -> Result<usize, ArenaSupplyHostError> {
+        let owner = usize::try_from(who).map_err(|_| ArenaSupplyHostError::InvalidOwner(who))?;
+        if owner >= self.players.len() {
+            return Err(ArenaSupplyHostError::InvalidOwner(who));
+        }
+        Ok(owner)
+    }
+
+    fn object_index(&self, who: i32, o: i32) -> Result<Option<usize>, ArenaSupplyHostError> {
+        self.owner(who)?;
+        let Ok(o) = i16::try_from(o) else {
+            return Ok(None);
+        };
+        Ok(self
+            .ents
+            .iter()
+            .position(|ent| i32::from(ent.who) == who && ent.object_o == o))
+    }
+
+    fn completed_owned_type(&self, who: i32, type_id: i32) -> bool {
+        self.ents.iter().any(|ent| {
+            ent.alive && ent.complete && i32::from(ent.who) == who && ent.type_id == type_id
+        })
+    }
+
+    fn upgrade_count(&self, who: i32, range: std::ops::RangeInclusive<i32>) -> i32 {
+        let Ok(owner) = self.owner(who) else {
+            return 0;
+        };
+        range
+            .filter(|type_id| self.players[owner].techs.contains(type_id))
+            .count() as i32
+    }
+}
+
+impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
+    type Error = ArenaSupplyHostError;
+
+    fn unit_state(
+        &self,
+        who: i32,
+        o: i32,
+    ) -> Result<Option<SupplyAttritionUnitState>, Self::Error> {
+        let Some(index) = self.object_index(who, o)? else {
+            return Ok(None);
+        };
+        let ent = &self.ents[index];
+        if !ent.alive || ent.building {
+            return Ok(None);
+        }
+        let motion = ent
+            .motion
+            .as_ref()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        let ty = self
+            .types
+            .get(ent.type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(ent.type_id))?;
+        Ok(Some(SupplyAttritionUnitState {
+            unit: retail_systems::SupplyUnitKey {
+                who,
+                o,
+                x: ent.x,
+                y: ent.y,
+            },
+            unit_id: ent.object_o,
+            attrition_period: ent.attrition_period,
+            unit_masks: motion.unit_masks,
+            unit_masks2: motion.unit_masks2,
+            is_supply: ty.unit_flags2 & 0x40 != 0,
+            // `get_bonus(0x42)` devirtualizes to ObjectTypeData::is(TypeIndex 66, 0).
+            militia: type_is(self.types, ent.type_id, 0x42),
+            type_308: ty.uber_size,
+            // Arena objects have no captain/child object links. The isolated object shape
+            // is exact for uber_size == 1; damage below fails closed for every other shape.
+            curr_uber_size: 1,
+        }))
+    }
+
+    fn supply_records(&self, who: i32) -> Result<&[SupplyRegistryRecord], Self::Error> {
+        let owner = self.owner(who)?;
+        Ok(&self.supply_records[owner])
+    }
+
+    fn hero_records(&self, who: i32) -> Result<&[HeroRegistryRecord], Self::Error> {
+        let owner = self.owner(who)?;
+        Ok(&self.hero_records[owner])
+    }
+
+    fn support_object(&self, who: i32, o: i32) -> Result<Option<SupplySearchObject>, Self::Error> {
+        let Some(index) = self.object_index(who, o)? else {
+            return Ok(None);
+        };
+        let ent = &self.ents[index];
+        Ok(Some(SupplySearchObject {
+            active: ent.alive,
+            is_unit: !ent.building,
+            x: ent.x,
+            y: ent.y,
+        }))
+    }
+
+    fn supply_radius_facts(&self, who: i32) -> Result<SupplyRadiusFacts, Self::Error> {
+        self.owner(who)?;
+        let rules = don_sim::systems::borders_fog::AttritionRules::default();
+        Ok(SupplyRadiusFacts {
+            supply_radius: rules.supply_radius,
+            supply_radius_upgrade: rules.supply_radius_upgrade,
+            // `LeaderData::get_supply_upgrade` counts TypeIndexes 0x2FB..0x2FD.
+            supply_upgrade: self.upgrade_count(who, 0x2FB..=0x2FD),
+            has_terra_cotta: self.completed_owned_type(who, 0x211),
+            terra_cotta_range: 0,
+        })
+    }
+
+    fn owned_type_count(&self, who: i32, type_id: i32) -> Result<i32, Self::Error> {
+        self.owner(who)?;
+        Ok(self
+            .ents
+            .iter()
+            .filter(|ent| ent.alive && i32::from(ent.who) == who && ent.type_id == type_id)
+            .count() as i32)
+    }
+
+    fn object_is(
+        &self,
+        who: i32,
+        o: i32,
+        type_id: i32,
+        relation_set: i32,
+    ) -> Result<bool, Self::Error> {
+        let Some(index) = self.object_index(who, o)? else {
+            return Err(ArenaSupplyHostError::MissingObject { who, o });
+        };
+        let actual = self.ents[index].type_id;
+        // All hero identities consumed by this transaction are concrete live TypeIndexes.
+        // The loaded FROM chain supplies relation-set zero ancestry. Relation-set one is
+        // used only for the six concrete patriot ids and has no additional Arena aliases.
+        Ok(actual == type_id || (relation_set == 0 && type_is(self.types, actual, type_id)))
+    }
+
+    fn hero_radius_facts(&self, who: i32) -> Result<HeroRadiusFacts, Self::Error> {
+        self.owner(who)?;
+        Ok(HeroRadiusFacts {
+            // `LeaderData::get_general_upgrade` counts TypeIndexes 0x305..0x307.
+            general_upgrade: self.upgrade_count(who, 0x305..=0x307),
+            general_radius: 6,
+            parmenio_radius_adjust_256: 384,
+            wellington_radius_percent: 200,
+            kutosov_radius_percent: 300,
+            has_terra_cotta: self.completed_owned_type(who, 0x211),
+            terra_cotta_range: 0,
+            military_patriot_radius_bonus: 3,
+            economic_patriot_radius_bonus: 1,
+        })
+    }
+
+    fn write_unit_masks2(
+        &mut self,
+        who: i32,
+        o: i32,
+        before: u32,
+        after: u32,
+    ) -> Result<(), Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let motion = self.ents[index]
+            .motion
+            .as_mut()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        if motion.unit_masks2 != before {
+            return Err(ArenaSupplyHostError::StaleUnitMasks2 {
+                expected: before,
+                found: motion.unit_masks2,
+            });
+        }
+        motion.unit_masks2 = after;
+        Ok(())
+    }
+
+    fn take_attrition_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage: don_sim::systems::borders_fog::AttritionDamage,
+    ) -> Result<DamageOutcome, Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let type_id = self.ents[index].type_id;
+        let ty = self
+            .types
+            .get(type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(type_id))?;
+        if ty.uber_size != 1 {
+            return Err(ArenaSupplyHostError::UnsupportedUberDamage {
+                type_id,
+                uber_size: ty.uber_size,
+            });
+        }
+        let ent = &mut self.ents[index];
+        ent.hp.accumulate(damage.flat, damage.fractional);
+        ent.last_damaged = self.frame;
+        Ok(don_sim::systems::combat::resolve_damage(&ent.hp, ty.hits))
+    }
+
+    fn suffer_graphic_attrition(&mut self, who: i32, o: i32) -> Result<(), Self::Error> {
+        // The callback is output-only in retail. Validate that the surviving live object
+        // still exists; headless Arena intentionally owns no graphic-event queue.
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        if !self.ents[index].alive {
+            return Err(ArenaSupplyHostError::MissingObject { who, o });
+        }
+        Ok(())
+    }
 }
 
 struct ArenaTargetAdapter<'a> {
@@ -1001,6 +1259,8 @@ impl World {
             gather_runtime: ArenaGatherRuntime::default(),
             target_world,
             target_circle: circle_table(),
+            supply_records: vec![Vec::new(); tribes.len()],
+            hero_records: vec![Vec::new(); tribes.len()],
             age_techs,
             next_object_uid: vec![0; tribes.len()],
         };
@@ -1234,9 +1494,16 @@ impl World {
             assigned_to: EntId::NONE,
             last_damaged: -1,
             spawn_frame: self.frame,
+            attrition_period: 0,
             motion: motion.take(),
             guys,
         });
+        if t.kind_unit && t.unit_flags2 & 0x40 != 0 {
+            self.init_supply_record(who, object_o);
+        }
+        if t.kind_unit && t.unit_flags2 & 0x20 != 0 {
+            self.init_hero_record(who, object_o);
+        }
         if t.kind_unit {
             let ent = self.ents.last().expect("unit was just pushed");
             let row = collision_row(ent, &t);
@@ -1282,6 +1549,84 @@ impl World {
                 .expect("Arena entity slots never recycle within a World");
         }
         id
+    }
+
+    /// `Supplies::init_supply` (`0x0073AD40`): reuse the first inactive six-byte
+    /// record, otherwise append one, and retain the registry slot as `supply`.
+    fn init_supply_record(&mut self, who: u8, o: i16) {
+        let records = &mut self.supply_records[usize::from(who)];
+        let slot = records
+            .iter()
+            .position(|record| record.supply_flags & SUPPORT_REGISTRY_ACTIVE == 0)
+            .unwrap_or(records.len());
+        let record = SupplyRegistryRecord {
+            supply: i16::try_from(slot).expect("retail supply registry index fits i16"),
+            o,
+            supply_flags: SUPPORT_REGISTRY_ACTIVE,
+            who: who as i8,
+        };
+        if slot == records.len() {
+            records.push(record);
+        } else {
+            records[slot] = record;
+        }
+    }
+
+    /// `Heroes::init_hero` (`0x0073A330`), with the same inactive-hole reuse rule as
+    /// the retail walked array.
+    fn init_hero_record(&mut self, who: u8, o: i16) {
+        let records = &mut self.hero_records[usize::from(who)];
+        let slot = records
+            .iter()
+            .position(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE == 0)
+            .unwrap_or(records.len());
+        let record = HeroRegistryRecord {
+            hero: i16::try_from(slot).expect("retail hero registry index fits i16"),
+            o,
+            hero_flags: SUPPORT_REGISTRY_ACTIVE,
+            who: who as i8,
+        };
+        if slot == records.len() {
+            records.push(record);
+        } else {
+            records[slot] = record;
+        }
+    }
+
+    /// `Supplies::close_supply` (`0x0073ACC0`) and `Heroes::close_hero`
+    /// (`0x0073A480`): clear the active identity and trim only inactive tail slots.
+    fn close_support_records(&mut self, who: u8, o: i16) {
+        let supplies = &mut self.supply_records[usize::from(who)];
+        if let Some(record) = supplies
+            .iter_mut()
+            .find(|record| record.supply_flags & SUPPORT_REGISTRY_ACTIVE != 0 && record.o == o)
+        {
+            record.supply_flags &= !SUPPORT_REGISTRY_ACTIVE;
+            record.who = -1;
+            record.o = -1;
+        }
+        while supplies
+            .last()
+            .is_some_and(|record| record.supply_flags & SUPPORT_REGISTRY_ACTIVE == 0)
+        {
+            supplies.pop();
+        }
+
+        let heroes = &mut self.hero_records[usize::from(who)];
+        if let Some(record) = heroes
+            .iter_mut()
+            .find(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0 && record.o == o)
+        {
+            record.hero_flags &= !SUPPORT_REGISTRY_ACTIVE;
+            record.who = -1;
+            record.o = -1;
+        }
+        while heroes
+            .last()
+            .is_some_and(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE == 0)
+        {
+            heroes.pop();
+        }
     }
 
     /// MODEL 3 — worker slots and yield come from the terrain the building stands on.
@@ -1993,7 +2338,43 @@ impl World {
             self.tick_queue(i);
             self.tick_cycle(i);
             self.tick_job(i);
+            if !buildings && self.ents[i].alive {
+                self.tick_supply_attrition(i);
+            }
         }
+    }
+
+    /// The due-frame block at the tail of `Unit::process` (`0x006117F6`). The adapter
+    /// borrows the actual Arena tables for the whole transaction, then synchronises the
+    /// existing target/death lifecycle exactly when damage was applied.
+    fn tick_supply_attrition(&mut self, i: usize) -> SupplyAttritionTransaction {
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let id = self.ents[i].id;
+        let transaction = {
+            let mut host = ArenaSupplyHost {
+                ents: &mut self.ents,
+                types: &self.types,
+                players: &self.players,
+                supply_records: &self.supply_records,
+                hero_records: &self.hero_records,
+                frame: self.frame,
+            };
+            retail_systems::execute_supply_attrition(self.frame as i32, who, o, &mut host)
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena supply/attrition transaction failed for ({who},{o}): {error:?}")
+        });
+
+        if let SupplyAttritionTransaction::Damaged { outcome, .. } = transaction {
+            self.sync_target_damage(id);
+            if outcome != DamageOutcome::Survived {
+                // Retail returns from Unit::process immediately after lethal attrition;
+                // make the ordinary Arena close path visible before the next object slot.
+                self.reap();
+            }
+        }
+        transaction
     }
 
     fn begin_construction_site_frame(&mut self, i: usize) {
@@ -2973,6 +3354,7 @@ impl World {
                 // invented here and credited counters stay in the record.
                 build.flags &= !production::flag::VALID;
             }
+            self.close_support_records(e.who, e.object_o);
             self.ents[i].alive = false;
             self.players[e.who as usize].losses += 1;
             for p in 0..self.players.len() {
@@ -3755,6 +4137,89 @@ impl WorkWorld for ArenaMoveWorld<'_> {
                 MoveCollisionReply::Handled
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod supply_attrition_integration {
+    use super::*;
+    use crate::arena::match_run::{load_world, MatchConfig};
+
+    #[test]
+    fn live_unit_band_walks_supply_then_applies_due_attrition_and_closes_source() {
+        let Ok(mut world) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        let supply_type = world
+            .types
+            .rows
+            .values()
+            .find(|ty| ty.kind_unit && ty.unit_flags2 & 0x40 != 0)
+            .expect("live tables contain a UnitData::is_supply type")
+            .id;
+        let ty = world.map.w / 2;
+        let target = world.spawn(0, world.ids.citizen, ty - 7, ty, true);
+        let source = world.spawn(0, supply_type, ty + 7, ty, true);
+        let target_index = target.index().expect("spawn returned a dense Arena handle");
+        let source_index = source.index().expect("spawn returned a dense Arena handle");
+        let target_o = world.ents[target_index].object_o;
+        let source_o = world.ents[source_index].object_o;
+        world.ents[target_index].attrition_period = 48;
+        world.ents[target_index]
+            .motion
+            .as_mut()
+            .expect("Citizen owns UnitWork")
+            .unit_masks2 &= !RESUPPLIED_THIS_TICK;
+
+        let due = (-i64::from(target_o)).rem_euclid(48);
+        world.frame = due;
+        world.step();
+
+        assert!(world.last_object_process_order.contains(&target));
+        assert_ne!(
+            world.ents[target_index]
+                .motion
+                .as_ref()
+                .unwrap()
+                .unit_masks2
+                & RESUPPLIED_THIS_TICK,
+            0,
+            "the live unit-band transaction must write the walked resupply mask"
+        );
+        assert_eq!(world.ents[target_index].hp.damage, 0);
+        assert!(world.supply_records[0].iter().any(|record| {
+            record.supply_flags & SUPPORT_REGISTRY_ACTIVE != 0 && record.o == source_o
+        }));
+
+        // One tile beyond the exact fourteen-tile base radius: the next due frame must
+        // traverse the same live record, exhaust supply, and mutate the Citizen object.
+        world.ents[source_index].x += RANGE_UNITS_PER_TILE;
+        world.ents[target_index]
+            .motion
+            .as_mut()
+            .unwrap()
+            .unit_masks2 &= !RESUPPLIED_THIS_TICK;
+        world.frame = due + 48;
+        world.step();
+
+        assert_eq!(world.ents[target_index].hp.damage, 1);
+        assert_eq!(
+            world.ents[target_index]
+                .motion
+                .as_ref()
+                .unwrap()
+                .unit_masks2
+                & RESUPPLIED_THIS_TICK,
+            0
+        );
+        assert!(world.ents[target_index].alive);
+
+        let source_hits = world.types.get(supply_type).unwrap().hits;
+        world.ents[source_index].hp.damage = source_hits;
+        world.reap();
+        assert!(!world.supply_records[0].iter().any(|record| {
+            record.supply_flags & SUPPORT_REGISTRY_ACTIVE != 0 && record.o == source_o
+        }));
     }
 }
 
