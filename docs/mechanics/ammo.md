@@ -19,7 +19,7 @@ cargo test -p don-sim --lib systems::ammo
 cargo test -p don-sim --test ammo_splash_transaction
 # test result: ok. 2 passed; 0 failed
 cargo test -p don-sim --test ammo_spline_transaction
-# test result: ok. 6 passed; 0 failed
+# test result: ok. 9 passed; 0 failed
 ```
 
 The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
@@ -44,6 +44,7 @@ gate in `systems::air`; it is referenced by the real tick driver.
 | Splash falloff | `splash_scale`, `splash_ring` | `0x006788E0`–`0x0067892D` | linear from the bounding box; negative skips |
 | Live splash transaction | `ammo_do_damage_splash_execute` | `Ammo::do_damage` `0x00678629`–`0x00678B56` | damage is interleaved with the exact table/down-chain cursor; mutation can change later admissions; projectile closes last |
 | Cruise B-spline transaction | `ammo_init_cruise_spline`, `ammo_step_cruise_spline`, `RetailSpline::walk_checksum` | `0x00913960`, `0x00912F00`, `0x00911820`, `0x00911F60`, `0x009132B0`, spline arm of `0x0067D380` | exact constructed-empty array growth, knots, Cox–de Boor samples, tangent normals, nested checksum walk and indexed flight sample |
+| Both nuke B-spline constructors | `ammo_init_nuke_spline_high_arc`, `ammo_init_nuke_spline_terrain` | both arms of `Spline::calc_nuke_spline` `0x00913AD0` | high arc pins all 12 controls/custom knot widths; terrain arm pins truncated query order, flag-tier priority, all-30 knot header, fail-closed host facts, and complete checksum |
 | `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
 
 **Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
@@ -445,7 +446,7 @@ The function returns `None` without mutation for `splash_area <= 0`, preventing 
 accidentally closing a projectile that belongs to the distinct single-target branch. The splash
 walk itself consumes no RNG; all ordering sensitivity here is world and checksum mutation order.
 
-### Cruise splines are generated and walked, not approximated
+### Cruise and nuke splines are generated and walked, not approximated
 
 `ammo_init_cruise_spline` reproduces the complete non-nuke constructor transaction. A recycled
 `Spline` is cleared, its `flags` becomes `0x10`, and `calc_from_dir` installs start/control,
@@ -469,6 +470,22 @@ path. `ammo_step_cruise_spline` is the isolated live arm after `cur_time` increm
 coordinate truncations. The last sample is deliberately retained for the impact boundary. The
 constructor and step consume no RNG.
 
+`calc_nuke_spline` has two constructor arms and both feed that same generator. The fixed arm
+installs the measured 12-point high arc, raw degree/depth `(3,120)`, and 17 custom widths
+`[100,30,15,10…]`. The terrain arm truncates both endpoints before computing
+`vector_dist / 768`, retains the original f32 endpoints for interpolation, and truncates each
+interior sample before its terrain query. It lifts ordinary cells by 250, `flags & 0x30 == 0x30`
+cells by 750, and cells with both flag bit 14 and low bits `3` by 1250; the 1250 arm has priority
+when both predicates match. It then calls `set_min_seg_length(96.0)` and installs an all-30
+knot-width array whose length and capacity are exactly `control_len + 2 + degree`.
+
+`NukeSplineEnv` supplies the ordered height/flag facts without coupling the primitive to the
+SoA world. Missing terrain fails before the caller's `Ammo` is changed, while successful
+construction installs `TRAJ_SPLINE`, the non-null sidecar bit, and
+`total_time = spline_verts.length - 1`. Neither nuke arm consumes RNG. The remaining boundary
+is live selection of the constructor and retention of the returned sidecar in the slot-aligned
+pool; it is intentionally outside this isolated projectile tranche.
+
 ---
 
 ## 7. Honest gaps
@@ -484,15 +501,14 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **The terrain-aware nuke constructor is the remaining `TRAJ_SPLINE` gap.** Cruise missiles'
-   `Spline::calc_from_dir` (`0x00913960`) chain is now complete: `set_min_seg_length`
-   (`0x009125E0`), `calc_spline` (`0x00912F00`), `generate_bspline` (`0x00911820`),
-   `build_normals` (`0x00911F60`), indexed `Ammo::inc_time` sampling, and every nested array
-   header/payload in `SplineData::walk_data` (`0x009132B0`). `calc_nuke_spline` (`0x00913AD0`)
-   remains because its alternate arm queries terrain for every interpolated control point and
-   installs a distinct weighted-knot profile. Aircraft crashes were previously misclassified
-   here; `Ammo::init_crash` writes an ordinary arc and is executable. `Ammo::init` only ever
-   writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`.
+3. **Live nuke launch must select and retain the recovered spline sidecar.** Both arms of
+   `Spline::calc_nuke_spline` (`0x00913AD0`) are executable, including the terrain query/flag
+   tiers and distinct knot profiles. The remaining seam is the world-owned launch adapter:
+   supply `NukeSplineEnv`, choose the retail arm, store the returned `RetailSpline` beside the
+   allocated ammo slot, and release it when `Ammo::close` returns the path to its recycler.
+   Aircraft crashes were previously misclassified here; `Ammo::init_crash` writes an ordinary
+   arc and is executable. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is
+   never set by `init`.
 4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved
    executor is implemented and mutation-pinned in `ammo_do_damage_splash_execute`; the remaining
    seam is to expose the live WData/down-chain/diplomacy reads and `Object::do_damage` mutation
@@ -515,9 +531,10 @@ Ordered by how much they would cost a replay harness.
   flight-band state should use `ammo_init_targeted`, not the post-gate compatibility adapter.
 - The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
   world bounds, unit/building search, water test), `SplashEnv` (WData heads, down-chain objects,
-  diplomacy), `SplashDamageEnv` (synchronous `Object::do_damage` dispatch), and `CrashEnv`
-  (WCoord bounds and terrain height) rather than reaching into the SoA world. Whoever owns the
-  world implements those adapters. The crash adapter is wired at the live death seam and activates
+  diplomacy), `SplashDamageEnv` (synchronous `Object::do_damage` dispatch), `CrashEnv`
+  (WCoord bounds and terrain height), and `NukeSplineEnv` (ordered terrain height/cell flags)
+  rather than reaching into the SoA world. Whoever owns the world implements those adapters.
+  The crash adapter is wired at the live death seam and activates
   only when its exact optional Guy/type/terrain sources are installed; it does not reuse
   `AmmoView`'s documented flat-terrain compatibility substitution.
 - Single-target and compatibility splash paths still **emit** `DamageCall` values. The exact

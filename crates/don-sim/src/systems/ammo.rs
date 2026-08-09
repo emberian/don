@@ -61,10 +61,11 @@
 //!
 //! ## What is NOT here
 //!
-//! * `TRAJ_SPLINE` cruise paths — `calc_from_dir` → `calc_spline` → `generate_bspline` →
-//!   `build_normals`, the six nested array walks, and the indexed flight step are implemented
-//!   below. `calc_nuke_spline`'s terrain-aware constructor is still separate. Aircraft wrecks
-//!   actually use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
+//! * `TRAJ_SPLINE` cruise and nuke paths — `calc_from_dir` / both arms of
+//!   `calc_nuke_spline` → `calc_spline` → `generate_bspline` → `build_normals`, the six nested
+//!   array walks, and the indexed flight step are implemented below. Live world code still
+//!   has to provide [`NukeSplineEnv`] and retain the returned sidecar. Aircraft wrecks actually
+//!   use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -301,6 +302,17 @@ impl SplineVec3 {
     }
 }
 
+/// SSE `cvttss2si`: truncate toward zero, returning the architectural indefinite integer
+/// for NaN and values outside the signed 32-bit range. Rust's float cast saturates instead.
+#[inline]
+fn cvttss2si(value: f32) -> i32 {
+    if !value.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        i32::MIN
+    } else {
+        value as i32
+    }
+}
+
 /// A checksum-complete `SplineData` for the B-spline arm used by cruise projectiles.
 ///
 /// All six arrays use the engine's constructed-empty header (`size=0`, `increment=-1`),
@@ -401,19 +413,19 @@ impl RetailSpline {
             let knot = if i <= degree {
                 value
             } else if i <= control_len {
-                if self.weights.is_empty() {
+                if self.knots.is_empty() {
                     value += 1.0;
                 } else {
                     for weight in
-                        &self.weights.as_slice()[weight_index..weight_index + degree as usize]
+                        &self.knots.as_slice()[weight_index..weight_index + degree as usize]
                     {
                         value += *weight;
                     }
                     weight_index += 1;
                 }
                 value
-            } else if weight_index == 0 && !self.weights.is_empty() {
-                self.weights[0]
+            } else if weight_index == 0 && !self.knots.is_empty() {
+                self.knots[0]
             } else {
                 value
             };
@@ -655,6 +667,22 @@ fn walk_vec3_array(mut adler: u32, array: &mut crate::container::EngineArray<Spl
 pub enum SplineBuildError {
     NonFiniteInput,
     NonPositiveSegmentLength,
+    MissingTerrain { x: i32, y: i32 },
+}
+
+/// Terrain facts consumed by the terrain-following arm of `Spline::calc_nuke_spline`
+/// (`0x00913AD0`). `z` is the queried terrain height and `flags` is the corresponding
+/// `TerrainMapData` cell's `u16` flags word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NukeTerrainSample {
+    pub z: i32,
+    pub flags: u16,
+}
+
+/// Host facts required by terrain-following nuke construction. A missing sample fails the
+/// transaction closed before the caller's [`Ammo`] is mutated.
+pub trait NukeSplineEnv {
+    fn nuke_terrain(&self, x: i32, y: i32) -> Option<NukeTerrainSample>;
 }
 
 /// Complete cruise-path transaction: recycler-clear, retail flag `0x10`,
@@ -688,6 +716,164 @@ pub fn ammo_init_cruise_spline(
     Ok(spline)
 }
 
+/// The self-contained (`terrain_path == 0`) arm of `Spline::calc_nuke_spline`
+/// (`0x00913AD0`). It installs retail's 12-point high-altitude arc, degree 3/depth 120,
+/// and the 17-entry custom knot-width array (`100,30,15,10...`) before entering the same
+/// B-spline/normal/checksum chain as cruise missiles.
+pub fn ammo_init_nuke_spline_high_arc(
+    ammo: &mut Ammo,
+    start: SplineVec3,
+    end: SplineVec3,
+) -> Result<RetailSpline, SplineBuildError> {
+    if !start.finite() || !end.finite() {
+        return Err(SplineBuildError::NonFiniteInput);
+    }
+
+    let mut spline = RetailSpline::new();
+    spline.flags = 0x10;
+    let quarter = SplineVec3::new(
+        (start.x * 3.0 + end.x) * 0.25,
+        (start.y * 3.0 + end.y) * 0.25,
+        (start.z * 3.0 + end.z) * 0.25 + 20_000.0,
+    );
+    let middle = SplineVec3::new(
+        (start.x + end.x) * 0.5,
+        (start.y + end.y) * 0.5,
+        (start.z + end.z) * 0.5 + 20_000.0,
+    );
+    let three_quarters = SplineVec3::new(
+        (end.x * 3.0 + start.x) * 0.25,
+        (end.y * 3.0 + start.y) * 0.25,
+        (end.z * 3.0 + start.z) * 0.25 + 10_000.0,
+    );
+    for point in [
+        start,
+        SplineVec3::new(start.x, start.y, start.z + 250.0),
+        SplineVec3::new(start.x, start.y, start.z + 750.0),
+        SplineVec3::new(start.x, start.y, start.z + 2_250.0),
+        SplineVec3::new(start.x, start.y, start.z + 6_750.0),
+        quarter,
+        middle,
+        three_quarters,
+        SplineVec3::new(end.x, end.y, end.z + 6_000.0),
+        SplineVec3::new(end.x, end.y, end.z + 4_000.0),
+        SplineVec3::new(end.x, end.y, end.z + 2_000.0),
+        end,
+    ] {
+        spline.control_verts.add(point);
+    }
+    spline.spline_type = 3;
+    spline.max_control_depth_ratio = 0.0;
+    spline.degree = 3;
+    spline.depth = 120;
+
+    // make_valid(control_len + 4) treats the argument as an index: len becomes 17 and the
+    // negative increment asks increase_size for the exact 17-slot deficit, not doubling.
+    spline.knots = crate::container::EngineArray::with_size(17, -1);
+    for i in 0..17 {
+        spline.knots.add(match i {
+            0 => 100.0,
+            1 => 30.0,
+            2 => 15.0,
+            _ => 10.0,
+        });
+    }
+    spline.calc_spline();
+    ammo.w.traj = TRAJ_SPLINE;
+    ammo.w.total_time = (spline.spline_verts.len() as u32).saturating_sub(1);
+    ammo.has_spline = true;
+    Ok(spline)
+}
+
+/// The terrain-following (`terrain_path != 0`) arm of `Spline::calc_nuke_spline`
+/// (`0x00913AD0`). Retail truncates both endpoints before computing
+/// `vector_dist(start,end) / 768`, but interpolates each interior control point from the
+/// original f32 endpoints and truncates the result only for the terrain query/stored point.
+///
+/// Every interior point begins at `terrain_z + 250`. A cell with flag bit 14 and low bits
+/// `3` instead receives `+1250`; otherwise a cell whose `0x30` bits are both set receives
+/// `+750`. Construction then uses degree 3, `set_min_seg_length(96.0)`, an exact-length
+/// all-30 knot-width array, and the common B-spline/normal/checksum chain. No RNG is consumed.
+pub fn ammo_init_nuke_spline_terrain<E: NukeSplineEnv>(
+    ammo: &mut Ammo,
+    env: &E,
+    start: SplineVec3,
+    end: SplineVec3,
+) -> Result<RetailSpline, SplineBuildError> {
+    if !start.finite() || !end.finite() {
+        return Err(SplineBuildError::NonFiniteInput);
+    }
+
+    // 0x00913B01..0x00913B54: the four endpoint cvttss2si operations happen before
+    // vector_dist, followed by MSVC's signed magic divide by 0x300.
+    let dx = cvttss2si(start.x)
+        .wrapping_sub(cvttss2si(end.x))
+        .wrapping_abs();
+    let dy = cvttss2si(start.y)
+        .wrapping_sub(cvttss2si(end.y))
+        .wrapping_abs();
+    let divisions = vector_dist(dx, dy) / 0x300;
+
+    let mut spline = RetailSpline::new();
+    spline.flags = 0x10;
+    spline.control_verts.add(start);
+    spline
+        .control_verts
+        .add(SplineVec3::new(start.x, start.y, start.z + 250.0));
+
+    if divisions > 1 {
+        let denominator = divisions as f32;
+        for i in 1..divisions {
+            // Preserve retail's scalar-SSE order: i*end + (n-i)*start, then divide.
+            let fi = i as f32;
+            let remaining = (divisions - i) as f32;
+            let sample_y = (fi * end.y + remaining * start.y) / denominator;
+            let sample_x = (fi * end.x + remaining * start.x) / denominator;
+            let x = cvttss2si(sample_x);
+            let y = cvttss2si(sample_y);
+            let terrain = env
+                .nuke_terrain(x, y)
+                .ok_or(SplineBuildError::MissingTerrain { x, y })?;
+            let lift = if terrain.flags & 0x4000 != 0 && terrain.flags & 3 == 3 {
+                1_250
+            } else if terrain.flags & 0x30 == 0x30 {
+                750
+            } else {
+                250
+            };
+            spline.control_verts.add(SplineVec3::new(
+                x as f32,
+                y as f32,
+                terrain.z.wrapping_add(lift) as f32,
+            ));
+        }
+    }
+
+    spline
+        .control_verts
+        .add(SplineVec3::new(end.x, end.y, end.z + 250.0));
+    spline.control_verts.add(end);
+    spline.spline_type = 3;
+    spline.max_control_depth_ratio = 0.0;
+    spline.degree = 3;
+    spline.depth = 120;
+    spline.set_min_seg_length(96.0);
+
+    // 0x00913E1D..0x00913E78 grows capacity by exactly the deficit when the constructed
+    // array is empty, then sets length to max(desired, old length). A fresh path therefore
+    // has identical length/capacity `control_len + 2 + degree`.
+    let knot_count = spline.control_verts.len() + 2 + spline.degree as usize;
+    spline.knots = crate::container::EngineArray::with_size(knot_count as i32, -1);
+    for _ in 0..knot_count {
+        spline.knots.add(30.0);
+    }
+    spline.calc_spline();
+    ammo.w.traj = TRAJ_SPLINE;
+    ammo.w.total_time = (spline.spline_verts.len() as u32).saturating_sub(1);
+    ammo.has_spline = true;
+    Ok(spline)
+}
+
 /// The isolated spline arm of `Ammo::inc_time` after `cur_time` has already incremented.
 /// Retail reads `spline_verts[cur_time]` only while `length > cur_time + 1` and truncates all
 /// three f32 coordinates with `cvttss2si`.
@@ -696,9 +882,9 @@ pub fn ammo_step_cruise_spline(ammo: &mut AmmoWalk, spline: &RetailSpline) -> Op
         return None;
     }
     let point = spline.spline_verts[ammo.cur_time as usize];
-    ammo.ex = point.x as i32;
-    ammo.ey = point.y as i32;
-    ammo.ez = point.z as i32;
+    ammo.ex = cvttss2si(point.x);
+    ammo.ey = cvttss2si(point.y);
+    ammo.ez = cvttss2si(point.z);
     Some(point)
 }
 

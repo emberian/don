@@ -1,7 +1,10 @@
 use don_sim::systems::ammo::{
-    ammo_init_cruise_spline, ammo_step_cruise_spline, Ammo, AmmoPool, AmmoSplineChecksumError,
-    RetailSpline, SplineBuildError, SplineVec3, FLAG_ALIVE, FLAG_FLYING, TRAJ_SPLINE,
+    ammo_init_cruise_spline, ammo_init_nuke_spline_high_arc, ammo_init_nuke_spline_terrain,
+    ammo_step_cruise_spline, Ammo, AmmoPool, AmmoSplineChecksumError, NukeSplineEnv,
+    NukeTerrainSample, RetailSpline, SplineBuildError, SplineVec3, FLAG_ALIVE, FLAG_FLYING,
+    TRAJ_SPLINE,
 };
+use std::cell::RefCell;
 
 fn path_args() -> (f32, SplineVec3, SplineVec3, SplineVec3, SplineVec3) {
     (
@@ -73,6 +76,153 @@ fn zero_optional_control_selects_the_quadratic_constructor_arm() {
     assert_eq!(spline.spline_normals.checksum_header(), (13, 16, -1, 0));
     assert_eq!(ammo.w.total_time, 13);
     assert_eq!(spline.walk_checksum(1), 0x0600_9686);
+}
+
+#[test]
+fn fixed_nuke_arm_installs_the_high_arc_and_exact_custom_knot_header() {
+    let mut ammo = Ammo::default();
+    let start = SplineVec3::new(100.0, 200.0, 300.0);
+    let end = SplineVec3::new(900.0, 1_000.0, 500.0);
+    let mut spline = ammo_init_nuke_spline_high_arc(&mut ammo, start, end).unwrap();
+
+    assert_eq!(spline.control_verts.checksum_header(), (12, 16, -1, 0));
+    assert_eq!(spline.control_verts[0], start);
+    assert_eq!(
+        spline.control_verts[1],
+        SplineVec3::new(100.0, 200.0, 550.0)
+    );
+    assert_eq!(
+        spline.control_verts[5],
+        SplineVec3::new(300.0, 400.0, 20_350.0)
+    );
+    assert_eq!(
+        spline.control_verts[6],
+        SplineVec3::new(500.0, 600.0, 20_400.0)
+    );
+    assert_eq!(spline.control_verts[11], end);
+    assert_eq!(spline.knots.checksum_header(), (17, 17, -1, 0));
+    assert_eq!(&spline.knots.as_slice()[..4], &[100.0, 30.0, 15.0, 10.0]);
+    assert_eq!(spline.spline_knots.checksum_header(), (16, 16, -1, 0));
+    assert_eq!(spline.spline_verts.len(), 121);
+    assert_eq!(spline.spline_normals.len(), 121);
+    assert_eq!(ammo.w.total_time, 120);
+    assert_eq!(spline.total_spline_length.to_bits(), 0x4718_900c);
+    assert_eq!(spline.walk_checksum(1), 0x545d_b134);
+}
+
+struct TerrainFixture {
+    calls: RefCell<Vec<(i32, i32)>>,
+    flags: [u16; 4],
+    missing: Option<(i32, i32)>,
+}
+
+impl TerrainFixture {
+    fn complete(flags: [u16; 4]) -> Self {
+        Self {
+            calls: RefCell::new(Vec::new()),
+            flags,
+            missing: None,
+        }
+    }
+}
+
+impl NukeSplineEnv for TerrainFixture {
+    fn nuke_terrain(&self, x: i32, y: i32) -> Option<NukeTerrainSample> {
+        let ordinal = self.calls.borrow().len();
+        self.calls.borrow_mut().push((x, y));
+        if self.missing == Some((x, y)) {
+            return None;
+        }
+        Some(NukeTerrainSample {
+            z: 1_000 + ordinal as i32 * 10,
+            flags: self.flags[ordinal],
+        })
+    }
+}
+
+#[test]
+fn terrain_nuke_arm_queries_truncated_points_and_applies_flag_priority() {
+    let env = TerrainFixture::complete([0, 0x4003, 0x30, 0x4033]);
+    let mut ammo = Ammo::default();
+    let start = SplineVec3::new(100.9, 200.9, 300.0);
+    let end = SplineVec3::new(3_500.9, 3_000.9, 500.0);
+    let mut spline = ammo_init_nuke_spline_terrain(&mut ammo, &env, start, end).unwrap();
+
+    assert_eq!(
+        env.calls.into_inner(),
+        [(780, 760), (1_460, 1_320), (2_140, 1_880), (2_820, 2_440)]
+    );
+    assert_eq!(spline.control_verts.checksum_header(), (8, 8, -1, 0));
+    assert_eq!(spline.control_verts[0], start);
+    assert_eq!(
+        spline.control_verts[1],
+        SplineVec3::new(100.9, 200.9, 550.0)
+    );
+    assert_eq!(
+        spline.control_verts[2],
+        SplineVec3::new(780.0, 760.0, 1_250.0)
+    );
+    assert_eq!(
+        spline.control_verts[3],
+        SplineVec3::new(1_460.0, 1_320.0, 2_260.0)
+    );
+    assert_eq!(
+        spline.control_verts[4],
+        SplineVec3::new(2_140.0, 1_880.0, 1_770.0)
+    );
+    assert_eq!(
+        spline.control_verts[5],
+        SplineVec3::new(2_820.0, 2_440.0, 2_280.0)
+    );
+    assert_eq!(
+        spline.control_verts[6],
+        SplineVec3::new(3_500.9, 3_000.9, 750.0)
+    );
+    assert_eq!(spline.control_verts[7], end);
+    assert_eq!(spline.knots.checksum_header(), (13, 13, -1, 0));
+    assert!(spline.knots.as_slice().iter().all(|&knot| knot == 30.0));
+    assert_eq!(spline.spline_knots.checksum_header(), (12, 16, -1, 0));
+    assert_eq!(spline.depth, 70);
+    assert_eq!(spline.spline_verts.len(), 71);
+    assert_eq!(spline.spline_normals.len(), 71);
+    assert_eq!(ammo.w.traj, TRAJ_SPLINE);
+    assert_eq!(ammo.w.total_time, 70);
+    assert!(ammo.has_spline);
+    assert_eq!(spline.total_spline_length.to_bits(), 0x45ba_0b3d);
+    assert_eq!(spline.walk_checksum(1), 0xa8a8_206e);
+
+    let changed_tier = TerrainFixture::complete([0, 0x4003, 0x30, 0x33]);
+    let mut changed_ammo = Ammo::default();
+    let mut changed =
+        ammo_init_nuke_spline_terrain(&mut changed_ammo, &changed_tier, start, end).unwrap();
+    assert_ne!(
+        changed.walk_checksum(1),
+        0xa8a8_206e,
+        "clearing terrain bit 14 changes the fourth control height and walked path"
+    );
+}
+
+#[test]
+fn missing_nuke_terrain_fails_before_ammo_installation() {
+    let env = TerrainFixture {
+        calls: RefCell::new(Vec::new()),
+        flags: [0; 4],
+        missing: Some((1_460, 1_320)),
+    };
+    let mut ammo = Ammo::default();
+    ammo.w.total_time = 77;
+    let before = ammo;
+    assert_eq!(
+        ammo_init_nuke_spline_terrain(
+            &mut ammo,
+            &env,
+            SplineVec3::new(100.9, 200.9, 300.0),
+            SplineVec3::new(3_500.9, 3_000.9, 500.0),
+        ),
+        Err(SplineBuildError::MissingTerrain { x: 1_460, y: 1_320 })
+    );
+    assert_eq!(ammo, before);
+    assert_eq!(env.calls.into_inner(), [(780, 760), (1_460, 1_320)]);
 }
 
 #[test]
