@@ -5,9 +5,10 @@
 //! The numbers come from `ron-data/unitrules.xml` and `ron-data/buildingrules.xml`, which
 //! are shipped game content and are gitignored. `crates/don-env/gen/gen_spec.py` extracts
 //! them into `schema/live/env-typecaps.bin`; this module reads that file at runtime. An
-//! env constructed without it still runs — every capability answers "yes" — and
-//! [`TypeCaps::is_permissive`] says so, so a permissive mask can never be mistaken for a
-//! derived one.
+//! env constructed without it still runs — broad capability flags answer "yes", while
+//! evidence-dependent predicates such as `is_plane` remain false — and
+//! [`TypeCaps::is_permissive`] says so. Patrol application then reports no effect instead
+//! of guessing a retail order class.
 //!
 //! # Where the type ids come from
 //!
@@ -75,10 +76,16 @@ pub struct TypeCap {
     pub los: i16,
     pub recharge: i16,
     pub pop: u8,
-    /// 0 Land, 1 Sea, 2 Air. Same encoding `DamageInput::attacker_domain` wants.
+    /// The shipped `DOMAIN` value. Do not use `domain == 2` as an `is_plane`
+    /// predicate: `DomainIndex` aliases `BOTH` and `AIR` at 2, and helicopters
+    /// are air-domain but fail retail's `UnitData::is_plane` test.
     pub domain: u8,
     /// 0 good, 1 unit, 2 gaia, 3 building, 4 other.
     pub category: u8,
+    /// `UnitData::is_plane` `0x0046CE40`: `domain == AIR &&
+    /// !(unit_flags & 0x20)`. Stored in the formerly reserved byte at offset 27
+    /// of `env-typecaps.bin`, derived from shipped `DOMAIN` + `FLAGS`.
+    pub is_plane: bool,
     pub cost: [i32; NUM_COMMON],
     pub support: [i32; NUM_COMMON],
 }
@@ -91,7 +98,9 @@ impl TypeCap {
 }
 
 const REC: usize = 76;
-const MAGIC: &[u8; 8] = b"DONTYPC1";
+// v2 assigns the formerly reserved record byte +27 to `is_plane`. A v1 table must not
+// load as all-false: that would silently route every plane patrol to GROUP_PATROL.
+const MAGIC: &[u8; 8] = b"DONTYPC2";
 
 /// The whole table, plus the producible-set bitsets that drive the `Type` head mask.
 pub struct TypeCaps {
@@ -109,7 +118,8 @@ impl TypeCaps {
         n.div_ceil(8)
     }
 
-    /// Everything allowed, nothing derived. Used when `env-typecaps.bin` is absent.
+    /// Broad flags allowed, no exact type predicates derived. Used when
+    /// `env-typecaps.bin` is absent.
     pub fn permissive() -> TypeCaps {
         let bb = Self::bitset_bytes_for(NUM_TYPES);
         TypeCaps {
@@ -179,6 +189,7 @@ impl TypeCaps {
                 pop: b[o + 24],
                 domain: b[o + 25],
                 category: b[o + 26],
+                is_plane: b[o + 27] != 0,
                 ..Default::default()
             };
             for k in 0..NUM_COMMON {
@@ -251,6 +262,23 @@ mod tests {
         assert!(t.get(0).has(F_ATTACK));
     }
 
+    #[test]
+    fn v2_plane_byte_is_required_and_loaded() {
+        let mut b = vec![0u8; 16 + NUM_TYPES * REC];
+        b[..8].copy_from_slice(MAGIC);
+        b[8..12].copy_from_slice(&(NUM_TYPES as u32).to_le_bytes());
+        b[16 + 289 * REC + 27] = 1;
+        let t = TypeCaps::from_bytes(&b).unwrap();
+        assert!(t.get(289).is_plane);
+        assert!(!t.get(310).is_plane);
+
+        b[..8].copy_from_slice(b"DONTYPC1");
+        assert!(
+            TypeCaps::from_bytes(&b).is_err(),
+            "v1's reserved zero byte cannot be treated as an is_plane table"
+        );
+    }
+
     /// Only meaningful on a tree that has run the generator; skips otherwise so the
     /// suite is honest about what it did not check rather than vacuously green.
     #[test]
@@ -264,7 +292,12 @@ mod tests {
         // PEASANTS = 50, the first unitrules entry ("Citizen"): civilian, mobile, cheap.
         let peasant = t.get(UNIT_TYPE_BASE as u16);
         assert!(peasant.has(F_UNIT) && peasant.has(F_CIVILIAN) && peasant.has(F_MOVE));
+        assert!(!peasant.is_plane);
         assert_eq!(peasant.hits, 40, "unitrules Citizen HITS");
+        // PDB TypeIndex values; rule-side classification is the exact retail
+        // `UnitData::is_plane` predicate, not a broad AIR capability flag.
+        assert!(t.get(289).is_plane, "FIGHTER");
+        assert!(!t.get(310).is_plane, "HELICOPTER");
         // VILLAGE = 414, the first buildingrules entry ("Small City").
         let village = t.get(BUILD_TYPE_BASE as u16);
         assert!(village.has(F_BUILDING));

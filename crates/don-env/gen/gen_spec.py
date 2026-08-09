@@ -406,7 +406,7 @@ def emit_typecaps(num_types, unit_base, build_base, num_buildtypes):
             flags=flags, attack=attack, hits=as_int(b.findtext("HITS")),
             armor=as_int(b.findtext("ARMOR")), move=0, rmin=rmin, rmax=rmax,
             los=as_int(b.findtext("LOS")), recharge=as_int(b.findtext("RECHARGE")),
-            pop=0, domain=0, cat=3, cost=parse_cost(b.findtext("COST")),
+            pop=0, domain=0, cat=3, is_plane=False, cost=parse_cost(b.findtext("COST")),
             support=[0] * 6, obj=obj,
         )
         sup = b.findtext("SUPPORT0")
@@ -459,6 +459,7 @@ def emit_typecaps(num_types, unit_base, build_base, num_buildtypes):
             armor=as_int(u.findtext("ARMOR")), move=moves, rmin=rmin, rmax=rmax,
             los=as_int(u.findtext("LOS")), recharge=as_int(u.findtext("RECHARGE")),
             pop=as_int(u.findtext("POP")), domain={"land": 0, "sea": 1, "air": 2}.get(dom, 0),
+            is_plane=(dom == "air" and "f" not in uflags),
             cat=1 if t < build_base - 12 else 2,
             cost=parse_cost(u.findtext("COST")), support=parse_cost(u.findtext("SUPPORT")),
             obj=obj,
@@ -469,7 +470,8 @@ def emit_typecaps(num_types, unit_base, build_base, num_buildtypes):
             caps[build_name_to_type[where]]["flags"] |= F_PRODUCER
 
     zero = dict(flags=0, attack=0, hits=0, armor=0, move=0, rmin=0, rmax=0, los=0,
-                recharge=0, pop=0, domain=0, cat=0, cost=[0] * 6, support=[0] * 6, obj="")
+                recharge=0, pop=0, domain=0, cat=0, is_plane=False,
+                cost=[0] * 6, support=[0] * 6, obj="")
     for t in range(num_types):
         if caps[t] is None:
             caps[t] = dict(zero, cat=0 if t < unit_base else 4)
@@ -478,12 +480,15 @@ def emit_typecaps(num_types, unit_base, build_base, num_buildtypes):
     # silently wrap in i16. Every other numeric field fits comfortably.
     rec = struct.Struct("<HhihhiihhBBBB6i6i")
     assert rec.size == 76, rec.size
-    blob = bytearray(b"DONTYPC1")
+    # v2 consumes the byte at record offset 27 for UnitData::is_plane. Rejecting v1 is
+    # important: treating every old zero-filled record as a helicopter would silently
+    # route fighter patrols to GROUP_PATROL.
+    blob = bytearray(b"DONTYPC2")
     blob += struct.pack("<II", num_types, len(edges))
     for c in caps:
         blob += rec.pack(c["flags"], c["attack"], c["hits"], c["armor"], c["move"],
                          c["rmin"], c["rmax"], c["los"], c["recharge"],
-                         min(c["pop"], 255), c["domain"], c["cat"], 0,
+                         min(c["pop"], 255), c["domain"], c["cat"], int(c["is_plane"]),
                          *c["cost"], *c["support"])
     for a, b_ in sorted(edges):
         blob += struct.pack("<HH", a, b_)

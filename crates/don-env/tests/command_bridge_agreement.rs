@@ -119,10 +119,11 @@ fn three_group_scoped_opcodes_sit_on_the_env_player_head() {
     }
 }
 
-/// **Disagreement, pinned.** `don-env::action::apply_unit` routes `MOVE_TO`, `MOVE_NEAR`,
-/// `PATROL` and `LAUNCH_PATROL` to one arm that installs `OrderIndex::MoveTo`.
-/// `COVERAGE.md` §3.1 already records that as wrong; the bridge now says what the right
-/// answer is, measured from the allocation site rather than argued:
+/// `don-env::action::apply_unit` now agrees with the measured allocation sites. The
+/// `PATROL` command has a type-dependent branch: `Group::action_patrol` delegates true
+/// planes to `action_air_patrol`, while ground units and helicopters take the group path.
+/// `LAUNCH_PATROL` filters out every non-plane member instead of installing a ground
+/// fallback.
 ///
 /// | opcode | `Group::action_*` | `Unit::add_*_order` | `OrdersMemManager::get_obj` |
 /// |---|---|---|---|
@@ -132,6 +133,22 @@ fn three_group_scoped_opcodes_sit_on_the_env_player_head() {
 /// | 11 `LAUNCH_PATROL` | `action_launch_patrol` | `add_air_patrol_order` | **`AIR_PATROL` (17)** |
 #[test]
 fn patrol_and_launch_patrol_are_not_move_to() {
+    use don_env::action::patrol_order_for_opcode;
+
+    assert_eq!(
+        patrol_order_for_opcode(10, false),
+        Some(g::OrderIndex::GroupPatrol)
+    );
+    assert_eq!(
+        patrol_order_for_opcode(10, true),
+        Some(g::OrderIndex::AirPatrol)
+    );
+    assert_eq!(
+        patrol_order_for_opcode(11, true),
+        Some(g::OrderIndex::AirPatrol)
+    );
+    assert_eq!(patrol_order_for_opcode(11, false), None);
+
     // What the bridge installs, driven through the real wire path.
     use don_sim::command::{build, Bridge, Fleet, ObjectTable, Package, QueuePos, Slot};
 
@@ -169,12 +186,128 @@ fn patrol_and_launch_patrol_are_not_move_to() {
     assert!(cb::UNCONSTRUCTED_ORDERS.contains(&OrderIndex::Patrol));
 }
 
+/// Exercise the RL application and mask paths with the shipped type table. This catches
+/// both tempting broad classifications: treating every AIR-domain unit as a plane (which
+/// misroutes helicopters), and treating ordinary aircraft patrol as GROUP_PATROL.
+#[test]
+fn env_patrol_routing_uses_retail_is_plane() {
+    use don_env::action::{apply_unit, ApplyStats, UnitAction};
+    use don_env::mask::MaskWriter;
+    use don_env::spec::get_bit;
+    use don_env::state::{EnvWorld, Rules};
+    use don_env::EnvConfig;
+
+    let (rules, caps_real, _) = Rules::load(None, None);
+    if !caps_real {
+        eprintln!("SKIP: schema/live/env-typecaps.bin absent (run gen/gen_spec.py)");
+        return;
+    }
+    let cfg = EnvConfig::default();
+    let mut w = EnvWorld::new(rules, 8, 1, cfg.grid_w, cfg.grid_h);
+    let citizen = w.spawn(0, 50, 0, 0).unwrap();
+    let fighter = w.spawn(0, 289, 0, 0).unwrap();
+    let helicopter = w.spawn(0, 310, 0, 0).unwrap();
+
+    let apply = |w: &mut EnvWorld, h, verb| {
+        let mut st = ApplyStats::default();
+        apply_unit(
+            w,
+            &cfg,
+            0,
+            h,
+            UnitAction {
+                verb: (verb + 1) as u16,
+                target_x: 3,
+                target_y: 5,
+                queue_pos: g::QueuePos::QueueNew as u16,
+                ..Default::default()
+            },
+            &mut st,
+        );
+        st
+    };
+
+    let mut queued = ApplyStats::default();
+    apply_unit(
+        &mut w,
+        &cfg,
+        0,
+        citizen,
+        UnitAction {
+            verb: (g::uv::PATROL + 1) as u16,
+            target_x: 3,
+            target_y: 5,
+            queue_pos: g::QueuePos::QueueFirst as u16,
+            ..Default::default()
+        },
+        &mut queued,
+    );
+    assert_eq!(queued.accepted_no_effect, 1);
+    assert_eq!(
+        w.order[w.sim.row_of(citizen).unwrap()],
+        g::OrderIndex::None as u8,
+        "QUEUE_FIRST must not be silently collapsed to QUEUE_NEW"
+    );
+
+    assert_eq!(apply(&mut w, citizen, g::uv::PATROL).applied, 1);
+    assert_eq!(
+        w.order[w.sim.row_of(citizen).unwrap()],
+        g::OrderIndex::GroupPatrol as u8
+    );
+    assert_eq!(apply(&mut w, fighter, g::uv::PATROL).applied, 1);
+    assert_eq!(
+        w.order[w.sim.row_of(fighter).unwrap()],
+        g::OrderIndex::AirPatrol as u8
+    );
+    assert_eq!(apply(&mut w, helicopter, g::uv::PATROL).applied, 1);
+    assert_eq!(
+        w.order[w.sim.row_of(helicopter).unwrap()],
+        g::OrderIndex::GroupPatrol as u8
+    );
+    assert_eq!(apply(&mut w, fighter, g::uv::LAUNCH_PATROL).applied, 1);
+    assert_eq!(
+        w.order[w.sim.row_of(fighter).unwrap()],
+        g::OrderIndex::AirPatrol as u8
+    );
+    assert_eq!(
+        apply(&mut w, helicopter, g::uv::LAUNCH_PATROL).illegal,
+        1,
+        "retail ignores non-plane group members; the RL mask must not offer this pair"
+    );
+
+    let rows = vec![
+        w.sim.row_of(citizen).unwrap(),
+        w.sim.row_of(fighter).unwrap(),
+        w.sim.row_of(helicopter).unwrap(),
+    ];
+    let mut masks = MaskWriter::new(&cfg);
+    let rec = masks.unit.record_bytes;
+    let mut out = vec![0; cfg.max_controlled * rec];
+    masks.write_unit_masks(&w, &cfg, 0, &rows, &rows, &mut out);
+    let verb_offset = masks.unit.offsets[g::UnitHead::Verb as usize];
+    let verb_bytes = masks.unit.sizes[g::UnitHead::Verb as usize].div_ceil(8);
+    let allows = |slot: usize, verb: usize| {
+        let start = slot * rec + verb_offset;
+        get_bit(&out[start..start + verb_bytes], verb + 1)
+    };
+    assert!(allows(0, g::uv::PATROL));
+    assert!(!allows(0, g::uv::LAUNCH_PATROL));
+    assert!(allows(1, g::uv::PATROL));
+    assert!(allows(1, g::uv::LAUNCH_PATROL));
+    assert!(allows(2, g::uv::PATROL));
+    assert!(!allows(2, g::uv::LAUNCH_PATROL));
+}
+
 /// The env's `OrderIndex` and `QueuePos` enums must be numerically identical to
 /// `don-sim`'s, or an action crossing the boundary changes meaning.
 #[test]
 fn the_shared_enums_have_identical_numbering() {
     assert_eq!(g::OrderIndex::MoveTo as u16, OrderIndex::MoveTo as u16);
     assert_eq!(g::OrderIndex::Attack as u16, OrderIndex::Attack as u16);
+    assert_eq!(
+        g::OrderIndex::AirPatrol as u16,
+        OrderIndex::AirPatrol as u16
+    );
     assert_eq!(
         g::OrderIndex::GroupPatrol as u16,
         OrderIndex::GroupPatrol as u16

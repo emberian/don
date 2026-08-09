@@ -98,6 +98,22 @@ pub struct ApplyStats {
     pub illegal: u32,
 }
 
+/// Return the order retail installs for either patrol wire command.
+///
+/// `Group::action_patrol` `0x007030C0` calls `Unit::add_patrol_order` for ordinary
+/// units, but delegates true planes to `Group::action_air_patrol` `0x007029D0`.
+/// `Group::action_launch_patrol` `0x00703580` only reaches
+/// `Unit::add_air_patrol_order` for true planes.  The two allocation sites request
+/// orders 22 (`GROUP_PATROL`) and 17 (`AIR_PATROL`) respectively.  In particular,
+/// neither path constructs the dead `OrderIndex::Patrol` arm (5).
+pub fn patrol_order_for_opcode(opcode: u8, is_plane: bool) -> Option<g::OrderIndex> {
+    match (opcode, is_plane) {
+        (10, false) => Some(g::OrderIndex::GroupPatrol),
+        (10 | 11, true) => Some(g::OrderIndex::AirPatrol),
+        _ => None,
+    }
+}
+
 impl ApplyStats {
     pub fn add(&mut self, o: &ApplyStats) {
         self.noop += o.noop;
@@ -146,7 +162,7 @@ pub fn apply_unit(
     };
 
     match vi {
-        g::uv::MOVE_TO | g::uv::MOVE_NEAR | g::uv::LAUNCH_PATROL | g::uv::PATROL => {
+        g::uv::MOVE_TO | g::uv::MOVE_NEAR => {
             if w.speed[row] <= 0 {
                 st.illegal += 1;
                 return;
@@ -154,6 +170,41 @@ pub fn apply_unit(
             w.dest_x[row] = tx;
             w.dest_y[row] = ty;
             w.order[row] = g::OrderIndex::MoveTo as u8;
+            st.applied += 1;
+        }
+        g::uv::PATROL | g::uv::LAUNCH_PATROL => {
+            if w.speed[row] <= 0 {
+                st.illegal += 1;
+                return;
+            }
+            // EnvWorld does not yet carry UnitOrder's linked list. QUEUE_FIRST and
+            // QUEUE_LAST cannot be represented by overwriting its single order byte;
+            // report those honestly instead of silently treating them as QUEUE_NEW.
+            if a.queue_pos != g::QueuePos::QueueNew as u16 {
+                w.unimplemented.unit[vi] += 1;
+                st.accepted_no_effect += 1;
+                return;
+            }
+            // The permissive fallback has no UnitData::is_plane evidence. Guessing here
+            // would silently turn the same command into different retail order classes,
+            // so leave it visibly unimplemented until the derived type table is present.
+            if w.rules.caps.is_permissive() {
+                w.unimplemented.unit[vi] += 1;
+                st.accepted_no_effect += 1;
+                return;
+            }
+            let opcode = g::UNIT_VERBS[vi].opcode;
+            let Some(order) = patrol_order_for_opcode(opcode, w.cap(w.type_index[row]).is_plane)
+            else {
+                // Retail's launch-patrol group walk ignores non-plane members. The mask
+                // never offers this conjunction; classify an unmasked request as illegal
+                // instead of manufacturing a ground order.
+                st.illegal += 1;
+                return;
+            };
+            w.dest_x[row] = tx;
+            w.dest_y[row] = ty;
+            w.order[row] = order as u8;
             st.applied += 1;
         }
         g::uv::ATTACK | g::uv::SIEGE_ATTACK | g::uv::SWARM_AROUND => {

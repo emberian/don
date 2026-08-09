@@ -150,7 +150,9 @@ impl VecEnv {
             (
                 "typecaps".into(),
                 if self.caps_real {
-                    "derived from ron-data/unitrules.xml + buildingrules.xml [measured]".into()
+                    "derived from ron-data/unitrules.xml + buildingrules.xml, including \
+                     UnitData::is_plane [measured]"
+                        .into()
                 } else {
                     "ABSENT — masks are PERMISSIVE. Run crates/don-env/gen/gen_spec.py".to_string()
                 },
@@ -173,6 +175,7 @@ impl VecEnv {
         ];
         let scaffold = [
             "movement: straight-line integer approach, NOT Unit::move_step / PathFinder::astar_path",
+            "patrol: QUEUE_NEW routes AIR_PATROL/GROUP_PATROL exactly; executors and queued order-list insertion are absent",
             "pathfinding: absent",
             "gathering / economy rates: absent, base_rate is always 0",
             "build queue timing: absent, QueueUp and Build complete instantly",

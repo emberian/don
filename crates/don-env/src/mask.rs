@@ -155,6 +155,11 @@ impl MaskWriter {
                     allow(g::uv::MOVE_TO);
                     allow(g::uv::MOVE_NEAR);
                     allow(g::uv::PATROL);
+                    // `Group::action_launch_patrol` only installs an order on true
+                    // planes. Air-domain helicopters deliberately fail this predicate.
+                    if c.is_plane {
+                        allow(g::uv::LAUNCH_PATROL);
+                    }
                     allow(g::uv::FORM);
                     if any_friendly {
                         allow(g::uv::FOLLOW);
