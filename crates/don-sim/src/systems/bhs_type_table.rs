@@ -1,9 +1,9 @@
 //! Canonical mutable type ownership for the retail BHS type builtins.
 //!
-//! This module is intentionally not exported yet.  It freezes the state and mutation
-//! contracts for ScenarioFuncSet registrations 284, 286, 288..=291, and 815..=819 without
-//! creating a second availability facade.  Integration must make [`TypeBuiltinState`] the one
-//! owner seen by rules, checksum channel 13, save/load, and the script runtime.
+//! This module is exported through the narrow [`super::bhs_type_runtime`] adapter.  It freezes
+//! the state and mutation contracts for ScenarioFuncSet registrations 284, 286, 288..=291, and
+//! 815..=819 without creating a second availability facade.  [`TypeBuiltinState`] remains the
+//! one owner; checksum channel 13 and full save/load ownership are explicit red boundaries.
 
 #![allow(dead_code)]
 
@@ -544,6 +544,7 @@ pub struct TypeBuiltinState {
     pub tribes: TribeRoster,
     pub leaders: [LeaderTypeMasks; NUM_LEADERS],
     dirty: bool,
+    mutation_revision: u64,
 }
 
 impl TypeBuiltinState {
@@ -557,13 +558,29 @@ impl TypeBuiltinState {
             tribes,
             leaders,
             dirty: false,
+            mutation_revision: 0,
         }
     }
 
-    /// True after any successful retail mutation.  Save admission must use this to fail closed
-    /// until DoNSave owns the mutable rows and Leader mask effects.
+    /// True after any successful retail mutation.  Receipts and future DoNSave ownership use
+    /// this to distinguish pristine external rules from live rows/Leader mask effects.
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Monotonic receipt identity for successful retail mutation bodies.
+    ///
+    /// The value advances once per admitted mutating builtin, including a five-argument
+    /// tribe-enable call whose later building/grid tail returns `-1` after the type and Leader
+    /// masks were already changed.  It is runtime evidence only, not retail state and therefore
+    /// must never be mixed into checksum channel 13 or a save image.
+    pub fn mutation_revision(&self) -> u64 {
+        self.mutation_revision
+    }
+
+    fn mark_mutated(&mut self) {
+        self.dirty = true;
+        self.mutation_revision = self.mutation_revision.wrapping_add(1);
     }
 
     /// Builtin 288, `ScenarioFuncSet::rename_type`, `0x009EA6C0`.
@@ -583,7 +600,7 @@ impl TypeBuiltinState {
         }
         // Retail leaves TypeData::modified untouched.  The owner-level bit records that live
         // display state can no longer be reconstructed from pristine rules during save/load.
-        self.dirty = true;
+        self.mark_mutated();
         Ok(1)
     }
 
@@ -624,7 +641,7 @@ impl TypeBuiltinState {
             self.types.row_mut(target).common.job_time = job_time;
         }
         // The handler does not set TypeData::modified, but job_time is live channel-13 state.
-        self.dirty = true;
+        self.mark_mutated();
         Ok(seconds)
     }
 
@@ -645,7 +662,7 @@ impl TypeBuiltinState {
         for target in targets {
             self.types.row_mut(target).common.job_time = job_time;
         }
-        self.dirty = true;
+        self.mark_mutated();
         Ok(seconds)
     }
 
@@ -664,7 +681,7 @@ impl TypeBuiltinState {
             row.common.tribe_mask = 0;
             row.modified = 1;
         }
-        self.dirty = true;
+        self.mark_mutated();
         Ok(selected as i32)
     }
 
@@ -680,7 +697,7 @@ impl TypeBuiltinState {
         for target in targets {
             self.types.restore(target);
         }
-        self.dirty = true;
+        self.mark_mutated();
         Ok(selected as i32)
     }
 
@@ -784,7 +801,7 @@ impl TypeBuiltinState {
                 }
             }
         }
-        self.dirty = true;
+        self.mark_mutated();
         Ok(selected as i32)
     }
 

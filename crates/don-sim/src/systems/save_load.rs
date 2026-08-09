@@ -19,9 +19,10 @@ use crate::order::{
     FollowOrderPayload, FormOrderState, Order, OrderIndex, OrderList, SpecialAnimOrderState,
     SpecialAnimType,
 };
+use crate::script_runtime::ScriptRuntime;
 use crate::systems::{
-    borders_fog, economy, game_daemon_step12, groups_guys, items::Item, map_terrain, movement,
-    production,
+    bhs_type_runtime::TypeBuiltinBoundaryError, borders_fog, economy, game_daemon_step12,
+    groups_guys, items::Item, map_terrain, movement, production,
 };
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
@@ -62,6 +63,7 @@ pub enum SaveError {
     World(String),
     Items(String),
     Builds(String),
+    BhsTypes(TypeBuiltinBoundaryError),
 }
 
 impl fmt::Display for SaveError {
@@ -77,6 +79,7 @@ impl fmt::Display for SaveError {
             Self::World(s) => write!(f, "invalid world state: {s}"),
             Self::Items(s) => write!(f, "invalid item state: {s}"),
             Self::Builds(s) => write!(f, "invalid construction/production state: {s}"),
+            Self::BhsTypes(error) => write!(f, "unsupported BHS type state: {error:?}"),
         }
     }
 }
@@ -92,6 +95,12 @@ impl From<WorldSaveError> for SaveError {
 impl From<ItemRuntimeSaveError> for SaveError {
     fn from(value: ItemRuntimeSaveError) -> Self {
         Self::Items(value.to_string())
+    }
+}
+
+impl From<TypeBuiltinBoundaryError> for SaveError {
+    fn from(value: TypeBuiltinBoundaryError) -> Self {
+        Self::BhsTypes(value)
     }
 }
 
@@ -1968,6 +1977,17 @@ pub fn save_sim(sim: &Sim) -> Result<Vec<u8>, SaveError> {
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&root);
     Ok(out)
+}
+
+/// Serialize a simulation that has an external persistent script runtime.
+///
+/// The ordinary `save_sim` entry point predates script ownership and cannot inspect a runtime
+/// supplied separately to `Sim::do_frame_with_scripts`.  Script-bearing callers must use this
+/// combined boundary: it rejects every installed type owner until DoNSave can restore that owner
+/// and its synchronized rules/mod provenance, then delegates to the same deterministic v6 writer.
+pub fn save_sim_with_scripts(sim: &Sim, scripts: &ScriptRuntime) -> Result<Vec<u8>, SaveError> {
+    scripts.admit_type_state_for_save_v6()?;
+    save_sim(sim)
 }
 
 /// Load a supported Sim save. No caller-owned state is mutated on failure.

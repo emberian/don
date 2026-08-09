@@ -1,8 +1,10 @@
 # BHS mutable type table and restore ownership
 
-Status: isolated owner validated, not integrated. The implementation is
+Status: owner validated and typed runtime dispatch connected; production construction,
+channel-13 projection, and full save ownership remain red. The owner implementation is
 `crates/don-sim/src/systems/bhs_type_table.rs`; its isolated tests are
-`crates/don-sim/tests/bhs_type_table.rs`. No runtime export or handler is claimed.
+`crates/don-sim/tests/bhs_type_table.rs`. The Gen-7 adapter and its unexecuted source-only proof
+pack are described in `bhs-type-runtime-integration.md`.
 
 ## Result and honest coverage
 
@@ -36,11 +38,11 @@ registration/arity split.
 The 288–291 counts are comment/string-stripped and all 524 calls have the exact registered
 arity. Their raw textual counts are respectively 12, 133, 392, and 4.
 
-Because the module is not exported and `script_runtime.rs` has not been changed, immediate BHS
-coverage gained is **zero**. Integration of 815–819 can unlock 831 calls. Integration of the
-canonical relation and exact backups also unlocks 284/286's 259 calls. The new owner-local
-288–291 cohort contributes another 524 calls, for 1,614 total once every external boundary is
-connected.
+The typed adapter routes all 11 registrations when an exact owner is installed, but production
+setup does not yet construct that owner. Immediate executed BHS coverage gained is therefore
+still **zero**. Installing the canonical 806-row/24-tribe/eight-Leader state can unlock 831 calls
+from 815–819, 259 calls from 284/286, and 524 calls from 288–291: 1,614 total once every external
+boundary is connected.
 
 ## Retail bodies
 
@@ -232,10 +234,12 @@ must not be silently added to checksum channel 8. Their later effects remain det
 they are not direct channel-8 bytes in retail.
 
 DoNSave v6 currently owns neither the mutable type rows nor these Leader mask payloads/flags.
-The module exposes `is_dirty()` so save admission can fail closed after a successful mutation.
-A faithful save implementation must serialize and restore the live row state and Leader masks;
-silently reconstructing them from pristine rules would erase scenario effects. Immutable
-backup data can be reconstructed only from the exact synchronized rules/mod input.
+The module exposes `is_dirty()` and a mutation revision for receipts, but the combined save gate
+rejects every installed owner: v6 cannot restore even pristine external state without exact
+synchronized rules/mod provenance. A faithful save implementation must serialize and restore
+the live row state and Leader masks; silently reconstructing them from pristine rules would erase
+scenario effects. Immutable backup data can be reconstructed only from the exact synchronized
+rules/mod input.
 
 No handler directly consumes game RNG. The mutation changes later eligibility, production,
 research, and object behaviour, so downstream RNG and checksum consequences can differ; no
@@ -243,31 +247,35 @@ draw is added at the builtin call itself.
 
 ## Frozen minimal integration map
 
-No item below is performed by this source-only tranche.
+The Gen-7 runtime adapter in `bhs-type-runtime-integration.md` now performs items 1 and 4 and
+adds the fail-closed half of item 6. The remaining ownership work stays red.
 
-1. Export the module once its owner is placed in the canonical Sim state; do not add another
+1. **Connected:** export the owner only through the typed runtime adapter; do not add another
    script-only table.
 2. During synchronized rules/mod composition, construct exactly 806 rows and 24 tribes, import
    the canonical non-strict relation lists, and capture the immutable backups before scripts run.
 3. Adapt the eight canonical Leader slots' tribe, `tech`, and `obs_flags` fields to this owner.
-4. Route script registrations 284, 286, 288–291, and 815–819 to the methods with their exact
-   return conventions and overload arities. Keep registration 289 spell queries mapped to its
-   typed fail-closed error until the anomalous dependency is resolved.
+4. **Connected:** route script registrations 284, 286, 288–291, and 815–819 to the methods with
+   their exact declarations, return conventions, overload arities, and revision receipts. Keep
+   registration 289 spell queries mapped to its typed fail-closed error until the anomalous
+   dependency is resolved.
 5. Make channel 13 consume these live fields in its complete type projection. Do not fold the
    Leader masks into channel 8.
-6. Extend DoNSave ownership for the mutable rows and Leader masks, or reject save while
-   `TypeBuiltinState::is_dirty()` is true.
+6. **Opt-in fail-closed guard:** `save_sim_with_scripts` rejects every installed owner because
+   v6 cannot restore even pristine external state or its rules/mod provenance. Global enforcement
+   still requires moving the admission token into `Sim` or an opaque combined session.
 7. Only after the script bridge, checksum, and save boundaries are connected may the 1,614
    shipped calls be marked handled.
 
 ## Red boundary
 
-The retail algorithms and the full restore subset they consume are source-complete here. The
-lane remains red end to end because no shared runtime export, canonical Sim field, rules loader,
-channel-13 adapter, script dispatch, or save/load integration was authorized. Non-ASCII mod
-names also remain an explicit typed failure until an exact Windows `_wcsicmp`-compatible fold is
-provided. Registration 288 replacement display strings are unrestricted and are not affected by
-that lookup-only boundary. Registration 289 spell rows remain an explicit typed failure.
+The retail algorithms and the full restore subset they consume are source-complete here. Script
+dispatch and dirty-save rejection are connected, but the lane remains red end to end because no
+production rules loader installs the owner and no complete channel-13 or DoNSave state projection
+exists. Non-ASCII mod names also remain an explicit typed failure until an exact Windows
+`_wcsicmp`-compatible fold is provided. Registration 288 replacement display strings are
+unrestricted and are not affected by that lookup-only boundary. Registration 289 spell rows
+remain an explicit typed failure.
 
 ## Isolated validation
 
@@ -284,5 +292,6 @@ and release profiles:
 - persvati `bhs-type-local-2-release-20260809T212713Z-12021-10960-b1e98fb890c4`.
 
 They cover the all-806 scan, unrestricted display strings, wrapping readback, both distinct
-signed setter boundaries, typed spell failure, and mutation-free error paths. Neither proof
-changes the zero immediate runtime-coverage claim above.
+signed setter boundaries, typed spell failure, and mutation-free error paths. Neither isolated
+proof changes the zero immediate executed runtime-coverage claim above; the later adapter proof
+pack has not been run under this source-only order.

@@ -30,6 +30,10 @@ pub mod armies;
 /// to the complete nearby-spot service; building targets retain perimeter order plus the
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.
 pub mod attack_position;
+/// Exact declaration gate, dispatch receipts, and persistence/checksum admission for that owner.
+pub mod bhs_type_runtime;
+/// Canonical mutable `Types[806]` / Leader-mask owner for the recovered BHS type cohort.
+pub mod bhs_type_table;
 pub mod borders_fog;
 /// Exact completed-Farm arm of `BuildTypeData::calc_gather`: six-slot LandData/river
 /// evaluation, city/Japanese scaling, and the Egyptian Wealth side output. Unsupported

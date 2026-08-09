@@ -19,7 +19,14 @@ use don_bhs::{
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
-use crate::systems::{economy, leaders, naval, order_dispatch, production, victory_score};
+use crate::systems::{
+    bhs_type_runtime::{
+        TypeBuiltinBoundaryError, TypeBuiltinOutcome, TypeBuiltinReceipt, TypeBuiltinRuntime,
+        TypeBuiltinRuntimeError,
+    },
+    bhs_type_table::TypeBuiltinState,
+    economy, leaders, naval, order_dispatch, production, victory_score,
+};
 use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
@@ -250,6 +257,7 @@ pub struct ScriptRuntime {
     program: Program,
     game: Option<ScriptBinding>,
     general_powers: Option<ScriptBinding>,
+    type_builtins: Option<TypeBuiltinRuntime>,
     output: Vec<ScriptOutput>,
     timers: ScriptTimers,
     calls: u64,
@@ -272,6 +280,7 @@ impl ScriptRuntime {
             program,
             game,
             general_powers,
+            type_builtins: None,
             output: Vec::new(),
             timers: ScriptTimers::default(),
             calls: 0,
@@ -293,6 +302,57 @@ impl ScriptRuntime {
 
     pub fn bytecodes(&self) -> u64 {
         self.bytecodes
+    }
+
+    /// Install the one synchronized rules/mod owner used by the recovered type builtins.
+    /// A second install is rejected with the caller's state intact rather than replacing live
+    /// mutations or creating an ambiguous mirror.
+    pub fn install_type_builtins(
+        &mut self,
+        state: TypeBuiltinState,
+    ) -> Result<(), TypeBuiltinState> {
+        if self.type_builtins.is_some() {
+            return Err(state);
+        }
+        self.type_builtins = Some(TypeBuiltinRuntime::new(state));
+        Ok(())
+    }
+
+    pub fn type_builtins(&self) -> Option<&TypeBuiltinRuntime> {
+        self.type_builtins.as_ref()
+    }
+
+    pub fn last_type_builtin_receipt(&self) -> Option<&TypeBuiltinReceipt> {
+        self.type_builtins.as_ref()?.last_receipt()
+    }
+
+    pub fn last_type_builtin_fault(&self) -> Option<&TypeBuiltinRuntimeError> {
+        self.type_builtins.as_ref()?.last_fault()
+    }
+
+    /// Admission used by the opt-in combined Sim + script save entry point.
+    /// Legacy `save_sim(&Sim)` cannot observe this external runtime and remains a red boundary.
+    pub fn admit_type_state_for_save_v6(&self) -> Result<(), TypeBuiltinBoundaryError> {
+        match &self.type_builtins {
+            Some(types) => types.admit_save_v6(),
+            None => Ok(()),
+        }
+    }
+
+    /// An installed canonical type owner cannot be omitted from a checksum-shaped digest.
+    pub fn admit_type_state_for_partial_digest(&self) -> Result<(), TypeBuiltinBoundaryError> {
+        match &self.type_builtins {
+            Some(types) => types.admit_partial_channel_digest(),
+            None => Ok(()),
+        }
+    }
+
+    /// The opt-in checksum-shaped simulation digest with explicit external-runtime admission.
+    /// Installing the canonical type owner keeps this red until its channel-13 projection is
+    /// complete; callers cannot accidentally omit the owner merely because it is pristine.
+    pub fn admitted_sim_channel_digest(&self, sim: &Sim) -> Result<u64, TypeBuiltinBoundaryError> {
+        self.admit_type_state_for_partial_digest()?;
+        Ok(sim.channel_digest())
     }
 
     /// Execute the two `Game::do_frame` call sites in recovered order.
@@ -331,6 +391,7 @@ impl ScriptRuntime {
             scenario,
             timers: &mut self.timers,
             output: &mut self.output,
+            type_builtins: &mut self.type_builtins,
         };
         let mut vm = Vm::new(&mut self.program, &mut host);
         let result = vm.run_script(binding.file, &binding.name);
@@ -385,6 +446,7 @@ struct SimScriptHost<'a, H> {
     scenario: &'a mut H,
     timers: &'a mut ScriptTimers,
     output: &'a mut Vec<ScriptOutput>,
+    type_builtins: &'a mut Option<TypeBuiltinRuntime>,
 }
 
 fn string_arg(args: &[Value], index: usize) -> Result<&str, HostError> {
@@ -430,7 +492,28 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                 352 => Ok(Value::Int(
                     (self.scenario.game_seconds() / 60 < args[0].as_int()) as i32,
                 )),
-                _ => self.scenario.call_scenario(decl, args),
+                _ => {
+                    if let Some(types) = self.type_builtins.as_mut() {
+                        match types.dispatch(decl, args) {
+                            Ok(Some(receipt)) => match receipt.outcome {
+                                TypeBuiltinOutcome::Returned(value) => {
+                                    return Ok(Value::Int(value));
+                                }
+                                TypeBuiltinOutcome::OwnerFault(_) => {
+                                    unreachable!("owner faults return Err from dispatch")
+                                }
+                            },
+                            Ok(None) => {}
+                            Err(TypeBuiltinRuntimeError::BadArguments { .. }) => {
+                                return Err(HostError::BadArgs(
+                                    "BHS type builtin arguments have wrong scalar shape",
+                                ));
+                            }
+                            Err(_) => return Err(HostError::Unimplemented),
+                        }
+                    }
+                    self.scenario.call_scenario(decl, args)
+                }
             },
         }
     }
