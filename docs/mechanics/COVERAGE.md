@@ -215,8 +215,11 @@ Jump table at `0x00617B94`, indexed directly by `OrderIndex`, reached from `Unit
 
 `ATTACK` is implemented at the order layer, but its host is still partial: the damage
 arithmetic is the derived `ObjectData::get_damage` pipeline while `DamagePredicates` sit at
-their defaults. `Unit::fight` `0x005FD4D0` (8,157 B) and `Unit::find_attack_pos`
-`0x00601280` (7,124 B), the target-selection half, also remain outside this dispatcher.
+their defaults. The ordinary held-target range/retirement slice is in `held_target`, and
+`attack_position` now executes the unit nearby-spot transaction plus the building
+terrain/collision/RNG selection loop. Arena still needs an authoritative adapter for the
+alternating building-perimeter stream; the rest of `Unit::fight` `0x005FD4D0` remains outside
+this dispatcher.
 
 `Unit::work` `0x0060D180` (2,885 B) and its queue driver are now transcribed in
 `systems::order_dispatch`, including `update_action`, `repath`, `kill_current_order`, the
@@ -401,10 +404,12 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
 5. **Consolidate channel 12 and the eight `adler32`s.** `borders_fog` and `map_terrain`
    both claim `world` with incompatible implementations. Until one walker wins, neither
    can be validated, and the checksum primitive must be singular by construction.
-6. **`Unit::fight` `0x005FD4D0` (8,157 B) + `Unit::find_attack_pos` `0x00601280`
-   (7,124 B).** Both uncited. `get_damage` is the best-tested thing in the project
-   (7.99 M trials) and it is fed by target selection that does not exist, so combat cannot
-   run even though its arithmetic is solved.
+6. **Complete `Unit::fight` `0x005FD4D0` and the building-perimeter provider for
+   `Unit::find_attack_pos` `0x00601280`.** Target acquisition, held-target range/retirement,
+   direct land volley, the unit nearby-spot positioning arm, and the building candidate
+   gate/scoring loop now exist. The exact alternating perimeter stream, remaining
+   duty/retarget branches, projectile creation, retaliation, and order integration still
+   prevent the full retail fight transaction from running.
 7. **`Balance::type_damage` `0x0057FB50` (8,524 B).** `game/balance.cpp` is 0.5 % named.
    The port reads `final_balance_table` directly; the engine reads it through
    `type_damage` + `compute_modifier` + `return_pack`. Whether those agree is untested, and

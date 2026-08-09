@@ -34,6 +34,7 @@ sibling lanes are mid-flight. `pub mod combat;` is added to `crates/don-sim/src/
 | `RECHARGE` and the artillery penalty | `UnitData::recharge` `0x0060FDF0` | done |
 | The attack cycle (`recharging`, byte-wrapping) | `Unit::fight` `0x005FD4D0` @ `0x005FF0A4` | done |
 | Range gates in `× 192` space | `poor_target` `0x0064A270`, `attack_dist` `0x006488F0` | done |
+| Held-target positioning transaction | `Unit::find_attack_pos` `0x00601280` | unit arm executable; building perimeter stream is a mandatory host boundary |
 | `Object::poor_target` — the "don't chase" rule | `0x0064A270` | done |
 | Overkill: window anchor, stamp, last-damager pair, attenuation predicate | `0x0064A5EB…0x0064A641`, `get_damage` step 23 `0x00644B94` | done |
 | The applier's scaling: 8.8 multiplier, `0x100` floor, rounds, `uber_size`, sixteenths | `0x0064A6F9…0x0064A7F1` | done, both branches |

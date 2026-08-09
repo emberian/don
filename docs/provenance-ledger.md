@@ -267,6 +267,16 @@ Load-bearing facts, stated separately because they are easy to assume wrongly:
 | evidence | Owner-local `i16` chain, signed `i8` persistent capacity, assigned/active count modes, UID target identity, 9-byte command, 31-byte order payload, reservation bit `0x1000`, sixteenth-unit worker/scholar gross, and 450-frame remainder credit are recovered. |
 | fail-closed boundary | The complete 7,668-byte terrain/type evaluator is not ported. Callers must supply and persist its result; no terrain label, radius, or building-type capacity table is inferred. Non-flat worker choreography and rare-Good spatial targeting remain explicit gaps. |
 
+### 1.9b Held-target attack positioning
+
+| field | value |
+|---|---|
+| source | `Unit::find_attack_pos` `0x00601280`; unit nearby request at `0x00602AB9..0x00602B31`; building direction/step setup from `0x0060197B`; candidate gates/calls at `0x00602090`, `0x006020E1`, `0x006020FA`, and `0x00602124` |
+| implementation | `crates/don-sim/src/systems/attack_position.rs` |
+| tier | **C** — instruction-derived and covered by focused Rust transaction tests; not executed against retail |
+| covered behavior | Ordinary unit target: exact sixteen-argument `UnitType::find_nearby_spot` tuple, candidate terrain/range recheck, and domain fallback. Building target: initial side, `0x20/0x40/0xC0` step selection, capped angular step, 48-unit snapping, `invalid_loc` → terrain `0x4000` → bitmap collision → ordered collision → RNG call order, strict-low score, and adaptive 100-probe budget. |
+| fail-closed boundary | The alternating building-perimeter transition stream remains a mandatory provider. The module rejects contradictory held-target range facts and does not substitute a raster, circle, reflection, or nearest-free-cell heuristic. Earlier activity/duty/retarget arms in the 7,124-byte function are outside this ordinary transaction. |
+
 ### 1.10 Field offsets — 1,223 constants
 
 | field | value |

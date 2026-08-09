@@ -307,12 +307,18 @@ stacking on one victim, and it is a checksummed counter that saturates at 100.
   `systems::fight` carries direct land-volley Guy/facing geometry. Projectile spawning,
   splash/retaliation and the remaining duty/retarget/order arms are still outside those two
   APIs and fail closed where the common slice cannot choose a retail branch.
-* **`Unit::find_attack_pos` `0x00601280` (7,124 B) is now bounded, not implemented.** Its
-  ordinary unit arm calls `UnitType::find_nearby_spot`; its building arm scans a perimeter,
-  checks terrain and ordered collision, and draws from `game_random` while scoring candidates.
-  `HeldTargetStep::FindAttackPosition` emits the exact ordinary six-argument wrapper request,
-  never a guessed target or reflected back-off destination. A faithful spatial provider is
-  still required before Arena may turn that request into a move order.
+* **The ordinary positioning transaction of `Unit::find_attack_pos` `0x00601280` is now
+  executable and fail-closed.** `systems::attack_position` constructs the unit-target arm's
+  exact sixteen-argument `UnitType::find_nearby_spot` request (including the `>0x240`
+  radius/step split), repeats `is_in_range` at a returned point, and preserves the measured
+  domain-dependent target-anchor fallback. For buildings it derives the initial rectangle
+  side and the exact `0x20/0x40/0xC0` linear and capped angular steps, snaps probes to 48-unit
+  centres, and enforces the retail call order: `invalid_loc`, terrain bit `0x4000`, bitmap
+  collision, ordered collision, then `game_random(0,0xffff)`. Scoring is
+  `vector_dist(candidate,source) + random % 0xC0`, strict-lower wins, and the 100-probe budget
+  contracts at the recovered `0x300` separation boundary. The still-unported alternating
+  perimeter transition state machine is a mandatory provider method; no circular/rectangular
+  raster or back-off point is substituted when it is absent.
 * **The `mode` (`param_4`) flag's meaning is transcribed, not understood.** It is
   `find_nearby_target`'s `local_40`, set when the owner is not AI-flagged, `0x006EC000`
   returns 0, and `Game +0x821 & 2` is clear. It flips `compare_target` from multiplying by
