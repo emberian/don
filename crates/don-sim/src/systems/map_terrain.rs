@@ -1242,6 +1242,90 @@ impl World {
         }
     }
 
+    /// `Map::make_coastlines(unsigned char)` `0x006947a0`--`0x00694aa5`.
+    ///
+    /// This is the complete common coastline stage called by `Map::make` at
+    /// `0x0068bef2`, immediately after [`World::fix_diag_land`]. The PDB names an
+    /// `unsigned char` argument, but the shipped 774-byte body never reads it.
+    /// Retail first calls [`World::fix_lakes`], then performs two row-major WData
+    /// scans:
+    ///
+    /// 1. Every non-ocean, non-coast cell adjacent to an in-bounds pure-ocean,
+    ///    non-coast cell becomes `COAST | ORIG_COAST`. `WATERHALF` makes a cell
+    ///    non-ocean and is preserved by this write.
+    /// 2. Every coast cell with no in-bounds neighbour that is dry, non-half-water,
+    ///    and non-coast is converted to deep water. This clears exactly
+    ///    `LAND_CLASS_MASK | WATERHALF | ORIG_COAST`, writes the `land/land_sub`
+    ///    word as `2`, and preserves every other WData byte.
+    ///
+    /// The caller must supply the map-style continent WData plane. This routine is
+    /// exact for that supplied plane, but does not invent the still-missing
+    /// `make_continents` output.
+    pub fn make_coastlines(&mut self) {
+        self.fix_lakes();
+
+        // First retail scan: mark the land side of each ocean boundary. The
+        // instruction stream walks y outside / x inside and probes the canonical
+        // NW,N,NE,E,SE,S,SW,W ring.
+        for y in 0..self.ys {
+            for x in 0..self.xs {
+                if self.is_ocean(x, y) || self.is_coast(x, y) {
+                    continue;
+                }
+
+                let touches_unmarked_ocean =
+                    NEIGHBOUR_DX
+                        .iter()
+                        .zip(NEIGHBOUR_DY.iter())
+                        .any(|(&dx, &dy)| {
+                            let nx = x + dx;
+                            let ny = y + dy;
+                            self.valid_w(nx, ny) && self.is_ocean(nx, ny) && !self.is_coast(nx, ny)
+                        });
+                if touches_unmarked_ocean {
+                    let cell = self.wdata_mut(x, y);
+                    // `and word ptr [cell], 0xffc3; or 4; or 0x400`.
+                    cell.flags &= !wflag::LAND_CLASS_MASK;
+                    cell.flags |= wflag::COAST | wflag::ORIG_COAST;
+                }
+            }
+        }
+
+        // Second retail scan: coast unsupported by genuine inland terrain is
+        // ocean. Off-map neighbours are ignored, exactly as the branch ladder at
+        // 0x006949b0--0x00694a4f does.
+        for y in 0..self.ys {
+            for x in 0..self.xs {
+                if !self.is_coast(x, y) {
+                    continue;
+                }
+
+                let has_inland_support =
+                    NEIGHBOUR_DX
+                        .iter()
+                        .zip(NEIGHBOUR_DY.iter())
+                        .any(|(&dx, &dy)| {
+                            let nx = x + dx;
+                            let ny = y + dy;
+                            if !self.valid_w(nx, ny) {
+                                return false;
+                            }
+                            let neighbour = self.wdata(nx, ny);
+                            neighbour.flags & wflag::WATERHALF == 0
+                                && !self.is_ocean(nx, ny)
+                                && neighbour.flags & wflag::COAST == 0
+                        });
+                if !has_inland_support {
+                    let cell = self.wdata_mut(x, y);
+                    // `and word ptr [cell], 0xfac3; mov word ptr [cell+2], 2`.
+                    cell.flags &= !(wflag::LAND_CLASS_MASK | wflag::WATERHALF | wflag::ORIG_COAST);
+                    cell.land = land::OCEAN;
+                    cell.land_sub = 0;
+                }
+            }
+        }
+    }
+
     // -- indexing ------------------------------------------------------------------------
 
     /// `World::get_wdata` `0x0046d220`: `wdata[wy * xs + wx]`, stride 28.
