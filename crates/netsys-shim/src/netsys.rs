@@ -751,6 +751,12 @@ unsafe fn pump(this: *mut NetSysBase) {
         let host_removed = old
             .iter()
             .any(|player| core::ptr::eq(player.as_ref(), (*obj).base.host_player));
+        // A later reconnect may reuse the same owned transport id. Remove its
+        // old SetupWin slot mapping before the deletion callback, otherwise a
+        // same-poll READYFLAG can target stale ConnectionData.
+        for player in &old {
+            s.bridged_slots.remove(&player.unique_id);
+        }
         // Additions must see coherent direct pointers. For removal, shipped
         // leaves the old host/local pointer intact until the delete callback
         // returns, even though players[]/num_players were already compacted.

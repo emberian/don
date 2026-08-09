@@ -6,7 +6,7 @@ use don_net::msg::NetMsg;
 use don_net::obfuscate::{rank_xor_keys, xor_payload};
 use don_net::session::{Event, Role, Session};
 use don_net::setup::{GameConnectionData, PlayerSlotPod};
-use don_net::transport::TcpTransport;
+use don_net::transport::{Dest, TcpTransport, Transport};
 use don_net::{decode_commands, encode_commands, CheckSums, Command, Obfuscation};
 use std::collections::BTreeSet;
 use std::env;
@@ -70,6 +70,7 @@ struct RetailReport {
     packages_seen: u32,
     checksum_turns: u32,
     packages_sent: u32,
+    orderly_disconnect_sent: bool,
     transcript_hash: u64,
     game_key: u32,
 }
@@ -117,7 +118,7 @@ fn main() {
         },
         Mode::Retail(options) => match run_retail(&options) {
             Ok(report) => println!(
-                "{{\"schema\":\"don.owned-peer.retail.v1\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                "{{\"schema\":\"don.owned-peer.retail.v1\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"orderly_disconnect_sent\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
                 report.local_id,
                 report.host_id,
                 report.local_slot,
@@ -125,6 +126,7 @@ fn main() {
                 report.packages_seen,
                 report.checksum_turns,
                 report.packages_sent,
+                report.orderly_disconnect_sent,
                 if options.passive { "passive" } else { "mirror-retail-checksum" },
                 report.game_key,
                 report.transcript_hash,
@@ -396,6 +398,20 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
         let enough =
             checksum_turns >= options.turns && (options.passive || packages_sent >= options.turns);
         if enough {
+            let mut destroy = Vec::new();
+            InternalPacket::DestroyPlayer {
+                unique_id: options.id,
+            }
+            .encode(&mut destroy);
+            session
+                .transport
+                .send(Dest::All, &destroy)
+                .map_err(|e| format!("send orderly destroy-player: {e}"))?;
+            println!(
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"disconnect-sent\",\"local_id\":{},\"packet\":\"IPT_DESTROYPLAYER\",\"bytes\":{}}}",
+                options.id,
+                destroy.len(),
+            );
             return Ok(RetailReport {
                 local_id: options.id,
                 host_id,
@@ -404,6 +420,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 packages_seen,
                 checksum_turns,
                 packages_sent,
+                orderly_disconnect_sent: true,
                 transcript_hash,
                 game_key: game_key.expect("checksum traffic requires a key"),
             });
@@ -1055,10 +1072,11 @@ mod tests {
     }
 
     #[test]
-    fn retail_connect_mode_joins_readies_and_returns_checksum_turn() {
+    fn retail_connect_replies_repeatedly_disconnects_and_rejoins_cleanly() {
         let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
         let addr = host_transport.local_addr().unwrap();
-        let options = retail_options(addr.to_string());
+        let mut options = retail_options(addr.to_string());
+        options.turns = 3;
         let peer = std::thread::spawn(move || run_retail(&options));
         let mut host = Session::new(host_transport, Role::Host, PEER_NAME);
         let start = Instant::now();
@@ -1130,26 +1148,76 @@ mod tests {
         }
 
         let key = 0x005a_c33d;
-        let checksum = checksum_command(23);
-        let host_payload = encode_checksum_only(&checksum, key).unwrap();
-        host.send_command_package(23, 0, &host_payload).unwrap();
-        while !host.turn_ready(23) {
-            host.poll(now(), Duration::from_millis(5)).unwrap();
-            host.drain_events();
-            assert!(start.elapsed() < Duration::from_secs(4));
+        let mut first_peer_left = false;
+        for stamp in 23..26 {
+            let checksum = checksum_command(stamp);
+            let host_payload = encode_checksum_only(&checksum, key).unwrap();
+            host.send_command_package(stamp, 0, &host_payload).unwrap();
+            while !host.turn_ready(stamp) {
+                host.poll(now(), Duration::from_millis(5)).unwrap();
+                first_peer_left |= host.drain_events().contains(&Event::PlayerLeft(CLIENT_ID));
+                assert!(start.elapsed() < Duration::from_secs(5));
+            }
+            let packages = host.take_turn(stamp);
+            assert_eq!(packages.len(), 2);
+            let client = packages.iter().find(|package| package.play == 1).unwrap();
+            assert_eq!(client.stamp, stamp);
+            let decoded = decode_traffic(&client.payload, key).unwrap();
+            assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
         }
-        let packages = host.take_turn(23);
-        assert_eq!(packages.len(), 2);
-        let client = packages.iter().find(|package| package.play == 1).unwrap();
-        let decoded = decode_traffic(&client.payload, key).unwrap();
-        assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
 
         let report = peer.join().unwrap().unwrap();
         assert_eq!(report.host_id, HOST_ID);
         assert_eq!(report.local_slot, 1);
         assert!(report.all_ready_observed);
-        assert_eq!(report.packages_seen, 1);
-        assert_eq!(report.checksum_turns, 1);
-        assert_eq!(report.packages_sent, 1);
+        assert_eq!(report.packages_seen, 3);
+        assert_eq!(report.checksum_turns, 3);
+        assert_eq!(report.packages_sent, 3);
+        assert!(report.orderly_disconnect_sent);
+
+        let mut left = first_peer_left;
+        while !left {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            left = host.drain_events().contains(&Event::PlayerLeft(CLIENT_ID));
+            assert!(start.elapsed() < Duration::from_secs(6));
+        }
+        assert_eq!(host.players().len(), 1);
+
+        // The exact IPT_DESTROYPLAYER transition permits the same owned ID to
+        // reconnect. A socket drop without that packet is not promoted to a
+        // protocol guarantee here; it remains timeout-driven in Session.
+        let reconnect_options = retail_options(addr.to_string());
+        let rejoined = std::thread::spawn(move || run_retail(&reconnect_options));
+        let mut host_ready_republished = false;
+        while !roster_is_authoritative(&host) || !host.all_ready() {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            if roster_is_authoritative(&host) && !host_ready_republished {
+                // Reconnect is a new setup readiness epoch. Restate the host
+                // flag after membership exists; a pre-roster READYFLAG is
+                // deliberately dropped by the retail-compatible handler.
+                host.send_ready_flag(true).unwrap();
+                host_ready_republished = true;
+            }
+            assert!(start.elapsed() < Duration::from_secs(8));
+        }
+        let stamp = 26;
+        let checksum = checksum_command(stamp);
+        let host_payload = encode_checksum_only(&checksum, key).unwrap();
+        host.send_command_package(stamp, 0, &host_payload).unwrap();
+        while !host.turn_ready(stamp) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(9));
+        }
+        let packages = host.take_turn(stamp);
+        assert_eq!(packages.len(), 2);
+        let client = packages.iter().find(|package| package.play == 1).unwrap();
+        let decoded = decode_traffic(&client.payload, key).unwrap();
+        assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
+        let rejoin_report = rejoined.join().unwrap().unwrap();
+        assert_eq!(rejoin_report.local_slot, 1);
+        assert_eq!(rejoin_report.packages_sent, 1);
+        assert!(rejoin_report.orderly_disconnect_sent);
     }
 }

@@ -97,3 +97,37 @@ the new mode observes `PlayerJoined` before `ReadyChanged(true)`, reaches an aut
 roster, crosses all-ready, stays game-silent for multiple polls, automatically recovers the first
 package transform, and returns an exactly decodable client checksum package for the identical
 first stamp while preserving the original synthetic harness.
+
+## Retail start and packet-loop boundary
+
+The shipped start handoff is independent of the replacement transport. The exact host path is:
+
+1. `SetupWin::on_button_clicked` reaches the start arm at `0x005C5F4A`, requires
+   `check_all_ready(0)` at `0x005C5F70`, requires a non-observer local `NetPlayer`, verifies
+   `NetSys::is_host`, then calls the SetupWin countdown virtual at `+0x31C`.
+2. At countdown completion, `SetupWin::countdown` sets `NetSys::set_playing(1)` through vtable
+   `+0x18` at `0x005BC5C0`, obtains the lobby ID, and calls
+   `ICrossPlayService::StartGame` at service vtable `+0x5C` at `0x005BC855`.
+3. `SetupWin::start_game_success(false)` at `0x005B7530` changes lobby type to `playing`, writes
+   local `PlayerConnectionData.ready=2` at `0x005B7589`, calls
+   `ConnectionData::send_player(0,false)` at `0x005B758D`, and transitions away from SetupWin.
+4. `NetDaemon::process_all` at `0x00951300` repeatedly calls `NetDaemon::process` until it returns
+   false. Each `process` calls NetSys `check_pulse` (`+0x3C`),
+   `process_system_messages` (`+0x9C`), then `get` (`+0x5C`) at
+   `0x00950F67..0x00950FA4`. Command-package case 7 relays client packages through
+   `NetSys::send_all` at `0x009510E5..0x009510FA`; the turn gate consumes one package per slot.
+
+The owned-peer mock-retail test now crosses that packet boundary for three consecutive stamps,
+verifies silence before the first host package, mirrors only each stamp's extracted checksum,
+sends the exact five-byte `IPT_DESTROYPLAYER`, observes authoritative `PlayerLeft`, reconnects
+the same owned ID into slot 1, explicitly republishes readiness for the new setup epoch, and
+completes a fourth stamp. Run it with:
+
+```sh
+cargo test --manifest-path tools/owned-peer/Cargo.toml \
+  retail_connect_replies_repeatedly_disconnects_and_rejoins_cleanly
+```
+
+An unannounced socket loss is intentionally not called an orderly disconnect: the current
+session protocol detects that case through its configured pulse timeout. Reconnect acceptance
+therefore requires `IPT_DESTROYPLAYER` first and a new readiness exchange after membership.
