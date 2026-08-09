@@ -48,6 +48,6 @@ mod ground_truth {
         use offsets::fun_00570170 as r;
         assert_eq!(r::UNIT_DEFENSIVE_RESPOND_RANGE, 28);
         assert_eq!(r::SHIP_DEFENSIVE_RESPOND_RANGE, 52);
-        assert!(r::SHIP_DEFENSIVE_RESPOND_RANGE > r::UNIT_GATHER_RESPOND_RANGE);
+        const { assert!(r::SHIP_DEFENSIVE_RESPOND_RANGE > r::UNIT_GATHER_RESPOND_RANGE) };
     }
 }

@@ -24,6 +24,8 @@
 //! * [`overlay_file`] — the checked `don-overlay.xml` artifact for independent-edition mods.
 //! * [`runtime`] — strict whole-file rule loading and an immutable, generation-checked
 //!   prepare/commit boundary for new simulation worlds.
+//! * [`unitrules`] — the closed 364×55 `unitrules.xml` registry boundary, retaining
+//!   same-`NAME` rows by source occurrence instead of overwriting them.
 //! * [`string_table`] — retail ordinal strings, exact owner-first localization, and the
 //!   shipped-startup/translated-only language-change transaction boundary.
 //! * [`extend`] — the surface beyond retail: extension type ids above the closed
@@ -58,6 +60,7 @@ pub mod runtime;
 pub mod scan;
 pub mod status;
 pub mod string_table;
+pub mod unitrules;
 pub mod vfs;
 pub mod workflow;
 
@@ -71,6 +74,10 @@ pub use runtime::{PreparedReload, RuleRegistry, RuntimeSnapshot};
 pub use string_table::{
     PreparedStringTables, RetailLanguage, RetailStringTable, StringCommitError, StringPrepareError,
     StringTableRegistry, StringTablesSnapshot,
+};
+pub use unitrules::{
+    parse_unitrules_xml, read_unitrules_xml, UnitCanonicalKey, UnitRuleCatalog, UnitRuleField,
+    UnitRuleRow, UnitRulesError, UnitRulesReadError,
 };
 pub use vfs::{
     classify, is_map_forbidden, ContentStack, ModCategory, ModPackage, Resolved, StorageLocation,
