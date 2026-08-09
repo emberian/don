@@ -61,8 +61,9 @@
 //!
 //! ## What is NOT here
 //!
-//! * `TRAJ_SPLINE` (aircraft crashes, nukes, cruise missiles) — `Spline::calc_from_dir`
-//!   /`calc_nuke_spline` are unread. Spline ammo is modelled as an opaque path.
+//! * `TRAJ_SPLINE` (nukes and cruise missiles) — `Spline::calc_from_dir` /
+//!   `calc_nuke_spline` are unread. Aircraft wrecks actually use `TRAJ_ARC`; their separate
+//!   [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -1097,6 +1098,182 @@ fn ammo_init_post_gate(
 }
 
 // ============================================================================
+// Aircraft wreck projectile — `Ammo::init_crash` `0x0067B800`
+// ============================================================================
+
+/// The exact `Guy`/owner/type facts consumed by `Ammo::init_crash`.
+///
+/// The source pointer is a PDB `Guy*`, not a Unit. Identity and pose come from `GuyData`,
+/// while `gpiece`, current order, and the squad leader's bank are reached through the owning
+/// `Unit`. They are flattened here so the primitive remains independent of live object storage.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CrashGuy {
+    /// `GuyData +0xA1 who`, sign-extended from `char`.
+    pub who: i32,
+    /// `GuyData +0x8C o`, sign-extended from `short`.
+    pub o: i32,
+    /// `GuyData +0x08 type`; its `UnitType +0x2C0 moves` is [`CrashGuy::moves`].
+    pub type_index: i32,
+    /// Plain, unobfuscated `GuyData +0x0C/+0x10/+0x14` coordinates.
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    /// `GuyData +0x18`, binary angle.
+    pub angle: i32,
+    /// Owning object's virtual `+0x34` (`get_gpiece`).
+    pub shooter_gpiece: i32,
+    /// The owning `Unit` object's XOR-decoded `ObjectData +0x10/+0x14` coordinates.
+    ///
+    /// Retail launches the wreck's extrapolated endpoint from these coordinates, even though
+    /// `sx/sy` and the later distance calculation use the individual `Guy` coordinates above.
+    pub owner_x: i32,
+    pub owner_y: i32,
+    /// PDB `UnitType +0x2C0 moves`, before multiplication by `Constants::unit_move_speed`.
+    pub moves: i32,
+    /// Current `OrderIndex`, or a negative value when the order list is empty.
+    pub order_type: i32,
+    /// `unit.guys[0].bank` (`GuyData +0x44`). Read only for orders 16, 17, and 24.
+    pub lead_bank: f32,
+}
+
+/// Terrain/world reads in `Ammo::init_crash`.
+pub trait CrashEnv {
+    /// `WorldData +0/+4`, measured in four-tile `WCoord` cells.
+    fn crash_world_wcells(&self) -> (i32, i32);
+    /// `TerrainOut::find_data_z(x, y, 0)` `0x00866560`.
+    fn crash_terrain_z(&self, x: i32, y: i32) -> i32;
+}
+
+/// SSE `cvttss2si` / `cvttsd2si` invalid conversion result. Rust's float-to-int cast
+/// saturates instead, so the exceptional cases need spelling out for instruction fidelity.
+#[inline]
+fn crash_cvtt_f32_i32(value: f32) -> i32 {
+    if value.is_finite() && (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value.trunc() as i32
+    } else {
+        i32::MIN
+    }
+}
+
+/// `Ammo::init_crash(Guy*, int slot, int graph_index)` `0x0067B800`.
+///
+/// This mutates an existing pool slot because retail deliberately preserves fields it does not
+/// write: notably `accuracy`, flag bits outside `0x1c`, and `ammo_path`. The constructor is not
+/// a spline transaction: it writes `traj = TRAJ_ARC`, `v1z = 0`, and never touches
+/// `AmmoData::ammo_path`.
+///
+/// RNG order is asymmetric and checksum-critical:
+///
+/// 1. `game_random.get(0, 0xffff) % 7 - 3` writes `rolling` (one global draw);
+/// 2. a temporary `Random(sx + sy + sz)` supplies `bank_dx` then `bank_dy` from `[-30,30)`.
+///
+/// The two bank draws therefore do not advance the game stream and are identical for crashes
+/// with the same coordinate sum.
+pub fn ammo_init_crash<E: CrashEnv>(
+    ammo: &mut Ammo,
+    guy: &CrashGuy,
+    slot: i32,
+    graph_index: i32,
+    env: &E,
+    game_rng: &mut Rng,
+) {
+    let a = &mut ammo.w;
+
+    a.who = guy.who;
+    a.flags &= 0xe3;
+    a.index = slot;
+    a.graph_index = graph_index;
+    a.o = guy.o;
+    a.num_guys = 1;
+    a.gpiece = guy.shooter_gpiece;
+    a.start_roll_angle = if matches!(guy.order_type, 16 | 17 | 24) {
+        crash_cvtt_f32_i32(guy.lead_bank).wrapping_neg()
+    } else {
+        0
+    };
+
+    a.sx = guy.x;
+    a.sy = guy.y;
+    a.sz = guy.z;
+
+    let speed = guy.moves.wrapping_mul(UNIT_MOVE_SPEED);
+    let fall_numerator = guy.z.wrapping_neg().wrapping_mul(2);
+    let fall_time = ((fall_numerator as f32) / GRAVITY).sqrt();
+    let vx = crate::trig::sinx(guy.angle, speed);
+    let vy = crate::trig::cosx(guy.angle, speed).wrapping_neg();
+    let mut ex = guy
+        .owner_x
+        .wrapping_add(crash_cvtt_f32_i32((vx as f32) * fall_time));
+    let mut ey = guy
+        .owner_y
+        .wrapping_add(crash_cvtt_f32_i32((vy as f32) * fall_time));
+
+    let (world_xs, world_ys) = env.crash_world_wcells();
+    let max_x = world_xs.wrapping_mul(0x300).wrapping_sub(1);
+    let max_y = world_ys.wrapping_mul(0x300).wrapping_sub(1);
+    ex = ex.max(0).min(max_x);
+    ey = ey.max(0).min(max_y);
+    a.ex = ex;
+    a.ey = ey;
+    a.ez = env.crash_terrain_z(ex, ey);
+
+    let ddx = ex.wrapping_sub(guy.x);
+    let ddy = ey.wrapping_sub(guy.y);
+    let squared = ddx.wrapping_mul(ddx).wrapping_add(ddy.wrapping_mul(ddy));
+    let distance = (squared as f32).sqrt();
+    let raw_time = crash_cvtt_f32_i32(distance / (speed as f32));
+    a.flags |= FLAG_FLYING;
+    a.angle = guy.angle;
+    a.splash_area = 2;
+    a.cur_time = 0;
+    a.total_time = if (raw_time as u32) < 1 {
+        1
+    } else {
+        raw_time as u32
+    };
+
+    a.rolling = (game_rng.draw16() % 7 - 3) as i8;
+    a.traj = TRAJ_ARC;
+    a.v1z = 0.0;
+    a.dx = distance / (a.total_time as f32);
+
+    let seed = guy.x.wrapping_add(guy.y).wrapping_add(guy.z) as u32;
+    let mut local_rng = Rng(seed);
+    a.bank_dx = local_rng.in_range(-30, 30) as f32;
+    a.bank_dy = local_rng.in_range(-30, 30) as f32;
+    a.whom = -1;
+    a.ox = -1;
+}
+
+/// The ammo-pool transaction surrounding [`ammo_init_crash`] in `Objects::kill_guy`
+/// (`0x00659410`).
+///
+/// Retail scans for the lowest free slot, passes the current `Objects::ammo_index` as the
+/// wreck's `graph_index`, runs the constructor against that recycled slot, and only then
+/// increments the counter. The PDB `TypeData::cat == 8` and `obj_masks & 0x08000000` gates stay
+/// with the death caller; once it elects to spawn a wreck, this is the complete ammo-owned
+/// transaction.
+pub fn ammo_spawn_crash<E: CrashEnv>(
+    pool: &mut AmmoPool,
+    guy: &CrashGuy,
+    env: &E,
+    game_rng: &mut Rng,
+) -> usize {
+    let slot = pool.alloc_slot();
+    let graph_index = pool.ammo_index;
+    ammo_init_crash(
+        &mut pool.slots[slot],
+        guy,
+        slot as i32,
+        graph_index,
+        env,
+        game_rng,
+    );
+    pool.ammo_index = pool.ammo_index.wrapping_add(1);
+    slot
+}
+
+// ============================================================================
 // Flight — `Ammo::inc_time` `0x0067D380`
 // ============================================================================
 
@@ -1930,6 +2107,21 @@ mod tests {
         }
     }
 
+    struct CrashWorld {
+        xs: i32,
+        ys: i32,
+    }
+
+    impl CrashEnv for CrashWorld {
+        fn crash_world_wcells(&self) -> (i32, i32) {
+            (self.xs, self.ys)
+        }
+
+        fn crash_terrain_z(&self, x: i32, y: i32) -> i32 {
+            x.wrapping_mul(3).wrapping_add(y.wrapping_mul(5)) & 0x3ff
+        }
+    }
+
     #[test]
     fn layout_matches_pdb() {
         assert_layout();
@@ -1939,6 +2131,216 @@ mod tests {
     fn gravity_bit_pattern() {
         assert_eq!(GRAVITY.to_bits(), 0xC127_CCCD);
         assert!((GRAVITY - -10.4875).abs() < 1e-4);
+    }
+
+    fn crash_fixture() -> CrashGuy {
+        CrashGuy {
+            who: 2,
+            o: 17,
+            type_index: 88,
+            x: 2_000,
+            y: 5_000,
+            z: 1_000,
+            angle: 0,
+            shooter_gpiece: 41,
+            owner_x: 2_200,
+            owner_y: 5_100,
+            moves: 100,
+            order_type: 16,
+            lead_bank: 12.75,
+        }
+    }
+
+    #[test]
+    fn crash_init_is_a_mutating_arc_constructor_not_a_spline_constructor() {
+        let env = CrashWorld { xs: 10, ys: 10 };
+        let guy = crash_fixture();
+        let mut ammo = Ammo::default();
+        ammo.w.flags = 0xff;
+        ammo.w.accuracy = 321;
+        ammo.has_spline = true;
+        let before = ammo.w.as_bytes().to_vec();
+        let mut rng = Rng(0x1234_5678);
+
+        ammo_init_crash(&mut ammo, &guy, 9, 77, &env, &mut rng);
+
+        assert_ne!(ammo.w.as_bytes(), before.as_slice());
+        assert_eq!(
+            ammo.w.flags, 0xe3,
+            "clear 0x1c, preserve other bits, set FLYING"
+        );
+        assert_eq!(
+            ammo.w.accuracy, 321,
+            "init_crash never writes the walked accuracy"
+        );
+        assert!(
+            ammo.has_spline,
+            "the function never touches AmmoData::ammo_path"
+        );
+        assert_eq!((ammo.w.who, ammo.w.o), (2, 17));
+        assert_eq!((ammo.w.index, ammo.w.graph_index), (9, 77));
+        assert_eq!(ammo.w.gpiece, 41);
+        assert_eq!(ammo.w.num_guys, 1);
+        assert_eq!((ammo.w.sx, ammo.w.sy, ammo.w.sz), (2_000, 5_000, 1_000));
+        assert_eq!(ammo.w.angle, 0);
+        assert_eq!(ammo.w.splash_area, 2);
+        assert_eq!(ammo.w.cur_time, 0);
+        assert_eq!(ammo.w.traj, TRAJ_ARC);
+        assert_eq!(ammo.w.v1z.to_bits(), 0);
+        assert_eq!((ammo.w.whom, ammo.w.ox), (-1, -1));
+        assert_eq!(
+            ammo.w.start_roll_angle, -12,
+            "bank truncates before integer negation"
+        );
+        assert_eq!(
+            ammo.w.ex, guy.owner_x,
+            "angle zero has no x velocity and exposes the owner-centre launch base"
+        );
+        assert!(
+            ammo.w.ey < guy.owner_y,
+            "angle zero crashes north from the owner-centre y"
+        );
+        assert_ne!(
+            ammo.w.ex, guy.x,
+            "endpoint base is not the recorded individual-Guy start"
+        );
+        assert_eq!(ammo.w.ez, env.crash_terrain_z(ammo.w.ex, ammo.w.ey));
+        assert!(ammo.w.total_time > 0 && ammo.w.dx.is_finite());
+
+        let mut walked = ammo;
+        walked.has_spline = false;
+        let pool = AmmoPool {
+            slots: vec![walked],
+            ammo_index: 0,
+        };
+        assert_eq!(
+            pool.checksum(),
+            0x8ea7_181d,
+            "golden walked mutation pins every checksum-visible crash write"
+        );
+    }
+
+    #[test]
+    fn crash_rng_uses_one_global_draw_then_two_coordinate_seeded_local_draws() {
+        let env = CrashWorld { xs: 10, ys: 10 };
+        let guy = crash_fixture();
+        let seed = 0x89ab_cdef;
+        let mut game_rng = Rng(seed);
+        let mut ammo = Ammo::default();
+        ammo_init_crash(&mut ammo, &guy, 0, 0, &env, &mut game_rng);
+
+        let mut expected_game = Rng(seed);
+        let expected_roll = (expected_game.draw16() % 7 - 3) as i8;
+        assert_eq!(ammo.w.rolling, expected_roll);
+        assert_eq!(
+            game_rng, expected_game,
+            "bank jitter must not consume game_random"
+        );
+
+        let mut local = Rng(guy.x.wrapping_add(guy.y).wrapping_add(guy.z) as u32);
+        assert_eq!(ammo.w.bank_dx, local.in_range(-30, 30) as f32);
+        assert_eq!(ammo.w.bank_dy, local.in_range(-30, 30) as f32);
+
+        let mut same_sum = guy;
+        same_sum.x += 100;
+        same_sum.y -= 100;
+        same_sum.owner_x += 100;
+        same_sum.owner_y -= 100;
+        let mut other = Ammo::default();
+        let mut other_game_rng = Rng(seed ^ 0xffff);
+        ammo_init_crash(&mut other, &same_sum, 0, 0, &env, &mut other_game_rng);
+        assert_eq!(
+            (ammo.w.bank_dx, ammo.w.bank_dy),
+            (other.w.bank_dx, other.w.bank_dy),
+            "only sx+sy+sz seeds the private jitter stream"
+        );
+    }
+
+    #[test]
+    fn crash_start_roll_angle_is_only_inherited_by_the_three_air_orders() {
+        let env = CrashWorld { xs: 10, ys: 10 };
+        for order in [16, 17, 24] {
+            let mut guy = crash_fixture();
+            guy.order_type = order;
+            guy.lead_bank = -9.875;
+            let mut ammo = Ammo::default();
+            ammo_init_crash(&mut ammo, &guy, 0, 0, &env, &mut Rng(1));
+            assert_eq!(ammo.w.start_roll_angle, 9, "order {order}");
+        }
+        for order in [-1, 0, 15, 18, 23, 25] {
+            let mut guy = crash_fixture();
+            guy.order_type = order;
+            let mut ammo = Ammo::default();
+            ammo_init_crash(&mut ammo, &guy, 0, 0, &env, &mut Rng(1));
+            assert_eq!(ammo.w.start_roll_angle, 0, "order {order}");
+        }
+
+        let mut invalid = crash_fixture();
+        invalid.order_type = 16;
+        invalid.lead_bank = f32::NAN;
+        let mut ammo = Ammo::default();
+        ammo_init_crash(&mut ammo, &invalid, 0, 0, &env, &mut Rng(1));
+        assert_eq!(
+            ammo.w.start_roll_angle,
+            i32::MIN,
+            "cvttss2si produces INT_MIN for NaN, whose wrapping negation is itself"
+        );
+    }
+
+    #[test]
+    fn crash_landing_is_clamped_in_wcoords_before_terrain_and_flight_time() {
+        let env = CrashWorld { xs: 2, ys: 2 };
+        let mut east = crash_fixture();
+        east.x = 100;
+        east.y = 100;
+        east.z = 5_000;
+        east.angle = crate::trig::QUARTER_TURN;
+        east.owner_x = 100;
+        east.owner_y = 100;
+        east.moves = 500;
+        let mut ammo = Ammo::default();
+        ammo_init_crash(&mut ammo, &east, 0, 0, &env, &mut Rng(2));
+        assert_eq!(ammo.w.ex, 2 * 0x300 - 1);
+        assert_eq!(ammo.w.ey, 100);
+        assert_eq!(ammo.w.ez, env.crash_terrain_z(1_535, 100));
+
+        let mut north = east;
+        north.angle = 0;
+        let mut other = Ammo::default();
+        ammo_init_crash(&mut other, &north, 0, 0, &env, &mut Rng(2));
+        assert_eq!((other.w.ex, other.w.ey), (100, 0));
+        assert!(other.w.total_time >= 1);
+    }
+
+    #[test]
+    fn crash_pool_transaction_reuses_lowest_slot_then_advances_graph_index() {
+        let env = CrashWorld { xs: 10, ys: 10 };
+        let guy = crash_fixture();
+        let mut pool = AmmoPool::new();
+        pool.slots[0].w.flags = FLAG_ALIVE;
+        pool.slots[1].w.flags = FLAG_NO_DAMAGE;
+        pool.slots[1].w.accuracy = 444;
+        pool.ammo_index = i32::MAX;
+        let mut rng = Rng(7);
+
+        let slot = ammo_spawn_crash(&mut pool, &guy, &env, &mut rng);
+
+        assert_eq!(slot, 1, "the first flags&3==0 recycled slot wins");
+        assert_eq!(pool.slots[1].w.index, 1);
+        assert_eq!(pool.slots[1].w.graph_index, i32::MAX);
+        assert_eq!(
+            pool.slots[1].w.accuracy, 444,
+            "the recycled body is mutated"
+        );
+        assert_eq!(
+            pool.slots[1].w.flags, FLAG_FLYING,
+            "the stale NO_DAMAGE bit is cleared before FLYING is set"
+        );
+        assert_eq!(
+            pool.ammo_index,
+            i32::MIN,
+            "counter increment wraps after init"
+        );
     }
 
     #[test]

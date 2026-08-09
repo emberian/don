@@ -147,6 +147,46 @@ desynchronises silently.
 Object position fields are XOR-obfuscated with `0x63637` throughout; every read in the ammo
 path is `stored ^ 0x63637`.
 
+### Aircraft wrecks use a third constructor — and it is an arc
+
+`Ammo::init_crash(Guy*, slot, graph_index)` (`0x0067B800`) mutates a recycled ammo slot for a
+destroyed aircraft. Despite the earlier inventory label, it does **not** allocate or calculate a
+`Spline`: retail writes `traj = TRAJ_ARC`, `v1z = 0`, `splash_area = 2`, and never touches the
+existing `ammo_path` pointer. It likewise preserves the walked `accuracy` field and all flag bits
+outside `0x1C`; these stale-slot semantics are checksum-visible and the port keeps them.
+
+The endpoint solve is:
+
+```
+speed = UnitType.moves * Constants.unit_move_speed
+fall_time = sqrtf((-2 * guy.z) / GRAVITY)
+vx =  sinx(guy.angle, speed)
+vy = -cosx(guy.angle, speed)
+end = owner_object.xy + trunc((vx,vy) * fall_time)
+end = clamp(end, (0,0), (world.xs*768-1, world.ys*768-1))
+distance = sqrtf((end.x-guy.x)^2 + (end.y-guy.y)^2)
+total_time = unsigned_max(trunc(distance / speed), 1)
+dx = distance / total_time
+```
+
+The mixed coordinate bases are literal: `sx/sy/sz` and the distance origin are the individual
+PDB `GuyData` coordinates, while the extrapolated endpoint is added to the owning Unit object's
+XOR-decoded x/y. Flattening both to “the aircraft position” changes flight time and checksum.
+The endpoint is clamped in four-tile `WCoord` dimensions before `TerrainOut::find_data_z`.
+
+RNG is deliberately split. `rolling` consumes exactly one global
+`game_random.get(0,0xFFFF)` draw and maps it through `% 7 - 3`. Then a temporary
+`Random(guy.x + guy.y + guy.z)` supplies `bank_dx` followed by `bank_dy` from `[-30,30)`;
+those two draws never advance the global stream. Finally, `start_roll_angle` is
+`-trunc(guy[0].bank)` only for current orders `Strafe(16)`, `AirPatrol(17)`, and
+`AirAttackGround(24)`; all other orders write zero.
+
+`Objects::kill_guy` (`0x00659410`) owns the surrounding gate: the dying guy's PDB
+`TypeData::cat` must be 8 and the owning type must not carry object-mask bit `0x08000000`. Once
+admitted, retail claims the lowest `flags & 3 == 0` ammo slot, calls `init_crash` with the old
+`Objects::ammo_index`, then increments that counter. `ammo_spawn_crash` closes this pool mutation;
+only the death-path gate and extraction of the flattened `CrashGuy` view remain to be wired.
+
 ---
 
 ## 5. Flight, hit, and miss
@@ -391,11 +431,12 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **`TRAJ_SPLINE` is not modelled.** Aircraft crashes, nukes and cruise missiles go through
+3. **`TRAJ_SPLINE` is not modelled.** Nukes and cruise missiles go through
    `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`), unread. `Ammo`
    with a spline hashes an extra `Spline::walk_data` block, so those projectiles will diverge
-   on the channel. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never
-   set by `init`, which is worth confirming independently.
+   on the channel. Aircraft crashes were previously misclassified here; `Ammo::init_crash`
+   writes an ordinary arc and is now executable. `Ammo::init` only ever writes `traj` 1 or 2 —
+   `TRAJ_STRAIGHT` (0) is never set by `init`, which is worth confirming independently.
 4. **The live impact driver must supply `SplashEnv` and call `ammo_do_damage_splash_scan`.**
    The exact extractor is implemented and mutation-pinned, but its world/object/diplomacy
    adapter is intentionally separate from the currently owned tick lane. The old
@@ -404,8 +445,7 @@ Ordered by how much they would cost a replay harness.
 5. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
    (`0x006541E0`) and therefore whether it is on any channel. It monotonically increases and
    never rewinds, so if it *is* walked, save/load round-tripping must preserve it.
-6. `Ammo::init_crash` (`0x0067B800`) — the aircraft-crash constructor — is not ported.
-7. The exact `DataWalk` section-mask value `check_all` installs before the ammo channel is not
+6. The exact `DataWalk` section-mask value `check_all` installs before the ammo channel is not
    confirmed; `AmmoData::walk_data` reads the *direction* field (`+4`), not the mask (`+0xC`),
    so it should not matter, but it is unverified.
 
@@ -417,9 +457,11 @@ Ordered by how much they would cost a replay harness.
   integration seam is the tick launch call described in §7.2; callers that have live order and
   flight-band state should use `ammo_init_targeted`, not the post-gate compatibility adapter.
 - The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
-  world bounds, unit/building search, water test) and `SplashEnv` (WData heads, down-chain
-  objects, diplomacy) rather than reaching into the SoA world, so it will not collide with the
-  `world.rs` rewrite. Whoever owns the world implements those adapters.
+  world bounds, unit/building search, water test), `SplashEnv` (WData heads, down-chain objects,
+  diplomacy), and `CrashEnv` (WCoord bounds and terrain height) rather than reaching into the SoA
+  world, so it will not collide with the `world.rs` rewrite. Whoever owns the world implements
+  those adapters; `ammo_spawn_crash` is complete but intentionally not wired into the live
+  `Objects::kill_guy` equivalent or `tick.rs`.
 - Damage is **emitted, not applied**: `ammo_do_damage_single` / `ammo_do_damage_splash` return
   `DamageCall` values matching `Object::do_damage`'s argument list exactly. This keeps the
   `ammo`/`units`/`deaths` channel boundary clean.
