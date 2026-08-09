@@ -224,6 +224,19 @@ fn show(cfg: &ModeConfig, d: Deviation) {
             "no channel effect"
         }
     );
+    println!("IMPLEMENT   {:?}", e.implementation);
+    if e.surfaces.is_empty() {
+        println!("SURFACES    research-only / not applicable");
+    } else {
+        println!(
+            "SURFACES    {}",
+            e.surfaces
+                .iter()
+                .map(|s| s.slug())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     println!("\nRETAIL\n  {}", wrap(e.retail));
     println!("\nOURS\n  {}", wrap(e.ours));
     println!("\nWHY\n  {}", wrap(e.why));
