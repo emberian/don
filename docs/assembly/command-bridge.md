@@ -30,10 +30,11 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Eighteen inline state handlers** — control-group save/camera, MP-log toggle, speed
+* **Twenty-one inline state handlers** — control-group save/camera, MP-log toggle, speed
   set/up/down, all eight player-speed accumulators, two lockstep report stores, chat-route
-  status, reveal-map/turn telemetry, three AI controls, and three measured simulation
-  no-ops are complete; pause's common state path is wired but remains partial.
+  status, reveal-map/turn telemetry, three bounded cheat-state handlers, three AI controls,
+  and three measured simulation no-ops are complete; pause's common state path is wired
+  but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -50,10 +51,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,543 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 18 `InlineDef` + 82 `OpDef` | 168 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,614 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 21 `InlineDef` + 82 `OpDef` | 171 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–59/62–64/69/72/74/76/79/81, 6 tests | 347 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–65/69/72/74/76/79/81, 7 tests | 406 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -61,9 +62,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-51 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+52 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 6/6,
+`cargo test -p don-sim --test command_speed_state` 7/7,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -267,6 +268,25 @@ for a non-local sender while reveal-map is clear, using the sender's `Player::wh
 The newly implemented `ATTACK_TO`/`GROUP_ATTACK` executors were also re-audited here, but
 their command receivers still cross formation, caster, and target-split tails; those rows
 remain honestly `orders_partial`.
+
+### Technology and resource cheat-state tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 60 | `process_cheat_give_techs` `0x00945070` | set technology bits 0..805, status = 0, accumulated-cheat byte | `complete` |
+| 61 | `process_cheat_zero_techs` `0x00944FA0` | clear technology bits 0..805, status 0→2, accumulated-cheat byte | `complete` |
+| 65 | `process_cheat_increase_buckets` `0x00944C50` | add 1000 to six XOR-encoded resource buckets, accumulated-cheat byte | `complete` |
+
+The tech actions reproduce the exact 806-bit loops from `Game::action_cheat_give_techs`
+`0x00593180` and `Game::action_cheat_zero_techs` `0x00593120`; the two padding bits in
+the final byte are preserved. Give writes status zero throughout. Zero changes only an
+initial zero status to two and preserves every other nonzero value.
+
+The six resource buckets retain their retail encoding: decode with XOR `0x8221`, add
+1000 with wrapping `u32` arithmetic, then XOR again. Opcode 66 ZERO_BUCKETS remains red:
+its leaf clears the same buckets but, in network mode, consumes the game RNG to select an
+external response. Omitting that draw would silently move the lockstep stream, so the
+bounded mutation alone is not promoted.
 
 ## Five things worth keeping
 

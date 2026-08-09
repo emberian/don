@@ -1133,6 +1133,10 @@ impl BridgeStats {
 pub const PLAYER_SPEED_FIELDS: usize = 8;
 pub const NUM_NETWORK_PLAYERS: usize = 8;
 pub const HOTKEY_GROUP_SLOTS: usize = 162;
+pub const CHEAT_TECH_COUNT: usize = 0x326;
+pub const CHEAT_TECH_BYTES: usize = CHEAT_TECH_COUNT.div_ceil(8);
+pub const RESOURCE_BUCKETS: usize = 6;
+pub const RESOURCE_BUCKET_XOR: u32 = 0x8221;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HotKeyCamera {
@@ -1190,6 +1194,9 @@ pub struct InlineCommandState {
     pub local_play: i32,
     pub reveal_map: bool,
     pub accum_cheated: [u8; NUM_NETWORK_PLAYERS],
+    pub tech_bits: [[u8; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
+    pub tech_status: [i32; NUM_NETWORK_PLAYERS],
+    pub resource_buckets_encoded: [[u32; RESOURCE_BUCKETS]; NUM_NETWORK_PLAYERS],
     pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
@@ -1217,6 +1224,10 @@ impl Default for InlineCommandState {
             local_play: 0,
             reveal_map: false,
             accum_cheated: [0; NUM_NETWORK_PLAYERS],
+            tech_bits: [[0; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
+            tech_status: [0; NUM_NETWORK_PLAYERS],
+            resource_buckets_encoded: [[RESOURCE_BUCKET_XOR; RESOURCE_BUCKETS];
+                NUM_NETWORK_PLAYERS],
             turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
@@ -1434,6 +1445,16 @@ impl Bridge {
                     self.process_cheat_view_all(who);
                 }
             }
+            60 => {
+                if let Some(who) = i32_at(cmd, 1) {
+                    self.process_cheat_techs(who, true);
+                }
+            }
+            61 => {
+                if let Some(who) = i32_at(cmd, 1) {
+                    self.process_cheat_techs(who, false);
+                }
+            }
             // The three AI controls write a diagnostic log before this branch. Their only
             // simulation mutation is gated off in network play.
             62 => {
@@ -1449,6 +1470,11 @@ impl Bridge {
             64 => {
                 if !self.inline.network {
                     self.inline.ai_off = i32::from(self.inline.ai_off == 0);
+                }
+            }
+            65 => {
+                if let Some(who) = i32_at(cmd, 1) {
+                    self.process_cheat_increase_buckets(who);
                 }
             }
             // ChatSetCommand replaces all eight recipient status words for the sender's
@@ -1511,12 +1537,57 @@ impl Bridge {
             self.inline.reveal_map = true;
             self.inline.restart_delay = 0;
         }
+        self.process_cheat_warning(who);
+    }
+
+    /// `Game::action_cheat_warning`'s simulation-visible telemetry mutation.
+    fn process_cheat_warning(&mut self, who: i32) {
         let Ok(who) = usize::try_from(who) else {
             return;
         };
         if let Some(accum) = self.inline.accum_cheated.get_mut(who) {
             *accum = accum.wrapping_add(1);
         }
+    }
+
+    /// `Game::action_cheat_{give,zero}_techs` `0x00593180/0x00593120`.
+    fn process_cheat_techs(&mut self, who: i32, give: bool) {
+        let Ok(who) = usize::try_from(who) else {
+            return;
+        };
+        let (Some(bits), Some(status)) = (
+            self.inline.tech_bits.get_mut(who),
+            self.inline.tech_status.get_mut(who),
+        ) else {
+            return;
+        };
+        for tech in 0..CHEAT_TECH_COUNT {
+            let mask = 1 << (tech & 7);
+            if give {
+                bits[tech >> 3] |= mask;
+                *status = 0;
+            } else {
+                bits[tech >> 3] &= !mask;
+                if *status == 0 {
+                    *status = 2;
+                }
+            }
+        }
+        self.process_cheat_warning(who as i32);
+    }
+
+    /// `Game::action_cheat_increase_buckets` `0x00592FF0`.
+    fn process_cheat_increase_buckets(&mut self, who: i32) {
+        let Ok(who) = usize::try_from(who) else {
+            return;
+        };
+        let Some(buckets) = self.inline.resource_buckets_encoded.get_mut(who) else {
+            return;
+        };
+        for encoded in buckets {
+            *encoded = (*encoded ^ RESOURCE_BUCKET_XOR).wrapping_add(1000) ^ RESOURCE_BUCKET_XOR;
+        }
+        self.process_cheat_warning(who as i32);
     }
 
     /// `CommandPackage::process_turn_data` `0x00943D20`.

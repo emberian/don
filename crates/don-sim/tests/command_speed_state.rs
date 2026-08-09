@@ -4,7 +4,8 @@
 //! are never called directly.
 
 use don_sim::command::{
-    Bridge, InlineDef, InlinePort, ObjectTable, Package, Slot, PLAYER_SPEED_FIELDS,
+    Bridge, InlineDef, InlinePort, ObjectTable, Package, Slot, CHEAT_TECH_BYTES,
+    PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
 };
 
 fn fixed_i32(op: u8, value: i32) -> Vec<u8> {
@@ -343,5 +344,63 @@ fn reveal_map_and_turn_data_decode_exact_unsigned_fields_and_remote_gate() {
         "local sender cannot trigger reveal"
     );
     assert_eq!(bridge.stats.inline_state, 5);
+    assert_eq!(bridge.stats.inert, 0);
+}
+
+#[test]
+fn technology_and_bucket_cheats_preserve_padding_status_and_xor_arithmetic() {
+    for op in [60, 61, 65] {
+        assert_eq!(InlineDef::find(op).unwrap().port, InlinePort::Complete);
+    }
+
+    let mut bridge = Bridge::new();
+    let mut package = Package::new(0, 0);
+    bridge.inline.tech_bits[6][CHEAT_TECH_BYTES - 1] = 0xc0;
+    bridge.inline.tech_status[6] = 7;
+
+    issue(&mut bridge, &mut package, &fixed_i32(60, 6));
+    assert!(bridge.inline.tech_bits[6][..CHEAT_TECH_BYTES - 1]
+        .iter()
+        .all(|&byte| byte == 0xff));
+    assert_eq!(bridge.inline.tech_bits[6][CHEAT_TECH_BYTES - 1], 0xff);
+    assert_eq!(bridge.inline.tech_status[6], 0);
+    assert_eq!(bridge.inline.accum_cheated[6], 1);
+
+    issue(&mut bridge, &mut package, &fixed_i32(61, 6));
+    assert!(bridge.inline.tech_bits[6][..CHEAT_TECH_BYTES - 1]
+        .iter()
+        .all(|&byte| byte == 0));
+    assert_eq!(
+        bridge.inline.tech_bits[6][CHEAT_TECH_BYTES - 1],
+        0xc0,
+        "the two padding bits above tech 805 survive"
+    );
+    assert_eq!(bridge.inline.tech_status[6], 2);
+    assert_eq!(bridge.inline.accum_cheated[6], 2);
+
+    bridge.inline.tech_status[6] = 7;
+    issue(&mut bridge, &mut package, &fixed_i32(61, 6));
+    assert_eq!(
+        bridge.inline.tech_status[6], 7,
+        "zero-techs changes only a zero status to two"
+    );
+
+    let decoded = [0, 1, u32::MAX, 999, 1000, 0x8000_0000];
+    for (slot, value) in bridge.inline.resource_buckets_encoded[6]
+        .iter_mut()
+        .zip(decoded)
+    {
+        *slot = value ^ RESOURCE_BUCKET_XOR;
+    }
+    issue(&mut bridge, &mut package, &fixed_i32(65, 6));
+    let after =
+        bridge.inline.resource_buckets_encoded[6].map(|encoded| encoded ^ RESOURCE_BUCKET_XOR);
+    assert_eq!(
+        after,
+        decoded.map(|value| value.wrapping_add(1000)),
+        "all six decoded buckets add with x86 u32 wrapping"
+    );
+    assert_eq!(bridge.inline.accum_cheated[6], 4);
+    assert_eq!(bridge.stats.inline_state, 4);
     assert_eq!(bridge.stats.inert, 0);
 }
