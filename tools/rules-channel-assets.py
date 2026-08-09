@@ -8,7 +8,10 @@ fields.  Emitted images are privacy-safe normalized walker inputs: bytes the wal
 does not visit are zero, including vtables, heap pointers, and String state.
 
 ``--check-types`` is the independently useful green gate.  ``--check`` is the full P0
-gate and deliberately remains red until the 24 shipped nation inputs are available.
+gate and deliberately remains red until a narrow ``donject peek`` of the 24 contiguous
+Tribe records is supplied with ``--tribes-capture``.  The raw dump is only an input:
+the parser retains the two ranges visited by ``Tribe::walk_rules_data`` and zeroes every
+other byte before it returns a record.
 """
 
 from __future__ import annotations
@@ -33,6 +36,28 @@ RECORD_SIZE = 1792
 TYPE_CHECKPOINT = 0x72E0C3B6
 TYPE_WALKED_BYTES = 473_984
 ARRAY_OFFSETS = (0x27C, 0x298)
+
+RULES_BLOCK_BYTES = 0x0D40
+RULES_DUPLICATE_OFFSET = 0x0804
+CONSTANTS_CHECKPOINT = 0x50625668
+CONSTANTS_WALKED_BYTES = RULES_BLOCK_BYTES + 4
+BALANCE_SIDE = 493
+BALANCE_BYTES = BALANCE_SIDE * BALANCE_SIDE * 2
+BALANCE_CHECKPOINT = 0x56DAABC1
+TRIBE_COUNT = 24
+TRIBE_SIZE = 0x05F0
+TRIBE_CAPTURE_BYTES = TRIBE_COUNT * TRIBE_SIZE
+TRIBE_RANGES = ((0x54, 0x6C), (0x70, 0x5F0))
+TRIBE_WALKED_BYTES = TRIBE_COUNT * sum(end - begin for begin, end in TRIBE_RANGES)
+TRIBE_POINTER_RVA = 0x00A7FA34
+RULES_CHECKPOINT = 0x12BA3104
+RULES_WALKED_BYTES = (
+    TYPE_WALKED_BYTES
+    + CONSTANTS_WALKED_BYTES
+    + BALANCE_BYTES
+    + TRIBE_WALKED_BYTES
+)
+SUPPORTED_EXE_SHA256 = "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
 
 # Most-derived registry and retail walker kind in global TypeIndex order.
 TYPE_PLAN = (
@@ -79,6 +104,14 @@ class U16Array:
     grow: int
     flags: int
     elements: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class TribeCapture:
+    module_base: int
+    address: int
+    records: tuple[bytes, ...]
+    header: dict[str, str]
 
 
 def expected_type(slot: int) -> tuple[str, str, int]:
@@ -307,8 +340,14 @@ def validate_state_schema(path: Path) -> None:
             raise AssetError(f"{path}: {name} shape is {actual}, expected {shape}")
 
 
-def validate_manifest(path: Path, capture: Path) -> None:
+def validate_manifest(
+    path: Path, capture: Path, constants: bytes, balance_path: Path
+) -> None:
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != 2:
+        raise AssetError(
+            f"{path}: schema_version={manifest.get('schema_version')!r}, expected 2"
+        )
     types = manifest["types"]
     expected = {
         "slots": TYPE_SLOTS,
@@ -321,6 +360,225 @@ def validate_manifest(path: Path, capture: Path) -> None:
     for key, value in expected.items():
         if types.get(key) != value:
             raise AssetError(f"{path}: types.{key}={types.get(key)!r}, expected {value!r}")
+
+    static_expected = {
+        "constants": {
+            "source_checked_in": True,
+            "bytes": RULES_BLOCK_BYTES,
+            "block_sha256": hashlib.sha256(constants).hexdigest(),
+            "after_constants": f"0x{CONSTANTS_CHECKPOINT:08x}",
+            "bytes_walked": CONSTANTS_WALKED_BYTES,
+        },
+        "balance": {
+            "source_checked_in": False,
+            "bytes": BALANCE_BYTES,
+            "source_sha256": sha256(balance_path),
+            "after_balance": f"0x{BALANCE_CHECKPOINT:08x}",
+            "bytes_walked": BALANCE_BYTES,
+        },
+        "tribes": {
+            "records_required": TRIBE_COUNT,
+            "record_size": TRIBE_SIZE,
+            "capture_bytes": TRIBE_CAPTURE_BYTES,
+            "pointer_rva": f"0x{TRIBE_POINTER_RVA:08x}",
+            "walked_ranges": ["0x54..0x6c", "0x70..0x5f0"],
+            "bytes_walked": TRIBE_WALKED_BYTES,
+            "after_tribes": f"0x{RULES_CHECKPOINT:08x}",
+        },
+    }
+    for section, values in static_expected.items():
+        actual = manifest.get(section, {})
+        for key, value in values.items():
+            if actual.get(key) != value:
+                raise AssetError(
+                    f"{path}: {section}.{key}={actual.get(key)!r}, expected {value!r}"
+                )
+
+
+def repository_constants(path: Path) -> bytes:
+    text = path.read_text(encoding="ascii")
+    encoded = re.findall(r"^BLK=(\S+)$", text, re.MULTILINE)
+    if len(encoded) != 1:
+        raise AssetError(f"{path}: expected exactly one BLK= payload, got {len(encoded)}")
+    try:
+        decoded = base64.b64decode(encoded[0], validate=True)
+    except ValueError as error:
+        raise AssetError(f"{path}: invalid BLK base64: {error}") from error
+    if len(decoded) < RULES_BLOCK_BYTES:
+        raise AssetError(
+            f"{path}: decoded BLK is {len(decoded)} bytes, expected at least {RULES_BLOCK_BYTES}"
+        )
+    return decoded[:RULES_BLOCK_BYTES]
+
+
+def repository_balance(path: Path) -> bytes:
+    payload = path.read_bytes()
+    if len(payload) != BALANCE_BYTES:
+        raise AssetError(f"{path}: balance is {len(payload)} bytes, expected {BALANCE_BYTES}")
+    return payload
+
+
+def _header_hex(header: dict[str, str], name: str) -> int:
+    try:
+        value = header[name]
+    except KeyError as error:
+        raise AssetError(f"Tribe capture header is missing {name}=") from error
+    if value.casefold().startswith("0x"):
+        value = value[2:]
+    if not value or not re.fullmatch(r"[0-9a-fA-F]+", value):
+        raise AssetError(f"Tribe capture header has invalid {name}={header[name]!r}")
+    return int(value, 16)
+
+
+def _optional_header_hex(header: dict[str, str], *names: str) -> int | None:
+    for name in names:
+        if name in header:
+            return _header_hex(header, name)
+    return None
+
+
+def normalize_tribe_records(payload: bytes) -> tuple[bytes, ...]:
+    """Retain only bytes visited by Tribe::walk_rules_data (0x006f1270)."""
+    if len(payload) != TRIBE_CAPTURE_BYTES:
+        raise AssetError(
+            f"Tribe capture is {len(payload)} bytes, expected "
+            f"{TRIBE_COUNT} * 0x{TRIBE_SIZE:x} = {TRIBE_CAPTURE_BYTES}"
+        )
+    records = []
+    for index in range(TRIBE_COUNT):
+        raw = payload[index * TRIBE_SIZE : (index + 1) * TRIBE_SIZE]
+        image = bytearray(TRIBE_SIZE)
+        for begin, end in TRIBE_RANGES:
+            image[begin:end] = raw[begin:end]
+        records.append(bytes(image))
+    return tuple(records)
+
+
+def parse_tribe_capture(path: Path) -> TribeCapture:
+    """Parse the address-bearing text emitted by ``donject peek``.
+
+    The current injector header supplies ``base``, ``addr``, and ``len``.  Newer
+    headers may additionally supply the request metadata; every field that is present
+    is checked against the measured global-pointer boundary.
+    """
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise AssetError(
+            f"{path}: expected address-bearing donject peek text, not a raw memory blob"
+        ) from error
+    nonempty = [line.strip() for line in lines if line.strip()]
+    if not nonempty or not nonempty[0].startswith("#"):
+        raise AssetError(f"{path}: missing donject peek header")
+    header_pairs = re.findall(r"\b([A-Za-z][A-Za-z0-9_]*)=([^\s]+)", nonempty[0])
+    header = {name.casefold(): value for name, value in header_pairs}
+    if len(header) != len(header_pairs):
+        raise AssetError(f"{path}: duplicate field in donject peek header")
+
+    module_base = _header_hex(header, "base")
+    address = _header_hex(header, "addr")
+    length = _header_hex(header, "len")
+    if module_base < 0x00400000 or module_base & 0xFFFF:
+        raise AssetError(f"{path}: implausible x86 image base 0x{module_base:08x}")
+    if address < 0x10000 or address & 3 or address + length > 0x1_0000_0000:
+        raise AssetError(f"{path}: invalid x86 read range 0x{address:08x}+0x{length:x}")
+    if length != TRIBE_CAPTURE_BYTES:
+        raise AssetError(
+            f"{path}: header len=0x{length:x}, expected 24 * 0x5f0 = 0x{TRIBE_CAPTURE_BYTES:x}"
+        )
+
+    rva = _optional_header_hex(header, "rva", "root_rva")
+    if rva is not None and rva != TRIBE_POINTER_RVA:
+        raise AssetError(
+            f"{path}: header rva=0x{rva:x}, expected Tribe pointer RVA 0x{TRIBE_POINTER_RVA:x}"
+        )
+    deref = _optional_header_hex(header, "deref", "nderef")
+    if deref is not None and deref != 1:
+        raise AssetError(f"{path}: header deref={deref}, expected 1")
+    offset = _optional_header_hex(header, "off", "offset")
+    if offset is not None and offset != 0:
+        raise AssetError(f"{path}: header off=0x{offset:x}, expected 0")
+    root = _optional_header_hex(header, "root", "source", "pointer_addr")
+    if root is not None and root != module_base + TRIBE_POINTER_RVA:
+        raise AssetError(
+            f"{path}: header pointer address 0x{root:08x}, expected "
+            f"base+rva = 0x{module_base + TRIBE_POINTER_RVA:08x}"
+        )
+    if "module" in header and header["module"].casefold() != "riseofnations.exe":
+        raise AssetError(f"{path}: capture module is {header['module']!r}, not riseofnations.exe")
+    for name in ("exe_sha256", "image_sha256", "target_sha256"):
+        if name in header and header[name].casefold() != SUPPORTED_EXE_SHA256:
+            raise AssetError(f"{path}: {name} does not identify the supported executable")
+    if "stable" in header and header["stable"].casefold() not in {"1", "true", "yes"}:
+        raise AssetError(f"{path}: capture reports unstable root pointer")
+
+    payload = bytearray()
+    expected_address = address
+    row_pattern = re.compile(r"^([0-9a-fA-F]{8}):((?: [0-9a-fA-F]{2}){1,16})$")
+    for line_number, line in enumerate(nonempty[1:], 2):
+        match = row_pattern.fullmatch(line)
+        if not match:
+            raise AssetError(f"{path}:{line_number}: malformed donject peek row")
+        row_address = int(match.group(1), 16)
+        if row_address != expected_address:
+            raise AssetError(
+                f"{path}:{line_number}: row starts at 0x{row_address:08x}, "
+                f"expected 0x{expected_address:08x}"
+            )
+        row = bytes.fromhex(match.group(2))
+        if len(payload) + len(row) < length and len(row) != 16:
+            raise AssetError(f"{path}:{line_number}: short row before the final payload row")
+        payload.extend(row)
+        expected_address += len(row)
+        if len(payload) > length:
+            raise AssetError(f"{path}:{line_number}: payload exceeds header len")
+    if len(payload) != length:
+        raise AssetError(f"{path}: decoded {len(payload)} bytes, header declares {length}")
+
+    return TribeCapture(
+        module_base=module_base,
+        address=address,
+        records=normalize_tribe_records(bytes(payload)),
+        header=header,
+    )
+
+
+def walk_static_prefix(after_types: int, constants: bytes, balance: bytes) -> dict[str, int]:
+    if len(constants) != RULES_BLOCK_BYTES:
+        raise AssetError(f"Constants block is {len(constants)} bytes, expected {RULES_BLOCK_BYTES}")
+    if len(balance) != BALANCE_BYTES:
+        raise AssetError(f"balance table is {len(balance)} bytes, expected {BALANCE_BYTES}")
+    adler = zlib.adler32(constants, after_types) & 0xFFFF_FFFF
+    adler = zlib.adler32(
+        constants[RULES_DUPLICATE_OFFSET : RULES_DUPLICATE_OFFSET + 4], adler
+    ) & 0xFFFF_FFFF
+    after_constants = adler
+    adler = zlib.adler32(balance, adler) & 0xFFFF_FFFF
+    return {
+        "after_types": after_types,
+        "after_constants": after_constants,
+        "after_balance": adler,
+        "bytes_walked": TYPE_WALKED_BYTES + CONSTANTS_WALKED_BYTES + BALANCE_BYTES,
+    }
+
+
+def walk_static_rules(
+    after_types: int, constants: bytes, balance: bytes, tribes: tuple[bytes, ...]
+) -> dict[str, int]:
+    if len(tribes) != TRIBE_COUNT or any(len(image) != TRIBE_SIZE for image in tribes):
+        raise AssetError("normalized Tribe set is not exactly 24 records of 0x5f0 bytes")
+    prefix = walk_static_prefix(after_types, constants, balance)
+    adler = prefix["after_balance"]
+    for image in tribes:
+        for begin, end in TRIBE_RANGES:
+            adler = zlib.adler32(image[begin:end], adler) & 0xFFFF_FFFF
+    return {
+        "after_types": after_types,
+        "after_constants": prefix["after_constants"],
+        "after_balance": prefix["after_balance"],
+        "after_tribes": adler,
+        "bytes_walked": RULES_WALKED_BYTES,
+    }
 
 
 def check_walker_source(path: Path) -> None:
@@ -351,11 +609,20 @@ def tribe_blockers(root: Path) -> tuple[list[str], list[str]]:
     blockers = []
     if len(names) != 24:
         blockers.append(f"rules.xml names {len(names)} tribes, expected 24")
-    available = {p.name.casefold() for p in (root / "ron-data").rglob("*.xml")}
+    # RulesCategory::CAT_TRIBES resolves these names under the shipped `tribes\`
+    # category. Same-named campaign/scenario XML files elsewhere in the extracted
+    # corpus are not loader inputs and must not make this gate look less incomplete.
+    tribe_dir = root / "ron-data/tribes"
+    available = (
+        {p.name.casefold() for p in tribe_dir.iterdir() if p.is_file()}
+        if tribe_dir.is_dir()
+        else set()
+    )
     missing = [name for name in names if name.casefold() not in available]
     if missing:
         blockers.append(
-            "24 nation XML files that set Tribe scalar/substitution state are absent: "
+            f"{len(missing)} of {len(names)} nation XML files in ron-data/tribes that set "
+            "Tribe scalar/substitution state are absent: "
             + ", ".join(missing)
         )
     blockers.append(
@@ -428,6 +695,9 @@ def self_test() -> None:
     assert expected_type(543) == ("ItemType", "Object", 636)
     assert expected_type(805) == ("BonusType", "Type", 94)
     assert len(ARRAY_INITIALIZED) == 481
+    assert TRIBE_CAPTURE_BYTES == 0x8E80
+    assert TRIBE_WALKED_BYTES == 34_368
+    assert RULES_WALKED_BYTES == 997_846
     print("rules-channel-assets self-test: ok")
 
 
@@ -443,7 +713,13 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
     check_typeids(root / "schema/live/live-tables-typeids.tsv", types)
     validate_pdb(root / "schema/pdb-types.json")
     validate_state_schema(root / "schema/state-schema.json")
-    validate_manifest(root / "schema/rules-channel-assets.json", capture)
+    constants_path = root / "schema/live/rules-block-pid14644.txt"
+    balance_path = root / "schema/live/final-balance-runtime.bin"
+    constants = repository_constants(constants_path)
+    balance = repository_balance(balance_path)
+    validate_manifest(
+        root / "schema/rules-channel-assets.json", capture, constants, balance_path
+    )
     check_walker_source(root / "crates/don-replay/src/rules_channel.rs")
     arrays = rebuild_arrays(types)
     checkpoint, walked = walk_types(types, arrays)
@@ -452,13 +728,56 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
             f"type walk produced 0x{checkpoint:08x}/{walked}, expected "
             f"0x{TYPE_CHECKPOINT:08x}/{TYPE_WALKED_BYTES}"
         )
-    tribe_names, blockers = tribe_blockers(root)
+
+    prefix = walk_static_prefix(checkpoint, constants, balance)
+    prefix_expected = {
+        "after_constants": CONSTANTS_CHECKPOINT,
+        "after_balance": BALANCE_CHECKPOINT,
+    }
+    for name, expected in prefix_expected.items():
+        if prefix[name] != expected:
+            raise AssetError(
+                f"checked-in inputs produce {name}=0x{prefix[name]:08x}, "
+                f"expected measured retail checkpoint 0x{expected:08x}"
+            )
+
+    tribe_names, xml_blockers = tribe_blockers(root)
     unitrules = audit_unitrules(root / "ron-data/unitrules.xml")
+    tribe_capture = None
+    checkpoints = None
+    if args.tribes_capture:
+        tribe_capture_path = Path(args.tribes_capture)
+        if not tribe_capture_path.is_absolute():
+            tribe_capture_path = root / tribe_capture_path
+        tribe_capture = parse_tribe_capture(tribe_capture_path)
+        checkpoints = walk_static_rules(checkpoint, constants, balance, tribe_capture.records)
+        final_expected = {
+            "after_constants": CONSTANTS_CHECKPOINT,
+            "after_balance": BALANCE_CHECKPOINT,
+            "after_tribes": RULES_CHECKPOINT,
+            "bytes_walked": RULES_WALKED_BYTES,
+        }
+        for name, expected in final_expected.items():
+            if checkpoints[name] != expected:
+                formatted = (
+                    f"0x{checkpoints[name]:08x}" if name.startswith("after_") else checkpoints[name]
+                )
+                wanted = f"0x{expected:08x}" if name.startswith("after_") else expected
+                raise AssetError(
+                    f"capture and repository inputs produce {name}={formatted}, expected {wanted}"
+                )
+        blockers = []
+    else:
+        blockers = [
+            "no --tribes-capture was supplied; capture exactly 0x8e80 bytes with "
+            "`donject peek PID riseofnations.exe a7fa34 1 0 8e80`"
+        ] + xml_blockers
+
     if args.emit_types:
         emit_types(Path(args.emit_types), capture, types, arrays)
     array_values = sum(len(value.elements) for pair in arrays if pair for value in pair)
     result = {
-        "status": "incomplete" if blockers else "complete",
+        "status": "incomplete" if blockers else "complete-local-specimen",
         "source": {
             "path": str(capture.relative_to(root)),
             "sha256": sha256(capture),
@@ -473,9 +792,50 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
             "pointed_u16_values": array_values,
             "capture_header_mismatches": 0,
         },
-        "tribes": {"named": len(tribe_names), "complete_records": 0, **unitrules},
+        "constants": {
+            "source": str(constants_path.relative_to(root)),
+            "source_checked_in": True,
+            "bytes": len(constants),
+            "after_constants": f"0x{prefix['after_constants']:08x}",
+        },
+        "balance": {
+            "source": str(balance_path.relative_to(root)),
+            "source_checked_in": False,
+            "bytes": len(balance),
+            "after_balance": f"0x{prefix['after_balance']:08x}",
+        },
+        "tribes": {
+            "named": len(tribe_names),
+            "complete_records": len(tribe_capture.records) if tribe_capture else 0,
+            "raw_bytes_retained": 0,
+            "normalized_bytes_per_record": TRIBE_SIZE if tribe_capture else 0,
+            "walked_bytes": TRIBE_WALKED_BYTES if tribe_capture else 0,
+            **unitrules,
+        },
         "blockers": blockers,
     }
+    if tribe_capture and checkpoints:
+        normalized = b"".join(tribe_capture.records)
+        result["tribes"]["capture_header"] = {
+            "module_base": f"0x{tribe_capture.module_base:08x}",
+            "address": f"0x{tribe_capture.address:08x}",
+            "length": TRIBE_CAPTURE_BYTES,
+            "normalized_sha256": hashlib.sha256(normalized).hexdigest(),
+        }
+        result["rules"] = {
+            "after_types": f"0x{checkpoints['after_types']:08x}",
+            "after_constants": f"0x{checkpoints['after_constants']:08x}",
+            "after_balance": f"0x{checkpoints['after_balance']:08x}",
+            "after_tribes": f"0x{checkpoints['after_tribes']:08x}",
+            "bytes_walked": checkpoints["bytes_walked"],
+            "matches_retail": True,
+        }
+        result["remaining_integration"] = [
+            "derive a reproducible lawful Tribe builder or minimized value representation; "
+            "the raw donject capture remains local and must not be checked in",
+            "replace the gitignored Type and Balance specimen dependencies with lawful builders",
+            "feed normalized complete assets into don-replay channel 13",
+        ]
     return result, not blockers
 
 
@@ -488,6 +848,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="require the full Types+Tribes gate")
     parser.add_argument(
         "--check-types", action="store_true", help="require the independently complete Types gate"
+    )
+    parser.add_argument(
+        "--tribes-capture",
+        metavar="PATH",
+        help="address-bearing donject peek text for 24 contiguous 0x5f0-byte Tribe records",
     )
     parser.add_argument("--emit-types", metavar="PATH", help="write normalized type assets")
     parser.add_argument("--self-test", action="store_true")

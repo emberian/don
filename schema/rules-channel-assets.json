@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "status": "types-exact-tribes-blocked",
+  "schema_version": 2,
+  "status": "prefix-exact-tribes-capture-ready",
   "types": {
     "slots": 806,
     "source": "schema/live/types-runtime.bin",
@@ -11,15 +11,43 @@
     "after_types": "0x72e0c3b6",
     "bytes_walked": 473984
   },
+  "constants": {
+    "source": "schema/live/rules-block-pid14644.txt",
+    "source_checked_in": true,
+    "bytes": 3392,
+    "block_sha256": "327857a804a5c9c507c2fc8dd0e8c145e457bcefb41f845ef26794f1a67907b6",
+    "after_constants": "0x50625668",
+    "bytes_walked": 3396
+  },
+  "balance": {
+    "source": "schema/live/final-balance-runtime.bin",
+    "source_checked_in": false,
+    "bytes": 486098,
+    "source_sha256": "501b47edc9f05f1c1be46d9a7a54984f43fc6dff2a909f4f5174415fe537c79d",
+    "after_balance": "0x56daabc1",
+    "bytes_walked": 486098
+  },
   "tribes": {
     "records_required": 24,
     "record_size": 1520,
+    "capture_bytes": 36480,
+    "pointer_preferred_va": "0x00e7fa34",
+    "pointer_rva": "0x00a7fa34",
+    "donject_command": "donject peek PID riseofnations.exe a7fa34 1 0 8e80",
+    "walked_ranges": [
+      "0x54..0x6c",
+      "0x70..0x5f0"
+    ],
     "graft_entries_per_record": 352,
+    "bytes_walked": 34368,
+    "after_tribes": "0x12ba3104",
+    "raw_capture_checked_in": false,
     "complete_records": 0
   },
   "blockers": [
     "The exact type images currently depend on a gitignored DONTYPE1 capture; checked-in scalar TSVs are not a lossless replacement.",
-    "The 24 nation XML files named by rules.xml are absent.",
-    "No checked-in value-level capture exists for the 24 Tribe graft arrays."
+    "The exact Balance table currently depends on gitignored schema/live/final-balance-runtime.bin; a fresh clone has no lawful builder for it.",
+    "No narrow local donject peek capture has yet been ingested for the 24 contiguous Tribe records.",
+    "The 24 nation XML files named by rules.xml are absent, so a fresh-clone Tribe builder remains blocked."
   ]
 }
