@@ -1,18 +1,20 @@
 //! The players, and the seam a learned policy slots into.
 //!
-//! Three bots and one adapter:
+//! Four bots and one adapter:
 //!
 //! | bot | what it is |
 //! |---|---|
 //! | [`boom::ShippedOpening`] | the shipped `economic.bhs` purchase order, cases 6→18, as a player |
 //! | [`boom::CapFirst`] | the optimiser-derived opening ([`crate::optimum::player::CapFirst`]'s rules) re-expressed against the arena |
 //! | [`marshal::Marshal`] | the strong player: map, scouting, counter-composition, army movement, defence, expansion |
+//! | [`ai::Ai`] | the improved-edition opponent: observation-only war economy, active scouting, mixed counters, focus fire, and retreat |
 //! | [`HeadPolicy`] | **the drop-in**: a `Bot` whose decisions are `don-env` action-head vectors |
 //!
 //! Everything a bot may read is in [`Obs`]. Everything it may do is a [`Cmd`]. Those two
 //! types are the whole contract, and [`HeadPolicy`] exists to prove the contract is the
 //! same one an RL agent has.
 
+pub mod ai;
 pub mod boom;
 pub mod marshal;
 
