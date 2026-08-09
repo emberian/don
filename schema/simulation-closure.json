@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 191,
+  "red": 159,
   "summary": {
     "tick": {
       "total": 29,
@@ -13,18 +13,18 @@
     },
     "orders": {
       "total": 28,
-      "complete": 9,
-      "red": 19
+      "complete": 14,
+      "red": 14
     },
     "group_actions": {
       "total": 42,
-      "complete": 0,
-      "red": 42
+      "complete": 3,
+      "red": 39
     },
     "opcodes": {
       "total": 82,
-      "complete": 2,
-      "red": 80
+      "complete": 26,
+      "red": 56
     },
     "checksums": {
       "total": 15,
@@ -330,9 +330,9 @@
         "name": "ATTACK_TO",
         "retail_va": "0x005F2320",
         "symbol": "Unit::do_attack_to",
-        "status": "unimplemented",
-        "note": "calls through to do_move after target selection",
-        "complete": false
+        "status": "implemented",
+        "note": "exact do_move then 15-frame target/army/pause wrapper; mandatory transactional host",
+        "complete": true
       },
       {
         "id": 3,
@@ -366,9 +366,9 @@
         "name": "BUILD_AT",
         "retail_va": "0x005EEBF0",
         "symbol": "Unit::do_build",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact builder head/retirement order; mandatory animation, reswarm, placement and lifecycle host",
+        "complete": true
       },
       {
         "id": 7,
@@ -483,27 +483,27 @@
         "name": "GROUP_MOVE",
         "retail_va": "0x005E79A0",
         "symbol": "Unit::do_group_move",
-        "status": "unimplemented",
-        "note": "calls through to do_move",
-        "complete": false
+        "status": "implemented",
+        "note": "leader/follower orchestration; mandatory transactional host for Groups/object/terrain facts",
+        "complete": true
       },
       {
         "id": 20,
         "name": "GROUP_ATTACK",
         "retail_va": "0x005E75A0",
         "symbol": "Unit::do_group_attack",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact leader/follower orchestration; mandatory transactional group/target host",
+        "complete": true
       },
       {
         "id": 21,
         "name": "GROUP_ATTACK_TO",
         "retail_va": "0x005E74E0",
         "symbol": "Unit::do_group_attack_to",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact wrapper; mandatory preflighted fight/do_attack_to_pause world callbacks",
+        "complete": true
       },
       {
         "id": 22,
@@ -632,7 +632,7 @@
         "call_sites": 2,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -642,7 +642,7 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -819,7 +819,7 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -967,8 +967,8 @@
         "call_sites": 14,
         "installs": [],
         "delegates": [],
-        "status": "state_partial",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "stance",
@@ -1000,8 +1000,8 @@
         "call_sites": 3,
         "installs": [],
         "delegates": [],
-        "status": "state_partial",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "alarm",
@@ -1098,8 +1098,8 @@
         "call_sites": 0,
         "installs": [],
         "delegates": [],
-        "status": "not_on_wire",
-        "complete": false
+        "status": "complete",
+        "complete": true
       }
     ],
     "opcodes": [
@@ -1120,12 +1120,12 @@
         "name": "BeginCommand",
         "method": "process_begin",
         "retail_va": "0x00949fd0",
-        "receiver": "none",
-        "action": null,
+        "receiver": "group",
+        "action": "begin",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 2,
@@ -1256,8 +1256,8 @@
         "action": "halt",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "state_partial",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 13,
@@ -1280,7 +1280,7 @@
         "action": "set_transport",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1364,8 +1364,8 @@
         "action": "disband",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "state_partial",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 22,
@@ -1496,7 +1496,7 @@
         "action": "unitmask",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1508,7 +1508,7 @@
         "action": "buildmask",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1520,8 +1520,8 @@
         "action": null,
         "wire_bytes": "25",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 35,
@@ -1736,8 +1736,8 @@
         "action": null,
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 53,
@@ -1748,8 +1748,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 54,
@@ -1760,8 +1760,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 55,
@@ -1772,8 +1772,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 56,
@@ -1784,8 +1784,8 @@
         "action": null,
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 57,
@@ -1796,8 +1796,8 @@
         "action": null,
         "wire_bytes": "65",
         "class": "lockstep",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 58,
@@ -1808,8 +1808,8 @@
         "action": null,
         "wire_bytes": "6",
         "class": "lockstep",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 59,
@@ -1820,8 +1820,8 @@
         "action": "cheat_view_all",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 60,
@@ -1832,8 +1832,8 @@
         "action": "cheat_give_techs",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 61,
@@ -1844,8 +1844,8 @@
         "action": "cheat_zero_techs",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 62,
@@ -1856,8 +1856,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 63,
@@ -1868,8 +1868,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 64,
@@ -1880,8 +1880,8 @@
         "action": null,
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 65,
@@ -1892,8 +1892,8 @@
         "action": "cheat_increase_buckets",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 66,
@@ -1904,8 +1904,8 @@
         "action": "cheat_zero_buckets",
         "wire_bytes": "5",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 67,
@@ -1916,8 +1916,8 @@
         "action": "cheat_init_unit",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 68,
@@ -1940,8 +1940,8 @@
         "action": null,
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 70,
@@ -1976,7 +1976,7 @@
         "action": null,
         "wire_bytes": "10",
         "class": "presentation",
-        "bridge_status": "inert",
+        "bridge_status": "complete",
         "complete": true
       },
       {
@@ -2000,8 +2000,8 @@
         "action": "cheat_view_all",
         "wire_bytes": "11",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 75,
@@ -2024,7 +2024,7 @@
         "action": null,
         "wire_bytes": "2",
         "class": "sim",
-        "bridge_status": "inert",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -2060,8 +2060,8 @@
         "action": null,
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 80,
@@ -2084,8 +2084,8 @@
         "action": null,
         "wire_bytes": "2",
         "class": "sim",
-        "bridge_status": "inert",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       }
     ],
     "checksums": [
@@ -2202,7 +2202,7 @@
         "name": "items",
         "walker": "CheckSums::check_items",
         "element_class": "Item",
-        "producer": "absent",
+        "producer": "sim_bridge",
         "compares": 222938,
         "matches": 107882,
         "nontrivial_compares": 0,
