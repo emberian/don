@@ -55,6 +55,8 @@ don-deviations --mode improved --assert-ready product
 `playable` and `rl-env` check their concrete runtimes. `product` is their non-research
 aggregate. A green replay result therefore does not claim the arena is complete, and an
 unfinished research harness does not make an unrelated replay run red.
+`tools/product-readiness.sh` runs that aggregate gate for both canonical modes and refuses
+release until every listed blocker is removed rather than waived.
 
 Three ideas carry the design.
 
