@@ -1586,6 +1586,173 @@ pub fn set_age_plan(age: i32) -> (i32, [(i32, i32); 3]) {
     )
 }
 
+/// One completed `Leader::{set_age,set_epoch}` state transaction. [measured,
+/// `Leader::set_age` `0x006D25A0`, `Leader::set_epoch` `0x006D26F0`]
+///
+/// `target` is the exclusive upper bound of the ladder after clamping the caller's
+/// requested level. `gained` and `removed_from_ladder` retain retail call order;
+/// `invalidated` retains the order of the three prerequisite sweeps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TechSetReceipt {
+    pub target: i32,
+    pub gained: Vec<i32>,
+    pub removed_from_ladder: Vec<i32>,
+    pub invalidated: Vec<i32>,
+}
+
+/// Mandatory world effects reached by `Leader::{set_age,set_epoch}` around the tech-bit
+/// transaction. Implementations must execute these callbacks; default no-op effects would
+/// silently leave unit/build statistics stale.
+///
+/// `has_preq` is called against the already-mutated [`TechState`]. That is load-bearing:
+/// retail removes invalid entries immediately, so a later entry in the same ascending
+/// sweep observes all earlier removals.
+pub trait TechSetHost {
+    /// `LeaderData::has_preq` `0x006DB810`.
+    fn has_preq(&mut self, state: &TechState, type_index: i32) -> bool;
+    /// The state bit/counter mutation has happened; apply the remaining one-shot effects
+    /// of `Leader::gain_tech` `0x006DCB60` before the transaction continues.
+    fn gained_tech(&mut self, state: &TechState, type_index: i32);
+    /// The state bit/counter mutation has happened; apply the remaining one-shot effects
+    /// of `Leader::lose_tech` `0x006D2850` before the transaction continues.
+    fn lost_tech(&mut self, state: &TechState, type_index: i32);
+    /// `Leader::reset_obs_flags` `0x006E32A0`.
+    fn reset_obs_flags(&mut self, state: &TechState);
+    /// `Leader::calc_unit_stats` `0x006CF970`.
+    fn calc_unit_stats(&mut self, state: &TechState);
+    /// `Leader::calc_wall_stats` `0x006CF7C0`.
+    fn calc_wall_stats(&mut self, state: &TechState);
+    /// `Camera::outdate` `0x00844B80`.
+    fn outdate_camera(&mut self, state: &TechState);
+}
+
+#[inline]
+fn gain_for_set<H: TechSetHost>(
+    state: &mut TechState,
+    host: &mut H,
+    type_index: i32,
+    receipt: &mut TechSetReceipt,
+) {
+    state.gain(type_index);
+    host.gained_tech(state, type_index);
+    receipt.gained.push(type_index);
+}
+
+#[inline]
+fn lose_for_set<H: TechSetHost>(
+    state: &mut TechState,
+    host: &mut H,
+    type_index: i32,
+    out: &mut Vec<i32>,
+) {
+    state.lose(type_index);
+    host.lost_tech(state, type_index);
+    out.push(type_index);
+}
+
+/// The common tail of `Leader::set_age` and `Leader::set_epoch`: drop held entries whose
+/// prerequisites no longer hold, then refresh every derived consumer in retail order.
+/// [measured, `0x006D2615..0x006D26E3` and `0x006D2780..0x006D2843`]
+fn revalidate_after_tech_set<H: TechSetHost>(
+    state: &mut TechState,
+    host: &mut H,
+    receipt: &mut TechSetReceipt,
+) {
+    // The first sweep dispatches Type::is_age (vtable +0x34) and skips age types. The
+    // devirtualized body identifies exactly [0x220,0x227) as the age band.
+    for type_index in ty::CLASSICAL_AGE..ty::REVALIDATE_END {
+        if (ty::CLASSICAL_AGE..=ty::INFORMATION_AGE).contains(&type_index) {
+            continue;
+        }
+        if state.tech.get(type_index) && !host.has_preq(state, type_index) {
+            lose_for_set(state, host, type_index, &mut receipt.invalidated);
+        }
+    }
+
+    // These two bodies test the raw BitMask<806> bit before calling has_preq.
+    for (begin, end) in [(50, 402), (ty::VILLAGE, 543)] {
+        for type_index in begin..end {
+            if state.tech.get(type_index) && !host.has_preq(state, type_index) {
+                lose_for_set(state, host, type_index, &mut receipt.invalidated);
+            }
+        }
+    }
+
+    host.reset_obs_flags(state);
+    host.calc_unit_stats(state);
+    host.calc_wall_stats(state);
+    host.outdate_camera(state);
+}
+
+impl TechState {
+    /// Execute `Leader::set_age(int age)` (`0x006D25A0`) over the checksum-visible tech
+    /// mask/counters and a mandatory host for one-shot/world effects. [measured]
+    ///
+    /// Retail treats `age` as the number of completed age advances: level 0 holds none of
+    /// `[CLASSICAL_AGE, INFORMATION_AGE]`, level 7 holds all seven. It first removes the
+    /// suffix in descending order, then grants the prefix in ascending order.
+    pub fn execute_set_age<H: TechSetHost>(&mut self, age: i32, host: &mut H) -> TechSetReceipt {
+        let target = age.clamp(0, 7) + ty::CLASSICAL_AGE;
+        let mut receipt = TechSetReceipt {
+            target,
+            ..TechSetReceipt::default()
+        };
+
+        for type_index in (target..=ty::INFORMATION_AGE).rev() {
+            if self.tech.get(type_index) {
+                lose_for_set(self, host, type_index, &mut receipt.removed_from_ladder);
+            }
+        }
+        for type_index in ty::CLASSICAL_AGE..target {
+            if !self.tech.get(type_index) {
+                gain_for_set(self, host, type_index, &mut receipt);
+            }
+        }
+
+        revalidate_after_tech_set(self, host, &mut receipt);
+        receipt
+    }
+
+    /// Execute `Leader::set_epoch(int category, int level)` (`0x006D26F0`). [measured]
+    ///
+    /// Categories clamp to `0..=3` and use the retail `ResearchCat` numbering. Levels
+    /// clamp to `0..=7`; level 0 removes the category's seven techs and level 7 grants all
+    /// seven. Removal is descending and grant is ascending before the shared revalidation
+    /// tail runs.
+    pub fn execute_set_epoch<H: TechSetHost>(
+        &mut self,
+        category: i32,
+        level: i32,
+        host: &mut H,
+    ) -> TechSetReceipt {
+        let base = match category.clamp(0, 3) {
+            0 => 572, // Military / THE_ART_OF_WAR
+            1 => 565, // Civic / CITY_STATE
+            2 => 558, // Commerce / BARTER
+            _ => 551, // Science / WRITTEN_WORD
+        };
+        let target = base + level.clamp(0, 7);
+        let mut receipt = TechSetReceipt {
+            target,
+            ..TechSetReceipt::default()
+        };
+
+        for type_index in (target..=base + 6).rev() {
+            if self.tech.get(type_index) {
+                lose_for_set(self, host, type_index, &mut receipt.removed_from_ladder);
+            }
+        }
+        for type_index in base..target {
+            if !self.tech.get(type_index) {
+                gain_for_set(self, host, type_index, &mut receipt);
+            }
+        }
+
+        revalidate_after_tech_set(self, host, &mut receipt);
+        receipt
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------------------
@@ -2284,6 +2451,186 @@ mod tests {
         let (t, _) = set_age_plan(99);
         assert_eq!(t, ty::CLASSICAL_AGE + 7);
         assert_eq!(ranges[0], (544, 629));
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum TechSetEvent {
+        HasPreq(i32, bool),
+        Gained(i32),
+        Lost(i32),
+        ResetObs,
+        UnitStats,
+        WallStats,
+        Camera,
+    }
+
+    #[derive(Default)]
+    struct TechSetProbe {
+        invalid: Vec<i32>,
+        /// `(type, dependency)`: `type` is valid only while `dependency` is held.
+        dependencies: Vec<(i32, i32)>,
+        events: Vec<TechSetEvent>,
+    }
+
+    impl TechSetHost for TechSetProbe {
+        fn has_preq(&mut self, state: &TechState, type_index: i32) -> bool {
+            let valid = !self.invalid.contains(&type_index)
+                && self
+                    .dependencies
+                    .iter()
+                    .filter(|(t, _)| *t == type_index)
+                    .all(|(_, dependency)| state.tech.get(*dependency));
+            self.events.push(TechSetEvent::HasPreq(type_index, valid));
+            valid
+        }
+
+        fn gained_tech(&mut self, state: &TechState, type_index: i32) {
+            assert!(
+                state.tech.get(type_index),
+                "gain callback must observe the committed bit"
+            );
+            self.events.push(TechSetEvent::Gained(type_index));
+        }
+
+        fn lost_tech(&mut self, state: &TechState, type_index: i32) {
+            assert!(
+                !state.tech.get(type_index),
+                "loss callback must observe the cleared bit"
+            );
+            self.events.push(TechSetEvent::Lost(type_index));
+        }
+
+        fn reset_obs_flags(&mut self, _: &TechState) {
+            self.events.push(TechSetEvent::ResetObs);
+        }
+
+        fn calc_unit_stats(&mut self, _: &TechState) {
+            self.events.push(TechSetEvent::UnitStats);
+        }
+
+        fn calc_wall_stats(&mut self, _: &TechState) {
+            self.events.push(TechSetEvent::WallStats);
+        }
+
+        fn outdate_camera(&mut self, _: &TechState) {
+            self.events.push(TechSetEvent::Camera);
+        }
+    }
+
+    #[test]
+    fn set_age_executes_descending_loss_ascending_gain_and_exact_tail() {
+        let mut state = TechState::default();
+        for t in [545, 546, 548, 550] {
+            state.gain(t);
+        }
+        let mut host = TechSetProbe::default();
+
+        let receipt = state.execute_set_age(2, &mut host);
+
+        assert_eq!(receipt.target, 546);
+        assert_eq!(receipt.removed_from_ladder, vec![550, 548, 546]);
+        assert_eq!(receipt.gained, vec![544]);
+        assert!(receipt.invalidated.is_empty());
+        assert!(state.tech.get(544));
+        assert!(state.tech.get(545));
+        assert!(!(546..=550).any(|t| state.tech.get(t)));
+        assert_eq!(
+            host.events,
+            vec![
+                TechSetEvent::Lost(550),
+                TechSetEvent::Lost(548),
+                TechSetEvent::Lost(546),
+                TechSetEvent::Gained(544),
+                TechSetEvent::ResetObs,
+                TechSetEvent::UnitStats,
+                TechSetEvent::WallStats,
+                TechSetEvent::Camera,
+            ]
+        );
+    }
+
+    #[test]
+    fn set_epoch_mutates_the_selected_counter_band_at_exclusive_level() {
+        let mut state = TechState::default();
+        let mut host = TechSetProbe::default();
+
+        let receipt = state.execute_set_epoch(ResearchCat::Civic as i32, 3, &mut host);
+        assert_eq!(receipt.target, 568);
+        assert_eq!(receipt.gained, vec![565, 566, 567]);
+        assert_eq!(state.counters.epochs, 3);
+        assert_eq!(state.counters.epoch, [0, 3, 0, 0]);
+        assert!((565..568).all(|t| state.tech.get(t)));
+        assert!(!(568..572).any(|t| state.tech.get(t)));
+
+        host.events.clear();
+        let receipt = state.execute_set_epoch(ResearchCat::Civic as i32, 1, &mut host);
+        assert_eq!(receipt.target, 566);
+        assert_eq!(receipt.removed_from_ladder, vec![567, 566]);
+        assert!(receipt.gained.is_empty());
+        assert_eq!(state.counters.epochs, 1);
+        assert_eq!(state.counters.epoch, [0, 1, 0, 0]);
+        assert!(state.tech.get(565));
+        assert!(!state.tech.get(566));
+        assert!(!state.tech.get(567));
+    }
+
+    #[test]
+    fn tech_revalidation_is_live_ordered_and_skips_age_types() {
+        let mut state = TechState::default();
+        for t in [551, 552, 50, 51, 414, 415] {
+            state.gain(t);
+        }
+        let mut host = TechSetProbe {
+            invalid: vec![551, 50, 414],
+            dependencies: vec![(552, 551), (51, 50), (415, 414)],
+            events: Vec::new(),
+        };
+
+        let receipt = state.execute_set_age(7, &mut host);
+
+        assert_eq!(receipt.target, 551);
+        assert_eq!(receipt.gained, (544..551).collect::<Vec<_>>());
+        assert_eq!(receipt.invalidated, vec![551, 552, 50, 51, 414, 415]);
+        assert_eq!(state.counters.epochs, 0);
+        assert_eq!(state.counters.discovered, 0);
+        assert!((544..551).all(|t| state.tech.get(t)));
+
+        let queried = host
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                TechSetEvent::HasPreq(t, _) => Some(*t),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(queried, vec![551, 552, 50, 51, 414, 415]);
+        assert!(queried.iter().all(|t| !(544..=550).contains(t)));
+        assert_eq!(
+            &host.events[host.events.len() - 4..],
+            &[
+                TechSetEvent::ResetObs,
+                TechSetEvent::UnitStats,
+                TechSetEvent::WallStats,
+                TechSetEvent::Camera,
+            ]
+        );
+    }
+
+    #[test]
+    fn set_epoch_clamps_category_and_level_before_selecting_retail_base() {
+        let mut military = TechState::default();
+        let mut military_host = TechSetProbe::default();
+        let receipt = military.execute_set_epoch(-99, 99, &mut military_host);
+        assert_eq!(receipt.target, 579);
+        assert_eq!(receipt.gained, (572..579).collect::<Vec<_>>());
+        assert_eq!(military.counters.epoch, [7, 0, 0, 0]);
+
+        let mut science = TechState::default();
+        let mut science_host = TechSetProbe::default();
+        let receipt = science.execute_set_epoch(99, -99, &mut science_host);
+        assert_eq!(receipt.target, 551);
+        assert!(receipt.gained.is_empty());
+        assert!(science.tech.bytes.iter().all(|byte| *byte == 0));
     }
 
     // ---- techrules.xml -----------------------------------------------------------

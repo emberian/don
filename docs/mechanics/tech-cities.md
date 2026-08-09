@@ -397,6 +397,16 @@ library techs for Classical through Information.
 any held type whose `has_preq` no longer holds: `[544, 629)`, `[50, 402)` (units) and
 `[414, 543)` (buildings and wonders).
 
+Those two operations are now executable as `TechState::execute_set_age` and
+`TechState::execute_set_epoch`. The port preserves the non-obvious transaction order:
+remove the selected ladder's suffix descending, grant its prefix ascending, then perform
+the three prerequisite sweeps ascending against the state produced by every earlier
+removal. Age types `544..550` are skipped by the first sweep, matching its vtable
+`is_age` gate. The mandatory host receives each gain/loss one-shot effect and the final
+`reset_obs_flags -> calc_unit_stats -> calc_wall_stats -> Camera::outdate` tail; the
+remaining boundary is still the unported body of `Leader::gain_tech`, not the ladder or
+revalidation transaction itself.
+
 ### 6.5 The prerequisite graph
 
 `LeaderData::has_preq` `0x006DB810` is the evaluator. Core:
