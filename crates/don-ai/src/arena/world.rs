@@ -39,9 +39,10 @@
 //!
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
-//! 6. No water, naval, air or diplomacy. Supply source traversal and the due-frame
-//!    attrition mutation are wired into the live unit band; attrition-period recomputation,
-//!    supply reload penalties and healing remain separate blockers.
+//! 6. No water, naval, air or diplomacy. Supply source traversal, siege reload selection,
+//!    isolated French/Versailles healing, the 32-frame attrition reset/friendly return and
+//!    due-frame attrition mutation are wired into the live unit band. Non-friendly period
+//!    selection and other healing families remain explicit blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -100,9 +101,11 @@ use super::gather_runtime::{
 };
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
-    self, ArenaSupplyAttritionHost, HeroRadiusFacts, HeroRegistryRecord,
-    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyRadiusFacts, SupplyRegistryRecord,
-    SupplySearchObject, RESUPPLIED_THIS_TICK, SUPPORT_REGISTRY_ACTIVE,
+    self, ArenaAttritionRecomputeHost, ArenaReloadSupplyHost, ArenaSupplyAttritionHost,
+    ArenaSupplyHealingHost, AttritionRecomputeTransaction, HeroRadiusFacts, HeroRegistryRecord,
+    ReloadSupplyState, SupplyAttritionTransaction, SupplyAttritionUnitState,
+    SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject,
+    RESUPPLIED_THIS_TICK, SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -305,8 +308,9 @@ pub struct Ent {
     pub last_damaged: i64,
     pub spawn_frame: i64,
     /// `UnitData::attrition` `+0x9E`, the due period in frames. It is real per-unit state;
-    /// zero disables the due branch. Arena does not yet implement the separate
-    /// `Unit::process_attrition` recomputation sites, so ordinary spawns retain zero.
+    /// zero disables the due branch. Arena executes the 32-frame universal reset and
+    /// friendly-territory return; ordinary spawns retain zero because non-friendly period
+    /// selection still requires unavailable diplomacy/leader/object-graph authority.
     pub attrition_period: i16,
     /// The persistent retail `UnitData` slice consumed by `Unit::do_move`: order queue,
     /// waypoint stack, parked A* state, body, collision bookkeeping, and movement masks.
@@ -576,7 +580,12 @@ enum ArenaSupplyHostError {
     MissingMotion { who: i32, o: i32 },
     MissingType(i32),
     StaleUnitMasks2 { expected: u32, found: u32 },
+    StaleDamage { expected: i32, found: i32 },
+    StaleUnitMasks { expected: u32, found: u32 },
+    StaleAttritionPeriod { expected: i16, found: i16 },
     UnsupportedUberDamage { type_id: i32, uber_size: i32 },
+    UnsupportedUberHealing { type_id: i32, uber_size: i32 },
+    PositionOutsideWorld { x: i32, y: i32 },
 }
 
 /// A direct view of the live Arena object tables for one retail supply/attrition
@@ -587,6 +596,7 @@ struct ArenaSupplyHost<'a> {
     players: &'a [PlayerState],
     supply_records: &'a [Vec<SupplyRegistryRecord>],
     hero_records: &'a [Vec<HeroRegistryRecord>],
+    territory: &'a don_sim::systems::map_terrain::World,
     frame: i64,
 }
 
@@ -658,11 +668,13 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
             },
             unit_id: ent.object_o,
             attrition_period: ent.attrition_period,
+            damage: ent.hp.damage,
             unit_masks: motion.unit_masks,
             unit_masks2: motion.unit_masks2,
             is_supply: ty.unit_flags2 & 0x40 != 0,
             // `get_bonus(0x42)` devirtualizes to ObjectTypeData::is(TypeIndex 66, 0).
             militia: type_is(self.types, ent.type_id, 0x42),
+            domain: ty.domain,
             type_308: ty.uber_size,
             // Arena objects have no captain/child object links. The isolated object shape
             // is exact for uber_size == 1; damage below fails closed for every other shape.
@@ -782,20 +794,21 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
             .object_index(who, o)?
             .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
         let type_id = self.ents[index].type_id;
-        let ty = self
+        let uber_size = self
             .types
             .get(type_id)
-            .ok_or(ArenaSupplyHostError::MissingType(type_id))?;
-        if ty.uber_size != 1 {
-            return Err(ArenaSupplyHostError::UnsupportedUberDamage {
-                type_id,
-                uber_size: ty.uber_size,
-            });
+            .ok_or(ArenaSupplyHostError::MissingType(type_id))?
+            .uber_size;
+        if uber_size != 1 {
+            return Err(ArenaSupplyHostError::UnsupportedUberDamage { type_id, uber_size });
         }
         let ent = &mut self.ents[index];
         ent.hp.accumulate(damage.flat, damage.fractional);
         ent.last_damaged = self.frame;
-        Ok(don_sim::systems::combat::resolve_damage(&ent.hp, ty.hits))
+        Ok(don_sim::systems::combat::resolve_damage(
+            &ent.hp,
+            ent.hp.myhits,
+        ))
     }
 
     fn suffer_graphic_attrition(&mut self, who: i32, o: i32) -> Result<(), Self::Error> {
@@ -807,6 +820,131 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
         if !self.ents[index].alive {
             return Err(ArenaSupplyHostError::MissingObject { who, o });
         }
+        Ok(())
+    }
+}
+
+impl ArenaReloadSupplyHost for ArenaSupplyHost<'_> {
+    fn territory_owner_at(&self, x: i32, y: i32) -> Result<i32, Self::Error> {
+        let tx = x.div_euclid(RANGE_UNITS_PER_TILE);
+        let ty = y.div_euclid(RANGE_UNITS_PER_TILE);
+        let wx = tx.div_euclid(4);
+        let wy = ty.div_euclid(4);
+        if wx < 0 || wy < 0 || wx >= self.territory.xs || wy >= self.territory.ys {
+            return Err(ArenaSupplyHostError::PositionOutsideWorld { x, y });
+        }
+        Ok(self.territory.get_who(wx, wy))
+    }
+}
+
+impl ArenaSupplyHealingHost for ArenaSupplyHost<'_> {
+    fn french_supply_bonus(&self, who: i32) -> Result<bool, Self::Error> {
+        let owner = self.owner(who)?;
+        Ok(self.players[owner].tribe == 0x0A)
+    }
+
+    fn completed_versailles(&self, who: i32) -> Result<bool, Self::Error> {
+        self.owner(who)?;
+        Ok(self.completed_owned_type(who, 0x218))
+    }
+
+    fn unsupported_prior_healing_source(&self, who: i32, o: i32) -> Result<bool, Self::Error> {
+        let owner = self.owner(who)?;
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let ent = &self.ents[index];
+        let ty = self
+            .types
+            .get(ent.type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(ent.type_id))?;
+        let has_live_hero = self.hero_records[owner]
+            .iter()
+            .any(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0);
+        // The rest of Unit::process_healing can pre-empt or add to this supply arm for
+        // heroes, Iroquois, civilians/caravans/merchants, and multi-slot captain objects.
+        // Arena does not silently compose the isolated supply transaction with them.
+        Ok(has_live_hero
+            || self.players[owner].tribe == 0x12
+            || ty.cat == 5
+            || ent.type_id == 0x13D
+            || ty.uber_size != 1)
+    }
+
+    fn repair_supply_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        before: i32,
+        amount: i32,
+    ) -> Result<i32, Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let type_id = self.ents[index].type_id;
+        let uber_size = self
+            .types
+            .get(type_id)
+            .ok_or(ArenaSupplyHostError::MissingType(type_id))?
+            .uber_size;
+        if uber_size != 1 {
+            return Err(ArenaSupplyHostError::UnsupportedUberHealing { type_id, uber_size });
+        }
+        let ent = &mut self.ents[index];
+        if ent.hp.damage != before {
+            return Err(ArenaSupplyHostError::StaleDamage {
+                expected: before,
+                found: ent.hp.damage,
+            });
+        }
+        let (damage, damage_frac) = production::repair_damage(ent.hp.damage, amount, ent.hp.myhits);
+        ent.hp.damage = damage;
+        ent.hp.damage_frac = damage_frac;
+        Ok(damage)
+    }
+}
+
+impl ArenaAttritionRecomputeHost for ArenaSupplyHost<'_> {
+    fn write_attrition_recompute_prefix(
+        &mut self,
+        who: i32,
+        o: i32,
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        unit_masks2_before: u32,
+        unit_masks2_after: u32,
+        period_before: i16,
+        period_after: i16,
+    ) -> Result<(), Self::Error> {
+        let index = self
+            .object_index(who, o)?
+            .ok_or(ArenaSupplyHostError::MissingObject { who, o })?;
+        let ent = &mut self.ents[index];
+        let motion = ent
+            .motion
+            .as_mut()
+            .ok_or(ArenaSupplyHostError::MissingMotion { who, o })?;
+        if motion.unit_masks != unit_masks_before {
+            return Err(ArenaSupplyHostError::StaleUnitMasks {
+                expected: unit_masks_before,
+                found: motion.unit_masks,
+            });
+        }
+        if motion.unit_masks2 != unit_masks2_before {
+            return Err(ArenaSupplyHostError::StaleUnitMasks2 {
+                expected: unit_masks2_before,
+                found: motion.unit_masks2,
+            });
+        }
+        if ent.attrition_period != period_before {
+            return Err(ArenaSupplyHostError::StaleAttritionPeriod {
+                expected: period_before,
+                found: ent.attrition_period,
+            });
+        }
+        motion.unit_masks = unit_masks_after;
+        motion.unit_masks2 = unit_masks2_after;
+        ent.attrition_period = period_after;
         Ok(())
     }
 }
@@ -2339,15 +2477,21 @@ impl World {
             self.tick_cycle(i);
             self.tick_job(i);
             if !buildings && self.ents[i].alive {
+                self.tick_supply_healing(i);
+                self.tick_attrition_recompute(i);
                 self.tick_supply_attrition(i);
             }
         }
     }
 
-    /// The due-frame block at the tail of `Unit::process` (`0x006117F6`). The adapter
-    /// borrows the actual Arena tables for the whole transaction, then synchronises the
-    /// existing target/death lifecycle exactly when damage was applied.
-    fn tick_supply_attrition(&mut self, i: usize) -> SupplyAttritionTransaction {
+    /// The supply-specific land arm of `Unit::process_healing`, immediately before the
+    /// recovered attrition tail. Other healing families retain their explicit blocker.
+    fn tick_supply_healing(&mut self, i: usize) -> SupplyHealingTransaction {
+        // This is Unit::process_healing's first supply-arm prerequisite and keeps the
+        // ordinary undamaged unit band from constructing an O(n) object-table host.
+        if self.ents[i].hp.damage <= 0 {
+            return SupplyHealingTransaction::NoDamage;
+        }
         let who = i32::from(self.ents[i].who);
         let o = i32::from(self.ents[i].object_o);
         let id = self.ents[i].id;
@@ -2358,6 +2502,66 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                territory: &self.collision_world,
+                frame: self.frame,
+            };
+            retail_systems::execute_supply_healing(self.frame as i32, who, o, &mut host)
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena supply-healing transaction failed for ({who},{o}): {error:?}")
+        });
+        if matches!(transaction, SupplyHealingTransaction::Healed { .. }) {
+            self.sync_target_damage(id);
+        }
+        transaction
+    }
+
+    /// The exact 32-frame call site before the due attrition tail. Arena closes the
+    /// universal reset and friendly-territory return; the transaction receipt retains the
+    /// explicit non-friendly authority boundary instead of synthesising a period.
+    fn tick_attrition_recompute(&mut self, i: usize) -> AttritionRecomputeTransaction {
+        if (self.frame as i32).wrapping_add(i32::from(self.ents[i].object_o)) % 32 != 0 {
+            return AttritionRecomputeTransaction::NotDue;
+        }
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let mut host = ArenaSupplyHost {
+            ents: &mut self.ents,
+            types: &self.types,
+            players: &self.players,
+            supply_records: &self.supply_records,
+            hero_records: &self.hero_records,
+            territory: &self.collision_world,
+            frame: self.frame,
+        };
+        retail_systems::execute_attrition_recompute(self.frame as i32, who, o, &mut host)
+            .unwrap_or_else(|error| {
+                panic!("Arena attrition-recompute transaction failed for ({who},{o}): {error:?}")
+            })
+    }
+
+    /// The due-frame block at the tail of `Unit::process` (`0x006117F6`). The adapter
+    /// borrows the actual Arena tables for the whole transaction, then synchronises the
+    /// existing target/death lifecycle exactly when damage was applied.
+    fn tick_supply_attrition(&mut self, i: usize) -> SupplyAttritionTransaction {
+        if !don_sim::systems::borders_fog::attrition_due(
+            self.frame as i32,
+            self.ents[i].object_o,
+            self.ents[i].attrition_period,
+        ) {
+            return SupplyAttritionTransaction::NotDue;
+        }
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let id = self.ents[i].id;
+        let transaction = {
+            let mut host = ArenaSupplyHost {
+                ents: &mut self.ents,
+                types: &self.types,
+                players: &self.players,
+                supply_records: &self.supply_records,
+                hero_records: &self.hero_records,
+                territory: &self.collision_world,
                 frame: self.frame,
             };
             retail_systems::execute_supply_attrition(self.frame as i32, who, o, &mut host)
@@ -3187,21 +3391,61 @@ impl World {
         for _ in 0..shot_count {
             dealt = dealt.wrapping_add(self.fire(i, target, &at, &dt, damage_attack_dir, flank));
         }
-        let rech = don_sim::systems::combat::recharge_frames(
-            &don_sim::systems::combat::RechargeInput {
-                base_recharge: at.recharge,
-                is_siege: at.cat == 3,
-                unit_masks2_bit0: false,
-                in_supply: true,
-                is_bombard: false,
-            },
-            &self.combat,
-        );
+        let rech = if attacker.building {
+            at.recharge
+        } else {
+            // UnitTypeData::is_siege 0x00470460 is unit_flags bit 0x20000.
+            let is_siege = at.unit_flags & 0x2_0000 != 0;
+            let unit_masks2_bit0 = self.ents[i]
+                .motion
+                .as_ref()
+                .expect("live Arena unit owns UnitWork")
+                .unit_masks2
+                & 1
+                != 0;
+            let in_supply = if !is_siege {
+                true
+            } else if self.combat.artillery_under_attack_fires_slowly != 0 && unit_masks2_bit0 {
+                // The measured under-attack gate skips UnitData::in_supply entirely.
+                false
+            } else {
+                self.reload_supply_state(i) != ReloadSupplyState::OutOfSupply
+            };
+            don_sim::systems::combat::recharge_frames(
+                &don_sim::systems::combat::RechargeInput {
+                    base_recharge: at.recharge,
+                    is_siege,
+                    unit_masks2_bit0,
+                    in_supply,
+                    is_bombard: type_is(&self.types, at.id, 0x10B),
+                },
+                &self.combat,
+            )
+        };
         self.ents[i].cycle.fire(rech);
         let who = self.ents[i].who;
         self.players[who as usize].damage_dealt += dealt as i64;
         let tw = tgt.who as usize;
         self.players[tw].damage_taken += dealt as i64;
+    }
+
+    /// `UnitData::in_supply` (`0x00609EF0`), called only from the siege override of
+    /// `UnitData::recharge` after a completed volley.
+    fn reload_supply_state(&mut self, i: usize) -> ReloadSupplyState {
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let host = ArenaSupplyHost {
+            ents: &mut self.ents,
+            types: &self.types,
+            players: &self.players,
+            supply_records: &self.supply_records,
+            hero_records: &self.hero_records,
+            territory: &self.collision_world,
+            frame: self.frame,
+        };
+        retail_systems::resolve_reload_supply(who, o, &host).unwrap_or_else(|error| {
+            panic!("Arena reload-supply query failed for ({who},{o}): {error:?}")
+        })
     }
 
     /// Apply the exact checksum-visible aim writes prepared by `Unit::fight`'s direct-land
@@ -4146,7 +4390,7 @@ mod supply_attrition_integration {
     use crate::arena::match_run::{load_world, MatchConfig};
 
     #[test]
-    fn live_unit_band_walks_supply_then_applies_due_attrition_and_closes_source() {
+    fn live_unit_band_applies_reload_healing_attrition_and_source_lifetime() {
         let Ok(mut world) = load_world(&MatchConfig::default()) else {
             return;
         };
@@ -4159,19 +4403,101 @@ mod supply_attrition_integration {
             .id;
         let ty = world.map.w / 2;
         let target = world.spawn(0, world.ids.citizen, ty - 7, ty, true);
+        let siege = world.spawn(0, 0x109, ty - 7, ty, true);
         let source = world.spawn(0, supply_type, ty + 7, ty, true);
+        let enemy = world.spawn(1, world.ids.citizen, ty - 3, ty, true);
         let target_index = target.index().expect("spawn returned a dense Arena handle");
+        let siege_index = siege.index().expect("spawn returned a dense Arena handle");
         let source_index = source.index().expect("spawn returned a dense Arena handle");
+        let enemy_index = enemy.index().expect("spawn returned a dense Arena handle");
+        world.ents[enemy_index].hp.myhits = 10_000;
         let target_o = world.ents[target_index].object_o;
+        let siege_o = world.ents[siege_index].object_o;
         let source_o = world.ents[source_index].object_o;
-        world.ents[target_index].attrition_period = 48;
+
+        // UnitData::recharge consults its narrower in_supply predicate after the volley:
+        // neutral territory plus this registry hit keeps the live Catapult at base delay.
+        let base_recharge = world.types.get(0x109).unwrap().recharge;
+        world.ents[siege_index].job = Job::Attack { target: enemy };
+        world.tick_job(siege_index);
+        assert_eq!(
+            world.ents[siege_index].cycle.recharging,
+            base_recharge as u8
+        );
+
+        world.ents[source_index].x += RANGE_UNITS_PER_TILE;
+        world.ents[siege_index].cycle.recharging = 0;
+        world.tick_job(siege_index);
+        assert_eq!(
+            world.ents[siege_index].cycle.recharging,
+            (base_recharge * 3 / 2) as u8,
+            "the real fire call site must apply out-of-supply siege delay"
+        );
+
+        // French supply healing has a 20-frame phase. Return the source to the inclusive
+        // radius and prove World::step calls repair_damage before the attrition tail.
+        world.ents[source_index].x -= RANGE_UNITS_PER_TILE;
+        world.ents[siege_index].job = Job::Idle;
+        world.ents[siege_index].hp.damage = 2;
+        world.players[0].tribe = 0x0A;
+        let heal_due = (-i64::from(world.ents[siege_index].object_o)).rem_euclid(20);
+        world.frame = heal_due;
+        world.step();
+        assert_eq!(world.ents[siege_index].hp.damage, 1);
+
+        // Unit::process calls process_attrition on its independent 32-frame stagger. The
+        // friendly return closes after the universal mask/period reset; neutral territory
+        // exposes the typed non-friendly authority boundary but retains that exact prefix.
+        let (siege_tx, siege_ty) = world.ents[siege_index].tile();
+        let siege_wx = siege_tx.div_euclid(4);
+        let siege_wy = siege_ty.div_euclid(4);
+        world.collision_world.wdata_mut(siege_wx, siege_wy).who = 0;
+        {
+            let siege_ent = &mut world.ents[siege_index];
+            siege_ent.attrition_period = 23;
+            let motion = siege_ent.motion.as_mut().expect("Catapult owns UnitWork");
+            motion.unit_masks |= 0x40_0080;
+            motion.unit_masks2 |= RESUPPLIED_THIS_TICK;
+        }
+        world.frame = (-i64::from(siege_o)).rem_euclid(32);
+        assert!(matches!(
+            world.tick_attrition_recompute(siege_index),
+            AttritionRecomputeTransaction::FriendlyTerritoryReset {
+                period_before: 23,
+                ..
+            }
+        ));
+        assert_eq!(world.ents[siege_index].attrition_period, 0);
+        let motion = world.ents[siege_index].motion.as_ref().unwrap();
+        assert_eq!(motion.unit_masks & 0x40_0080, 0);
+        assert_eq!(motion.unit_masks2 & RESUPPLIED_THIS_TICK, 0);
+
+        world.collision_world.wdata_mut(siege_wx, siege_wy).who = -1;
+        world.ents[siege_index].attrition_period = 29;
+        world.ents[siege_index].motion.as_mut().unwrap().unit_masks2 |= RESUPPLIED_THIS_TICK;
+        world.frame += 32;
+        assert!(matches!(
+            world.tick_attrition_recompute(siege_index),
+            AttritionRecomputeTransaction::BlockedNonFriendlyTerritory {
+                territory_owner: -1,
+                period_before: 29,
+                ..
+            }
+        ));
+        assert_eq!(world.ents[siege_index].attrition_period, 0);
+        assert_eq!(
+            world.ents[siege_index].motion.as_ref().unwrap().unit_masks2 & RESUPPLIED_THIS_TICK,
+            0
+        );
+
+        world.ents[target_index].attrition_period = 47;
         world.ents[target_index]
             .motion
             .as_mut()
             .expect("Citizen owns UnitWork")
             .unit_masks2 &= !RESUPPLIED_THIS_TICK;
 
-        let due = (-i64::from(target_o)).rem_euclid(48);
+        let due = (-i64::from(target_o)).rem_euclid(47);
         world.frame = due;
         world.step();
 
@@ -4199,7 +4525,7 @@ mod supply_attrition_integration {
             .as_mut()
             .unwrap()
             .unit_masks2 &= !RESUPPLIED_THIS_TICK;
-        world.frame = due + 48;
+        world.frame = due + 47;
         world.step();
 
         assert_eq!(world.ents[target_index].hp.damage, 1);

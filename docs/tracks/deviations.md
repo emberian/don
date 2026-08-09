@@ -295,8 +295,8 @@ playable surface while their runtime path remains incomplete:
 | `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
 | `arena-air-model` | 6c | `do_air_physics`, target/host scans, Ammo RNG insertion, orders and walked state |
 | `arena-diplomacy-model` | 6d | declaration command plus retargeting, shared vision, event/chat and strategy side effects |
-| `arena-attrition-model` | 6e | per-unit period state/recomputation and exact fractional damage host |
-| `arena-supply-model` | 6f | `Supplies::find_supply`, building scans, reload call site and healing |
+| `arena-attrition-model` | 6e | non-friendly period selection (diplomacy/leader/object graphs) and multi-slot damage cascade; the live 32-frame reset/friendly return and singleton due-damage path are resolved |
+| `arena-supply-model` | 6f | non-supply healing-family composition and multi-slot repair; live registry traversal, reload selection and isolated French/Versailles healing are resolved |
 
 MODEL 4's focused unit-target integration is substantially narrower: five exact target tests
 cover stable traversal, spatial lifecycle, stance, visibility, region and priority. The

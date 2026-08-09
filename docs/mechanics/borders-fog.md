@@ -368,20 +368,27 @@ business and is **not derived here** — flagged for the combat lane.
 `Unit::process_supply` `0x005E0560` is in supply if, in this order: not already flagged
 (`Unit +0x68 & 0x400000`), not an always-supplied type (`ObjectType +0x2B8 & 0x40`), not
 militia (`get_bonus(0x42)`), and then **any** of `Supplies::find_supply(x, y, owner) >= 0`
-or a nearby owned building of type `0x16B`, `0x176`, `0x16E`.
+or a radius-qualified owned hero of type `0x16B`, `0x176`, `0x16E` from the walked
+`HeroData` registry.
 
 Relevant constants: `supply_radius` 14 tiles, `supply_radius_upgrade` 2 tiles,
 `supply_hp_upgrade` `{0,20,40,60}`, `supply_heal_rate` 0 frames (= do not heal),
 `french_free_supply` 1, `versailles_supply_heal_rate` / `french_supply_heal_rate` 20 frames.
 
-Out-of-supply reload penalty — the constants are measured,
-`String::fraction` scale 256:
+The application point is `UnitData::recharge` `0x0060FDF0`. Non-siege units return their
+type's base recharge without a supply query. Siege units return the base when the
+under-attack rule permits it and `UnitData::in_supply` `0x00609EF0` succeeds; otherwise
+Bombards (`ObjectData::is(0x10B, 0)`) use **2×** base and other siege units use signed
+truncating **3/2×** base. `in_supply` returns true for non-land units and friendly WData
+territory, then walks only `Supplies::find_supply`—the hero arm above is not part of this
+narrower predicate.
 
-* `siege_out_of_supply_reload` `+0xCC8` = 384 → **×1.5 delay**
-* `artillery_out_of_supply_reload` `+0xCCC` = 512 → **×2 delay**
-
-Exposed as `out_of_supply_reload(base, mult)`. **The call site that applies them was not
-located** — nothing in the module calls it yet. See §8.
+The supply-specific arm of `Unit::process_healing` is at
+`0x005E0F1A..0x005E0FFC`. Its shipped base rate is zero; the French bonus adds 20 frames,
+and completed Versailles contributes 20 alone or combines as `(rate + 20) / 4`. On the
+per-object due phase it requires `Supplies::find_supply >= 0` and calls
+`Unit::repair_damage(1, 1, 1)`. Other healing families earlier in the function can
+pre-empt or compose with this arm and must remain separate host inputs.
 
 ---
 
@@ -438,14 +445,15 @@ still useful but the combination is not.
    the outermost ring is redone. It is an optimisation over the same planes, **but it
    changes which cells get `set_seen` called on them and therefore which cells fire
    `reveal_fog`** — so it must be ported before a replay comparison is trusted.
-3. **`Supplies::find_supply` `0x0073ABA0` is not ported.** `supply_state` takes the answer
-   as an input. Same for the three nearby-building queries.
-4. **The out-of-supply reload call site was not found.** Constants measured, application
-   point unknown.
-   `don_ai::arena::retail_systems` exposes the recovered attrition/supply arithmetic behind
-   a `SupplyFacts` input with no default, so an arena host must resolve all four proximity
-   queries explicitly. That adapter does not close either missing world query or this call
-   site, and the playable supply/attrition gates remain blocked.
+3. **`don-sim` still does not own the walked `Supplies`/`HeroData` registries.** Its local
+   kernels take resolved inputs. The Arena world now owns and walks those live registries
+   for process-supply, recharge and the isolated supply-healing arm; other hosts must still
+   provide the same ordered object lookup.
+4. **Non-friendly attrition-period selection and the other healing families remain open.**
+   Arena executes the exact 32-frame reset/friendly-territory return and fails closed at
+   the diplomacy/leader/object-graph boundary. Its healing host likewise rejects cases
+   where an unintegrated earlier healing family or multi-slot object could compose with the
+   isolated supply arm.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.
@@ -512,5 +520,8 @@ that do not exist yet. If the tree does not build, this module is not the reason
 | `0x006CDCC0` | `Leader::calc_anti_attrition` | ✔ |
 | `0x005E1A10` | `Unit::suffer_attrition` | damage shape |
 | `0x005E0560` | `Unit::process_supply` | predicate structure |
-| `0x0073ABA0` | `Supplies::find_supply` | ✘ |
+| `0x005E0670` | `Unit::process_healing` | supply arm integrated in Arena |
+| `0x00609EF0` | `UnitData::in_supply` | integrated in Arena |
+| `0x0060FDF0` | `UnitData::recharge` | integrated in Arena |
+| `0x0073ABA0` | `Supplies::find_supply` | walked Arena host; no shared don-sim registry owner |
 | `0x006B5CF0` | `World::walk_data` | 6 of 9 sections |

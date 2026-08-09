@@ -336,13 +336,14 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
         recovered: &[
             "calc_anti_attrition and get_attrition arithmetic",
             "period phase and suffer-attrition damage shape",
+            "32-frame live recomputation call site and universal reset prefix",
+            "friendly-territory recomputation return",
             "object-backed due-tick supply/attrition mutation transaction",
             "live Arena unit-band host, singleton damage mutation and death close path",
         ],
         missing: &[
-            "retail attrition-period recomputation sites (ordinary Arena spawns remain disabled)",
+            "non-friendly attrition-period selection requiring diplomacy, leader and object graphs",
             "multi-slot captain damage cascade for ObjectType uber_size greater than one",
-            "removal of arena combat's unconditional in_supply=true input",
         ],
     },
     IntegrationItem {
@@ -353,9 +354,13 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "walked SupplyData and HeroData registry traversal with exact range metric",
             "due-tick UnitData unit_masks2 resupplied write",
             "live Arena support registries, object-table host and unit-band call site",
-            "out-of-supply reload arithmetic and constants",
+            "live UnitData::in_supply query at the post-volley siege recharge call site",
+            "French and completed-Versailles supply-healing arm with live repair mutation",
         ],
-        missing: &["located reload call site and supply healing"],
+        missing: &[
+            "other Unit::process_healing families which can pre-empt or compose with supply healing",
+            "multi-slot captain repair for ObjectType uber_size greater than one",
+        ],
     },
 ];
 
@@ -1037,10 +1042,12 @@ pub struct SupplyAttritionUnitState {
     pub unit: SupplyUnitKey,
     pub unit_id: i16,
     pub attrition_period: i16,
+    pub damage: i32,
     pub unit_masks: u32,
     pub unit_masks2: u32,
     pub is_supply: bool,
     pub militia: bool,
+    pub domain: i32,
     pub type_308: i32,
     pub curr_uber_size: i32,
 }
@@ -1094,6 +1101,47 @@ pub trait ArenaSupplyAttritionHost {
     fn suffer_graphic_attrition(&mut self, who: i32, o: i32) -> Result<(), Self::Error>;
 }
 
+/// Additional live world reads used by `UnitData::in_supply` (`0x00609EF0`), the query
+/// performed from `UnitData::recharge` (`0x0060FDF0`). This predicate is deliberately
+/// separate from `Unit::process_supply`: non-land and friendly-territory units return in
+/// supply immediately, and only the walked Supplies registry is consulted afterward.
+pub trait ArenaReloadSupplyHost: ArenaSupplyAttritionHost {
+    fn territory_owner_at(&self, x: i32, y: i32) -> Result<i32, Self::Error>;
+}
+
+/// Supply-healing facts that belong to the leader/world rather than the unit. The active
+/// healing arm at `0x005E0F1A..0x005E0FFC` uses only these two gates after the base rate.
+pub trait ArenaSupplyHealingHost: ArenaSupplyAttritionHost {
+    fn french_supply_bonus(&self, who: i32) -> Result<bool, Self::Error>;
+    fn completed_versailles(&self, who: i32) -> Result<bool, Self::Error>;
+    fn unsupported_prior_healing_source(&self, who: i32, o: i32) -> Result<bool, Self::Error>;
+    fn repair_supply_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        before: i32,
+        amount: i32,
+    ) -> Result<i32, Self::Error>;
+}
+
+/// The universal live-world prefix of `Unit::process_attrition` plus the territory read
+/// needed by its first exactly-closable branch. The host write is compare-and-swap shaped:
+/// callers cannot clear a period or mask value that changed after [`unit_state`].
+pub trait ArenaAttritionRecomputeHost: ArenaReloadSupplyHost {
+    #[allow(clippy::too_many_arguments)]
+    fn write_attrition_recompute_prefix(
+        &mut self,
+        who: i32,
+        o: i32,
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        unit_masks2_before: u32,
+        unit_masks2_after: u32,
+        period_before: i16,
+        period_after: i16,
+    ) -> Result<(), Self::Error>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SupportRegistry {
     Supplies,
@@ -1117,11 +1165,66 @@ pub enum SupplyAttritionTransactionError<E> {
         found_who: i32,
         found_o: i32,
     },
+    UnsupportedPriorHealingSource {
+        who: i32,
+        o: i32,
+    },
     MissingRegistryObject {
         registry: SupportRegistry,
         slot: usize,
         who: i32,
         o: i16,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReloadSupplyState {
+    NonLand,
+    FriendlyTerritory,
+    SuppliesIndex(i32),
+    OutOfSupply,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupplyHealingTransaction {
+    NoDamage,
+    NotLand,
+    SupplyUnit,
+    Disabled,
+    NotDue {
+        rate: i32,
+    },
+    OutOfSupply {
+        rate: i32,
+    },
+    Healed {
+        rate: i32,
+        source_index: i32,
+        damage_before: i32,
+        damage_after: i32,
+    },
+}
+
+/// Receipt for the 32-frame `Unit::process_attrition` call site in `Unit::process`.
+/// `BlockedNonFriendlyTerritory` still proves the universal retail prefix was applied;
+/// selecting a replacement period needs the unrecovered diplomacy/leader/object graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttritionRecomputeTransaction {
+    NotDue,
+    FriendlyTerritoryReset {
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        unit_masks2_before: u32,
+        unit_masks2_after: u32,
+        period_before: i16,
+    },
+    BlockedNonFriendlyTerritory {
+        territory_owner: i32,
+        unit_masks_before: u32,
+        unit_masks_after: u32,
+        unit_masks2_before: u32,
+        unit_masks2_after: u32,
+        period_before: i16,
     },
 }
 
@@ -1216,30 +1319,10 @@ fn hero_radius_tiles<H: ArenaSupplyAttritionHost>(
     Ok(radius)
 }
 
-fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
+fn find_registered_supply<H: ArenaSupplyAttritionHost>(
     state: SupplyAttritionUnitState,
     host: &H,
-) -> Result<SupplyResolution, SupplyAttritionTransactionError<H::Error>> {
-    let guards = SupplyGuards {
-        already_flagged: state.unit_masks & 0x40_0000 != 0,
-        supply_type: state.is_supply,
-        militia: state.militia,
-    };
-    let guarded = if guards.already_flagged {
-        Some(SupplyGuard::AlreadyFlagged)
-    } else if guards.supply_type {
-        Some(SupplyGuard::SupplyType)
-    } else if guards.militia {
-        Some(SupplyGuard::Militia)
-    } else {
-        None
-    };
-    if let Some(guard) = guarded {
-        return Ok(SupplyResolution {
-            outcome: SupplyOutcome::Guarded(guard),
-        });
-    }
-
+) -> Result<Option<i32>, SupplyAttritionTransactionError<H::Error>> {
     let supplies = host
         .supply_records(state.unit.who)
         .map_err(SupplyAttritionTransactionError::Host)?;
@@ -1265,10 +1348,40 @@ fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
             .radius_tiles()
             .wrapping_mul(SUPPORT_RANGE_UNITS_PER_TILE);
         if support_distance(state.unit, object) <= radius {
-            return Ok(SupplyResolution {
-                outcome: SupplyOutcome::Supplied(SupplySource::SuppliesIndex(slot as i32)),
-            });
+            return Ok(Some(slot as i32));
         }
+    }
+    Ok(None)
+}
+
+fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
+    state: SupplyAttritionUnitState,
+    host: &H,
+) -> Result<SupplyResolution, SupplyAttritionTransactionError<H::Error>> {
+    let guards = SupplyGuards {
+        already_flagged: state.unit_masks & 0x40_0000 != 0,
+        supply_type: state.is_supply,
+        militia: state.militia,
+    };
+    let guarded = if guards.already_flagged {
+        Some(SupplyGuard::AlreadyFlagged)
+    } else if guards.supply_type {
+        Some(SupplyGuard::SupplyType)
+    } else if guards.militia {
+        Some(SupplyGuard::Militia)
+    } else {
+        None
+    };
+    if let Some(guard) = guarded {
+        return Ok(SupplyResolution {
+            outcome: SupplyOutcome::Guarded(guard),
+        });
+    }
+
+    if let Some(slot) = find_registered_supply(state, host)? {
+        return Ok(SupplyResolution {
+            outcome: SupplyOutcome::Supplied(SupplySource::SuppliesIndex(slot)),
+        });
     }
 
     for type_id in [0x16B, 0x176, 0x16E] {
@@ -1320,6 +1433,193 @@ fn resolve_registered_supply<H: ArenaSupplyAttritionHost>(
     Ok(SupplyResolution {
         outcome: SupplyOutcome::Exhausted,
     })
+}
+
+/// Execute the exact `UnitData::in_supply` predicate used by `UnitData::recharge`.
+/// Unlike `Unit::process_supply`, this returns true immediately for non-land domains and
+/// friendly territory, then walks only `Supplies::find_supply`.
+pub fn resolve_reload_supply<H: ArenaReloadSupplyHost>(
+    who: i32,
+    o: i32,
+    host: &H,
+) -> Result<ReloadSupplyState, SupplyAttritionTransactionError<H::Error>> {
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.domain != 0 {
+        return Ok(ReloadSupplyState::NonLand);
+    }
+    let territory_who = host
+        .territory_owner_at(state.unit.x, state.unit.y)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if territory_who == who {
+        return Ok(ReloadSupplyState::FriendlyTerritory);
+    }
+    Ok(match find_registered_supply(state, host)? {
+        Some(slot) => ReloadSupplyState::SuppliesIndex(slot),
+        None => ReloadSupplyState::OutOfSupply,
+    })
+}
+
+/// Execute the supply-specific healing arm of `Unit::process_healing`
+/// (`0x005E0F1A..0x005E0FFC`) for a live, isolated land object.
+///
+/// The shipped base rate is zero. French supply adds 20 frames; completed Versailles adds
+/// 20 when it is the only source, or combines as `(rate + 20) / 4`. On a due phase the
+/// engine walks `Supplies::find_supply` and calls `Unit::repair_damage(1,1,1)`.
+pub fn execute_supply_healing<H: ArenaSupplyHealingHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<SupplyHealingTransaction, SupplyAttritionTransactionError<H::Error>> {
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.damage <= 0 {
+        return Ok(SupplyHealingTransaction::NoDamage);
+    }
+    if state.domain != 0 {
+        return Ok(SupplyHealingTransaction::NotLand);
+    }
+    if state.is_supply {
+        return Ok(SupplyHealingTransaction::SupplyUnit);
+    }
+    let mut rate = AttritionRules::default().supply_heal_rate;
+    if host
+        .french_supply_bonus(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        rate = rate.wrapping_add(20);
+    }
+    if host
+        .completed_versailles(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        rate = if rate == 0 {
+            20
+        } else {
+            rate.wrapping_add(20) / 4
+        };
+    }
+    if rate == 0 {
+        return Ok(SupplyHealingTransaction::Disabled);
+    }
+    if (frame.wrapping_add(i32::from(state.unit_id))) % rate != 0 {
+        return Ok(SupplyHealingTransaction::NotDue { rate });
+    }
+    let Some(source_index) = find_registered_supply(state, host)? else {
+        return Ok(SupplyHealingTransaction::OutOfSupply { rate });
+    };
+    if host
+        .unsupported_prior_healing_source(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Err(SupplyAttritionTransactionError::UnsupportedPriorHealingSource { who, o });
+    }
+    let damage_after = host
+        .repair_supply_damage(who, o, state.damage, 1)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    Ok(SupplyHealingTransaction::Healed {
+        rate,
+        source_index,
+        damage_before: state.damage,
+        damage_after,
+    })
+}
+
+/// Execute the exact universal prefix and friendly-territory return of
+/// `Unit::process_attrition` (`0x005E11A0`) from its 32-frame `Unit::process` call site.
+///
+/// Retail first clears `RESUPPLIED_THIS_TICK`, then `process_attrition` clears
+/// `unit_masks & 0x400080` and resets the signed attrition period to zero. Friendly land
+/// returns with that state. Non-friendly territory reaches predicates which require the
+/// diplomacy/leader/object graph, so the transaction reports that boundary without
+/// inventing a replacement period.
+pub fn execute_attrition_recompute<H: ArenaAttritionRecomputeHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<AttritionRecomputeTransaction, SupplyAttritionTransactionError<H::Error>> {
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if frame.wrapping_add(i32::from(state.unit_id)) % 32 != 0 {
+        return Ok(AttritionRecomputeTransaction::NotDue);
+    }
+
+    let unit_masks_after = state.unit_masks & !0x40_0080;
+    let unit_masks2_after = state.unit_masks2 & !RESUPPLIED_THIS_TICK;
+    host.write_attrition_recompute_prefix(
+        who,
+        o,
+        state.unit_masks,
+        unit_masks_after,
+        state.unit_masks2,
+        unit_masks2_after,
+        state.attrition_period,
+        0,
+    )
+    .map_err(SupplyAttritionTransactionError::Host)?;
+
+    let territory_owner = host
+        .territory_owner_at(state.unit.x, state.unit.y)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if territory_owner == who {
+        Ok(AttritionRecomputeTransaction::FriendlyTerritoryReset {
+            unit_masks_before: state.unit_masks,
+            unit_masks_after,
+            unit_masks2_before: state.unit_masks2,
+            unit_masks2_after,
+            period_before: state.attrition_period,
+        })
+    } else {
+        Ok(AttritionRecomputeTransaction::BlockedNonFriendlyTerritory {
+            territory_owner,
+            unit_masks_before: state.unit_masks,
+            unit_masks_after,
+            unit_masks2_before: state.unit_masks2,
+            unit_masks2_after,
+            period_before: state.attrition_period,
+        })
+    }
 }
 
 /// Execute the sim-state part of retail's supply/attrition branch for one live unit.
@@ -2214,10 +2514,12 @@ mod tests {
                 unit,
                 unit_id: 0,
                 attrition_period: 48,
+                damage: 0,
                 unit_masks: 0,
                 unit_masks2: 0x20,
                 is_supply: false,
                 militia: false,
+                domain: 0,
                 type_308: 0,
                 curr_uber_size: 4,
             },
