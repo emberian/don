@@ -1326,7 +1326,7 @@ impl EnvWorld {
         ) {
             self.dest_x[row] = x;
             self.dest_y[row] = y;
-        } else if kind == OrderIndex::Attack {
+        } else if matches!(kind, OrderIndex::Attack | OrderIndex::GroupAttack) {
             let target_row = (0..self.sim.live_count() as usize).find(|&candidate| {
                 self.sim.owner()[candidate] as i32 == target_who
                     && self.sim.units.o()[candidate] as i32 == target_o
@@ -1530,6 +1530,7 @@ impl EnvWorld {
                     self.advance_move(row, true);
                 }
                 x if x == g::OrderIndex::GroupMove as u8 => self.advance_group_move(row),
+                x if x == g::OrderIndex::GroupAttack as u8 => self.advance_group_attack(row),
                 x if x == g::OrderIndex::GroupAttackTo as u8 => self.advance_group_attack_to(row),
                 x if x == g::OrderIndex::Attack as u8 => self.advance_attack(row),
                 x if x == g::OrderIndex::Gather as u8 => {
@@ -2037,6 +2038,58 @@ impl EnvWorld {
             return;
         }
         self.unimplemented.unit[g::uv::MOVE_TO] += 1;
+    }
+
+    /// Product boundary for `GROUP_ATTACK`.
+    ///
+    /// The ungrouped retail branch is a local AttackOrder copy and is authoritative here.
+    /// Every grouped branch depends on target liveness/range/nearby search and mutable Groups
+    /// operations (`fight`, kill/distribute/refresh), none of which EnvWorld currently owns as
+    /// one transactional snapshot. Such nodes remain byte-for-byte intact and are counted.
+    fn advance_group_attack(&mut self, row: usize) {
+        let Some(order) = self.orders[row].front().cloned() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        if order.kind != OrderIndex::GroupAttack {
+            self.unimplemented.unit[g::uv::ATTACK] += 1;
+            return;
+        }
+        if self.sim.units.group()[row] >= 0 {
+            self.unimplemented.unit[g::uv::ATTACK] += 1;
+            return;
+        }
+
+        // Unit::set_angle(group_angle, ?, 0): publish the represented UnitData angle and its
+        // large-turn mask toggle before replacing the order. EnvWorld does not store Guys.
+        let old_angle = self.sim.units.angle()[row];
+        let angle_delta = (order.group_angle as u32).wrapping_sub(old_angle as u32);
+        if angle_delta > 0x3fff_ffff && angle_delta < 0xc000_0001 {
+            self.sim.units.unit_masks_mut()[row] ^= 2;
+        }
+        self.sim.units.angle_mut()[row] = order.group_angle;
+
+        // AttackOrder::operator= copies exactly the UnitOrder flag, TargetOrder identity,
+        // and AttackOrder fields into a freshly allocated ordinary ATTACK.
+        let ordinary = OrderRec {
+            kind: OrderIndex::Attack,
+            flags: order.flags,
+            target_o: order.target_o,
+            target_who: order.target_who,
+            target_uid: order.target_uid,
+            attack_def_x: order.attack_def_x,
+            attack_def_y: order.attack_def_y,
+            attack_mandatory: order.attack_mandatory,
+            attack_defensive: order.attack_defensive,
+            attack_in_range: order.attack_in_range,
+            attack_ever_in_range: order.attack_ever_in_range,
+            attack_new_ord: order.attack_new_ord,
+            ..OrderRec::default()
+        };
+        *self.orders[row]
+            .front_mut()
+            .expect("GROUP_ATTACK conversion cloned a live front node") = ordinary;
+        self.sync_order_from_queue(row);
     }
 
     /// Integrate one frame toward an explicit target using the environment's existing

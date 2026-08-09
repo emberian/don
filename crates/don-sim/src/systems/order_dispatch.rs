@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 17 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 15 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -430,6 +430,21 @@ pub struct OrderRec {
     /// initializes this to zero.
     pub in_group: i32,
 
+    // ---- AttackOrder / GroupAttackOrder ----
+    /// `AttackOrder::def_x/def_y` at concrete offsets `+20/+24`.
+    pub attack_def_x: i32,
+    pub attack_def_y: i32,
+    /// `AttackOrder::{mandatory,defensive,in_range,ever_in_range,new_ord}` at `+28..+32`.
+    pub attack_mandatory: u8,
+    pub attack_defensive: u8,
+    pub attack_in_range: u8,
+    pub attack_ever_in_range: u8,
+    pub attack_new_ord: u8,
+    /// `GroupAttackOrder::{temporary,oxxx,whosoever}` at concrete offsets `+60/+64/+68`.
+    pub group_attack_temporary: i32,
+    pub group_attack_oxxx: i32,
+    pub group_attack_whosoever: i32,
+
     // ---- TargetOrder ----
     /// `TargetOrder::ox` at `+8` — the target's index in its owner's object band.
     pub target_o: i32,
@@ -509,6 +524,16 @@ impl Default for OrderRec {
             group_form_id: 0,
             group_angle: 0,
             in_group: 0,
+            attack_def_x: 0,
+            attack_def_y: 0,
+            attack_mandatory: 0,
+            attack_defensive: 0,
+            attack_in_range: 0,
+            attack_ever_in_range: 0,
+            attack_new_ord: 0,
+            group_attack_temporary: 0,
+            group_attack_oxxx: -1,
+            group_attack_whosoever: -1,
             target_o: -1,
             target_who: -1,
             target_uid: 0,
@@ -1396,6 +1421,73 @@ pub enum GroupAttackToHostError {
     InvalidState(&'static str),
 }
 
+/// Why `GROUP_ATTACK` could not acquire its global group/target snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupAttackHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// One coherent external decision for `Unit::do_group_attack` `0x005E75A0`.
+///
+/// Target liveness/range, leader validity, nearby-target selection, and the mutable Groups
+/// pool are deliberately outside [`UnitWork`]. The host resolves those reads before the core
+/// writes actor angle state, queue state, or the GroupAttackOrder scratch target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupAttackPlan {
+    LeaderFight {
+        target_o: i32,
+        target_who: i32,
+    },
+    FollowerFight {
+        target_o: i32,
+        target_who: i32,
+    },
+    LeaderKillMoveAndDistribute,
+    KillGroupOrder,
+    RefreshGroupOrder,
+    /// The follower has no admitted target and takes the facing/idle tail.
+    FollowerFace,
+    /// The exceptional tail rotates this temporary GROUP_ATTACK behind its immediately
+    /// queued GROUP_MOVE and calls `move_step(group_move, 1)` once.
+    FollowerTailStep,
+}
+
+/// Infallible cross-object effects reached after successful [`GroupAttackPlan`] preflight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupAttackEffect {
+    /// The Groups-pool side effect inside `Unit::set_angle(group_angle, ?, 0)`. The Unit angle
+    /// and mask toggle precede this callback; the lead Guy angle follows it, as in retail.
+    SetAngle {
+        angle: i32,
+    },
+    Fight {
+        target_o: i32,
+        target_who: i32,
+        mandatory: u8,
+        temporary: i32,
+    },
+    KillGroupMove {
+        id: i32,
+    },
+    KillGroupOrder {
+        id: i32,
+    },
+    DistributeAttack {
+        target_o: i32,
+        target_who: i32,
+    },
+    RefreshGroupOrder {
+        id: i32,
+    },
+    /// The otherwise-discarded `UnitData::get_speed(1)` call immediately after unlinking the
+    /// current GROUP_ATTACK. It is retained because a virtual getter may have host effects.
+    ProbeSpeed {
+        mode: i32,
+    },
+    SetIdleAnim,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1535,6 +1627,27 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::group_attack_to_pause_gate requires successful preflight")
     }
 
+    /// Acquire all cross-object facts used by `Unit::do_group_attack`. The default is
+    /// unavailable and must leave the actor byte-for-byte unchanged.
+    fn group_attack_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<GroupAttackPlan, GroupAttackHostError> {
+        Err(GroupAttackHostError::Unavailable)
+    }
+
+    /// Apply a Groups/object/action effect after successful preflight. It cannot reject;
+    /// every fallible lookup belongs in [`WorkWorld::group_attack_preflight`].
+    fn group_attack_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _effect: GroupAttackEffect,
+    ) {
+        panic!("WorkWorld::group_attack_effect requires successful preflight")
+    }
+
     /// `Unit::set_anim(a, b, c)` at the head of both boarding executors. The shipped arms
     /// always pass `(0, 0, 1)` before any rendezvous or target probe. Animation state is not
     /// represented by [`UnitWork`], so a boarding-capable host must apply it here.
@@ -1660,7 +1773,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 17 AIR_PATROL      Unit::do_air_patrol 0x005EA620
     ArmStatus::Unimplemented,   // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
     ArmStatus::Implemented,     // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
-    ArmStatus::Unimplemented,   // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
+    ArmStatus::Implemented,     // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
     ArmStatus::Implemented,     // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
     ArmStatus::Unimplemented,   // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
@@ -2594,6 +2707,259 @@ pub fn do_group_attack_to<W: WorkWorld>(
     ArmResult::Working
 }
 
+fn ungroup_current_attack(u: &mut UnitWork, group_id: i32) -> bool {
+    let Some(current) = u.orders.front().cloned() else {
+        return false;
+    };
+    if current.kind != OrderIndex::GroupAttack || current.group_id != group_id {
+        return false;
+    }
+    // Retail allocates a fresh ATTACK and invokes AttackOrder::operator=: only UnitOrder's
+    // flag, TargetOrder identity, and AttackOrder's own fields cross the conversion.
+    let ordinary = OrderRec {
+        kind: OrderIndex::Attack,
+        flags: current.flags,
+        target_o: current.target_o,
+        target_who: current.target_who,
+        target_uid: current.target_uid,
+        attack_def_x: current.attack_def_x,
+        attack_def_y: current.attack_def_y,
+        attack_mandatory: current.attack_mandatory,
+        attack_defensive: current.attack_defensive,
+        attack_in_range: current.attack_in_range,
+        attack_ever_in_range: current.attack_ever_in_range,
+        attack_new_ord: current.attack_new_ord,
+        ..OrderRec::default()
+    };
+    *u.orders.front_mut().expect("front was cloned above") = ordinary;
+    true
+}
+
+fn set_group_attack_angle(u: &mut UnitWork, angle: i32) {
+    let delta = (angle as u32).wrapping_sub(u.body.angle as u32);
+    if delta > 0x3fff_ffff && delta < 0xc000_0001 {
+        u.unit_masks ^= 2;
+    }
+    u.body.angle = angle;
+}
+
+fn group_attack_tail_target(u: &UnitWork, order: &OrderRec) -> Option<(i32, i32)> {
+    if order.group_attack_temporary == 0 || u.path.is_empty() || u.orders.len() < 2 {
+        return None;
+    }
+    // Retail begins on the list tail (the executing/oldest node), then inspects
+    // `current_node->prev`: the immediately queued order in execution order.
+    let queued = u.orders.iter().nth(1)?;
+    if queued.kind != OrderIndex::GroupMove
+        || (queued.dest_x == u.body.x && queued.dest_y == u.body.y)
+    {
+        return None;
+    }
+    Some((queued.dest_x, queued.dest_y))
+}
+
+fn group_attack_tail_step<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    original: OrderRec,
+    target: (i32, i32),
+) -> ArmResult {
+    u.orders.reset();
+    let removed = u.orders.remove_current();
+    debug_assert_eq!(
+        removed.as_ref().map(|order| order.kind),
+        Some(OrderIndex::GroupAttack)
+    );
+    // The call is deliberately retained even though retail discards its return value.
+    w.group_attack_effect(u, &original, GroupAttackEffect::ProbeSpeed { mode: 1 });
+    // `tail()` now publishes the queued GROUP_MOVE as current before `move_step(order, 1)`.
+    u.orders.reset();
+    let result = integrate_move_step(u, w, pf, target, 1).0;
+    // `orderlist.add(original)` makes the GROUP_ATTACK newest, hence last in execution order.
+    u.orders.push_back(original);
+    u.orders.reset();
+    result
+}
+
+/// `Unit::do_group_attack(GroupAttackOrder*)` `0x005E75A0` (1,011 bytes), arm 20.
+///
+/// The recovered local orchestration is complete: recharge hold, group angle publication,
+/// leader/follower split, scratch-target writes before `fight`, ordered group kill/
+/// distribution/refresh effects, the facing tail, the exceptional GROUP_ATTACK rotation
+/// behind a queued GROUP_MOVE plus `move_step`, and the ungrouped conversion to ATTACK.
+/// Global target/group searches are supplied by one mandatory preflight plan, before any
+/// actor mutation; all later effects are infallible.
+pub fn do_group_attack<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    _cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = u.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::GroupAttack {
+        return ArmResult::MalformedOrder;
+    }
+    if u.recharging != 0 {
+        return ArmResult::Working;
+    }
+    if u.group < 0 {
+        set_group_attack_angle(u, order.group_angle);
+        u.lead_guy.angle = order.group_angle;
+        return if ungroup_current_attack(u, order.group_id) {
+            ArmResult::Working
+        } else {
+            ArmResult::MalformedOrder
+        };
+    }
+
+    let plan = match w.group_attack_preflight(&*u, &order) {
+        Ok(plan) => plan,
+        Err(GroupAttackHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(GroupAttackHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    let is_leader = order.group_oxx == i32::from(u.o) && order.group_whose == i32::from(u.who);
+    let role_matches = matches!(
+        (&plan, is_leader),
+        (
+            GroupAttackPlan::LeaderFight { .. } | GroupAttackPlan::LeaderKillMoveAndDistribute,
+            true
+        ) | (
+            GroupAttackPlan::FollowerFight { .. }
+                | GroupAttackPlan::RefreshGroupOrder
+                | GroupAttackPlan::FollowerFace
+                | GroupAttackPlan::FollowerTailStep,
+            false
+        ) | (GroupAttackPlan::KillGroupOrder, true)
+    );
+    if !role_matches {
+        return ArmResult::MalformedOrder;
+    }
+    let tail_target = match plan {
+        GroupAttackPlan::FollowerTailStep => {
+            let Some(target) = group_attack_tail_target(u, &order) else {
+                return ArmResult::MalformedOrder;
+            };
+            Some(target)
+        }
+        _ => None,
+    };
+    if matches!(
+        plan,
+        GroupAttackPlan::LeaderFight {
+            target_o,
+            target_who
+        } | GroupAttackPlan::FollowerFight {
+            target_o,
+            target_who
+        } if target_o < 0 || target_who < 0
+    ) {
+        return ArmResult::MalformedOrder;
+    }
+
+    // `Unit::set_angle(group_angle, ?, 0)` precedes the shipped grouped branch.
+    set_group_attack_angle(u, order.group_angle);
+    w.group_attack_effect(
+        u,
+        &order,
+        GroupAttackEffect::SetAngle {
+            angle: order.group_angle,
+        },
+    );
+    // `Guy::set_angle(group_angle, 0)` is the final call inside Unit::set_angle.
+    u.lead_guy.angle = order.group_angle;
+    match plan {
+        GroupAttackPlan::LeaderFight {
+            target_o,
+            target_who,
+        } => {
+            let current = u
+                .orders
+                .front_mut()
+                .expect("preflight kept the front node live");
+            current.group_attack_oxxx = target_o;
+            current.group_attack_whosoever = target_who;
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::Fight {
+                    target_o,
+                    target_who,
+                    mandatory: order.attack_mandatory,
+                    temporary: order.group_attack_temporary,
+                },
+            );
+            ArmResult::Working
+        }
+        GroupAttackPlan::FollowerFight {
+            target_o,
+            target_who,
+        } => {
+            let current = u
+                .orders
+                .front_mut()
+                .expect("preflight kept the front node live");
+            current.group_attack_oxxx = target_o;
+            current.group_attack_whosoever = target_who;
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::Fight {
+                    target_o,
+                    target_who,
+                    mandatory: 1,
+                    temporary: 1,
+                },
+            );
+            ArmResult::Working
+        }
+        GroupAttackPlan::LeaderKillMoveAndDistribute => {
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::KillGroupMove { id: order.group_id },
+            );
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::DistributeAttack {
+                    target_o: order.target_o,
+                    target_who: order.target_who,
+                },
+            );
+            ArmResult::Working
+        }
+        GroupAttackPlan::KillGroupOrder => {
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::KillGroupOrder { id: order.group_id },
+            );
+            ArmResult::Working
+        }
+        GroupAttackPlan::RefreshGroupOrder => {
+            w.group_attack_effect(
+                u,
+                &order,
+                GroupAttackEffect::RefreshGroupOrder { id: order.group_id },
+            );
+            ArmResult::Working
+        }
+        GroupAttackPlan::FollowerFace => {
+            if u.body.angle == order.group_angle {
+                w.group_attack_effect(u, &order, GroupAttackEffect::SetIdleAnim);
+            }
+            ArmResult::Working
+        }
+        GroupAttackPlan::FollowerTailStep => {
+            let target = tail_target.expect("validated above");
+            group_attack_tail_step(u, w, pf, order, target)
+        }
+    }
+}
+
 /// `Unit::do_attack(AttackOrder*)` `0x005F1B80` (1,822 B), arm 10.
 ///
 /// The order-layer half: validate the target's identity, hand the shot to the host's damage
@@ -2913,6 +3279,7 @@ pub fn do_job<W: WorkWorld>(
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
+        OrderIndex::GroupAttack => do_group_attack(u, w, pf, cov),
         OrderIndex::GroupAttackTo => do_group_attack_to(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
@@ -3304,6 +3671,10 @@ mod tests {
         group_attack_pause_gate: bool,
         group_attack_events: Vec<&'static str>,
         group_attack_fight_result: ArmResult,
+        group_attack_plan: Result<GroupAttackPlan, GroupAttackHostError>,
+        group_attack_effects: Vec<GroupAttackEffect>,
+        group_attack_scratch_seen: Vec<Option<(i32, i32)>>,
+        group_attack_angles_seen: Vec<(i32, i32)>,
         scrambled: Vec<i16>,
     }
 
@@ -3331,6 +3702,10 @@ mod tests {
                 group_attack_pause_gate: false,
                 group_attack_events: vec![],
                 group_attack_fight_result: ArmResult::Working,
+                group_attack_plan: Err(GroupAttackHostError::Unavailable),
+                group_attack_effects: vec![],
+                group_attack_scratch_seen: vec![],
+                group_attack_angles_seen: vec![],
                 scrambled: vec![],
             }
         }
@@ -3466,6 +3841,29 @@ mod tests {
             self.group_attack_events.push("attack_to_pause_gate");
             self.group_attack_pause_gate
         }
+        fn group_attack_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<GroupAttackPlan, GroupAttackHostError> {
+            self.group_attack_plan
+        }
+        fn group_attack_effect(
+            &mut self,
+            actor: &mut UnitWork,
+            _: &OrderRec,
+            effect: GroupAttackEffect,
+        ) {
+            self.group_attack_effects.push(effect);
+            self.group_attack_angles_seen
+                .push((actor.body.angle, actor.lead_guy.angle));
+            self.group_attack_scratch_seen.push(
+                actor
+                    .orders
+                    .front()
+                    .map(|order| (order.group_attack_oxxx, order.group_attack_whosoever)),
+            );
+        }
         fn boarding_set_anim(&mut self, _: &mut UnitWork, _: i32, _: i32, _: i32) {}
         fn board_check_meet_ship(
             &mut self,
@@ -3543,7 +3941,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_twelve_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_thirteen_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -3556,9 +3954,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Eleven implemented, including both grouped movement wrappers, both boarding arms,
-        // and the two live patrols; PATROL remains faithfully empty.
-        assert_eq!((implemented, empty, absent), (11, 1, 16));
+        // Twelve implemented, including all three recovered grouped order executors, both
+        // boarding arms, and the two live patrols; PATROL remains faithfully empty.
+        assert_eq!((implemented, empty, absent), (12, 1, 15));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -4008,6 +4406,26 @@ mod tests {
         }
     }
 
+    fn group_attack_order(
+        actor_who: u8,
+        leader_o: i16,
+        id: i32,
+        target_who: i32,
+        target_o: i32,
+    ) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::GroupAttack,
+            flags: ORDER_GROUP,
+            target_o,
+            target_who,
+            group_oxx: i32::from(leader_o),
+            group_whose: i32::from(actor_who),
+            group_id: id,
+            group_angle: 0x1234_5678,
+            ..OrderRec::default()
+        }
+    }
+
     #[test]
     fn group_move_missing_host_is_a_zero_mutation_transaction() {
         let mut w = TestWorld::open(16);
@@ -4176,6 +4594,330 @@ mod tests {
         assert_eq!(u.tolerance, 0);
         assert!(u.body.x >= 100);
         assert!(w.group_effects.is_empty());
+    }
+
+    // -- do_group_attack -------------------------------------------------
+
+    #[test]
+    fn group_attack_missing_host_is_a_zero_mutation_transaction() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.dest_angle = 99;
+        u.safe = 29;
+        u.path.push(PathData {
+            to_x: 200,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.orders
+            .push_back(group_attack_order(u.who, u.o, 93, 1, 12));
+        let before_body = u.body;
+        let before_orders = u.orders.clone();
+        let before_path = u.path.clone();
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle, u.body.stuck_budget),
+            (
+                before_body.x,
+                before_body.y,
+                before_body.angle,
+                before_body.stuck_budget
+            )
+        );
+        assert_eq!(u.orders, before_orders);
+        assert_eq!(u.path, before_path);
+        assert_eq!((u.group, u.safe, u.dest_angle), (3, 29, 99));
+        assert!(w.group_attack_effects.is_empty());
+    }
+
+    #[test]
+    fn group_attack_rejects_a_bad_preflight_plan_before_publishing_angle() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::LeaderFight {
+            target_o: -1,
+            target_who: 1,
+        });
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.dest_angle = 99;
+        u.orders
+            .push_back(group_attack_order(u.who, u.o, 93, 1, 12));
+        let before = u.orders.clone();
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::MalformedOrder
+        );
+        assert_eq!(u.dest_angle, 99);
+        assert_eq!(u.orders, before);
+        assert!(w.group_attack_effects.is_empty());
+    }
+
+    #[test]
+    fn ungrouped_group_attack_converts_to_attack_without_a_host() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        let mut order = group_attack_order(u.who, 7, 93, 1, 12);
+        order.target_uid = 71;
+        order.attack_def_x = 400;
+        order.attack_def_y = 500;
+        order.attack_mandatory = 2;
+        order.attack_defensive = 1;
+        order.attack_in_range = 1;
+        order.attack_ever_in_range = 1;
+        order.attack_new_ord = 1;
+        order.group_attack_temporary = 7;
+        order.group_attack_oxxx = 9;
+        order.group_attack_whosoever = 3;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        let ordinary = u.orders.front().unwrap();
+        assert_eq!(ordinary.kind, OrderIndex::Attack);
+        assert_eq!(
+            (
+                ordinary.target_who,
+                ordinary.target_o,
+                ordinary.target_uid,
+                ordinary.attack_def_x,
+                ordinary.attack_def_y,
+                ordinary.attack_mandatory,
+                ordinary.attack_defensive,
+                ordinary.attack_in_range,
+                ordinary.attack_ever_in_range,
+                ordinary.attack_new_ord,
+            ),
+            (1, 12, 71, 400, 500, 2, 1, 1, 1, 1)
+        );
+        assert_eq!(
+            (
+                ordinary.group_id,
+                ordinary.group_oxx,
+                ordinary.group_whose,
+                ordinary.group_attack_temporary,
+                ordinary.group_attack_oxxx,
+                ordinary.group_attack_whosoever,
+            ),
+            (-1, -1, -1, 0, -1, -1)
+        );
+        assert_eq!(u.body.angle, 0x1234_5678);
+        assert_eq!(u.lead_guy.angle, 0x1234_5678);
+        assert_eq!(u.dest_angle, 0);
+        assert!(w.group_attack_effects.is_empty());
+    }
+
+    #[test]
+    fn group_attack_leader_writes_scratch_before_fight() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::LeaderFight {
+            target_o: 17,
+            target_who: 4,
+        });
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        let mut order = group_attack_order(u.who, u.o, 93, 1, 12);
+        order.attack_mandatory = 2;
+        order.group_attack_temporary = 7;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.body.angle, 0x1234_5678);
+        assert_eq!(u.lead_guy.angle, 0x1234_5678);
+        assert_eq!(
+            w.group_attack_effects,
+            vec![
+                GroupAttackEffect::SetAngle { angle: 0x1234_5678 },
+                GroupAttackEffect::Fight {
+                    target_o: 17,
+                    target_who: 4,
+                    mandatory: 2,
+                    temporary: 7,
+                },
+            ]
+        );
+        assert_eq!(
+            w.group_attack_scratch_seen,
+            vec![Some((-1, -1)), Some((17, 4))]
+        );
+        assert_eq!(
+            w.group_attack_angles_seen,
+            vec![(0x1234_5678, 0), (0x1234_5678, 0x1234_5678)]
+        );
+    }
+
+    #[test]
+    fn group_attack_leader_kills_move_before_distributing_target() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::LeaderKillMoveAndDistribute);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.orders
+            .push_back(group_attack_order(u.who, u.o, 93, 1, 12));
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.group_attack_effects,
+            vec![
+                GroupAttackEffect::SetAngle { angle: 0x1234_5678 },
+                GroupAttackEffect::KillGroupMove { id: 93 },
+                GroupAttackEffect::DistributeAttack {
+                    target_o: 12,
+                    target_who: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn group_attack_follower_fight_forces_both_fight_flags_to_one() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::FollowerFight {
+            target_o: 18,
+            target_who: 5,
+        });
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        let mut order = group_attack_order(u.who, 7, 93, 1, 12);
+        order.attack_mandatory = 0;
+        order.group_attack_temporary = 0;
+        u.orders.push_back(order);
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.group_attack_effects,
+            vec![
+                GroupAttackEffect::SetAngle { angle: 0x1234_5678 },
+                GroupAttackEffect::Fight {
+                    target_o: 18,
+                    target_who: 5,
+                    mandatory: 1,
+                    temporary: 1,
+                },
+            ]
+        );
+        assert_eq!(u.orders.front().unwrap().group_attack_oxxx, 18);
+        assert_eq!(u.orders.front().unwrap().group_attack_whosoever, 5);
+    }
+
+    #[test]
+    fn group_attack_follower_face_sets_idle_after_angle_publication() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::FollowerFace);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        u.body.angle = 0;
+        u.orders.push_back(group_attack_order(u.who, 7, 93, 1, 12));
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.body.angle, 0x1234_5678);
+        assert_eq!(
+            w.group_attack_effects,
+            vec![
+                GroupAttackEffect::SetAngle { angle: 0x1234_5678 },
+                GroupAttackEffect::SetIdleAnim,
+            ]
+        );
+    }
+
+    #[test]
+    fn group_attack_recharging_holds_without_demanding_a_host() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.recharging = 1;
+        u.orders
+            .push_back(group_attack_order(u.who, u.o, 93, 1, 12));
+        let before = u.orders.clone();
+
+        assert_eq!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders, before);
+        assert_eq!(u.body.angle, 0);
+        assert!(w.group_attack_effects.is_empty());
+    }
+
+    #[test]
+    fn group_attack_follower_rotates_behind_queued_group_move() {
+        let mut w = TestWorld::open(16);
+        w.group_attack_plan = Ok(GroupAttackPlan::FollowerTailStep);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        u.body.angle = movement::find_angle(100, 0);
+        u.path.push(PathData {
+            to_x: 220,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        let mut attack = group_attack_order(u.who, 7, 93, 1, 12);
+        attack.group_attack_temporary = 1;
+        let queued = group_move_order(u.who, 7, 93, 220, 200);
+        u.orders.push_back(attack.clone());
+        u.orders.push_back(queued);
+        u.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
+
+        assert!(matches!(
+            do_group_attack(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Moved | ArmResult::Turned | ArmResult::Blocked | ArmResult::Working
+        ));
+        let kinds: Vec<_> = u.orders.iter().map(|order| order.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                OrderIndex::GroupMove,
+                OrderIndex::Guard,
+                OrderIndex::GroupAttack
+            ]
+        );
+        assert_eq!(u.orders.iter().nth(2), Some(&attack));
+        assert_eq!(
+            w.group_attack_effects,
+            vec![
+                GroupAttackEffect::SetAngle { angle: 0x1234_5678 },
+                GroupAttackEffect::ProbeSpeed { mode: 1 },
+            ]
+        );
     }
 
     // -- do_group_attack_to ----------------------------------------------
@@ -4628,11 +5370,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 16 unimplemented arms, each hit once. The smoke actors take both grouped movement
-        // wrappers' exact ungrouped conversion; grouped actors without a snapshot fail
+        // 15 unimplemented arms, each hit once. The smoke actors take all three grouped
+        // executors' exact ungrouped conversion; grouped actors without a snapshot fail
         // closed at the mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 16);
-        assert!((cov.covered_fraction() - 12.0 / 28.0).abs() < 1e-12);
+        assert_eq!(cov.unimplemented, 15);
+        assert!((cov.covered_fraction() - 13.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]

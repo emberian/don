@@ -2,6 +2,7 @@ use don_env::state::{EnvWorld, Rules};
 use don_sim::command::{build, Bridge, Package, QueuePos};
 use don_sim::order::OrderIndex;
 use don_sim::systems::groups_guys::Formation;
+use don_sim::systems::order_dispatch::OrderRec;
 
 #[test]
 fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
@@ -156,4 +157,115 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
             "grouped attack-move must fail closed without fight/do_attack_to callbacks"
         );
     }
+}
+
+#[test]
+fn product_env_group_attack_converts_locally_or_fails_closed() {
+    let (rules, _, _) = Rules::load(None, None);
+    let mut world = EnvWorld::new(rules, 8, 1, 64, 64);
+    let actor = world
+        .spawn(0, 50, 4_800, 9_600)
+        .expect("actor spawn must fit");
+    let target = world
+        .spawn(1, 50, 5_000, 9_600)
+        .expect("target spawn must fit");
+    let actor_row = world.sim.row_of(actor).expect("actor is live");
+    let target_row = world.sim.row_of(target).expect("target is live");
+    let actor_o = world.sim.units.o()[actor_row];
+    let target_o = world.sim.units.o()[target_row];
+    let target_uid = world.sim.units.uid()[target_row] as u16;
+
+    let grouped = OrderRec {
+        kind: OrderIndex::GroupAttack,
+        flags: 4,
+        target_o: i32::from(target_o),
+        target_who: 1,
+        target_uid,
+        attack_def_x: 111,
+        attack_def_y: 222,
+        attack_mandatory: 2,
+        attack_defensive: 1,
+        attack_in_range: 1,
+        attack_ever_in_range: 1,
+        attack_new_ord: 1,
+        group_oxx: i32::from(actor_o),
+        group_whose: 0,
+        group_id: 7,
+        group_angle: 0x1234_5678,
+        group_attack_temporary: 9,
+        group_attack_oxxx: 17,
+        group_attack_whosoever: 4,
+        ..OrderRec::default()
+    };
+
+    world.sim.units.group_mut()[actor_row] = -1;
+    world
+        .install_order(actor_row, grouped.clone(), QueuePos::New)
+        .expect("ordinary installation is admitted");
+    world.frame();
+    let ordinary = world.orders[actor_row]
+        .front()
+        .expect("ungrouped conversion retains an ATTACK");
+    assert_eq!(ordinary.kind, OrderIndex::Attack);
+    assert_eq!(world.target[actor_row], target);
+    assert_eq!(world.sim.units.angle()[actor_row], 0x1234_5678);
+    assert_eq!(
+        (
+            ordinary.flags,
+            ordinary.target_o,
+            ordinary.target_who,
+            ordinary.target_uid,
+            ordinary.attack_def_x,
+            ordinary.attack_def_y,
+            ordinary.attack_mandatory,
+            ordinary.attack_defensive,
+            ordinary.attack_in_range,
+            ordinary.attack_ever_in_range,
+            ordinary.attack_new_ord,
+        ),
+        (
+            4,
+            i32::from(target_o),
+            1,
+            target_uid,
+            111,
+            222,
+            2,
+            1,
+            1,
+            1,
+            1
+        )
+    );
+    assert_eq!(ordinary.group_id, -1);
+    assert_eq!(ordinary.group_attack_temporary, 0);
+
+    world.sim.units.group_mut()[actor_row] = 3;
+    world.sim.units.angle_mut()[actor_row] = 77;
+    world.sim.units.unit_masks_mut()[actor_row] = 0x40;
+    world
+        .install_order(actor_row, grouped.clone(), QueuePos::New)
+        .expect("grouped installation is admitted");
+    let before = world.orders[actor_row].clone();
+    let before_angle_state = (
+        world.sim.units.angle()[actor_row],
+        world.sim.units.unit_masks()[actor_row],
+    );
+    let before_count = world.unimplemented.unit[don_env::generated::uv::ATTACK];
+    world.frame();
+    assert_eq!(world.orders[actor_row], before);
+    assert_eq!(
+        (
+            world.sim.units.angle()[actor_row],
+            world.sim.units.unit_masks()[actor_row],
+        ),
+        before_angle_state,
+        "host failure must precede Unit::set_angle publication"
+    );
+    assert_eq!(world.target[actor_row], target);
+    assert_eq!(
+        world.unimplemented.unit[don_env::generated::uv::ATTACK],
+        before_count + 1,
+        "missing fight/range/Groups facts must be visible and fail closed"
+    );
 }
