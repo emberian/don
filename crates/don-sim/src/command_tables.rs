@@ -90,7 +90,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
         call_sites: 4,
         installs: &[OrderIndex::Follow],
         delegates: &["halt"],
-        port: Port::Orders,
+        port: Port::Complete,
     },
     ActionDef {
         name: "stop_spell",

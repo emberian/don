@@ -227,6 +227,7 @@ pub const SHIPPED_ECONOMY_SLOTS: &[(usize, &str, i32)] = &[
     (1060, "global_prosperity", 25),
     (1072, "pyramids_food", 20),
     (1080, "colossus_wealth", 30),
+    (1084, "colossus_pop_cap", 50),
     (1088, "colossus_caravan", 0),
     (1096, "hanging_gardens_knowledge", 50),
     (1168, "tikal_timber", 50),
@@ -258,6 +259,7 @@ pub const SHIPPED_ECONOMY_SLOTS: &[(usize, &str, i32)] = &[
     (2284, "silk_caravan", 0),
     (2288, "spice_caravan_income", 20),
     (2308, "amber_market", 10),
+    (2340, "peacocks_pop", 10),
     (2428, "coffee_income_bonus", 10),
     (2496, "capitalism_oil_prod", 100),
     (2788, "ctw_market_bonus_buy", 25),
@@ -425,6 +427,8 @@ impl EconRules {
         pyramids_food, 1072);
     rule!(/// `COLOSSUS_WEALTH` — +30% wealth.
         colossus_wealth, 1080);
+    rule!(/// `COLOSSUS_POP_CAP` — flat +50 effective population cap.
+        colossus_pop_cap, 1084);
     rule!(/// `COLOSSUS_CARAVAN` — caravan-limit bonus.
         colossus_caravan, 1088);
     rule!(/// `HANGING_GARDENS_KNOWLEDGE` — flat +50 knowledge income (`<< 4`).
@@ -493,6 +497,8 @@ impl EconRules {
     );
     rule!(/// `JAPANESE_FISHING_BOATS` — +25% on fish rares.
         japanese_fishing_boats, 1964);
+    rule!(/// `PEACOCKS_POP` — +10% effective population cap.
+        peacocks_pop, 2340);
     rule!(
         /// `MONGOL_NOMADIC_FOOD` = 1. A **divisor** in the territory-food term at
         /// `0x006CF55E`, guarded `!= 0` at the call site.

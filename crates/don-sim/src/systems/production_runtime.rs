@@ -1612,7 +1612,11 @@ impl BuildingCompletionHost for SimFinishedHost<'_> {
             self.unsupported("captured-building population-cap calculation");
             return;
         };
-        self.sim.step8.leaders[build.who as usize].pop_cap = state.population_cap_after;
+        let who = build.who as usize;
+        self.sim.vic_leaders.slots[who].misery = 0;
+        self.sim.vic_leaders.slots[who].population_cap = state.population_cap_after;
+        self.sim.step8.leaders[who].pop_cap = state.population_cap_after;
+        self.runtime.leaders[who].control_cap = state.population_cap_after;
         state.population_cap_recalculations = state.population_cap_recalculations.wrapping_add(1);
     }
 
@@ -2373,6 +2377,9 @@ mod tests {
         assert_eq!(runtime.world_population, 204);
         assert_eq!(runtime.leaders[0].region_population[7], 7);
         assert_eq!(sim.step8.leaders[0].pop_cap, 77);
+        assert_eq!(sim.vic_leaders.slots[0].population_cap, 77);
+        assert_eq!(sim.vic_leaders.slots[0].misery, 0);
+        assert_eq!(runtime.leaders[0].control_cap, 77);
         assert!(sim.map.regions.iter().all(|region| region.borders == 0));
         assert_eq!(
             runtime.captured_buildings[row],

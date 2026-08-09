@@ -58,8 +58,9 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, casters_animals, combat, defeat_cleanup, economy, groups_guys, leaders,
-    movement, movement_driver, movement_live, production, victory_score, walls, wonders,
+    ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
+    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live, production,
+    victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -129,8 +130,8 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 11 Leader::check_explore leaders.cpp:26413 - uncited",
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
     "step 11 Leader::diplomacy 0x006BC950 (20,348 B) - deliberately not ported; a self-play agent replaces it",
-    "step 12 GameDaemon::calc_danger gamedaemon.cpp:102 - uncited",
-    "step 12 GameDaemon::process_coll_blocks gamedaemon.cpp:556 - uncited",
+    "step 12 GameDaemon::calc_danger 0x00732D10 - body absent; exact scheduler charges only frame % 200 == 0",
+    "step 12 GameDaemon::process_coll_blocks 0x00731F90 - body and persistent live cursor execute; dormant trace slot records only bridge-invariant failure",
     "step 13 Armies::process_all 0x006F3B00 - exact dispatcher/prefix executes; valid armies require their complete Group/Unit/City/type host and reached AI bodies remain explicit",
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
     "step 14 Unit::process_supply unit.cpp:29845 - uncited",
@@ -708,6 +709,9 @@ pub struct Sim {
     pub leaders: [LeaderSlot; NUM_LEADERS],
     pub market: economy::MarketState,
 
+    /// Retained scalar ScenarioData configuration used by exact BHS mutations.
+    pub scenario_data: crate::script_runtime::ScenarioDataState,
+
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
     pub vic_leaders: victory_score::Leaders,
@@ -725,6 +729,11 @@ pub struct Sim {
 
     // ---- step 12: fog, borders, groups ------------------------------------------------
     pub map: MapState,
+    /// PDB-shaped `GameDaemon` state driven by the exact step-12 shell.
+    pub game_daemon: game_daemon_step12::GameDaemonState,
+    /// Exclusive persistent cursor/live-world adapter for `process_coll_blocks`.
+    /// `game_daemon.empty_colls` mirrors this runtime and is preflighted every pass.
+    pub collision_blocks: collision_blocks_live::CollisionBlockRuntime,
     pub road_scan: crate::systems::roads::RoadScanState,
     pub groups: groups_guys::Groups,
 
@@ -773,12 +782,186 @@ pub struct Sim {
     seen_buf: Vec<(i32, i32)>,
 }
 
+/// Borrow-split bridge from the exact step-12 scheduler into `Sim`'s authoritative stores.
+///
+/// `game_daemon_step12::process_all` temporarily owns the daemon record and 64-region slice;
+/// every other child store remains reachable through this host. Keeping the bridge here also
+/// lets the victory callback retain the existing synchronous terminal-cleanup transaction.
+struct SimGameDaemonHost<'a> {
+    sim: &'a mut Sim,
+    expected_empty_colls: i32,
+    work: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SimGameDaemonBridgeFault {
+    daemon_empty_colls: i32,
+    runtime_cursor: i32,
+}
+
+impl game_daemon_step12::GameDaemonProcessAllHost for SimGameDaemonHost<'_> {
+    type Fault = SimGameDaemonBridgeFault;
+
+    fn preflight(&self, _schedule: &game_daemon_step12::CallSchedule) -> Result<(), Self::Fault> {
+        let runtime_cursor = self.sim.collision_blocks.cursor();
+        if runtime_cursor != self.expected_empty_colls {
+            return Err(SimGameDaemonBridgeFault {
+                daemon_empty_colls: self.expected_empty_colls,
+                runtime_cursor,
+            });
+        }
+        Ok(())
+    }
+
+    fn process_victory(&mut self) {
+        let sim = &mut *self.sim;
+
+        // `GameDaemon::process_victory` queries `LeaderData::has_preq(0x2B9)` live for
+        // each qualifying Wonder alliance.
+        for who in 0..NUM_LEADERS {
+            sim.vic_leaders.slots[who].has_preq_2b9 =
+                sim.production_runtime.leader_has_prerequisites(who, 0x2b9);
+        }
+
+        let wonder_mode = matches!(
+            victory_score::Victory::from_u8(sim.vic_match.options.victory),
+            Some(
+                victory_score::Victory::Standard
+                    | victory_score::Victory::SuddenDeath
+                    | victory_score::Victory::Wonder
+            )
+        );
+        let zeros = [0i32; NUM_LEADERS];
+        let inputs = if wonder_mode && sim.wonders.has_active() {
+            match sim.wonder_world.as_deref_mut() {
+                Some(world) => sim.wonders.victory_inputs(world, &sim.vic_leaders),
+                None => Err(wonders::WonderError::MissingWorld),
+            }
+        } else {
+            Ok((zeros, zeros))
+        };
+        match inputs {
+            Ok((wonder_net, wonder_value)) => {
+                sim.wonder_error = None;
+                sim.vic_leaders
+                    .process_victory(&mut sim.vic_match, &wonder_net, &wonder_value);
+                sim.flush_terminal_queue_cleanup();
+                self.work = self.work.saturating_add(1);
+            }
+            Err(error) => {
+                sim.wonder_error = Some(error);
+                sim.cover.gaps[Gap::WonderValueWorld.index()] += 1;
+            }
+        }
+    }
+
+    fn calc_danger(&mut self) {
+        // The exact shell reaches this only at `frame % 200 == 0`. Retain the red child
+        // honestly without shifting every ordinary frame's gap count.
+        self.sim.cover.gaps[Gap::GameDaemonCalcDanger.index()] += 1;
+    }
+
+    fn update_all_seen(&mut self) {
+        let sim = &mut *self.sim;
+        sim.map.world.clear_seen();
+        let live = sim.world.live_count() as usize;
+        let mut revealed = 0u64;
+        let mut buf = std::mem::take(&mut sim.seen_buf);
+        for row in 0..live {
+            if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                continue;
+            }
+            let obj = borders_fog::SeeingObject {
+                fine_x: sim.world.units.x_internal()[row],
+                fine_y: sim.world.units.y_internal()[row],
+                owner: sim.world.units.get_who(row),
+                los_tiles: sim.world.units.mylos()[row] as i32,
+                detector: false,
+                grant_seen2_to: 0,
+            };
+            buf.clear();
+            borders_fog::update_seen(
+                &sim.map.fog,
+                &mut sim.map.world,
+                &sim.map.circle,
+                &obj,
+                &mut buf,
+            );
+            revealed += buf.len() as u64;
+            self.work = self.work.saturating_add(1);
+        }
+        sim.seen_buf = buf;
+        sim.cover.fog_cells_revealed += revealed;
+    }
+
+    fn calc_markets(&mut self) {
+        let sim = &mut *self.sim;
+        let before = sim.market.cycle;
+        let frame = sim.world.frame;
+        economy::calc_markets(
+            &sim.econ_rules,
+            &mut sim.market,
+            &mut sim.world.random,
+            frame,
+        );
+        if sim.market.cycle != before {
+            sim.cover.market_cycles += 1;
+            self.work = self.work.saturating_add(1);
+        }
+    }
+
+    fn check_borders(&mut self, regions: &mut [borders_fog::RegionBorderState]) -> i32 {
+        let sim = &mut *self.sim;
+        let mut inputs = [borders_fog::LeaderBorderInput::default(); NUM_LEADERS];
+        for (i, leader) in sim.leaders.iter().enumerate() {
+            inputs[i] = leader.border;
+        }
+        let tiles = borders_fog::check_borders(
+            regions,
+            &mut sim.map.world,
+            &sim.map.border_sources,
+            &inputs,
+            &sim.map.territory,
+        );
+        sim.cover.border_tiles += tiles.max(0) as u64;
+        self.work = self.work.saturating_add(tiles.max(0) as u32);
+        tiles
+    }
+
+    fn process_coll_blocks(&mut self, empty_colls: &mut i32) {
+        let sim = &mut *self.sim;
+        let pass = sim.collision_blocks.process_step12(&mut sim.map.world);
+        // Preflight proved the two views began equal. Commit the exclusive runtime's result
+        // back to the PDB-shaped daemon field as part of the same scheduler callback.
+        *empty_colls = pass.end_cursor;
+        self.work = self.work.saturating_add(1);
+    }
+
+    fn groups_process(&mut self) {
+        let sim = &mut *self.sim;
+        let active = std::array::from_fn(|who| sim.leaders[who].active);
+        let any_active = active.iter().any(|&value| value);
+        let keep = |_who: usize, _o: i16| groups_guys::MemberState::Keep;
+        let speed = |_who: usize, _group: &groups_guys::GroupData| None;
+        // Retail advances `proc_group` even with no active leader.
+        sim.groups.process(&active, &keep, &speed);
+        if any_active {
+            sim.cover.group_normalises += 1;
+        }
+        self.work = self.work.saturating_add(1);
+    }
+}
+
 impl Sim {
     /// A sim over a `wcells` x `wcells` WCoord map (4 tiles per cell, 192 fine units per
     /// tile — so 64 gives the 256-tile square [`MAP_SPAN`] describes).
     pub fn new(seed: u64, wcells: u16) -> Sim {
         let mut map = MapState::new(wcells);
         map.single_region();
+        // Retail's step-12 rollover walks 64 Region records unconditionally. Preserve the
+        // reduced driver's populated region in slot zero and materialize the empty suffix.
+        map.regions
+            .resize_with(game_daemon_step12::REGION_SLOTS, Default::default);
         let mut vic_match = victory_score::Match {
             world_xs: (wcells as i32) * 4,
             world_land_size: (wcells as i32) * (wcells as i32),
@@ -796,6 +979,7 @@ impl Sim {
             step8_rules: leaders::Step8Rules::shipped(),
             leaders: Default::default(),
             market: economy::MarketState::default(),
+            scenario_data: crate::script_runtime::ScenarioDataState::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
             wonders: wonders::Wonders::new(),
@@ -804,6 +988,8 @@ impl Sim {
             defeat_cleanup_error: None,
             cannon_time: CannonTimeState::default(),
             map,
+            game_daemon: game_daemon_step12::GameDaemonState::default(),
+            collision_blocks: collision_blocks_live::CollisionBlockRuntime::new(),
             road_scan: crate::systems::roads::RoadScanState::default(),
             groups: groups_guys::Groups::default(),
             armies: crate::systems::armies::Armies::new(),
@@ -1209,7 +1395,8 @@ impl Sim {
     /// Synchronize the shared tick state into step 8's instruction-derived layout.
     ///
     /// This is an adapter, not a second implementation. The exact dispatcher owns flags,
-    /// diplomacy, timers, rare-mask edge state and stat-pass history. `LeaderSlot` remains
+    /// diplomacy, timers, population cap, rare-mask edge state and stat-pass history.
+    /// `LeaderSlot` remains
     /// authoritative only for the economy fields that steps 11/12 still consume. The
     /// object bands are rebuilt from `ObjectRegistry` so the stat passes visit the same
     /// owner-local rows as the real object tick; unresolved virtual answers and their call
@@ -1226,6 +1413,7 @@ impl Sim {
             dst.anti_attrition_off = policy.take_attrition_disabled;
             dst.neutral_attrition = policy.neutral_attrition;
             dst.building_attrition_off = policy.building_attrition_disabled;
+            dst.pop_cap = policy.population_cap;
 
             let env = &mut self.step8_env.leaders[who];
             env.gather = src.gather_inputs.clone();
@@ -1839,153 +2027,32 @@ impl Sim {
 
     /// `GameDaemon::process_all` `0x00732700` — `process_victory`, `calc_danger`,
     /// `update_all_seen`, `calc_markets`, `check_borders`, `process_coll_blocks`,
-    /// `Groups::process`. Five of the seven run.
+    /// `Groups::process`. Six children have live bodies; scheduled `calc_danger` remains red.
     ///
     /// Order is retail's, and it matters: fog, markets and borders are all recomputed
     /// **before** any unit moves, and group normalisation is the tail of this pass rather
     /// than a pass of its own.
     fn game_daemon_process_all(&mut self) -> (StepRun, u32) {
-        let mut work = 0u32;
         let frame = self.world.frame;
-
-        // Retail runs this pass unconditionally. With no leader and no object there is
-        // nothing for any of its seven children to read, and doing the work anyway would
-        // let an empty world inflate the number this file exists to report.
-        let any_active = self.leaders.iter().any(|l| l.active);
-        if !any_active && self.world.live_count() == 0 {
-            return (StepRun::Vacuous, 0);
-        }
-
-        // `GameDaemon::process_victory` queries `LeaderData::has_preq(0x2B9)` live for
-        // each qualifying Wonder alliance. Resolve the installed Bonus row against the
-        // production runtime's current TechState immediately before that sweep.
-        for who in 0..NUM_LEADERS {
-            self.vic_leaders.slots[who].has_preq_2b9 =
-                self.production_runtime.leader_has_prerequisites(who, 0x2b9);
-        }
-
-        // GameDaemon::process_victory gamedaemon.cpp:585. Wonder points are queried only
-        // in Standard/SuddenDeath/Wonder modes. With an active registry their object/type
-        // host is mandatory: skipping the whole victory sweep is safer than cancelling a
-        // real countdown with manufactured zeroes while continuing other victory writes.
-        let wonder_mode = matches!(
-            victory_score::Victory::from_u8(self.vic_match.options.victory),
-            Some(
-                victory_score::Victory::Standard
-                    | victory_score::Victory::SuddenDeath
-                    | victory_score::Victory::Wonder
-            )
-        );
-        let zeros = [0i32; NUM_LEADERS];
-        let inputs = if wonder_mode && self.wonders.has_active() {
-            match self.wonder_world.as_deref_mut() {
-                Some(world) => self.wonders.victory_inputs(world, &self.vic_leaders),
-                None => Err(wonders::WonderError::MissingWorld),
-            }
-        } else {
-            Ok((zeros, zeros))
+        let mut daemon = std::mem::take(&mut self.game_daemon);
+        let mut regions = std::mem::take(&mut self.map.regions);
+        let mut host = SimGameDaemonHost {
+            expected_empty_colls: daemon.empty_colls,
+            sim: self,
+            work: 0,
         };
-        match inputs {
-            Ok((wonder_net, wonder_value)) => {
-                self.wonder_error = None;
-                self.vic_leaders
-                    .process_victory(&mut self.vic_match, &wonder_net, &wonder_value);
-                self.flush_terminal_queue_cleanup();
-                work += 1;
-            }
-            Err(error) => {
-                self.wonder_error = Some(error);
-                self.cover.gaps[Gap::WonderValueWorld.index()] += 1;
-            }
-        }
+        let result = game_daemon_step12::process_all(&mut daemon, frame, &mut regions, &mut host);
+        let work = host.work;
+        drop(host);
+        self.game_daemon = daemon;
+        self.map.regions = regions;
 
-        // calc_danger: no port.
-        self.cover.gaps[Gap::GameDaemonCalcDanger.index()] += 1;
-
-        // update_all_seen gamedaemon.cpp:232 — World::clear_seen first, then every seeing
-        // object stamps its disc.
-        self.map.world.clear_seen();
-        let live = self.world.live_count() as usize;
-        let mut revealed = 0u64;
-        let mut buf = std::mem::take(&mut self.seen_buf);
-        for row in 0..live {
-            if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
-                continue;
-            }
-            let obj = borders_fog::SeeingObject {
-                fine_x: self.world.units.x_internal()[row],
-                fine_y: self.world.units.y_internal()[row],
-                owner: self.world.units.get_who(row),
-                los_tiles: self.world.units.mylos()[row] as i32,
-                detector: false,
-                grant_seen2_to: 0,
-            };
-            buf.clear();
-            borders_fog::update_seen(
-                &self.map.fog,
-                &mut self.map.world,
-                &self.map.circle,
-                &obj,
-                &mut buf,
-            );
-            revealed += buf.len() as u64;
-            work += 1;
-        }
-        self.seen_buf = buf;
-        self.cover.fog_cells_revealed += revealed;
-
-        // GameDaemon::calc_markets 0x00732?? — one RNG consumer, on the sim stream.
-        let before = self.market.cycle;
-        economy::calc_markets(
-            &self.econ_rules,
-            &mut self.market,
-            &mut self.world.random,
-            frame,
-        );
-        if self.market.cycle != before {
-            self.cover.market_cycles += 1;
-            work += 1;
-        }
-
-        // GameDaemon::check_borders 0x00732060.
-        let mut inputs = [borders_fog::LeaderBorderInput::default(); NUM_LEADERS];
-        for (i, l) in self.leaders.iter().enumerate() {
-            inputs[i] = l.border;
-        }
-        // The limit triples now come off `World +0x38..0x4c` rather than being passed in,
-        // so a caller can no longer hand `check_borders` limits that differ from the ones
-        // the checksum walks.
-        let tiles = borders_fog::check_borders(
-            &mut self.map.regions,
-            &mut self.map.world,
-            &self.map.border_sources,
-            &inputs,
-            &self.map.territory,
-        );
-        self.cover.border_tiles += tiles as u64;
-        work += tiles as u32;
-
-        // process_coll_blocks: no port.
-        self.cover.gaps[Gap::GameDaemonProcessCollBlocks.index()] += 1;
-
-        // Groups::process groups.cpp:12529 — the tail of this pass.
-        let mut active = [false; NUM_LEADERS];
-        for (i, l) in self.leaders.iter().enumerate() {
-            active[i] = l.active;
-        }
-        let any_active = active.iter().any(|&a| a);
-        if any_active {
-            let keep = |_who: usize, _o: i16| groups_guys::MemberState::Keep;
-            let speed = |_who: usize, _g: &groups_guys::GroupData| None;
-            self.groups.process(&active, &keep, &speed);
-            self.cover.group_normalises += 1;
-            work += 1;
-        }
-
-        if work == 0 {
-            (StepRun::Vacuous, 0)
-        } else {
-            (StepRun::Executed, work)
+        match result {
+            Ok(_) => (StepRun::Executed, work),
+            // Both errors are preflight failures, so the adapter has committed no local or
+            // child mutation. Keep the dormant collision gap as the executable bridge-fault
+            // signal instead of pretending the unconditional retail pass was vacuous.
+            Err(_) => (StepRun::Unimplemented(Gap::GameDaemonProcessCollBlocks), 0),
         }
     }
 
@@ -3487,21 +3554,19 @@ mod tests {
         assert_eq!(sim.world.frame, 12);
     }
 
-    /// A step with a body but nothing to do reports `Vacuous`, never `Executed`. An empty
-    /// world must not be able to inflate the number this wave is judged by.
+    /// Retail's GameDaemon shell is unconditional even in an empty world: victory,
+    /// collision-block cursor maintenance, and the Groups cursor still execute. Every
+    /// other empty-body step stays vacuous, leaving exactly those three scheduled steps.
     #[test]
     fn an_empty_world_executes_only_the_counters() {
         let mut sim = Sim::new(5, 8);
         let t = sim.do_frame();
         assert!(!t.steps[8].ran(), "no active leaders, so no economy ran");
+        assert!(t.steps[12].ran(), "the GameDaemon shell is unconditional");
         assert!(!t.steps[14].ran(), "no objects, so no object pass ran");
         assert!(!t.steps[15].ran(), "no projectiles, so no flight ran");
         assert!(t.steps[20].ran() && t.steps[23].ran());
-        assert!(
-            t.executed() <= 2,
-            "an empty world executed {} steps",
-            t.executed()
-        );
+        assert_eq!(t.executed(), 3);
     }
 
     #[test]
@@ -4115,12 +4180,17 @@ mod tests {
         );
     }
 
-    /// Fog is stamped by `update_seen` at step 12, before anything moves.
+    /// Fog is stamped by the exact `frame % 100 == 33` GameDaemon gate at step 12,
+    /// before anything moves on that frame.
     #[test]
     fn units_explore_the_fog_plane() {
         let mut sim = Sim::new(13, 16);
         sim.activate(0);
         sim.spawn_unit(0, 0, 6000, 6000, 6).unwrap();
+        assert_eq!(sim.cover.fog_cells_revealed, 0);
+        for _ in 0..33 {
+            sim.do_frame();
+        }
         assert_eq!(sim.cover.fog_cells_revealed, 0);
         sim.do_frame();
         assert!(

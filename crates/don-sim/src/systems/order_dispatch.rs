@@ -153,11 +153,16 @@
 
 use crate::command::QueuePos;
 use crate::order::{
-    ArmStatus, Order, OrderIndex, SpecialAnimOrderState, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED,
+    ArmStatus, FollowOrderPayload, FormOrderState, Order, OrderIndex, SpecialAnimOrderState,
+    NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED,
 };
 use crate::systems::construction::{BuilderFinish, ObjectKey};
 use crate::systems::construction_builder::{
     self, AfterInvalidTarget, PreflightInput as BuildAtPreflightInput, PreflightPlan,
+};
+use crate::systems::follow_executor::{
+    FollowActorFacts, FollowExecutorEffect, FollowExecutorReceipt, FollowExecutorRequest,
+    FollowExecutorTransactionStatus, FollowIdentity, FollowMoveFacingTail, FollowOrderState,
 };
 use crate::systems::groups_guys::{GuyData, GuyEnv, UnitTypeStats};
 use crate::systems::movement::{
@@ -168,9 +173,14 @@ use crate::systems::patrol::{
     self, AirPatrolAction, AirPatrolAfterPhysics, AirPatrolOrder, AirPatrolTarget,
     GroundPatrolAction, GroupMoveRequest, GroupPatrolOrder, StrafeOrder,
 };
+use crate::systems::repair_order;
 use crate::systems::targeted_order_plans::{
     self, AirAttackGroundFacts, AirAttackGroundOrderState, AttackGroundFacts,
     AttackGroundOrderState, ExploreToFacts, HostFact, OrderEffect,
+};
+use crate::systems::terminal_order_plans::{
+    ChangeFormOrderFacts, TerminalOrderActor, TerminalOrderReceipt, TerminalOrderRequest,
+    TerminalOrderStatus,
 };
 
 // ---------------------------------------------------------------------------
@@ -464,10 +474,19 @@ pub struct OrderRec {
     /// what `Unit::work`'s tail treats as "the target you named is not there any more".
     pub target_uid: u16,
 
+    /// Complete concrete payload for `FollowOrder` (order 11). The duplicated primary
+    /// identity must agree with `target_o/target_who/target_uid`; a mismatch is malformed.
+    pub follow: Option<FollowOrderPayload>,
+
     /// Complete concrete payload for `SpecialAnimOrder` (order 25). This is separate from
     /// `x/y` and target identity because its nine walked words are not layout-compatible
     /// with either generic descriptive union.
     pub special_anim: Option<SpecialAnimOrderState>,
+
+    /// Complete concrete payload for `FormOrder` (order 18). `angle` is duplicated in the
+    /// common `MoveOrder` slot above because `update_action` reads it generically; the
+    /// dispatcher rejects a mismatch rather than choosing one copy.
+    pub form_order: Option<FormOrderState>,
 
     /// Concrete checksum-visible storage for the coordinate-target order classes. These
     /// classes are not layout-compatible with `MoveOrder` or `TargetOrder`, so retaining
@@ -567,7 +586,9 @@ impl Default for OrderRec {
             target_o: -1,
             target_who: -1,
             target_uid: 0,
+            follow: None,
             special_anim: None,
+            form_order: None,
             targeted_payload: TargetedOrderPayload::None,
             patrol_payload: PatrolPayload::None,
         }
@@ -607,6 +628,18 @@ impl OrderRec {
         }
     }
 
+    pub fn follow(payload: FollowOrderPayload) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::Follow,
+            flags: ORDER_GROUP,
+            target_o: payload.ox,
+            target_who: payload.whom,
+            target_uid: payload.uid,
+            follow: Some(payload),
+            ..OrderRec::default()
+        }
+    }
+
     pub fn attack_ground(state: AttackGroundOrderState) -> OrderRec {
         OrderRec {
             kind: OrderIndex::AttackGround,
@@ -630,6 +663,19 @@ impl OrderRec {
     pub fn of_kind(kind: OrderIndex) -> OrderRec {
         OrderRec {
             kind,
+            ..OrderRec::default()
+        }
+    }
+
+    pub fn change_form(angle: i32, new_form: i32, delay: i32) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::ChangeForm,
+            angle,
+            form_order: Some(FormOrderState {
+                angle,
+                new_form,
+                delay,
+            }),
             ..OrderRec::default()
         }
     }
@@ -798,6 +844,7 @@ pub fn install_air_patrol(
 impl From<Order> for OrderRec {
     /// Widen a descriptive [`crate::order::Order`]. The retry state machine starts clean.
     fn from(o: Order) -> OrderRec {
+        let follow = o.follow;
         let attack = AttackGroundOrderState {
             att_x: o.x,
             att_y: o.y,
@@ -825,9 +872,13 @@ impl From<Order> for OrderRec {
             dest_x: o.x,
             dest_y: o.y,
             tolerance: o.tolerance,
-            target_o: o.target_o as i32,
-            target_who: o.target_who as i32,
+            target_o: follow.map_or(i32::from(o.target_o), |payload| payload.ox),
+            target_who: follow.map_or(i32::from(o.target_who), |payload| payload.whom),
+            target_uid: follow.map_or(0, |payload| payload.uid),
+            follow,
             special_anim: o.special_anim,
+            angle: o.form_order.map_or(0, |form| form.angle),
+            form_order: o.form_order,
             targeted_payload,
             ..OrderRec::default()
         }
@@ -846,7 +897,9 @@ impl From<OrderRec> for Order {
             target_who: r.target_who.clamp(i8::MIN as i32, i8::MAX as i32) as i8,
             target_o: r.target_o.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             tolerance: r.tolerance,
+            follow: r.follow,
             special_anim: r.special_anim,
+            form_order: r.form_order,
         }
     }
 }
@@ -1039,6 +1092,8 @@ pub struct UnitWork {
     pub unit_masks: u32,
     /// `UnitData::unit_masks2` `+108`.
     pub unit_masks2: u32,
+    /// `UnitData::form` `+170` (`+0xAA`), written by `Unit::do_form_change`.
+    pub form: i8,
     /// `UnitData::group` `+128`; `< 0` means ungrouped.
     pub group: i16,
     /// `UnitData::inside_up` `+130`; `< 0` means not garrisoned.
@@ -1080,6 +1135,9 @@ pub struct UnitWork {
     /// `ut.turn_speed` is the runtime binary angle (`45° == 0x20000000`), not the XML degree
     /// integer; shipped `turn_scale` is 256 and `turn_scale2` is 2.
     pub guy_env: GuyEnv,
+    /// Actor virtual `los()` at vtable `+0x128`, projected by the live type adapter. It is
+    /// carried explicitly because LOS is not a checksum-owned `UnitData` field.
+    pub follow_los: i32,
     /// `UnitTypeData::unit_flags +0x2B4 & 0x20`, the same-frame turn-and-translate gate.
     pub type_moves_while_turning: bool,
     /// Result of `Unit::move_step`'s virtual capability branch at `0x005FB288`. The shipped
@@ -1139,6 +1197,7 @@ impl UnitWork {
             orders_y: y,
             unit_masks: 0,
             unit_masks2: 0,
+            form: 0,
             group: -1,
             inside_up: -1,
             collide_frame: i32::MIN / 2,
@@ -1155,6 +1214,7 @@ impl UnitWork {
             path_unit: PathUnit::default(),
             lead_guy,
             guy_env,
+            follow_los: 0,
             type_moves_while_turning: false,
             type_special_wide_turner: false,
             type_snap_arm: false,
@@ -1689,6 +1749,43 @@ pub struct AirAttackGroundPhysicsReceipt {
     pub facts: AirAttackGroundFacts,
 }
 
+/// Why REPAIR cannot acquire one coherent target/diplomacy/city/economy snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// Single-use snapshot and capability token for `Unit::do_repair` `0x005EE420`.
+///
+/// `snapshot_version` is host-owned and must bind every object, leader, terrain, city and
+/// constants read represented by `facts`. The duplicated actor/order identity is checked
+/// before the pure planner can emit its first mutation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepairHostReceipt {
+    pub snapshot_version: u64,
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    /// UID observed on the target object in this snapshot, not merely copied from the order.
+    pub target_uid: u16,
+    pub order: OrderRec,
+    pub facts: repair_order::RepairFacts,
+}
+
+/// Proof returned only after the WorkWorld host atomically applies the complete REPAIR
+/// effect slice. A partial count is a broken host contract and is rejected loudly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepairCommitReceipt {
+    pub snapshot_version: u64,
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    pub target: repair_order::ObjectId,
+    pub target_uid: u16,
+    pub committed_effects: usize,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1917,6 +2014,52 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::targeted_order_effect requires a successful targeted-order receipt")
     }
 
+    /// Acquire the coherent object/containment/speed/LOS/search snapshot and every
+    /// non-local capability needed by `Unit::do_follow` before the dispatcher mutates the
+    /// order or actor. `request.actor.speed/los` are host observations; all other actor and
+    /// order fields are checked against live dispatcher state before the receipt is accepted.
+    fn follow_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        request: FollowExecutorRequest,
+    ) -> FollowExecutorReceipt {
+        FollowExecutorReceipt::unavailable(request)
+    }
+
+    /// Apply the sole non-local FOLLOW effect, `Unit::set_anim`. An applied preflight
+    /// receipt guarantees this callback cannot fail. Queue, fallback and same-tick movement
+    /// effects remain local to the dispatcher.
+    fn follow_set_anim(&mut self, _actor: &mut UnitWork, _anim: i32, _mode: i32, _choose: i32) {
+        panic!("WorkWorld::follow_set_anim requires an applied FOLLOW receipt")
+    }
+
+    /// Acquire all branch facts and the capability to commit every effect which REPAIR can
+    /// reach. This callback is read-only with respect to simulation state. The default makes
+    /// a generic movement host fail closed with no animation, queue, target, or economy write.
+    fn repair_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<RepairHostReceipt, RepairHostError> {
+        Err(RepairHostError::Unavailable)
+    }
+
+    /// Atomically apply the complete ordered effect slice from [`repair_order::plan_repair`].
+    ///
+    /// This one callback owns local-looking effects too: animation, bare order retirement,
+    /// find-repair/gather/swarm queue changes, helper byte, both resource stores, target
+    /// `repair_damage`, leader stamp, and local UI/sound. It must validate the same
+    /// `snapshot_version` immediately before committing and may not partially succeed.
+    fn repair_commit(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _effects: &[repair_order::RepairEffect],
+        _receipt: &RepairHostReceipt,
+    ) -> RepairCommitReceipt {
+        panic!("WorkWorld::repair_commit requires a successful REPAIR preflight receipt")
+    }
+
     /// Acquire every external fact and capability which `Unit::do_build` may reach from this
     /// node. The returned local fields are checked against the actor/order before any effect.
     /// A successful host must also have infallible animation, facing, reswarm, placement,
@@ -2042,6 +2185,21 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::boarding_abort_passenger is required for AWAIT_BOARD")
     }
 
+    /// Atomically execute the complete `CHANGE_FORM` or `THINK` terminal-order plan.
+    ///
+    /// `Applied` attests that every ordered effect was preflighted and committed, including
+    /// the nested `set_angle`, `kill_current_order`, `do_idle`, and `think_peasant`
+    /// lifecycles. `Unavailable` must leave both the actor and external world unchanged.
+    /// The default is fail-closed so existing movement-only worlds cannot silently acquire
+    /// either executor.
+    fn apply_terminal_order_transaction(
+        &mut self,
+        _actor: &mut UnitWork,
+        request: TerminalOrderRequest,
+    ) -> TerminalOrderReceipt {
+        TerminalOrderReceipt::unavailable(request)
+    }
+
     /// The side-effecting `detect_unit_collision` -> `resolve_unit_collision` bridge used by
     /// `Unit::move_step`. The default preserves the older boolean occupancy host, but a
     /// fidelity host must apply blocker/order state on `Detect(MoveStep)` and consume it on
@@ -2087,14 +2245,14 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     //  8 BOARD_SHIP      Unit::do_board 0x005ED1F0
     ArmStatus::Implemented,     //  9 AWAIT_BOARD     Unit::do_await_board 0x005ED040
     ArmStatus::Implemented,     // 10 ATTACK          Unit::do_attack 0x005F1B80
-    ArmStatus::Unimplemented,   // 11 FOLLOW          Unit::do_follow 0x005E65D0
+    ArmStatus::Implemented,     // 11 FOLLOW          Unit::do_follow 0x005E65D0
     ArmStatus::Unimplemented,   // 12 GUARD           Unit::do_guard 0x005E5C70
-    ArmStatus::Unimplemented,   // 13 REPAIR          Unit::do_repair 0x005EE420
+    ArmStatus::Implemented,     // 13 REPAIR          Unit::do_repair 0x005EE420
     ArmStatus::Unimplemented,   // 14 CAST_SPELL      Unit::do_cast 0x005EBFE0
     ArmStatus::Unimplemented,   // 15 TRADE_ROUTE     Unit::do_trade 0x005ED270
     ArmStatus::Unimplemented,   // 16 STRAFE          Unit::do_strafe 0x005EAB00
     ArmStatus::Implemented,     // 17 AIR_PATROL      Unit::do_air_patrol 0x005EA620
-    ArmStatus::Unimplemented,   // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
+    ArmStatus::Implemented,     // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
     ArmStatus::Implemented,     // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
     ArmStatus::Implemented,     // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
     ArmStatus::Implemented,     // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
@@ -2103,7 +2261,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
     ArmStatus::Unimplemented,   // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
     ArmStatus::Unimplemented,   // 26 GARRISON        Unit::do_garrison 0x005E6B80
-    ArmStatus::Unimplemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0
+    ArmStatus::Implemented,     // 27 THINK           Unit::do_think_order 0x005E5BF0
 ];
 
 /// Per-arm dispatch counts, so coverage is measured rather than estimated.
@@ -3099,6 +3257,48 @@ fn air_attack_ground_receipt_matches(
         && receipt.order_flags == order.flags
 }
 
+#[inline]
+fn repair_receipt_matches(
+    actor: &UnitWork,
+    order: &OrderRec,
+    frame: i32,
+    receipt: &RepairHostReceipt,
+) -> bool {
+    let facts = &receipt.facts;
+    receipt.actor_who == actor.who
+        && receipt.actor_o == actor.o
+        && receipt.actor_uid == actor.uid
+        && receipt.target_uid == order.target_uid
+        && &receipt.order == order
+        && facts.repairer
+            == (repair_order::ObjectId {
+                o: i32::from(actor.o),
+                who: i32::from(actor.who),
+            })
+        && facts.target
+            == (repair_order::ObjectId {
+                o: order.target_o,
+                who: order.target_who,
+            })
+        && facts.more_work == (order.flags & ORDER_GROUP != 0)
+        && facts.repairer_unit_masks == actor.unit_masks
+        && facts.frame == frame
+}
+
+#[inline]
+fn repair_commit_matches(
+    actor_identity: (u8, i16, u16),
+    receipt: &RepairHostReceipt,
+    commit: &RepairCommitReceipt,
+    effects: &[repair_order::RepairEffect],
+) -> bool {
+    commit.snapshot_version == receipt.snapshot_version
+        && (commit.actor_who, commit.actor_o, commit.actor_uid) == actor_identity
+        && commit.target == receipt.facts.target
+        && commit.target_uid == receipt.target_uid
+        && commit.committed_effects == effects.len()
+}
+
 /// Apply one ordered tail effect emitted by a coordinate-target planner.
 ///
 /// Returns true when a bare `kill_current_order(0)` retired the executor's node. Every
@@ -3305,6 +3505,221 @@ pub fn do_air_attack_ground<W: WorkWorld>(
         apply_targeted_effect(actor, world, &order_before, effect, cov);
     }
     ArmResult::Working
+}
+
+#[inline]
+fn follow_state(payload: FollowOrderPayload) -> FollowOrderState {
+    FollowOrderState {
+        primary: FollowIdentity {
+            o: payload.ox,
+            who: payload.whom,
+            uid: payload.uid,
+        },
+        fallback: FollowIdentity {
+            o: payload.oxx,
+            who: payload.whose,
+            uid: payload.uid2,
+        },
+    }
+}
+
+#[inline]
+fn follow_payload(state: FollowOrderState) -> FollowOrderPayload {
+    FollowOrderPayload {
+        ox: state.primary.o,
+        whom: state.primary.who,
+        uid: state.primary.uid,
+        oxx: state.fallback.o,
+        whose: state.fallback.who,
+        uid2: state.fallback.uid,
+    }
+}
+
+#[inline]
+fn follow_payload_matches_order(order: &OrderRec, payload: FollowOrderPayload) -> bool {
+    order.kind == OrderIndex::Follow
+        && order.target_o == payload.ox
+        && order.target_who == payload.whom
+        && order.target_uid == payload.uid
+}
+
+#[inline]
+fn follow_move_remainder(coord: i32) -> i16 {
+    let low_coord = i32::from(coord as i16);
+    let low_cells = i32::from((coord / movement::WCELL) as i16);
+    low_coord.wrapping_sub(low_cells.wrapping_mul(movement::WCELL)) as i16
+}
+
+fn install_follow_move(
+    actor: &mut UnitWork,
+    x: i32,
+    y: i32,
+    angle: i32,
+    tail: FollowMoveFacingTail,
+) {
+    // The planner/receipt pins this exact tuple. Keep the checks here as a second guard
+    // against calling the local constructor with an unmodelled add_move_facing_order arm.
+    assert_eq!(tail.arg4, 1);
+    assert_eq!(tail.arg5, 0);
+    assert_eq!(tail.queued, QueuePos::First as i32);
+    assert_eq!(tail.arg7, 0);
+    assert_eq!(tail.arg8, -1);
+    assert_eq!(tail.coord9, -1);
+    assert_eq!(tail.coord10, -1);
+    assert_eq!(tail.arg11, 0);
+
+    let world_x = x
+        .wrapping_mul(movement::UCELL)
+        .wrapping_add(movement::UCELL / 2);
+    let world_y = y
+        .wrapping_mul(movement::UCELL)
+        .wrapping_add(movement::UCELL / 2);
+    actor.orders.push_front(OrderRec {
+        kind: OrderIndex::MoveTo,
+        x: world_x,
+        y: world_y,
+        angle,
+        dest_x: world_x,
+        dest_y: world_y,
+        facing: tail.arg8,
+        orig_x: tail.coord9,
+        orig_y: tail.coord10,
+        off_x: follow_move_remainder(world_x),
+        off_y: follow_move_remainder(world_y),
+        ..OrderRec::default()
+    });
+    clear_partial_path(actor);
+    update_action(actor);
+}
+
+/// `Unit::do_follow(FollowOrder*)` `0x005E65D0` (1,455 B), arm 11.
+///
+/// An applied host receipt freezes every reached cross-object observation and proves the
+/// animation callback is available before the dispatcher publishes the updated primary /
+/// fallback order identity. All other effects are exact local queue operations: bare kill,
+/// full `work()` reentry, QUEUE_FIRST movement insertion, and immediate `do_move`.
+pub fn do_follow<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    pathfinder: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order_before) = update_order(actor) else {
+        return ArmResult::NoOrder;
+    };
+    let Some(payload_before) = order_before.follow else {
+        return ArmResult::MalformedOrder;
+    };
+    if !follow_payload_matches_order(&order_before, payload_before) {
+        return ArmResult::MalformedOrder;
+    }
+
+    let request = FollowExecutorRequest {
+        actor: FollowActorFacts {
+            o: actor.o,
+            who: actor.who,
+            x: actor.body.x,
+            y: actor.body.y,
+            speed: actor.guy_env.unit_speed,
+            los: actor.follow_los,
+        },
+        order: follow_state(payload_before),
+    };
+    let receipt = world.follow_preflight(&*actor, request);
+    if receipt.status != FollowExecutorTransactionStatus::Applied || !receipt.validates(&request) {
+        return ArmResult::HostUnavailable;
+    }
+    let Some(plan) = receipt.plan else {
+        return ArmResult::HostUnavailable;
+    };
+
+    let payload_after = follow_payload(plan.order);
+    let Some(current) = actor.orders.front_mut() else {
+        return ArmResult::HostUnavailable;
+    };
+    if *current != order_before {
+        return ArmResult::HostUnavailable;
+    }
+    current.target_o = payload_after.ox;
+    current.target_who = payload_after.whom;
+    current.target_uid = payload_after.uid;
+    current.follow = Some(payload_after);
+
+    for effect in plan.effects {
+        match effect {
+            FollowExecutorEffect::KillCurrentOrder { flags } => {
+                assert_eq!(flags, 0);
+                kill_current_order(actor, KillReason::Failed);
+                cov.failed += 1;
+                return ArmResult::Retired(KillReason::Failed);
+            }
+            FollowExecutorEffect::ReenterWork => {
+                return work(actor, world, pathfinder, cov).result;
+            }
+            FollowExecutorEffect::SetAnim { anim, mode, choose } => {
+                world.follow_set_anim(actor, anim, mode, choose);
+            }
+            FollowExecutorEffect::AddMoveFacingOrder { x, y, angle, tail } => {
+                install_follow_move(actor, x, y, angle, tail);
+            }
+            FollowExecutorEffect::UpdateOrderThenDoMove => {
+                return do_move(actor, world, pathfinder, cov);
+            }
+        }
+    }
+    ArmResult::Working
+}
+
+/// `Unit::do_repair(RepairOrder*)` `0x005EE420`, arm 13.
+///
+/// The external reads are acquired as one versioned snapshot before retail's first
+/// animation write. The pure planner then fixes the complete effect order, and one WorkWorld
+/// callback commits that slice atomically. A missing or incoherent receipt is zero-mutation;
+/// a successful preflight is an infallibility contract for the commit.
+pub fn do_repair<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::Repair {
+        return ArmResult::MalformedOrder;
+    }
+
+    let frame = world.frame();
+    let receipt = match world.repair_preflight(&*actor, &order) {
+        Ok(receipt) => receipt,
+        Err(RepairHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(RepairHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    if !repair_receipt_matches(actor, &order, frame, &receipt) {
+        return ArmResult::HostUnavailable;
+    }
+    let plan = match repair_order::plan_repair(&receipt.facts) {
+        Ok(plan) => plan,
+        Err(_) => return ArmResult::MalformedOrder,
+    };
+    let actor_identity = (actor.who, actor.o, actor.uid);
+    let commit = world.repair_commit(actor, &order, &plan.effects, &receipt);
+    assert!(
+        repair_commit_matches(actor_identity, &receipt, &commit, &plan.effects),
+        "REPAIR host returned an incomplete or foreign atomic commit receipt"
+    );
+
+    let retired = plan.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            repair_order::RepairEffect::KillCurrentOrder { arg: 0 }
+        )
+    });
+    if retired {
+        cov.completed += 1;
+        ArmResult::Retired(KillReason::Completed)
+    } else {
+        ArmResult::Working
+    }
 }
 
 #[inline]
@@ -4074,8 +4489,11 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::GroupAttackTo => do_group_attack_to(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
+        OrderIndex::Repair => do_repair(u, w, cov),
         OrderIndex::BoardShip => do_board(u, w, cov),
         OrderIndex::AwaitBoard => do_await_board(u, w, cov),
+        OrderIndex::Follow => do_follow(u, w, pf, cov),
+        OrderIndex::ChangeForm | OrderIndex::Think => do_terminal_order(u, w, cov, kind),
         OrderIndex::AirPatrol => do_air_patrol(u, w),
         OrderIndex::GroupPatrol => do_group_patrol(u, w),
         OrderIndex::AttackGround => do_attack_ground(u, w, cov),
@@ -4087,6 +4505,77 @@ pub fn do_job<W: WorkWorld>(
             ArmResult::NotPorted
         }
     }
+}
+
+fn do_terminal_order<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    cov: &mut DispatchCoverage,
+    kind: OrderIndex,
+) -> ArmResult {
+    let Some(current) = u.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if current.kind != kind {
+        return ArmResult::MalformedOrder;
+    }
+    let no_foreign_payload = current.follow.is_none()
+        && current.special_anim.is_none()
+        && matches!(&current.targeted_payload, TargetedOrderPayload::None)
+        && matches!(&current.patrol_payload, PatrolPayload::None);
+    if !no_foreign_payload {
+        return ArmResult::MalformedOrder;
+    }
+    let actor = TerminalOrderActor {
+        who: u.who,
+        object: u.o,
+        uid: u.uid,
+    };
+    let queue_before: Vec<_> = u.orders.iter().map(|order| order.kind).collect();
+    let request = match kind {
+        OrderIndex::ChangeForm => {
+            let Some(form) = current.form_order else {
+                return ArmResult::MalformedOrder;
+            };
+            if form.angle != current.angle {
+                return ArmResult::MalformedOrder;
+            }
+            TerminalOrderRequest::ChangeForm {
+                actor,
+                order: ChangeFormOrderFacts {
+                    angle: form.angle,
+                    new_form: form.new_form,
+                },
+                queue_before,
+            }
+        }
+        OrderIndex::Think => {
+            if current.form_order.is_some() {
+                return ArmResult::MalformedOrder;
+            }
+            TerminalOrderRequest::Think {
+                actor,
+                unit_type: u.ptype,
+                queue_before,
+            }
+        }
+        _ => unreachable!("only terminal arms call do_terminal_order"),
+    };
+
+    // A malformed or unavailable host is not allowed to leave the local actor half-mutated.
+    // External rollback remains the WorkWorld transaction's responsibility.
+    let before = u.clone();
+    let receipt = w.apply_terminal_order_transaction(u, request.clone());
+    if !receipt.validates(&request) {
+        *u = before;
+        return ArmResult::MalformedOrder;
+    }
+    if receipt.status != TerminalOrderStatus::Applied {
+        *u = before;
+        return ArmResult::HostUnavailable;
+    }
+    cov.completed += 1;
+    ArmResult::Retired(KillReason::Completed)
 }
 
 // ---------------------------------------------------------------------------
@@ -4478,6 +4967,12 @@ mod tests {
         build_at_events: Vec<&'static str>,
         build_at_effect_fronts: Vec<Option<OrderIndex>>,
         build_at_construct: BuildAtConstructResult,
+        repair_preflight: Option<Result<RepairHostReceipt, RepairHostError>>,
+        repair_effects: Vec<repair_order::RepairEffect>,
+        repair_events: Vec<&'static str>,
+        repair_claimed_effects: Option<usize>,
+        follow_receipt: Option<FollowExecutorReceipt>,
+        follow_anims: Vec<(i32, i32, i32)>,
         scrambled: Vec<i16>,
     }
 
@@ -4521,6 +5016,12 @@ mod tests {
                     credited: 1,
                     started_this_call: false,
                 },
+                repair_preflight: None,
+                repair_effects: vec![],
+                repair_events: vec![],
+                repair_claimed_effects: None,
+                follow_receipt: None,
+                follow_anims: vec![],
                 scrambled: vec![],
             }
         }
@@ -4575,6 +5076,18 @@ mod tests {
         fn draw_path_retry_delay(&mut self) -> i32 {
             self.draws += 1;
             6
+        }
+        fn follow_preflight(
+            &mut self,
+            _: &UnitWork,
+            request: FollowExecutorRequest,
+        ) -> FollowExecutorReceipt {
+            self.follow_receipt
+                .clone()
+                .unwrap_or_else(|| FollowExecutorReceipt::unavailable(request))
+        }
+        fn follow_set_anim(&mut self, _: &mut UnitWork, anim: i32, mode: i32, choose: i32) {
+            self.follow_anims.push((anim, mode, choose));
         }
         fn patrol_think_bird(&mut self, _: &mut UnitWork, _: &mut AirPatrolOrder) {}
         fn air_patrol_physics(
@@ -4715,6 +5228,43 @@ mod tests {
             self.build_at_events.push("construct");
             self.build_at_construct
         }
+        fn repair_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<RepairHostReceipt, RepairHostError> {
+            self.repair_events.push("preflight");
+            self.repair_preflight
+                .clone()
+                .unwrap_or(Err(RepairHostError::Unavailable))
+        }
+        fn repair_commit(
+            &mut self,
+            actor: &mut UnitWork,
+            _: &OrderRec,
+            effects: &[repair_order::RepairEffect],
+            receipt: &RepairHostReceipt,
+        ) -> RepairCommitReceipt {
+            self.repair_events.push("commit");
+            self.repair_effects.extend_from_slice(effects);
+            for effect in effects {
+                if matches!(
+                    effect,
+                    repair_order::RepairEffect::KillCurrentOrder { arg: 0 }
+                ) {
+                    kill_current_order(actor, KillReason::Completed);
+                }
+            }
+            RepairCommitReceipt {
+                snapshot_version: receipt.snapshot_version,
+                actor_who: receipt.actor_who,
+                actor_o: receipt.actor_o,
+                actor_uid: receipt.actor_uid,
+                target: receipt.facts.target,
+                target_uid: receipt.target_uid,
+                committed_effects: self.repair_claimed_effects.unwrap_or(effects.len()),
+            }
+        }
         fn group_attack_preflight(
             &mut self,
             _: &UnitWork,
@@ -4815,7 +5365,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_eighteen_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_twenty_two_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -4828,10 +5378,8 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Seventeen implemented, including the three coordinate-target executors, BUILD_AT,
-        // ATTACK_TO, all grouped executors, both boarding arms, and both live patrols;
-        // PATROL is faithfully empty.
-        assert_eq!((implemented, empty, absent), (17, 1, 10));
+        // Twenty-one implemented; PATROL's missing jump-table arm is faithfully empty.
+        assert_eq!((implemented, empty, absent), (21, 1, 6));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -5019,6 +5567,83 @@ mod tests {
         kill_current_order(&mut u, KillReason::Completed);
         assert!(!u.parked_search);
         assert!(u.path.is_empty());
+    }
+
+    #[test]
+    fn follow_dispatch_is_zero_mutation_without_a_receipt_then_commits_the_idle_effect() {
+        use crate::systems::follow_executor::{
+            plan_follow_executor, FollowExecutorFacts, FollowObjectFacts,
+        };
+
+        let payload = FollowOrderPayload {
+            ox: 7,
+            whom: 3,
+            uid: 70,
+            oxx: 7,
+            whose: 3,
+            uid2: 70,
+        };
+        let mut u = UnitWork::at(2, 9, 0, 0);
+        u.guy_env.unit_speed = 8;
+        u.follow_los = 4;
+        u.orders.push_back(OrderRec::follow(payload));
+        let request = FollowExecutorRequest {
+            actor: FollowActorFacts {
+                o: 9,
+                who: 2,
+                x: 0,
+                y: 0,
+                speed: 8,
+                los: 4,
+            },
+            order: follow_state(payload),
+        };
+
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let before = u.orders.clone();
+        assert_eq!(
+            do_follow(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(u.orders, before);
+
+        let primary = FollowIdentity {
+            o: 7,
+            who: 3,
+            uid: 70,
+        };
+        let facts = FollowExecutorFacts {
+            primary: Some(FollowObjectFacts {
+                identity: primary,
+                valid_unit: true,
+                on_map: true,
+                active: true,
+                inside_up: -1,
+                seen_by_actor: true,
+                x: 1_000,
+                y: 0,
+                angle: 0x2000_0000,
+                speed: 4,
+                is_moving: false,
+                captain_o: 7,
+            }),
+            ..FollowExecutorFacts::default()
+        };
+        let plan = plan_follow_executor(&request, &facts).unwrap();
+        w.follow_receipt = Some(FollowExecutorReceipt {
+            request,
+            status: FollowExecutorTransactionStatus::Applied,
+            facts: Some(facts),
+            plan: Some(plan),
+        });
+        assert_eq!(
+            do_follow(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().follow, Some(payload));
+        assert_eq!(w.follow_anims, vec![(0, 0, 1)]);
     }
 
     // -- the phase gates ---------------------------------------------------
@@ -5258,6 +5883,150 @@ mod tests {
         assert_eq!(arrived.orders.len(), 1);
         assert_eq!(arrived.orders.front().unwrap().x, 300);
         assert_eq!(w.attack_to_events, vec!["preflight"]);
+    }
+
+    fn repair_order() -> OrderRec {
+        let mut order = OrderRec::of_kind(OrderIndex::Repair);
+        order.flags = ORDER_GROUP;
+        order.target_who = 2;
+        order.target_o = 2_001;
+        order.target_uid = 20;
+        order
+    }
+
+    fn repair_facts(actor: &UnitWork, order: &OrderRec, frame: i32) -> repair_order::RepairFacts {
+        repair_order::RepairFacts {
+            repairer: repair_order::ObjectId {
+                o: i32::from(actor.o),
+                who: i32::from(actor.who),
+            },
+            target: repair_order::ObjectId {
+                o: order.target_o,
+                who: order.target_who,
+            },
+            more_work: order.flags & ORDER_GROUP != 0,
+            repairer_unit_masks: actor.unit_masks,
+            target_damage: 50,
+            target_is_repairer_team: true,
+            repairer_relation_to_target_is_two: false,
+            team_relation_to_target_is_two: false,
+            target_has_object_interface: false,
+            target_build_active: true,
+            target_under_attack: false,
+            territory_owner: None,
+            target_owner_allied_with_territory: false,
+            repairer_in_range: true,
+            target_has_repair_interface_after_range: false,
+            repair_numerator: 1,
+            target_hit_capacity: 100,
+            repair_scale_constant: 1,
+            target_helpers: 0,
+            target_build_flags: 0,
+            city_repair_state_mismatch: false,
+            leader_has_korean_repair_bonus: false,
+            korean_repair_percent: 0,
+            korean_skips_damage_penalties: false,
+            target_build_masks: 0,
+            frame,
+            target_repair_state: 0,
+            resources: [repair_order::RepairResourceFacts::default(); repair_order::RESOURCE_COUNT],
+            leader_repair_stamp: 0,
+            repairer_owner_is_local_player: false,
+            lost_target_fallback: repair_order::LostTargetFallbackFacts {
+                repairer_order_type: 1,
+                repairer_state_f8: 2,
+                target_has_object_interface: false,
+                target_type_allows_gather: false,
+                target_is_university: false,
+            },
+        }
+    }
+
+    fn repair_receipt(actor: &UnitWork, order: &OrderRec, frame: i32) -> RepairHostReceipt {
+        RepairHostReceipt {
+            snapshot_version: 77,
+            actor_who: actor.who,
+            actor_o: actor.o,
+            actor_uid: actor.uid,
+            target_uid: order.target_uid,
+            order: order.clone(),
+            facts: repair_facts(actor, order, frame),
+        }
+    }
+
+    #[test]
+    fn repair_missing_or_foreign_snapshot_is_zero_mutation() {
+        let mut world = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(1, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(repair_order());
+        let before = actor.orders.clone();
+
+        assert_eq!(
+            do_repair(&mut actor, &mut world, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(actor.orders, before);
+        assert!(world.repair_effects.is_empty());
+        assert_eq!(world.repair_events, ["preflight"]);
+
+        let order = actor.orders.front().unwrap().clone();
+        let mut foreign = repair_receipt(&actor, &order, world.frame);
+        foreign.target_uid ^= 1;
+        world.repair_preflight = Some(Ok(foreign));
+        world.repair_events.clear();
+        assert_eq!(
+            do_repair(&mut actor, &mut world, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(actor.orders, before);
+        assert!(world.repair_effects.is_empty());
+        assert_eq!(world.repair_events, ["preflight"]);
+    }
+
+    #[test]
+    fn repair_full_atomic_receipt_retires_only_after_all_effects_commit() {
+        let mut world = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(1, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(repair_order());
+        let order = actor.orders.front().unwrap().clone();
+        world.repair_preflight = Some(Ok(repair_receipt(&actor, &order, world.frame)));
+
+        assert_eq!(
+            do_repair(&mut actor, &mut world, &mut cov),
+            ArmResult::Retired(KillReason::Completed)
+        );
+        assert!(actor.orders.is_empty());
+        assert_eq!(world.repair_events, ["preflight", "commit"]);
+        assert_eq!(
+            world.repair_effects,
+            [
+                repair_order::RepairEffect::SetAnimation {
+                    animation: repair_order::REPAIR_ANIM,
+                    arg0: 0,
+                    arg1: 1,
+                },
+                repair_order::RepairEffect::KillCurrentOrder { arg: 0 },
+            ]
+        );
+        assert_eq!(cov.completed, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "incomplete or foreign atomic commit receipt")]
+    fn repair_partial_commit_claim_is_a_broken_host_contract() {
+        let mut world = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(1, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(repair_order());
+        let order = actor.orders.front().unwrap().clone();
+        world.repair_preflight = Some(Ok(repair_receipt(&actor, &order, world.frame)));
+        world.repair_claimed_effects = Some(1);
+        let _ = do_repair(&mut actor, &mut world, &mut cov);
     }
 
     fn build_at_order() -> OrderRec {
@@ -6697,11 +7466,12 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 10 unimplemented arms, each hit once. The smoke actors take all three grouped
+        // Six unimplemented arms, each hit once. The smoke actors take all three grouped
         // executors' exact ungrouped conversion; grouped actors without a snapshot fail
-        // closed at the mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 10);
-        assert!((cov.covered_fraction() - 18.0 / 28.0).abs() < 1e-12);
+        // closed at the mandatory host seam. Both boarding and both live patrol arms run,
+        // as do the recovered FOLLOW, REPAIR, CHANGE_FORM, and THINK executors.
+        assert_eq!(cov.unimplemented, 6);
+        assert!((cov.covered_fraction() - 22.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # REPAIR order reconstruction
 
-Status: deterministic planner complete from a frozen host snapshot; live order dispatch is
-intentionally not wired in this lane.  Primary evidence is `Unit::do_repair` at
+Status: dispatcher arm complete behind a mandatory versioned WorkWorld snapshot and atomic
+commit receipt. Primary evidence is `Unit::do_repair` at
 `0x005EE420` (`re/decomp-all/005ee420.c`, 1,998 bytes; `schema/rise-procs.tsv`).
 
 ## Exact control flow
@@ -51,22 +51,25 @@ Resolved callees: `Unit::kill_current_order` `0x005E2CB0`, `Unit::find_repair_sp
 
 ## Honest boundary and integration map
 
-`repair_order.rs` is independent of Arena/World and exposes `plan_repair`, ordered
-`RepairEffect`s, and one `AtomicRepairHost::commit_repair` receipt. The planner is complete
-only when its `RepairFacts` are a coherent same-version snapshot. The adapter must still:
+`repair_order.rs` remains independent of Arena/World and exposes `plan_repair` plus ordered
+`RepairEffect`s. `order_dispatch.rs` now declares `RepairHostReceipt`, validates actor/order,
+target slot/UID, frame, mask and flag identity, plans before mutation, and hands the entire effect
+slice to one infallible `WorkWorld::repair_commit`. `RepairCommitReceipt` must echo the
+snapshot version and identities and prove that the full effect count committed; a foreign or
+partial receipt is rejected loudly. The callback owns order removal, fallback Group
+construction/swarm, target helper mutation, decoded/encrypted stock writes, repair damage,
+repair stamp, and local UI/sound as one atomic transaction.
 
-1. add `pub mod repair_order;` to `systems/mod.rs`;
-2. replace `OrderIndex::Repair => Unimplemented` in `order_dispatch.rs` with a host-fact
-   snapshot, `execute_repair`, and a `Port::Complete` receipt;
-3. make one atomic callback own order removal, fallback Group construction/swarm, target
-   helper mutation, decoded/encrypted stock writes, repair damage, repair stamp, and local
-   UI/sound; and
-4. change `check_target_path(REPAIR)` only after its separately recovered retail path
-   predicate is wired. `Unit::do_repair` does not prove that predicate.
+The default WorkWorld preflight remains unavailable, so a host without all facts/effects
+returns `ArmResult::HostUnavailable` before animation or any other mutation. With the typed
+receipt implemented, arm 13 is honestly `ArmStatus::Implemented` / live `Port::Complete`.
+
+One boundary deliberately remains separate: `check_target_path(REPAIR)` still returns false
+in the dispatcher. It may change only after its own retail path predicate is recovered;
+`Unit::do_repair` does not prove that predicate and this integration does not claim it.
 
 Still host-owned/opaque by design: the semantic names behind target vslots `+0x78`,
 `+0x114`, `+0x11c`, `+0x18c`, unit vslot `+0xf8`, the two City bytes, live diplomacy and
 terrain-owner lookup, and local UI/sound construction. Their exact returned values and
-branch use are preserved; guessing their broader meaning is not required for the planner.
-Until the atomic adapter exists, the honest closure class is isolated deterministic
-`Port::Planned`, not live `Port::Complete`.
+branch use are preserved through the mandatory WorkWorld facts/effects; guessing their
+broader meaning is not required for executor closure.

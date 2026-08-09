@@ -108,7 +108,7 @@
 //! wire/group installation side and writes the same executable queue shape, including the
 //! dynamic patrol payloads that cannot be represented by a flat order tag.
 
-use crate::order::{Order, OrderIndex};
+use crate::order::{FollowOrderPayload, Order, OrderIndex, ORDER_GROUP};
 use crate::systems::groups_guys::{
     formation_order_coord, plan_action_buildmask, plan_action_disband, plan_action_halt,
     plan_action_set_transport, plan_action_stance, plan_action_unitmask, resolve_form, vector_dist,
@@ -131,6 +131,8 @@ use crate::systems::order_dispatch::{
 pub mod diplomacy_command_plans;
 #[path = "systems/direct_entity_command_integration.rs"]
 pub mod direct_entity_command_integration;
+#[path = "systems/follow_action.rs"]
+pub mod follow_action;
 #[path = "systems/group_action_frontier.rs"]
 pub mod group_action_frontier;
 #[path = "systems/late_command_plans.rs"]
@@ -146,6 +148,10 @@ use self::diplomacy_command_plans::{
     DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
 };
 use self::direct_entity_command_integration::{DirectEntityFleetReceipt, DirectEntityFleetRequest};
+use self::follow_action::{
+    decode_follow, plan_follow, FollowEffect, FollowMemberFacts, FollowReceipt, FollowRequest,
+    FollowTargetFacts, FollowTransactionStatus,
+};
 use self::group_action_frontier::{
     plan_stop_spell, GroupActionTransactionStatus, OpenGroupActionCommand, StopSpellMemberFacts,
     StopSpellReceipt, StopSpellRequest, StopSpellStep,
@@ -1013,6 +1019,13 @@ pub trait Fleet {
         StopSpellReceipt::unavailable(request)
     }
 
+    /// Atomic receiver boundary for complete `Group::action_follow`. Applied hosts commit
+    /// the validated halt/install/insert lifecycle before returning; unavailable hosts leave
+    /// group, queues, paths and actions untouched.
+    fn apply_follow_transaction(&mut self, request: FollowRequest) -> FollowReceipt {
+        FollowReceipt::unavailable(request)
+    }
+
     fn apply_group_halt_transaction(
         &mut self,
         request: GroupHaltTransactionRequest,
@@ -1132,6 +1145,12 @@ pub struct Slot {
     pub can_move: bool,
     pub is_plane: bool,
     pub is_on_map: bool,
+    /// Object virtual `get_captain()` used only by FOLLOW's self-target gate. `None`
+    /// denotes this slot itself.
+    pub follow_captain_o: Option<i32>,
+    /// `ObjectData::inside_down/inside_down_who` captured by `add_follow_order`. `None`
+    /// makes the secondary FOLLOW identity equal the primary identity.
+    pub follow_inside_down: Option<(i32, i32)>,
     pub is_captain: bool,
     pub leaves_groups: bool,
     pub form_category: i32,
@@ -1448,6 +1467,190 @@ impl Fleet for ObjectTable {
             request,
             status: GroupActionTransactionStatus::Applied,
             group_after_ignore_orders: Some(group_after_ignore_orders),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_follow_transaction(&mut self, request: FollowRequest) -> FollowReceipt {
+        let group_after_ignore_orders = request.group.clone();
+        let target_key = u8::try_from(request.command.target_who)
+            .ok()
+            .zip(i16::try_from(request.command.target_o).ok());
+        let target_slot = target_key.and_then(|(who, o)| self.get(who, o)).cloned();
+        let target = target_key.map(|(_who, o)| FollowTargetFacts {
+            queried_o: request.command.target_o,
+            queried_who: request.command.target_who,
+            valid_unit: target_slot
+                .as_ref()
+                .is_some_and(|slot| slot.alive && slot.is_unit),
+            on_map: target_slot.as_ref().is_some_and(|slot| slot.is_on_map),
+            is_plane: target_slot.as_ref().is_some_and(|slot| slot.is_plane),
+            canonical_o: target_slot
+                .as_ref()
+                .and_then(|slot| slot.follow_captain_o)
+                .unwrap_or(i32::from(o)),
+        });
+        let n = group_after_ignore_orders
+            .num
+            .clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = group_after_ignore_orders.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(group_after_ignore_orders.who, o);
+                FollowMemberFacts {
+                    o,
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    on_map: slot.is_some_and(|slot| slot.is_on_map),
+                    is_plane: slot.is_some_and(|slot| slot.is_plane),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_follow(&request, &group_after_ignore_orders, target, &members) else {
+            return FollowReceipt::unavailable(request);
+        };
+
+        // This compact host cannot replay Group::finish_insert's arbitrary saved group
+        // actions. Fail closed before mutation when set_up_insert would capture any.
+        if request.command.queued == 0
+            && group_after_ignore_orders.list[..n].iter().any(|&o| {
+                self.orders(group_after_ignore_orders.who, o)
+                    .is_some_and(|orders| orders.iter().any(|order| order.flags & ORDER_GROUP != 0))
+            })
+        {
+            return FollowReceipt::unavailable(request);
+        }
+
+        let mut halt_plan = None;
+        if plan
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, FollowEffect::ActionHalt { .. }))
+        {
+            let mut halt_group = group_after_ignore_orders.clone();
+            halt_group.disband = 0;
+            let halt_members: Vec<_> = halt_group.list[..n]
+                .iter()
+                .map(|&o| {
+                    let slot = self.get(halt_group.who, o);
+                    HaltMemberFacts {
+                        o,
+                        valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                        on_map: slot.is_some_and(|slot| slot.is_on_map),
+                        is_plane: slot.is_some_and(|slot| slot.is_plane),
+                        domain: slot.map_or(0, |slot| slot.domain),
+                        unit_flags: slot.map_or(0, |slot| slot.unit_flags),
+                        entering_or_exiting: slot.is_some_and(|slot| slot.entering_or_exiting),
+                        flag_4_veto: slot.is_some_and(|slot| slot.halt_flag_4_veto),
+                        special: slot.is_some_and(|slot| slot.special),
+                        spy: slot.is_some_and(|slot| slot.spy),
+                    }
+                })
+                .collect();
+            let Ok(preflight) = plan_action_halt(&halt_group, 0, &halt_members) else {
+                return FollowReceipt::unavailable(request);
+            };
+            halt_plan = Some(preflight);
+        }
+
+        for effect in &plan.effects {
+            if let FollowEffect::AddFollowOrder {
+                actor_who,
+                actor_o,
+                target_o,
+                target_who,
+                queued,
+            } = *effect
+            {
+                if !matches!(queued, 1 | 2)
+                    || self.orders(actor_who, actor_o).is_none()
+                    || target_o != request.command.target_o
+                    || target_who != request.command.target_who
+                {
+                    return FollowReceipt::unavailable(request);
+                }
+                let Some(target_slot) = target_slot.as_ref() else {
+                    return FollowReceipt::unavailable(request);
+                };
+                if let Some((secondary_o, secondary_who)) = target_slot.follow_inside_down {
+                    let Some((who, o)) = u8::try_from(secondary_who)
+                        .ok()
+                        .zip(i16::try_from(secondary_o).ok())
+                    else {
+                        return FollowReceipt::unavailable(request);
+                    };
+                    if self.get(who, o).is_none() {
+                        return FollowReceipt::unavailable(request);
+                    }
+                }
+            }
+        }
+
+        for effect in &plan.effects {
+            match *effect {
+                FollowEffect::SetUpInsert | FollowEffect::FinishInsert => {}
+                FollowEffect::ActionHalt { flags } => {
+                    assert_eq!(flags, 0);
+                    for step in &halt_plan.as_ref().expect("halt plan was preflighted").steps {
+                        match *step {
+                            HaltStep::ClearUnitMask { who, o, mask } => {
+                                self.get_mut(who, o)
+                                    .expect("halt identity vanished")
+                                    .unit_masks &= !mask;
+                            }
+                            HaltStep::CloseOrders { who, o, .. } => {
+                                self.get_mut(who, o)
+                                    .expect("halt identity vanished")
+                                    .orders
+                                    .clear();
+                            }
+                            HaltStep::ClearPathAnchor { .. }
+                            | HaltStep::ClearPartialPath { .. }
+                            | HaltStep::UpdateAction { .. } => {}
+                        }
+                    }
+                }
+                FollowEffect::AddFollowOrder {
+                    actor_who,
+                    actor_o,
+                    target_o,
+                    target_who,
+                    queued,
+                } => {
+                    let target_slot = target_slot.as_ref().expect("follow target was preflighted");
+                    let (oxx, whose, uid2) = match target_slot.follow_inside_down {
+                        Some((o, who)) => {
+                            let slot = self
+                                .get(who as u8, o as i16)
+                                .expect("secondary follow identity was preflighted");
+                            (o, who, slot.uid)
+                        }
+                        None => (target_o, target_who, target_slot.uid),
+                    };
+                    let order = OrderRec::follow(FollowOrderPayload {
+                        ox: target_o,
+                        whom: target_who,
+                        uid: target_slot.uid,
+                        oxx,
+                        whose,
+                        uid2,
+                    });
+                    let orders = self
+                        .orders_mut(actor_who, actor_o)
+                        .expect("follow actor was preflighted");
+                    if queued == 2 {
+                        orders.clear();
+                    }
+                    orders.push_back(order);
+                }
+            }
+        }
+
+        FollowReceipt {
+            request,
+            status: FollowTransactionStatus::Applied,
+            group_after_ignore_orders: Some(group_after_ignore_orders),
+            target,
             members,
             plan: Some(plan),
         }
@@ -3704,11 +3907,9 @@ impl Action<'_> {
                 self.action_form(form, rotate, queued, f);
             }
             "follow" => {
-                let (Some(ox), Some(whom)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
-                    return;
-                };
-                let q = QueuePos::from_i64(i32_at(cmd, 9).unwrap_or(0) as i64);
-                self.action_target(OrderIndex::Follow, ox, whom, q, f);
+                if let Some(command) = decode_follow(cmd) {
+                    self.action_follow(command, f);
+                }
             }
             "guard" => {
                 let (Some(ox), Some(whom)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
@@ -3825,6 +4026,28 @@ impl Action<'_> {
             .iter()
             .filter(|step| matches!(step, StopSpellStep::CloseOrders { .. }))
             .count() as u64;
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
+        }
+    }
+
+    fn action_follow(&mut self, command: follow_action::FollowCommand, f: &mut dyn Fleet) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let request = FollowRequest { group, command };
+        let receipt = f.apply_follow_transaction(request.clone());
+        if receipt.status != FollowTransactionStatus::Applied || !receipt.validates(&request) {
+            return;
+        }
+        let Some(plan) = receipt.plan else { return };
+        let installed = plan
+            .effects
+            .iter()
+            .filter(|effect| matches!(effect, FollowEffect::AddFollowOrder { .. }))
+            .count() as u64;
+        self.stats.orders_installed += installed;
+        self.stats.by_order[OrderIndex::Follow.index()] += installed;
         if let Some(group) = self.groups.get_mut(self.slot) {
             *group = plan.group;
         }
@@ -4505,8 +4728,8 @@ impl Action<'_> {
         body(self, q, f);
     }
 
-    /// The shared shape of `action_follow` / `action_guard` / `action_garrison` /
-    /// `action_repair` / `action_gather` / `action_board_ship` / `action_trade`: one
+    /// The shared shape of `action_guard` / `action_garrison` / `action_repair` /
+    /// `action_gather` / `action_board_ship` / `action_trade`: one
     /// `Unit::add_<k>_order(ox, whom, queued)` per member, with the `QUEUE_FIRST` dance in
     /// front. All seven are [structure] from their decompiled bodies; all seven install
     /// exactly the one `OrderIndex` [measured, `ADD_ORDER_KINDS`].
@@ -4522,11 +4745,6 @@ impl Action<'_> {
             let (who, list) = a.members();
             for o in list {
                 if !f.alive(who, o) {
-                    continue;
-                }
-                // `action_follow` refuses to make a unit follow itself [structure,
-                // 0x006FD510: `if (member != ox || group.who != whom) add_follow_order`].
-                if ox as i16 == o && (whom < 0 || whom as u8 == who) {
                     continue;
                 }
                 let ord = Order {
@@ -5304,6 +5522,34 @@ mod tests {
         assert_eq!(b.stats.orders_installed, before);
         assert_eq!(f.get(1, 0).unwrap().stance, 2);
         assert_eq!(f.get(1, 1).unwrap().stance, 2);
+    }
+
+    #[test]
+    fn follow_uses_dedicated_transaction_and_preserves_both_target_identities() {
+        let mut b = Bridge::new();
+        let mut f = fleet(4);
+        let mut p = Package::new(1, 0);
+        select(&mut b, &mut p, &mut f, &[0, 1]);
+        b.process_all(&mut p, &build::target(30, 1, 1, QueuePos::New), &mut f)
+            .unwrap();
+
+        let follower = f.orders(1, 0).unwrap().front().unwrap();
+        assert_eq!(follower.kind, OrderIndex::Follow);
+        assert_eq!(
+            follower.follow,
+            Some(FollowOrderPayload {
+                ox: 1,
+                whom: 1,
+                uid: f.uid(1, 1),
+                oxx: 1,
+                whose: 1,
+                uid2: f.uid(1, 1),
+            })
+        );
+        assert!(
+            f.orders(1, 1).unwrap().is_empty(),
+            "canonical self is skipped"
+        );
     }
 
     #[test]

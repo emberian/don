@@ -1,6 +1,7 @@
 //! Exact transaction plans for the two terminal `Unit::do_job` arms.
 //!
-//! This module owns no dispatcher integration.  It transcribes the complete bodies of:
+//! The shared dispatcher consumes these plans through one atomic `WorkWorld` transaction.
+//! This module transcribes the complete bodies of:
 //!
 //! * `Unit::do_form_change` `0x005E8670..0x005E86C3` (`CHANGE_FORM`, arm 18); and
 //! * `Unit::do_think_order` `0x005E5BF0..0x005E5C63` (`THINK`, arm 27).
@@ -145,8 +146,8 @@ impl TerminalOrderReceipt {
     }
 }
 
-/// Fail-closed handoff which can be copied onto the dispatcher host without adding a required
-/// method to every existing test host in the same convergence step.
+/// Standalone fail-closed handoff for hosts which consume the planner without the shared
+/// `WorkWorld` dispatcher adapter.
 pub trait TerminalOrderHost {
     fn apply_terminal_order_transaction(
         &mut self,

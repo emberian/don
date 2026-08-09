@@ -3,9 +3,9 @@
 ## Outcome
 
 `crates/don-sim/src/systems/collision.rs` already ports
-`GameDaemon::process_coll_blocks` `0x00731F90` exactly. The ordinary tick nevertheless records
-`Gap::GameDaemonProcessCollBlocks` because it never supplies the persistent scan cursor at
-`GameDaemon + 0x20` and never calls the recovered body.
+`GameDaemon::process_coll_blocks` `0x00731F90` exactly. The ordinary tick now supplies the
+persistent scan cursor at `GameDaemon + 0x20` and calls the recovered body from the exact
+`GameDaemon::process_all` scheduler.
 
 `collision_blocks_live::CollisionBlockRuntime` is the missing exclusive store. It owns that
 cursor across frames and passes the authoritative `map_terrain::World` directly to the recovered
@@ -28,17 +28,18 @@ or script lanes.
 | 4 | script runtime executes twice; unrecovered builtins fail closed | active script/BHS work owns it |
 | 8 | economy/leader dispatcher exists; several child hosts remain partial | broad leader/type host |
 | 11 | strategy dispatcher exists; exploration, planning, diplomacy remain partial | overlaps victory/AI work |
-| 12 | reaper body exact; persistent cursor and live call absent | **selected** |
+| 12 | reaper body, persistent cursor, and real tick call are live | **selected and landed** |
 | 13 | army dispatcher/prefix exists; full Group/Unit/City/type host is missing | army/group files are actively owned |
 | 15 | ammo runs; Unit/Guy/build/corpse `inc_time` family remains partial | several RNG and animation hosts |
 | 17 | recovered leader post-pass exists but remains a partial top-level row | lower simulation impact |
 | 19 | recovered event-frame dispatcher exists but child feedback/event hosts remain partial | lower simulation impact |
 | 22 | scanner exists; renderer-owned `RoadElementCandidate` facts fail closed | external candidate source |
 
-## Frozen integration hunk
+## Landed bounded integration
 
-The proof pack intentionally does not edit `systems/mod.rs` or `tick.rs`. Integration is exactly
-the following four changes; broadening this hunk should trigger a new ownership review.
+The proof pack originally froze the four changes below. They are now landed through the exact
+step-12 host. The only addition is a PDB-shaped daemon mirror: preflight requires it to equal the
+exclusive runtime cursor, and a successful callback commits the runtime's result back to it.
 
 ```diff
 diff --git a/crates/don-sim/src/systems/mod.rs b/crates/don-sim/src/systems/mod.rs
@@ -65,7 +66,10 @@ diff --git a/crates/don-sim/src/tick.rs b/crates/don-sim/src/tick.rs
 ```
 
 The existing gap enum entry may remain temporarily as a zero counter for trace-schema stability;
-the frozen hunk removes the only increment. A later schema migration can delete the dormant slot.
+the live path removes the ordinary increment. It records only a cursor/cardinality bridge refusal.
+`crates/don-sim/tests/game_daemon_step12_live.rs` proves the real tick reaches the body, frees an
+authoritative `WData` block, retains the cursor across frames, and refuses a divergent mirror
+before the step-12 shell mutates daemon or region state.
 
 ## Evidence boundary
 

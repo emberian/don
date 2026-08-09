@@ -616,8 +616,12 @@ and playing"; `(flags & 0x43) == 3` is "…and not yet defeated".
 and per `schema/state-schema.json` that walker covers `[0, 8)` then `[8, 26922)` of
 `LeaderData` — which contains every field here: the score block `+0x18..+0x44`,
 `diplos +0x74`, the popwin/wonderwin/lost-capital stamps and timers `+0x414..+0x44C`,
-`victory_type +0x7D8`, `defeat_type +0x7DC`, `territory +0x9D8`, and the
-`num_units` / `num_buildings` / `num_queued` count arrays the score reads.
+`victory_type +0x7D8`, `defeat_type +0x7DC`, the effective `population_cap +0x7E4`,
+`misery +0x7EC`, attrition-policy words
+`+0x7F8..+0x804`, `territory +0x9D8`, and the `num_units` / `num_buildings` /
+`num_queued` count arrays the score reads. `set_population_cap` retains its future
+recalculation input in the separate ScenarioData override array; retail's ScenarioData
+walker does not cover that array, so only the resulting LeaderData words enter channel 8.
 
 Match-level state rides `Game::walk_data` (`0x00589600`), which walks
 `Game[0x550 .. 0x6E4)` — covering `frame`, `tick`, `on_team`, `starting`,

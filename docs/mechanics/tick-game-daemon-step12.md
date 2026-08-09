@@ -12,7 +12,7 @@ The compiled 29-row tick inventory currently has nine red rows:
 | 4 | `RunTimeEnv::run_script` `0x0043D0E0` | runtime wired | unrecovered reached `ScenarioFuncSet` builtins |
 | 8 | `Leaders::process_all` `0x006ED2A0` | `systems/leaders.rs`, reached from `tick.rs` | child host coverage, especially stat/taunt inputs |
 | 11 | `Leaders::strategy_all` `0x006ED430` | exact dispatcher plus recovered children | full `plan_strategy`/diplomacy host |
-| 12 | `GameDaemon::process_all` `0x00732700` | several children were called ad hoc in `tick.rs` | no exact daemon-state/64-region shell; `calc_danger` missing |
+| 12 | `GameDaemon::process_all` `0x00732700` | exact shell and collision reaper reached from `Sim::do_frame` | `calc_danger` body and full detector/visibility facts remain |
 | 13 | `Armies::process_all` `0x006F3B00` | exact slot dispatcher in `systems/armies.rs` | live army object/type host |
 | 15 | `Objects::inc_time` `0x0065DB70` | deep `systems/unit_inctime.rs` port plus ammo path | authoritative object-band binding for all six loops |
 | 17 | `Leaders::end_process_all` `0x006ED070` | body in `systems/leaders.rs` | presentation/GameInfo receipts and closure evidence |
@@ -66,32 +66,33 @@ unconditional pass into `Vacuous` merely because its current reduced world has n
 - focused source tests for both frame phases, signed arithmetic, flag rollover and atomic
   refusal.
 
-This makes the 315-byte shell complete on a successful host receipt. It does **not** make the
-compiled tick row green until the real tick uses it and every reached child preflights.
+The real `Sim::do_frame` now uses this shell. Its live bridge retains the existing victory and
+terminal-cleanup transaction, schedules fog/market/borders/groups through the typed callbacks,
+and runs `collision_blocks_live` against the authoritative `map.world`. The 315-byte shell is
+complete on a successful host receipt, but the compiled tick row remains red while a reached
+child is missing.
 
-## Exact integration handoff (do not infer around it)
+## Landed bounded integration
 
-1. Declare `pub mod game_daemon_step12;` in `crates/don-sim/src/systems/mod.rs`.
-2. Add `game_daemon_step12::GameDaemonState` to `tick::Sim`, default-initialized in
-   `Sim::new`. It must be the same state collision repath admission reads later in step 14;
-   do not keep the old implicit counters beside it.
-3. Make the authoritative region container 64 slots. The current `MapState::single_region`
-   reduction supplies one record and will intentionally receive `RegionCardinality` until it
-   preserves the retail lattice. Empty slots may be default records; deleting them is not
-   equivalent because the rollover always touches 64 flags.
-4. Build a `GameDaemonProcessAllHost` from disjoint `Sim` field borrows. Bind its methods to:
-   `victory_score`/`wonders`, the eventual exact danger pass, full fog restamp,
-   `economy::calc_markets`, `borders_fog::check_borders`,
-   `collision::process_coll_blocks`, and `groups_guys::Groups::process`.
-5. Replace the body of `tick.rs::game_daemon_process_all` with one call to
-   `game_daemon_step12::process_all`. Remove the old empty-world early return, the two gap
-   increments once their hosts are truly bound, and the ad-hoc child order.
-6. Derive `StepRun`/work only from the successful trace/child work. A preflight or cardinality
-   error is a tick failure, not a vacuous or partially executed step.
-7. Only then change schedule/closure status. The row remains red while `calc_danger` lacks its
-   authoritative object/type/world inputs, or while a live child is skipped/defaulted.
+1. `Sim` owns the PDB-shaped daemon record and `CollisionBlockRuntime`; their `empty_colls`
+   scalars are preflighted equal before every pass, and the runtime result is committed back to
+   the daemon mirror in the same callback.
+2. `Sim::new` preserves the populated reduced region in slot zero and materializes the remaining
+   63 default records. This is required by the unconditional retail rollover.
+3. `SimGameDaemonHost` is the borrow-split bridge for victory, scheduled danger, fog, markets,
+   borders, collision-block collection, and groups. It removes the old non-retail empty-world
+   return; `Groups::proc_group` now advances even when no leader is active.
+4. `GameDaemonProcessCollBlocks` is a dormant schema slot on the successful live path. It is
+   emitted only when region cardinality or the cursor-mirror invariant refuses the transaction.
+5. `GameDaemonCalcDanger` is charged only when the exact scheduler reaches it (`frame % 200 ==
+   0`), rather than once on every frame.
+6. `crates/don-sim/tests/game_daemon_step12_live.rs` freezes real-tick reachability, live-world
+   reaping, cursor persistence/mirroring, group-cursor advance, phase-correct danger charging,
+   and atomic bridge refusal.
 
 The largest remaining bridge is `GameDaemon::calc_danger` `0x00732D10` (1,476 bytes), followed
 by supplying exact `update_all_seen` detector/visibility facts. The collision-block child is
 already ported in `systems/collision.rs`; this adapter exposes the state it needs, so continuing
-to charge that gap after integration would be stale.
+to charge that gap after integration would be stale. Step 14's collision/repath admission must
+also consume this same `GameDaemonState::repaths` array; that downstream binding is not claimed
+by the step-12 integration.

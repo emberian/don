@@ -268,6 +268,6 @@ mod tests {
                 }] += 1;
                 counts
             });
-        assert_eq!(counts, [8, 15, 0, 5, 7, 7]);
+        assert_eq!(counts, [9, 14, 0, 5, 7, 7]);
     }
 }

@@ -72,6 +72,9 @@ pub mod economy;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
 pub mod fight;
+/// Exact `Unit::do_follow` planner and atomic host receipt. The live order dispatcher owns
+/// its concrete queue/effect integration.
+pub mod follow_executor;
 /// Exact step-12 GameDaemon scheduler state and child-call transaction.
 pub mod game_daemon_step12;
 /// Exact ordinary Farm/Camp/Mine on-map attachment, building approach, queued movement,
@@ -131,6 +134,9 @@ pub mod production;
 /// Exact post-coastline `Regions::clear_all` / `find_all` worldgen stage, including
 /// component floods, overflow aggregation, coasts, ranks and coordinate rebuilds.
 pub mod regions;
+/// Exact `Unit::do_repair` branch/arithmetic planner plus its atomic dispatcher receipt.
+/// The separately recovered `check_target_path(REPAIR)` predicate remains an open seam.
+pub mod repair_order;
 /// Complete step-22 `Roads::scan_and_kill_stray_roads` dispatcher/body over the PDB road
 /// candidate lattice. Missing renderer-owned candidate facts fail closed rather than being
 /// guessed from terrain adjacency.

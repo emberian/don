@@ -8,7 +8,7 @@ use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
 };
 use don_sim::systems::{
-    leaders,
+    economy, leaders,
     map_terrain::{land, wflag},
     victory_score,
 };
@@ -287,6 +287,13 @@ fn utility_rng_uses_the_simulation_stream() {
     let seed = 0x1234_5678u64;
     let mut expected = Random::new(seed as i32);
     let _ = expected.get(10, 20);
+    let mut market = economy::MarketState::default();
+    economy::calc_markets(
+        &economy::EconRules::shipped(),
+        &mut market,
+        &mut expected,
+        0,
+    );
 
     let mut scripts = game_runtime(one_builtin_program(
         "rand_int",
@@ -1188,13 +1195,142 @@ fn custom_time_limit_fails_closed_without_scenario_override_state() {
 fn configure_player_read_state(sim: &mut Sim) {
     sim.activate(0);
     sim.activate(1);
-    sim.step8.leaders[0].pop_cap = 275;
+    sim.vic_leaders.slots[0].population_cap = 275;
     sim.vic_leaders.slots[0].score = 1_234;
     sim.vic_leaders.slots[0].num_units[0] = 7;
     sim.vic_leaders.slots[0].num_units[175] = 11;
     sim.vic_leaders.slots[0].num_units[351] = 13;
     sim.step8.leaders[0].diplo[1] = victory_score::Diplo::Ally as i32;
     sim.step8.leaders[1].diplo[0] = victory_score::Diplo::War as i32;
+}
+
+fn configure_population_cap_effect_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    sim.vic_match
+        .set_sem(victory_score::game_sem::SCENARIO_RULES);
+
+    // Keep the step-8 facade active while removing the canonical ACTIVE bit. Every
+    // invalid call in the fixture must reject before touching the retained override.
+    sim.vic_leaders.slots[1].leader_flags &= !victory_score::leader_flag::ACTIVE;
+    sim.vic_leaders.slots[1].population_cap = 777;
+    sim.vic_leaders.slots[1].misery = 778;
+
+    sim.vic_leaders.slots[0].population_cap = 13;
+    sim.vic_leaders.slots[0].misery = 91;
+    sim.step8.leaders[0].pop_cap = 14;
+    sim.production_runtime.leaders[0].control_cap = 15;
+}
+
+fn assert_population_cap_state(sim: &Sim, argument: i32, effective: i32) {
+    assert_eq!(sim.scenario_data.population_caps[0], argument);
+    assert_eq!(sim.vic_leaders.slots[0].population_cap, effective);
+    assert_eq!(sim.vic_leaders.slots[0].misery, 0);
+    assert_eq!(sim.step8.leaders[0].pop_cap, effective);
+    assert_eq!(sim.production_runtime.leaders[0].control_cap, effective);
+    assert_eq!(sim.leaders[0].econ.stockpile[0], argument);
+    assert_eq!(sim.leaders[0].econ.stockpile[1], effective);
+
+    assert_eq!(sim.scenario_data.population_caps[1], -1);
+    assert_eq!(sim.vic_leaders.slots[1].population_cap, 777);
+    assert_eq!(sim.vic_leaders.slots[1].misery, 778);
+}
+
+fn execute_population_cap_effect_sequence(sim: &mut Sim, scripts: &mut ScriptRuntime) {
+    sim.world.seconds = 0;
+    let plain = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(plain.steps[4], StepRun::Executed);
+    assert!(plain.work[4] > 0);
+    assert_population_cap_state(sim, 200, 200);
+
+    // The common suffix is ordered: Peacocks' wrapping percentage first, then the flat
+    // Colossus addition. The script still receives the original 300 return value.
+    sim.step8.leaders[0].rare_effective.set(19, true);
+    sim.leaders[0].gather_inputs.bonus_gates.colossus = true;
+    sim.world.seconds = 1;
+    let both = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(both.steps[4], StepRun::Executed);
+    assert!(both.work[4] > 0);
+    assert_population_cap_state(sim, 300, 380);
+
+    // The conquest rare mask is an independent second Peacocks source. A non-round
+    // argument pins signed truncation of the wrapped product.
+    sim.step8.leaders[0].rare_effective.set(19, false);
+    sim.step8.leaders[0].rare_b.set(19, true);
+    sim.leaders[0].gather_inputs.bonus_gates.colossus = false;
+    sim.world.seconds = 2;
+    let conquest_rare = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(conquest_rare.steps[4], StepRun::Executed);
+    assert!(conquest_rare.work[4] > 0);
+    assert_population_cap_state(sim, 401, 441);
+}
+
+#[test]
+fn ordinary_source_executes_population_cap_effects() {
+    let program = compile_source_fixture("scenario_population_cap_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "population_cap_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8143, 8);
+    configure_population_cap_effect_state(&mut sim);
+
+    execute_population_cap_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_population_cap_effects() {
+    let compiled = compile_source_fixture("scenario_population_cap_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "population_cap_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8144, 8);
+    configure_population_cap_effect_state(&mut sim);
+
+    execute_population_cap_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn population_cap_effect_fails_closed_without_direct_mode() {
+    let mut scripts = game_runtime(one_builtin_program(
+        "set_population_cap",
+        &[Value::Int(1), Value::Int(333)],
+    ));
+    let mut sim = Sim::new(0x8145, 8);
+    sim.activate(0);
+    sim.vic_leaders.slots[0].population_cap = 123;
+    sim.vic_leaders.slots[0].misery = 45;
+    sim.step8.leaders[0].pop_cap = 124;
+    sim.production_runtime.leaders[0].control_cap = 125;
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "set_population_cap",
+            ..
+        })
+    ));
+    assert_eq!(sim.scenario_data.population_caps[0], -1);
+    assert_eq!(sim.vic_leaders.slots[0].population_cap, 123);
+    assert_eq!(sim.vic_leaders.slots[0].misery, 45);
+    assert_eq!(sim.step8.leaders[0].pop_cap, 124);
+    assert_eq!(sim.production_runtime.leaders[0].control_cap, 125);
+}
+
+#[test]
+fn population_cap_owner_changes_the_sim_channel_digest() {
+    let mut sim = Sim::new(0x8146, 8);
+    let before = sim.channel_digest();
+    sim.vic_leaders.slots[0].population_cap = 417;
+    assert_ne!(sim.channel_digest(), before);
 }
 
 #[test]

@@ -158,6 +158,22 @@ pub const ORDER_DISEMBARK: u8 = 32;
 pub const ORDER_PUSHED: u8 = 64;
 pub const ORDER_FACING_TARGET: u8 = 128;
 
+/// Complete concrete payload of `FollowOrder` (`sizeof=44`).
+///
+/// `TargetOrder` supplies the primary `(ox, whom, uid)` at `+0x08..+0x10`; FOLLOW adds
+/// the secondary containment/fallback identity at `+0x14..+0x1C`. The descriptive
+/// [`Order`] keeps the full-width fields together so a bridge round trip cannot truncate
+/// or silently discard the identity used by `Unit::do_follow`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FollowOrderPayload {
+    pub ox: i32,
+    pub whom: i32,
+    pub uid: u16,
+    pub oxx: i32,
+    pub whose: i32,
+    pub uid2: u16,
+}
+
 /// `SpecialType`, the four-byte discriminator at `SpecialAnimOrder+0x08`.
 ///
 /// `UnitData::is_entering_or_exiting` `0x0060A6F0` returns true for the first two values
@@ -201,6 +217,18 @@ pub struct SpecialAnimOrderState {
     pub data4: i32,
     pub ox: i32,
     pub whom: i32,
+}
+
+/// The checksum-visible fields unique to `FormOrder` (`sizeof=100`).
+///
+/// `angle` is inherited from `MoveOrder` at concrete `+0x0C`; `new_form` and `delay` are
+/// the two `FormOrder` words at `+0x50/+0x54`.  The executor does not read `delay`, but the
+/// order object owns and walks it, so the compact order representation must not discard it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormOrderState {
+    pub angle: i32,
+    pub new_form: i32,
+    pub delay: i32,
 }
 
 impl Default for SpecialAnimOrderState {
@@ -276,11 +304,13 @@ pub const EXECUTORS: [Executor; NUM_UNIT_ORDERS] = [
         status: ArmStatus::Implemented,
         note: "unit.cpp:20156; range/recharge gate is ours, the damage arithmetic is the derived pipeline" },
     Executor { order: OrderIndex::Follow, va: Some("0x005E65D0"), symbol: "Unit::do_follow",
-        status: ArmStatus::Unimplemented, note: "calls through to do_move" },
+        status: ArmStatus::Implemented,
+        note: "exact containment/fallback transaction, three-search close and same-tick do_move" },
     Executor { order: OrderIndex::Guard, va: Some("0x005E5C70"), symbol: "Unit::do_guard",
         status: ArmStatus::Unimplemented, note: "calls through to do_move" },
     Executor { order: OrderIndex::Repair, va: Some("0x005EE420"), symbol: "Unit::do_repair",
-        status: ArmStatus::Unimplemented, note: "" },
+        status: ArmStatus::Implemented,
+        note: "exact planner with one mandatory atomic WorkWorld snapshot/commit receipt" },
     Executor { order: OrderIndex::CastSpell, va: Some("0x005EBFE0"), symbol: "Unit::do_cast",
         status: ArmStatus::Unimplemented, note: "" },
     Executor { order: OrderIndex::TradeRoute, va: Some("0x005ED270"), symbol: "Unit::do_trade",
@@ -291,7 +321,8 @@ pub const EXECUTORS: [Executor; NUM_UNIT_ORDERS] = [
         status: ArmStatus::Implemented,
         note: "dynamic waypoints, air-physics boundary, 16/32-frame scans and STRAFE insertion" },
     Executor { order: OrderIndex::ChangeForm, va: Some("0x005E8670"), symbol: "Unit::do_form_change",
-        status: ArmStatus::Unimplemented, note: "" },
+        status: ArmStatus::Implemented,
+        note: "exact atomic form/angle/retirement/idle transaction" },
     Executor { order: OrderIndex::GroupMove, va: Some("0x005E79A0"), symbol: "Unit::do_group_move",
         status: ArmStatus::Implemented,
         note: "leader/follower orchestration; mandatory transactional host for Groups/object/terrain facts" },
@@ -315,7 +346,8 @@ pub const EXECUTORS: [Executor; NUM_UNIT_ORDERS] = [
     Executor { order: OrderIndex::Garrison, va: Some("0x005E6B80"), symbol: "Unit::do_garrison",
         status: ArmStatus::Unimplemented, note: "" },
     Executor { order: OrderIndex::Think, va: Some("0x005E5BF0"), symbol: "Unit::do_think_order",
-        status: ArmStatus::Unimplemented, note: "unit AI entry" },
+        status: ArmStatus::Implemented,
+        note: "exact atomic retirement and four-type think_peasant tail" },
 ];
 
 /// One `UnitOrder`, flattened.
@@ -337,9 +369,15 @@ pub struct Order {
     pub target_o: i16,
     /// Arrival tolerance in Coord units; `UnitData::tolerance` is the per-unit default.
     pub tolerance: i32,
+    /// Concrete payload for order 11. `None` on FOLLOW is malformed legacy state: the
+    /// executor must fail closed rather than inventing its fallback identity.
+    pub follow: Option<FollowOrderPayload>,
     /// Concrete payload for order 25. `None` on a `SpecialAnim` order is malformed legacy
     /// state and must fail any caller which needs the subtype rather than guessing UNIT.
     pub special_anim: Option<SpecialAnimOrderState>,
+    /// Concrete payload for order 18. `None` on `CHANGE_FORM` is malformed: neither the
+    /// form byte nor final angle may be guessed by the executor.
+    pub form_order: Option<FormOrderState>,
 }
 
 impl Default for Order {
@@ -352,7 +390,9 @@ impl Default for Order {
             target_who: -1,
             target_o: -1,
             tolerance: 0,
+            follow: None,
             special_anim: None,
+            form_order: None,
         }
     }
 }
@@ -377,6 +417,18 @@ impl Order {
         }
     }
 
+    /// One exact `FollowOrder`, retaining both identities and UID snapshots.
+    pub fn follow(payload: FollowOrderPayload) -> Order {
+        Order {
+            kind: OrderIndex::Follow,
+            flags: ORDER_GROUP,
+            target_who: payload.whom.clamp(i8::MIN as i32, i8::MAX as i32) as i8,
+            target_o: payload.ox.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            follow: Some(payload),
+            ..Order::default()
+        }
+    }
+
     /// `Unit::add_spec_anim_order(type, data1, data2, QueuePos)` `0x005E4160`.
     pub fn special_anim(special_type: SpecialAnimType, data1: i32, data2: i32) -> Order {
         Order {
@@ -387,6 +439,19 @@ impl Order {
                 data1,
                 data2,
                 ..SpecialAnimOrderState::default()
+            }),
+            ..Order::default()
+        }
+    }
+
+    /// Construct one exact `FormOrder` payload.
+    pub fn change_form(angle: i32, new_form: i32, delay: i32) -> Order {
+        Order {
+            kind: OrderIndex::ChangeForm,
+            form_order: Some(FormOrderState {
+                angle,
+                new_form,
+                delay,
             }),
             ..Order::default()
         }
@@ -613,6 +678,22 @@ mod tests {
             ..Order::default()
         };
         assert_eq!(malformed.is_entering_or_exiting(), None);
+    }
+
+    #[test]
+    fn follow_payload_preserves_both_full_width_identities() {
+        let payload = FollowOrderPayload {
+            ox: 70_000,
+            whom: 300,
+            uid: 17,
+            oxx: 80_000,
+            whose: 301,
+            uid2: 19,
+        };
+        let order = Order::follow(payload);
+        assert_eq!(order.kind, OrderIndex::Follow);
+        assert_eq!(order.flags & ORDER_GROUP, ORDER_GROUP);
+        assert_eq!(order.follow, Some(payload));
     }
 
     #[test]

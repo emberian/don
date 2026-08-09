@@ -122,6 +122,26 @@ pub struct ScriptOutput {
     pub newline: bool,
 }
 
+/// The scalar `ScenarioData` policy state currently owned by the script host.
+///
+/// `ScenarioData::pop_cap[8]` lives at `0x00cc21f0`. Retail reset paths at
+/// `0x00a03825` and `0x00a04119` fill every slot with `-1`; the array is retained across
+/// calls because later `Leader::calc_pop_cap` invocations reread it. It sits exactly at
+/// the end of the ranges covered by `ScenarioData::walk_data`, so it is authoritative
+/// scenario configuration but not a checksum-channel field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScenarioDataState {
+    pub population_caps: [i32; 8],
+}
+
+impl Default for ScenarioDataState {
+    fn default() -> Self {
+        Self {
+            population_caps: [-1; 8],
+        }
+    }
+}
+
 /// The mandatory simulation surface for a step-4 script run.
 ///
 /// Retail routes utility RNG calls and every `ScenarioFuncSet` handler through the live
@@ -647,6 +667,64 @@ impl Sim {
             _ => unreachable!(),
         }
         1
+    }
+
+    /// `ScenarioFuncSet::set_population_cap` `0x009e8ef0`, including the direct-mode
+    /// arm of `Leader::calc_pop_cap` `0x006dc490`.
+    ///
+    /// The full ordinary cap calculator still depends on unowned city/type/tribe facts.
+    /// Retail's playback/scenario arm is exact with the state already present here: the
+    /// retained ScenarioData override, the two Peacocks masks, the Colossus predicate,
+    /// and the two Rules words. Missing that mode fails before the first write.
+    fn script_set_population_cap(&mut self, who: i32, cap: i32) -> Result<i32, HostError> {
+        if cap < 0 {
+            return Ok(-1);
+        }
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let Some(leader) = self.vic_leaders.slots.get(who) else {
+            return Ok(-1);
+        };
+        if !leader.is_active() {
+            return Ok(-1);
+        }
+        if !self.vic_match.sem(victory_score::game_sem::PLAYBACK)
+            && !self.vic_match.sem(victory_score::game_sem::SCENARIO_RULES)
+        {
+            return Err(HostError::Unimplemented);
+        }
+
+        let rare = self
+            .step8
+            .leaders
+            .get(who)
+            .ok_or(HostError::Unimplemented)?;
+        let peacocks = rare.rare_effective.get(19) || rare.rare_b.get(19);
+        let colossus = self
+            .leaders
+            .get(who)
+            .ok_or(HostError::Unimplemented)?
+            .gather_inputs
+            .bonus_gates
+            .colossus;
+
+        let mut effective = cap;
+        if peacocks {
+            effective =
+                effective.wrapping_mul(self.econ_rules.peacocks_pop().wrapping_add(100)) / 100;
+        }
+        if colossus {
+            effective = effective.wrapping_add(self.econ_rules.colossus_pop_cap());
+        }
+
+        // Retail writes the override before entering calc_pop_cap. All facts above are
+        // preflighted so the port's missing-host path remains atomic and fail-closed.
+        self.scenario_data.population_caps[who] = cap;
+        let leader = &mut self.vic_leaders.slots[who];
+        leader.misery = 0;
+        leader.population_cap = effective;
+        self.step8.leaders[who].pop_cap = effective;
+        self.production_runtime.leaders[who].control_cap = effective;
+        Ok(cap)
     }
 
     /// `ScenarioFuncSet::{enable,disable}_unit_ai` (`0x009ff920` / `0x009ffa10`).
@@ -1408,11 +1486,21 @@ impl ScenarioHost for Sim {
             // `population_cap` `0x009e8eb0`: both Leader flags, then the direct
             // `LeaderData::pop_cap` read at +0x7e4.
             246 => {
-                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                let who = args[0].as_int().wrapping_sub(1) as u32 as usize;
+                let Some(leader) = self.vic_leaders.slots.get(who) else {
                     return Ok(Value::Int(-1));
                 };
-                Ok(Value::Int(self.step8.leaders[who].pop_cap))
+                if !leader.is_active() {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(leader.population_cap))
             }
+            // `set_population_cap` `0x009e8ef0`: retain the ScenarioData override,
+            // recalculate the walked LeaderData cap, clear misery, and return the
+            // original argument rather than the modified effective cap.
+            247 => Ok(Value::Int(
+                self.script_set_population_cap(args[0].as_int(), args[1].as_int())?,
+            )),
             // `score` `0x009e8fa0`: the same gate, then `LeaderData::score` at +0x18.
             249 => {
                 let Some(who) = self.active_script_leader(args[0].as_int()) else {

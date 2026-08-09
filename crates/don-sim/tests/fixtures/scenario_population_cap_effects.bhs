@@ -1,0 +1,19 @@
+int scenario population_cap_effects_tick()
+{
+    if (time_sec() == 0) {
+        if (set_population_cap(0, 200) == -1 &&
+            set_population_cap(9, 200) == -1 &&
+            set_population_cap(1, -1) == -1 &&
+            set_population_cap(2, 200) == -1) {
+            set_good(1, "Food", set_population_cap(1, 200));
+            set_good(1, "Timber", population_cap(1));
+        }
+    } else if (time_sec() == 1) {
+        set_good(1, "Food", set_population_cap(1, 300));
+        set_good(1, "Timber", population_cap(1));
+    } else {
+        set_good(1, "Food", set_population_cap(1, 401));
+        set_good(1, "Timber", population_cap(1));
+    }
+    return 1;
+}

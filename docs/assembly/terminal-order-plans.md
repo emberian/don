@@ -1,7 +1,7 @@
 # Terminal order planners: `CHANGE_FORM` and `THINK`
 
-This lane recovers the two smallest still-red `Unit::do_job` bodies into
-`systems::terminal_order_plans`. It deliberately does not edit the shared dispatcher.
+This lane recovers the two smallest terminal `Unit::do_job` bodies into
+`systems::terminal_order_plans` and wires them through one atomic `WorkWorld` transaction.
 
 ## `CHANGE_FORM` — arm 18
 
@@ -10,6 +10,11 @@ Retail body: `Unit::do_form_change` `0x005E8670..0x005E86C3`, 86 bytes.
 The PDB says `FormOrder` is 100 bytes. Its relevant flattened fields are
 `MoveOrder::angle` at `+0x0C` and `FormOrder::newform` at `+0x50`; `delay` at `+0x54` is not
 read by this executor.
+
+`order::FormOrderState` preserves all three words. `OrderRec` also retains the generic
+`MoveOrder::angle` view used by `update_action`; the dispatcher rejects a mismatched duplicate
+instead of choosing one. Missing FormOrder payload is likewise malformed, never a zero-form
+fallback.
 
 The body is exactly:
 
@@ -49,21 +54,27 @@ exact `TypeIndex` against:
 Only those four call `Unit::think_peasant(1)` (`0x005E5C3E..0x005E5C5C`). The adjacent type
 IDs are not admitted.
 
-## Atomic boundary and closure
+## Atomic boundary and live closure
 
 `TerminalOrderRequest` binds the actor identity, exact queue-kind sequence, and the arm's
 field reads. `TerminalOrderReceipt::validates` recomputes the ordered effect list. The
 fail-closed `TerminalOrderHost` default returns `Unavailable` and performs no mutation.
 
-Both arms can honestly move to `implemented` once the shared dispatcher calls one atomic host
-transaction and accepts only a validated `Applied` receipt. That transaction must execute the
-full nested effects:
+Both arms now call `WorkWorld::apply_terminal_order_transaction` and accept only a receipt
+which recomputes against the exact actor UID, queue-kind image, unit type, and FormOrder facts.
+The default returns `Unavailable` without mutation. An applied host must execute the full
+nested effects atomically:
 
 - `CHANGE_FORM`: form store, exact `set_angle` side effects when selected, exact
   `kill_current_order(0)` lifecycle, and `do_idle` when selected.
 - `THINK`: exact order retirement/list refresh and the complete `think_peasant(1)` call when
   selected.
 
-Merely emitting these calls, or mutating the form byte before a callback can fail, is
-`state_wired`, not complete. The expected closure delta after atomic dispatcher integration is
-**+2 orders** (`CHANGE_FORM`, `THINK`), reducing the current order-red count by two.
+The dispatcher snapshots and restores its local `UnitWork` on an unavailable or malformed
+receipt; external rollback remains part of the host's atomic contract. Focused integration
+tests pin single/queued CHANGE_FORM, exact THINK type/successor gates, retirement accounting,
+malformed payload refusal, and unavailable-host rollback.
+
+`order::EXECUTORS` and `order_dispatch::ARMS` promote only these two entries. The exact
+closure delta of this tranche is **+2 implemented executors** (`CHANGE_FORM`, `THINK`); it
+does not claim any adjacent FOLLOW, REPAIR, SPECIAL_ANIM, or GARRISON work.

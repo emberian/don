@@ -487,6 +487,7 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
 | 245 | `population` | active Leader's live control total at `+0x940` (`0x009e8e70`) |
 | 246 | `population_cap` | active Leader's direct `pop_cap` field at `+0x7e4` (`0x009e8eb0`) |
+| 247 | `set_population_cap` | retain the scenario override, run the exact direct-mode Peacocks/Colossus suffix, and write `pop_cap` (`0x009e8ef0`) |
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
 | 249 | `score` | active Leader's direct score field at `+0x18` (`0x009e8fa0`) |
 | 250 | `get_territory` | active Leader's owned-tile count times 100 divided by `WorldData::land_size` (`0x009e8fe0`) |
@@ -540,9 +541,9 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 868 | `disable_building_attrition` | active Leader, then write `disable_building_attrition` at `+0x804` to one (`0x00a029c0`) |
 | 869 | `set_neutral_attrition` | active Leader, clamp signed input to `0..=1000`, then write `neutral_attrition` at `+0x800` (`0x00a02a00`) |
 
-The current 363-file census contains 8,528 calls to those eighty registrations. Together
+The current 363-file census contains 8,653 calls to those eighty-one registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-9,319 of 39,957 measured shipped-corpus call sites (**23.32%**, up from **1.98%**).
+9,444 of 39,957 measured shipped-corpus call sites (**23.64%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
@@ -635,6 +636,32 @@ an in-range neutral value, and the same-frame step-8 projection. Adjacent #870
 `get_neutral_attrition` is exact and unblocked by this owner, but has zero shipped calls and
 retains a peculiar ignored second integer argument, so it remains outside this reachability
 tranche.
+
+Global #247 `set_population_cap` adds 125 shipped calls in 42 files. It rejects a negative
+cap, an unsigned one-based player outside 1 through 8, or a canonical LeaderData row missing
+either active bit, returning -1 without writing. Success first retains the argument in
+`ScenarioData::pop_cap[who]`, calls `Leader::calc_pop_cap`, and returns the original argument,
+not the effective result. The exact bounded recalculation arm requires either Game semaphore
+bit 12 (playback) or bit 17 (scenario/CTW rules); without either, the runtime fails closed
+before the first write because retail's ordinary calculator also needs unowned city, type,
+tribe, and match-cap facts. Direct mode clears walked `LeaderData::misery +0x7ec`, starts from
+the retained override, applies Peacocks rare bit 19 from either `rare +0x6d98` or
+`rare_conquest +0x6dc0` as wrapping `cap * (PEACOCKS_POP + 100) / 100`, then adds the
+wrapping `COLOSSUS_POP_CAP` value when `has_wonder(0x20f)` is true. The shipped Rules values
+are 10 and 50 respectively, and the percentage precedes the flat addition.
+
+The effective `population_cap +0x7e4` and cleared misery are canonical channel-8 LeaderData
+state. Step 8 receives the cap from that owner, production's control-cap consumer is updated
+by both the BHS transaction and captured-building recalculation, and #246 reads the canonical
+word. The retained ScenarioData override is deliberately not mixed into the checksum:
+`ScenarioData::walk_data` ends at its address. Ordinary-source and loaded-chunk fixtures
+mutation-test every invalid sentinel, stale-facade rejection, the plain/Peacocks/Colossus
+ordering, both rare-mask sources, truncation, original-argument return, same-frame consumer
+projections, and checksum visibility. Global #284/#286 `disable_type`/`enable_type` remain
+blocked despite another 259 calls: they scan case-folded names and subtype relationships over
+806 mutable TypeData rows, while enable restores broad Unit/Build fields from an immutable
+Game backup. Sim has neither that canonical table, its `is` relations, nor the backup, so an
+availability-bit approximation would be observably wrong.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode

@@ -233,6 +233,9 @@ pub mod game_sem {
     pub const CHECK_VICTORY_MODE: u32 = 9;
     /// `game[0x821] & 0x10` — replay playback.
     pub const PLAYBACK: u32 = 12;
+    /// `game[0x822] & 0x02` — scenario/CTW rule selection. The same unnamed engine bit
+    /// also selects Tech Race's all-epochs form.
+    pub const SCENARIO_RULES: u32 = 17;
     /// `game[0x822] & 0x40` — victory resolution already ran this frame.
     pub const VICTORY_RESOLVED: u32 = 22;
 }
@@ -780,6 +783,11 @@ pub struct LeaderState {
     /// `+0x7DC` `defeat_type`.
     pub defeat_type: i32,
 
+    /// `+0x7E4` `pop_cap`, the effective population/control cap.
+    pub population_cap: i32,
+    /// `+0x7EC` `misery`, cleared by every `Leader::calc_pop_cap` invocation.
+    pub misery: i32,
+
     /// `+0x7F8` `give_att_disabled` — nonzero disables attrition dealt to enemies.
     pub give_attrition_disabled: i32,
     /// `+0x7FC` `take_att_disabled` — nonzero disables attrition received from enemies.
@@ -851,6 +859,8 @@ impl Default for LeaderState {
             lost_capital_timer: 0,
             victory_type: 0,
             defeat_type: 0,
+            population_cap: 0,
+            misery: 0,
             give_attrition_disabled: 0,
             take_attrition_disabled: 0,
             neutral_attrition: 0,
@@ -950,6 +960,8 @@ impl LeaderState {
             self.lost_capital_timer,
             self.victory_type,
             self.defeat_type,
+            self.population_cap,
+            self.misery,
             self.give_attrition_disabled,
             self.take_attrition_disabled,
             self.neutral_attrition,

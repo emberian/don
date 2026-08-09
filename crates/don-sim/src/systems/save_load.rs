@@ -15,7 +15,10 @@ use crate::generated::state::unit::{UnitCols, W1_PLANES, W2_PLANES, W4_PLANES, W
 use crate::item_runtime::{
     validate_absent_items_map, ItemRuntime, ItemRuntimeSaveError, ItemRuntimeSaveState,
 };
-use crate::order::{Order, OrderIndex, OrderList, SpecialAnimOrderState, SpecialAnimType};
+use crate::order::{
+    FollowOrderPayload, FormOrderState, Order, OrderIndex, OrderList, SpecialAnimOrderState,
+    SpecialAnimType,
+};
 use crate::systems::{borders_fog, economy, items::Item, map_terrain, movement, production};
 use crate::tick::{LeaderSlot, Sim, NUM_LEADERS};
 use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
@@ -23,7 +26,7 @@ use crate::world::{WorldSaveError, WorldSaveState, MAX_UNITS};
 mod step8_views;
 
 const MAGIC: &[u8; 8] = b"DoNSave\0";
-const FORMAT_VERSION: u32 = 3;
+const FORMAT_VERSION: u32 = 5;
 const MAX_SAVE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ORDERS_PER_UNIT: usize = 1024;
 const MAX_PATH_RECORDS: usize = 1 << 20;
@@ -315,6 +318,21 @@ fn write_order(w: &mut Writer, o: &Order) {
         w.i32(special.ox);
         w.i32(special.whom);
     }
+    w.bool(o.form_order.is_some());
+    if let Some(form) = o.form_order {
+        w.i32(form.angle);
+        w.i32(form.new_form);
+        w.i32(form.delay);
+    }
+    w.bool(o.follow.is_some());
+    if let Some(follow) = o.follow {
+        w.i32(follow.ox);
+        w.i32(follow.whom);
+        w.u16(follow.uid);
+        w.i32(follow.oxx);
+        w.i32(follow.whose);
+        w.u16(follow.uid2);
+    }
 }
 
 fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
@@ -329,6 +347,8 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
         target_o: r.i16()?,
         tolerance: r.i32()?,
         special_anim: None,
+        follow: None,
+        form_order: None,
     };
     let special_anim = if r.bool()? {
         let special_type = SpecialAnimType::from_raw(r.i32()?)
@@ -347,8 +367,31 @@ fn read_order(r: &mut Reader<'_>) -> Result<Order, SaveError> {
     } else {
         None
     };
+    let form_order = if r.bool()? {
+        Some(FormOrderState {
+            angle: r.i32()?,
+            new_form: r.i32()?,
+            delay: r.i32()?,
+        })
+    } else {
+        None
+    };
+    let follow = if r.bool()? {
+        Some(FollowOrderPayload {
+            ox: r.i32()?,
+            whom: r.i32()?,
+            uid: r.u16()?,
+            oxx: r.i32()?,
+            whose: r.i32()?,
+            uid2: r.u16()?,
+        })
+    } else {
+        None
+    };
     Ok(Order {
         special_anim,
+        form_order,
+        follow,
         ..order
     })
 }
@@ -1956,6 +1999,7 @@ mod tests {
             target_o: 0,
             tolerance: 77,
             special_anim: None,
+            ..Order::default()
         });
         sim.world.orders_mut(ar).push(Order {
             kind: OrderIndex::Patrol,
@@ -2585,5 +2629,32 @@ mod tests {
             read_order(&mut reader),
             Err(SaveError::Invalid("unknown special animation type"))
         );
+    }
+
+    #[test]
+    fn change_form_payload_round_trips_without_losing_the_walked_delay() {
+        let order = Order::change_form(0x1020_3040, -7, 1234);
+        let mut writer = Writer::default();
+        write_order(&mut writer, &order);
+        let mut reader = Reader::new(&writer.0);
+        assert_eq!(read_order(&mut reader).unwrap(), order);
+        reader.finish().unwrap();
+    }
+
+    #[test]
+    fn follow_payload_round_trips_both_full_width_identities_and_uid_snapshots() {
+        let order = Order::follow(FollowOrderPayload {
+            ox: 70_000,
+            whom: 300,
+            uid: 0x1234,
+            oxx: -40_000,
+            whose: -500,
+            uid2: 0xabcd,
+        });
+        let mut writer = Writer::default();
+        write_order(&mut writer, &order);
+        let mut reader = Reader::new(&writer.0);
+        assert_eq!(read_order(&mut reader).unwrap(), order);
+        reader.finish().unwrap();
     }
 }

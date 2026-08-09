@@ -1,8 +1,8 @@
 //! Save admission for step-8's synchronized views.
 //!
 //! `Sim::sync_step8_inputs` materializes a second layout immediately before retail step 8:
-//! economy values are copied from `LeaderSlot`, attrition policy from the canonical
-//! `victory_score::LeaderState`, and unit/build views from the authoritative
+//! economy values are copied from `LeaderSlot`, population cap and attrition policy from
+//! the canonical `victory_score::LeaderState`, and unit/build views from the authoritative
 //! `World`/`BuildData` stores. An inactive leader never consumes or mutates those views.
 //! They are therefore reconstructible adapter state, not another save owner. This validator
 //! admits only the constructor-empty form or the exact post-sync form; every query package,
@@ -35,6 +35,8 @@ fn leader_has_only_mirrors(
         && actual.anti_attrition_off == policy.take_attrition_disabled
         && actual.neutral_attrition == policy.neutral_attrition
         && actual.building_attrition_off == policy.building_attrition_disabled;
+    let population_cap_is_empty = actual.pop_cap == fresh.pop_cap;
+    let population_cap_is_synchronized = actual.pop_cap == policy.population_cap;
 
     (mirror_is_empty || mirror_is_synchronized)
         && (policy_is_empty || policy_is_synchronized)
@@ -46,7 +48,7 @@ fn leader_has_only_mirrors(
         && actual.taunt_frame == fresh.taunt_frame
         && actual.timers == fresh.timers
         && actual.retake_scale == fresh.retake_scale
-        && actual.pop_cap == fresh.pop_cap
+        && (population_cap_is_empty || population_cap_is_synchronized)
         && actual.pop_issues == fresh.pop_issues
         && actual.frame_counter_b == fresh.frame_counter_b
         && actual.attrition == fresh.attrition

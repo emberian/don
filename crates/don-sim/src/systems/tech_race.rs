@@ -14,13 +14,13 @@
 //! `Game::check_victory` through the defeated-player path.
 
 use super::tech_cities::{ty, TechState};
-use super::victory_score::{leader_flag, Leaders, Match, Victory, VictoryType};
+use super::victory_score::{game_sem, leader_flag, Leaders, Match, Victory, VictoryType};
 
 /// `Game::semaphore` bit tested at `0x006DE853` and `0x006DE88F`.
 ///
 /// The PDB does not contain the semaphore enum name. This behavioral name deliberately
 /// describes only the measured Tech Race use site.
-pub const TECH_RACE_ALL_EPOCHS_SEMAPHORE: u32 = 17;
+pub const TECH_RACE_ALL_EPOCHS_SEMAPHORE: u32 = game_sem::SCENARIO_RULES;
 
 /// `END_EPOCHTYPES - BASE_EPOCHTYPES`, compared as literal `0x1c` at `0x006DE987`.
 pub const ALL_EPOCHS_GOAL: i32 = ty::END_EPOCHTYPES - ty::BASE_EPOCHTYPES;
