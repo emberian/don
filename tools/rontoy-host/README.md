@@ -12,15 +12,53 @@ it allows at most 32 simultaneous HTTP connections. Every request must also carr
 exact `127.0.0.1:PORT` or `localhost:PORT` Host header, preventing a DNS-rebound web
 origin from reading the otherwise unauthenticated local dashboard stream.
 
-## Start it
+## One command against the live game
+
+```sh
+python3 tools/rontoy-host/rontoyctl.py doctor      # changes nothing; reports readiness
+python3 tools/rontoy-host/rontoyctl.py up --open   # host + guest probe + collector + browser
+```
+
+`up` starts the loopback host in-process, publishes its ephemeral ingest token to
+`tools/rontoy-host/.rontoy-token` (mode 0600, deleted on exit), launches `donfeed`
+inside the Parallels guest through `prlctl exec`, and pipes its NDJSON through the
+same normalize → `POST /v1/snapshot` path the manual bridge uses. Ctrl-C stops the
+collector, terminates the guest probe, prints a run summary, and removes the token
+file. Useful flags:
+
+| flag | effect |
+|---|---|
+| `--hz 1` | probe cadence (1..15; start at 1) |
+| `--seconds N` / `--count N` | bounded run, for a scripted gate |
+| `--record PATH` | append the raw observation NDJSON (opt-in; off by default) |
+| `--summary-json PATH` | write the run summary for a script to assert on |
+| `--vm`, `--donfeed` | non-default VM name or guest probe path |
+| `--verbose` | per-request access log and every dropped observation |
+
+`rontoyctl.py replay FILE --hold --open` feeds a recorded NDJSON into the same host,
+so dashboard and advisor work needs no running match.
+
+Lifecycle behavior is intentionally explicit: paused observations remain displayable
+but suppress every recommendation; a stopped probe leaves one immutable snapshot that
+the browser and native overlay label stale before hiding its advice; and a changed
+game-process identity is rejected rather than silently splicing two sessions. When
+the game restarts, stop and relaunch `rontoyctl.py up` so the new host owns a fresh
+latest-only slot and ephemeral token.
+
+## Start it by hand
 
 From the repository root:
 
 ```sh
-python3 tools/rontoy-host/server.py
+python3 tools/rontoy-host/server.py --token-file /tmp/rontoy-token
 ```
 
-The process prints a random `Snapshot ingest token`. Open
+The process prints a random `Snapshot ingest token` and, with `--token-file`, also
+writes it to that path with mode 0600 and deletes it on exit. A reader then reads it
+with `bridge.py --token-file /tmp/rontoy-token`, so the token never has to be copied
+out of a terminal by hand. To pin a token instead of generating one, pass `--token` or
+set `RONTOY_TOKEN`; both the host and the bridge read that variable, and an empty
+value is refused rather than silently ignored. Open
 <http://127.0.0.1:17360/>. The host serves `web/public/rontoy.html` and its JavaScript
 at the same origin as the event stream, with a restrictive CSP and no-store headers.
 Nothing leaves the machine and the dashboard loads no external assets.
@@ -66,15 +104,15 @@ cargo build --release --target aarch64-pc-windows-msvc \
   --manifest-path crates/donscan/Cargo.toml --bin donfeed
 ```
 
-The safest first bridge has no guest network listener. Start the host, copy its
-ephemeral token into a second Mac terminal, and pipe guest stdout directly:
+The safest first bridge has no guest network listener. `rontoyctl.py up` does all of
+this for you; the equivalent by hand, with the token passed through a file rather
+than copied from stdout, is:
 
 ```sh
-export RONTOY_TOKEN='TOKEN_PRINTED_BY_THE_HOST'
+python3 tools/rontoy-host/server.py --token-file /tmp/rontoy-token &
 prlctl exec "Windows 11" cmd.exe /d /s /c \
-  '"C:\path\to\donfeed.exe" --hz 1 2>NUL' \
-  | python3 tools/rontoy-host/bridge.py
-unset RONTOY_TOKEN
+  '"C:\Users\Public\donfeed.exe" --hz 1 2>NUL' \
+  | python3 tools/rontoy-host/bridge.py --token-file /tmp/rontoy-token
 ```
 
 Redirect guest stderr as shown so status lines cannot enter the NDJSON pipe. The
@@ -209,11 +247,43 @@ current 45-frame ETA cutoff is deliberately conservative and will often hide ETA
 `income_rate_too_old_for_eta` means “too old for this model,” not corrupt telemetry.
 Population observations remain eligible when only rate-dependent advice is hidden.
 
+### Optional direct-counter blocks
+
+`normalize_donfeed_observation` carries three further direct engine readings. Each is
+a value the leader block maintains, never something the host computed:
+
+```json
+"economy": {
+  "population": {"used": 157, "cap": 250, "idle_citizens": 1, "idle_basis": "direct_count"},
+  "workers": {"basis": "direct_leader_counters",
+              "gatherers": 42, "peasants": 61, "fishermen": 22,
+              "idle_fishermen": 1, "scholars": 26},
+  "clamp": {"basis": "engine_direct_pre_interest_clamp",
+            "resources": {"timber": {"over_cap": 1, "cap_per_min": 740.0}}}
+}
+```
+
+`idle_citizens` is `LeaderData::free_peasants` (`+0x9BC`), the engine's own fast
+idle-citizen counter. `workers` are unit-class counters; `filled_gather_slots` is
+deliberately **not** among them, because gather-slot occupancy is site capacity and
+must never be presented as worker allocation. `over_cap` is the engine's authoritative
+pre-interest clamp status in `{0,1,2}` — a value outside that range fails the capture
+closed rather than producing advice — and `cap_per_min` is `resource_cap` in the same
+x16-per-30-game-second units as income, divided by 8. It is an income-rate threshold,
+never a stockpile ceiling. See [`../../docs/derivation/rontoy-econ.md`](../../docs/derivation/rontoy-econ.md).
+
 Optional priority goals let the advisor estimate time-to-afford and identify
 the modeled limiting resource. The v1 schema deliberately has no stock `capacity`:
 RoN's commerce cap limits income, not stored stockpile, and pretending otherwise
 would reject legal states and produce false advice. A commerce-cap field should only
 enter a future schema after its live meaning and units are verified.
+
+Advisor version 2 owns five rules: `idle_citizens_observed`,
+`idle_fishermen_observed`, `income_clamped_pre_interest`, `population_pressure` /
+`population_headroom_low`, and `goal_bottleneck_*`. The first three read the direct
+counters above; before they existed the advisor could only ever fire on population,
+so a live capture with idle workers and four clamped resources produced no advice at
+all.
 
 The advisor is a pure function of the admitted snapshot. It observes idle citizens
 without pretending a safe work site exists, conditions population/queue pressure on

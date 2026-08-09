@@ -6,16 +6,19 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
-import os
+import pathlib
 import sys
 from typing import Optional
 
 from rontoy_host import (
     DEFAULT_MAX_BODY_BYTES,
     DEFAULT_PORT,
+    TOKEN_ENVIRONMENT_VARIABLE,
     AdmissionError,
     normalize_donfeed_observation,
     parse_json_object,
+    read_token_file,
+    resolve_ingest_token,
 )
 
 
@@ -90,7 +93,12 @@ def run(port: int, token: str, max_errors: int) -> int:
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bridge donfeed NDJSON into the loopback RoNtoy host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"host loopback port (default {DEFAULT_PORT})")
-    parser.add_argument("--token", help="host ingest token (or set RONTOY_TOKEN)")
+    parser.add_argument("--token", help=f"host ingest token (or set {TOKEN_ENVIRONMENT_VARIABLE})")
+    parser.add_argument(
+        "--token-file",
+        type=pathlib.Path,
+        help="read the ingest token from this file (as written by the host's --token-file)",
+    )
     parser.add_argument("--max-errors", type=int, default=5, help="stop after this many consecutive rejected lines")
     return parser
 
@@ -101,9 +109,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         raise SystemExit("--port must be in 1..65535")
     if args.max_errors <= 0:
         raise SystemExit("--max-errors must be positive")
-    token = args.token or os.environ.get("RONTOY_TOKEN")
+    if args.token and args.token_file:
+        raise SystemExit("give --token or --token-file, not both")
+    token = read_token_file(args.token_file) if args.token_file else resolve_ingest_token(args.token)
     if not token:
-        raise SystemExit("provide --token or RONTOY_TOKEN")
+        raise SystemExit(f"provide --token, --token-file, or {TOKEN_ENVIRONMENT_VARIABLE}")
     return run(args.port, token, args.max_errors)
 
 

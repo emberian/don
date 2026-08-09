@@ -14,6 +14,7 @@ import hmac
 import ipaddress
 import json
 import math
+import os
 import pathlib
 import re
 import secrets
@@ -27,7 +28,9 @@ from urllib.parse import urlsplit
 
 
 SCHEMA_VERSION = 1
-ADVISOR_VERSION = 1
+# 2 adds the direct idle-fisherman and pre-interest commerce-clamp rules; the wire
+# schema is unchanged because both new blocks are optional.
+ADVISOR_VERSION = 2
 DEFAULT_PORT = 17360
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 DEFAULT_MIN_INTERVAL_MS = 50
@@ -46,6 +49,49 @@ SUPPORTED_IMAGE_SIZE = 0x00BB_4000
 SUPPORTED_MODULE_SIZE = 9_925_120
 SUPPORTED_MODULE_SHA256 = "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
 DONFEED_REQUIRED_COMPONENTS = (1 << 0) | (1 << 3) | (1 << 4)  # Game, Leaders, Econ.
+TOKEN_ENVIRONMENT_VARIABLE = "RONTOY_TOKEN"
+# A readable-by-owner file is the supported way for a collector on this machine to
+# learn the ephemeral ingest token without scraping the host's stdout.
+DEFAULT_TOKEN_FILE = pathlib.Path(__file__).resolve().parent / ".rontoy-token"
+
+
+def resolve_ingest_token(explicit: Optional[str] = None) -> Optional[str]:
+    """Return the operator-supplied ingest token, or ``None`` to generate one.
+
+    Precedence is ``--token`` then ``RONTOY_TOKEN``.  An empty value is refused
+    rather than silently treated as "generate one", because an empty token in the
+    environment is much more likely to be a broken shell pipeline than an intent.
+    """
+
+    if explicit is not None:
+        if not explicit.strip():
+            raise SystemExit("--token must not be empty")
+        return explicit
+    from_environment = os.environ.get(TOKEN_ENVIRONMENT_VARIABLE)
+    if from_environment is None:
+        return None
+    if not from_environment.strip():
+        raise SystemExit(f"{TOKEN_ENVIRONMENT_VARIABLE} is set but empty")
+    return from_environment
+
+
+def write_token_file(path: pathlib.Path, token: str) -> None:
+    """Publish ``token`` at ``path`` with owner-only permissions."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(token + "\n")
+    os.chmod(path, 0o600)
+
+
+def read_token_file(path: pathlib.Path) -> str:
+    """Read a token published by :func:`write_token_file`."""
+
+    token = path.read_text(encoding="utf-8").strip()
+    if not token:
+        raise SystemExit(f"token file {path} is empty")
+    return token
 
 
 class AdmissionError(ValueError):
@@ -236,7 +282,7 @@ def validate_snapshot(snapshot: Mapping[str, Any]) -> None:
         _string(game["match_name"], "game.match_name", 1, 128)
 
     economy = _object(snapshot["economy"], "economy")
-    _exact_keys(economy, {"resources", "population", "rate_sample"}, {"production"}, "economy")
+    _exact_keys(economy, {"resources", "population", "rate_sample"}, {"production", "workers", "clamp"}, "economy")
     rate_sample = _object(economy["rate_sample"], "economy.rate_sample")
     _exact_keys(rate_sample, {"basis", "gather_stamp_raw", "age_frames", "confidence"}, set(), "economy.rate_sample")
     if rate_sample["basis"] not in {"engine_direct_gather_cache", "sampled_stock_delta", "unavailable"}:
@@ -296,6 +342,42 @@ def validate_snapshot(snapshot: Mapping[str, Any]) -> None:
         _integer(population["idle_citizens"], "economy.population.idle_citizens", 0, 1_000_000)
         if population["idle_basis"] != "direct_count":
             raise AdmissionError("invalid_schema", "economy.population.idle_basis must be direct_count")
+
+    if "workers" in economy:
+        # Direct engine unit-class counters only.  These are counts the leader block
+        # maintains, never an inferred allocation of workers to resources.
+        workers = _object(economy["workers"], "economy.workers")
+        _exact_keys(
+            workers,
+            {"basis"},
+            {"gatherers", "peasants", "fishermen", "idle_fishermen", "scholars"},
+            "economy.workers",
+        )
+        if workers["basis"] != "direct_leader_counters":
+            raise AdmissionError("invalid_schema", "economy.workers.basis must be direct_leader_counters")
+        for name in ("gatherers", "peasants", "fishermen", "idle_fishermen", "scholars"):
+            if name in workers:
+                _integer(workers[name], f"economy.workers.{name}", 0, 1_000_000)
+
+    if "clamp" in economy:
+        # `over_cap` is the engine's own pre-interest clamp status, not a computed
+        # comparison of displayed income against the cap: post-clamp interest can
+        # legitimately push displayed income above the cap with over_cap == 0.
+        # See docs/derivation/rontoy-econ.md §"over_cap".
+        clamp = _object(economy["clamp"], "economy.clamp")
+        _exact_keys(clamp, {"basis", "resources"}, set(), "economy.clamp")
+        if clamp["basis"] != "engine_direct_pre_interest_clamp":
+            raise AdmissionError("invalid_schema", "economy.clamp.basis must be engine_direct_pre_interest_clamp")
+        clamp_resources = _object(clamp["resources"], "economy.clamp.resources")
+        unknown_clamped = clamp_resources.keys() - set(RESOURCE_NAMES)
+        if unknown_clamped:
+            names = ", ".join(sorted(unknown_clamped))
+            raise AdmissionError("invalid_schema", f"economy.clamp.resources has unknown resources: {names}")
+        for name, raw_entry in clamp_resources.items():
+            entry = _object(raw_entry, f"economy.clamp.resources.{name}")
+            _exact_keys(entry, {"over_cap", "cap_per_min"}, set(), f"economy.clamp.resources.{name}")
+            _integer(entry["over_cap"], f"economy.clamp.resources.{name}.over_cap", 0, 2)
+            _number(entry["cap_per_min"], f"economy.clamp.resources.{name}.cap_per_min", 0, 1e9)
 
     if "production" in economy:
         production = _object(economy["production"], "economy.production")
@@ -514,6 +596,13 @@ def normalize_donfeed_observation(observation: Mapping[str, Any]) -> dict[str, A
     }
     if any(value < 0 for value in arrays["stockpile"]):
         raise AdmissionError("invalid_observation", "stockpile contains a negative resource")
+    # docs/derivation/rontoy-econ.md: over_cap[r] is 0, or 1 + (resource_cap[r] > 0x3E6F).
+    # Anything outside {0,1,2} means the decode is wrong, so fail closed rather than
+    # advise from it.
+    if any(value not in (0, 1, 2) for value in arrays["over_cap"]):
+        raise AdmissionError("invalid_observation", "over_cap is outside the engine's 0..2 clamp status")
+    if any(value < 0 for value in arrays["resource_cap_x16"]):
+        raise AdmissionError("invalid_observation", "resource_cap contains a negative threshold")
 
     resources = {
         name: {
@@ -524,6 +613,23 @@ def normalize_donfeed_observation(observation: Mapping[str, Any]) -> dict[str, A
         }
         for index, name in enumerate(RESOURCE_NAMES)
     }
+
+    population_block: dict[str, Any] = {"used": population_current, "cap": population_cap}
+    # `LeaderData::free_peasants` (+0x9BC) is the engine's own fast idle-citizen
+    # counter — docs/derivation/rontoy-econ.md maps it to "idle citizens (MVP)".  It is
+    # a direct count, not an entity walk, and is carried only when it is in range.
+    free_peasants = leader["free_peasants"]
+    if 0 <= free_peasants <= 1_000_000:
+        population_block["idle_citizens"] = free_peasants
+        population_block["idle_basis"] = "direct_count"
+    # Direct unit-class counters. Deliberately NOT filled_gather_slots: gather-slot
+    # occupancy is site capacity, not worker allocation, and must never be presented
+    # as one.
+    worker_block: dict[str, Any] = {"basis": "direct_leader_counters"}
+    for field in ("gatherers", "peasants", "fishermen", "idle_fishermen", "scholars"):
+        value = leader[field]
+        if 0 <= value <= 1_000_000:
+            worker_block[field] = value
     normalized = {
         "schema_version": SCHEMA_VERSION,
         "source": {
@@ -558,7 +664,20 @@ def normalize_donfeed_observation(observation: Mapping[str, Any]) -> dict[str, A
         },
         "economy": {
             "resources": resources,
-            "population": {"used": population_current, "cap": population_cap},
+            "population": population_block,
+            "workers": worker_block,
+            "clamp": {
+                "basis": "engine_direct_pre_interest_clamp",
+                "resources": {
+                    name: {
+                        "over_cap": arrays["over_cap"][index],
+                        # Cap is an income-rate threshold in the same x16-per-30-game-second
+                        # units as income, never a stockpile ceiling.
+                        "cap_per_min": arrays["resource_cap_x16"][index] / 8.0,
+                    }
+                    for index, name in enumerate(RESOURCE_NAMES)
+                },
+            },
             "rate_sample": {
                 "basis": "engine_direct_gather_cache",
                 "gather_stamp_raw": gather_stamp,
@@ -660,6 +779,19 @@ def analyze_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                 0,
             )
         )
+    idle_fishermen = int(snapshot["economy"].get("workers", {}).get("idle_fishermen", 0))
+    if idle_fishermen:
+        advice.append(
+            _advice(
+                "idle_fishermen_observed",
+                "warning",
+                "Idle fishermen observed",
+                f"{idle_fishermen} {'fishermen are' if idle_fishermen != 1 else 'fisherman is'} idle.",
+                "Send them back to a fish or whale site, or to a dock, if one is reachable in-game.",
+                {"idle_fishermen": idle_fishermen},
+                0,
+            )
+        )
     if headroom <= 0:
         queue_depth = int(snapshot["economy"].get("production", {}).get("queue_depth", 0))
         if queue_depth:
@@ -698,6 +830,32 @@ def analyze_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                 "Start capacity before committing more unit production.",
                 {"used": population["used"], "cap": population["cap"], "headroom": headroom},
                 2,
+            )
+        )
+
+    clamped = sorted(
+        name
+        for name, entry in snapshot["economy"].get("clamp", {}).get("resources", {}).items()
+        if int(entry["over_cap"]) > 0
+    )
+    if clamped:
+        listed = ", ".join(clamped)
+        advice.append(
+            _advice(
+                "income_clamped_pre_interest",
+                "warning",
+                "Production is hitting the commerce clamp",
+                f"The engine reports pre-interest production clamped on {listed}.",
+                "Raise the commerce limit (Commerce research, a Market, or a Temple) "
+                "or move gatherers off the clamped resources; extra gathering there is being discarded.",
+                {
+                    "clamped": clamped,
+                    "over_cap": {name: snapshot["economy"]["clamp"]["resources"][name]["over_cap"] for name in clamped},
+                    "cap_per_min": {
+                        name: snapshot["economy"]["clamp"]["resources"][name]["cap_per_min"] for name in clamped
+                    },
+                },
+                3,
             )
         )
 
@@ -749,6 +907,10 @@ def analyze_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "total_income_per_min": round(total_income, 3),
             "reported_gatherers_total": reported_gatherers_total,
             "population_headroom": headroom,
+            "idle_citizens": idle,
+            "idle_fishermen": idle_fishermen,
+            "clamped_resources": clamped,
+            "worker_counters": dict(sorted(snapshot["economy"].get("workers", {}).items())),
             "gatherer_distribution": gatherer_distribution,
             "goal_etas": goal_etas,
             "goal_eta_model": "constant_reported_income_no_future_spending_optimistic",
@@ -951,6 +1113,7 @@ class RoNtoyServer(ThreadingHTTPServer):
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
         ingest_token: Optional[str] = None,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        access_log: bool = True,
     ) -> None:
         host = ipaddress.ip_address(address[0])
         if not host.is_loopback:
@@ -958,6 +1121,9 @@ class RoNtoyServer(ThreadingHTTPServer):
         self.store = store
         self.max_body_bytes = max_body_bytes
         self.heartbeat_seconds = heartbeat_seconds
+        # A supervised run prints its own one-line status; per-request logging
+        # would interleave with it and hide the numbers that matter.
+        self.access_log = access_log
         self.ingest_token = ingest_token or secrets.token_urlsafe(24)
         if max_connections <= 0:
             raise ValueError("max_connections must be positive")
@@ -1025,6 +1191,8 @@ class RoNtoyHandler(BaseHTTPRequestHandler):
             return
 
     def log_message(self, format: str, *args: Any) -> None:
+        if not getattr(self.server, "access_log", True):
+            return
         print(f"{self.log_date_time_string()} {self.client_address[0]} {format % args}")
 
     def do_GET(self) -> None:
@@ -1324,6 +1492,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-connections", type=int, default=DEFAULT_MAX_CONNECTIONS, help="maximum simultaneous HTTP connections"
     )
+    parser.add_argument(
+        "--token",
+        help=f"ingest token to require (default: read {TOKEN_ENVIRONMENT_VARIABLE}, else generate a random one)",
+    )
+    parser.add_argument(
+        "--token-file",
+        type=pathlib.Path,
+        help="write the ingest token here (mode 0600) for the duration of the run, then delete it",
+    )
     return parser
 
 
@@ -1346,7 +1523,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         store,
         max_body_bytes=args.max_body_bytes,
         max_connections=args.max_connections,
+        ingest_token=resolve_ingest_token(args.token),
     )
+    token_file: Optional[pathlib.Path] = args.token_file
+    if token_file is not None:
+        write_token_file(token_file, server.ingest_token)
     stop = threading.Event()
     demo_thread: Optional[threading.Thread] = None
     if args.demo:
@@ -1360,11 +1541,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     signal.signal(signal.SIGTERM, request_shutdown)
     print(f"RoNtoy listening on http://127.0.0.1:{server.server_port} (latest-only, schema v{SCHEMA_VERSION})")
     print(f"Snapshot ingest token: {server.ingest_token}")
+    if token_file is not None:
+        print(f"Snapshot ingest token file: {token_file}")
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
         stop.set()
         server.server_close()
+        if token_file is not None:
+            try:
+                token_file.unlink()
+            except FileNotFoundError:
+                pass
         if demo_thread is not None:
             demo_thread.join(timeout=2)
     return 0

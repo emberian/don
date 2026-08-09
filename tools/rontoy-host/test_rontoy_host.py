@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import argparse
 import http.client
 import json
 import pathlib
@@ -15,6 +16,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import rontoy_host as host
+import rontoyctl
 
 
 DONFEED_FIXTURE = (
@@ -223,6 +225,42 @@ class AdvisorTests(unittest.TestCase):
         self.assertIn("not_unique_human", analysis["suppressed_reasons"])
 
 
+class IngestTokenTests(unittest.TestCase):
+    def test_explicit_token_beats_environment_and_empty_is_refused(self) -> None:
+        import os
+
+        previous = os.environ.get(host.TOKEN_ENVIRONMENT_VARIABLE)
+        try:
+            os.environ[host.TOKEN_ENVIRONMENT_VARIABLE] = "from-environment"
+            self.assertEqual(host.resolve_ingest_token("explicit"), "explicit")
+            self.assertEqual(host.resolve_ingest_token(None), "from-environment")
+            os.environ[host.TOKEN_ENVIRONMENT_VARIABLE] = "  "
+            with self.assertRaises(SystemExit):
+                host.resolve_ingest_token(None)
+            del os.environ[host.TOKEN_ENVIRONMENT_VARIABLE]
+            self.assertIsNone(host.resolve_ingest_token(None))
+            with self.assertRaises(SystemExit):
+                host.resolve_ingest_token("")
+        finally:
+            if previous is None:
+                os.environ.pop(host.TOKEN_ENVIRONMENT_VARIABLE, None)
+            else:
+                os.environ[host.TOKEN_ENVIRONMENT_VARIABLE] = previous
+
+    def test_token_file_round_trips_and_is_owner_only(self) -> None:
+        import stat
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "nested" / "token"
+            host.write_token_file(path, "s3cret")
+            self.assertEqual(host.read_token_file(path), "s3cret")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            path.write_text("\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                host.read_token_file(path)
+
+
 class DonfeedAdapterTests(unittest.TestCase):
     def test_rust_encoder_golden_normalizes_to_instrument_snapshot(self) -> None:
         normalized = host.normalize_donfeed_observation(donfeed_observation())
@@ -237,6 +275,59 @@ class DonfeedAdapterTests(unittest.TestCase):
         analysis = host.analyze_snapshot(normalized)
         self.assertTrue(analysis["advice_allowed"])
         self.assertTrue(analysis["rate_advice_allowed"])
+
+    def test_direct_worker_and_clamp_counters_reach_the_advisor(self) -> None:
+        """The R1 normalizer used to drop every advisable field except population.
+
+        Each assertion below names a leader counter that exists in the donfeed
+        observation and had no path into `analyze_snapshot`.
+        """
+
+        observation = donfeed_observation()
+        observation["leader"]["free_peasants"] = 3
+        observation["leader"]["idle_fishermen"] = 2
+        observation["leader"]["over_cap"] = [1, 0, 2, 0, 0, 0]
+        normalized = host.normalize_donfeed_observation(observation)
+        self.assertEqual(normalized["economy"]["population"]["idle_citizens"], 3)
+        self.assertEqual(normalized["economy"]["population"]["idle_basis"], "direct_count")
+        self.assertEqual(
+            normalized["economy"]["workers"],
+            {
+                "basis": "direct_leader_counters",
+                "gatherers": 26,
+                "peasants": 31,
+                "fishermen": 2,
+                "idle_fishermen": 2,
+                "scholars": 5,
+            },
+        )
+        # resource_cap is an x16-per-30-game-second income threshold: /8 per minute.
+        self.assertEqual(normalized["economy"]["clamp"]["resources"]["food"]["cap_per_min"], 500.0)
+        analysis = host.analyze_snapshot(normalized)
+        codes = [item["code"] for item in analysis["advice"]]
+        self.assertEqual(codes, ["idle_citizens_observed", "idle_fishermen_observed", "income_clamped_pre_interest"])
+        clamp = next(item for item in analysis["advice"] if item["code"] == "income_clamped_pre_interest")
+        self.assertEqual(clamp["evidence"]["clamped"], ["food", "wealth"])
+        self.assertEqual(clamp["evidence"]["over_cap"], {"food": 1, "wealth": 2})
+        self.assertEqual(analysis["metrics"]["clamped_resources"], ["food", "wealth"])
+
+    def test_unclamped_capture_produces_no_clamp_advice(self) -> None:
+        observation = donfeed_observation()
+        observation["leader"]["free_peasants"] = 0
+        analysis = host.analyze_snapshot(host.normalize_donfeed_observation(observation))
+        self.assertEqual([item["code"] for item in analysis["advice"]], [])
+
+    def test_impossible_clamp_status_fails_closed(self) -> None:
+        observation = donfeed_observation()
+        observation["leader"]["over_cap"] = [3, 0, 0, 0, 0, 0]
+        with self.assertRaises(host.AdmissionError) as caught:
+            host.normalize_donfeed_observation(observation)
+        self.assertEqual(caught.exception.code, "invalid_observation")
+
+    def test_gather_slot_occupancy_is_not_presented_as_worker_allocation(self) -> None:
+        normalized = host.normalize_donfeed_observation(donfeed_observation())
+        for resource in normalized["economy"]["resources"].values():
+            self.assertNotIn("gatherers", resource)
 
     def test_unknown_or_true_pause_suppresses_advice(self) -> None:
         for paused, reason in ((None, "pause_state_unknown"), (True, "game_paused")):
@@ -348,6 +439,34 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(status["latest"]["age_ms"], 1250)
         self.assertFalse(status["latest"]["stale"])
         self.assertEqual(status["rejections_by_code"], {"test_drop": 1})
+
+
+class SupervisorLifecycleTests(unittest.TestCase):
+    def test_process_change_requires_a_fresh_supervised_host(self) -> None:
+        args = argparse.Namespace(
+            min_interval_ms=0,
+            port=0,
+            token="test-token",
+            verbose=False,
+            no_token_file=True,
+            token_file=pathlib.Path("unused"),
+            record=None,
+            vm="unused",
+            donfeed="unused",
+            hz=1,
+            count=None,
+            no_guest_kill=True,
+        )
+        pipeline = rontoyctl.Pipeline(args)
+        pipeline.start_host()
+        try:
+            pipeline.post(snapshot(1))
+            changed = snapshot(2)
+            changed["source"]["process_started_100ns"] = "999"
+            with self.assertRaisesRegex(rontoyctl.SourceRestartRequired, "restart rontoyctl"):
+                pipeline.post(changed)
+        finally:
+            pipeline.stop_host()
 
 
 class HttpTests(unittest.TestCase):

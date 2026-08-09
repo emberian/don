@@ -126,6 +126,8 @@ function validateSnapshot(s, now = Date.now()) {
         || !number(resource.amount) || resource.amount < 0 || !number(resource.rate)) return `resources[${index}] is invalid`;
     if (resource.confidence !== null && resource.confidence !== undefined
         && (!number(resource.confidence) || resource.confidence < 0 || resource.confidence > 1)) return `resources[${index}].confidence is invalid`;
+    if (resource.clamped !== undefined
+        && (!integer(resource.clamped) || resource.clamped < 0 || resource.clamped > 2)) return `resources[${index}].clamped is invalid`;
   }
   for (const [index, worker] of s.workers.entries()) {
     if (!record(worker) || !text(worker.id, 64) || !text(worker.label, 128)
@@ -155,8 +157,12 @@ function renderResources(resources) {
     const wrap = node('div', 'resource');
     wrap.append(node('div', 'res-name', resource.label ?? resource.id ?? 'resource'));
     wrap.append(node('div', 'res-value', formatNumber(resource.amount)));
-    const rate = node('div', `res-rate${finite(resource.rate) < 0 ? ' negative' : ''}`, formatRate(resource.rate));
+    const clamped = integer(resource.clamped) && resource.clamped > 0;
+    const rate = node('div',
+      `res-rate${finite(resource.rate) < 0 ? ' negative' : ''}${clamped ? ' clamped' : ''}`, formatRate(resource.rate));
     wrap.append(rate);
+    // The engine's own pre-interest clamp status, never a comparison we computed.
+    if (clamped) wrap.append(node('div', 'res-cap', 'at commerce cap'));
     if (number(resource.confidence)) {
       const confidence = node('div', 'res-confidence');
       const fill = node('i');
@@ -514,8 +520,20 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
   }
 
   const labels = { food: 'Food', timber: 'Timber', wealth: 'Wealth', metal: 'Metal', knowledge: 'Knowledge', oil: 'Oil' };
+  const clampBlock = raw.economy.clamp;
+  if (clampBlock !== undefined) {
+    if (!record(clampBlock) || clampBlock.basis !== 'engine_direct_pre_interest_clamp'
+        || !record(clampBlock.resources)) return fail('host clamp block is invalid');
+    for (const [name, entry] of Object.entries(clampBlock.resources)) {
+      if (!knownResources.has(name) || !record(entry) || !integer(entry.over_cap)
+          || entry.over_cap < 0 || entry.over_cap > 2 || !number(entry.cap_per_min)
+          || entry.cap_per_min < 0) return fail(`host clamp entry ${name} is invalid`);
+    }
+  }
+  const clampOf = (id) => clampBlock?.resources?.[id]?.over_cap ?? 0;
   const resources = resourceEntries.map(([id, resource]) => ({
     id, label: labels[id], amount: resource.stock, rate: resource.income_per_min, confidence: null,
+    clamped: clampOf(id),
   }));
   const workers = resourceEntries.filter(([, resource]) => resource.gatherers !== undefined).map(([id, resource]) => ({
     id, label: labels[id], count: resource.gatherers, target: null,
