@@ -12,7 +12,9 @@ use std::convert::Infallible;
 use don_sim::rng::Random;
 use don_sim::systems::collision::{CollCheck, CollUnits};
 use don_sim::systems::containment::{NearbyUnitType, OrderedCollision};
-use don_sim::systems::economy::{EconRules, NUM_RESOURCES};
+use don_sim::systems::economy::{
+    self, CapGates, DoGatherContext, EconRules, GatherInputs, LeaderEcon, Payout, NUM_RESOURCES,
+};
 use don_sim::systems::gather_lifecycle::{
     attached_ordinary_order_state, camp_mine_building_approach, farm_first_gather_tick,
     AuthoritativeOrdinaryGatherGeometry, CampMineApproachOutcome, CampMineDisposition,
@@ -26,6 +28,7 @@ use don_sim::systems::gathering::{
     GatherTerrainRequest, GatherTile, GatherWorker, MineGatherCapacityRequest, NonFlatGatherState,
     NonFlatTilePreparation, WoodGatherCapacityRequest,
 };
+use don_sim::systems::leaders::NUM_LEADER_SLOTS;
 use don_sim::systems::map_terrain::{Coord, World};
 
 use super::map::RetainedGatherTerrainSources;
@@ -63,9 +66,102 @@ struct SiteState {
     capacity: GatherCapacityAuthority,
     site: GatherSite,
     mining: GatherMiningList,
+    /// Live type and object geometry consumed by the external
+    /// `BuildTypeData::calc_gather` evaluator.  Capacity alone is not sufficient.
+    payout_source: Option<AuthoritativeGatherPayoutSource>,
     /// Output of the still-separate authoritative `BuildTypeData::calc_gather` payout
     /// evaluator.  Capacity does not imply resource kind or per-worker yield.
     per_worker_gross: Option<[i32; NUM_RESOURCES]>,
+}
+
+/// The source-backed building facts which identify one invocation of retail's unresolved
+/// `BuildTypeData::calc_gather` evaluator.  The remaining player/type/world predicates are
+/// intentionally owned by [`GatherPerWorkerEvaluator`], not guessed in Arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AuthoritativeGatherPayoutSource {
+    pub site_type: AuthoritativeGatherSiteType,
+    pub placement: AuthoritativeGatherSitePlacement,
+}
+
+/// Exact Arena-to-host boundary for the per-worker six-slot building evaluator.
+///
+/// The request exposes the retained live type, object coordinates and ordered MiningList.
+/// An implementation must execute the complete `BuildTypeData::calc_gather` path, including
+/// resource choice and player/terrain modifiers.  Returning `PEASANT_RATE` in a slot chosen
+/// from [`OrdinaryGatherKind`] is not an implementation of this trait's contract.
+#[allow(dead_code)]
+pub(crate) struct GatherPerWorkerEvaluationRequest<'a> {
+    pub site_key: GatherObjectKey,
+    pub source: AuthoritativeGatherPayoutSource,
+    pub active_workers: i32,
+    pub authoritative_capacity: i32,
+    pub mining: &'a GatherMiningList,
+}
+
+pub(crate) trait GatherPerWorkerEvaluator {
+    type Error;
+
+    fn evaluate(
+        &mut self,
+        request: GatherPerWorkerEvaluationRequest<'_>,
+    ) -> Result<[i32; NUM_RESOURCES], Self::Error>;
+}
+
+impl<E, F> GatherPerWorkerEvaluator for F
+where
+    F: FnMut(GatherPerWorkerEvaluationRequest<'_>) -> Result<[i32; NUM_RESOURCES], E>,
+{
+    type Error = E;
+
+    fn evaluate(
+        &mut self,
+        request: GatherPerWorkerEvaluationRequest<'_>,
+    ) -> Result<[i32; NUM_RESOURCES], Self::Error> {
+        self(request)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GatherPerWorkerEvaluationReceipt {
+    pub site_key: GatherObjectKey,
+    pub type_index: i32,
+    pub active_workers: i32,
+    pub authoritative_capacity: i32,
+    pub evaluated: [i32; NUM_RESOURCES],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GatherPerWorkerEvaluationError<E> {
+    Runtime(GatherRuntimeError),
+    Evaluator(E),
+}
+
+/// Persistent inputs and checksum-visible economy state for one exact Leader payout lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GatherLeaderPayoutState {
+    pub leader_slot: i32,
+    pub econ: LeaderEcon,
+    pub last_calc_frame: i32,
+    pub dirty: bool,
+}
+
+/// Receipt for the complete recovered Leader economy transaction.
+///
+/// The checksum values cover `LeaderEcon::image()`'s recovered 244-byte economy block.
+/// They are deliberately named `modelled`: `don-sim` documents unidentified bytes in the
+/// full retail Leader walk, so these must not be advertised as the retail channel-8 hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GatherOwnerPayoutReceipt {
+    pub evaluated_site_gross: [i32; NUM_RESOURCES],
+    pub composed_object_income: [i32; NUM_RESOURCES],
+    pub gross_recomputed: bool,
+    pub payouts: [Payout; NUM_RESOURCES],
+    pub stockpile: [i32; NUM_RESOURCES],
+    pub accumulators: [i32; NUM_RESOURCES],
+    pub commerce_cap: [i32; NUM_RESOURCES],
+    pub expenses: [i32; NUM_RESOURCES],
+    pub modelled_econ_adler32_before: u32,
+    pub modelled_econ_adler32_after: u32,
 }
 
 /// The exact supported ordinary gathering rows in the shipped live building table.
@@ -150,15 +246,6 @@ pub(crate) struct GatherTerrainRefreshReceipt {
     pub mining_header: (i32, i32, i16, u8),
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct GatherOwnerPayoutReceipt {
-    pub evaluated_site_gross: [i32; NUM_RESOURCES],
-    pub post_economy_income: [i32; NUM_RESOURCES],
-    pub credited: [i32; NUM_RESOURCES],
-    pub accumulators: [i32; NUM_RESOURCES],
-}
-
 /// Why the generated Arena cannot enter the exact ordinary-gather path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GatherPrerequisiteRefusal {
@@ -184,7 +271,11 @@ pub(crate) enum GatherRuntimeError {
         actual: OrdinaryGatherKind,
     },
     MissingAuthoritativeCapacity(GatherObjectKey),
+    MissingAuthoritativePayoutSource(GatherObjectKey),
     MissingAuthoritativePayout(GatherObjectKey),
+    LeaderSlotOutOfRange(i32),
+    ExistingAuthoritativeLeaderEconomy(u8),
+    MissingAuthoritativeLeaderEconomy(u8),
     WrongAuthoritativeType {
         site: GatherObjectKey,
         expected: OrdinaryGatherKind,
@@ -223,7 +314,7 @@ pub(crate) struct ArenaGatherRuntime {
     sites: BTreeMap<GatherObjectKey, SiteState>,
     workers: Vec<GatherWorker>,
     orders: BTreeMap<GatherObjectKey, NonFlatGatherState>,
-    owner_accumulators: BTreeMap<u8, [i32; NUM_RESOURCES]>,
+    owner_economies: BTreeMap<u8, GatherLeaderPayoutState>,
 }
 
 #[allow(dead_code)]
@@ -271,6 +362,7 @@ impl ArenaGatherRuntime {
                 capacity,
                 site,
                 mining: GatherMiningList::default(),
+                payout_source: None,
                 per_worker_gross: None,
             },
         );
@@ -445,6 +537,9 @@ impl ArenaGatherRuntime {
                 ) {
                     self.orders.remove(&worker_key);
                 }
+                if outcome.leader_economy_dirty {
+                    self.mark_owner_economy_dirty_if_present(site_key.owner);
+                }
                 Ok(outcome)
             }
             Err(error) => Err(CampMineRuntimeError::Lifecycle(error)),
@@ -559,6 +654,13 @@ impl ArenaGatherRuntime {
         )
         .map_err(GatherRuntimeError::Refresh)?;
         trial_state.capacity = GatherCapacityAuthority::EvaluatedRetailTerrain;
+        let payout_source = AuthoritativeGatherPayoutSource {
+            site_type,
+            placement,
+        };
+        trial_state.payout_source = Some(payout_source);
+        // MiningList contents are evaluator input even when type/placement are unchanged.
+        trial_state.per_worker_gross = None;
         let receipt = GatherTerrainRefreshReceipt {
             discovery,
             refresh,
@@ -567,6 +669,7 @@ impl ArenaGatherRuntime {
         };
 
         self.sites.insert(site_key, trial_state);
+        self.mark_owner_economy_dirty_if_present(site_key.owner);
         *world = trial_world;
         *rng = trial_rng;
         Ok(receipt)
@@ -628,7 +731,13 @@ impl ArenaGatherRuntime {
                     .unwrap_or(false)
             })
             .map_err(GatherRuntimeError::Refresh)?;
+        if removed != 0 {
+            trial_state.per_worker_gross = None;
+        }
         self.sites.insert(site_key, trial_state);
+        if removed != 0 {
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
         *world = trial_world;
         Ok(removed)
     }
@@ -651,7 +760,13 @@ impl ArenaGatherRuntime {
         let mut trial_world = world.clone();
         let released = gathering::close_gather_tiles(&mut trial_world, &mut trial_state.mining)
             .map_err(GatherRuntimeError::Refresh)?;
+        if released != 0 {
+            trial_state.per_worker_gross = None;
+        }
         self.sites.insert(site_key, trial_state);
+        if released != 0 {
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
         *world = trial_world;
         Ok(released)
     }
@@ -745,20 +860,96 @@ impl ArenaGatherRuntime {
         Ok(preparation)
     }
 
-    /// Install only the output of the complete per-worker six-slot evaluator.  This API
-    /// deliberately takes no resource-kind enum: Farm/Food, Camp/Timber and Mine/Metal
-    /// cannot be inferred from Arena labels or a table at this boundary.
-    pub(crate) fn set_authoritative_per_worker_gross(
+    /// Bind the retained live type and building placement used by the payout evaluator.
+    /// Rebinding clears any result evaluated against the previous descriptor.
+    pub(crate) fn bind_authoritative_payout_source(
         &mut self,
         site_key: GatherObjectKey,
-        evaluated: [i32; NUM_RESOURCES],
+        source: AuthoritativeGatherPayoutSource,
     ) -> Result<(), GatherRuntimeError> {
         let state = self
             .sites
             .get_mut(&site_key)
             .ok_or(GatherRuntimeError::MissingSite(site_key))?;
-        state.per_worker_gross = Some(evaluated);
+        if state.kind != source.site_type.kind {
+            return Err(GatherRuntimeError::WrongAuthoritativeType {
+                site: site_key,
+                expected: state.kind,
+                actual: source.site_type.kind,
+            });
+        }
+        let changed = state.payout_source != Some(source);
+        state.payout_source = Some(source);
+        if changed {
+            state.per_worker_gross = None;
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
         Ok(())
+    }
+
+    /// Execute the mandatory external `BuildTypeData::calc_gather` boundary and retain
+    /// only its six-slot per-worker output.  Type, placement, capacity, active occupancy
+    /// and MiningList are read from the same persistent site.  Evaluator failure is
+    /// transactional: the previous result and Leader dirty bit are unchanged.
+    pub(crate) fn evaluate_authoritative_per_worker<E: GatherPerWorkerEvaluator>(
+        &mut self,
+        site_key: GatherObjectKey,
+        evaluator: &mut E,
+    ) -> Result<GatherPerWorkerEvaluationReceipt, GatherPerWorkerEvaluationError<E::Error>> {
+        let state = self
+            .sites
+            .get(&site_key)
+            .ok_or(GatherRuntimeError::MissingSite(site_key))
+            .map_err(GatherPerWorkerEvaluationError::Runtime)?;
+        if state.capacity == GatherCapacityAuthority::MissingRetailTerrainSource {
+            return Err(GatherPerWorkerEvaluationError::Runtime(
+                GatherRuntimeError::MissingAuthoritativeCapacity(site_key),
+            ));
+        }
+        let source = state.payout_source.ok_or_else(|| {
+            GatherPerWorkerEvaluationError::Runtime(
+                GatherRuntimeError::MissingAuthoritativePayoutSource(site_key),
+            )
+        })?;
+        let active_workers = gathering::num_gatherers(
+            &state.site,
+            &self.workers,
+            gathering::GatherCount::Active,
+            0,
+        )
+        .map_err(GatherRuntimeError::Retirement)
+        .map_err(GatherPerWorkerEvaluationError::Runtime)?;
+        let authoritative_capacity = state.site.max_gatherers();
+        let evaluated = evaluator
+            .evaluate(GatherPerWorkerEvaluationRequest {
+                site_key,
+                source,
+                active_workers,
+                authoritative_capacity,
+                mining: &state.mining,
+            })
+            .map_err(GatherPerWorkerEvaluationError::Evaluator)?;
+
+        let changed = self
+            .sites
+            .get(&site_key)
+            .expect("site borrowed above")
+            .per_worker_gross
+            != Some(evaluated);
+        self.sites
+            .get_mut(&site_key)
+            .expect("site borrowed above")
+            .per_worker_gross = Some(evaluated);
+        if changed {
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
+        Ok(GatherPerWorkerEvaluationReceipt {
+            site_key,
+            type_index: source.site_type.type_index,
+            active_workers,
+            authoritative_capacity,
+            evaluated,
+        })
     }
 
     /// Compose every linked site's active occupancy into one owner-level gross vector.
@@ -790,28 +981,103 @@ impl ArenaGatherRuntime {
         Ok(gross)
     }
 
-    /// Apply the shared owner-level carry to the six slots returned by the caller's exact
-    /// `Leader::do_gather` resource-tick phase. This method also recomputes site gross for
-    /// an auditable receipt, but never substitutes raw gross for cap/expense processing.
-    pub(crate) fn credit_authoritative_owner_post_economy(
+    /// Install the real Leader economy state which owns caps, expenses, carries,
+    /// stockpiles and their recovered checksum image.  Object ownership is not assumed to
+    /// equal the Leader slot; the authoritative host supplies and validates that mapping.
+    pub(crate) fn bind_authoritative_leader_economy(
+        &mut self,
+        owner: u8,
+        state: GatherLeaderPayoutState,
+    ) -> Result<(), GatherRuntimeError> {
+        if !(0..NUM_LEADER_SLOTS as i32).contains(&state.leader_slot) {
+            return Err(GatherRuntimeError::LeaderSlotOutOfRange(state.leader_slot));
+        }
+        if self.owner_economies.contains_key(&owner) {
+            return Err(GatherRuntimeError::ExistingAuthoritativeLeaderEconomy(
+                owner,
+            ));
+        }
+        self.owner_economies.insert(owner, state);
+        Ok(())
+    }
+
+    pub(crate) fn authoritative_leader_economy(
+        &self,
+        owner: u8,
+    ) -> Result<GatherLeaderPayoutState, GatherRuntimeError> {
+        self.owner_economies
+            .get(&owner)
+            .copied()
+            .ok_or(GatherRuntimeError::MissingAuthoritativeLeaderEconomy(owner))
+    }
+
+    pub(crate) fn mark_owner_economy_dirty(&mut self, owner: u8) -> Result<(), GatherRuntimeError> {
+        let state = self
+            .owner_economies
+            .get_mut(&owner)
+            .ok_or(GatherRuntimeError::MissingAuthoritativeLeaderEconomy(owner))?;
+        state.dirty = true;
+        Ok(())
+    }
+
+    fn mark_owner_economy_dirty_if_present(&mut self, owner: u8) {
+        if let Some(state) = self.owner_economies.get_mut(&owner) {
+            state.dirty = true;
+        }
+    }
+
+    /// Compose exact site gross into the caller's authoritative non-site object income,
+    /// then execute retail's recovered `Leader::gather` economy sequence as one local
+    /// transaction: scheduled gross recomposition, expense reset, caps, payout, carry,
+    /// stockpile and the obfuscated economy checksum image.
+    ///
+    /// `non_site_inputs.object_income` must contain every retail object-graph contribution
+    /// except the sites owned here.  This explicit split prevents double-crediting.
+    pub(crate) fn execute_authoritative_owner_payout(
         &mut self,
         owner: u8,
         rules: &EconRules,
-        post_economy_income: [i32; NUM_RESOURCES],
+        frame: i32,
+        non_site_inputs: &GatherInputs,
+        cap_gates: &CapGates,
+        context: &DoGatherContext,
     ) -> Result<GatherOwnerPayoutReceipt, GatherRuntimeError> {
+        // Complete every fallible read before touching checksum-visible Leader state.
         let evaluated_site_gross = self.authoritative_owner_gross(owner)?;
-        let accumulators = self
-            .owner_accumulators
-            .entry(owner)
-            .or_insert([0; NUM_RESOURCES]);
-        let credited =
-            gathering::credit_gather_frame(post_economy_income, rules.gather_rate(), accumulators);
-        Ok(GatherOwnerPayoutReceipt {
+        let mut state = self.authoritative_leader_economy(owner)?;
+        let mut inputs = non_site_inputs.clone();
+        for (income, site) in inputs.object_income.iter_mut().zip(evaluated_site_gross) {
+            *income = income.wrapping_add(site);
+        }
+
+        let modelled_econ_adler32_before = state.econ.adler32();
+        let gross_recomputed =
+            economy::calc_gather_due(frame, state.leader_slot, state.last_calc_frame, state.dirty);
+        let payouts = economy::leader_gather(
+            rules,
+            &mut state.econ,
+            frame,
+            state.leader_slot,
+            &mut state.last_calc_frame,
+            &mut state.dirty,
+            &inputs,
+            cap_gates,
+            context,
+        );
+        let receipt = GatherOwnerPayoutReceipt {
             evaluated_site_gross,
-            post_economy_income,
-            credited,
-            accumulators: *accumulators,
-        })
+            composed_object_income: inputs.object_income,
+            gross_recomputed,
+            payouts,
+            stockpile: state.econ.stockpile,
+            accumulators: state.econ.accumulator,
+            commerce_cap: state.econ.commerce_cap,
+            expenses: state.econ.expense,
+            modelled_econ_adler32_before,
+            modelled_econ_adler32_after: state.econ.adler32(),
+        };
+        self.owner_economies.insert(owner, state);
+        Ok(receipt)
     }
 
     /// Transactional exact Farm activation.  All persistent state and the simulation RNG
@@ -878,6 +1144,9 @@ impl ArenaGatherRuntime {
         if matches!(outcome.disposition, FarmFirstTickDisposition::Active { .. }) {
             self.orders.insert(worker_key, trial_order);
         }
+        if outcome.leader_economy_dirty {
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
         *rng = trial_rng;
         Ok(outcome)
     }
@@ -910,6 +1179,9 @@ impl ArenaGatherRuntime {
         self.sites.get_mut(&site_key).expect("validated site").site = trial_site;
         self.workers = trial_workers;
         self.orders.remove(&worker_key);
+        if retirement.leader_economy_dirty {
+            self.mark_owner_economy_dirty_if_present(site_key.owner);
+        }
         Ok(retirement)
     }
 
@@ -1712,50 +1984,8 @@ mod tests {
         assert_eq!(runtime.site(FARM).unwrap().gather_down, WORKER.o);
         assert_eq!(runtime.exact_active_workers(FARM), Ok(Some(1)));
     }
-
-    #[test]
-    fn payout_requires_six_slot_evaluation_and_shares_one_owner_carry() {
-        let (_world, units) = collision();
-        let mut runtime = runtime();
-        let mut rng = Random::new(0x1234);
-        runtime
-            .begin_farm(
-                &units,
-                WORKER,
-                FARM,
-                target(),
-                unit_type(),
-                AuthoritativeFarmFirstTick {
-                    farm_update_result: 1,
-                    game_gate_value: 1,
-                },
-                &mut rng,
-            )
-            .unwrap();
-        assert_eq!(
-            runtime.authoritative_owner_gross(1),
-            Err(GatherRuntimeError::MissingAuthoritativePayout(FARM))
-        );
-
-        let rules = EconRules::shipped();
-        let mut evaluated = [0; NUM_RESOURCES];
-        evaluated[0] = gathering::base_worker_gross(&rules, false);
-        assert_eq!(evaluated[0], 160);
-        runtime
-            .set_authoritative_per_worker_gross(FARM, evaluated)
-            .unwrap();
-        for _ in 0..44 {
-            let receipt = runtime
-                .credit_authoritative_owner_post_economy(1, &rules, evaluated)
-                .unwrap();
-            assert_eq!(receipt.evaluated_site_gross, evaluated);
-            assert_eq!(receipt.post_economy_income, evaluated);
-            assert_eq!(receipt.credited, [0; NUM_RESOURCES]);
-        }
-        let receipt = runtime
-            .credit_authoritative_owner_post_economy(1, &rules, evaluated)
-            .unwrap();
-        assert_eq!(receipt.credited, [1, 0, 0, 0, 0, 0]);
-        assert_eq!(receipt.accumulators, [0; NUM_RESOURCES]);
-    }
 }
+
+#[cfg(test)]
+#[path = "gather_payout_tests.rs"]
+mod gather_payout_tests;
