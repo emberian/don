@@ -278,8 +278,10 @@ pub fn phase_offset(army: i32, who: i32) -> i32 {
 /// Named retail sub-calls this port reaches but does not execute, counted rather than
 /// guessed — the same discipline `crate::tick` applies to the anti-air dud roll.
 ///
-/// Every field is a call site inside code that *does* run here. A non-zero count is a
-/// precise statement of what did not happen this frame.
+/// The retail-body fields are call sites inside outer control flow that *does* run here. A
+/// non-zero count is a precise statement of which body did not happen this frame. The RNG
+/// hazard is separate: because those bodies are missing, the exact draw count is unknown
+/// and is never invented.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ArmyGaps {
     /// `Army::do_mustering` `0x006F4260`.
@@ -302,12 +304,10 @@ pub struct ArmyGaps {
     pub use_scouts: u64,
     /// `Army::find_muster_spot` `0x006F5CC0` (3,309 B).
     pub find_muster_spot: u64,
-    /// `Army::find_target` `0x006F69B0` past its prologue.
-    pub find_target_body: u64,
-    /// `Random::get(0, 0xFFFF)` draws `find_target` would have taken from `game_random`.
-    /// **Each one is a point where our stream leaves retail's.** See
-    /// [`FindTargetDraw`].
-    pub find_target_rng_draws: u64,
+    /// Dispatches into an unported body that can reach `Army::find_target` and therefore
+    /// `game_random`. This is a count of unresolved stream hazards, **not** a guessed count
+    /// of RNG draws. The exact draw count is data-dependent inside the absent body.
+    pub game_random_stream_unresolved: u64,
 }
 
 impl ArmyGaps {
@@ -323,8 +323,6 @@ impl ArmyGaps {
             + self.use_spies
             + self.use_scouts
             + self.find_muster_spot
-            + self.find_target_body
-            + self.find_target_rng_draws
     }
 }
 
@@ -1575,7 +1573,11 @@ impl Armies {
         processed
     }
 
-    /// `Army::process` `0x006F93D0`, the whole state machine.
+    /// Research transcription of `Army::process` `0x006F93D0`'s outer state machine.
+    ///
+    /// Every dispatched retail body listed in [`RUNTIME_FIDELITY_BLOCKERS`] is counted and
+    /// skipped. This method is therefore crate-private and explicitly named
+    /// `_research_partial`; it must not be wired into a product or fidelity tick.
     ///
     /// It is a method on [`Armies`] rather than [`ArmyData`] because the merge branch scans
     /// this owner's other fifteen armies.
@@ -1762,8 +1764,7 @@ impl Armies {
             let a = self.lists[who][idx].clone();
             a.set_stance(w, 0);
             gaps.do_marching += 1;
-            gaps.find_target_body += 1;
-            gaps.find_target_rng_draws += 1;
+            gaps.game_random_stream_unresolved += 1;
         }
         if status & ST_FORMING != 0 {
             gaps.do_forming += 1;
@@ -1777,6 +1778,7 @@ impl Armies {
         }
         if status & ST_TRANSPORTING != 0 {
             gaps.do_transporting += 1;
+            gaps.game_random_stream_unresolved += 1;
         }
         if self.lists[who][idx].navy != 0 {
             let a = self.lists[who][idx].clone();
@@ -1914,7 +1916,9 @@ mod tests {
     fn recovered_army_driver_is_fail_closed_for_runtime_fidelity() {
         assert!(!RUNTIME_FIDELITY_READY);
         assert!(!RUNTIME_FIDELITY_BLOCKERS.is_empty());
-        assert!(RUNTIME_FIDELITY_BLOCKERS.iter().any(|s| s.contains("find_target body")));
+        assert!(RUNTIME_FIDELITY_BLOCKERS
+            .iter()
+            .any(|s| s.contains("find_target body")));
     }
 
     /// A minimal in-memory world. It is a *test double*, not a port: every answer is
@@ -2883,9 +2887,9 @@ mod tests {
     }
 
     #[test]
-    fn every_marching_army_records_one_uncounted_rng_draw() {
-        // The honest ledger: `do_marching` calls `find_target`, `find_target` reaches at
-        // least one `Random::get`, and this port draws none. Counting it is the point.
+    fn every_marching_army_records_an_unresolved_rng_stream_hazard() {
+        // `do_marching` can reach `find_target`, but the body and its data-dependent draw
+        // count are absent. Record the hazard without inventing a draw count.
         let mut w = TestWorld::new();
         let g = w.push_group(0, &[1], 1);
         w.groups[g as usize].counts = vec![((COUNT_TYPE, TYPE_ARG_SIEGE), -5)];
@@ -2894,8 +2898,7 @@ mod tests {
         let mut gaps = ArmyGaps::default();
         ar.process_one_research_partial(&mut w, 0, 0, true, &mut gaps);
         assert_eq!(gaps.do_marching, 1);
-        assert_eq!(gaps.find_target_body, 1);
-        assert_eq!(gaps.find_target_rng_draws, 1);
+        assert_eq!(gaps.game_random_stream_unresolved, 1);
     }
 
     // --- determinism -------------------------------------------------------------------

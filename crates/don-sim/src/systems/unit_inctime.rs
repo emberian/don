@@ -108,8 +108,8 @@
 //! | symbol | VA | size | role |
 //! |---|---|---:|---|
 //! | `Objects::inc_time` | `0x0065DB70` | 360 | step 15 driver |
-//! | `Unit::inc_time` | `0x00610B40` | 122 | dispatcher — ported exactly |
-//! | `Guy::inc_time` | `0x005D9E10` | 1251 | the animation clock — ported exactly |
+//! | `Unit::inc_time` | `0x00610B40` | 122 | dispatcher transcribed; called guy path is partial |
+//! | `Guy::inc_time` | `0x005D9E10` | 1251 | outer clock control flow; `set_anim` calls are partial |
 //! | `Guy::set_anim` | `0x005DA300` | 4723 | **tail ported, head unread** |
 //! | `AnimationPacket::get_anim_time` | `0x00918C40` | 88 | anim duration, default `200` |
 //! | `AnimationPacket::get_game_frames` | `0x00918CC0` | 88 | used by `Wall`/`DeathObj` |
@@ -125,9 +125,9 @@
 //! case for it. The composite `Guy` / `Unit` / `Objects` drivers are crate-private and carry
 //! a `_research_partial` suffix, so this recovered module cannot be mistaken for the shipped
 //! step-15 runtime merely because it is declared. The machine-readable boundary is
-//! [`RUNTIME_FIDELITY_READY`] / [`RUNTIME_FIDELITY_BLOCKERS`]. Two boundaries inside the
-//! recovered unit/guy path are load-bearing and are counted rather than papered over:
-//! The complete admission ledger is `docs/mechanics/unit-inctime.md`.
+//! [`RUNTIME_FIDELITY_READY`] / [`RUNTIME_FIDELITY_BLOCKERS`]. The complete admission
+//! ledger is `docs/mechanics/unit-inctime.md`. Two boundaries inside the recovered unit/guy
+//! path are load-bearing and are counted rather than papered over:
 //!
 //! 1. **`Guy::set_anim`'s head is unread.** Bytes `0x005DA300..0x005DB3F0` resolve *which*
 //!    animation actually plays (variation selection, hero and spell special-cases, the
@@ -657,8 +657,11 @@ pub fn set_new_location_crew<T: TerrainZ>(
 // Guy::inc_time
 // ---------------------------------------------------------------------------
 
-/// `Guy::inc_time` `0x005D9E10` [measured, 1,251 bytes, transcribed instruction by
-/// instruction].
+/// Research transcription of `Guy::inc_time` `0x005D9E10` [measured, 1,251 bytes].
+///
+/// The outer control flow is instruction-level, but calls to `Guy::set_anim` execute only
+/// [`set_anim_tail`]. That missing head changes animation choice and simulation RNG position,
+/// so this function is intentionally crate-private and named `_research_partial`.
 ///
 /// The animation clock, and — because `queued_attack` is consumed here and nowhere else on
 /// this path — **the thing that actually starts an attack animation**.
@@ -982,8 +985,12 @@ mod tests {
     fn recovered_inc_time_driver_is_fail_closed_for_runtime_fidelity() {
         assert!(!RUNTIME_FIDELITY_READY);
         assert!(!RUNTIME_FIDELITY_BLOCKERS.is_empty());
-        assert!(RUNTIME_FIDELITY_BLOCKERS.iter().any(|s| s.contains("set_anim head")));
-        assert!(RUNTIME_FIDELITY_BLOCKERS.iter().any(|s| s.contains("Farms::inc_time")));
+        assert!(RUNTIME_FIDELITY_BLOCKERS
+            .iter()
+            .any(|s| s.contains("set_anim head")));
+        assert!(RUNTIME_FIDELITY_BLOCKERS
+            .iter()
+            .any(|s| s.contains("Farms::inc_time")));
     }
 
     fn ut(squad: i32, crew: i32) -> UnitTypeStats {
@@ -1476,7 +1483,13 @@ mod tests {
             s.queued_attack = 1;
         }
         let mut st = IncTimeStats::default();
-        unit_inc_time_research_partial(&view(1, 0), &mut g, &MissingAnimData, &FlatTerrain, &mut st);
+        unit_inc_time_research_partial(
+            &view(1, 0),
+            &mut g,
+            &MissingAnimData,
+            &FlatTerrain,
+            &mut st,
+        );
         assert_eq!(st.gaps.set_anim_head, 1);
         assert_eq!(st.missing_sim_rng_draws(), (0, 3));
     }
