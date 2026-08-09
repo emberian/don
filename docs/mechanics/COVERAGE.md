@@ -415,8 +415,11 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    taunt-table scan. The four slots are resolved: `+0x4C` is `WallData::is_active`, `+0xE8`
    is `UnitData::is_captain`, and base `+0x15C/+0x160` run
    `Object::update_hits/update_los` and commit into real Unit/Wall state. Remaining are the
-   building `Wall` override pair, construction-time recompute, automatic speed/armor
-   type/tech/tribe/wonder gate population, and `Leader::process_taunt` AI chat. The
+   construction-time recompute, automatic wall/unit type/tech/tribe/wonder/city query
+   population, reached `Object::eject_contents`, and `Leader::process_taunt` AI chat. The
+   building `Wall::update_hits/update_los` overrides now run their complete 1,509/544-byte
+   bodies when query packages are supplied, committing full/construction HP and signed-byte
+   LOS into real `BuildData`. The
    1,341-byte `Unit::update_speed` body now executes when its exact query package is
    supplied, including retail's signed rounding and `o_down` propagation. The 215-byte
    `ObjectData::armor` body and 249-byte `Unit::update_armor` suffix now run, including

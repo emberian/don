@@ -25,7 +25,7 @@ Concretely, these execute today and did not this morning:
 | `Leaders::process_all` | `0x006ED2A0` | uncited; step 8 approximated by a per-leader `for` | ported whole, 387 B disassembled |
 | the diplomacy / hostile scan | `0x006ED2E0`..`0x006ED321` | absent | ported |
 | `Leader::gather`'s `BitMask<44>` union | `0x006CE35F`..`0x006CE3D0` | absent | ported — **this is what arms the stat passes** |
-| `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal plus `is_active` and plain-wall base hit/LOS bodies execute; building overrides remain |
+| `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal, `is_active`, plain-wall base bodies, and full building `Wall::update_hits/update_los` overrides execute when query packages are supplied; automatic query population, construction-time recompute, and reached ejection remain |
 | `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, full `Unit::update_speed`, `ObjectData::armor`, and `Unit::update_armor` suffix execute when their query packages are supplied; automatic gate population remains |
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
@@ -358,8 +358,12 @@ Corrections, two sentences each:
   `+0x15C/+0x160` implementations are `Object::update_hits` (98 bytes) and
   `Object::update_los` (42 bytes). Those base bodies now write real Unit/Wall state when
   their global type-table inputs are supplied. The building band overrides the last pair
-  with `Wall::update_hits/update_los`; those overrides, `Wall::update_construct_time`, and
-  automatic speed/armor type, tech, tribe, and wonder gate population remain red. The
+  with `Wall::update_hits/update_los`; both overrides now execute their complete 1,509/544-
+  byte bodies when their query packages are supplied. This includes the HP percentage
+  chain, construction ramp and both stores, plus signed-byte LOS science/type/wonder/rare
+  arithmetic. `Object::eject_contents` remains independently red only when the recovered
+  tail predicate reaches it. `Wall::update_construct_time` and automatic wall/unit type,
+  tech, tribe, wonder, city, and upgrade query population remain red. The
   1,341-byte `Unit::update_speed` body now executes its exact modifier order and signed
   rounding — military-epoch transport bonuses, Whales, type-family ratios, Bantu/French/
   Versailles, Aluminum, spy/general/supply upgrades, and Aztec — then stores signed

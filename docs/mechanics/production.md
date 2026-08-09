@@ -2,7 +2,7 @@
 
 **Lane:** `mech:production` · **Checksum channel served:** `check_builds` (channel 2 of 15,
 `CheckSums::check_builds` `0x00937290`, checksums.cpp:646) · **Module:**
-`crates/don-sim/src/systems/production.rs` (3,082 lines, 62 tests, all green).
+`crates/don-sim/src/systems/production.rs` (78 focused tests, all green).
 
 ---
 
@@ -28,6 +28,7 @@ oracle run would have to cover.
 | Under-construction collapse | `Object::take_damage` `0x00652020` | `under_construction_collapses` |
 | Hit points while razing (float!) | `BuildData::hits` `0x0062E740` | `build_hits` |
 | Training/production queue tick | `Build::do_queue` `0x0061E410` | `queue_step`, `QueueKind`, `execute_local_queue_slot`, `execute_routed_queue_slots` |
+| Library queue aggregation / forwarded unqueue | `BuildData::get_queue` `0x0062D280`, `Build::unqueue` `0x006207C0`, `LeaderData::get_first_library` `0x006DB6C0` | `BuildPool::{first_library_object,library_queue_type,execute_library_unqueue}` |
 | `JOB_EXTRA_TIME` ramp + 3× cap | `ObjectData::train_time` `0x006508C0` | `train_time_ramp` |
 | Age penalty + difficulty scale | same, tail | `train_time_age_penalty`, `train_time_finalize` |
 | SUPPORT × PROGRESSION cost ramp | `TypeData::get_cost` `0x00664090` | `ramp_cost`, `progression_ramp_count` |
@@ -45,8 +46,7 @@ oracle run would have to cover.
 | Channel iteration | `CheckSums::check_builds` `0x00937290` | `BuildPool::check_builds` |
 | adler32 / `CheckSum::walk_function` | `0x00A46830` / `0x00936FF0` | `adler32`, `CheckSum` |
 
-**Verification method.** 62 unit tests, run standalone (`rustc --edition 2021 --test`,
-because `lib.rs` does not yet declare `pub mod systems;` — see §7). They are behavioural
+**Verification method.** 78 focused unit tests through the wired `don-sim` crate. They are behavioural
 assertions on the *derived* arithmetic, not captured retail vectors: they prove the port
 matches what I read out of the instruction stream, and they pin the six places where a
 plausible-looking reimplementation diverges (§3). They are **not** evidence of fidelity to
@@ -448,17 +448,15 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
    multiply/divide with a truncating cast. This is a genuine exception to README-LLM's "the
    sim is INTEGERS" and belongs on the same list as `LeaderData::anti_att`,
    `LeaderData::plunder_scale` and `Unit::move_step`. Reproduced literally in `build_hits`.
-5. **Primary-Library forwarding.** Local single-slot completion is executable as
-   `execute_local_queue_slot`, and `execute_routed_queue_slots` now preserves the exact
-   multi-slot recursion for producers satisfying `is(0x1B3)`: outer slots prepare first,
-   eligible higher slots apply deepest-first, each recursive frame re-queries the
-   leader-owned parallel-slot limit, and the parallel completion branch intentionally
-   skips the ordinary pre-`finished` saturation store. The remaining route is the
-   non-primary Library case:
-   `BuildData::get_queue` / `Build::unqueue` can translate a slot onto a *different mutable
-   building* selected by `FUN_006DB6C0` (apparently a per-player primary/capital). That
-   cross-building transaction needs the owning leader/object graph and is intentionally
-   not hidden behind the local `&mut BuildData` API.
+5. **Library host integration.** The queue algorithms themselves are now executable.
+   `execute_routed_queue_slots` preserves the exact multi-slot recursion for producers
+   satisfying `is(0x1B3)`, including outer-first preparation, deepest-first application,
+   and the parallel branch's skipped pre-`finished` saturation store. `BuildPool` now
+   executes `LeaderData::get_first_library`'s ordered object-band scan, aggregate
+   `BuildData::get_queue`, and the cross-building `Build::unqueue` transaction. The
+   remaining work is host wiring: live city ownership must answer `is_unassimilated`, the
+   type tree must answer `is(0x1B3)`, and stockpile/counter owners must implement the
+   mandatory callbacks. Those boundaries deliberately have no defaults.
 6. **`Object::must_walk` `0x00647930`** is an input to the walk. Getting it wrong changes
    which windows are hashed, so it must be settled by whoever owns `Object`.
 
@@ -472,24 +470,16 @@ globals, which is the shape the existing oracle already handles.
 
 ---
 
-## 7. Wiring (one line each, not done by this lane)
+## 7. Wiring
 
-The module is self-contained — it compiles standalone with `rustc` and has no crate-internal
-dependencies — but it is **not reachable from the crate** yet:
+The module is exported through `systems::production` and participates in the normal crate
+gate. The current focused gate is **78 passed, 0 failed**; the full `don-sim --lib` gate is
+**1320 passed, 0 failed, 2 ignored**. `production::adler32` already re-exports the crate's
+shared checksum implementation.
 
-- `crates/don-sim/src/systems/mod.rs` lists `ammo, borders_fog, economy, groups_guys,
-  map_terrain, movement, victory_score` as of this writing. It needs one more line:
-  `pub mod production;`.
-- `crates/don-sim/src/lib.rs` does not declare `pub mod systems;` at all, so the whole
-  directory is stranded until it does.
-
-I did not edit either file: `lib.rs` is the sim-core lane's, and `systems/mod.rs` is shared.
-Verification was therefore `rustc --edition 2021 --test` on the file directly —
-**62 passed, 0 failed**, and a `--crate-type lib` build with zero warnings.
-
-Two things to reconcile once the tree is wired:
-
-- `production::adler32` duplicates `economy::adler32` byte for byte. If `don-sim` grows a
-  shared checksum module, both should defer to it.
-- `production::train_time_ramp` supersedes `mechanics::ramped_rate` (§3.5). Same integers,
-  correct name, and the "what is `x`" caveat resolved.
+The remaining wiring is deliberately at typed world boundaries, not module visibility:
+queue completion needs the finished/spawn owner, parallel production needs the live
+leader slot limit, and Library aggregation needs city assimilation, type-tree, stockpile,
+and queued-counter hosts. `production::train_time_ramp` also supersedes
+`mechanics::ramped_rate` (§3.5); the latter should be retired when its remaining callers
+move to the production API.

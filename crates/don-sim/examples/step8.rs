@@ -58,6 +58,22 @@ fn main() {
         e.objects.band_2000 = vec![
             StatObject {
                 active: true,
+                wall_active: true,
+                wall_started: true,
+                owner_in_game: true,
+                hit_inputs: Some(don_sim::systems::leaders::ObjectHitInputs {
+                    base_hits: 500,
+                    ..Default::default()
+                }),
+                type_los: Some(6),
+                wall_hit_inputs: Some(don_sim::systems::leaders::WallHitInputs {
+                    can_carry_domain_2: true,
+                    ..Default::default()
+                }),
+                wall_los_inputs: Some(don_sim::systems::leaders::WallLosInputs {
+                    footprint_x: 2,
+                    ..Default::default()
+                }),
                 ..Default::default()
             };
             6

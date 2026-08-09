@@ -27,7 +27,7 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     sim.spawn_build(
         0,
         production::BuildData {
-            flags: production::flag::VALID | production::flag::ACTIVE,
+            flags: production::flag::VALID | production::flag::STARTED | production::flag::ACTIVE,
             ..Default::default()
         },
     );
@@ -59,6 +59,19 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
         ..Default::default()
     }];
     sim.step8_env.leaders[0].objects.band_2000 = vec![leaders::StatObject {
+        hit_inputs: Some(leaders::ObjectHitInputs {
+            base_hits: 555,
+            ..Default::default()
+        }),
+        type_los: Some(11),
+        wall_hit_inputs: Some(leaders::WallHitInputs {
+            can_carry_domain_2: true,
+            ..Default::default()
+        }),
+        wall_los_inputs: Some(leaders::WallLosInputs {
+            footprint_x: 2,
+            ..Default::default()
+        }),
         ..Default::default()
     }];
     sim.step8_env.leaders[0].objects.band_3000 = vec![leaders::StatObject {
@@ -90,11 +103,14 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.world.units.mylos()[unit_row], 7);
     assert_eq!(sim.world.units.myspeed()[unit_row], 27);
     assert_eq!(sim.world.units.myarmor()[unit_row], 15);
+    assert_eq!(sim.builds[0].myhits, 555);
+    assert_eq!(sim.builds[0].construct_hits, 555);
+    assert_eq!(sim.builds[0].other[0x3c] as i8, 12);
     assert_eq!(sim.walls[0].myhits, 444);
     assert_eq!(sim.walls[0].mylos, 9);
-    // Only the building's Wall override pair remains red; all four virtual slots and the
-    // supplied Unit::update_speed / Unit::update_armor bodies executed.
-    assert_eq!(sim.cover.gaps[Gap::LeaderCalcWallStats.index()], 2);
+    // Both building Wall overrides and the supplied unit bodies executed; no nested red
+    // call was reached on this active, ungarrisoned building.
+    assert_eq!(sim.cover.gaps[Gap::LeaderCalcWallStats.index()], 0);
     assert_eq!(sim.cover.gaps[Gap::LeaderCalcUnitStats.index()], 0);
 
     // The exact taunt-table scan reads the pre-increment frame. Step 20 made it 1.
@@ -104,6 +120,9 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     sim.world.units.mylos_mut()[unit_row] = 5;
     sim.world.units.myspeed_mut()[unit_row] = 45;
     sim.world.units.myarmor_mut()[unit_row] = 55;
+    sim.builds[0].myhits = 777;
+    sim.builds[0].construct_hits = 777;
+    sim.builds[0].other[0x3c] = 7;
     sim.walls[0].myhits = 666;
     sim.walls[0].mylos = 6;
     sim.step8.leaders[0].taunt_frame[2] = 1;
@@ -116,6 +135,9 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.world.units.mylos()[unit_row], 5);
     assert_eq!(sim.world.units.myspeed()[unit_row], 45);
     assert_eq!(sim.world.units.myarmor()[unit_row], 55);
+    assert_eq!(sim.builds[0].myhits, 777);
+    assert_eq!(sim.builds[0].construct_hits, 777);
+    assert_eq!(sim.builds[0].other[0x3c], 7);
     assert_eq!(sim.walls[0].myhits, 666);
     assert_eq!(sim.walls[0].mylos, 6);
 }

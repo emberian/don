@@ -1397,6 +1397,89 @@ pub trait QueueRoutingHost: QueueCompletionHost {
     fn parallel_slot_limit(&mut self, build: &BuildData, slot: usize) -> usize;
 }
 
+/// Stable identity for a building in the player-major object graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildObjectKey {
+    pub player: usize,
+    /// Absolute object index, not a build-band-relative slot.
+    pub object_id: usize,
+}
+
+/// Mandatory type/city boundary for `LeaderData::get_first_library` (`0x006DB6C0`).
+///
+/// Validity, activation, city presence, and object-slot scan order are owned by
+/// [`BuildPool`]. Assimilation depends on the live city owner and the producer's type
+/// tree owns `is(0x1B3)`, so neither query has a guessed default here.
+pub trait LibraryObjectGraphHost {
+    /// `BuildData::is_unassimilated` (`0x0062D470`), queried before the Library type test.
+    fn is_unassimilated(&mut self, key: BuildObjectKey, build: &BuildData) -> bool;
+    /// The producer-side `is(0x1B3)` query.
+    fn is_library(&mut self, key: BuildObjectKey, build: &BuildData) -> bool;
+}
+
+/// Mandatory world callbacks inside a routed `Build::unqueue` (`0x006207C0`).
+pub trait LibraryUnqueueHost: LibraryObjectGraphHost {
+    /// The global store-dirty write, after routing and target bounds checks.
+    fn mark_queue_dirty(&mut self, target: BuildObjectKey);
+    /// Per-player/type queued counters, after elapsed is zeroed and before refund/compaction.
+    fn decrement_queued_counters(
+        &mut self,
+        target: BuildObjectKey,
+        type_index: i32,
+        queue: &BuildQueue,
+        slot: usize,
+    );
+    /// `Build::unpay_cost(slot)`, reached only when `refund` is non-zero. The queue entry
+    /// is still in place and its elapsed field is already zero.
+    fn refund_unqueue(
+        &mut self,
+        target: BuildObjectKey,
+        type_index: i32,
+        queue: &BuildQueue,
+        slot: usize,
+    );
+}
+
+/// Fail-closed object-graph or queue invariant violations during Library routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryQueueError {
+    PlayerOutsidePool {
+        player: usize,
+    },
+    ObjectOutsideLiveBuildBand(BuildObjectKey),
+    MissingBuildObject(BuildObjectKey),
+    NegativeTranslatedSlot {
+        source: BuildObjectKey,
+        requested_slot: i32,
+        source_queued: usize,
+    },
+    LogicalLengthExceedsAllocation {
+        target: BuildObjectKey,
+        queued: usize,
+        allocated: usize,
+    },
+    InvalidTypeIndex {
+        target: BuildObjectKey,
+        type_index: i32,
+    },
+}
+
+/// Which physical building received a routed `Build::unqueue` mutation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LibraryUnqueueTransaction {
+    pub source: BuildObjectKey,
+    pub target: BuildObjectKey,
+    /// Slot passed to the source building.
+    pub requested_slot: i32,
+    /// Initial slot after subtracting the source's local queue prefix, if forwarded.
+    pub target_slot: usize,
+    /// Physical slot removed. With `refund`, retail advances across an adjacent run of
+    /// identical types and removes the final matching record.
+    pub removed_slot: usize,
+    pub type_index: i32,
+    pub refunded: bool,
+}
+
 /// Fail-closed violations of the normal retail queue invariant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueueTransactionError {
@@ -2481,6 +2564,203 @@ impl BuildPool {
         }
     }
 
+    fn checked_build(&self, key: BuildObjectKey) -> Result<&BuildData, LibraryQueueError> {
+        if key.player >= NUM_LEADERS {
+            return Err(LibraryQueueError::PlayerOutsidePool { player: key.player });
+        }
+        if key.object_id < BUILD_BAND_BASE || key.object_id >= self.counts[key.player] {
+            return Err(LibraryQueueError::ObjectOutsideLiveBuildBand(key));
+        }
+        let slot = key.object_id - BUILD_BAND_BASE;
+        self.slots[key.player]
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(LibraryQueueError::MissingBuildObject(key))
+    }
+
+    /// `LeaderData::get_first_library` (`0x006DB6C0`). [measured]
+    ///
+    /// Retail scans absolute object indices `2000..objects.counts[player]` and returns the
+    /// first object which is valid, active, attached to a city, assimilated, and satisfies
+    /// `is(0x1B3)`. The two host queries occur only after the four cheap object/build
+    /// checks, and assimilation is queried before the type tree.
+    pub fn first_library_object<H: LibraryObjectGraphHost>(
+        &self,
+        player: usize,
+        host: &mut H,
+    ) -> Result<Option<BuildObjectKey>, LibraryQueueError> {
+        if player >= NUM_LEADERS {
+            return Err(LibraryQueueError::PlayerOutsidePool { player });
+        }
+        let end = self.counts[player]
+            .saturating_sub(BUILD_BAND_BASE)
+            .min(BUILD_POOL_SLOTS);
+        for slot in 0..end {
+            let Some(build) = self.slots[player][slot].as_ref() else {
+                continue;
+            };
+            if !build.is_valid() || !build.is_active() || build.city < 0 {
+                continue;
+            }
+            let key = BuildObjectKey {
+                player,
+                object_id: BUILD_BAND_BASE + slot,
+            };
+            if host.is_unassimilated(key, build) {
+                continue;
+            }
+            if host.is_library(key, build) {
+                return Ok(Some(key));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `BuildData::get_queue(slot)` (`0x0062D280`) with its Library aggregation route.
+    ///
+    /// A Library forwards only slots at or beyond its own logical queue prefix. If the
+    /// first Library is another building, `source.queued` is subtracted exactly once;
+    /// otherwise the source remains the target. Missing or out-of-range entries return
+    /// retail's `-1` sentinel.
+    pub fn library_queue_type<H: LibraryObjectGraphHost>(
+        &self,
+        source: BuildObjectKey,
+        requested_slot: i32,
+        host: &mut H,
+    ) -> Result<i32, LibraryQueueError> {
+        let source_build = self.checked_build(source)?;
+        let source_is_library = host.is_library(source, source_build);
+        let mut target = source;
+        let mut target_slot = requested_slot;
+        if source_is_library && requested_slot >= source_build.queue.queued as i32 {
+            if let Some(first) = self.first_library_object(source.player, host)? {
+                if first != source {
+                    target = first;
+                    target_slot = requested_slot.wrapping_sub(source_build.queue.queued as i32);
+                }
+            }
+        }
+
+        if target_slot < 0 {
+            return Ok(-1);
+        }
+        let target_build = self.checked_build(target)?;
+        let slot = target_slot as usize;
+        if slot >= target_build.queue.queued as usize || slot >= target_build.queue.num() {
+            return Ok(-1);
+        }
+        Ok(target_build.queue.entries[slot].type_index as i32)
+    }
+
+    /// Execute the cross-building route at the head of `Build::unqueue(slot, refund)`
+    /// (`0x006207C0`). [measured]
+    ///
+    /// A local `0x29A` queue entry always stays on the source. Every other unqueue on a
+    /// non-primary Library targets `first_library` at `slot - source.queued`; notably,
+    /// retail does not clamp a negative translation back to zero. After routing, only the
+    /// target is mutated: dirty marker, optional identical-type run selection, elapsed
+    /// reset, queued-counter callback, optional refund, physical compaction, logical
+    /// decrement, empty repeat-latch clear.
+    pub fn execute_library_unqueue<H: LibraryUnqueueHost>(
+        &mut self,
+        source: BuildObjectKey,
+        requested_slot: i32,
+        refund: bool,
+        host: &mut H,
+    ) -> Result<Option<LibraryUnqueueTransaction>, LibraryQueueError> {
+        let source_build = self.checked_build(source)?;
+        let source_queued = source_build.queue.queued as usize;
+        let source_allocated = source_build.queue.num();
+        if source_queued > source_allocated {
+            return Err(LibraryQueueError::LogicalLengthExceedsAllocation {
+                target: source,
+                queued: source_queued,
+                allocated: source_allocated,
+            });
+        }
+        let local_razing = requested_slot >= 0
+            && (requested_slot as usize) < source_queued
+            && source_build.queue.entries[requested_slot as usize].type_index as i32 == 0x29A;
+        let source_is_library = host.is_library(source, source_build);
+
+        let mut target = source;
+        let mut target_slot = requested_slot;
+        if source_is_library && !local_razing {
+            if let Some(first) = self.first_library_object(source.player, host)? {
+                if first != source {
+                    target = first;
+                    target_slot = requested_slot.wrapping_sub(source_queued as i32);
+                }
+            }
+        }
+
+        if target_slot < 0 {
+            return Err(LibraryQueueError::NegativeTranslatedSlot {
+                source,
+                requested_slot,
+                source_queued,
+            });
+        }
+        let target_queued = self.checked_build(target)?.queue.queued as usize;
+        let target_allocated = self.checked_build(target)?.queue.num();
+        if target_queued > target_allocated {
+            return Err(LibraryQueueError::LogicalLengthExceedsAllocation {
+                target,
+                queued: target_queued,
+                allocated: target_allocated,
+            });
+        }
+        let translated_slot = target_slot as usize;
+        if translated_slot >= target_queued {
+            return Ok(None);
+        }
+
+        let target_band_slot = target.object_id - BUILD_BAND_BASE;
+        let target_build = self.slots[target.player][target_band_slot]
+            .as_mut()
+            .expect("checked_build established the target");
+        let mut slot = translated_slot;
+        if refund {
+            while slot + 1 < target_queued
+                && target_build.queue.entries[slot].type_index
+                    == target_build.queue.entries[slot + 1].type_index
+            {
+                slot += 1;
+            }
+        }
+        let type_index = target_build.queue.entries[slot].type_index as i32;
+        if type_index < 0 {
+            return Err(LibraryQueueError::InvalidTypeIndex { target, type_index });
+        }
+
+        host.mark_queue_dirty(target);
+        target_build.queue.entries[slot].elapsed = 0;
+        host.decrement_queued_counters(target, type_index, &target_build.queue, slot);
+        if refund {
+            host.refund_unqueue(target, type_index, &target_build.queue, slot);
+        }
+        if slot + 1 < target_queued {
+            target_build
+                .queue
+                .entries
+                .copy_within(slot + 1..target_queued, slot);
+        }
+        target_build.queue.queued -= 1;
+        if target_build.queue.queued == 0 {
+            target_build.build_masks &= !mask::REPEAT_QUEUE;
+        }
+
+        Ok(Some(LibraryUnqueueTransaction {
+            source,
+            target,
+            requested_slot,
+            target_slot: translated_slot,
+            removed_slot: slot,
+            type_index,
+            refunded: refund,
+        }))
+    }
+
     /// `CheckSums::check_builds` (`0x00937290`, checksums.cpp:646) — the **builds
     /// channel**.
     ///
@@ -2991,6 +3271,76 @@ mod tests {
         Repeat(i32, u8, bool),
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum LibraryEvent {
+        Unassimilated(BuildObjectKey),
+        IsLibrary(BuildObjectKey),
+        Dirty(BuildObjectKey),
+        Counters(BuildObjectKey, i32, i32),
+        Refund(BuildObjectKey, i32, i32),
+    }
+
+    #[derive(Default)]
+    struct LibraryProbe {
+        libraries: Vec<usize>,
+        unassimilated: Vec<usize>,
+        events: Vec<LibraryEvent>,
+    }
+
+    impl LibraryObjectGraphHost for LibraryProbe {
+        fn is_unassimilated(&mut self, key: BuildObjectKey, _build: &BuildData) -> bool {
+            self.events.push(LibraryEvent::Unassimilated(key));
+            self.unassimilated.contains(&key.object_id)
+        }
+
+        fn is_library(&mut self, key: BuildObjectKey, _build: &BuildData) -> bool {
+            self.events.push(LibraryEvent::IsLibrary(key));
+            self.libraries.contains(&key.object_id)
+        }
+    }
+
+    impl LibraryUnqueueHost for LibraryProbe {
+        fn mark_queue_dirty(&mut self, target: BuildObjectKey) {
+            self.events.push(LibraryEvent::Dirty(target));
+        }
+
+        fn decrement_queued_counters(
+            &mut self,
+            target: BuildObjectKey,
+            type_index: i32,
+            queue: &BuildQueue,
+            slot: usize,
+        ) {
+            self.events.push(LibraryEvent::Counters(
+                target,
+                type_index,
+                queue.entries[slot].elapsed,
+            ));
+        }
+
+        fn refund_unqueue(
+            &mut self,
+            target: BuildObjectKey,
+            type_index: i32,
+            queue: &BuildQueue,
+            slot: usize,
+        ) {
+            self.events.push(LibraryEvent::Refund(
+                target,
+                type_index,
+                queue.entries[slot].elapsed,
+            ));
+        }
+    }
+
+    fn active_city_build(who: u8) -> BuildData {
+        let mut build = BuildData::default();
+        build.who = who;
+        build.flags = flag::VALID | flag::ACTIVE;
+        build.city = 0;
+        build
+    }
+
     struct QueueProbe {
         total: i32,
         kind: QueueKind,
@@ -3445,6 +3795,303 @@ mod tests {
                 QueueEvent::CompletedUnqueue(60, 0),
             ],
             "the ordinary branch's saturation store must not leak into 0x1B3 routing"
+        );
+    }
+
+    #[test]
+    fn first_library_scan_applies_retail_gates_and_query_order() {
+        let mut pool = BuildPool::new();
+        pool.insert(0, 0, BuildData::default());
+
+        let mut inactive = active_city_build(0);
+        inactive.flags &= !flag::ACTIVE;
+        pool.insert(0, 1, inactive);
+
+        let mut no_city = active_city_build(0);
+        no_city.city = -1;
+        pool.insert(0, 2, no_city);
+        pool.insert(0, 3, active_city_build(0));
+        pool.insert(0, 4, active_city_build(0));
+        pool.insert(0, 5, active_city_build(0));
+        pool.insert(0, 6, active_city_build(0));
+
+        let mut host = LibraryProbe {
+            libraries: vec![2005, 2006],
+            unassimilated: vec![2003],
+            ..LibraryProbe::default()
+        };
+
+        let found = pool.first_library_object(0, &mut host).unwrap();
+
+        assert_eq!(
+            found,
+            Some(BuildObjectKey {
+                player: 0,
+                object_id: 2005,
+            })
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                LibraryEvent::Unassimilated(BuildObjectKey {
+                    player: 0,
+                    object_id: 2003,
+                }),
+                LibraryEvent::Unassimilated(BuildObjectKey {
+                    player: 0,
+                    object_id: 2004,
+                }),
+                LibraryEvent::IsLibrary(BuildObjectKey {
+                    player: 0,
+                    object_id: 2004,
+                }),
+                LibraryEvent::Unassimilated(BuildObjectKey {
+                    player: 0,
+                    object_id: 2005,
+                }),
+                LibraryEvent::IsLibrary(BuildObjectKey {
+                    player: 0,
+                    object_id: 2005,
+                }),
+            ],
+            "invalid, inactive, and cityless objects must not reach host queries"
+        );
+    }
+
+    #[test]
+    fn library_queue_accessor_keeps_the_local_prefix_then_translates_to_primary() {
+        let mut pool = BuildPool::new();
+        let mut primary = active_city_build(0);
+        primary.queue.queued = 1;
+        primary.queue.entries.push(BuildQueueEntry {
+            type_index: 70,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 0, primary);
+
+        let mut source = active_city_build(0);
+        source.queue.queued = 1;
+        source.queue.entries.push(BuildQueueEntry {
+            type_index: 0x29A,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 1, source);
+        let source_key = BuildObjectKey {
+            player: 0,
+            object_id: 2001,
+        };
+        let primary_key = BuildObjectKey {
+            player: 0,
+            object_id: 2000,
+        };
+        let mut host = LibraryProbe {
+            libraries: vec![2000, 2001],
+            ..LibraryProbe::default()
+        };
+
+        assert_eq!(
+            pool.library_queue_type(source_key, 0, &mut host).unwrap(),
+            0x29A
+        );
+        assert_eq!(host.events, vec![LibraryEvent::IsLibrary(source_key)]);
+
+        host.events.clear();
+        assert_eq!(
+            pool.library_queue_type(source_key, 1, &mut host).unwrap(),
+            70
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                LibraryEvent::IsLibrary(source_key),
+                LibraryEvent::Unassimilated(primary_key),
+                LibraryEvent::IsLibrary(primary_key),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_primary_library_unqueue_mutates_only_the_translated_primary_slot() {
+        let mut pool = BuildPool::new();
+        let mut primary = active_city_build(0);
+        primary.build_masks |= mask::REPEAT_QUEUE;
+        primary.queue.queued = 3;
+        primary.queue.entries = vec![
+            BuildQueueEntry {
+                elapsed: 123,
+                type_index: 70,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 222,
+                type_index: 70,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 456,
+                type_index: 71,
+                ..BuildQueueEntry::default()
+            },
+        ];
+        pool.insert(0, 0, primary);
+
+        let mut source = active_city_build(0);
+        source.queue.queued = 1;
+        source.queue.entries.push(BuildQueueEntry {
+            elapsed: 99,
+            type_index: 0x29A,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 1, source);
+        let source_key = BuildObjectKey {
+            player: 0,
+            object_id: 2001,
+        };
+        let primary_key = BuildObjectKey {
+            player: 0,
+            object_id: 2000,
+        };
+        let mut host = LibraryProbe {
+            libraries: vec![2000, 2001],
+            ..LibraryProbe::default()
+        };
+
+        let result = pool
+            .execute_library_unqueue(source_key, 1, true, &mut host)
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Some(LibraryUnqueueTransaction {
+                source: source_key,
+                target: primary_key,
+                requested_slot: 1,
+                target_slot: 0,
+                removed_slot: 1,
+                type_index: 70,
+                refunded: true,
+            })
+        );
+        let source = pool.slots[0][1].as_ref().unwrap();
+        assert_eq!(source.queue.queued, 1);
+        assert_eq!(source.queue.entries[0].type_index as i32, 0x29A);
+        assert_eq!(source.queue.entries[0].elapsed, 99);
+        let primary = pool.slots[0][0].as_ref().unwrap();
+        assert_eq!(primary.queue.queued, 2);
+        assert_eq!(primary.queue.entries[0].type_index, 70);
+        assert_eq!(primary.queue.entries[0].elapsed, 123);
+        assert_eq!(primary.queue.entries[1].type_index, 71);
+        assert_eq!(primary.queue.entries[1].elapsed, 456);
+        assert_eq!(primary.queue.entries[2], primary.queue.entries[1]);
+        assert_ne!(primary.build_masks & mask::REPEAT_QUEUE, 0);
+        assert_eq!(
+            host.events,
+            vec![
+                LibraryEvent::IsLibrary(source_key),
+                LibraryEvent::Unassimilated(primary_key),
+                LibraryEvent::IsLibrary(primary_key),
+                LibraryEvent::Dirty(primary_key),
+                LibraryEvent::Counters(primary_key, 70, 0),
+                LibraryEvent::Refund(primary_key, 70, 0),
+            ],
+            "routing has no source mutation callback; target elapsed resets before counters/refund"
+        );
+    }
+
+    #[test]
+    fn local_razing_entry_bypasses_primary_library_forwarding() {
+        let mut pool = BuildPool::new();
+        let mut primary = active_city_build(0);
+        primary.queue.queued = 1;
+        primary.queue.entries.push(BuildQueueEntry {
+            elapsed: 300,
+            type_index: 70,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 0, primary);
+
+        let mut source = active_city_build(0);
+        source.build_masks |= mask::REPEAT_QUEUE;
+        source.queue.queued = 1;
+        source.queue.entries.push(BuildQueueEntry {
+            elapsed: 200,
+            type_index: 0x29A,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 1, source);
+        let source_key = BuildObjectKey {
+            player: 0,
+            object_id: 2001,
+        };
+        let mut host = LibraryProbe {
+            libraries: vec![2000, 2001],
+            ..LibraryProbe::default()
+        };
+
+        let result = pool
+            .execute_library_unqueue(source_key, 0, false, &mut host)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.target, source_key);
+        assert_eq!(result.target_slot, 0);
+        assert_eq!(result.removed_slot, 0);
+        assert_eq!(pool.slots[0][1].as_ref().unwrap().queue.queued, 0);
+        assert_eq!(
+            pool.slots[0][1].as_ref().unwrap().build_masks & mask::REPEAT_QUEUE,
+            0
+        );
+        assert_eq!(pool.slots[0][0].as_ref().unwrap().queue.queued, 1);
+        assert_eq!(
+            host.events,
+            vec![
+                LibraryEvent::IsLibrary(source_key),
+                LibraryEvent::Dirty(source_key),
+                LibraryEvent::Counters(source_key, 0x29A, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn impossible_negative_library_translation_fails_before_mutation_callbacks() {
+        let mut pool = BuildPool::new();
+        pool.insert(0, 0, active_city_build(0));
+        let mut source = active_city_build(0);
+        source.queue.queued = 1;
+        source.queue.entries.push(BuildQueueEntry {
+            type_index: 70,
+            ..BuildQueueEntry::default()
+        });
+        pool.insert(0, 1, source);
+        let source_key = BuildObjectKey {
+            player: 0,
+            object_id: 2001,
+        };
+        let primary_key = BuildObjectKey {
+            player: 0,
+            object_id: 2000,
+        };
+        let mut host = LibraryProbe {
+            libraries: vec![2000, 2001],
+            ..LibraryProbe::default()
+        };
+
+        assert_eq!(
+            pool.execute_library_unqueue(source_key, 0, false, &mut host),
+            Err(LibraryQueueError::NegativeTranslatedSlot {
+                source: source_key,
+                requested_slot: 0,
+                source_queued: 1,
+            })
+        );
+        assert_eq!(pool.slots[0][1].as_ref().unwrap().queue.queued, 1);
+        assert_eq!(
+            host.events,
+            vec![
+                LibraryEvent::IsLibrary(source_key),
+                LibraryEvent::Unassimilated(primary_key),
+                LibraryEvent::IsLibrary(primary_key),
+            ]
         );
     }
 

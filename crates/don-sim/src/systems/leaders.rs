@@ -69,10 +69,10 @@
 //!   in [`Step8Trace::taunts`] and the body is not ported.
 //! * The four virtual slots are now resolved from the retail vtables. `+0x4C` is
 //!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
-//!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band overrides
-//!   the latter pair with the much larger `Wall::update_hits/update_los`; those overrides,
-//!   `Unit::update_speed` and automatic population of the armor type/tribe gate package
-//!   remain explicit gaps.
+//!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band's complete
+//!   `Wall::update_hits/update_los` overrides and `Unit::update_speed` now execute when
+//!   their global query packages are supplied. Automatic query population,
+//!   `Wall::update_construct_time`, and reached `Object::eject_contents` remain explicit.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
 //!
@@ -339,6 +339,38 @@ pub struct Step8Rules {
     pub aluminum_air_speed: i32,
     /// `RULES + 0x93C` = 2364, `WHALES_SHIPS_MOVE`, shipped 20.
     pub whales_ships_move: i32,
+    /// `RULES + 0x154` = 340, `BUILDING_HP_UPGRADE`, shipped 10.
+    pub building_hp_upgrade: i32,
+    /// The five dwords beginning at `RULES + 0x154` selected by the capital-building arm
+    /// of `Wall::update_hits`: `BUILDING_HP_UPGRADE` followed by the first four
+    /// `TEMPLE_UPGRADE_HP` entries.
+    pub capital_building_hp: [i32; 5],
+    /// `RULES + 0x58C` = 1420, `MAYA_BUILDING_HP`, shipped 25.
+    pub maya_building_hp: i32,
+    /// `RULES + 0x5FC` = 1532, `ROMAN_FORT_HP`, shipped 0.
+    pub roman_fort_hp: i32,
+    /// `RULES + 0x4F8` = 1272, `TAJ_BUILDING_HP`, shipped 100.
+    pub taj_building_hp: i32,
+    /// `RULES + 0x4C8` = 1224, `RED_FORT_FORT_HPS`, shipped 33.
+    pub red_fort_fort_hps: i32,
+    /// `RULES + 0x5CC` = 1484, `NUBIAN_HIT_POINTS`, shipped 50.
+    pub nubian_hit_points: i32,
+    /// `RULES + 0x4A0` = 1184, `TIKAL_TEMPLE_HP`, shipped 50.
+    pub tikal_temple_hp: i32,
+    /// `RULES + 0xB08` = 2824, `CTW_MISSIONARIES_BONUS`, shipped 25. Despite the name,
+    /// `Wall::update_hits` uses it for the CTW rare-0x20 capital branch.
+    pub ctw_missionaries_bonus: i32,
+    /// `RULES + 0xC48` = 3144, `SENATE_HP_BONUS`, shipped 35.
+    pub senate_hp_bonus: i32,
+    /// `RULES + 0x180` = 384, `FORT_UPGRADE_RANGE[5]`, used as signed bytes by
+    /// `Wall::update_los`.
+    pub fort_upgrade_range: [i32; 5],
+    /// `RULES + 0x1A8` = 424, `TOWER_FORT_RANGE[4]`, likewise read as signed bytes.
+    pub tower_fort_range: [i32; 4],
+    /// `RULES + 0x474` = 1140, `COLOSSEUM_FORT_RANGE`, shipped 0.
+    pub colosseum_fort_range: i32,
+    /// `RULES + 0x914` = 2324, `FURS_LOS`, shipped 0.
+    pub furs_los: i32,
 }
 
 /// Byte offsets of every [`Step8Rules`] field, so [`Step8Rules::from_block`] and a
@@ -362,6 +394,20 @@ pub mod rule_offsets {
     pub const AMERICANS_MARINE_SPEED_BONUS: usize = 2156;
     pub const ALUMINUM_AIR_SPEED: usize = 2360;
     pub const WHALES_SHIPS_MOVE: usize = 2364;
+    pub const BUILDING_HP_UPGRADE: usize = 340;
+    pub const CAPITAL_BUILDING_HP: usize = 340;
+    pub const FORT_UPGRADE_RANGE: usize = 384;
+    pub const TOWER_FORT_RANGE: usize = 424;
+    pub const COLOSSEUM_FORT_RANGE: usize = 1140;
+    pub const TIKAL_TEMPLE_HP: usize = 1184;
+    pub const RED_FORT_FORT_HPS: usize = 1224;
+    pub const TAJ_BUILDING_HP: usize = 1272;
+    pub const MAYA_BUILDING_HP: usize = 1420;
+    pub const NUBIAN_HIT_POINTS: usize = 1484;
+    pub const ROMAN_FORT_HP: usize = 1532;
+    pub const FURS_LOS: usize = 2324;
+    pub const CTW_MISSIONARIES_BONUS: usize = 2824;
+    pub const SENATE_HP_BONUS: usize = 3144;
     pub const TITANIUM_ATTRITION: usize = 2396;
     pub const CATTLE_CITIZEN_ARMOR: usize = 2400;
     pub const CTW_ATTRITION: usize = 2572;
@@ -398,6 +444,20 @@ impl Step8Rules {
             americans_marine_speed_bonus: 2,
             aluminum_air_speed: 25,
             whales_ships_move: 20,
+            building_hp_upgrade: 10,
+            capital_building_hp: [10, 25, 50, 100, 150],
+            maya_building_hp: 25,
+            roman_fort_hp: 0,
+            taj_building_hp: 100,
+            red_fort_fort_hps: 33,
+            nubian_hit_points: 50,
+            tikal_temple_hp: 50,
+            ctw_missionaries_bonus: 25,
+            senate_hp_bonus: 35,
+            fort_upgrade_range: [0, 1, 2, 3, 4],
+            tower_fort_range: [0, 1, 2, 3],
+            colosseum_fort_range: 0,
+            furs_los: 0,
         }
     }
 
@@ -426,6 +486,20 @@ impl Step8Rules {
             americans_marine_speed_bonus: 0,
             aluminum_air_speed: 0,
             whales_ships_move: 0,
+            building_hp_upgrade: 0,
+            capital_building_hp: [0; 5],
+            maya_building_hp: 0,
+            roman_fort_hp: 0,
+            taj_building_hp: 0,
+            red_fort_fort_hps: 0,
+            nubian_hit_points: 0,
+            tikal_temple_hp: 0,
+            ctw_missionaries_bonus: 0,
+            senate_hp_bonus: 0,
+            fort_upgrade_range: [0; 5],
+            tower_fort_range: [0; 4],
+            colosseum_fort_range: 0,
+            furs_los: 0,
         }
     }
 
@@ -463,6 +537,37 @@ impl Step8Rules {
             americans_marine_speed_bonus: at(rule_offsets::AMERICANS_MARINE_SPEED_BONUS),
             aluminum_air_speed: at(rule_offsets::ALUMINUM_AIR_SPEED),
             whales_ships_move: at(rule_offsets::WHALES_SHIPS_MOVE),
+            building_hp_upgrade: at(rule_offsets::BUILDING_HP_UPGRADE),
+            capital_building_hp: [
+                at(rule_offsets::CAPITAL_BUILDING_HP),
+                at(rule_offsets::CAPITAL_BUILDING_HP + 4),
+                at(rule_offsets::CAPITAL_BUILDING_HP + 8),
+                at(rule_offsets::CAPITAL_BUILDING_HP + 12),
+                at(rule_offsets::CAPITAL_BUILDING_HP + 16),
+            ],
+            maya_building_hp: at(rule_offsets::MAYA_BUILDING_HP),
+            roman_fort_hp: at(rule_offsets::ROMAN_FORT_HP),
+            taj_building_hp: at(rule_offsets::TAJ_BUILDING_HP),
+            red_fort_fort_hps: at(rule_offsets::RED_FORT_FORT_HPS),
+            nubian_hit_points: at(rule_offsets::NUBIAN_HIT_POINTS),
+            tikal_temple_hp: at(rule_offsets::TIKAL_TEMPLE_HP),
+            ctw_missionaries_bonus: at(rule_offsets::CTW_MISSIONARIES_BONUS),
+            senate_hp_bonus: at(rule_offsets::SENATE_HP_BONUS),
+            fort_upgrade_range: [
+                at(rule_offsets::FORT_UPGRADE_RANGE),
+                at(rule_offsets::FORT_UPGRADE_RANGE + 4),
+                at(rule_offsets::FORT_UPGRADE_RANGE + 8),
+                at(rule_offsets::FORT_UPGRADE_RANGE + 12),
+                at(rule_offsets::FORT_UPGRADE_RANGE + 16),
+            ],
+            tower_fort_range: [
+                at(rule_offsets::TOWER_FORT_RANGE),
+                at(rule_offsets::TOWER_FORT_RANGE + 4),
+                at(rule_offsets::TOWER_FORT_RANGE + 8),
+                at(rule_offsets::TOWER_FORT_RANGE + 12),
+            ],
+            colosseum_fort_range: at(rule_offsets::COLOSSEUM_FORT_RANGE),
+            furs_los: at(rule_offsets::FURS_LOS),
         }
     }
 }
@@ -879,6 +984,56 @@ pub struct UnitSpeedInputs {
     pub aztec: bool,
 }
 
+/// Global query answers consumed by the percentage chain in `Wall::update_hits`
+/// `0x0063F0D0`. Object-local construction fields remain on [`StatObject`] and the base
+/// `Object::update_hits` row remains [`StatObject::hit_inputs`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct WallHitInputs {
+    pub maya: bool,
+    pub roman: bool,
+    pub is_city_type: bool,
+    pub is_tower_1b7: bool,
+    pub is_wonder: bool,
+    pub building_hp_upgrade: i32,
+    pub taj_mahal: bool,
+    pub red_fort: bool,
+    pub is_fort_1b4: bool,
+    pub nubian: bool,
+    /// Vtable `+0x20`, reached only by the `flags & 0x20 == 0` arm.
+    pub noncapital_city_gate: bool,
+    /// Whether the guard building's `BuildData::city` (`+0x72`) is non-negative.
+    pub linked_city: bool,
+    /// `City::num_cities()`-like result at `0x00739340`, used as `(count - 1)`.
+    pub linked_city_count: i32,
+    /// `flags & 0x80` on the linked city object, in the `flags & 0x20 != 0` arm.
+    pub linked_city_is_capital: bool,
+    pub has_preq_2cd: bool,
+    /// `LeaderData::get_building_upgrade()` when `has_preq_2cd` is false.
+    pub capital_building_upgrade: i32,
+    pub tikal: bool,
+    pub ctw_mode: bool,
+    pub ctw_rare_20: bool,
+    /// Result of `ObjectData::can_carry(DOMAIN_AIR=2)` at the ejection tail.
+    pub can_carry_domain_2: bool,
+}
+
+/// Global type/leader query answers consumed by `Wall::update_los` `0x0063EEB0`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct WallLosInputs {
+    /// Decoded signed byte at `LeaderDataEncrypt + 0xF4` (`^ 0x87`).
+    pub science_level: i8,
+    /// Signed `ObjectTypeData::science_los` at `type + 0x220`.
+    pub type_science_los: i8,
+    pub is_wonder: bool,
+    pub is_city_type: bool,
+    pub is_tower_1b7: bool,
+    pub city_range_upgrade: i32,
+    pub tower_range_upgrade: i32,
+    pub colosseum: bool,
+    /// `ObjectTypeData::x_size` at `type + 0x234`; retail adds signed `x_size / 2`.
+    pub footprint_x: i32,
+}
+
 /// One entry of an `Objects` band, as the two stat passes observe it through the vtable.
 ///
 /// `hit_inputs` and `type_los` are resolved type-table inputs, not invented answers. `None`
@@ -908,6 +1063,9 @@ pub struct StatObject {
     pub armor_inputs: Option<UnitArmorInputs>,
     /// Type/tech/tribe gate package consumed by the exact `Unit::update_speed` body.
     pub speed_inputs: Option<UnitSpeedInputs>,
+    /// Query packages consumed by the building-band Wall override pair.
+    pub wall_hit_inputs: Option<WallHitInputs>,
+    pub wall_los_inputs: Option<WallLosInputs>,
     /// Resolved `UnitData::o_down` (`+0x90`). Retail stores a signed object index and uses
     /// every negative value as the end sentinel; `None` is that sentinel here.
     pub o_down: Option<usize>,
@@ -920,6 +1078,17 @@ pub struct StatObject {
     pub armor_written: bool,
     /// Same edge-local write marker for `myspeed`.
     pub speed_written: bool,
+    /// Building-local fields read/written by the Wall overrides.
+    pub wall_started: bool,
+    pub wall_city_flag: bool,
+    pub job_counter: u32,
+    pub constr_time: u32,
+    pub construct_hits: i32,
+    pub damage: i32,
+    pub inside_down: i16,
+    pub wall_hits_written: bool,
+    pub wall_los_written: bool,
+    pub eject_contents_requested: bool,
     /// How many times `vtbl + 0x160` was invoked on this object.
     pub v160_calls: u32,
     /// How many times `vtbl + 0x15C` was invoked on this object.
@@ -938,6 +1107,8 @@ pub struct StatObject {
     pub unit_armor_updates: u32,
     /// Resolved `Unit::update_speed` calls (one per captain, not per propagated member).
     pub unit_speed_updates: u32,
+    pub wall_hits_updates: u32,
+    pub wall_los_updates: u32,
 }
 
 /// What one stat pass did, so "it ran" is a number instead of an assertion.
@@ -952,6 +1123,9 @@ pub struct StatPassCounts {
     pub object_los_updates: u32,
     pub unit_armor_updates: u32,
     pub unit_speed_updates: u32,
+    pub wall_hits_updates: u32,
+    pub wall_los_updates: u32,
+    pub eject_contents_calls: u32,
     /// Calls whose body or global type-table input remains unavailable.
     pub unresolved_calls: u32,
 }
@@ -967,6 +1141,9 @@ impl StatPassCounts {
         self.object_los_updates += other.object_los_updates;
         self.unit_armor_updates += other.unit_armor_updates;
         self.unit_speed_updates += other.unit_speed_updates;
+        self.wall_hits_updates += other.wall_hits_updates;
+        self.wall_los_updates += other.wall_los_updates;
+        self.eject_contents_calls += other.eject_contents_calls;
         self.unresolved_calls += other.unresolved_calls;
     }
 }
@@ -1198,6 +1375,141 @@ pub fn unit_update_armor(
     Some(stored as i32)
 }
 
+/// Result of the recovered `Wall::update_hits` override. The ejection call is exposed
+/// separately because `Object::eject_contents` is its own 2,962-byte transaction.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WallHitOutcome {
+    pub returned_hits: i32,
+    pub eject_contents: bool,
+}
+
+/// `Wall::update_hits(int full)` `0x0063F0D0` (1,509 bytes), including the complete
+/// percentage chain, construction ramp, stores, and ejection predicate.
+pub fn wall_update_hits(
+    o: &mut StatObject,
+    rules: &Step8Rules,
+    full: bool,
+) -> Option<WallHitOutcome> {
+    let input = o.wall_hit_inputs?;
+    let mut hits = object_update_hits(o, full)?;
+
+    if input.maya {
+        hits = crate::systems::production::pct_scale(hits, rules.maya_building_hp);
+    }
+    if input.roman && (input.is_city_type || input.is_tower_1b7) && !input.is_wonder {
+        hits = crate::systems::production::pct_scale(hits, rules.roman_fort_hp);
+    }
+    hits = crate::systems::production::pct_scale(
+        hits,
+        rules
+            .building_hp_upgrade
+            .wrapping_mul(input.building_hp_upgrade),
+    );
+    if input.taj_mahal {
+        hits = crate::systems::production::pct_scale(hits, rules.taj_building_hp);
+    }
+    if input.red_fort && input.is_city_type && !input.is_wonder {
+        hits = crate::systems::production::pct_scale(hits, rules.red_fort_fort_hps);
+    }
+    if input.is_fort_1b4 && input.nubian && rules.nubian_hit_points != 0 {
+        hits = crate::systems::production::pct_scale(hits, rules.nubian_hit_points);
+    }
+
+    if o.wall_city_flag {
+        if o.wall_active && input.linked_city && input.linked_city_is_capital {
+            let upgrade = if input.has_preq_2cd {
+                4usize
+            } else {
+                usize::try_from(input.capital_building_upgrade).ok()?
+            };
+            let mut bonus = *rules.capital_building_hp.get(upgrade)?;
+            if input.tikal {
+                bonus = rules
+                    .tikal_temple_hp
+                    .wrapping_add(100)
+                    .wrapping_mul(bonus)
+                    .wrapping_add(99)
+                    .wrapping_div(100);
+            }
+            hits = crate::systems::production::pct_scale(hits, bonus);
+            if input.ctw_mode && input.ctw_rare_20 {
+                hits = crate::systems::production::pct_scale(hits, rules.ctw_missionaries_bonus);
+            }
+        }
+    } else if input.noncapital_city_gate
+        && o.wall_active
+        && input.linked_city
+        && !input.is_city_type
+        && !input.is_tower_1b7
+    {
+        let additive = rules
+            .senate_hp_bonus
+            .wrapping_mul(input.linked_city_count.wrapping_sub(1))
+            .wrapping_mul(hits)
+            .wrapping_div(100);
+        hits = hits.wrapping_add(additive);
+    }
+
+    o.myhits = hits;
+    o.construct_hits = crate::systems::production::construct_hits(
+        hits,
+        o.wall_active,
+        input.is_wonder,
+        o.job_counter,
+        o.constr_time,
+    );
+    o.wall_hits_written = true;
+    o.wall_hits_updates = o.wall_hits_updates.wrapping_add(1);
+    let eject_contents =
+        o.construct_hits <= o.damage && o.inside_down >= 0 && !input.can_carry_domain_2;
+    o.eject_contents_requested = eject_contents;
+    Some(WallHitOutcome {
+        returned_hits: if full { o.myhits } else { o.construct_hits },
+        eject_contents,
+    })
+}
+
+/// `Wall::update_los()` `0x0063EEB0` (544 bytes). All arithmetic that stores into
+/// `ObjectData::mylos` is signed-byte wrapping, including the science product.
+pub fn wall_update_los(o: &mut StatObject, leader: &Leader, rules: &Step8Rules) -> Option<i32> {
+    let input = o.wall_los_inputs?;
+    let mut los: i8;
+
+    if !o.wall_started || (!o.wall_active && !input.is_wonder) {
+        los = 0;
+    } else {
+        if !o.wall_active {
+            los = 1;
+        } else {
+            los = if o.owner_in_game { o.type_los? } else { 0 };
+            los = los.wrapping_add(input.science_level.wrapping_mul(input.type_science_los));
+
+            let range_bonus = if input.is_city_type {
+                let i = usize::try_from(input.city_range_upgrade).ok()?;
+                *rules.fort_upgrade_range.get(i)?
+            } else if input.is_tower_1b7 {
+                let i = usize::try_from(input.tower_range_upgrade).ok()?;
+                *rules.tower_fort_range.get(i)?
+            } else {
+                0
+            };
+            los = los.wrapping_add(range_bonus as i8);
+            if (input.is_city_type || input.is_tower_1b7) && input.colosseum {
+                los = los.wrapping_add(rules.colosseum_fort_range as i8);
+            }
+            if leader.rare_effective.get(15) || leader.rare_b.get(15) {
+                los = los.wrapping_add(rules.furs_los as i8);
+            }
+        }
+        los = los.wrapping_add((input.footprint_x / 2) as i8);
+    }
+
+    o.mylos = los;
+    o.wall_los_written = true;
+    o.wall_los_updates = o.wall_los_updates.wrapping_add(1);
+    Some(los as i32)
+}
+
 /// The two `Objects` bands `Leader::calc_wall_stats` walks, and the unit band
 /// `Leader::calc_unit_stats` walks.
 ///
@@ -1217,7 +1529,7 @@ pub struct OwnerObjects {
 }
 
 /// The body both of `calc_wall_stats`'s loops share (`0x006CF7D8` and `0x006CF88E`).
-fn build_band_pass(band: &mut [StatObject]) -> StatPassCounts {
+fn build_band_pass(band: &mut [StatObject], leader: &Leader, rules: &Step8Rules) -> StatPassCounts {
     let mut c = StatPassCounts::default();
     for o in band.iter_mut() {
         c.visited += 1;
@@ -1233,11 +1545,25 @@ fn build_band_pass(band: &mut [StatObject]) -> StatPassCounts {
             c.construct_time_updates += 1;
             c.unresolved_calls += 1;
         }
-        // BuildData's vtable overrides the base pair. These are Wall::update_hits
-        // (1,509 bytes) and Wall::update_los (544 bytes), not the 98/42-byte Object bodies.
         o.v15c_calls += 1;
+        match wall_update_hits(o, rules, false) {
+            Some(outcome) => {
+                c.wall_hits_updates += 1;
+                if outcome.eject_contents {
+                    c.eject_contents_calls += 1;
+                    // The override and predicate ran; Object::eject_contents is a distinct
+                    // 2,962-byte transaction and remains red only when actually reached.
+                    c.unresolved_calls += 1;
+                }
+            }
+            None => c.unresolved_calls += 1,
+        }
         o.v160_calls += 1;
-        c.unresolved_calls += 2;
+        if wall_update_los(o, leader, rules).is_some() {
+            c.wall_los_updates += 1;
+        } else {
+            c.unresolved_calls += 1;
+        }
     }
     c
 }
@@ -1280,8 +1606,12 @@ fn wall_band_pass(band: &mut [StatObject]) -> StatPassCounts {
 /// object through vtable slot `+0xAC` and the second through `+0xB0`, while both then use
 /// `+0xB0` for the work. The distinction still matters after resolving the work object's
 /// vtable, so it is recorded here rather than "tidied" away.
-pub fn calc_wall_stats(objs: &mut OwnerObjects) -> StatPassCounts {
-    let mut c = build_band_pass(&mut objs.band_2000);
+pub fn calc_wall_stats(
+    leader: &Leader,
+    rules: &Step8Rules,
+    objs: &mut OwnerObjects,
+) -> StatPassCounts {
+    let mut c = build_band_pass(&mut objs.band_2000, leader, rules);
     c.add(wall_band_pass(&mut objs.band_3000));
     c
 }
@@ -1532,7 +1862,7 @@ pub fn process_all(
         // frame rather than being swallowed.
         if ls.leaders[i].flags & flag::WALL_STATS_DIRTY != 0 {
             ls.leaders[i].flags &= !flag::WALL_STATS_DIRTY;
-            trace.wall_pass[i] = calc_wall_stats(&mut e.objects);
+            trace.wall_pass[i] = calc_wall_stats(&ls.leaders[i], rules, &mut e.objects);
             trace.wall_stats_ran[i] = true;
         }
         // 0x006ED341.
@@ -1924,6 +2254,182 @@ mod tests {
         o.owner_in_game = true;
         assert_eq!(object_update_los(&mut o), Some(7));
         assert_eq!(o.mylos, 7);
+    }
+
+    #[test]
+    fn wall_hit_override_executes_the_full_modifier_order_and_both_city_arms() {
+        let mut rules = Step8Rules::zeroed();
+        rules.maya_building_hp = 25;
+        rules.roman_fort_hp = 20;
+        rules.building_hp_upgrade = 10;
+        rules.taj_building_hp = 50;
+        rules.red_fort_fort_hps = 10;
+        rules.nubian_hit_points = 50;
+        rules.capital_building_hp[4] = 40;
+        rules.tikal_temple_hp = 50;
+        rules.ctw_missionaries_bonus = 20;
+        rules.senate_hp_bonus = 35;
+        let mut o = StatObject {
+            wall_active: true,
+            wall_city_flag: true,
+            hit_inputs: Some(ObjectHitInputs {
+                base_hits: 100,
+                ..Default::default()
+            }),
+            wall_hit_inputs: Some(WallHitInputs {
+                maya: true,
+                roman: true,
+                is_city_type: true,
+                building_hp_upgrade: 2,
+                taj_mahal: true,
+                red_fort: true,
+                is_fort_1b4: true,
+                nubian: true,
+                linked_city: true,
+                linked_city_is_capital: true,
+                has_preq_2cd: true,
+                tikal: true,
+                ctw_mode: true,
+                ctw_rare_20: true,
+                can_carry_domain_2: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = wall_update_hits(&mut o, &rules, false).unwrap();
+        assert_eq!(out.returned_hits, 854);
+        assert_eq!(o.myhits, 854);
+        assert_eq!(o.construct_hits, 854);
+        assert!(o.wall_hits_written);
+        assert!(!out.eject_contents);
+
+        // Mutation pin for the mutually exclusive non-capital arm: +35% for each city
+        // beyond the first is additive, not another pct_scale.
+        o.wall_city_flag = false;
+        o.hit_inputs.as_mut().unwrap().base_hits = 100;
+        o.wall_hit_inputs = Some(WallHitInputs {
+            noncapital_city_gate: true,
+            linked_city: true,
+            linked_city_count: 3,
+            can_carry_domain_2: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            wall_update_hits(&mut o, &rules, false)
+                .unwrap()
+                .returned_hits,
+            170
+        );
+    }
+
+    #[test]
+    fn wall_hit_override_quantises_progress_and_surfaces_only_reached_ejection() {
+        let rules = Step8Rules::shipped();
+        let mut o = StatObject {
+            wall_active: false,
+            job_counter: 500,
+            constr_time: 1000,
+            damage: 500,
+            inside_down: 0,
+            hit_inputs: Some(ObjectHitInputs {
+                base_hits: 1000,
+                ..Default::default()
+            }),
+            wall_hit_inputs: Some(WallHitInputs::default()),
+            ..Default::default()
+        };
+        let out = wall_update_hits(&mut o, &rules, false).unwrap();
+        assert_eq!(o.myhits, 1000);
+        assert_eq!(o.construct_hits, 483);
+        assert_eq!(out.returned_hits, 483);
+        assert!(out.eject_contents);
+
+        o.wall_hit_inputs.as_mut().unwrap().can_carry_domain_2 = true;
+        let out = wall_update_hits(&mut o, &rules, true).unwrap();
+        assert_eq!(out.returned_hits, 1000);
+        assert!(!out.eject_contents);
+    }
+
+    #[test]
+    fn wall_los_override_keeps_started_wonder_byte_arithmetic_and_rare_order() {
+        let mut leader = Leader::new(0);
+        leader.rare_b.set(15, true); // Furs
+        let mut rules = Step8Rules::shipped();
+        rules.colosseum_fort_range = 4;
+        rules.furs_los = 5;
+        let input = WallLosInputs {
+            science_level: 2,
+            type_science_los: 3,
+            is_city_type: true,
+            city_range_upgrade: 2,
+            colosseum: true,
+            footprint_x: 3,
+            ..Default::default()
+        };
+        let mut o = StatObject {
+            wall_started: true,
+            wall_active: true,
+            owner_in_game: true,
+            type_los: Some(5),
+            wall_los_inputs: Some(input),
+            ..Default::default()
+        };
+        assert_eq!(wall_update_los(&mut o, &leader, &rules), Some(23));
+        assert!(o.wall_los_written);
+
+        // An unstarted object takes the hard-zero return before footprint/type bonuses.
+        o.wall_started = false;
+        assert_eq!(wall_update_los(&mut o, &leader, &rules), Some(0));
+
+        // A started but incomplete wonder begins at LOS 1, then still takes x_size / 2.
+        o.wall_started = true;
+        o.wall_active = false;
+        o.wall_los_inputs.as_mut().unwrap().is_wonder = true;
+        assert_eq!(wall_update_los(&mut o, &leader, &rules), Some(2));
+        o.wall_los_inputs.as_mut().unwrap().is_wonder = false;
+        assert_eq!(wall_update_los(&mut o, &leader, &rules), Some(0));
+    }
+
+    #[test]
+    fn build_band_gap_accounting_charges_only_missing_or_reached_nested_bodies() {
+        let leader = Leader::new(0);
+        let rules = Step8Rules::shipped();
+        let resolved = StatObject {
+            active: true,
+            wall_active: true,
+            wall_started: true,
+            owner_in_game: true,
+            hit_inputs: Some(ObjectHitInputs {
+                base_hits: 500,
+                ..Default::default()
+            }),
+            type_los: Some(6),
+            wall_hit_inputs: Some(WallHitInputs {
+                can_carry_domain_2: true,
+                ..Default::default()
+            }),
+            wall_los_inputs: Some(WallLosInputs::default()),
+            ..Default::default()
+        };
+        let mut objects = OwnerObjects {
+            band_2000: vec![resolved],
+            ..Default::default()
+        };
+        let c = calc_wall_stats(&leader, &rules, &mut objects);
+        assert_eq!(c.wall_hits_updates, 1);
+        assert_eq!(c.wall_los_updates, 1);
+        assert_eq!(c.eject_contents_calls, 0);
+        assert_eq!(c.unresolved_calls, 0);
+
+        let o = &mut objects.band_2000[0];
+        o.damage = 500;
+        o.inside_down = 0;
+        o.wall_hit_inputs.as_mut().unwrap().can_carry_domain_2 = false;
+        let c = calc_wall_stats(&leader, &rules, &mut objects);
+        assert_eq!(c.wall_hits_updates, 1);
+        assert_eq!(c.wall_los_updates, 1);
+        assert_eq!(c.eject_contents_calls, 1);
+        assert_eq!(c.unresolved_calls, 1);
     }
 
     #[test]
@@ -2604,6 +3110,8 @@ mod tests {
         block[rule_offsets::DUTCH_ATTACK_BONUS / 4] = 1;
         block[rule_offsets::UNIT_MOVE_SPEED / 4] = 1;
         block[rule_offsets::AZTEC_MOVE_SPEED / 4] = 17;
+        block[rule_offsets::SENATE_HP_BONUS / 4] = 35;
+        block[rule_offsets::FORT_UPGRADE_RANGE / 4 + 4] = 4;
         let r = Step8Rules::from_block(&block);
         assert_eq!(r.timer_refresh_ratio, 5);
         assert_eq!(r.attrition_improved[0], 1);
@@ -2613,6 +3121,8 @@ mod tests {
         assert_eq!(r.dutch_attack_bonus, 1);
         assert_eq!(r.unit_move_speed, 1);
         assert_eq!(r.aztec_move_speed, 17);
+        assert_eq!(r.senate_hp_bonus, 35);
+        assert_eq!(r.fort_upgrade_range[4], 4);
         // A short block zero-extends rather than panicking.
         assert_eq!(Step8Rules::from_block(&[]).timer_refresh_ratio, 0);
     }
@@ -2646,6 +3156,24 @@ mod tests {
         block[rule_offsets::AMERICANS_MARINE_SPEED_BONUS / 4] = s.americans_marine_speed_bonus;
         block[rule_offsets::ALUMINUM_AIR_SPEED / 4] = s.aluminum_air_speed;
         block[rule_offsets::WHALES_SHIPS_MOVE / 4] = s.whales_ships_move;
+        block[rule_offsets::BUILDING_HP_UPGRADE / 4] = s.building_hp_upgrade;
+        for i in 0..5 {
+            block[rule_offsets::CAPITAL_BUILDING_HP / 4 + i] = s.capital_building_hp[i];
+            block[rule_offsets::FORT_UPGRADE_RANGE / 4 + i] = s.fort_upgrade_range[i];
+        }
+        for i in 0..4 {
+            block[rule_offsets::TOWER_FORT_RANGE / 4 + i] = s.tower_fort_range[i];
+        }
+        block[rule_offsets::COLOSSEUM_FORT_RANGE / 4] = s.colosseum_fort_range;
+        block[rule_offsets::TIKAL_TEMPLE_HP / 4] = s.tikal_temple_hp;
+        block[rule_offsets::RED_FORT_FORT_HPS / 4] = s.red_fort_fort_hps;
+        block[rule_offsets::TAJ_BUILDING_HP / 4] = s.taj_building_hp;
+        block[rule_offsets::MAYA_BUILDING_HP / 4] = s.maya_building_hp;
+        block[rule_offsets::NUBIAN_HIT_POINTS / 4] = s.nubian_hit_points;
+        block[rule_offsets::ROMAN_FORT_HP / 4] = s.roman_fort_hp;
+        block[rule_offsets::FURS_LOS / 4] = s.furs_los;
+        block[rule_offsets::CTW_MISSIONARIES_BONUS / 4] = s.ctw_missionaries_bonus;
+        block[rule_offsets::SENATE_HP_BONUS / 4] = s.senate_hp_bonus;
         assert_eq!(Step8Rules::from_block(&block), s);
     }
 }

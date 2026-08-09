@@ -35,7 +35,7 @@ The Rust module recovers these local pieces:
 | object bands | `Objects::init` `0x0065EA80`, `Objects::clear` `0x0065D740` | unit/build/wall band constants and the eight-leader wall-channel loop |
 | walked state | `SubObject::walk_data` `0x006621D0`, `Object::walk_data` `0x00647830`, `WallData::walk_data` `0x00642510` | walked scalar bytes plus an engine-shaped `SimpleArray<int>` header for `launching` |
 | construction | `Wall::do_construct` `0x006434D0` | start/reject gate, same-frame helper divisor, credited work, and completion latch |
-| hit-point slices | `Wall::update_hits` `0x0063F0D0`, `BuildData::hits` `0x0062E740`, `WallData::armor` `0x0063FA60` | construction ramp, razing interpolation, and inactive-armor halving; not the full modifier chain |
+| hit-point slices | `Wall::update_hits` `0x0063F0D0`, `BuildData::hits` `0x0062E740`, `WallData::armor` `0x0063FA60` | full hit modifier chain and construction ramp execute from step 8 with supplied queries; razing interpolation and inactive-armor halving also ported |
 | footprint | `WallData::tile_corner` `0x00643440`, `covers_tile` `0x006439B0` | footprint rectangle over an inferred coordinate-to-tile helper |
 | per-frame bookkeeping | `Wall::process` `0x00640450` | targeted decay, 16/32-frame phase flags, seen toggles, and helper reset/latches |
 
@@ -91,8 +91,9 @@ Declaring the module therefore means “compiled and locally tested,” not:
    the matching `Build` lifecycle points in retail order.
 2. Connect `WallData::walk_data` as the base prefix of the `builds` channel, preserving stable
    slot identity and every `EngineArray` capacity/growth field.
-3. Derive and port the complete `Wall::update_hits` percentage chain. `update_hits` currently
-   accepts its already-computed `full_hits`; it does not establish that value.
+3. Populate `Wall::update_hits/update_los` query packages automatically from live type,
+   city, tribe, wonder, upgrade, and rare tables; the complete bodies now execute from
+   step 8 when those answers are supplied explicitly.
 4. Port activation, initialization, closure, ownership swaps, terrain masks, site clearing,
    and the omitted world/leader effects surfaced by `ProcessEffects`.
 5. Replace `world_to_tile`'s documented floor-division inference with the retail lookup-table
