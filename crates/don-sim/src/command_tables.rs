@@ -420,7 +420,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     },
 ];
 
-pub const NUM_INLINE_COMMANDS: usize = 41;
+pub const NUM_INLINE_COMMANDS: usize = 46;
 
 /// Non-group state/receipt/transaction handlers recovered beyond the group-action table.
 #[rustfmt::skip]
@@ -459,12 +459,17 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 67, name: "cheat_init_unit", port: InlinePort::Complete },
     InlineDef { op: 68, name: "chat", port: InlinePort::Complete },
     InlineDef { op: 69, name: "chat_set", port: InlinePort::Complete },
+    InlineDef { op: 70, name: "resign", port: InlinePort::StateWired },
+    InlineDef { op: 71, name: "quit", port: InlinePort::StateWired },
     InlineDef { op: 72, name: "camera", port: InlinePort::Complete },
+    InlineDef { op: 73, name: "leader_options", port: InlinePort::StateWired },
     InlineDef { op: 74, name: "turn_data", port: InlinePort::Complete },
     InlineDef { op: 75, name: "rename_city", port: InlinePort::Complete },
     InlineDef { op: 76, name: "pause", port: InlinePort::Complete },
     InlineDef { op: 77, name: "cannon_time", port: InlinePort::Complete },
+    InlineDef { op: 78, name: "console_cmd", port: InlinePort::StateWired },
     InlineDef { op: 79, name: "player_speed", port: InlinePort::Complete },
+    InlineDef { op: 80, name: "ungraceful_player_drop", port: InlinePort::StateWired },
     InlineDef { op: 81, name: "marwan", port: InlinePort::Complete },
 ];
 

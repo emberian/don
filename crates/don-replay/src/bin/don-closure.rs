@@ -180,7 +180,7 @@ mod tests {
     fn canonical_inventory_cardinalities() {
         assert_eq!((DO_FRAME.len(), EXECUTORS.len()), (29, 28));
         assert_eq!((GROUP_ACTIONS.len(), OPCODES.len()), (42, 82));
-        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 41);
+        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 46);
         assert_eq!(NUM_WALKED, 15);
     }
 
@@ -218,6 +218,16 @@ mod tests {
     #[test]
     fn addressed_entity_rows_with_open_action_tails_stay_red() {
         for op in [48, 49] {
+            assert_eq!(
+                inline_status(InlineDef::find(op).unwrap().port),
+                "state_wired"
+            );
+        }
+    }
+
+    #[test]
+    fn late_control_rows_with_dynamic_open_tails_stay_red() {
+        for op in [70, 71, 73, 78, 80] {
             assert_eq!(
                 inline_status(InlineDef::find(op).unwrap().port),
                 "state_wired"

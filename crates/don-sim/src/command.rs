@@ -137,6 +137,8 @@ pub mod late_command_plans;
 pub mod object_command_plans;
 #[path = "systems/setup_diplomacy.rs"]
 pub mod setup_diplomacy;
+#[path = "systems/tail_command_transactions.rs"]
+pub mod tail_command_transactions;
 
 use self::diplomacy_command_plans::{
     DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
@@ -148,6 +150,7 @@ use self::late_command_plans::{
 use self::object_command_plans::{
     RenameCityCommand, RenameCityTransactionReceipt, RenameCityTransactionStatus,
 };
+use self::tail_command_transactions::{TailCommandFacts, TailCommandReceipt, TailCommandRequest};
 
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
@@ -670,6 +673,15 @@ pub struct DirectEntityReceiptRecord {
     pub valid: bool,
 }
 
+/// Bridge-owned evidence for one late-control command transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TailCommandReceiptRecord {
+    pub expected: TailCommandRequest,
+    pub facts: TailCommandFacts,
+    pub observed: TailCommandReceipt,
+    pub valid: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupHaltTransactionRequest {
     pub group: GroupData,
@@ -1083,6 +1095,20 @@ pub trait Fleet {
         request: DiplomacyCommandRequest,
     ) -> DiplomacyCommandReceipt {
         DiplomacyCommandReceipt::unavailable(request)
+    }
+
+    /// Preflight facts for rows 70, 71, 73, 78, and 80. Boundary decisions authorize no
+    /// mutation; no-tail decisions may commit only through the atomic callback below.
+    fn tail_command_facts(&self, _request: &TailCommandRequest) -> Option<TailCommandFacts> {
+        None
+    }
+
+    fn apply_tail_command_transaction(
+        &mut self,
+        request: TailCommandRequest,
+        _facts: TailCommandFacts,
+    ) -> TailCommandReceipt {
+        TailCommandReceipt::unavailable(request)
     }
 }
 
@@ -2421,6 +2447,8 @@ pub struct InlineCommandState {
     pub cheat_init_unit_receipts: Vec<CheatInitUnitReceiptRecord>,
     /// Validated host transaction evidence for opcodes 46 through 49.
     pub direct_entity_receipts: Vec<DirectEntityReceiptRecord>,
+    /// Validated no-tail/boundary evidence for opcodes 70, 71, 73, 78, and 80.
+    pub tail_command_receipts: Vec<TailCommandReceiptRecord>,
     pub command_side_effect_receipts: Vec<CommandSideEffectReceipt>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
@@ -2467,6 +2495,7 @@ impl Default for InlineCommandState {
             cheat_warning_receipts: Vec::new(),
             cheat_init_unit_receipts: Vec::new(),
             direct_entity_receipts: Vec::new(),
+            tail_command_receipts: Vec::new(),
             command_side_effect_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
@@ -2552,6 +2581,10 @@ impl Bridge {
 
     pub fn take_direct_entity_receipts(&mut self) -> Vec<DirectEntityReceiptRecord> {
         std::mem::take(&mut self.inline.direct_entity_receipts)
+    }
+
+    pub fn take_tail_command_receipts(&mut self) -> Vec<TailCommandReceiptRecord> {
+        std::mem::take(&mut self.inline.tail_command_receipts)
     }
 
     pub fn take_command_side_effect_receipts(&mut self) -> Vec<CommandSideEffectReceipt> {
@@ -2764,6 +2797,7 @@ impl Bridge {
                     *dst = src as u32;
                 }
             }
+            70 | 71 | 73 | 78 | 80 => self.process_tail_command(cmd, f),
             // CameraCommand logs the remote viewpoint and may update only the local
             // Console/Scene zoom and scroll. It has no headless simulation mutation.
             72 => {
@@ -3317,6 +3351,28 @@ impl Bridge {
             .direct_entity_receipts
             .push(DirectEntityReceiptRecord {
                 expected,
+                observed,
+                valid,
+            });
+    }
+
+    /// Remaining non-group rows through a branch-complete, fail-closed transaction.
+    /// Applied receipts are possible only for a recomputable no-tail branch; every
+    /// lifecycle/cascade/parser/drop boundary remains unavailable and closure-red.
+    fn process_tail_command(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+        let Ok(expected) = tail_command_transactions::decode_tail_command(cmd) else {
+            return;
+        };
+        let Some(facts) = f.tail_command_facts(&expected) else {
+            return;
+        };
+        let observed = f.apply_tail_command_transaction(expected.clone(), facts.clone());
+        let valid = observed.validates_for(&expected, &facts);
+        self.inline
+            .tail_command_receipts
+            .push(TailCommandReceiptRecord {
+                expected,
+                facts,
                 observed,
                 valid,
             });
