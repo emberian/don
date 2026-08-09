@@ -1401,28 +1401,63 @@ impl Sim {
     // -- step 11 ----------------------------------------------------------------------
 
     /// `Leaders::strategy_all` `0x006ED430` — `check_explore`, `plan_strategy`,
-    /// `compute_score`, `diplomacy`, `Game::check_victory`. Of the five, the two that are
-    /// not AI behaviour are ported.
+    /// `compute_score`, `diplomacy`, `Game::check_victory`. The exact dispatcher and
+    /// exploration body run here; only the two large AI bodies remain call-counted gaps.
     fn leaders_strategy_all(&mut self) -> (StepRun, u32) {
-        let mut n = 0u32;
-        for who in 0..NUM_LEADERS {
-            if !self.leaders[who].active {
-                continue;
+        let has_explore_preq = std::array::from_fn(|who| {
+            self.vic_leaders.slots[who]
+                .has_tech
+                .get(leaders::EXPLORE_ALL_PREREQ)
+                .copied()
+        });
+        let trace = leaders::strategy_all(
+            &mut self.step8,
+            leaders::StrategyInputs {
+                frame: self.world.frame,
+                // `GameAccess::ai_speed` is global. Step 8's shared adapter mirrors it in
+                // every gather context; slot zero is the canonical copy.
+                ai_speed: self.step8_env.leaders[0].payout.ai_speed,
+                world: leaders::ExploreWorld {
+                    reg_xs: self.map.world.reg_xs,
+                    reg_ys: self.map.world.reg_ys,
+                    reg_size: self.map.world.reg_size,
+                    fog_xs: self.map.world.fog_xs,
+                    seen2: &self.map.world.seen2,
+                },
+                has_explore_preq,
+                check_victory_mode: self
+                    .vic_match
+                    .sem(victory_score::game_sem::CHECK_VICTORY_MODE),
+            },
+        );
+
+        for call in trace.calls.iter().copied() {
+            match call {
+                leaders::StrategyCall::CheckExplore { update, .. } => {
+                    if update == leaders::ExploreUpdate::MissingFacts {
+                        self.cover.gaps[Gap::LeaderCheckExplore.index()] += 1;
+                    }
+                }
+                leaders::StrategyCall::PlanStrategy(_) => {
+                    self.cover.gaps[Gap::LeaderPlanStrategy.index()] += 1;
+                }
+                leaders::StrategyCall::ComputeScore { slot, force } => {
+                    self.vic_leaders.compute_score(&self.vic_match, slot, force);
+                }
+                leaders::StrategyCall::Diplomacy(_) => {
+                    self.cover.gaps[Gap::LeaderDiplomacy.index()] += 1;
+                }
+                leaders::StrategyCall::CheckVictory => {
+                    self.vic_leaders.check_victory(&mut self.vic_match);
+                }
             }
-            self.vic_leaders.compute_score(&self.vic_match, who, 0);
-            n += 1;
         }
-        if n > 0 {
-            // Game::check_victory game.cpp:1561.
-            self.vic_leaders.check_victory(&mut self.vic_match);
-        }
-        self.cover.gaps[Gap::LeaderCheckExplore.index()] += 1;
-        self.cover.gaps[Gap::LeaderPlanStrategy.index()] += 1;
-        self.cover.gaps[Gap::LeaderDiplomacy.index()] += 1;
-        if n == 0 {
+
+        let work = trace.calls.len() as u32;
+        if work == 0 {
             (StepRun::Vacuous, 0)
         } else {
-            (StepRun::Executed, n)
+            (StepRun::Executed, work)
         }
     }
 

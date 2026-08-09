@@ -1,4 +1,5 @@
-//! Step 8 of `Game::do_frame`: `Leaders::process_all` `0x006ED2A0` and its second level.
+//! Leader-owned tick dispatchers: step 8 `Leaders::process_all` `0x006ED2A0` and step 11
+//! `Leaders::strategy_all` `0x006ED430`.
 //!
 //! # What this file is
 //!
@@ -28,14 +29,22 @@
 //!        if RULES.timer_refresh_ratio && frame % it == 0: three grace timers creep
 //!        if frame != 0: scan 8 taunt slots for one stamped this frame
 //!        flags &= ~0x80000
+//!  +- [11] Leaders::strategy_all    0x006ED430   <- [`strategy_all`], this file
+//!      for slot in 0..8, flags & 3 == 3:
+//!        Leader::check_explore      0x006BC860   -> [`check_explore`]
+//!        Leader::plan_strategy      0x006B9620   ; AI body remains explicit
+//!        Leader::compute_score(0)   0x006EC560   ; existing victory-score port
+//!        Leader::diplomacy          0x006BC950   ; AI body remains explicit
+//!      if Game semaphore bit 9:
+//!        Game::check_victory        0x005926B0   ; existing victory-score port
 //! ```
 //!
 //! Everything above is [measured] from a capstone disassembly of `0x006ED2A0`,
-//! `0x006CE280`, `0x006CF7C0`, `0x006CF970`, `0x006CDEA0`, `0x006CDCC0` and `0x006B8A20`
-//! against `ron-bin/riseofnations.exe` (sha256 `30478a44…625079`), cross-read against
-//! `re/decomp-all/`. **Tier C**: structure and constants are read from the binary, nothing
-//! here has been executed against retail, and no claim may be promoted without an oracle
-//! run.
+//! `0x006CE280`, `0x006CF7C0`, `0x006CF970`, `0x006CDEA0`, `0x006CDCC0`, `0x006B8A20`,
+//! `0x006ED430` and `0x006BC860` against `ron-bin/riseofnations.exe` (sha256
+//! `30478a44…625079`), cross-read against `re/decomp-all/`. **Tier C**: structure and
+//! constants are read from the binary, nothing here has been executed against retail, and
+//! no claim may be promoted without an oracle run.
 //!
 //! # Five things the earlier rendition of step 8 did not have
 //!
@@ -178,6 +187,9 @@ pub mod offsets {
     pub const ATTRITION: usize = 0x7F0;
     /// `0x006CDCCE` — **f32**, the anti-attrition scale, 256.0 = none.
     pub const ANTI_ATTRITION: usize = 0x7F4;
+    /// `0x006BC8B6` / `0x006BC8CB` / `0x006BC91B` — the number of explored region
+    /// cells rebuilt by `Leader::check_explore`.
+    pub const EXPLORED: usize = 0x9D4;
     /// `0x006CDEA6` — non-zero forces attrition to 0.
     pub const ATTRITION_OFF: usize = 0x7F8;
     /// `0x006CDCC7` — non-zero forces anti-attrition to 0.0.
@@ -626,6 +638,8 @@ pub struct Leader {
     pub attrition_off: i32,
     /// `+0x7FC`.
     pub anti_attrition_off: i32,
+    /// `+0x9D4`, rebuilt by step 11's [`check_explore`] on its phase.
+    pub explored: i32,
     /// `+0x6900`, the CTW gate byte.
     pub conquest_byte: u8,
     /// `+0x6D98` payload.
@@ -2194,6 +2208,197 @@ pub fn process_all(
 }
 
 // ===========================================================================================
+// Leader::check_explore 0x006BC860 / Leaders::strategy_all 0x006ED430
+// ===========================================================================================
+
+/// The unnamed `BonusType` queried by `Leader::check_explore` through
+/// `LeaderData::has_preq`. Its one captured prerequisite is Electronics (`556`).
+pub const EXPLORE_ALL_BONUS: i32 = 0x2B2;
+pub const EXPLORE_ALL_PREREQ: usize = 556;
+/// `mov eax, 200` at `0x006BC87E`; divided by `GameAccess::ai_speed`.
+pub const EXPLORE_PERIOD_BASE: i32 = 200;
+/// Each leader's recount phase advances by 25 frames (`imul ..., 0x19`).
+pub const EXPLORE_SLOT_PHASE: i32 = 25;
+/// The final `+ 12` in the dividend at `0x006BC890`.
+pub const EXPLORE_PHASE_BIAS: i32 = 12;
+
+/// The exact WorldData view consumed by `Leader::check_explore`.
+///
+/// Retail walks region coordinates (`WorldData +0x24/+0x28`) but samples the persistent
+/// fog `seen2` plane at `(4*x + 3, 4*y + 3)`. Keeping the dimensions beside the borrowed
+/// plane makes an incomplete host adapter explicit instead of indexing invented data.
+#[derive(Clone, Copy, Debug)]
+pub struct ExploreWorld<'a> {
+    pub reg_xs: i32,
+    pub reg_ys: i32,
+    pub reg_size: i32,
+    pub fog_xs: i32,
+    pub seen2: &'a [u8],
+}
+
+/// What one reached `Leader::check_explore` call did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ExploreUpdate {
+    /// The player-specific phase did not fire; retail leaves `Leader +0x9D4` untouched.
+    #[default]
+    NotDue,
+    /// The Electronics/bonus prerequisite makes the whole region grid explored.
+    FullMap(i32),
+    /// The sampled bits in `WorldData::seen2` were counted.
+    Recounted(i32),
+    /// A host supplied a zero/overflowing AI period or an incomplete `seen2` plane.
+    /// Retail's World and `ai_speed` invariants exclude this state.
+    MissingFacts,
+}
+
+/// Inputs read by the 93-byte `Leaders::strategy_all` dispatcher and its recovered first
+/// child. `has_explore_preq` is the decoded result of retail's `has_preq(0x2B2)` call; the
+/// shipped type row has the single prerequisite Electronics (`556`). `None` keeps an
+/// incomplete host adapter red instead of manufacturing a negative answer.
+#[derive(Clone, Copy, Debug)]
+pub struct StrategyInputs<'a> {
+    pub frame: i32,
+    pub ai_speed: i32,
+    pub world: ExploreWorld<'a>,
+    pub has_explore_preq: [Option<bool>; NUM_LEADER_SLOTS],
+    /// Game semaphore bit 9 (`game[0x821] & 2`). It gates the tail call independently of
+    /// whether any leader passed the loop gate.
+    pub check_victory_mode: bool,
+}
+
+/// One call boundary in `Leaders::strategy_all`, in exact retail order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrategyCall {
+    CheckExplore { slot: usize, update: ExploreUpdate },
+    PlanStrategy(usize),
+    ComputeScore { slot: usize, force: i32 },
+    Diplomacy(usize),
+    CheckVictory,
+}
+
+/// Measured execution of step 11. The two giant AI bodies remain represented by reached
+/// calls, while the dispatcher, exploration recount, score boundary and victory gate run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StrategyTrace {
+    pub processed: [bool; NUM_LEADER_SLOTS],
+    pub explore: [ExploreUpdate; NUM_LEADER_SLOTS],
+    pub calls: Vec<StrategyCall>,
+}
+
+impl StrategyTrace {
+    pub fn leaders_processed(&self) -> usize {
+        self.processed.iter().filter(|ran| **ran).count()
+    }
+
+    pub fn unresolved_explore(&self) -> usize {
+        self.explore
+            .iter()
+            .filter(|update| **update == ExploreUpdate::MissingFacts)
+            .count()
+    }
+}
+
+/// `Leader::check_explore` `0x006BC860`, the whole 227-byte body.
+///
+/// Frame zero always recomputes. Later frames use
+/// `(leader.slot * 25 + frame + 12) % (200 / ai_speed) == 0`. The world scan samples one
+/// `seen2` byte per region cell, specifically fog coordinate `(4*x+3, 4*y+3)`, and tests
+/// the low byte of x86's `1 << (slot & 31)` mask.
+pub fn check_explore(
+    leader: &mut Leader,
+    frame: i32,
+    ai_speed: i32,
+    has_explore_preq: Option<bool>,
+    world: ExploreWorld<'_>,
+) -> ExploreUpdate {
+    if frame != 0 {
+        if ai_speed == 0 {
+            return ExploreUpdate::MissingFacts;
+        }
+        let period = EXPLORE_PERIOD_BASE / ai_speed;
+        if period == 0 {
+            return ExploreUpdate::MissingFacts;
+        }
+        let phase = leader
+            .slot
+            .wrapping_mul(EXPLORE_SLOT_PHASE)
+            .wrapping_add(frame)
+            .wrapping_add(EXPLORE_PHASE_BIAS);
+        if phase % period != 0 {
+            return ExploreUpdate::NotDue;
+        }
+    }
+
+    let Some(has_explore_preq) = has_explore_preq else {
+        return ExploreUpdate::MissingFacts;
+    };
+    if has_explore_preq {
+        leader.explored = world.reg_size;
+        return ExploreUpdate::FullMap(leader.explored);
+    }
+
+    let player_mask = (1u32 << ((leader.slot as u32) & 31)) as u8;
+    let mut explored = 0i32;
+    for y in 0..world.reg_ys.max(0) {
+        let fog_y = y.wrapping_mul(4).wrapping_add(3);
+        for x in 0..world.reg_xs.max(0) {
+            let fog_x = x.wrapping_mul(4).wrapping_add(3);
+            let index = world.fog_xs.wrapping_mul(fog_y).wrapping_add(fog_x);
+            let Some(&bits) = usize::try_from(index)
+                .ok()
+                .and_then(|index| world.seen2.get(index))
+            else {
+                return ExploreUpdate::MissingFacts;
+            };
+            if bits & player_mask != 0 {
+                explored = explored.wrapping_add(1);
+            }
+        }
+    }
+    leader.explored = explored;
+    ExploreUpdate::Recounted(explored)
+}
+
+/// **Step 11 of `Game::do_frame`.** `Leaders::strategy_all` `0x006ED430`, recovered in
+/// full at the dispatcher level. A leader enters only when `(flags & 3) == 3`. Calls are
+/// emitted in their instruction order so the tick can execute the existing score/victory
+/// ports at the exact boundary and charge only the two unresolved AI bodies.
+pub fn strategy_all(ls: &mut Leaders, input: StrategyInputs<'_>) -> StrategyTrace {
+    let mut trace = StrategyTrace::default();
+
+    for slot in 0..NUM_LEADER_SLOTS {
+        if ls.leaders[slot].flags & (flag::IN_GAME | flag::PROCESS)
+            != (flag::IN_GAME | flag::PROCESS)
+        {
+            continue;
+        }
+        trace.processed[slot] = true;
+
+        let update = check_explore(
+            &mut ls.leaders[slot],
+            input.frame,
+            input.ai_speed,
+            input.has_explore_preq[slot],
+            input.world,
+        );
+        trace.explore[slot] = update;
+        trace
+            .calls
+            .push(StrategyCall::CheckExplore { slot, update });
+        trace.calls.push(StrategyCall::PlanStrategy(slot));
+        trace
+            .calls
+            .push(StrategyCall::ComputeScore { slot, force: 0 });
+        trace.calls.push(StrategyCall::Diplomacy(slot));
+    }
+
+    if input.check_victory_mode {
+        trace.calls.push(StrategyCall::CheckVictory);
+    }
+    trace
+}
+
+// ===========================================================================================
 // A driver, so this is a thing that runs rather than a thing that compiles
 // ===========================================================================================
 
@@ -2336,6 +2541,138 @@ mod tests {
     #[test]
     fn no_anti_attrition_is_the_0x43800000_literal() {
         assert_eq!(NO_ANTI_ATTRITION.to_bits(), 0x4380_0000);
+    }
+
+    fn strategy_input<'a>(seen2: &'a [u8]) -> StrategyInputs<'a> {
+        StrategyInputs {
+            frame: 1,
+            ai_speed: 1,
+            world: ExploreWorld {
+                reg_xs: 2,
+                reg_ys: 2,
+                reg_size: 4,
+                fog_xs: 8,
+                seen2,
+            },
+            has_explore_preq: [Some(false); NUM_LEADER_SLOTS],
+            check_victory_mode: false,
+        }
+    }
+
+    /// `0x006ED440` gates on both low bits and the four calls stay interleaved per slot.
+    #[test]
+    fn strategy_all_uses_flags_3_and_preserves_exact_call_order() {
+        let seen2 = [0u8; 64];
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[1].flags = flag::PROCESS;
+        ls.leaders[2].activate();
+        ls.leaders[4].activate();
+
+        let mut input = strategy_input(&seen2);
+        input.check_victory_mode = true;
+        let trace = strategy_all(&mut ls, input);
+
+        assert_eq!(trace.leaders_processed(), 2);
+        assert_eq!(
+            trace.calls,
+            vec![
+                StrategyCall::CheckExplore {
+                    slot: 2,
+                    update: ExploreUpdate::NotDue,
+                },
+                StrategyCall::PlanStrategy(2),
+                StrategyCall::ComputeScore { slot: 2, force: 0 },
+                StrategyCall::Diplomacy(2),
+                StrategyCall::CheckExplore {
+                    slot: 4,
+                    update: ExploreUpdate::NotDue,
+                },
+                StrategyCall::PlanStrategy(4),
+                StrategyCall::ComputeScore { slot: 4, force: 0 },
+                StrategyCall::Diplomacy(4),
+                StrategyCall::CheckVictory,
+            ]
+        );
+    }
+
+    /// The phase is `(slot*25 + frame + 12) % (200/ai_speed)`. For slot 2, frame 138
+    /// is due. The scan samples fog coordinates (3,3), (7,3), (3,7), (7,7).
+    #[test]
+    fn check_explore_recounts_the_exact_seen2_samples_on_its_phase() {
+        let mut seen2 = [0u8; 64];
+        for index in [27usize, 31, 59] {
+            seen2[index] |= 1 << 2;
+        }
+        seen2[63] |= 1 << 1;
+        let world = strategy_input(&seen2).world;
+        let mut leader = Leader::new(2);
+        leader.explored = 91;
+
+        assert_eq!(
+            check_explore(&mut leader, 137, 1, Some(false), world),
+            ExploreUpdate::NotDue
+        );
+        assert_eq!(leader.explored, 91);
+        assert_eq!(
+            check_explore(&mut leader, 138, 1, Some(false), world),
+            ExploreUpdate::Recounted(3)
+        );
+        assert_eq!(leader.explored, 3);
+    }
+
+    /// Frame zero bypasses the period calculation, the prerequisite chooses `reg_size`,
+    /// and replacing the fog plane refreshes the value rather than replaying the prior one.
+    #[test]
+    fn check_explore_frame_zero_full_map_and_refresh_are_mutation_pinned() {
+        let mut leader = Leader::new(3);
+        let full_seen = [1 << 3; 64];
+        let empty_seen = [0u8; 64];
+
+        let full_world = strategy_input(&full_seen).world;
+        assert_eq!(
+            check_explore(&mut leader, 0, 0, Some(true), full_world),
+            ExploreUpdate::FullMap(4),
+            "frame zero never divides by ai_speed"
+        );
+        assert_eq!(leader.explored, 4);
+
+        let empty_world = strategy_input(&empty_seen).world;
+        assert_eq!(
+            check_explore(&mut leader, 0, 1, Some(false), empty_world),
+            ExploreUpdate::Recounted(0)
+        );
+        assert_eq!(leader.explored, 0, "the old full-map value cannot replay");
+
+        leader.explored = 17;
+        let missing_world = ExploreWorld {
+            seen2: &empty_seen[..8],
+            ..empty_world
+        };
+        assert_eq!(
+            check_explore(&mut leader, 0, 1, Some(false), missing_world),
+            ExploreUpdate::MissingFacts
+        );
+        assert_eq!(leader.explored, 17, "incomplete host state is fail-closed");
+
+        assert_eq!(
+            check_explore(&mut leader, 0, 1, None, empty_world),
+            ExploreUpdate::MissingFacts,
+            "an absent has_preq answer cannot be treated as false"
+        );
+        assert_eq!(leader.explored, 17);
+    }
+
+    /// The tail semaphore is outside the leader loop; it fires even with no active slots.
+    #[test]
+    fn strategy_all_victory_gate_is_independent_of_active_leaders() {
+        let seen2 = [0u8; 64];
+        let mut ls = Leaders::new();
+        let mut input = strategy_input(&seen2);
+        input.check_victory_mode = true;
+        let trace = strategy_all(&mut ls, input);
+        assert_eq!(trace.leaders_processed(), 0);
+        assert_eq!(trace.calls, vec![StrategyCall::CheckVictory]);
     }
 
     /// The outer gate is bit 1. A leader with only bit 0 is scanned by everyone else's

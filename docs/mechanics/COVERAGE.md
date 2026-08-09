@@ -159,7 +159,7 @@ code actually does.
 | 8 | **`Leaders::process_all`** | `0x006ED2A0` | module exists, runtime call unverified | `economy.rs` |
 | 9 | `NetDaemon::process_all` | `0x00951300` | out of scope | ×5 per tick |
 | 10 | AI diplomacy chat | — | out of scope | |
-| 11 | **`Leaders::strategy_all`** | `0x006ED430` | **absent** | `Leader::diplomacy` uncited |
+| 11 | **`Leaders::strategy_all`** | `0x006ED430` | **dispatcher + deterministic prefix executed** | full `check_explore`; score/victory ports; `plan_strategy` and `diplomacy` bodies remain explicit |
 | 12 | **`GameDaemon::process_all`** | `0x00732700` | module exists, runtime call unverified | `borders_fog.rs` |
 | 13 | `Armies::process_all` | `0x006F3B00` | **absent** | |
 | 14 | **`Objects::process_all`** | `0x0065DCE0` | **implemented** | rotation `(frame+i)%10`, `crate::objects` |
