@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 15 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 14 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -1421,6 +1421,27 @@ pub enum GroupAttackToHostError {
     InvalidState(&'static str),
 }
 
+/// Why `ATTACK_TO` cannot guarantee its later phased target-search/pause transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackToHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// The exact post-`do_move` branch of `Unit::do_attack_to` `0x005F2320`.
+///
+/// The host evaluates these facts against the moved actor: attack capability and virtual
+/// `is_supply`, the army leash, or the two Group predicates in `do_attack_to_pause`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackToPostMove {
+    /// The special army leash returned before target selection because distance exceeded six.
+    HoldForArmy,
+    /// Call `find_melee_target(-1, nullptr, 0, 1, 0)`, including its action transition.
+    FindMeleeTarget,
+    /// The no-attack/supply branch calls `do_attack_to_pause`; true writes literal 15.
+    Pause { set_pause: bool },
+}
+
 /// Why `GROUP_ATTACK` could not acquire its global group/target snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupAttackHostError {
@@ -1627,6 +1648,29 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::group_attack_to_pause_gate requires successful preflight")
     }
 
+    /// Prove that all future phased `ATTACK_TO` target/army/pause facts and effects are
+    /// available. This runs before movement even on a non-phase frame: otherwise a missing
+    /// host on the next phase would silently skip retail's search and continue moving.
+    fn attack_to_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<(), AttackToHostError> {
+        Err(AttackToHostError::Unavailable)
+    }
+
+    /// Resolve the post-movement branch on `(frame + actor.o) % 15 == 0`. It cannot reject;
+    /// [`WorkWorld::attack_to_preflight`] already proved every lookup is available.
+    fn attack_to_post_move(&mut self, _actor: &UnitWork, _order: &OrderRec) -> AttackToPostMove {
+        panic!("WorkWorld::attack_to_post_move requires successful preflight")
+    }
+
+    /// Apply `find_melee_target(-1, nullptr, 0, 1, 0)`. The callback owns exact selection
+    /// and any ATTACK/action node it installs, and is infallible after preflight.
+    fn attack_to_find_melee_target(&mut self, _actor: &mut UnitWork, _order: &OrderRec) {
+        panic!("WorkWorld::attack_to_find_melee_target requires successful preflight")
+    }
+
     /// Acquire all cross-object facts used by `Unit::do_group_attack`. The default is
     /// unavailable and must leave the actor byte-for-byte unchanged.
     fn group_attack_preflight(
@@ -1755,7 +1799,7 @@ pub trait WorkWorld: UnitWorld {
 pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     //  0 NONE            virtual do_idle
     ArmStatus::Implemented,     //  1 MOVE_TO         Unit::do_move 0x005F7B30
-    ArmStatus::Unimplemented,   //  2 ATTACK_TO       Unit::do_attack_to 0x005F2320
+    ArmStatus::Implemented,     //  2 ATTACK_TO       Unit::do_attack_to 0x005F2320
     ArmStatus::Unimplemented,   //  3 EXPLORE_TO      Unit::do_explore_to 0x005F24A0
     ArmStatus::Implemented,     //  4 FLEE_TO         Unit::do_move -- SAME ARM as MOVE_TO
     ArmStatus::FaithfullyEmpty, //  5 PATROL          no case label; falls to the default
@@ -2655,6 +2699,70 @@ pub fn do_group_move<W: WorkWorld>(
     }
 }
 
+/// `Unit::do_attack_to(MoveOrder*)` `0x005F2320` (340 bytes), arm 2.
+///
+/// Retail first executes `do_move`. If the same node survives and
+/// `(Game::frame + actor.o) % 15 == 0`, it either:
+///
+/// - returns behind the `unit_masks & 0x40000` army-distance leash;
+/// - calls `find_melee_target(-1, nullptr, 0, 1, 0)` for an attacking non-supply unit; or
+/// - calls `do_attack_to_pause`, whose two Group predicates may write `MoveOrder::pause=15`.
+///
+/// The spatial/type/Groups facts are mandatory host state. Capability is preflighted before
+/// `do_move`, including on non-phase frames, so an unavailable host never leaves a partially
+/// advanced attack-move that silently skipped its next target-selection phase.
+pub fn do_attack_to<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = u.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::AttackTo {
+        return ArmResult::MalformedOrder;
+    }
+    match w.attack_to_preflight(&*u, &order) {
+        Ok(()) => {}
+        Err(AttackToHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(AttackToHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    }
+
+    let original_queue_len = u.orders.len();
+    let move_result = do_move(u, w, pf, cov);
+    if u.orders.len() != original_queue_len
+        || !u
+            .orders
+            .front()
+            .is_some_and(|current| current.kind == OrderIndex::AttackTo)
+        || !phase_due(w.frame(), u.o, 15)
+    {
+        return move_result;
+    }
+    let current = u
+        .orders
+        .front()
+        .cloned()
+        .expect("the same ATTACK_TO node survived do_move");
+    match w.attack_to_post_move(&*u, &current) {
+        AttackToPostMove::HoldForArmy => ArmResult::Working,
+        AttackToPostMove::FindMeleeTarget => {
+            w.attack_to_find_melee_target(u, &current);
+            ArmResult::Working
+        }
+        AttackToPostMove::Pause { set_pause } => {
+            if set_pause {
+                u.orders
+                    .front_mut()
+                    .expect("the same ATTACK_TO node survived post-move planning")
+                    .pause = 15;
+            }
+            ArmResult::Working
+        }
+    }
+}
+
 /// `Unit::do_group_attack_to(GroupMoveOrder*)` `0x005E74E0` (192 bytes), arm 21.
 ///
 /// The shipped wrapper has four observable stages:
@@ -3278,6 +3386,7 @@ pub fn do_job<W: WorkWorld>(
         }
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
+        OrderIndex::AttackTo => do_attack_to(u, w, pf, cov),
         OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
         OrderIndex::GroupAttack => do_group_attack(u, w, pf, cov),
         OrderIndex::GroupAttackTo => do_group_attack_to(u, w, pf, cov),
@@ -3675,6 +3784,10 @@ mod tests {
         group_attack_effects: Vec<GroupAttackEffect>,
         group_attack_scratch_seen: Vec<Option<(i32, i32)>>,
         group_attack_angles_seen: Vec<(i32, i32)>,
+        attack_to_preflight: Result<(), AttackToHostError>,
+        attack_to_post: AttackToPostMove,
+        attack_to_events: Vec<&'static str>,
+        attack_to_target: Option<(i32, i32, u16)>,
         scrambled: Vec<i16>,
     }
 
@@ -3706,6 +3819,10 @@ mod tests {
                 group_attack_effects: vec![],
                 group_attack_scratch_seen: vec![],
                 group_attack_angles_seen: vec![],
+                attack_to_preflight: Err(AttackToHostError::Unavailable),
+                attack_to_post: AttackToPostMove::HoldForArmy,
+                attack_to_events: vec![],
+                attack_to_target: None,
                 scrambled: vec![],
             }
         }
@@ -3841,6 +3958,24 @@ mod tests {
             self.group_attack_events.push("attack_to_pause_gate");
             self.group_attack_pause_gate
         }
+        fn attack_to_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<(), AttackToHostError> {
+            self.attack_to_events.push("preflight");
+            self.attack_to_preflight
+        }
+        fn attack_to_post_move(&mut self, _: &UnitWork, _: &OrderRec) -> AttackToPostMove {
+            self.attack_to_events.push("post_move");
+            self.attack_to_post
+        }
+        fn attack_to_find_melee_target(&mut self, actor: &mut UnitWork, _: &OrderRec) {
+            self.attack_to_events.push("find_melee_target");
+            if let Some((who, o, uid)) = self.attack_to_target {
+                actor.orders.push_front(OrderRec::attack(who, o, uid));
+            }
+        }
         fn group_attack_preflight(
             &mut self,
             _: &UnitWork,
@@ -3941,7 +4076,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_thirteen_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_fourteen_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -3954,9 +4089,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Twelve implemented, including all three recovered grouped order executors, both
-        // boarding arms, and the two live patrols; PATROL remains faithfully empty.
-        assert_eq!((implemented, empty, absent), (12, 1, 15));
+        // Thirteen implemented, including ATTACK_TO, all three recovered grouped order
+        // executors, both boarding arms, and both live patrols; PATROL is faithfully empty.
+        assert_eq!((implemented, empty, absent), (13, 1, 14));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -4199,6 +4334,190 @@ mod tests {
         assert_eq!(cov.completed, 1);
         assert!(cov.dispatches[OrderIndex::MoveTo.index()] > 1);
         assert!(u.body.x > 24, "the unit did not advance along +x");
+    }
+
+    fn attack_to_order(x: i32, y: i32) -> OrderRec {
+        let mut order = OrderRec::move_to(x, y, 0);
+        order.kind = OrderIndex::AttackTo;
+        order
+    }
+
+    #[test]
+    fn attack_to_missing_host_prevents_all_movement_mutation() {
+        let mut w = TestWorld::open(16);
+        w.frame = 1; // non-phase still preflights future target-search capability
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 200);
+        u.myspeed = 8;
+        u.tolerance = 0;
+        u.body.angle = movement::find_angle(40, 0);
+        u.path.push(PathData {
+            to_x: 140,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.orders.push_back(attack_to_order(140, 200));
+        let before_body = u.body;
+        let before_orders = u.orders.clone();
+        let before_path = u.path.clone();
+
+        assert_eq!(
+            do_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle, u.body.stuck_budget),
+            (
+                before_body.x,
+                before_body.y,
+                before_body.angle,
+                before_body.stuck_budget
+            )
+        );
+        assert_eq!(u.orders, before_orders);
+        assert_eq!(u.path, before_path);
+        assert_eq!(w.attack_to_events, vec!["preflight"]);
+
+        w.attack_to_preflight = Err(AttackToHostError::InvalidState("stale target index"));
+        w.attack_to_events.clear();
+        assert_eq!(
+            do_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::MalformedOrder
+        );
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle, u.body.stuck_budget),
+            (
+                before_body.x,
+                before_body.y,
+                before_body.angle,
+                before_body.stuck_budget
+            )
+        );
+        assert_eq!(u.orders, before_orders);
+        assert_eq!(u.path, before_path);
+        assert_eq!(w.attack_to_events, vec!["preflight"]);
+    }
+
+    #[test]
+    fn attack_to_non_phase_moves_after_capability_preflight_only() {
+        let mut w = TestWorld::open(16);
+        w.frame = 1;
+        w.attack_to_preflight = Ok(());
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 200);
+        u.myspeed = 8;
+        u.tolerance = 0;
+        u.body.angle = movement::find_angle(40, 0);
+        u.path.push(PathData {
+            to_x: 140,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.orders.push_back(attack_to_order(140, 200));
+
+        assert!(matches!(
+            do_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Moved | ArmResult::Turned | ArmResult::Working
+        ));
+        assert!(u.body.x > 100);
+        assert_eq!(w.attack_to_events, vec!["preflight"]);
+    }
+
+    #[test]
+    fn attack_to_phase_moves_then_runs_melee_selection_transition() {
+        let mut w = TestWorld::open(16);
+        w.frame = 0;
+        w.attack_to_preflight = Ok(());
+        w.attack_to_post = AttackToPostMove::FindMeleeTarget;
+        w.attack_to_target = Some((1, 7, 99));
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 200);
+        u.myspeed = 8;
+        u.tolerance = 0;
+        u.body.angle = movement::find_angle(40, 0);
+        u.path.push(PathData {
+            to_x: 140,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.orders.push_back(attack_to_order(140, 200));
+
+        assert_eq!(
+            do_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert!(u.body.x > 100, "do_move must precede target selection");
+        assert_eq!(
+            w.attack_to_events,
+            vec!["preflight", "post_move", "find_melee_target"]
+        );
+        let attack = u
+            .orders
+            .front()
+            .expect("host installed an ATTACK transition");
+        assert_eq!(attack.kind, OrderIndex::Attack);
+        assert_eq!(
+            (attack.target_who, attack.target_o, attack.target_uid),
+            (1, 7, 99)
+        );
+    }
+
+    #[test]
+    fn attack_to_pause_army_hold_and_retirement_preserve_post_move_ordering() {
+        let mut w = TestWorld::open(16);
+        w.frame = 0;
+        w.attack_to_preflight = Ok(());
+        w.attack_to_post = AttackToPostMove::Pause { set_pause: true };
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 200);
+        u.myspeed = 8;
+        u.tolerance = 0;
+        u.body.angle = movement::find_angle(40, 0);
+        u.orders.push_back(attack_to_order(140, 200));
+
+        assert_eq!(
+            do_attack_to(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().pause, 15);
+        assert_eq!(w.attack_to_events, vec!["preflight", "post_move"]);
+
+        w.attack_to_events.clear();
+        w.attack_to_post = AttackToPostMove::HoldForArmy;
+        let mut leashed = UnitWork::at(0, 0, 100, 200);
+        leashed.myspeed = 8;
+        leashed.tolerance = 0;
+        leashed.body.angle = movement::find_angle(40, 0);
+        leashed.orders.push_back(attack_to_order(140, 200));
+        assert_eq!(
+            do_attack_to(&mut leashed, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert!(
+            leashed.body.x > 100,
+            "the army leash is evaluated after do_move"
+        );
+        assert_eq!(leashed.orders.front().unwrap().pause, 0);
+        assert_eq!(w.attack_to_events, vec!["preflight", "post_move"]);
+
+        w.attack_to_events.clear();
+        let mut arrived = UnitWork::at(0, 0, 100, 200);
+        arrived.orders.push_back(attack_to_order(100, 200));
+        arrived.orders.push_back(attack_to_order(300, 200));
+        assert_eq!(
+            do_attack_to(&mut arrived, &mut w, &mut pf, &mut cov),
+            ArmResult::Retired(KillReason::Completed)
+        );
+        assert_eq!(arrived.orders.len(), 1);
+        assert_eq!(arrived.orders.front().unwrap().x, 300);
+        assert_eq!(w.attack_to_events, vec!["preflight"]);
     }
 
     #[test]
@@ -5370,11 +5689,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 15 unimplemented arms, each hit once. The smoke actors take all three grouped
+        // 14 unimplemented arms, each hit once. The smoke actors take all three grouped
         // executors' exact ungrouped conversion; grouped actors without a snapshot fail
         // closed at the mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 15);
-        assert!((cov.covered_fraction() - 13.0 / 28.0).abs() < 1e-12);
+        assert_eq!(cov.unimplemented, 14);
+        assert!((cov.covered_fraction() - 14.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]

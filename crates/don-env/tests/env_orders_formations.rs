@@ -129,8 +129,8 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
     }
 
     // Env has no authoritative fight/do_attack_to host, so valid grouped nodes stay intact.
-    // The ungrouped retail branch, however, is wholly local and must convert without asking
-    // for unavailable combat state.
+    // The ungrouped retail branch is wholly local and converts without asking for combat
+    // state, but Citizen's resulting ATTACK_TO still requires target-selection capability.
     let detached = rows[2];
     world.sim.units.group_mut()[detached] = -1;
     let detached_before = (world.sim.pos_x()[detached], world.sim.pos_y()[detached]);
@@ -144,11 +144,28 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
         detached_before,
         "ungroup conversion returns before ordinary ATTACK_TO movement"
     );
+    let attack_gaps_before = world.unimplemented.unit[don_env::generated::uv::ATTACK];
+    let move_gaps_before = world.unimplemented.unit[don_env::generated::uv::MOVE_TO];
     world.frame();
-    assert_ne!(
+    assert_eq!(
         (world.sim.pos_x()[detached], world.sim.pos_y()[detached]),
         detached_before,
-        "the converted ordinary ATTACK_TO must use the existing product mover"
+        "combat-capable ATTACK_TO must not move before find_melee_target is available"
+    );
+    assert_eq!(
+        world.orders[detached].front().map(|order| order.kind),
+        Some(OrderIndex::AttackTo),
+        "the unsupported ordinary node must remain intact"
+    );
+    assert_eq!(
+        world.unimplemented.unit[don_env::generated::uv::ATTACK],
+        attack_gaps_before + 1,
+        "the detached attacker stays visibly unsupported"
+    );
+    assert_eq!(
+        world.unimplemented.unit[don_env::generated::uv::MOVE_TO],
+        move_gaps_before + 2,
+        "both grouped movement wrappers stay visibly unsupported"
     );
     for &row in &rows[..2] {
         assert_eq!(

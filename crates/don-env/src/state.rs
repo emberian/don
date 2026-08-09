@@ -1526,9 +1526,8 @@ impl EnvWorld {
                 continue;
             }
             match self.order[row] {
-                x if x == g::OrderIndex::MoveTo as u8 || x == g::OrderIndex::AttackTo as u8 => {
-                    self.advance_move(row, true);
-                }
+                x if x == g::OrderIndex::MoveTo as u8 => self.advance_move(row, true),
+                x if x == g::OrderIndex::AttackTo as u8 => self.advance_attack_to(row),
                 x if x == g::OrderIndex::GroupMove as u8 => self.advance_group_move(row),
                 x if x == g::OrderIndex::GroupAttack as u8 => self.advance_group_attack(row),
                 x if x == g::OrderIndex::GroupAttackTo as u8 => self.advance_group_attack_to(row),
@@ -2090,6 +2089,32 @@ impl EnvWorld {
             .front_mut()
             .expect("GROUP_ATTACK conversion cloned a live front node") = ordinary;
         self.sync_order_from_queue(row);
+    }
+
+    /// Product boundary for ordinary `ATTACK_TO`.
+    ///
+    /// An exact non-permissive zero-attack actor outside a group can only take the local
+    /// `do_attack_to_pause` false branch, so its existing movement adapter is authoritative.
+    /// Every attacking actor may call `find_melee_target`, and every grouped actor may query
+    /// the army leash or Group pause predicates. Those nodes remain wholly unmoved until one
+    /// transactional combat host owns the corresponding retail facts and effects.
+    fn advance_attack_to(&mut self, row: usize) {
+        let Some(order) = self.orders[row].front() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        if order.kind != OrderIndex::AttackTo {
+            self.unimplemented.unit[g::uv::ATTACK] += 1;
+            return;
+        }
+        let exact_noncombat = !self.rules.caps.is_permissive()
+            && self.attack[row] == 0
+            && self.sim.units.group()[row] < 0;
+        if !exact_noncombat {
+            self.unimplemented.unit[g::uv::ATTACK] += 1;
+            return;
+        }
+        self.advance_move(row, true);
     }
 
     /// Integrate one frame toward an explicit target using the environment's existing
