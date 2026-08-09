@@ -103,7 +103,6 @@ pub enum Gap {
     LeadersEndProcessAll,
     LeaderProcessEventFrame,
     RoadsScanStray,
-    TurnControlCheckCannonTime,
     GameProcessEndGame,
 }
 
@@ -141,7 +140,6 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 17 Leaders::end_process_all 0x006ED070 - uncited",
     "step 19 Leader::process_event_frame 0x006EC180 - uncited",
     "step 22 Roads::scan_and_kill_stray_roads 0x008956A0 - uncited",
-    "step 24 TurnControl::check_cannon_time 0x009579E0 - uncited",
     "step 27 Game::process_end_game 0x00591CE0 - uncited; victory_score::check_victory runs at step 11 instead",
 ];
 
@@ -605,6 +603,50 @@ pub struct AmmoShot {
     pub damage: i32,
 }
 
+/// The checksum-relevant-independent state touched by `TurnControl::check_cannon_time`.
+///
+/// Field order mirrors `TurnControl +0x24..+0x30`: active player, start frame, pending
+/// speed, current speed. UI messages, sound, and camera notification are presentation
+/// effects and deliberately stay outside the headless core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CannonTimeState {
+    pub active_player: i32,
+    pub start_frame: i32,
+    pub pending_speed: i32,
+    pub current_speed: i32,
+}
+
+impl Default for CannonTimeState {
+    fn default() -> Self {
+        CannonTimeState {
+            active_player: -1,
+            start_frame: 0,
+            pending_speed: 0,
+            current_speed: crate::schedule::SPEED_NORMAL as i32,
+        }
+    }
+}
+
+impl CannonTimeState {
+    /// `TurnControl::check_cannon_time` `0x009579E0`, followed by the state-writing
+    /// portion of `TurnControl::end_cannon_time` `0x00956470` [measured].
+    ///
+    /// Retail expires when signed `Game::frame - start_frame >= 75`, sets the active
+    /// player to `-1`, adopts `pending_speed` when it differs, and finally clears the
+    /// pending value. Returns whether expiry occurred this frame.
+    pub fn check(&mut self, frame: i32) -> bool {
+        if self.active_player < 0 || frame.wrapping_sub(self.start_frame) < 75 {
+            return false;
+        }
+        self.active_player = -1;
+        if self.current_speed != self.pending_speed {
+            self.current_speed = self.pending_speed;
+        }
+        self.pending_speed = 0;
+        true
+    }
+}
+
 // =======================================================================================
 // The simulation
 // =======================================================================================
@@ -624,6 +666,7 @@ pub struct Sim {
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
     pub vic_leaders: victory_score::Leaders,
+    pub cannon_time: CannonTimeState,
 
     // ---- step 12: fog, borders, groups ------------------------------------------------
     pub map: MapState,
@@ -682,6 +725,7 @@ impl Sim {
             market: economy::MarketState::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
+            cannon_time: CannonTimeState::default(),
             map,
             groups: groups_guys::Groups::default(),
             prod_rules: production::ProdRules::shipped(),
@@ -913,8 +957,16 @@ impl Sim {
             t.work[23] = 1;
         }
 
-        // 24..28.
-        t.steps[24] = StepRun::Unimplemented(Gap::TurnControlCheckCannonTime);
+        // 24 — TurnControl::check_cannon_time. The frame read is the post-step-20 value.
+        let cannon_active = self.cannon_time.active_player >= 0;
+        let cannon_expired = self.cannon_time.check(self.world.frame);
+        t.steps[24] = if cannon_active {
+            StepRun::Executed
+        } else {
+            StepRun::Vacuous
+        };
+        t.work[24] = cannon_expired as u32;
+        // 25..28.
         t.steps[25] = StepRun::OutOfScope;
         t.steps[26] = StepRun::OutOfScope;
         t.steps[27] = StepRun::Unimplemented(Gap::GameProcessEndGame);
@@ -2024,6 +2076,40 @@ mod tests {
             "an empty world executed {} steps",
             t.executed()
         );
+    }
+
+    #[test]
+    fn cannon_time_expires_on_the_exact_post_increment_frame() {
+        let mut sim = Sim::new(6, 8);
+        sim.cannon_time = CannonTimeState {
+            active_player: 3,
+            start_frame: 0,
+            pending_speed: 4,
+            current_speed: 2,
+        };
+        for _ in 0..74 {
+            let t = sim.do_frame();
+            assert!(t.steps[24].ran());
+            assert_eq!(t.work[24], 0);
+            assert_eq!(sim.cannon_time.active_player, 3);
+        }
+        let t = sim.do_frame();
+        assert_eq!(sim.world.frame, 75);
+        assert_eq!(t.work[24], 1);
+        assert_eq!(sim.cannon_time.active_player, -1);
+        assert_eq!(sim.cannon_time.current_speed, 4);
+        assert_eq!(sim.cannon_time.pending_speed, 0);
+    }
+
+    #[test]
+    fn inactive_cannon_time_is_vacuous_and_does_not_reapply_speed() {
+        let mut sim = Sim::new(8, 8);
+        sim.cannon_time.current_speed = 3;
+        sim.cannon_time.pending_speed = 1;
+        let t = sim.do_frame();
+        assert_eq!(t.steps[24], StepRun::Vacuous);
+        assert_eq!(sim.cannon_time.current_speed, 3);
+        assert_eq!(sim.cannon_time.pending_speed, 1);
     }
 
     /// Construction is driven from inside the object traversal, so the `helpers` divisor

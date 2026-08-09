@@ -115,7 +115,7 @@ pub const DO_FRAME: [SubsystemStep; 29] = [
     SubsystemStep { idx: 23, name: "frame % 15 -> Game::seconds++", va: Some("0x005924CF"), source: "game.cpp",
         status: StepStatus::Implemented, note: "15 sim frames is one game second, exactly" },
     SubsystemStep { idx: 24, name: "TurnControl::check_cannon_time", va: Some("0x009579E0"), source: "turncontrol.cpp:116",
-        status: StepStatus::Stub, note: "no-rush / countdown timer" },
+        status: StepStatus::Implemented, note: "75-frame cannon-time expiry and pending speed transition" },
     SubsystemStep { idx: 25, name: "SaveGame::save_game / LoadGame::load_game", va: Some("0x005A8220"), source: "save.cpp:1081",
         status: StepStatus::OutOfScope, note: "autosave, conditional" },
     SubsystemStep { idx: 26, name: "GameLog::end_frame", va: Some("0x009329D0"), source: "gamelog.cpp:354",
