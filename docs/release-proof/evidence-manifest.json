@@ -50,13 +50,13 @@
     },
     {
       "path": "tools/retail-control/wer_localdumps.py",
-      "sha256": "3d5eec6ba8d4bd0f8f05969e0a7eb17b1b8b732faf63329ae2d2a16f4fdd64a1",
-      "role": "scoped Windows Error Reporting setup, removal, and in-place dump verification"
+      "sha256": "6c84b04a29bc137c8a2f35bf7faa3e44b35f6b29975fc7a681d1b8805411415b",
+      "role": "scoped Windows Error Reporting lifecycle, structural full-dump validation, and immutable archive verification"
     },
     {
       "path": "tools/retail-control/test_wer_localdumps.py",
-      "sha256": "3cc5821679b2e1cec829cdd8ae073ee3d24df0ec0688d16089fca065c140b415",
-      "role": "synthetic workflow regressions for crash capture and non-destructive removal"
+      "sha256": "9ef1ab69071aa92b8a5d64ac0495212a3e1162a97418e0d45718746b0dce479e",
+      "role": "synthetic workflow, minidump identity, truncation, and content-addressed archive regressions"
     },
     {
       "path": "tools/retail-control/README.md",
