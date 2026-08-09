@@ -41,9 +41,6 @@ pub const RETAIL_BALANCE_WALKED_BYTES: u64 = 486_098;
 pub const RETAIL_TRIBES_WALKED_BYTES: u64 = 34_368;
 pub const RETAIL_WALKED_BYTES: u64 = 997_846;
 
-const ADLER_BASE: u32 = 65_521;
-const ADLER_NMAX: usize = 5_552;
-
 /// The seven implementations reached by `Types::walk_rules_data`'s 806 virtual calls.
 ///
 /// `ItemType` inherits `ObjectType::walk_rules_data`, and `BonusType` inherits
@@ -241,18 +238,13 @@ impl Adler32 {
     }
 
     fn update(&mut self, bytes: &[u8]) {
+        // The arithmetic is `don_sim::checksum::adler32`, the workspace's only
+        // implementation of `0x00a46830`. This struct is only the running `CheckSum+0x10`
+        // / `+0x14` pair the channel carries.
         self.bytes += bytes.len() as u64;
-        let mut at = 0;
-        while at < bytes.len() {
-            let n = ADLER_NMAX.min(bytes.len() - at);
-            for &b in &bytes[at..at + n] {
-                self.s1 += u32::from(b);
-                self.s2 += self.s1;
-            }
-            self.s1 %= ADLER_BASE;
-            self.s2 %= ADLER_BASE;
-            at += n;
-        }
+        let sum = don_sim::checksum::adler32((self.s2 << 16) | self.s1, bytes);
+        self.s1 = sum & 0xFFFF;
+        self.s2 = sum >> 16;
     }
 
     fn value(self) -> u32 {

@@ -31,26 +31,14 @@ pub const NMAX: usize = 5552;
 /// The `NMAX` chunking is not cosmetic: it is where the modulus is applied, and
 /// a version that reduces on a different schedule is a *different function* on
 /// inputs long enough to overflow. Keep the chunk boundary.
+///
+/// Delegates to `don_sim::checksum::adler32`, which is the workspace's only implementation
+/// of the routine. The primitive that decides whether two machines are running the same
+/// game cannot be transcribed twice; the null-pointer arm is
+/// `don_sim::checksum::adler32_or_null`.
+#[inline]
 pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    // `0xa4683d test edi,edi` -> `lea eax,[edx+1]`: a null buffer returns 1
-    // regardless of the incoming adler. An empty slice is not a null pointer,
-    // so it takes the ordinary path and returns `adler` unchanged; that
-    // distinction is why the engine's empty channels read exactly 1 (the
-    // walker is never called at all) rather than "1 by accident".
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    let mut i = 0usize;
-    while i < buf.len() {
-        let n = NMAX.min(buf.len() - i);
-        for &b in &buf[i..i + n] {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= ADLER_BASE;
-        s2 %= ADLER_BASE;
-        i += n;
-    }
-    (s2 << 16) | s1
+    don_sim::checksum::adler32(adler, buf)
 }
 
 /// The engine's `DataWalk` interface: exactly two virtuals.

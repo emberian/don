@@ -43,6 +43,14 @@ pub struct Totals {
     pub compares: [u64; NUM_CHANNELS],
     pub matches: [u64; NUM_CHANNELS],
     pub trivial: [u64; NUM_CHANNELS],
+    /// Matches on channels with no producer at all. See
+    /// `ChannelResult::unmodelled_matches` — this is the column that says how
+    /// much of the scoreboard is vacuous.
+    pub unmodelled: [u64; NUM_CHANNELS],
+    /// Compares where our walker touched bytes.
+    pub nontrivial: [u64; NUM_CHANNELS],
+    /// Compares where retail's own value was 1.
+    pub retail_empty: [u64; NUM_CHANNELS],
     pub best_survived: [u32; NUM_CHANNELS],
     pub sim_commands: usize,
     pub lockstep_commands: usize,
@@ -68,6 +76,9 @@ impl Totals {
             compares: [0; NUM_CHANNELS],
             matches: [0; NUM_CHANNELS],
             trivial: [0; NUM_CHANNELS],
+            unmodelled: [0; NUM_CHANNELS],
+            nontrivial: [0; NUM_CHANNELS],
+            retail_empty: [0; NUM_CHANNELS],
             best_survived: [0; NUM_CHANNELS],
             sim_commands: 0,
             lockstep_commands: 0,
@@ -98,6 +109,9 @@ impl Totals {
                 t.compares[c] += r.channels[c].compares as u64;
                 t.matches[c] += r.channels[c].matches as u64;
                 t.trivial[c] += r.channels[c].trivial_matches as u64;
+                t.unmodelled[c] += r.channels[c].unmodelled_matches as u64;
+                t.nontrivial[c] += r.channels[c].nontrivial_compares as u64;
+                t.retail_empty[c] += r.channels[c].retail_empty_compares as u64;
                 t.best_survived[c] = t.best_survived[c].max(r.channels[c].survived);
             }
         }
@@ -110,7 +124,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     let mut s = String::new();
     s.push_str("{\n");
     s.push_str(&format!("  \"generated_by\": \"{}\",\n", esc(generated_by)));
-    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes.\",\n");
+    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes; `unmodelled` is the subset of those on channels don-sim has no producer for at all, which are not evidence about anything. `retail_empty_compares` counts compares where the ENGINE's own value was 1, and `retail_first_nonempty_turn` is the turn it stopped being 1 -- the deadline a producer has to meet.\",\n");
     s.push_str("  \"checksum_source\": \"CheckSums::check_all 0x00936560; packet builder 0x00940770; adler32 0x00a46830 (Tier B, 500k differential calls, 0 mismatches)\",\n");
     s.push_str("  \"walk_source\": \"schema/state-schema.json -> crates/don-replay/src/walk_gen.rs (generated)\",\n");
     s.push_str(&format!(
@@ -138,10 +152,13 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     s.push_str("    \"per_channel\": {\n");
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
         s.push_str(&format!(
-            "      \"{name}\": {{ \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"best_survived_turns\": {}, \"crossplay_disagreements\": {}, \"mutable\": {} }}{}\n",
+            "      \"{name}\": {{ \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"unmodelled\": {}, \"nontrivial_compares\": {}, \"retail_empty_compares\": {}, \"best_survived_turns\": {}, \"crossplay_disagreements\": {}, \"mutable\": {} }}{}\n",
             t.compares[i],
             t.matches[i],
             t.trivial[i],
+            t.unmodelled[i],
+            t.nontrivial[i],
+            t.retail_empty[i],
             t.best_survived[i],
             t.crossplay_per_channel[i],
             crate::checksum::CHANNELS[i].is_mutable(),
@@ -218,7 +235,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         for (i, name) in CHANNEL_NAMES.iter().enumerate() {
             let c = &r.channels[i];
             s.push_str(&format!(
-                "        \"{name}\": {{ \"survived\": {}, \"first_divergence_turn\": {}, \"expected\": \"0x{:08x}\", \"got\": \"0x{:08x}\", \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"retail_disagreed\": {} }}{}\n",
+                "        \"{name}\": {{ \"survived\": {}, \"first_divergence_turn\": {}, \"expected\": \"0x{:08x}\", \"got\": \"0x{:08x}\", \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"unmodelled\": {}, \"nontrivial_compares\": {}, \"our_bytes_walked\": {}, \"retail_empty_compares\": {}, \"retail_first_nonempty_turn\": {}, \"retail_disagreed\": {} }}{}\n",
                 c.survived,
                 c.first_divergence_turn.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
                 c.expected,
@@ -226,6 +243,11 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 c.compares,
                 c.matches,
                 c.trivial_matches,
+                c.unmodelled_matches,
+                c.nontrivial_compares,
+                c.our_bytes_walked,
+                c.retail_empty_compares,
+                c.retail_first_nonempty_turn.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
                 c.retail_disagreed,
                 if i + 1 == NUM_CHANNELS { "" } else { "," }
             ));

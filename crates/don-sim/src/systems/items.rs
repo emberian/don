@@ -917,35 +917,8 @@ impl Items {
 ///
 /// `NMAX = 0x15B0 = 5552`, `BASE = 65521` (the `0x80078071` / `0xFFFF000F` pair is the
 /// reciprocal-multiply form of `% 65521`). A null buffer returns `1`; here that is the
-/// empty slice.
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    const NMAX: usize = 0x15B0;
-
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-
-    if buf.is_empty() {
-        // `test edi, edi; jne ...; lea eax, [edx+1]` -- with a null pointer the retail
-        // routine returns 1. An empty (non-null) buffer falls through the loop and
-        // returns `adler` unchanged; both agree when `adler == 1`, which is the only
-        // value `check_all` ever starts a channel from.
-        return adler;
-    }
-
-    let mut i = 0usize;
-    while i < buf.len() {
-        let n = core::cmp::min(NMAX, buf.len() - i);
-        for &b in &buf[i..i + n] {
-            s1 = s1.wrapping_add(u32::from(b));
-            s2 = s2.wrapping_add(s1);
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-        i += n;
-    }
-    (s2 << 16) | s1
-}
+/// empty slice — [`crate::checksum::adler32_or_null`] carries the null arm.
+pub use crate::checksum::adler32;
 
 /// Push one `Item`'s walked bytes, in emission order.
 ///

@@ -463,21 +463,8 @@ impl PathStack {
 
 /// zlib adler-32, `0x00A46830`, `__fastcall`. The checksum accumulator `CheckSum` initialises it
 /// to 1 before each of the fifteen channels [measured, `docs/derivation/checksum.md` §2, Tier B
-/// against retail at 500,000 calls].
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    for chunk in buf.chunks(5552) {
-        for &b in chunk {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-    }
-    (s2 << 16) | s1
-}
+/// against retail at 500,000 calls]. Re-exported from [`crate::checksum`].
+pub use crate::checksum::adler32;
 
 // ---------------------------------------------------------------------------
 // 4. The world interface the search needs
@@ -743,8 +730,12 @@ pub struct PathFinder {
     /// sets it from the caller; `i32::MAX` here means "no soft cap".
     pub soft_node_limit: i32,
     /// `+0x84` — a suspended search is parked in the unit and resumed by `find_upath_restore`
-    /// `0x00688F40`. NOT IMPLEMENTED here; see the module docs.
+    /// `0x00688F40`.
     pub suspended: bool,
+    /// The scalar half of the parked `astar_path` frame. Retail parks the five tree roots on
+    /// `UnitData+0x104..+0x114` and retains these values in `PathFinderData`; Rust owns the
+    /// trees directly, so the equivalent continuation frame lives beside them.
+    resume: Option<UnitSearchResume>,
     /// Nodes expanded by the last search — `local_58`, the quantity the 32,000 budget bounds.
     pub last_expanded: i32,
     /// **The caller must service this.** A failed unit search obliges the engine to draw
@@ -758,6 +749,26 @@ pub struct PathFinder {
     /// must not invent a stream. Skipping it does not corrupt path state — it shifts the shared
     /// stream position for **every later draw in the tick**, which is a whole-sim desync.
     pub pending_retry_draw: bool,
+}
+
+/// Values from `astar_path`'s stack frame which must survive `find_upath_restore`.
+///
+/// The open/closed/valid containers themselves remain in [`PathFinder`]. Keeping this frame is
+/// not an algorithmic shortcut: `PathFinder::find_upath_restore` `0x00688F40` sets the resume
+/// gate, installs a fresh per-frame soft budget, and calls `find_upath`, whose resume arm adopts
+/// the parked containers and continues with these same search constants. [measured]
+#[derive(Clone, Copy, Debug)]
+struct UnitSearchResume {
+    goal: (i32, i32),
+    arrive_tol: i32,
+    step_scale: i32,
+    row_stride: i32,
+    dir_stride: i32,
+    seed: i32,
+    /// `UnitData+0x148`: expansions spent by earlier suspended slices. Retail compares the
+    /// hard cap against `saved_expanded + expanded_this_call`, but the soft cap against this
+    /// call alone. [measured `0x0068409D..0x006840CC`]
+    expanded_before: i32,
 }
 
 /// What `astar_path` returns. The engine's raw returns are `1` success, `0` failure,
@@ -787,6 +798,8 @@ impl PathFinder {
         self.closed.clear();
         self.valid.clear();
         self.nodes.clear();
+        self.suspended = false;
+        self.resume = None;
     }
 
     fn alloc(&mut self, n: PathNode) -> u32 {
@@ -911,64 +924,90 @@ impl PathFinder {
     /// success the waypoints are pushed back on, goal-end first, so the top of the stack is the
     /// waypoint nearest the unit.
     ///
-    /// Not implemented: the `suspended` resume path (`this+0x84`), which re-adopts trees parked
-    /// on the unit at `+0x104..+0x114`; and the `0xC0` / `0x300` domains.
+    /// The suspended resume path is implemented: a second call while [`PathFinder::suspended`]
+    /// is true continues the retained trees instead of pushing a second root. The caller must
+    /// install retail's resume budget before that call (`300 / player_path_scale²`, versus
+    /// `500 / player_path_scale²` for the initial `find_upath` wrapper). The `0xC0` / `0x300`
+    /// domains remain outside this unit-domain entry point.
     pub fn astar_path_unit<W: UnitWorld>(
         &mut self,
         w: &W,
         stack: &mut PathStack,
         args: &SearchArgs,
     ) -> SearchResult {
-        let unit_size = ((args.unit.type_size + 1) / 2).max(1);
-        let step_scale = unit_size * UCELL;
-        let row_stride = w.wcells_w() * 16;
-        let dir_stride: i32 = if args.quick != 0 { 2 } else { 1 };
-
-        // --- pop goal, start, and the tolerance from the record below start ---
-        let goal = stack.pop_clamped();
-        let start = stack.pop_clamped();
-        let below_tol = if stack.records.is_empty() {
-            0
+        let mut frame = if self.suspended {
+            self.resume
+                .expect("a suspended unit search carries its continuation frame")
         } else {
-            stack.records[stack.records.len() - 1].tolerance
-        };
+            let unit_size = ((args.unit.type_size + 1) / 2).max(1);
+            let step_scale = unit_size * UCELL;
+            let row_stride = w.wcells_w() * 16;
+            let dir_stride: i32 = if args.quick != 0 { 2 } else { 1 };
 
-        let (gx, gy) = (goal.to_x, goal.to_y);
-        let (sx, sy) = (start.to_x, start.to_y);
-
-        // Arrival tolerance: `local_24 = local_60 / 2 + unit_size * step`. [measured 0x00684090]
-        let arrive_tol = below_tol / 2 + step_scale;
-
-        // --- root node ---
-        let metric0 = (ucell_of(sx) + ucell_of(sy) * row_stride) as u32;
-        let h0 = get_estimate(sx, sy, gx, gy, 0x30);
-        let root = self.alloc(PathNode {
-            x: sx,
-            y: sy,
-            length: 0,
-            estimate: h0,
-            value: h0,
-            timeout: 0,
-            metric: metric0,
-            ..Default::default()
-        });
-        let tn = self.open.ordered_insert(root, h0);
-        self.open_refs.insert(metric0, tn);
-
-        // --- the fixed direction seed [measured 0x00684064..0x00684086] ---
-        let dx0 = sx - gx;
-        let dy0 = sy - gy;
-        let seed: i32 = if dy0.abs() < dx0.abs() {
-            if gx < sx {
-                7
+            // --- pop goal, start, and the tolerance from the record below start ---
+            let goal = stack.pop_clamped();
+            let start = stack.pop_clamped();
+            let below_tol = if stack.records.is_empty() {
+                0
             } else {
-                3
-            }
-        } else if sy <= gy {
-            5
-        } else {
-            1
+                stack.records[stack.records.len() - 1].tolerance
+            };
+
+            let (gx, gy) = (goal.to_x, goal.to_y);
+            let (sx, sy) = (start.to_x, start.to_y);
+
+            // Arrival tolerance: `local_24 = local_60 / 2 + unit_size * step`.
+            // [measured 0x00684090]
+            let arrive_tol = below_tol / 2 + step_scale;
+
+            // --- root node ---
+            let metric0 = (ucell_of(sx) + ucell_of(sy) * row_stride) as u32;
+            let h0 = get_estimate(sx, sy, gx, gy, 0x30);
+            let root = self.alloc(PathNode {
+                x: sx,
+                y: sy,
+                length: 0,
+                estimate: h0,
+                value: h0,
+                timeout: 0,
+                metric: metric0,
+                ..Default::default()
+            });
+            let tn = self.open.ordered_insert(root, h0);
+            self.open_refs.insert(metric0, tn);
+
+            // --- the fixed direction seed [measured 0x00684064..0x00684086] ---
+            let dx0 = sx - gx;
+            let dy0 = sy - gy;
+            let seed: i32 = if dy0.abs() < dx0.abs() {
+                if gx < sx { 7 } else { 3 }
+            } else if sy <= gy {
+                5
+            } else {
+                1
+            };
+            let frame = UnitSearchResume {
+                goal: (gx, gy),
+                arrive_tol,
+                step_scale,
+                row_stride,
+                dir_stride,
+                seed,
+                expanded_before: 0,
+            };
+            self.resume = Some(frame);
+            frame
         };
+        self.suspended = false;
+        let (gx, gy) = frame.goal;
+        let UnitSearchResume {
+            arrive_tol,
+            step_scale,
+            row_stride,
+            dir_stride,
+            seed,
+            ..
+        } = frame;
 
         let mut expanded = 0i32;
 
@@ -984,15 +1023,22 @@ impl PathFinder {
 
             let cn = self.nodes[cur as usize];
             let manh = (cn.x - gx).abs() + (cn.y - gy).abs();
-            let hard_out = UNIT_NODE_BUDGET <= expanded;
+            let total_expanded = frame.expanded_before.wrapping_add(expanded);
+            let hard_out = UNIT_NODE_BUDGET <= total_expanded;
             let soft_out = self.in_upath != 0 && self.soft_node_limit < expanded;
 
             if manh <= arrive_tol || hard_out || soft_out {
                 if soft_out && manh > arrive_tol && args.quick == 0 {
                     // The engine parks the containers on the unit and returns -1 so that
-                    // `find_upath_restore` can pick the search back up next frame.
+                    // `find_upath_restore` can pick the search back up next frame. It first
+                    // puts the node it just removed back into both open containers
+                    // (`0x006845E5..0x00684601`), so the resumed slice does not skip it.
+                    let tn = self.open.ordered_insert(cur, cn.value);
+                    self.open_refs.insert(cn.metric, tn);
+                    frame.expanded_before = total_expanded;
+                    self.resume = Some(frame);
                     self.suspended = true;
-                    self.last_expanded = expanded;
+                    self.last_expanded = total_expanded;
                     return SearchResult::Suspended;
                 }
                 // `if (local_70 + local_58 < local_84 * 0x40 || param_3 != 0) bVar15 = false;`
@@ -1002,12 +1048,14 @@ impl PathFinder {
                 // whole arm, so a quick search that runs out of budget *does* return its best
                 // node. Getting this backwards costs you a spurious path where retail gives up.
                 if hard_out && args.quick == 0 {
-                    self.last_expanded = expanded;
+                    self.last_expanded = total_expanded;
                     self.pending_retry_draw = true;
+                    self.resume = None;
                     return SearchResult::Failed;
                 }
                 self.emit_path(stack, cur, args);
-                self.last_expanded = expanded;
+                self.last_expanded = total_expanded;
+                self.resume = None;
                 return SearchResult::Found;
             }
 
@@ -1115,8 +1163,9 @@ impl PathFinder {
 
         // Open list exhausted — the second of the two failure epilogues, at `0x00684E02`.
         // Same obligation as the budget one: see `pending_retry_draw`.
-        self.last_expanded = expanded;
+        self.last_expanded = frame.expanded_before.wrapping_add(expanded);
         self.pending_retry_draw = true;
+        self.resume = None;
         SearchResult::Failed
     }
 

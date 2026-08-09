@@ -1,9 +1,26 @@
 //! Borders / territory / supply / attrition / fog-of-war.
 //!
-//! Checksum channel served: **`world`** — `CheckSums::check_all` `0x00936560` channel 12,
-//! which is `World::walk_data` `0x006B5CF0` (world.cpp:1265). Every piece of state this
-//! module owns lands inside that walk; [`WorldChecksum`] reproduces the walk section by
-//! section so a replay harness can diff per section instead of per whole channel.
+//! # This module does not own the `world` channel. It writes into it.
+//!
+//! Channel 12 (`world`) is `World::walk_data` `0x006B5CF0`, and its single Rust owner is
+//! [`crate::systems::map_terrain::World`] — the storage *and* the walker. This module used
+//! to declare itself the channel owner too, with its own `Grids` / `WDataPlane` /
+//! `FogPlanes` copies of the state and a `world_checksum` covering 6 of the walk's 13
+//! sections. Two owners meant neither could be validated: whichever one a harness read, the
+//! other one's writes were invisible.
+//!
+//! Reconciled 2026-08-08 in favour of `map_terrain`, on the evidence of the walk itself —
+//! `re/decomp-all/006b5cf0.c` emits thirteen guarded sections including the six
+//! `SimpleArray<WCoord>` sub-object walks, the `CollBlock` loop, and four `Terrain` arrays
+//! reached through `[0x00c06218]`, none of which this module modelled. What this module had
+//! and `map_terrain` lacked — the per-section digest, so a mismatch says *which* section —
+//! was merged in as [`crate::systems::map_terrain::World::checksum_sections`].
+//!
+//! So: **`map_terrain::World` is the WData storage and the checksum walker; this module is
+//! the territory and fog *behaviour* that writes `WData::who` / `who2` / `was_seen` and the
+//! three fog planes through it.** Every function here that touches checksummed state takes
+//! a `&World` or `&mut World`, so there is exactly one copy of the bytes and
+//! `World::checksum()` sees this module's writes by construction.
 //!
 //! # Provenance
 //!
@@ -52,40 +69,51 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use super::map_terrain::{World, COORD_PER_FCELL, COORD_PER_TILE, COORD_PER_WCELL};
+
 // ---------------------------------------------------------------------------
 // 0. Coordinate systems
 // ---------------------------------------------------------------------------
 
-/// Fine world units per `rules.xml` "tile".
+/// Fine world units per `rules.xml` "tile". Alias of
+/// [`crate::systems::map_terrain::COORD_PER_TILE`] — the coordinate ladder is derived once,
+/// in `map_terrain`, and this module names it in the units its own derivation used.
 ///
 /// `[measured]` two ways that agree: `String::fraction` scale 192 is used for
 /// `unit_formation_spacing` (`"1/16 tile"` stores 12 = 192/16) and `unit_move_speed`
 /// (`"1/192 tile"` stores 1); and `div_3_table[c >> 6] == c / 192` is what
 /// `World::compute_reg_territory` uses to put a city into the tile grid.
-pub const FINE_PER_TILE: i32 = 192;
+pub const FINE_PER_TILE: i32 = COORD_PER_TILE;
 
 /// Fine units per fog cell. `Object::update_seen` computes `(los * 0xC0) / 0x180`
 /// = `los * 192 / 384`, and reads its own position through `div_3_table[c >> 7]`
 /// = `c / 384`. `[measured]`
-pub const FINE_PER_FOG: i32 = 384;
+pub const FINE_PER_FOG: i32 = COORD_PER_FCELL;
 
 /// Fine units per `WCoord` cell — the `WData` grid, where territory lives.
 /// `WallData::in_unfriendly_territory` indexes `WData` with `div_3_table[c >> 8]`
 /// = `c / 768`. `[measured]`
-pub const FINE_PER_WCOORD: i32 = 768;
+pub const FINE_PER_WCOORD: i32 = COORD_PER_WCELL;
 
 /// Object coordinates are stored XOR-obfuscated with this key.
 /// `[measured]` — every `Object` position read in the decompiled corpus is
 /// `*(u32*)(obj + 0x10) ^ 0x63637` / `+0x14 ^ 0x63637`.
 pub const COORD_XOR: u32 = 0x0006_3637;
 
-/// `div_3_table[i] == i / 3`, the table at `int *div_3_table` `0x00CAE5FC`.
+/// `div_3_table[i]`, the table at `int *div_3_table` `0x00CAE5FC`.
 ///
 /// It exists so the three shifts below land on the three grids: `>>6` then `/3` is
 /// `/192` (tile), `>>7` then `/3` is `/384` (fog), `>>8` then `/3` is `/768` (WCoord).
+///
+/// **Corrected while reconciling the two modules**: this used to be `v / 3`, Rust's
+/// truncating division, which disagrees with the table for every negative `v` not
+/// divisible by 3 (`-1/3 == 0`, but `div_3_table[-1] == -1`). `init_coord_lookup_array`
+/// `0x00681db0` fills `t[j] = (j - 2) / 3` for `j < 0`, i.e. `floor(j/3)` on both sides of
+/// zero — which is what [`crate::systems::map_terrain::div_3`] already implemented and what
+/// this now delegates to. Off-map and clamped coordinates are the ones that go negative.
 #[inline]
 pub const fn div3(v: i32) -> i32 {
-    v / 3
+    super::map_terrain::div_3(v)
 }
 
 /// Deobfuscate a stored object coordinate.
@@ -153,234 +181,40 @@ pub fn rem8_signed(v: i32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// 1. The four grids — World::init 0x006B76F0
+// 1. Grids and WData storage — both live in `map_terrain`
 // ---------------------------------------------------------------------------
 
-/// The four co-registered grids, exactly as `World::init(u16 xs, u16 ys)` derives them.
-///
-/// ```text
-/// xs, ys        = arguments                         WData / territory grid  (WCoord)
-/// size          = xs * ys
-/// fog_xs/ys     = xs*2, ys*2      fog_size  = product      fog planes       (FCoord)
-/// tile_xs/ys    = xs*4, ys*4      tile_size = product      TData            (TCoord)
-/// reg_xs/ys     = (xs*4)>>3, ..   reg_size  = product      danger planes    (region)
-/// ```
-///
-/// So one WCoord cell is 4 tiles across, one fog cell is 2 tiles, one region cell is
-/// 8 tiles. `[measured]` from the decompiled `World::init`, cross-checked against the
-/// allocation sizes it then passes to `malloc` and against the lengths
-/// `World::walk_data` walks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Grids {
-    pub xs: i32,
-    pub ys: i32,
-    pub size: i32,
-    pub fog_xs: i32,
-    pub fog_ys: i32,
-    pub fog_size: i32,
-    pub tile_xs: i32,
-    pub tile_ys: i32,
-    pub tile_size: i32,
-    pub reg_xs: i32,
-    pub reg_ys: i32,
-    pub reg_size: i32,
-}
-
-impl Grids {
-    /// Port of `World::init` `0x006B76F0`, grid arithmetic only.
-    pub fn new(xs: u16, ys: u16) -> Self {
-        let (xs, ys) = (xs as i32, ys as i32);
-        let (fog_xs, fog_ys) = ((xs * 8) >> 2, (ys * 8) >> 2);
-        let (tile_xs, tile_ys) = (xs * 4, ys * 4);
-        let (reg_xs, reg_ys) = (tile_xs >> 3, tile_ys >> 3);
-        Self {
-            xs,
-            ys,
-            size: xs * ys,
-            fog_xs,
-            fog_ys,
-            fog_size: fog_xs * fog_ys,
-            tile_xs,
-            tile_ys,
-            tile_size: tile_xs * tile_ys,
-            reg_xs,
-            reg_ys,
-            reg_size: reg_xs * reg_ys,
-        }
-    }
-
-    #[inline]
-    pub fn w_index(&self, wx: i32, wy: i32) -> usize {
-        (wy * self.xs + wx) as usize
-    }
-
-    #[inline]
-    pub fn f_index(&self, fx: i32, fy: i32) -> usize {
-        (fy * self.fog_xs + fx) as usize
-    }
-
-    #[inline]
-    pub fn f_in_bounds(&self, fx: i32, fy: i32) -> bool {
-        fx >= 0 && fy >= 0 && fx < self.fog_xs && fy < self.fog_ys
-    }
-
-    #[inline]
-    pub fn w_in_bounds(&self, wx: i32, wy: i32) -> bool {
-        wx >= 0 && wy >= 0 && wx < self.xs && wy < self.ys
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 2. WData — the per-WCoord record, 28 bytes, first 21 checksummed
-// ---------------------------------------------------------------------------
-
-/// Field offsets inside the 28-byte `WData` record, from the PDB TPI stream.
-///
-/// `World::walk_data` section 5 walks `[record+0, record+0x15)` for every one of `size`
-/// records — so bytes 0..21 are sim-critical, the three padding bytes and the
-/// `CollBlock*` at `+0x18` are not (the block is walked separately in section 9).
-pub mod wdata_off {
-    pub const FLAGS: usize = 0x00; // u16
-    pub const LAND: usize = 0x02; // i8
-    pub const LAND_SUB: usize = 0x03; // u8
-    pub const REGION: usize = 0x04; // i16
-    pub const REGION2: usize = 0x06; // i16
-    pub const DOWN: usize = 0x08; // i16
-    pub const DOWN_WHO: usize = 0x0A; // i16
-    pub const VAL: usize = 0x0C; // u8
-    pub const GOODS: usize = 0x0D; // u8
-    pub const LIGHT: usize = 0x0E; // u8
-    pub const WHO: usize = 0x0F; // i8   <- territory owner
-    pub const WHO2: usize = 0x10; // i8   <- runner-up owner
-    pub const BLOCKED: usize = 0x11; // u8
-    pub const BAD: usize = 0x12; // u8
-    pub const SOLID: usize = 0x13; // i8
-    pub const WAS_SEEN: usize = 0x14; // u8   <- per-player explored bitmask
-    pub const BLOCK_PTR: usize = 0x18; // CollBlock*
-    /// `sizeof(WData)`.
-    pub const STRIDE: usize = 28;
-    /// The prefix `World::walk_data` section 5 checksums.
-    pub const WALK_LEN: usize = 0x15;
-}
-
-/// The `WData` plane, structure-of-arrays.
-///
-/// Only the fields this lane owns are modelled as live state; the rest are carried so the
-/// checksum byte stream can be reproduced exactly. `flags`, `land`, `region`, … are
-/// written by worldgen and other lanes and are inputs here.
-#[derive(Clone, Debug, Default)]
-pub struct WDataPlane {
-    pub flags: Vec<u16>,
-    pub land: Vec<i8>,
-    pub land_sub: Vec<u8>,
-    pub region: Vec<i16>,
-    pub region2: Vec<i16>,
-    pub down: Vec<i16>,
-    pub down_who: Vec<i16>,
-    pub val: Vec<u8>,
-    pub goods: Vec<u8>,
-    pub light: Vec<u8>,
-    /// Territory owner, `-1` = unowned, `-2` = contested. `WorldData::get_who`.
-    pub who: Vec<i8>,
-    /// Runner-up claimant. `WorldData::get_who2`.
-    pub who2: Vec<i8>,
-    pub blocked: Vec<u8>,
-    pub bad: Vec<u8>,
-    pub solid: Vec<i8>,
-    /// Per-player explored bitmask (bit `p` = player `p` has explored this cell).
-    pub was_seen: Vec<u8>,
-}
-
-impl WDataPlane {
-    pub fn new(size: usize) -> Self {
-        Self {
-            flags: vec![0; size],
-            land: vec![0; size],
-            land_sub: vec![0; size],
-            region: vec![0; size],
-            region2: vec![0; size],
-            down: vec![0; size],
-            down_who: vec![0; size],
-            val: vec![0; size],
-            goods: vec![0; size],
-            light: vec![0; size],
-            who: vec![-1; size],
-            who2: vec![-1; size],
-            blocked: vec![0; size],
-            bad: vec![0; size],
-            solid: vec![0; size],
-            was_seen: vec![0; size],
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.who.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.who.is_empty()
-    }
-
-    /// Serialise record `i` into the exact 21 bytes `World::walk_data` section 5 hands to
-    /// the `DataWalk` visitor, little-endian, in `WData` field order.
-    pub fn walk_bytes(&self, i: usize, out: &mut Vec<u8>) {
-        let mut rec = [0u8; wdata_off::WALK_LEN];
-        rec[wdata_off::FLAGS..wdata_off::FLAGS + 2].copy_from_slice(&self.flags[i].to_le_bytes());
-        rec[wdata_off::LAND] = self.land[i] as u8;
-        rec[wdata_off::LAND_SUB] = self.land_sub[i];
-        rec[wdata_off::REGION..wdata_off::REGION + 2]
-            .copy_from_slice(&self.region[i].to_le_bytes());
-        rec[wdata_off::REGION2..wdata_off::REGION2 + 2]
-            .copy_from_slice(&self.region2[i].to_le_bytes());
-        rec[wdata_off::DOWN..wdata_off::DOWN + 2].copy_from_slice(&self.down[i].to_le_bytes());
-        rec[wdata_off::DOWN_WHO..wdata_off::DOWN_WHO + 2]
-            .copy_from_slice(&self.down_who[i].to_le_bytes());
-        rec[wdata_off::VAL] = self.val[i];
-        rec[wdata_off::GOODS] = self.goods[i];
-        rec[wdata_off::LIGHT] = self.light[i];
-        rec[wdata_off::WHO] = self.who[i] as u8;
-        rec[wdata_off::WHO2] = self.who2[i] as u8;
-        rec[wdata_off::BLOCKED] = self.blocked[i];
-        rec[wdata_off::BAD] = self.bad[i];
-        rec[wdata_off::SOLID] = self.solid[i] as u8;
-        rec[wdata_off::WAS_SEEN] = self.was_seen[i];
-        out.extend_from_slice(&rec);
-    }
-}
+// `World::init` `0x006B76F0`'s grid arithmetic, the 28-byte `WData` record and the three
+// fog planes were all modelled here as `Grids` / `WDataPlane` / `FogPlanes`. They are gone:
+// `map_terrain::World` already carried the same state in the PDB's own field order, and it
+// is the state the `world` channel walks. A second copy could only diverge from it.
+//
+// The mapping, for anyone following an old call site:
+//
+//   Grids{xs,ys,size,fog_*,tile_*,reg_*}  ->  World's fields of the same names
+//   Grids::w_index / f_index              ->  World::w_index / World::f_index
+//   Grids::w_in_bounds / f_in_bounds      ->  World::valid_w / World::valid_f
+//   WDataPlane::who[i] / who2[i]          ->  World::wdata[i].who / .who2
+//   WDataPlane::walk_bytes(i, out)        ->  World::wdata[i].checksum_bytes()
+//   FogPlanes{seen,seen2,seen3,wcoord_seen} -> World's fields of the same names
+//   world_checksum(..)                    ->  World::checksum_sections()
 
 // ---------------------------------------------------------------------------
 // 3. Fog of war
 // ---------------------------------------------------------------------------
 
-/// The three fog planes plus the coarse `wcoord_seen` plane.
-///
-/// Each byte is a **bitmask over the 8 player slots**; `WorldData::is_seen` and friends
-/// test it against `LeaderData +0x6929`, a per-leader single-bit player mask.
-///
-/// | plane | `World` offset | length | meaning |
-/// |---|---|---|---|
-/// | `seen`   | `+0x15C` | `fog_size` | currently visible this frame (cleared every tick) |
-/// | `seen2`  | `+0x160` | `fog_size` | ever explored |
-/// | `seen3`  | `+0x164` | `fog_size` | **detected** — the stealth-detection plane |
-/// | `wcoord_seen` | `+0x168` | `size` | explored, at WCoord resolution |
-#[derive(Clone, Debug, Default)]
-pub struct FogPlanes {
-    pub seen: Vec<u8>,
-    pub seen2: Vec<u8>,
-    pub seen3: Vec<u8>,
-    pub wcoord_seen: Vec<u8>,
-}
-
-impl FogPlanes {
-    pub fn new(g: &Grids) -> Self {
-        Self {
-            seen: vec![0; g.fog_size as usize],
-            seen2: vec![0; g.fog_size as usize],
-            seen3: vec![0; g.fog_size as usize],
-            wcoord_seen: vec![0; g.size as usize],
-        }
-    }
-}
+// The three fog planes plus the coarse `wcoord_seen` plane are `World` fields — they are
+// sections 6 and 7 of the checksum, so they live with the rest of the walked state:
+//
+// | plane | `World` offset | length | meaning |
+// |---|---|---|---|
+// | `seen`   | `+0x15C` | `fog_size` | currently visible this frame (cleared every tick) |
+// | `seen2`  | `+0x160` | `fog_size` | ever explored |
+// | `seen3`  | `+0x164` | `fog_size` | **detected** — the stealth-detection plane |
+// | `wcoord_seen` | `+0x168` | `size` | explored, at WCoord resolution |
+//
+// Each byte is a **bitmask over the 8 player slots**; `WorldData::is_seen` and friends test
+// it against `LeaderData +0x6929`, a per-leader single-bit player mask.
 
 /// Per-leader flags that short-circuit the fog queries, mirroring the bit tests in
 /// `WorldData::is_seen` / `was_seen` / `was_really_seen`.
@@ -403,23 +237,21 @@ pub struct FogLeader {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FogOption(pub u8);
 
-/// The fog-of-war state and the queries every other subsystem asks it.
-#[derive(Clone, Debug)]
+/// The fog-of-war **policy**: the per-leader facts and the game option that the plane
+/// queries consult. The planes themselves are `World` fields.
+///
+/// This is deliberately not a store. `Fog` holds only what `LeaderData` and `Game` supply;
+/// every method takes the `World` whose planes it reads or writes, so a fog stamp is
+/// visible to `World::checksum()` the instant it happens.
+#[derive(Clone, Debug, Default)]
 pub struct Fog {
-    pub grids: Grids,
-    pub planes: FogPlanes,
     pub leaders: [FogLeader; 8],
     pub option: FogOption,
 }
 
 impl Fog {
-    pub fn new(grids: Grids) -> Self {
-        Self {
-            planes: FogPlanes::new(&grids),
-            grids,
-            leaders: [FogLeader::default(); 8],
-            option: FogOption(0),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// `World::set_seen(FCoord fx, FCoord fy, int player, int detect)` `0x006B3C60`.
@@ -430,63 +262,53 @@ impl Fog {
     /// explored, run `reveal_fog`" trigger.
     ///
     /// `player < 0` writes mask `0xFF` (all players).
-    pub fn set_seen(
-        &mut self,
-        wdata: &mut WDataPlane,
-        fx: i32,
-        fy: i32,
-        player: i32,
-        detect: bool,
-    ) -> bool {
-        let i = self.grids.f_index(fx, fy);
+    pub fn set_seen(&self, w: &mut World, fx: i32, fy: i32, player: i32, detect: bool) -> bool {
+        let i = w.f_index(fx, fy);
         let mask: u8 = if player < 0 {
             0xFF
         } else {
             1u8 << (player as u32 & 0x1F)
         };
-        self.planes.seen[i] |= mask;
+        w.seen[i] |= mask;
         if detect {
-            self.planes.seen3[i] |= mask;
+            w.seen3[i] |= mask;
         }
-        let before = self.planes.seen2[i];
-        self.planes.seen2[i] |= mask;
-        let after = self.planes.seen2[i];
+        let before = w.seen2[i];
+        w.seen2[i] |= mask;
+        let after = w.seen2[i];
 
-        let wi = self.grids.w_index(fx >> 1, fy >> 1);
-        wdata.was_seen[wi] |= mask;
-        self.planes.wcoord_seen[wi] |= mask;
+        let wi = w.w_index(fx >> 1, fy >> 1);
+        w.wdata[wi].was_seen |= mask;
+        w.wcoord_seen[wi] |= mask;
 
         after != before
     }
 
     /// `World::set_was_seen(FCoord, FCoord, int)` `0x006B41D0` — explored only, no
     /// visibility, no return value.
-    pub fn set_was_seen(&mut self, wdata: &mut WDataPlane, fx: i32, fy: i32, player: i32) {
-        let i = self.grids.f_index(fx, fy);
+    pub fn set_was_seen(&self, w: &mut World, fx: i32, fy: i32, player: i32) {
+        let i = w.f_index(fx, fy);
         let mask: u8 = 1u8 << (player as u32 & 0x1F);
-        let wi = self.grids.w_index(fx >> 1, fy >> 1);
-        wdata.was_seen[wi] |= mask;
-        self.planes.seen2[i] |= mask;
+        let wi = w.w_index(fx >> 1, fy >> 1);
+        w.wdata[wi].was_seen |= mask;
+        w.seen2[i] |= mask;
     }
 
-    /// `World::clear_seen()` `0x006B2250` — zeroes `wcoord_seen` and `seen`. Runs first in
-    /// `GameDaemon::update_all_seen`, so the visible plane is rebuilt from scratch every
-    /// tick while `seen2` accumulates forever.
-    pub fn clear_seen(&mut self) {
-        self.planes.wcoord_seen.fill(0);
-        self.planes.seen.fill(0);
-    }
-
-    /// `GameDaemon::update_all_seen` also `memset`s `seen3` (detected) to zero before the
-    /// object pass. `[measured]`
-    pub fn clear_detected(&mut self) {
-        self.planes.seen3.fill(0);
+    /// `GameDaemon::update_all_seen` `0x00732840` also `memset`s `seen3` (detected) to zero
+    /// before the object pass, after `World::clear_seen` `0x006B2250` has cleared `seen` and
+    /// `wcoord_seen`. `[measured]`
+    ///
+    /// `World::clear_seen` itself is [`World::clear_seen`]; this is the pair of them, in the
+    /// order `update_all_seen` runs them.
+    pub fn begin_frame(&self, w: &mut World) {
+        w.clear_seen();
+        w.seen3.fill(0);
     }
 
     /// `WorldData::is_really_seen(FCoord, FCoord, int)` `0x006B42C0` — raw current
     /// visibility, with the leader short-circuits but **without** the `Game+0x30` option
     /// override that `is_seen` applies.
-    pub fn is_really_seen(&self, wdata: &WDataPlane, fx: i32, fy: i32, player: i32) -> bool {
+    pub fn is_really_seen(&self, w: &World, fx: i32, fy: i32, player: i32) -> bool {
         if player > 7 {
             return true;
         }
@@ -495,24 +317,24 @@ impl Fog {
             return true;
         }
         if l.see_own_territory {
-            let who = wdata.who[self.grids.w_index(fx >> 1, fy >> 1)];
+            let who = w.wdata[w.w_index(fx >> 1, fy >> 1)].who;
             if who >= 0 && self.is_ally(who as i32, player) {
                 return true;
             }
         }
-        self.planes.seen[self.grids.f_index(fx, fy)] & l.player_mask != 0
+        w.seen[w.f_index(fx, fy)] & l.player_mask != 0
     }
 
     /// `WorldData::is_seen(FCoord, FCoord, int)` `0x006B55C0`.
-    pub fn is_seen(&self, wdata: &WDataPlane, fx: i32, fy: i32, player: i32) -> bool {
+    pub fn is_seen(&self, w: &World, fx: i32, fy: i32, player: i32) -> bool {
         if player > 7 || self.option.0 == 3 {
             return true;
         }
-        self.is_really_seen(wdata, fx, fy, player)
+        self.is_really_seen(w, fx, fy, player)
     }
 
     /// `WorldData::was_really_seen(FCoord, FCoord, int)` `0x006B54F0` — explored, raw.
-    pub fn was_really_seen(&self, fx: i32, fy: i32, player: i32) -> bool {
+    pub fn was_really_seen(&self, w: &World, fx: i32, fy: i32, player: i32) -> bool {
         if player >= 8 || self.option.0 == 3 {
             return true;
         }
@@ -520,7 +342,7 @@ impl Fog {
         if l.see_all || l.reveal_counter != 0 {
             return true;
         }
-        self.planes.seen2[self.grids.f_index(fx, fy)] & l.player_mask != 0
+        w.seen2[w.f_index(fx, fy)] & l.player_mask != 0
     }
 
     /// `WorldData::is_detected(FCoord, FCoord, int)` `0x006B48C0` — is this cell inside a
@@ -528,29 +350,35 @@ impl Fog {
     /// is drawn/targetable only where `seen3` is set.
     ///
     /// Note it has **no** leader short-circuits at all — `see_all` does not grant detection.
-    pub fn is_detected(&self, fx: i32, fy: i32, player: i32) -> bool {
-        self.planes.seen3[self.grids.f_index(fx, fy)] & self.leaders[player as usize].player_mask
-            != 0
+    pub fn is_detected(&self, w: &World, fx: i32, fy: i32, player: i32) -> bool {
+        w.seen3[w.f_index(fx, fy)] & self.leaders[player as usize].player_mask != 0
     }
 
     /// `WorldData::is_detected_by_enemy(FCoord, FCoord, int)` `0x006B50F0` — the same plane
     /// masked with the *complement* of the player's bit: "is anyone but me detecting here".
-    pub fn is_detected_by_enemy(&self, fx: i32, fy: i32, player: i32) -> bool {
-        self.planes.seen3[self.grids.f_index(fx, fy)] & !self.leaders[player as usize].player_mask
-            != 0
+    pub fn is_detected_by_enemy(&self, w: &World, fx: i32, fy: i32, player: i32) -> bool {
+        w.seen3[w.f_index(fx, fy)] & !self.leaders[player as usize].player_mask != 0
     }
 
     /// Cheap per-player observability plane for the RL environment: `true` where player
     /// `p` currently has vision. One byte-test per cell, no allocation.
-    pub fn visible_mask_for(&self, player: usize) -> impl Iterator<Item = bool> + '_ {
+    pub fn visible_mask_for<'a>(
+        &self,
+        w: &'a World,
+        player: usize,
+    ) -> impl Iterator<Item = bool> + 'a {
         let bit = self.leaders[player].player_mask;
-        self.planes.seen.iter().map(move |b| b & bit != 0)
+        w.seen.iter().map(move |b| b & bit != 0)
     }
 
     /// Same, for explored-versus-unexplored.
-    pub fn explored_mask_for(&self, player: usize) -> impl Iterator<Item = bool> + '_ {
+    pub fn explored_mask_for<'a>(
+        &self,
+        w: &'a World,
+        player: usize,
+    ) -> impl Iterator<Item = bool> + 'a {
         let bit = self.leaders[player].player_mask;
-        self.planes.seen2.iter().map(move |b| b & bit != 0)
+        w.seen2.iter().map(move |b| b & bit != 0)
     }
 
     /// Placeholder for `LeaderData::is_ally` `0x006EDB50`; the diplomacy lane owns the real
@@ -666,8 +494,8 @@ pub struct SeeingObject {
 /// Returns the fog cells whose *explored* bit newly flipped — the ones on which the engine
 /// then calls `World::reveal_fog` `0x006B3D30`.
 pub fn update_seen(
-    fog: &mut Fog,
-    wdata: &mut WDataPlane,
+    fog: &Fog,
+    w: &mut World,
     circle: &CircleTable,
     obj: &SeeingObject,
     newly_explored: &mut Vec<(i32, i32)>,
@@ -688,21 +516,20 @@ pub fn update_seen(
     let end = circle.radius[r as usize];
 
     // The original hoists a bounds check when the whole disc is inside the map.
-    let g = fog.grids;
-    let fully_inside = g.f_in_bounds(ox + r, oy + r) && g.f_in_bounds(ox - r, oy - r);
+    let fully_inside = w.valid_f(ox + r, oy + r) && w.valid_f(ox - r, oy - r);
 
     for k in 0..end as usize {
         let fx = circle.x[k] as i32 + ox;
         let fy = circle.y[k] as i32 + oy;
-        if !fully_inside && !g.f_in_bounds(fx, fy) {
+        if !fully_inside && !w.valid_f(fx, fy) {
             continue;
         }
         let detect = (k as i32) < detect_end;
-        if fog.set_seen(wdata, fx, fy, obj.owner as i32, detect) {
+        if fog.set_seen(w, fx, fy, obj.owner as i32, detect) {
             newly_explored.push((fx, fy));
         }
         if obj.grant_seen2_to != 0 {
-            fog.set_was_seen(wdata, fx, fy, obj.grant_seen2_to as i32);
+            fog.set_was_seen(w, fx, fy, obj.grant_seen2_to as i32);
         }
     }
 }
@@ -1211,22 +1038,35 @@ impl RegionBorderState {
 ///
 /// Walks regions in index order, resolving cells from each region's cursor until the global
 /// budget runs out. Returns the number of tiles resolved.
+///
+/// **This is the writer of `WData::who` / `who2`, section 5 of the `world` channel.** It
+/// takes the `World` rather than a private plane, and the two territory-limit triples come
+/// from `World +0x38..0x4c` — the same dwords section 4 of the checksum walks — instead of
+/// being passed in beside it. A caller can no longer hand it limits that differ from the
+/// ones on the wire.
 pub fn check_borders(
     regions: &mut [RegionBorderState],
-    wdata: &mut WDataPlane,
-    grids: &Grids,
+    world: &mut World,
     slots: &[Vec<BorderSource>; 8],
     inputs: &[LeaderBorderInput; 8],
     c: &TerritoryRules,
-    // `World +0x38/0x3C/0x40` — the `player_territory_limit*` triple.
-    player_limits: (i32, i32, i32),
-    // `World +0x44/0x48/0x4C` — the `colonized_territory_limit*` triple.
-    colonized_limits: (i32, i32, i32),
 ) -> i32 {
     let mut active = [false; 8];
     for (i, l) in inputs.iter().enumerate() {
         active[i] = l.active;
     }
+
+    // `World +0x38/0x3C/0x40` and `+0x44/0x48/0x4C`.
+    let player_limits = (
+        world.player_territory_limit,
+        world.player_territory_limit_civic,
+        world.player_territory_limit_city,
+    );
+    let colonized_limits = (
+        world.colonized_territory_limit,
+        world.colonized_territory_limit_civic,
+        world.colonized_territory_limit_city,
+    );
 
     let mut budget = 0i32;
     for r in regions.iter_mut() {
@@ -1254,9 +1094,9 @@ pub fn check_borders(
                 continue;
             };
             let claim = claim_tile(wx, wy, slots, &params, &active, c);
-            let i = grids.w_index(wx, wy);
-            wdata.who[i] = claim.who;
-            wdata.who2[i] = claim.who2;
+            let i = world.w_index(wx, wy);
+            world.wdata[i].who = claim.who;
+            world.wdata[i].who2 = claim.who2;
         }
         r.flags |= 0x80 | 0x20;
     }
@@ -1268,16 +1108,16 @@ pub fn check_borders(
 // ---------------------------------------------------------------------------
 
 /// `WorldData::get_who(WCoord, WCoord)` `0x006B4700` (and `get_whose` `0x006B4D80`, which
-/// is byte-identical).
+/// is byte-identical). Re-exported from the storage owner.
 #[inline]
-pub fn get_who(wdata: &WDataPlane, g: &Grids, wx: i32, wy: i32) -> i32 {
-    wdata.who[g.w_index(wx, wy)] as i32
+pub fn get_who(w: &World, wx: i32, wy: i32) -> i32 {
+    w.get_who(wx, wy)
 }
 
 /// `WorldData::get_who2(WCoord, WCoord)` `0x006B2510`.
 #[inline]
-pub fn get_who2(wdata: &WDataPlane, g: &Grids, wx: i32, wy: i32) -> i32 {
-    wdata.who2[g.w_index(wx, wy)] as i32
+pub fn get_who2(w: &World, wx: i32, wy: i32) -> i32 {
+    w.get_who2(wx, wy)
 }
 
 /// The diplomacy facts `is_enemy_territory` needs. `team[p]` is `LeaderData +0x08`;
@@ -1294,15 +1134,8 @@ pub struct Diplomacy {
 /// Unowned (`who < 0`) is never enemy; own is never enemy; a tile owned by your team is
 /// never enemy; and a **mutual** alliance (`diplo[who][me] == 2 && diplo[me][team[who]] == 2`)
 /// is never enemy. Everything else is.
-pub fn is_enemy_territory(
-    wdata: &WDataPlane,
-    g: &Grids,
-    d: &Diplomacy,
-    wx: i32,
-    wy: i32,
-    player: i32,
-) -> bool {
-    let who = get_who(wdata, g, wx, wy);
+pub fn is_enemy_territory(w: &World, d: &Diplomacy, wx: i32, wy: i32, player: i32) -> bool {
+    let who = w.get_who(wx, wy);
     if who < 0 || who == player {
         return false;
     }
@@ -1648,198 +1481,21 @@ pub fn out_of_supply_reload(base_delay: i32, mult_256: i32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// 7. The `world` checksum channel
+// 7. The `world` checksum channel — owned by `map_terrain`
 // ---------------------------------------------------------------------------
 
-/// zlib `adler32`, the primitive at `0x00A46830` that `CheckSum` feeds every walked range.
-pub fn adler32(mut a: u32, data: &[u8]) -> u32 {
-    const BASE: u32 = 65_521;
-    let (mut s1, mut s2) = (a & 0xFFFF, (a >> 16) & 0xFFFF);
-    for &b in data {
-        s1 = (s1 + b as u32) % BASE;
-        s2 = (s2 + s1) % BASE;
-    }
-    a = (s2 << 16) | s1;
-    a
-}
-
-/// The sections of `World::walk_data(DataWalk*, int)` `0x006B5CF0`.
-///
-/// The `int` argument selects a section; `check_all` passes `-1`, meaning *all*. The
-/// section numbering below is the engine's own — the function is a chain of
-/// `if (sec < 0 || sec == N)` guards.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorldWalkSection {
-    /// 1 — `[World+0x00, World+0x08)`: `xs`, `ys`.
-    Dims = 1,
-    /// 2 — the four `SimpleArray<WCoord>` start-position arrays.
-    StartArrays = 2,
-    /// 3 — the two oil-position arrays.
-    OilArrays = 3,
-    /// 4 — `[World+0x08, World+0x80)`: every derived size, the six territory limits, the
-    /// resource totals and `seed`.
-    Scalars = 4,
-    /// 5 — `WData[size]`, bytes `[0, 0x15)` of each record. **Territory ownership and the
-    /// coarse explored bitmask ride here.**
-    WData = 5,
-    /// 6 — `TData[tile_size]` (2 bytes each), then `seen`, `seen2`, `seen3`, each
-    /// `fog_size` bytes. **All three fog planes are in the sync checksum.**
-    TDataAndFog = 6,
-    /// 7 — `wcoord_seen[size]`.
-    WCoordSeen = 7,
-    /// 8 — `danger[8][reg_size]`, 4 bytes per entry.
-    Danger = 8,
-    /// 9 — the per-`WData` `CollBlock`, when present.
-    CollBlocks = 9,
-}
-
-/// Reproduces the `World::walk_data` byte stream for the sections this lane owns, so a
-/// replay harness can diff **per section** instead of staring at one 32-bit mismatch.
-///
-/// Sections 2, 3 and 9 are owned by other lanes (worldgen and collision) and are emitted as
-/// empty here; `full` therefore is not yet the complete channel-12 digest, and says so.
-#[derive(Clone, Debug)]
-pub struct WorldChecksum {
-    pub dims: u32,
-    pub scalars: u32,
-    pub wdata: u32,
-    pub tdata_and_fog: u32,
-    pub wcoord_seen: u32,
-    pub danger: u32,
-    /// Adler over the concatenation of every section emitted, in walk order.
-    pub partial: u32,
-}
-
-/// The `[World+0x08, World+0x80)` scalar block, in field order.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct WorldScalars {
-    pub map: i32,
-    pub sea_map: i32,
-    pub player_territory_limit: i32,
-    pub player_territory_limit_civic: i32,
-    pub player_territory_limit_city: i32,
-    pub colonized_territory_limit: i32,
-    pub colonized_territory_limit_civic: i32,
-    pub colonized_territory_limit_city: i32,
-    pub player_reg: i32,
-    pub resource_reg: i32,
-    pub forest_size: i32,
-    pub mountain_size: i32,
-    pub rock_size: i32,
-    pub total_metal: i32,
-    pub total_oil: i32,
-    pub goodies: i32,
-    pub land_resources: i32,
-    pub sea_resources: i32,
-    pub land_size: i32,
-    pub seed: i32,
-}
-
-/// Compute the `world` channel digest over the state this lane owns.
-pub fn world_checksum(
-    g: &Grids,
-    sc: &WorldScalars,
-    wdata: &WDataPlane,
-    tdata: &[u16],
-    fog: &FogPlanes,
-    danger: &[Vec<i32>; 8],
-) -> WorldChecksum {
-    let mut stream: Vec<u8> = Vec::new();
-
-    // section 1
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&g.xs.to_le_bytes());
-    buf.extend_from_slice(&g.ys.to_le_bytes());
-    let dims = adler32(1, &buf);
-    stream.extend_from_slice(&buf);
-
-    // section 4 — [+0x08, +0x80): 30 dwords, derived sizes first then WorldScalars.
-    buf.clear();
-    for v in [
-        g.size,
-        g.fog_xs,
-        g.fog_ys,
-        g.fog_size,
-        g.tile_xs,
-        g.tile_ys,
-        g.tile_size,
-        g.reg_xs,
-        g.reg_ys,
-        g.reg_size,
-    ] {
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
-    for v in [
-        sc.map,
-        sc.sea_map,
-        sc.player_territory_limit,
-        sc.player_territory_limit_civic,
-        sc.player_territory_limit_city,
-        sc.colonized_territory_limit,
-        sc.colonized_territory_limit_civic,
-        sc.colonized_territory_limit_city,
-        sc.player_reg,
-        sc.resource_reg,
-        sc.forest_size,
-        sc.mountain_size,
-        sc.rock_size,
-        sc.total_metal,
-        sc.total_oil,
-        sc.goodies,
-        sc.land_resources,
-        sc.sea_resources,
-        sc.land_size,
-        sc.seed,
-    ] {
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
-    let scalars = adler32(1, &buf);
-    stream.extend_from_slice(&buf);
-
-    // section 5 — WData[size], 21 bytes each
-    buf.clear();
-    buf.reserve(wdata.len() * wdata_off::WALK_LEN);
-    for i in 0..wdata.len() {
-        wdata.walk_bytes(i, &mut buf);
-    }
-    let wdata_sum = adler32(1, &buf);
-    stream.extend_from_slice(&buf);
-
-    // section 6 — TData then the three fog planes
-    buf.clear();
-    for t in tdata {
-        buf.extend_from_slice(&t.to_le_bytes());
-    }
-    buf.extend_from_slice(&fog.seen);
-    buf.extend_from_slice(&fog.seen2);
-    buf.extend_from_slice(&fog.seen3);
-    let tdata_and_fog = adler32(1, &buf);
-    stream.extend_from_slice(&buf);
-
-    // section 7 — wcoord_seen[size]
-    let wcoord_seen = adler32(1, &fog.wcoord_seen);
-    stream.extend_from_slice(&fog.wcoord_seen);
-
-    // section 8 — danger[8][reg_size]
-    buf.clear();
-    for plane in danger.iter() {
-        for v in plane {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-    }
-    let danger_sum = adler32(1, &buf);
-    stream.extend_from_slice(&buf);
-
-    WorldChecksum {
-        dims,
-        scalars,
-        wdata: wdata_sum,
-        tdata_and_fog,
-        wcoord_seen,
-        danger: danger_sum,
-        partial: adler32(1, &stream),
-    }
-}
+// `adler32`, `WorldWalkSection`, `WorldScalars`, `WorldChecksum` and `world_checksum` were
+// here. They are gone, and nothing in this module hashes anything any more.
+//
+//   * the primitive is `crate::checksum::adler32`, the crate's only implementation;
+//   * the walker is `map_terrain::World::walk_section`, all thirteen sections;
+//   * the per-section digest this module invented, which was its one thing `map_terrain`
+//     lacked, is `map_terrain::World::checksum_sections` -> `WorldChecksum`.
+//
+// The scalar block this module called `WorldScalars` is not a separate struct: those
+// twenty dwords are `World +0x30 .. +0x7c`, walked as one contiguous 120-byte range with
+// the ten derived sizes ahead of them. `check_borders` above now reads the six territory
+// limits straight out of the same fields the checksum walks.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1848,10 +1504,12 @@ pub fn world_checksum(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::systems::map_terrain;
 
+    /// `World::init` grid arithmetic, now read off the one `World` both lanes share.
     #[test]
     fn grids_match_world_init() {
-        let g = Grids::new(64, 64);
+        let g = World::init_default_rules(64, 64);
         assert_eq!((g.xs, g.ys, g.size), (64, 64, 4096));
         assert_eq!((g.fog_xs, g.fog_ys, g.fog_size), (128, 128, 16384));
         assert_eq!((g.tile_xs, g.tile_ys, g.tile_size), (256, 256, 65536));
@@ -1950,19 +1608,20 @@ mod tests {
         assert_eq!(los_to_fog_radius(1000), CIRCLE_MAX_R as i32);
     }
 
-    fn tiny_fog() -> (Fog, WDataPlane, CircleTable) {
-        let g = Grids::new(16, 16);
-        let mut fog = Fog::new(g);
+    /// A 16x16-WCoord world plus the fog policy. The planes are the `World`'s — that is
+    /// the whole point of the reconciliation, so the tests below assert against the same
+    /// bytes `World::checksum()` walks.
+    fn tiny_fog() -> (Fog, World, CircleTable) {
+        let mut fog = Fog::new();
         for (i, l) in fog.leaders.iter_mut().enumerate() {
             l.player_mask = 1u8 << i;
         }
-        let w = WDataPlane::new(g.size as usize);
-        (fog, w, CircleTable::build())
+        (fog, World::init_default_rules(16, 16), CircleTable::build())
     }
 
     #[test]
     fn set_seen_writes_all_four_planes_and_reports_new_exploration() {
-        let (mut fog, mut w, _) = tiny_fog();
+        let (fog, mut w, _) = tiny_fog();
         let (fx, fy) = (10, 10);
         assert!(fog.set_seen(&mut w, fx, fy, 2, true), "first touch is new");
         assert!(
@@ -1970,37 +1629,38 @@ mod tests {
             "second touch is not"
         );
 
-        let fi = fog.grids.f_index(fx, fy);
-        let wi = fog.grids.w_index(fx >> 1, fy >> 1);
-        assert_eq!(fog.planes.seen[fi], 0b100);
-        assert_eq!(fog.planes.seen2[fi], 0b100);
-        assert_eq!(fog.planes.seen3[fi], 0b100);
-        assert_eq!(fog.planes.wcoord_seen[wi], 0b100);
-        assert_eq!(w.was_seen[wi], 0b100);
+        let fi = w.f_index(fx, fy);
+        let wi = w.w_index(fx >> 1, fy >> 1);
+        assert_eq!(w.seen[fi], 0b100);
+        assert_eq!(w.seen2[fi], 0b100);
+        assert_eq!(w.seen3[fi], 0b100);
+        assert_eq!(w.wcoord_seen[wi], 0b100);
+        assert_eq!(w.wdata[wi].was_seen, 0b100);
     }
 
     #[test]
     fn clear_seen_drops_visibility_but_keeps_exploration() {
-        let (mut fog, mut w, _) = tiny_fog();
+        let (fog, mut w, _) = tiny_fog();
         fog.set_seen(&mut w, 4, 4, 0, false);
-        fog.clear_seen();
+        fog.begin_frame(&mut w);
         assert!(!fog.is_really_seen(&w, 4, 4, 0));
-        assert!(fog.was_really_seen(4, 4, 0));
+        assert!(fog.was_really_seen(&w, 4, 4, 0));
         // and the coarse plane went with the visible one
-        assert_eq!(fog.planes.wcoord_seen[fog.grids.w_index(2, 2)], 0);
-        assert_ne!(w.was_seen[fog.grids.w_index(2, 2)], 0);
+        let wi = w.w_index(2, 2);
+        assert_eq!(w.wcoord_seen[wi], 0);
+        assert_ne!(w.wdata[wi].was_seen, 0);
     }
 
     #[test]
     fn detection_plane_is_separate_from_visibility() {
-        let (mut fog, mut w, _) = tiny_fog();
+        let (fog, mut w, _) = tiny_fog();
         fog.set_seen(&mut w, 6, 6, 1, false);
         assert!(fog.is_really_seen(&w, 6, 6, 1));
-        assert!(!fog.is_detected(6, 6, 1));
+        assert!(!fog.is_detected(&w, 6, 6, 1));
         fog.set_seen(&mut w, 6, 6, 1, true);
-        assert!(fog.is_detected(6, 6, 1));
-        assert!(fog.is_detected_by_enemy(6, 6, 0));
-        assert!(!fog.is_detected_by_enemy(6, 6, 1));
+        assert!(fog.is_detected(&w, 6, 6, 1));
+        assert!(fog.is_detected_by_enemy(&w, 6, 6, 0));
+        assert!(!fog.is_detected_by_enemy(&w, 6, 6, 1));
     }
 
     #[test]
@@ -2008,13 +1668,13 @@ mod tests {
         let (mut fog, w, _) = tiny_fog();
         fog.leaders[3].see_all = true;
         assert!(fog.is_really_seen(&w, 0, 0, 3));
-        assert!(fog.was_really_seen(0, 0, 3));
-        assert!(!fog.is_detected(0, 0, 3), "see_all grants no detection");
+        assert!(fog.was_really_seen(&w, 0, 0, 3));
+        assert!(!fog.is_detected(&w, 0, 0, 3), "see_all grants no detection");
     }
 
     #[test]
     fn update_seen_stamps_the_disc() {
-        let (mut fog, mut w, circle) = tiny_fog();
+        let (fog, mut w, circle) = tiny_fog();
         let obj = SeeingObject {
             fine_x: 16 * FINE_PER_FOG,
             fine_y: 16 * FINE_PER_FOG,
@@ -2024,23 +1684,23 @@ mod tests {
             grant_seen2_to: 0,
         };
         let mut newly = Vec::new();
-        update_seen(&mut fog, &mut w, &circle, &obj, &mut newly);
+        update_seen(&fog, &mut w, &circle, &obj, &mut newly);
 
         assert_eq!(newly.len(), circle.radius[4] as usize);
         assert!(fog.is_really_seen(&w, 16, 16, 0));
         assert!(fog.is_really_seen(&w, 20, 16, 0), "on the rim");
         assert!(!fog.is_really_seen(&w, 22, 16, 0), "outside the rim");
-        assert!(!fog.is_detected(16, 16, 0), "not a detector");
+        assert!(!fog.is_detected(&w, 16, 16, 0), "not a detector");
 
         // idempotent: a second pass reports nothing newly explored
         let mut again = Vec::new();
-        update_seen(&mut fog, &mut w, &circle, &obj, &mut again);
+        update_seen(&fog, &mut w, &circle, &obj, &mut again);
         assert!(again.is_empty());
     }
 
     #[test]
     fn detector_stamps_the_whole_disc_into_seen3() {
-        let (mut fog, mut w, circle) = tiny_fog();
+        let (fog, mut w, circle) = tiny_fog();
         let obj = SeeingObject {
             fine_x: 16 * FINE_PER_FOG,
             fine_y: 16 * FINE_PER_FOG,
@@ -2049,10 +1709,10 @@ mod tests {
             detector: true,
             grant_seen2_to: 0,
         };
-        update_seen(&mut fog, &mut w, &circle, &obj, &mut Vec::new());
-        assert!(fog.is_detected(16, 16, 1));
-        assert!(fog.is_detected(19, 16, 1));
-        assert!(!fog.is_detected(24, 16, 1));
+        update_seen(&fog, &mut w, &circle, &obj, &mut Vec::new());
+        assert!(fog.is_detected(&w, 16, 16, 1));
+        assert!(fog.is_detected(&w, 19, 16, 1));
+        assert!(!fog.is_detected(&w, 24, 16, 1));
     }
 
     #[test]
@@ -2077,7 +1737,7 @@ mod tests {
 
     #[test]
     fn update_seen_clips_at_the_map_edge() {
-        let (mut fog, mut w, circle) = tiny_fog();
+        let (fog, mut w, circle) = tiny_fog();
         let obj = SeeingObject {
             fine_x: 0,
             fine_y: 0,
@@ -2087,9 +1747,10 @@ mod tests {
             grant_seen2_to: 0,
         };
         // must not panic and must not wrap onto the far edge
-        update_seen(&mut fog, &mut w, &circle, &obj, &mut Vec::new());
+        update_seen(&fog, &mut w, &circle, &obj, &mut Vec::new());
         assert!(fog.is_really_seen(&w, 0, 0, 0));
-        assert!(!fog.is_really_seen(&w, fog.grids.fog_xs - 1, 0, 0));
+        let far = w.fog_xs - 1;
+        assert!(!fog.is_really_seen(&w, far, 0, 0));
     }
 
     // --- territory ---------------------------------------------------------
@@ -2362,18 +2023,19 @@ mod tests {
         );
     }
 
+    /// The 256-tile-per-frame budget, and — the point of the reconciliation — the claims
+    /// land in the `World` the checksum walks, not in a private plane.
     #[test]
     fn check_borders_respects_the_256_tile_budget() {
         let c = TerritoryRules::default();
-        let g = Grids::new(32, 32);
-        let mut w = WDataPlane::new(g.size as usize);
+        let mut world = World::init_default_rules(32, 32);
         let mut slots: [Vec<BorderSource>; 8] = Default::default();
         slots[0].push(city_at(0, 60, 60));
         let mut inputs = [LeaderBorderInput::default(); 8];
         inputs[0] = plain_leader();
 
-        let coords: Vec<(i32, i32)> = (0..g.ys)
-            .flat_map(|y| (0..g.xs).map(move |x| (x, y)))
+        let coords: Vec<(i32, i32)> = (0..world.ys)
+            .flat_map(|y| (0..world.xs).map(move |x| (x, y)))
             .collect();
         let mut regions = vec![RegionBorderState {
             flags: 4,
@@ -2382,51 +2044,106 @@ mod tests {
             coords,
         }];
 
+        let size = world.size;
         let mut frames = 0;
         while regions[0].dirty() {
-            let done = check_borders(
-                &mut regions,
-                &mut w,
-                &g,
-                &slots,
-                &inputs,
-                &c,
-                (44, 4, 4),
-                (44, 4, 4),
-            );
+            let done = check_borders(&mut regions, &mut world, &slots, &inputs, &c);
             assert!(done <= TERRITORY_TILES_PER_FRAME);
             frames += 1;
             assert!(frames < 100, "budget loop did not terminate");
         }
-        assert_eq!(frames, (g.size + 255) / 256);
-        assert!(w.who.contains(&0), "someone should own something");
+        assert_eq!(frames, (size + 255) / 256);
+        assert!(
+            world.wdata.iter().any(|d| d.who == 0),
+            "someone should own something"
+        );
+    }
+
+    /// A territory claim must move the `world` channel, and must move **section 5** of it
+    /// and nothing else. This is the assertion neither module could make while there were
+    /// two stores: `borders_fog` wrote one copy and `map_terrain` hashed the other.
+    #[test]
+    fn a_border_pass_moves_section_5_of_the_world_channel() {
+        let c = TerritoryRules::default();
+        let mut world = World::init_default_rules(16, 16);
+        let before = world.checksum_sections();
+
+        let mut slots: [Vec<BorderSource>; 8] = Default::default();
+        slots[0].push(city_at(0, 30, 30));
+        let mut inputs = [LeaderBorderInput::default(); 8];
+        inputs[0] = plain_leader();
+        let coords: Vec<(i32, i32)> = (0..world.ys)
+            .flat_map(|y| (0..world.xs).map(move |x| (x, y)))
+            .collect();
+        let mut regions = vec![RegionBorderState {
+            flags: 4,
+            size: coords.len() as i32,
+            borders: 0,
+            coords,
+        }];
+        while regions[0].dirty() {
+            check_borders(&mut regions, &mut world, &slots, &inputs, &c);
+        }
+
+        let after = world.checksum_sections();
+        assert_ne!(before.full, after.full, "the channel must notice a border");
+        assert_eq!(
+            after.differing_sections(&before),
+            vec![map_terrain::WorldSection::WData],
+            "territory is WData, section 5, and nothing else moved"
+        );
+    }
+
+    /// The same, for fog: `set_seen` touches `WData::was_seen` (section 5), the three fog
+    /// planes (section 6) and `wcoord_seen` (section 7), and no other section.
+    #[test]
+    fn a_fog_stamp_moves_sections_5_6_and_7() {
+        let (fog, mut world, circle) = tiny_fog();
+        let before = world.checksum_sections();
+        let obj = SeeingObject {
+            fine_x: 16 * FINE_PER_FOG,
+            fine_y: 16 * FINE_PER_FOG,
+            owner: 0,
+            los_tiles: 8,
+            detector: true,
+            grant_seen2_to: 0,
+        };
+        update_seen(&fog, &mut world, &circle, &obj, &mut Vec::new());
+        let after = world.checksum_sections();
+
+        use map_terrain::WorldSection::*;
+        assert_eq!(
+            after.differing_sections(&before),
+            vec![WData, TDataAndFog, WCoordSeen]
+        );
+        // and the byte counts are unchanged — a fog stamp rewrites bytes, never resizes.
+        for s in map_terrain::WorldSection::all() {
+            assert_eq!(before.section(s).bytes, after.section(s).bytes, "{s:?}");
+        }
     }
 
     #[test]
     fn ownership_queries() {
-        let g = Grids::new(8, 8);
-        let mut w = WDataPlane::new(g.size as usize);
-        w.who[g.w_index(3, 3)] = 1;
-        w.who2[g.w_index(3, 3)] = 2;
-        assert_eq!(get_who(&w, &g, 3, 3), 1);
-        assert_eq!(get_who2(&w, &g, 3, 3), 2);
-        assert_eq!(get_who(&w, &g, 0, 0), -1);
+        let mut w = World::init_default_rules(8, 8);
+        let i = w.w_index(3, 3);
+        w.wdata[i].who = 1;
+        w.wdata[i].who2 = 2;
+        assert_eq!(get_who(&w, 3, 3), 1);
+        assert_eq!(get_who2(&w, 3, 3), 2);
+        assert_eq!(get_who(&w, 0, 0), -1);
 
         let mut d = Diplomacy::default();
         for (i, t) in d.team.iter_mut().enumerate() {
             *t = i as i32;
         }
-        assert!(is_enemy_territory(&w, &g, &d, 3, 3, 0));
-        assert!(!is_enemy_territory(&w, &g, &d, 3, 3, 1));
-        assert!(
-            !is_enemy_territory(&w, &g, &d, 0, 0, 0),
-            "unowned is neutral"
-        );
+        assert!(is_enemy_territory(&w, &d, 3, 3, 0));
+        assert!(!is_enemy_territory(&w, &d, 3, 3, 1));
+        assert!(!is_enemy_territory(&w, &d, 0, 0, 0), "unowned is neutral");
 
         // mutual alliance
         d.diplo[0][1] = 2;
         d.diplo[1][0] = 2;
-        assert!(!is_enemy_territory(&w, &g, &d, 3, 3, 0));
+        assert!(!is_enemy_territory(&w, &d, 3, 3, 0));
     }
 
     // --- attrition / supply ------------------------------------------------
@@ -2709,73 +2426,39 @@ mod tests {
 
     // --- checksum ----------------------------------------------------------
 
-    #[test]
-    fn adler32_matches_known_vectors() {
-        assert_eq!(adler32(1, b""), 1);
-        assert_eq!(adler32(1, b"a"), 0x0062_0062);
-        assert_eq!(adler32(1, b"Wikipedia"), 0x11E6_0398);
-    }
-
+    /// The channel's own bytes, from the one owner. `WData +0x0f/+0x10` is `who`/`who2`
+    /// and `+0x14` is `was_seen`, which is what puts territory and exploration on the wire.
     #[test]
     fn wdata_walk_record_is_21_bytes_in_field_order() {
-        let mut w = WDataPlane::new(1);
-        w.flags[0] = 0x1234;
-        w.region[0] = 0x0506;
-        w.who[0] = 3;
-        w.who2[0] = -2;
-        w.was_seen[0] = 0xA5;
-        let mut out = Vec::new();
-        w.walk_bytes(0, &mut out);
-        assert_eq!(out.len(), wdata_off::WALK_LEN);
+        let mut d = map_terrain::WData::default();
+        d.flags = 0x1234;
+        d.region = 0x0506;
+        d.who = 3;
+        d.who2 = -2;
+        d.was_seen = 0xA5;
+        let out = d.checksum_bytes();
+        assert_eq!(out.len(), 0x15);
         assert_eq!(&out[0..2], &[0x34, 0x12]);
         assert_eq!(&out[4..6], &[0x06, 0x05]);
-        assert_eq!(out[wdata_off::WHO], 3);
-        assert_eq!(out[wdata_off::WHO2], 0xFE);
-        assert_eq!(out[wdata_off::WAS_SEEN], 0xA5);
+        assert_eq!(out[0x0f], 3);
+        assert_eq!(out[0x10], 0xFE);
+        assert_eq!(out[0x14], 0xA5);
     }
 
-    #[test]
-    fn world_checksum_reacts_to_every_plane_it_owns() {
-        let g = Grids::new(8, 8);
-        let sc = WorldScalars::default();
-        let mut w = WDataPlane::new(g.size as usize);
-        let tdata = vec![0u16; g.tile_size as usize];
-        let mut fog = FogPlanes::new(&g);
-        let danger: [Vec<i32>; 8] = std::array::from_fn(|_| vec![0i32; g.reg_size as usize]);
-
-        let base = world_checksum(&g, &sc, &w, &tdata, &fog, &danger);
-
-        w.who[5] = 2;
-        let after_territory = world_checksum(&g, &sc, &w, &tdata, &fog, &danger);
-        assert_ne!(base.wdata, after_territory.wdata);
-        assert_ne!(base.partial, after_territory.partial);
-
-        fog.seen3[7] = 1;
-        let after_detect = world_checksum(&g, &sc, &w, &tdata, &fog, &danger);
-        assert_ne!(after_territory.tdata_and_fog, after_detect.tdata_and_fog);
-
-        fog.wcoord_seen[1] = 4;
-        let after_wseen = world_checksum(&g, &sc, &w, &tdata, &fog, &danger);
-        assert_ne!(after_detect.wcoord_seen, after_wseen.wcoord_seen);
-    }
-
+    /// The point of the whole lane: territory is inside the `world` sync channel, so a
+    /// border that resolves one tile differently is a desync, not a cosmetic difference.
     #[test]
     fn a_territory_flip_changes_the_world_channel() {
-        // The point of the whole lane: territory is inside the `world` sync channel, so a
-        // border that resolves one tile differently is a desync, not a cosmetic difference.
-        let g = Grids::new(16, 16);
-        let sc = WorldScalars::default();
-        let tdata = vec![0u16; g.tile_size as usize];
-        let fog = FogPlanes::new(&g);
-        let danger: [Vec<i32>; 8] = std::array::from_fn(|_| vec![0i32; g.reg_size as usize]);
-
-        let mut a = WDataPlane::new(g.size as usize);
-        let mut b = WDataPlane::new(g.size as usize);
-        a.who[100] = 1;
-        b.who[100] = 2;
-        assert_ne!(
-            world_checksum(&g, &sc, &a, &tdata, &fog, &danger).wdata,
-            world_checksum(&g, &sc, &b, &tdata, &fog, &danger).wdata
+        let mut a = World::init_default_rules(16, 16);
+        let mut b = World::init_default_rules(16, 16);
+        assert_eq!(a.checksum(), b.checksum());
+        a.wdata[100].who = 1;
+        b.wdata[100].who = 2;
+        assert_ne!(a.checksum(), b.checksum());
+        assert_eq!(
+            a.checksum_sections()
+                .differing_sections(&b.checksum_sections()),
+            vec![map_terrain::WorldSection::WData]
         );
     }
 }

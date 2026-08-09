@@ -41,7 +41,15 @@ pub mod balance;
 pub mod balance_path;
 pub mod batch;
 pub mod checksum;
+/// Added by the `command-bridge` lane. The command→order bridge:
+/// `CommandPackage::process_*` -> `Group::action_*` -> `Unit::add_*_order`. Depends only
+/// on [`order`] and [`systems::groups_guys`].
+pub mod command;
 pub mod container;
+/// Added by the `dual-mode` lane. The fidelity / improved mode split and the registry of
+/// every deliberate deviation from retail. **Fidelity is the default**; see
+/// `docs/tracks/dual-mode.md`. Depends on nothing else in this crate.
+pub mod deviations;
 pub mod generated;
 pub mod interleave;
 pub mod mechanics;
@@ -51,6 +59,7 @@ pub mod rng;
 pub mod schedule;
 pub mod simd;
 pub mod systems;
+pub mod tick;
 pub mod trig;
 pub mod world;
 

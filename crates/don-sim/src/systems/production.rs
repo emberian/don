@@ -2128,24 +2128,8 @@ impl CheckSum {
 /// duplicate at `0x005089D0`).
 ///
 /// `BASE = 65521`, `NMAX = 5552 = 0x15B0` — both literals appear in the disassembly.
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    const NMAX: usize = 5552;
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    let mut i = 0;
-    while i < buf.len() {
-        let n = NMAX.min(buf.len() - i);
-        for &b in &buf[i..i + n] {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-        i += n;
-    }
-    (s2 << 16) | s1
-}
+/// Re-exported from [`crate::checksum`], the crate's only implementation.
+pub use crate::checksum::adler32;
 
 // =======================================================================================
 // The pool, and the channel

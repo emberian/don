@@ -243,6 +243,90 @@ fn the_harness_produces_a_divergence_profile() {
     assert!(ran > 0, "no multiplayer recording ran");
 }
 
+/// The bridge, against a real recording: a `don_sim::World` with rows in it
+/// produces engine-layout `Unit` records, and the `units` channel compares
+/// **bytes against bytes** instead of nothing against something.
+///
+/// The population is seeded rather than derived — `don-sim` has no command
+/// producer yet — so this asserts about the plumbing, never about agreement. It
+/// asserts the opposite of agreement, in fact: a declared population must *not*
+/// match retail, and if it ever did, the comparator would be broken.
+#[test]
+fn the_bridge_makes_the_units_channel_non_trivial_against_a_recording() {
+    let reps = mp_replays();
+    if reps.is_empty() {
+        skip_banner();
+        return;
+    }
+    let rep = &reps[0];
+    let u = Channel::Units as usize;
+
+    let mut empty = NullSim::new();
+    let a = harness::run(rep, &mut empty, Phase::BeforeCommands, 0);
+    assert_eq!(
+        a.channels[u].nontrivial_compares, 0,
+        "an empty world walks no bytes"
+    );
+
+    let mut seeded = harness::WorldSim::seeded(2, 3);
+    assert_eq!(seeded.seed_units, 6);
+    let b = harness::run(rep, &mut seeded, Phase::BeforeCommands, 0);
+    eprintln!(
+        "  units: {} non-trivial compares, {} bytes/compare, {} matches",
+        b.channels[u].nontrivial_compares, b.channels[u].our_bytes_walked, b.channels[u].matches
+    );
+    assert_eq!(
+        b.channels[u].nontrivial_compares, b.channels[u].compares,
+        "every compare walked bytes"
+    );
+    assert!(
+        b.channels[u].our_bytes_walked >= 6 * 145,
+        "six units of Unit+Object bytes: {}",
+        b.channels[u].our_bytes_walked
+    );
+    assert_eq!(b.channels[u].matches, 0, "a seeded world must not match");
+    assert!(seeded.frames > 0, "the world was actually stepped");
+}
+
+/// Every agreement in the corpus today is on a channel `don-sim` has no producer
+/// for. That is the honest reading of the scoreboard, and it is asserted rather
+/// than written in prose so it stops being true the moment a producer lands.
+#[test]
+fn todays_agreements_are_all_unmodelled() {
+    let reps = mp_replays();
+    if reps.is_empty() {
+        skip_banner();
+        return;
+    }
+    let mut modelled_matches = 0u32;
+    for rep in reps.iter().take(3) {
+        let mut sim = NullSim::new();
+        let run = harness::run(rep, &mut sim, Phase::BeforeCommands, 0);
+        for c in 0..don_replay::checksum::NUM_WALKED {
+            let r = &run.channels[c];
+            assert!(r.unmodelled_matches <= r.trivial_matches);
+            assert!(r.trivial_matches <= r.matches);
+            if don_replay::check_all::CHANNEL_SOURCE[c]
+                == don_replay::check_all::ChannelSource::Modelled
+            {
+                modelled_matches += r.matches;
+            } else {
+                assert_eq!(
+                    r.matches,
+                    r.unmodelled_matches,
+                    "{} agreed without a producer and it was not counted as such",
+                    don_replay::CHANNEL_NAMES[c]
+                );
+            }
+        }
+    }
+    eprintln!("  matches on channels we actually model: {modelled_matches}");
+    assert_eq!(
+        modelled_matches, 0,
+        "the units channel started matching retail — update this test, it is good news"
+    );
+}
+
 /// A mutation test on the harness: if the comparator cannot see a wrong value,
 /// none of the numbers above mean anything.
 #[test]

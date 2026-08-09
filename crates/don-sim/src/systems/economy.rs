@@ -107,8 +107,11 @@ pub const RES_NAMES: [&str; NUM_RESOURCES] =
 /// `imul reg, imm; ...; sar edx, 5` — signed truncating divide by 100, the `0x51EB851F`
 /// idiom that appears ~40 times in the economy code. Rust's `/` already truncates toward
 /// zero on `i32`, so this exists to make the intent auditable at the call site.
+///
+/// `pub` because `systems::leaders` ports the same idiom out of `Leader::calc_attrition`
+/// and `Game::retake_capital`; one definition beats two.
 #[inline]
-fn pct(v: i32, hundredths: i32) -> i32 {
+pub fn pct(v: i32, hundredths: i32) -> i32 {
     v.wrapping_mul(hundredths) / 100
 }
 
@@ -727,27 +730,9 @@ impl LeaderEcon {
 /// zlib `adler32`, the lockstep checksum primitive (`0x00A46830`, `__fastcall`).
 ///
 /// Differentially tested against retail by the checksum lane — 500,000 calls, 0
-/// mismatches (`docs/derivation/checksum.md` §2). Reproduced here so the economy channels
-/// can be computed without a crate dependency; if `don-sim` ever grows a shared checksum
-/// module this should defer to it.
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    const NMAX: usize = 5552;
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    let mut i = 0;
-    while i < buf.len() {
-        let n = NMAX.min(buf.len() - i);
-        for &b in &buf[i..i + n] {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-        i += n;
-    }
-    (s2 << 16) | s1
-}
+/// mismatches (`docs/derivation/checksum.md` §2). That shared checksum module now exists,
+/// so this defers to it exactly as this comment used to ask for.
+pub use crate::checksum::adler32;
 
 // ---------------------------------------------------------------------------------------
 // Leader::calc_gather  0x006CEEE0  -- the gross-income composition

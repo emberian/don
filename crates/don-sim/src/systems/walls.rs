@@ -97,7 +97,12 @@
 //! * `WallData::armor` (`0x0063FA60`) — only its final, fully-derived step is ported
 //!   ([`armor_inactive_halved`](crate::systems::walls::armor_inactive_halved)).
 
-use crate::{container::EngineArray, systems::ammo::adler32};
+use crate::container::EngineArray;
+
+/// The lockstep checksum primitive. Taken straight from [`crate::checksum`] rather than
+/// hopping through `systems::ammo`, and re-exported so `walls::adler32` resolves for
+/// callers that hash [`WallData::walk_bytes`].
+pub use crate::checksum::adler32;
 
 // ============================================================================
 // Object banding — `Objects::init` 0x0065EA80 [measured]

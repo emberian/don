@@ -64,6 +64,23 @@ pub struct ChannelResult {
     pub matches: u32,
     /// Compares where our walker touched zero bytes (both sides empty).
     pub trivial_matches: u32,
+    /// Matches on a channel `don-sim` has **no producer for at all**
+    /// (`ChannelSource::Absent`). A subset of `trivial_matches`, and the honest
+    /// name for it: not "our empty model was right", but "we have not written
+    /// this channel". `walls` surviving 25,442 turns is entirely this.
+    pub unmodelled_matches: u32,
+    /// Compares where our walker touched at least one byte. The only compares
+    /// that are evidence about our mechanics.
+    pub nontrivial_compares: u32,
+    /// Bytes our walker handed the visitor on the last compare.
+    pub our_bytes_walked: u64,
+    /// Compares where *retail's* value was 1 — the engine walked nothing either.
+    /// A channel we "survive" for its whole recording while this equals
+    /// `compares` was never tested at all.
+    pub retail_empty_compares: u32,
+    /// First turn on which retail's value left 1. Our deadline: this is the turn
+    /// by which we must have a producer, measured from the recording itself.
+    pub retail_first_nonempty_turn: Option<i32>,
     /// Compares excluded because retail's own clients disagreed on this channel.
     pub retail_disagreed: u32,
 }
@@ -168,6 +185,80 @@ impl NullSim {
 impl Simulation for NullSim {
     fn step_turn(&mut self, _frames: u32) {
         self.turns += 1;
+        crate::state::SimBridge::populate(&self.world, &mut self.state);
+    }
+    fn check_all(&self) -> (Channels, [u64; NUM_WALKED]) {
+        let (ch, outs) = self.state.check_all();
+        let mut bytes = [0u64; NUM_WALKED];
+        for i in 0..NUM_WALKED {
+            bytes[i] = outs[i].bytes_walked;
+        }
+        (ch, bytes)
+    }
+}
+
+/// A simulation that really is a `don_sim::World`: it steps the tick, images
+/// its rows into engine layout through [`crate::state::SimBridge`], and reports
+/// the composed [`crate::check_all::CheckAll`].
+///
+/// The difference from [`NullSim`] is that this one *runs* — `World::step` per
+/// simulation frame, `population` carried across turns — so the moment `don-sim`
+/// can spawn from a command, the `units` channel on the scoreboard stops being a
+/// comparison of nothing against something.
+///
+/// [`WorldSim::seeded`] exists for one purpose and is labelled for it: to show
+/// the whole path end to end against a real recording before any producer
+/// exists. A seeded population is **not** derived from the recording and cannot
+/// match retail; what it demonstrates is that the bytes now flow, and the run
+/// reports it as `seed_units`, never as fidelity.
+pub struct WorldSim {
+    pub world: don_sim::World,
+    pub state: SimState,
+    pub turns: u64,
+    pub frames: u64,
+    pub seed_units: u32,
+}
+
+impl Default for WorldSim {
+    fn default() -> Self {
+        WorldSim::new()
+    }
+}
+
+impl WorldSim {
+    pub fn new() -> WorldSim {
+        WorldSim {
+            world: don_sim::World::with_capacity(4096, 1),
+            state: SimState::new(),
+            turns: 0,
+            frames: 0,
+            seed_units: 0,
+        }
+    }
+
+    /// A world pre-populated with `per_owner` units in each of `owners` owner
+    /// slots. Declared, not derived — see the type docs.
+    pub fn seeded(owners: u8, per_owner: u32) -> WorldSim {
+        let mut s = WorldSim::new();
+        for who in 0..owners {
+            for _ in 0..per_owner {
+                if s.world.spawn(who).is_some() {
+                    s.seed_units += 1;
+                }
+            }
+        }
+        crate::state::SimBridge::populate(&s.world, &mut s.state);
+        s
+    }
+}
+
+impl Simulation for WorldSim {
+    fn step_turn(&mut self, frames: u32) {
+        self.turns += 1;
+        for _ in 0..frames {
+            self.world.step();
+            self.frames += 1;
+        }
         crate::state::SimBridge::populate(&self.world, &mut self.state);
     }
     fn check_all(&self) -> (Channels, [u64; NUM_WALKED]) {
@@ -344,11 +435,29 @@ fn compare<S: Simulation>(
             continue;
         }
         r.compares += 1;
+        // Retail's own emptiness, measured from the recording: adler-32 of
+        // nothing is 1, so `rec == 1` is the engine saying this channel had no
+        // elements on this turn. Without this the survival numbers cannot be
+        // read at all.
+        if c < NUM_WALKED {
+            if rec.0[c] == 1 {
+                r.retail_empty_compares += 1;
+            } else if r.retail_first_nonempty_turn.is_none() {
+                r.retail_first_nonempty_turn = Some(turn);
+            }
+            r.our_bytes_walked = bytes[c];
+            if bytes[c] > 0 {
+                r.nontrivial_compares += 1;
+            }
+        }
         let agree = ours.0[c] == rec.0[c];
         if agree {
             r.matches += 1;
             if c < NUM_WALKED && bytes[c] == 0 {
                 r.trivial_matches += 1;
+                if crate::check_all::CHANNEL_SOURCE[c] == crate::check_all::ChannelSource::Absent {
+                    r.unmodelled_matches += 1;
+                }
             }
             if alive[c] {
                 r.survived += 1;
@@ -395,22 +504,40 @@ pub fn format_table(r: &RunResult) -> String {
         ));
     }
     s.push_str(
-        "  channel            survived  first-div      expected        got  compares  trivial\n",
+        "  channel          survived  first-div    expected       got  compares  trivial  unmodelled  our-bytes  retail-empty  retail-1st\n",
     );
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
         let c = &r.channels[i];
+        let expected = c
+            .first_divergence_turn
+            .map(|_| format!("{:08x}", c.expected))
+            .unwrap_or_else(|| "-".into());
+        let got = c
+            .first_divergence_turn
+            .map(|_| format!("{:08x}", c.got))
+            .unwrap_or_else(|| "-".into());
         s.push_str(&format!(
-            "  {name:<16} {:9}  {:>9}  {:>10}  {:>9}  {:8}  {:7}\n",
+            "  {name:<16} {:7}  {:>9}  {:>10}  {:>9}  {:8}  {:7}  {:10}  {:9}  {:12}  {:>10}\n",
             c.survived,
             c.first_divergence_turn
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| "-".into()),
-            format!("{:08x}", c.expected),
-            format!("{:08x}", c.got),
+            expected,
+            got,
             c.compares,
             c.trivial_matches,
+            c.unmodelled_matches,
+            c.our_bytes_walked,
+            c.retail_empty_compares,
+            c.retail_first_nonempty_turn
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "never".into()),
         ));
     }
+    s.push_str(
+        "  `unmodelled` = agreements on a channel don-sim has no producer for; those are not evidence.\n  \
+         `retail-empty` = compares where the ENGINE also walked nothing; `retail-1st` = the turn it stopped.\n",
+    );
     s
 }
 

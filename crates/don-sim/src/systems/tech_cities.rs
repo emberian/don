@@ -249,40 +249,14 @@ impl CityRules {
 /// [measured]
 ///
 /// `NMAX = 0x15B0 = 5552`, `BASE = 65521`, and a null buffer returns `1` rather than
-/// leaving the accumulator alone.
-pub fn adler32(adler: u32, buf: Option<&[u8]>) -> u32 {
-    const BASE: u32 = 65521;
-    const NMAX: usize = 0x15B0;
-    let buf = match buf {
-        None => return 1,
-        Some(b) => b,
-    };
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = adler >> 16;
-    let mut off = 0usize;
-    let mut remaining = buf.len();
-    while remaining != 0 {
-        let mut k = remaining.min(NMAX);
-        remaining -= k;
-        while k >= 16 {
-            for _ in 0..16 {
-                s1 = s1.wrapping_add(buf[off] as u32);
-                s2 = s2.wrapping_add(s1);
-                off += 1;
-            }
-            k -= 16;
-        }
-        while k > 0 {
-            s1 = s1.wrapping_add(buf[off] as u32);
-            s2 = s2.wrapping_add(s1);
-            off += 1;
-            k -= 1;
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-    }
-    (s2 << 16) | s1
-}
+/// leaving the accumulator alone — this module is the one that needs the null arm, so it
+/// re-exports [`crate::checksum::adler32_or_null`] under the local name.
+///
+/// Correction: the header above says "BHG's own copy, not zlib's". Both exist —
+/// `_adler32` `0x005089d0` is BHG's `main/basic` copy, `adler32` `0x00a46830` is the zlib
+/// one, and it is `0x00a46830` that `CheckSum::walk_function` `0x00936ff0` calls
+/// [measured, `call 0xa46830` at `0x0093700a`].
+pub use crate::checksum::adler32_or_null as adler32;
 
 /// `int vector_dist(int dx, int dy)` `0x0046CFF0` — the integer distance approximation
 /// used by every proximity rule in the game, including city spacing. [measured]

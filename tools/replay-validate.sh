@@ -45,7 +45,14 @@ print(f"HEADLINE: {best[1]} turns survived on channel `{best[0]}`")
 for k, v in per.items():
     if v["best_survived_turns"]:
         print(f"  {k:<16} best {v['best_survived_turns']:>6}  "
-              f"matches {v['matches']}/{v['compares']}  trivial {v['trivial']}")
+              f"matches {v['matches']}/{v['compares']}  trivial {v['trivial']}  "
+              f"unmodelled {v.get('unmodelled', '?')}  "
+              f"retail-also-empty {v.get('retail_empty_compares', '?')}")
+tot = sum(v["matches"] for k, v in per.items() if k != "all")
+unm = sum(v.get("unmodelled", 0) for k, v in per.items() if k != "all")
+ntr = sum(v.get("nontrivial_compares", 0) for k, v in per.items() if k != "all")
+print(f"  {unm} of {tot} agreements are on channels don-sim has no producer for; "
+      f"{ntr} compares walked a byte")
 PY
   exit 0
 fi
@@ -62,6 +69,17 @@ if ! compgen -G "$ROOT/ron-data/replays/**/*.rcx" >/dev/null 2>&1 \
 EOF
   exit 2
 fi
+
+# --- the fidelity gate -----------------------------------------------------
+# A replay-validation number is a claim about reproducing retail, so it may only
+# be produced in fidelity mode with every deviation registry entry inactive.
+# The scoped `replay` readiness target re-reads this process's own environment,
+# requires fidelity mode, and rejects any known gap reachable by the validator.
+# It intentionally does not require unrelated research/playable modules to be complete.
+# Registry and rationale: docs/tracks/dual-mode.md.
+cargo build --release -p don-sim --bin don-deviations --manifest-path "$ROOT/Cargo.toml" -q \
+  || exit 3
+"$ROOT/target/release/don-deviations" --assert-ready replay || exit 3
 
 cargo build --release -p don-replay --manifest-path "$ROOT/Cargo.toml" -q || exit 3
 exec "$ROOT/target/release/don-replay" validate --corpus --quiet --json "$OUT" "$@"

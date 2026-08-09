@@ -6,6 +6,9 @@
 //! don-replay scan     [--corpus | FILE...]      # decode only: framing, keys, checksum shape
 //! don-replay crossplay [--corpus | FILE...]     # retail-vs-retail control experiment
 //! don-replay walkers                            # coverage of the generated DataWalk table
+//! don-replay check-all                          # run CheckSums::check_all over a don-sim World
+//! don-replay seeded FILE [--seed-units N]       # drive a REAL World against a recording
+//! don-replay nextsum  [--corpus | FILE...]      # NextCheckSumCommand 0x3a payload survey
 //! ```
 
 use don_replay::checksum::{CHANNEL_NAMES, NUM_CHANNELS, NUM_WALKED};
@@ -38,6 +41,7 @@ struct Args {
     json: Option<PathBuf>,
     quiet: bool,
     limit: Option<usize>,
+    seed_units: u32,
 }
 
 fn parse() -> Result<Args, String> {
@@ -49,6 +53,7 @@ fn parse() -> Result<Args, String> {
         json: None,
         quiet: false,
         limit: None,
+        seed_units: 4,
     };
     let mut it = std::env::args().skip(1);
     let mut use_corpus = false;
@@ -68,6 +73,12 @@ fn parse() -> Result<Args, String> {
                     .and_then(|v| v.parse().ok())
                     .ok_or("--latency wants an integer")?
             }
+            "--seed-units" => {
+                a.seed_units = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or("--seed-units wants an integer")?
+            }
             "--limit" => {
                 a.limit = Some(
                     it.next()
@@ -85,7 +96,14 @@ fn parse() -> Result<Args, String> {
     if a.cmd.is_empty() {
         a.cmd = "validate".into();
     }
-    if use_corpus || a.files.is_empty() {
+    // Commands that inspect recordings default to the repository corpus.
+    // `walkers` and `check-all` are deliberately corpus-free, while `seeded`
+    // requires the caller to name the recording it seeds against.
+    let defaults_to_corpus = matches!(
+        a.cmd.as_str(),
+        "validate" | "scan" | "crossplay" | "nextsum"
+    );
+    if use_corpus || (a.files.is_empty() && defaults_to_corpus) {
         a.files = corpus(&repo_root());
     }
     if let Some(n) = a.limit {
@@ -102,7 +120,11 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if args.files.is_empty() {
+    let requires_corpus = matches!(
+        args.cmd.as_str(),
+        "validate" | "scan" | "crossplay" | "nextsum"
+    );
+    if requires_corpus && args.files.is_empty() {
         eprintln!(
             "\n  NO CORPUS — NOT A PASS. No .rcx under ron-data/replays/.\n  \
              ron-data/ is gitignored copyrighted game content; without it this\n  \
@@ -115,6 +137,9 @@ fn main() {
         "scan" => scan(&args),
         "crossplay" => crossplay(&args),
         "walkers" => walkers(),
+        "check-all" => check_all_demo(),
+        "seeded" => seeded(&args),
+        "nextsum" => nextsum(&args),
         other => {
             eprintln!("don-replay: unknown command {other}");
             std::process::exit(2);
@@ -169,26 +194,43 @@ fn validate(args: &Args) {
         "cross-player control: {}/{} identical tuples",
         t.crossplay_identical, t.crossplay_comparisons
     );
+    if with_cs.is_empty() {
+        eprintln!(
+            "\n  NO CHECKSUM PACKETS — NOT A PASS. None of the decoded recordings carries\n  \
+             CheckSumsCommand (opcode 0x39), so replay validation has no retail values\n  \
+             to compare against.\n"
+        );
+        std::process::exit(2);
+    }
     println!("\nper-channel survival (consecutive agreeing turns; best over the corpus)");
-    println!("  channel           best   compares    matches    trivial   xplay-diff");
+    println!(
+        "  channel           best   compares    matches    trivial unmodelled    nontriv retail-empty"
+    );
     for i in 0..NUM_CHANNELS {
         println!(
-            "  {:<16} {:>5}  {:>9}  {:>9}  {:>9}   {:>9}",
+            "  {:<16} {:>5}  {:>9}  {:>9}  {:>9}  {:>9}  {:>9}  {:>11}",
             CHANNEL_NAMES[i],
             t.best_survived[i],
             t.compares[i],
             t.matches[i],
             t.trivial[i],
-            t.crossplay_per_channel[i]
+            t.unmodelled[i],
+            t.nontrivial[i],
+            t.retail_empty[i],
         );
     }
     let (bi, bv) = (0..NUM_WALKED)
         .max_by_key(|&i| t.best_survived[i])
         .map(|i| (i, t.best_survived[i]))
         .unwrap();
+    let matches: u64 = t.matches[..NUM_WALKED].iter().sum();
+    let unmodelled: u64 = t.unmodelled[..NUM_WALKED].iter().sum();
+    let nontrivial: u64 = t.nontrivial[..NUM_WALKED].iter().sum();
     println!(
-        "\nHEADLINE: {} turns survived on channel `{}`",
-        bv, CHANNEL_NAMES[bi]
+        "\nHEADLINE: {} turns survived on channel `{}` — and {} of the corpus's {} agreements\n\
+         are on channels don-sim has no producer for, on compares where the ENGINE\n\
+         walked nothing either. Compares where our walker touched a byte: {}.",
+        bv, CHANNEL_NAMES[bi], unmodelled, matches, nontrivial
     );
 
     if let Some(p) = &args.json {
@@ -303,7 +345,10 @@ fn walkers() {
     );
     println!("  executable this-relative ranges {}", c.bytes);
     println!("  tag ops                        {}", c.tag);
-    println!("  sub-object ops                 {}", c.sub);
+    println!("  sub-object ops, base class     {}", c.sub);
+    println!("  sub-object ops, member at +N   {}", c.sub_member);
+    println!("  sub-object ops, behind a ptr   {}", c.sub_ptr);
+    println!("  sub-object ops, unbased        {}", c.sub_unbased);
     println!("  resolved length, no base       {}", c.length_only);
     println!("  ranges on a global object      {}", c.global);
     println!("  fully unresolved               {}", c.unresolved);
@@ -326,6 +371,172 @@ fn walkers() {
                 ),
                 None => "NO DERIVED WALKER".to_string(),
             }
+        );
+    }
+}
+
+/// `check-all`: run the composed `CheckSums::check_all` over a `don-sim` world,
+/// empty and then populated, and print what each channel could actually say.
+///
+/// This is the lane's "does it run" command. It needs no corpus: it is about our
+/// side of the comparison.
+fn check_all_demo() {
+    use don_replay::check_all::{check_all, ChannelSource, CHANNEL_SOURCE};
+    use don_replay::image::class_coverage;
+    use don_sim::generated::state::UnitCols;
+
+    let cov = class_coverage::<UnitCols>();
+    println!("Unit imaging (crates/don-replay/src/image.rs, PDB field table)");
+    println!("  sizeof                      {}", cov.bytes);
+    println!("  bytes a column can source   {}", cov.sourced);
+    println!("  bytes no column materialises {}", cov.unsourced);
+    println!("  padding / undeclared        {}", cov.unaccounted);
+    println!("  bytes the checksum visits   {}", cov.walked);
+    println!("    of those, sourced         {}", cov.sourced_walked);
+    println!("    of those, unsourced       {}", cov.unsourced_walked);
+
+    let empty = don_sim::World::with_capacity(64, 1);
+    println!("\nempty world");
+    print!("{}", check_all(&empty).format());
+
+    let mut w = don_sim::World::with_capacity(64, 1);
+    for who in 0..3u8 {
+        for _ in 0..4 {
+            w.spawn(who).expect("spawn");
+        }
+    }
+    println!("12 units over 3 owners");
+    let ca = check_all(&w);
+    print!("{}", ca.format());
+    let rec = ca.record().encode();
+    print!("  wire record ({} B):", rec.len());
+    for b in rec.iter() {
+        print!(" {b:02x}");
+    }
+    println!();
+    let absent: Vec<&str> = (0..15)
+        .filter(|&i| CHANNEL_SOURCE[i] == ChannelSource::Absent)
+        .map(|i| CHANNEL_NAMES[i])
+        .collect();
+    println!(
+        "\n{} of 15 channels have no producer in don-sim at all: {:?}",
+        absent.len(),
+        absent
+    );
+}
+
+/// `seeded FILE`: drive a real `don_sim::World` against a real recording, with a
+/// declared unit population, and show that the `units` channel now compares
+/// **bytes against bytes** rather than nothing against something.
+///
+/// What this establishes and what it does not: the bridge, the traversal and the
+/// composed `check_all` run end to end on retail's own command stream, and the
+/// `units` comparison is no longer trivial. The population is seeded, not
+/// derived from the recording, so it cannot match and does not claim to. The
+/// number that will move for real is the one that arrives when a command
+/// producer spawns these units instead of this flag.
+fn seeded(args: &Args) {
+    let Some(f) = args.files.first() else {
+        eprintln!("don-replay seeded: give me one .rcx");
+        std::process::exit(2);
+    };
+    let rep = match Replay::open(f) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("don-replay seeded: {e}");
+            std::process::exit(2);
+        }
+    };
+    if rep.checksum_packets == 0 {
+        eprintln!(
+            "\n  SKIPPED — NOT A PASS. {} carries no CheckSumsCommand, so there is\n  \
+             nothing to compare against.\n",
+            rep.path.file_name().unwrap().to_string_lossy()
+        );
+        std::process::exit(2);
+    }
+    let owners = rep.players.len().clamp(1, 8) as u8;
+
+    println!("=== control: empty world (the scoreboard's model) ===");
+    let mut null = harness::NullSim::new();
+    let a = harness::run(&rep, &mut null, args.phase, args.latency);
+    println!("{}", harness::format_table(&a));
+
+    println!(
+        "=== seeded world: {} owners x {} units (DECLARED, not derived) ===",
+        owners, args.seed_units
+    );
+    let mut sim = harness::WorldSim::seeded(owners, args.seed_units);
+    println!(
+        "  seeded {} units; bridge images {} engine-layout records per turn",
+        sim.seed_units,
+        sim.state.channels[0].len()
+    );
+    let b = harness::run(&rep, &mut sim, args.phase, args.latency);
+    println!("{}", harness::format_table(&b));
+    println!(
+        "  world stepped {} turns / {} simulation frames",
+        sim.turns, sim.frames
+    );
+    let u = don_replay::Channel::Units as usize;
+    println!(
+        "  units channel: {} -> {} non-trivial compares, {} bytes walked per compare",
+        a.channels[u].nontrivial_compares,
+        b.channels[u].nontrivial_compares,
+        b.channels[u].our_bytes_walked
+    );
+    println!(
+        "  matches: {} -> {} of {}. A seeded population cannot match retail and did not.",
+        a.channels[u].matches, b.channels[u].matches, b.channels[u].compares
+    );
+}
+
+/// `nextsum`: what the *other* per-turn checksum command carries.
+///
+/// `NextCheckSumCommand` (opcode `0x3a`, 6 bytes) outnumbers `CheckSumsCommand`
+/// 1.6 to 1 in the corpus and nothing in this repo had ever looked inside it.
+/// `CommandPackage::process_next_check_sum` `0x00945e20` reads `checksum_type`
+/// and `checksum` and stores the value into the global table at `0x00cbee90`
+/// indexed off the package, so it is a second, finer lockstep record. This
+/// prints the type distribution so the next lane can decide whether it is a
+/// usable oracle.
+fn nextsum(args: &Args) {
+    use don_replay::wire::CommandView;
+    let reps = open_all(&args.files, args.quiet);
+    let mut by_type: std::collections::BTreeMap<i64, usize> = Default::default();
+    let mut values_per_type: std::collections::BTreeMap<i64, std::collections::BTreeSet<u32>> =
+        Default::default();
+    let mut total = 0usize;
+    for r in &reps {
+        for t in &r.turns {
+            for p in &t.players {
+                for c in &p.commands {
+                    if c.opcode != 0x3a {
+                        continue;
+                    }
+                    total += 1;
+                    let v = CommandView::new(c.opcode, &c.bytes);
+                    let ty = v.get("checksum_type").unwrap_or(-1);
+                    *by_type.entry(ty).or_insert(0) += 1;
+                    if let Some(cs) = v.get("checksum") {
+                        let e = values_per_type.entry(ty).or_default();
+                        if e.len() < 4096 {
+                            e.insert(cs as u32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "NextCheckSumCommand 0x3a: {total} records over {} files",
+        reps.len()
+    );
+    println!("  checksum_type   count      distinct checksums (capped at 4096)");
+    for (ty, n) in &by_type {
+        println!(
+            "  {ty:>13}  {n:>9}      {}",
+            values_per_type.get(ty).map(|s| s.len()).unwrap_or(0)
         );
     }
 }

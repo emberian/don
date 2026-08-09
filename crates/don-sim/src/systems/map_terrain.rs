@@ -600,6 +600,13 @@ pub struct TerrainSync {
 
 /// The tile world. Field names and offsets are the PDB's `WorldData` layout verbatim
 /// (`World : WorldOut : WorldData`, 372 / 368 / 364 bytes).
+///
+/// **This is the single owner of everything the `world` checksum channel walks**: the
+/// `WData` records (territory `who`/`who2` included), the tile mask, the three fog planes,
+/// `wcoord_seen`, the danger planes, the collision blocks and the four synced `Terrain`
+/// arrays. `crate::systems::borders_fog` supplies the territory and fog *behaviour* and
+/// writes through this struct; nothing keeps a second copy.
+#[derive(Clone, Debug)]
 pub struct World {
     // +0x00 .. +0x04 — checksum section 1
     /// `+0x00` — width in world cells.
@@ -892,6 +899,12 @@ impl World {
     pub fn valid_t(&self, tx: i32, ty: i32) -> bool {
         tx >= 0 && ty >= 0 && tx < self.tile_xs && ty < self.tile_ys
     }
+    /// Fog-plane bounds — the check `Object::update_seen` `0x00651b80` hoists out of the
+    /// disc loop when the whole disc is on the map.
+    #[inline]
+    pub fn valid_f(&self, fx: i32, fy: i32) -> bool {
+        fx >= 0 && fy >= 0 && fx < self.fog_xs && fy < self.fog_ys
+    }
     /// `WorldData::is_valid(Coord,Coord)` `0x0043f360` — bounds are `tile_xs * 192`.
     #[inline]
     pub fn valid_coord(&self, cx: i32, cy: i32) -> bool {
@@ -1061,8 +1074,17 @@ impl World {
         self.wdata(wx, wy).region2 as i32
     }
     /// `WorldData::get_who` / `get_whose` `0x006b4700` / `0x006b4d80` — territory owner.
+    ///
+    /// `who` and `who2` are section-5 bytes (`WData +0x0f`, `+0x10`), so **this struct owns
+    /// territory ownership**: the writer is
+    /// [`crate::systems::borders_fog::check_borders`] and it writes through here, not into a
+    /// private plane. See that module's header for why there used to be two.
     pub fn get_who(&self, wx: i32, wy: i32) -> i32 {
         self.wdata(wx, wy).who as i32
+    }
+    /// `WorldData::get_who2` `0x006b2510` — the runner-up claimant.
+    pub fn get_who2(&self, wx: i32, wy: i32) -> i32 {
+        self.wdata(wx, wy).who2 as i32
     }
     /// `WorldData::get_goods` `0x0046ef10`.
     pub fn get_goods(&self, wx: i32, wy: i32) -> u8 {
@@ -1278,9 +1300,16 @@ impl World {
     /// `World::clear_seen` `0x006b2250` — zero the live-visibility plane. Called once per
     /// tick from `GameDaemon::update_all_seen`.
     pub fn clear_seen(&mut self) {
-        for b in self.seen.iter_mut() {
-            *b = 0;
-        }
+        // **Corrected while reconciling with `borders_fog`, which had this right.** The
+        // retail body ends with two memsets, not one [measured, `re/decomp-all/006b2250.c`]:
+        //   memset(world+0x168, 0, world+0x08)   // wcoord_seen, `size` bytes
+        //   memset(world+0x15c, 0, world+0x14)   // seen,        `fog_size` bytes
+        // Clearing only `seen` left `wcoord_seen` — section 7 of the checksum — accumulating
+        // forever, so this world's channel 12 would have diverged from retail's on the
+        // second frame of any game. The loop the two memsets follow walks `seen` and calls
+        // a presentation callback per lit cell; it writes no sim state and is not ported.
+        self.wcoord_seen.fill(0);
+        self.seen.fill(0);
     }
     /// `World::clear_danger` `0x006b22e0`.
     pub fn clear_danger(&mut self, who: usize) {
@@ -1648,20 +1677,139 @@ impl World {
         a.finish()
     }
 
-    /// The traversal itself, against any [`DataWalk`] sink.
+    /// The whole channel — `World::walk_data(w, -1)`.
     pub fn walk<W: DataWalk>(&self, w: &mut W) {
+        self.walk_section(w, WorldSection::ALL);
+    }
+
+    /// `World::walk_data(DataWalk* w, int section)` `0x006b5cf0`, **with its section
+    /// argument**.
+    ///
+    /// The retail function is a chain of `if (section < 0 || section == N)` guards, one per
+    /// section, with `check_all` passing `-1`. Modelling the argument rather than
+    /// hard-coding "all" is what makes [`World::checksum_sections`] the *same code path* as
+    /// the full walk instead of a parallel transcription of it — a per-section digest built
+    /// from a second traversal can drift from the one that matters.
+    pub fn walk_section<W: DataWalk>(&self, w: &mut W, section: i32) {
+        let want = |n: i32| section < 0 || section == n;
+
         // §1
-        w.walk(&self.xs.to_le_bytes());
-        w.walk(&self.ys.to_le_bytes());
+        if want(WorldSection::Dims as i32) {
+            w.walk(&self.xs.to_le_bytes());
+            w.walk(&self.ys.to_le_bytes());
+        }
         // §2
-        walk_simple_array_i32(w, &self.start_x);
-        walk_simple_array_i32(w, &self.start_y);
-        walk_simple_array_i32(w, &self.start_city_x);
-        walk_simple_array_i32(w, &self.start_city_y);
+        if want(WorldSection::StartArrays as i32) {
+            walk_simple_array_i32(w, &self.start_x);
+            walk_simple_array_i32(w, &self.start_y);
+            walk_simple_array_i32(w, &self.start_city_x);
+            walk_simple_array_i32(w, &self.start_city_y);
+        }
         // §3
-        walk_simple_array_i32(w, &self.oil_x);
-        walk_simple_array_i32(w, &self.oil_y);
-        // §4 — one contiguous 120-byte range, so field order is load-bearing.
+        if want(WorldSection::OilArrays as i32) {
+            walk_simple_array_i32(w, &self.oil_x);
+            walk_simple_array_i32(w, &self.oil_y);
+        }
+        if want(WorldSection::Scalars as i32) {
+            self.walk_scalars(w);
+        }
+        if want(WorldSection::WData as i32) {
+            // §5
+            for cell in self.wdata.iter() {
+                w.walk(&cell.checksum_bytes());
+            }
+        }
+        if want(WorldSection::TDataAndFog as i32) {
+            // §6
+            for t in self.tdata.iter() {
+                w.walk(&t.to_le_bytes());
+            }
+            w.walk(&self.seen);
+            w.walk(&self.seen2);
+            w.walk(&self.seen3);
+        }
+        if want(WorldSection::WCoordSeen as i32) {
+            // §7
+            w.walk(&self.wcoord_seen);
+        }
+        if want(WorldSection::Danger as i32) {
+            // §8
+            for plane in self.danger.iter() {
+                for v in plane.iter() {
+                    w.walk(&v.to_le_bytes());
+                }
+            }
+        }
+        if want(WorldSection::CollBlocks as i32) {
+            // §9
+            for cell in self.wdata.iter() {
+                let has: i32 = if cell.block.is_some() { 1 } else { 0 };
+                w.walk(&has.to_le_bytes());
+                if let Some(b) = cell.block.as_deref() {
+                    // `[block+0, +8)` then `[block+0xc, +0xc+size)`. `+8` (`flags`) is
+                    // deliberately skipped by the walk.
+                    w.walk(&b.bits.to_le_bytes());
+                    w.walk(&b.size.to_le_bytes());
+                    let n = (b.size.max(0) as usize).min(b.ptr.len());
+                    w.walk(&b.ptr[..n]);
+                }
+            }
+        }
+        // §10–13
+        if want(WorldSection::TerrainHalflandLocs as i32) {
+            walk_array_pairs(w, &self.terrain_sync.halfland_locs);
+        }
+        if want(WorldSection::TerrainHalflandTypes as i32) {
+            walk_simple_array_i32(w, &self.terrain_sync.halfland_types);
+        }
+        if want(WorldSection::TerrainHalflandSubtypes as i32) {
+            walk_simple_array_i32(w, &self.terrain_sync.halfland_subtypes);
+        }
+        if want(WorldSection::TerrainNukeHits as i32) {
+            walk_simple_array_i32(w, &self.terrain_sync.nuke_hits);
+        }
+    }
+
+    /// Per-section digests of the `world` channel.
+    ///
+    /// Each entry is a **fresh adler seeded to 1** over that section alone, plus the byte
+    /// count. The engine never computes these — `check_all` runs one accumulator across the
+    /// whole channel — but a single 32-bit mismatch is not a debuggable statement, and this
+    /// says *which* section diverged and after how many bytes. `full` is the value that has
+    /// to match retail.
+    ///
+    /// Merged in from the `borders_fog` lane's `world_checksum`, which computed the same
+    /// idea over a rival copy of the state; the rival is gone.
+    pub fn checksum_sections(&self) -> WorldChecksum {
+        let mut per_section = [SectionDigest::default(); WorldSection::COUNT];
+        for (i, slot) in per_section.iter_mut().enumerate() {
+            let mut a = Adler32::new();
+            self.walk_section(&mut a, i as i32 + 1);
+            *slot = SectionDigest {
+                adler: a.finish(),
+                bytes: a.bytes,
+            };
+        }
+        let mut all = Adler32::new();
+        self.walk(&mut all);
+        WorldChecksum {
+            per_section,
+            full: all.finish(),
+            bytes: all.bytes,
+        }
+    }
+
+    /// The exact byte stream the channel hands the visitor — for locating the first
+    /// differing offset against a captured retail walk.
+    pub fn checksum_image(&self) -> ByteSink {
+        let mut sink = ByteSink::new();
+        self.walk(&mut sink);
+        sink
+    }
+
+    /// §4 — `walk(world+8, world+0x80)`, one contiguous 120-byte range. Field order is the
+    /// struct's, so it is load-bearing.
+    fn walk_scalars<W: DataWalk>(&self, w: &mut W) {
         for v in [
             self.size,
             self.fog_xs,
@@ -1696,41 +1844,113 @@ impl World {
         ] {
             w.walk(&v.to_le_bytes());
         }
-        // §5
-        for cell in self.wdata.iter() {
-            w.walk(&cell.checksum_bytes());
-        }
-        // §6
-        for t in self.tdata.iter() {
-            w.walk(&t.to_le_bytes());
-        }
-        w.walk(&self.seen);
-        w.walk(&self.seen2);
-        w.walk(&self.seen3);
-        // §7
-        w.walk(&self.wcoord_seen);
-        // §8
-        for plane in self.danger.iter() {
-            for v in plane.iter() {
-                w.walk(&v.to_le_bytes());
-            }
-        }
-        // §9
-        for cell in self.wdata.iter() {
-            let has: i32 = if cell.block.is_some() { 1 } else { 0 };
-            w.walk(&has.to_le_bytes());
-            if let Some(b) = cell.block.as_deref() {
-                w.walk(&b.bits.to_le_bytes());
-                w.walk(&b.size.to_le_bytes());
-                let n = (b.size.max(0) as usize).min(b.ptr.len());
-                w.walk(&b.ptr[..n]);
-            }
-        }
-        // §10–13
-        walk_array_pairs(w, &self.terrain_sync.halfland_locs);
-        walk_simple_array_i32(w, &self.terrain_sync.halfland_types);
-        walk_simple_array_i32(w, &self.terrain_sync.halfland_subtypes);
-        walk_simple_array_i32(w, &self.terrain_sync.nuke_hits);
+    }
+}
+
+/// The thirteen sections of `World::walk_data(DataWalk*, int)` `0x006b5cf0`, numbered as
+/// the engine numbers them — the `int` argument is compared against these values directly.
+///
+/// [measured: `re/decomp-all/006b5cf0.c` is thirteen `if (sec < 0 || sec == N)` guards for
+/// `N` in `1..=13`, cross-checked against `World` in `schema/state-schema.json`, whose 24
+/// recovered ops line up one-for-one: op 1 is `[+0,+8)` on the global at `0x00c06188`,
+/// ops 2–7 are the six `SimpleArray<WCoord>::walk_data` calls, op 8 is `[+8,+0x80)`,
+/// ops 10–14 are the five plane pointers at `+0x138/+0x15c/+0x160/+0x164/+0x168`, and
+/// ops 20–23 are the four `Terrain` arrays reached through `0x00c06218`.]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum WorldSection {
+    /// `walk(world+0, +8)` — `xs`, `ys`.
+    Dims = 1,
+    /// The four `SimpleArray<WCoord>` start-position arrays.
+    StartArrays = 2,
+    /// The two oil-position arrays.
+    OilArrays = 3,
+    /// `walk(world+8, +0x80)` — 120 bytes: every derived size, the six territory limits,
+    /// the resource totals and `seed`.
+    Scalars = 4,
+    /// `WData[size]`, bytes `[0, 0x15)` of each 28-byte record. **Territory ownership
+    /// (`who`, `who2`) and the coarse explored bitmask (`was_seen`) ride here.**
+    WData = 5,
+    /// `TData[tile_size]` (2 B each), then `seen`, `seen2`, `seen3` (`fog_size` B each).
+    /// **All three fog planes are in the sync checksum.**
+    TDataAndFog = 6,
+    /// `wcoord_seen[size]`.
+    WCoordSeen = 7,
+    /// `danger[8][reg_size]`, 4 B per entry.
+    Danger = 8,
+    /// The per-`WData` `CollBlock`: presence flag, then `[+0,+8)` and `[+0xc, +0xc+size)`.
+    CollBlocks = 9,
+    /// `Terrain::halfland_locs` — `Array<WCoordData>`, 8-byte elements.
+    TerrainHalflandLocs = 10,
+    /// `Terrain::halfland_types` — `SimpleArray<int>`.
+    TerrainHalflandTypes = 11,
+    /// `Terrain::halfland_subtypes` — `SimpleArray<int>`.
+    TerrainHalflandSubtypes = 12,
+    /// `Terrain::nuke_hits` — `SimpleArray<int>`.
+    TerrainNukeHits = 13,
+}
+
+impl WorldSection {
+    /// The value `check_all` passes: every section.
+    pub const ALL: i32 = -1;
+    /// How many sections there are.
+    pub const COUNT: usize = 13;
+
+    /// Section numbers `1..=13` in walk order.
+    pub const fn all() -> [WorldSection; Self::COUNT] {
+        use WorldSection::*;
+        [
+            Dims,
+            StartArrays,
+            OilArrays,
+            Scalars,
+            WData,
+            TDataAndFog,
+            WCoordSeen,
+            Danger,
+            CollBlocks,
+            TerrainHalflandLocs,
+            TerrainHalflandTypes,
+            TerrainHalflandSubtypes,
+            TerrainNukeHits,
+        ]
+    }
+}
+
+/// One section's isolated digest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SectionDigest {
+    /// A fresh adler seeded to 1 over this section alone.
+    pub adler: u32,
+    /// Bytes the section handed the visitor.
+    pub bytes: u64,
+}
+
+/// The `world` channel, broken out per section. See [`World::checksum_sections`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldChecksum {
+    /// Indexed by `section - 1`.
+    pub per_section: [SectionDigest; WorldSection::COUNT],
+    /// The value channel 12 of `check_all` produces — one accumulator, all sections.
+    pub full: u32,
+    /// Total bytes the channel walks.
+    pub bytes: u64,
+}
+
+impl WorldChecksum {
+    /// This section's digest.
+    #[inline]
+    pub fn section(&self, s: WorldSection) -> SectionDigest {
+        self.per_section[s as usize - 1]
+    }
+
+    /// The sections that differ from another world's, in walk order — the first entry is
+    /// where a desync investigation starts.
+    pub fn differing_sections(&self, other: &WorldChecksum) -> Vec<WorldSection> {
+        WorldSection::all()
+            .into_iter()
+            .filter(|&s| self.section(s) != other.section(s))
+            .collect()
     }
 }
 
@@ -1766,60 +1986,17 @@ fn walk_array_pairs<W: DataWalk>(w: &mut W, a: &WalkedArray<(i32, i32)>) {
 }
 
 // ---------------------------------------------------------------------------------------
-// 6. DataWalk / adler-32
+// 6. DataWalk / adler-32 — re-exported, never re-implemented
 // ---------------------------------------------------------------------------------------
 
-/// The engine's `DataWalk` visitor: `slot 0 = walk(begin, end)`.
-/// `CheckSum` implements it as `adler32(this->checksum, begin, end-begin)`
-/// (`0x00936ff0`); `walk_tag` (slot 1) is a no-op for `CheckSum` and is not modelled.
-pub trait DataWalk {
-    fn walk(&mut self, bytes: &[u8]);
-}
-
-/// zlib adler-32, the engine's `0x00a46830`, seeded to `1` per channel.
-/// (`docs/derivation/checksum.md` establishes the identity at Tier B: 500,000 calls into
-/// retail machine code, 0 mismatches.)
-#[derive(Copy, Clone, Debug)]
-pub struct Adler32 {
-    s1: u32,
-    s2: u32,
-    /// `CheckSum+0x14` — the engine keeps a running byte count alongside the hash.
-    pub bytes: u64,
-}
-
-impl Default for Adler32 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Adler32 {
-    pub fn new() -> Self {
-        Adler32 {
-            s1: 1,
-            s2: 0,
-            bytes: 0,
-        }
-    }
-    pub fn finish(&self) -> u32 {
-        (self.s2 << 16) | self.s1
-    }
-}
-
-impl DataWalk for Adler32 {
-    fn walk(&mut self, bytes: &[u8]) {
-        self.bytes += bytes.len() as u64;
-        // NMAX = 5552 [measured: `mov edx, 0x15b0` at 0x00a46854]
-        for chunk in bytes.chunks(5552) {
-            for &b in chunk {
-                self.s1 += b as u32;
-                self.s2 += self.s1;
-            }
-            self.s1 %= 65521;
-            self.s2 %= 65521;
-        }
-    }
-}
+/// The checksum primitive and the `DataWalk` visitor live in [`crate::checksum`] and are
+/// re-exported here so `map_terrain::{Adler32, DataWalk, adler32}` keep resolving.
+///
+/// This module used to carry its own `Adler32`. It does not any more: `adler32`
+/// `0x00a46830` is the one arithmetic primitive beneath all fifteen channels, and it is
+/// singular by construction now. See [`crate::checksum`] for the derivation and the
+/// oracle lineage.
+pub use crate::checksum::{adler32, Adler32, ByteSink, DataWalk};
 
 // ---------------------------------------------------------------------------------------
 // 7. Tests
@@ -2076,6 +2253,93 @@ mod tests {
             + size * 4                    // §9 presence flags, no blocks allocated
             + 4 * 4; // §10-13 four empty arrays
         assert_eq!(a.bytes as i64, expect);
+    }
+
+    /// The section-parameterised walk must be the *same* traversal as the whole-channel
+    /// walk: concatenating sections 1..=13 in order has to give byte-for-byte the stream
+    /// `walk_data(w, -1)` produces. This is what makes the per-section digest evidence
+    /// about the real channel rather than a second, drifting transcription.
+    #[test]
+    fn the_thirteen_sections_concatenate_to_the_whole_channel() {
+        let mut w = World::init_default_rules(12, 12);
+        // Give every section something to say, so no section is vacuously equal.
+        w.start_x.items.push(3);
+        w.oil_y.items.push(7);
+        w.wdata[5].who = 2;
+        w.tdata[9] = 0x1234;
+        w.seen[3] = 0b101;
+        w.wcoord_seen[4] = 1;
+        w.danger[6][2] = -9;
+        w.new_coll_block(1, 1);
+        w.terrain_sync.halfland_locs.items.push((4, 5));
+        w.terrain_sync.nuke_hits.items.push(11);
+
+        let whole = w.checksum_image();
+        let mut pieces = ByteSink::new();
+        let mut counted = 0u64;
+        for s in WorldSection::all() {
+            let mut one = ByteSink::new();
+            w.walk_section(&mut one, s as i32);
+            counted += one.0.len() as u64;
+            pieces.walk(&one.0);
+        }
+        assert_eq!(
+            whole.first_difference(&pieces),
+            None,
+            "section walk diverges from the whole-channel walk"
+        );
+        assert_eq!(counted, whole.0.len() as u64);
+
+        // …and the digest agrees with the walk it claims to summarise.
+        let sec = w.checksum_sections();
+        assert_eq!(sec.full, w.checksum());
+        assert_eq!(sec.full, whole.checksum());
+        assert_eq!(sec.bytes, whole.0.len() as u64);
+        for s in WorldSection::all() {
+            let mut one = ByteSink::new();
+            w.walk_section(&mut one, s as i32);
+            assert_eq!(sec.section(s).adler, one.checksum(), "{s:?}");
+            assert_eq!(sec.section(s).bytes, one.0.len() as u64, "{s:?}");
+        }
+    }
+
+    /// Each section must be non-empty for a populated world — a section that silently walks
+    /// nothing would make its digest a constant and hide every divergence inside it.
+    #[test]
+    fn no_section_is_silently_empty() {
+        let mut w = World::init_default_rules(8, 8);
+        w.start_x.items.push(1);
+        w.start_y.items.push(1);
+        w.start_city_x.items.push(1);
+        w.start_city_y.items.push(1);
+        w.oil_x.items.push(1);
+        w.oil_y.items.push(1);
+        w.new_coll_block(0, 0);
+        w.terrain_sync.halfland_locs.items.push((1, 1));
+        w.terrain_sync.halfland_types.items.push(1);
+        w.terrain_sync.halfland_subtypes.items.push(1);
+        w.terrain_sync.nuke_hits.items.push(1);
+        let sec = w.checksum_sections();
+        for s in WorldSection::all() {
+            assert!(sec.section(s).bytes > 0, "section {s:?} walks nothing");
+        }
+    }
+
+    /// `World::clear_seen` `0x006b2250` ends in **two** memsets — `wcoord_seen` (section 7)
+    /// and `seen` (section 6) — and leaves `seen2` alone. Getting that wrong desyncs on the
+    /// second frame of any game, which is why it is pinned here.
+    #[test]
+    fn clear_seen_clears_both_planes_and_spares_the_explored_one() {
+        let mut w = World::init_default_rules(8, 8);
+        w.seen[3] = 0xFF;
+        w.seen2[3] = 0xFF;
+        w.seen3[3] = 0xFF;
+        w.wcoord_seen[1] = 0xFF;
+        w.clear_seen();
+        assert_eq!(w.seen[3], 0);
+        assert_eq!(w.wcoord_seen[1], 0);
+        assert_eq!(w.seen2[3], 0xFF, "explored accumulates forever");
+        assert_eq!(w.seen3[3], 0xFF, "detected is cleared by update_all_seen");
     }
 
     /// Seeding: a negative seed is ignored, a non-negative seed is installed.

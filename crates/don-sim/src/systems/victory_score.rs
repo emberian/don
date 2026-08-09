@@ -1771,15 +1771,8 @@ impl Leaders {
 
 /// `adler32` @ `0x00A46830`, the checksum `CheckSums::check_all` folds each channel
 /// with. Provided so a replay harness can hash [`Leaders::walk_bytes`] the same way.
-pub fn adler32(seed: u32, data: &[u8]) -> u32 {
-    let mut a = seed & 0xFFFF;
-    let mut b = (seed >> 16) & 0xFFFF;
-    for &x in data {
-        a = (a + x as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
-}
+/// Re-exported from [`crate::checksum`], the crate's only implementation.
+pub use crate::checksum::adler32;
 
 // ---------------------------------------------------------------------------
 // Tests. These pin the *arithmetic contract* read out of the instruction

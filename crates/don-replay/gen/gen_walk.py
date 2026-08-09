@@ -10,9 +10,15 @@ exactly how a traversal silently drifts from the binary.
 Re-run after any change to schema/state-schema.json:
 
     python3 crates/don-replay/gen/gen_walk.py
+
+CI/audits can verify that the checked-in Rust is exact without rewriting it:
+
+    python3 crates/don-replay/gen/gen_walk.py --check
 """
+import argparse
 import json
 import pathlib
+import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 SRC = ROOT / "schema" / "state-schema.json"
@@ -23,7 +29,7 @@ def rs_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def main() -> None:
+def generated_source() -> str:
     doc = json.load(SRC.open())
     classes = doc["classes"]
     meta = doc["_meta"]
@@ -63,8 +69,10 @@ def main() -> None:
                     # resolved but they are meaningless against an object image,
                     # so emitting them as this-relative would silently hash the
                     # wrong bytes. Keep the length; refuse the range.
-                    n = int(o["bytes"]) if o.get("bytes") else 0
-                    w(f'    WalkOp::Global {{ bytes: {n}, base: "{o["base"]}" }},')
+                    # `nb`, not `n`: `n` is the enclosing class name and
+                    # shadowing it here is a trap for the next edit.
+                    nb = int(o["bytes"]) if o.get("bytes") else 0
+                    w(f'    WalkOp::Global {{ bytes: {nb}, base: "{o["base"]}" }},')
                 elif isinstance(b, int) and isinstance(e, int) and e >= b >= 0:
                     w(f"    WalkOp::Bytes {{ begin: {b}, end: {e} }},")
                 elif o.get("bytes"):
@@ -77,10 +85,26 @@ def main() -> None:
                 w("    WalkOp::Tag,")
             elif k == "sub_object":
                 t = o.get("target_class")
-                if t in idx:
-                    w(f"    WalkOp::Sub {{ class: {idx[t]} }},")
-                else:
+                if t not in idx:
                     w(f"    WalkOp::SubUnknown {{ va: 0x{int(o['target'], 16):08x} }},")
+                    continue
+                # WHERE the sub-object lives decides whether the op is
+                # executable against a flat object image. `['this', N]` is an
+                # embedded base or member at this+N and is executable; anything
+                # else names a receiver we do not hold (a heap pointer, a global,
+                # an immediate address, a stack temporary), and executing it at
+                # offset 0 -- which this generator used to do for all 368 sub
+                # ops -- hashes the WRONG bytes with full confidence the moment
+                # an image stops being all zeroes.
+                base = o.get("this")
+                kind = base[0] if isinstance(base, list) and base else None
+                off = base[1] if isinstance(base, list) and len(base) > 1 else None
+                if kind == "this" and isinstance(off, int) and off >= 0:
+                    w(f"    WalkOp::Sub {{ class: {idx[t]}, at: {off} }},")
+                elif kind == "thisload" and isinstance(off, int) and off >= 0:
+                    w(f"    WalkOp::SubPtr {{ class: {idx[t]}, at: {off} }},")
+                else:
+                    w(f"    WalkOp::SubUnbased {{ class: {idx[t]} }},")
             elif k == "virtual":
                 w("    WalkOp::Virtual,")
             else:
@@ -108,8 +132,46 @@ def main() -> None:
     w("    SPECS.iter().position(|s| s.name == name)")
     w("}")
 
-    OUT.write_text("\n".join(lines) + "\n")
-    print(f"wrote {OUT} ({len(lines)} lines, {len(names)} classes)")
+    source = "\n".join(lines) + "\n"
+    # The checked-in artifact is rustfmt-formatted. Formatting here makes
+    # regeneration deterministic and lets `--check` compare exact bytes rather
+    # than accepting a semantically-equal but mechanically stale table.
+    try:
+        proc = subprocess.run(
+            ["rustfmt", "--edition", "2021", "--emit", "stdout"],
+            input=source,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit("gen_walk.py: rustfmt is required") from exc
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"gen_walk.py: rustfmt failed:\n{exc.stderr}") from exc
+    return proc.stdout
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if walk_gen.rs is not the exact generated, rustfmt-formatted output",
+    )
+    args = ap.parse_args()
+
+    source = generated_source()
+    if args.check:
+        current = OUT.read_text() if OUT.exists() else None
+        if current != source:
+            raise SystemExit(
+                f"stale generated walker: run python3 {pathlib.Path(__file__).relative_to(ROOT)}"
+            )
+        print(f"up to date: {OUT}")
+        return
+
+    OUT.write_text(source)
+    print(f"wrote {OUT}")
 
 
 if __name__ == "__main__":

@@ -44,8 +44,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod check_all;
 pub mod checksum;
 pub mod harness;
+pub mod image;
 pub mod replay;
 pub mod report;
 pub mod rules_channel;
@@ -58,6 +60,7 @@ pub mod wire;
 pub mod walk_gen;
 mod wire_gen;
 
+pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use replay::{corpus, Replay};

@@ -234,22 +234,15 @@ pub fn vector_dist(a: i32, b: i32) -> i32 {
 // Adler-32 and the CheckSum visitor
 // ---------------------------------------------------------------------------
 
-/// `adler32` `0x005089D0` — BHG's own copy, at `main/basic/misc.cpp:464`.
-pub fn adler32(mut adler: u32, buf: &[u8]) -> u32 {
-    const BASE: u32 = 65521;
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    for chunk in buf.chunks(5552) {
-        for &b in chunk {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= BASE;
-        s2 %= BASE;
-    }
-    adler = (s2 << 16) | s1;
-    adler
-}
+/// The lockstep checksum primitive, re-exported from [`crate::checksum`].
+///
+/// Correction to this module's previous comment: the binary contains **two** `adler32`
+/// procedures — `_adler32` `0x005089d0` (301 B, `__cdecl`, BHG's copy in `main/basic`) and
+/// `adler32` `0x00a46830` (295 B, `__fastcall`), whose bodies are structurally identical
+/// (`NMAX = 0x15b0`, 16-way unroll, null → 1). The one on the checksum path is
+/// `0x00a46830`: `CheckSum::walk_function` `0x00936ff0` is `call 0xa46830` at `0x0093700a`
+/// [measured]. `crate::checksum::adler32` is that one.
+pub use crate::checksum::adler32;
 
 /// The `CheckSum` half of the `DataWalk` interface: `walk_function` (slot 0) folds a byte
 /// range into a running adler at `CheckSum +0x10`.

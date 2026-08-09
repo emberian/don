@@ -18,9 +18,9 @@ pub const TOTAL_SIM_CRITICAL_BYTES: usize = 38275;
 static OPS_0: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 1 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 168 },
+    WalkOp::SubUnbased { class: 1 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 168 },
 ];
 static OPS_1: &[WalkOp] = &[
     WalkOp::Tag,
@@ -28,7 +28,7 @@ static OPS_1: &[WalkOp] = &[
         begin: 312,
         end: 320,
     },
-    WalkOp::Sub { class: 235 },
+    WalkOp::Sub { class: 235, at: 4 },
     WalkOp::Bytes {
         begin: 248,
         end: 280,
@@ -37,11 +37,14 @@ static OPS_1: &[WalkOp] = &[
         begin: 280,
         end: 312,
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 228,
+    },
 ];
 static OPS_2: &[WalkOp] = &[
     WalkOp::Bytes { begin: 0, end: 8 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 8 },
 ];
 static OPS_3: &[WalkOp] = &[
     WalkOp::Unresolved,
@@ -54,8 +57,8 @@ static OPS_4: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 24 }];
 static OPS_5: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 231 },
-    WalkOp::Sub { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 24 },
 ];
@@ -64,11 +67,14 @@ static OPS_6: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 5 },
     WalkOp::Bytes { begin: 5, end: 104 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 244 },
-    WalkOp::Sub { class: 244 },
+    WalkOp::SubUnbased { class: 244 },
+    WalkOp::SubPtr {
+        class: 244,
+        at: 104,
+    },
 ];
 static OPS_7: &[WalkOp] = &[
-    WalkOp::Sub { class: 269 },
+    WalkOp::Sub { class: 269, at: 0 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes {
@@ -141,14 +147,14 @@ static OPS_16: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 131 },
+    WalkOp::SubUnbased { class: 131 },
 ];
 static OPS_17: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 131 },
+    WalkOp::SubUnbased { class: 131 },
     WalkOp::Tag,
     WalkOp::Unresolved,
 ];
@@ -178,7 +184,7 @@ static OPS_21: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 131 },
+    WalkOp::SubUnbased { class: 131 },
     WalkOp::Tag,
     WalkOp::Unresolved,
 ];
@@ -236,20 +242,23 @@ static OPS_32: &[WalkOp] = &[
         begin: 131,
         end: 132,
     },
-    WalkOp::Sub { class: 274 },
+    WalkOp::Sub { class: 274, at: 0 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes {
         begin: 112,
         end: 134,
     },
-    WalkOp::Sub { class: 33 },
+    WalkOp::Sub { class: 33, at: 136 },
     WalkOp::Bytes {
         begin: 180,
         end: 182,
     },
-    WalkOp::Sub { class: 23 },
-    WalkOp::Sub { class: 210 },
+    WalkOp::Sub { class: 23, at: 152 },
+    WalkOp::Sub {
+        class: 210,
+        at: 184,
+    },
     WalkOp::Bytes {
         begin: 108,
         end: 112,
@@ -261,7 +270,7 @@ static OPS_33: &[WalkOp] = &[
     WalkOp::Unresolved,
 ];
 static OPS_34: &[WalkOp] = &[
-    WalkOp::Sub { class: 185 },
+    WalkOp::Sub { class: 185, at: 0 },
     WalkOp::Bytes {
         begin: 692,
         end: 741,
@@ -282,7 +291,7 @@ static OPS_36: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 14 },
     WalkOp::Bytes { begin: 32, end: 40 },
-    WalkOp::Sub { class: 245 },
+    WalkOp::Sub { class: 245, at: 16 },
 ];
 static OPS_37: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_38: &[WalkOp] = &[
@@ -297,7 +306,7 @@ static OPS_38: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 245 },
+    WalkOp::SubUnbased { class: 245 },
 ];
 static OPS_39: &[WalkOp] = &[
     WalkOp::Unresolved,
@@ -315,25 +324,31 @@ static OPS_40: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 12 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 12 },
 ];
 static OPS_41: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 6 },
     WalkOp::Bytes { begin: 6, end: 114 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 12 },
+    WalkOp::Sub {
+        class: 247,
+        at: 144,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 164,
+    },
+    WalkOp::Sub { class: 12, at: 116 },
 ];
 static OPS_42: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 8 }];
 static OPS_43: &[WalkOp] = &[
-    WalkOp::Sub { class: 26 },
-    WalkOp::Sub { class: 23 },
+    WalkOp::Sub { class: 26, at: 0 },
+    WalkOp::Sub { class: 23, at: 28 },
     WalkOp::Bytes { begin: 56, end: 72 },
 ];
 static OPS_44: &[WalkOp] = &[
-    WalkOp::Sub { class: 200 },
+    WalkOp::Sub { class: 200, at: 4 },
     WalkOp::Bytes {
         begin: 1496,
         end: 1504,
@@ -344,15 +359,15 @@ static OPS_44: &[WalkOp] = &[
         end: 1516,
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 201 },
+    WalkOp::Sub { class: 235, at: 32 },
+    WalkOp::Sub { class: 201, at: 60 },
 ];
 static OPS_45: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 194 },
+    WalkOp::SubUnbased { class: 194 },
 ];
 static OPS_46: &[WalkOp] = &[
     WalkOp::Tag,
@@ -361,9 +376,9 @@ static OPS_46: &[WalkOp] = &[
 ];
 static OPS_47: &[WalkOp] = &[
     WalkOp::Bytes { begin: 68, end: 84 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 235, at: 40 },
+    WalkOp::Sub { class: 247, at: 0 },
+    WalkOp::Sub { class: 247, at: 20 },
 ];
 static OPS_48: &[WalkOp] = &[
     WalkOp::Tag,
@@ -371,64 +386,85 @@ static OPS_48: &[WalkOp] = &[
         bytes: 388,
         base: "*(void**)0x00c0617c",
     },
-    WalkOp::Sub { class: 13 },
+    WalkOp::SubUnbased { class: 13 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 171 },
+    WalkOp::SubUnbased { class: 171 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 173 },
-    WalkOp::Sub { class: 170 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 234 },
-    WalkOp::Sub { class: 56 },
-    WalkOp::Sub { class: 20 },
+    WalkOp::SubUnbased { class: 173 },
+    WalkOp::SubUnbased { class: 170 },
+    WalkOp::SubUnbased { class: 183 },
+    WalkOp::SubUnbased { class: 183 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 234 },
+    WalkOp::SubUnbased { class: 56 },
+    WalkOp::SubUnbased { class: 20 },
     WalkOp::Global {
         bytes: 8,
         base: "*(void**)0x00c0617c",
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 14 },
-    WalkOp::Sub { class: 157 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 178 },
-    WalkOp::Sub { class: 166 },
-    WalkOp::Sub { class: 165 },
-    WalkOp::Sub { class: 166 },
+    WalkOp::SubUnbased { class: 183 },
+    WalkOp::SubUnbased { class: 14 },
+    WalkOp::SubUnbased { class: 157 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 183 },
+    WalkOp::SubUnbased { class: 178 },
+    WalkOp::SubUnbased { class: 166 },
+    WalkOp::SubUnbased { class: 165 },
+    WalkOp::SubUnbased { class: 166 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 184 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 184 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 static OPS_49: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 843 },
-    WalkOp::Sub { class: 169 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 169,
+        at: 984,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 844,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 872,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 900,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 928,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 956,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 1040,
+    },
     WalkOp::Bytes {
         begin: 1008,
         end: 1016,
@@ -444,18 +480,33 @@ static OPS_49: &[WalkOp] = &[
         end: 1068,
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::Sub {
+        class: 235,
+        at: 1072,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 1100,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 1128,
+    },
 ];
-static OPS_50: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 171 }];
+static OPS_50: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 171, at: 0 }];
 static OPS_51: &[WalkOp] = &[
     WalkOp::Bytes { begin: 0, end: 24 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::Sub { class: 235, at: 24 },
+    WalkOp::Sub { class: 235, at: 52 },
+    WalkOp::Sub { class: 235, at: 80 },
+    WalkOp::Sub {
+        class: 235,
+        at: 108,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 136,
+    },
 ];
 static OPS_52: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 24 }];
 static OPS_53: &[WalkOp] = &[
@@ -465,12 +516,21 @@ static OPS_53: &[WalkOp] = &[
         begin: 92,
         end: 104,
     },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 172 },
+    WalkOp::Sub { class: 247, at: 68 },
+    WalkOp::Sub {
+        class: 247,
+        at: 104,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 124,
+    },
+    WalkOp::Sub {
+        class: 172,
+        at: 144,
+    },
 ];
-static OPS_54: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 173 }];
+static OPS_54: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 173, at: 0 }];
 static OPS_55: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 36 },
     WalkOp::Bytes { begin: 36, end: 48 },
@@ -489,21 +549,54 @@ static OPS_56: &[WalkOp] = &[
 static OPS_57: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 4, end: 144 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 144,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 164,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 184,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 204,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 224,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 244,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 264,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 284,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 304,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 324,
+    },
     WalkOp::Bytes {
         begin: 372,
         end: 376,
     },
-    WalkOp::Sub { class: 209 },
+    WalkOp::Sub {
+        class: 209,
+        at: 344,
+    },
 ];
 static OPS_58: &[WalkOp] = &[
     WalkOp::Global {
@@ -555,18 +648,18 @@ static OPS_63: &[WalkOp] = &[
 ];
 static OPS_64: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 24 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 24 },
-    WalkOp::Sub { class: 236 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 232 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 24 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 24 },
+    WalkOp::SubUnbased { class: 236 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 232 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 static OPS_65: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_66: &[WalkOp] = &[WalkOp::Tag, WalkOp::Unresolved];
@@ -596,7 +689,7 @@ static OPS_89: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
 static OPS_90: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
 static OPS_91: &[WalkOp] = &[WalkOp::Tag, WalkOp::Tag];
 static OPS_92: &[WalkOp] = &[WalkOp::Tag, WalkOp::Unresolved, WalkOp::Unresolved];
-static OPS_93: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 184 }];
+static OPS_93: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 184 }];
 static OPS_94: &[WalkOp] = &[
     WalkOp::Global {
         bytes: 3392,
@@ -607,10 +700,10 @@ static OPS_94: &[WalkOp] = &[
         base: "*(void**)0x00c061f0",
     },
 ];
-static OPS_95: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 176 }];
-static OPS_96: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 205 }];
-static OPS_97: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 177 }];
-static OPS_98: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 17 }];
+static OPS_95: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 176 }];
+static OPS_96: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 205 }];
+static OPS_97: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 177 }];
+static OPS_98: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 17 }];
 static OPS_99: &[WalkOp] = &[WalkOp::Global {
     bytes: 40,
     base: "*(void**)0x00c061bc",
@@ -619,33 +712,33 @@ static OPS_100: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 15 },
+    WalkOp::SubUnbased { class: 15 },
 ];
 static OPS_101: &[WalkOp] = &[
     WalkOp::Global {
         bytes: 8,
         base: "*(void**)0x00c061b8",
     },
-    WalkOp::Sub { class: 179 },
-    WalkOp::Sub { class: 26 },
+    WalkOp::SubUnbased { class: 179 },
+    WalkOp::SubUnbased { class: 26 },
 ];
 static OPS_102: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 12 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 12 },
 ];
 static OPS_103: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 248 },
+    WalkOp::SubUnbased { class: 248 },
     WalkOp::Virtual,
 ];
 static OPS_104: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 248 },
+    WalkOp::SubUnbased { class: 248 },
     WalkOp::Virtual,
 ];
 static OPS_105: &[WalkOp] = &[WalkOp::Tag];
@@ -661,7 +754,7 @@ static OPS_114: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 15 },
+    WalkOp::SubUnbased { class: 15 },
 ];
 static OPS_115: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 10 },
@@ -670,8 +763,8 @@ static OPS_115: &[WalkOp] = &[
 ];
 static OPS_116: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 0 },
+    WalkOp::Sub { class: 247, at: 20 },
     WalkOp::Bytes {
         begin: 40,
         end: 3728,
@@ -682,7 +775,7 @@ static OPS_117: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 76 },
     WalkOp::Scratch { bytes: 8 },
 ];
-static OPS_118: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 176 }];
+static OPS_118: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 176 }];
 static OPS_119: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_120: &[WalkOp] = &[
     WalkOp::Tag,
@@ -697,7 +790,7 @@ static OPS_120: &[WalkOp] = &[
 ];
 static OPS_121: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 123 },
+    WalkOp::SubUnbased { class: 123 },
     WalkOp::Global {
         bytes: 404,
         base: "*(void**)0x00c061ec",
@@ -718,7 +811,7 @@ static OPS_122: &[WalkOp] = &[WalkOp::Global {
 }];
 static OPS_123: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Bytes { begin: 0, end: 4 },
     WalkOp::Bytes { begin: 4, end: 20 },
     WalkOp::Scratch { bytes: 4 },
@@ -734,18 +827,27 @@ static OPS_123: &[WalkOp] = &[
         begin: 56,
         end: 113,
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 120,
+    },
     WalkOp::Scratch { bytes: 8 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 1268,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 1288,
+    },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Scratch { bytes: 8 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Virtual,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_124: &[WalkOp] = &[
     WalkOp::Unresolved,
@@ -761,10 +863,10 @@ static OPS_126: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 13 }];
 static OPS_127: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 32, end: 33 },
-    WalkOp::Sub { class: 248 },
+    WalkOp::Sub { class: 248, at: 0 },
 ];
 static OPS_128: &[WalkOp] = &[
-    WalkOp::Sub { class: 185 },
+    WalkOp::Sub { class: 185, at: 0 },
     WalkOp::Bytes {
         begin: 692,
         end: 760,
@@ -777,16 +879,16 @@ static OPS_129: &[WalkOp] = &[
 static OPS_130: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 203 },
+    WalkOp::SubUnbased { class: 203 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 238 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 234 },
-    WalkOp::Sub { class: 11 },
+    WalkOp::SubUnbased { class: 238 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 234 },
+    WalkOp::SubUnbased { class: 11 },
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 203 },
+    WalkOp::SubUnbased { class: 203 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 1 },
 ];
@@ -818,13 +920,13 @@ static OPS_134: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 20 }]
 static OPS_135: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 231 },
-    WalkOp::Sub { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 20 },
 ];
 static OPS_136: &[WalkOp] = &[
-    WalkOp::Sub { class: 16 },
+    WalkOp::Sub { class: 16, at: 0 },
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
@@ -836,9 +938,9 @@ static OPS_137: &[WalkOp] = &[
 ];
 static OPS_138: &[WalkOp] = &[WalkOp::Bytes { begin: 8, end: 163 }];
 static OPS_139: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 27 }];
-static OPS_140: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 205 }];
+static OPS_140: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 205 }];
 static OPS_141: &[WalkOp] = &[
-    WalkOp::Sub { class: 10 },
+    WalkOp::Sub { class: 10, at: 4 },
     WalkOp::Bytes { begin: 36, end: 42 },
 ];
 static OPS_142: &[WalkOp] = &[
@@ -850,22 +952,22 @@ static OPS_142: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 10 },
+    WalkOp::SubUnbased { class: 10 },
     WalkOp::Unresolved,
 ];
 static OPS_143: &[WalkOp] = &[
-    WalkOp::Sub { class: 131 },
+    WalkOp::Sub { class: 131, at: 0 },
     WalkOp::Tag,
     WalkOp::Bytes {
         begin: 2512,
         end: 2524,
     },
 ];
-static OPS_144: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 17 }];
+static OPS_144: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 17 }];
 static OPS_145: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 32, end: 33 },
-    WalkOp::Sub { class: 248 },
+    WalkOp::Sub { class: 248, at: 0 },
 ];
 static OPS_146: &[WalkOp] = &[
     WalkOp::Bytes { begin: 12, end: 16 },
@@ -873,16 +975,22 @@ static OPS_146: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_147: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 264 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 264,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 284,
+    },
 ];
-static OPS_148: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 177 }];
+static OPS_148: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 177 }];
 static OPS_149: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 8 },
@@ -928,12 +1036,30 @@ static OPS_149: &[WalkOp] = &[
         end: 28048,
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 22 },
-    WalkOp::Sub { class: 18 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 22,
+        at: 28212,
+    },
+    WalkOp::Sub {
+        class: 18,
+        at: 28360,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 28240,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 28268,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 28296,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 28324,
+    },
     WalkOp::Bytes {
         begin: 28056,
         end: 28064,
@@ -949,7 +1075,10 @@ static OPS_149: &[WalkOp] = &[
         end: 28104,
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 150 },
+    WalkOp::SubPtr {
+        class: 150,
+        at: 28344,
+    },
 ];
 static OPS_150: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1017,8 +1146,8 @@ static OPS_152: &[WalkOp] = &[
 ];
 static OPS_153: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 149 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 149 },
 ];
 static OPS_154: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1044,12 +1173,12 @@ static OPS_156: &[WalkOp] = &[
         bytes: 4,
         base: "*(void**)0x00ed6668",
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Global {
         bytes: 4,
         base: "*(void**)0x00ed6668",
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_157: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1071,10 +1200,10 @@ static OPS_158: &[WalkOp] = &[
 ];
 static OPS_159: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 40 }];
 static OPS_160: &[WalkOp] = &[
-    WalkOp::Sub { class: 211 },
-    WalkOp::Sub { class: 211 },
-    WalkOp::Sub { class: 211 },
-    WalkOp::Sub { class: 211 },
+    WalkOp::SubUnbased { class: 211 },
+    WalkOp::SubUnbased { class: 211 },
+    WalkOp::SubUnbased { class: 211 },
+    WalkOp::SubUnbased { class: 211 },
     WalkOp::Global {
         bytes: 10,
         base: "*(void**)0x00c06208",
@@ -1084,8 +1213,8 @@ static OPS_160: &[WalkOp] = &[
         bytes: 8,
         base: "*(void**)0x00c06208",
     },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Global {
         bytes: 8,
         base: "*(void**)0x00c06208",
@@ -1094,7 +1223,7 @@ static OPS_160: &[WalkOp] = &[
         bytes: 10,
         base: "*(void**)0x00c06208",
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Global {
         bytes: 8,
         base: "*(void**)0x00c06208",
@@ -1112,15 +1241,15 @@ static OPS_161: &[WalkOp] = &[
         begin: 104,
         end: 114,
     },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 44 },
+    WalkOp::Sub { class: 247, at: 64 },
 ];
 static OPS_162: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 25 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 25 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 static OPS_163: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1142,16 +1271,16 @@ static OPS_164: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_165: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_166: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1159,15 +1288,15 @@ static OPS_166: &[WalkOp] = &[
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_167: &[WalkOp] = &[
-    WalkOp::Sub { class: 248 },
+    WalkOp::Sub { class: 248, at: 0 },
     WalkOp::Tag,
     WalkOp::Virtual,
     WalkOp::Bytes { begin: 32, end: 66 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubPtr { class: 235, at: 68 },
 ];
 static OPS_168: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1175,7 +1304,7 @@ static OPS_168: &[WalkOp] = &[
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_169: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1190,16 +1319,16 @@ static OPS_170: &[WalkOp] = &[
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_171: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 49 },
+    WalkOp::SubUnbased { class: 49 },
 ];
 static OPS_172: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1207,11 +1336,11 @@ static OPS_172: &[WalkOp] = &[
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 static OPS_173: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1221,17 +1350,17 @@ static OPS_173: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 172 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 172 },
 ];
 static OPS_174: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 57 },
+    WalkOp::SubUnbased { class: 57 },
 ];
 static OPS_175: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1248,8 +1377,8 @@ static OPS_176: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
     WalkOp::Unresolved,
 ];
 static OPS_177: &[WalkOp] = &[
@@ -1259,22 +1388,22 @@ static OPS_177: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Tag,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_178: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 174 },
+    WalkOp::SubUnbased { class: 174 },
 ];
 static OPS_179: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 213 },
+    WalkOp::SubUnbased { class: 213 },
 ];
 static OPS_180: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1293,14 +1422,14 @@ static OPS_182: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 static OPS_183: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Bytes { begin: 12, end: 14 },
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_184: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1310,20 +1439,29 @@ static OPS_184: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_185: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 116,
+    },
     WalkOp::Bytes {
         begin: 484,
         end: 636,
     },
-    WalkOp::Sub { class: 238 },
-    WalkOp::Sub { class: 238 },
+    WalkOp::Sub {
+        class: 238,
+        at: 636,
+    },
+    WalkOp::Sub {
+        class: 238,
+        at: 664,
+    },
 ];
 static OPS_186: &[WalkOp] = &[
     WalkOp::Tag,
@@ -1351,9 +1489,9 @@ static OPS_186: &[WalkOp] = &[
         begin: 468,
         end: 486,
     },
-    WalkOp::Sub { class: 163 },
-    WalkOp::Sub { class: 199 },
-    WalkOp::Sub { class: 175 },
+    WalkOp::Sub { class: 163, at: 4 },
+    WalkOp::SubUnbased { class: 199 },
+    WalkOp::SubUnbased { class: 175 },
 ];
 static OPS_187: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_188: &[WalkOp] = &[
@@ -1370,17 +1508,17 @@ static OPS_188: &[WalkOp] = &[
 static OPS_189: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 18 }];
 static OPS_190: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 20 },
+    WalkOp::Sub { class: 247, at: 40 },
 ];
 static OPS_191: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_192: &[WalkOp] = &[
-    WalkOp::Sub { class: 19 },
+    WalkOp::SubUnbased { class: 19 },
     WalkOp::Tag,
     WalkOp::Global {
         bytes: 92,
@@ -1409,15 +1547,15 @@ static OPS_195: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_196: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 231 },
-    WalkOp::Sub { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
 ];
 static OPS_197: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 96 }];
 static OPS_198: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 48, end: 50 },
     WalkOp::Bytes { begin: 0, end: 57 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 64 },
 ];
 static OPS_199: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1446,8 +1584,8 @@ static OPS_201: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes { begin: 8, end: 14 },
-    WalkOp::Sub { class: 26 },
-    WalkOp::Sub { class: 23 },
+    WalkOp::SubUnbased { class: 26 },
+    WalkOp::SubUnbased { class: 23 },
     WalkOp::Unresolved,
 ];
 static OPS_202: &[WalkOp] = &[
@@ -1508,7 +1646,7 @@ static OPS_207: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes { begin: 8, end: 14 },
-    WalkOp::Sub { class: 215 },
+    WalkOp::SubUnbased { class: 215 },
 ];
 static OPS_208: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1518,7 +1656,7 @@ static OPS_208: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes { begin: 8, end: 14 },
-    WalkOp::Sub { class: 222 },
+    WalkOp::SubUnbased { class: 222 },
 ];
 static OPS_209: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1529,8 +1667,8 @@ static OPS_209: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes { begin: 8, end: 14 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
+    WalkOp::SubUnbased { class: 247 },
 ];
 static OPS_210: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1545,9 +1683,9 @@ static OPS_210: &[WalkOp] = &[
 static OPS_211: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 146 },
+    WalkOp::SubPtr { class: 146, at: 12 },
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 146 },
+    WalkOp::SubPtr { class: 146, at: 12 },
 ];
 static OPS_212: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1565,7 +1703,7 @@ static OPS_213: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Bytes { begin: 88, end: 96 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 26 },
+    WalkOp::Sub { class: 26, at: 108 },
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
 ];
@@ -1574,13 +1712,13 @@ static OPS_214: &[WalkOp] = &[
         bytes: 8,
         base: "*(void**)0x00c061b8",
     },
-    WalkOp::Sub { class: 179 },
-    WalkOp::Sub { class: 26 },
+    WalkOp::SubUnbased { class: 179 },
+    WalkOp::SubUnbased { class: 26 },
 ];
 static OPS_215: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Sub { class: 244 },
+    WalkOp::SubPtr { class: 244, at: 8 },
 ];
 static OPS_216: &[WalkOp] = &[
     WalkOp::Tag,
@@ -1593,20 +1731,20 @@ static OPS_217: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 28, end: 32 },
     WalkOp::Bytes { begin: 32, end: 36 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::Sub { class: 235, at: 0 },
 ];
 static OPS_218: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 4 },
     WalkOp::Bytes { begin: 24, end: 34 },
 ];
 static OPS_219: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 36, end: 44 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 64 },
+    WalkOp::Sub { class: 247, at: 44 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 247, at: 4 },
     WalkOp::Bytes { begin: 24, end: 34 },
 ];
 static OPS_220: &[WalkOp] = &[
@@ -1627,11 +1765,11 @@ static OPS_221: &[WalkOp] = &[
         base: "*(void**)0x00c0620c",
     },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 231 },
-    WalkOp::Sub { class: 231 },
-    WalkOp::Sub { class: 236 },
-    WalkOp::Sub { class: 236 },
-    WalkOp::Sub { class: 237 },
+    WalkOp::SubUnbased { class: 231 },
+    WalkOp::SubUnbased { class: 231 },
+    WalkOp::SubUnbased { class: 236 },
+    WalkOp::SubUnbased { class: 236 },
+    WalkOp::SubUnbased { class: 237 },
     WalkOp::Global {
         bytes: 4,
         base: "*(void**)0x00c0620c",
@@ -1642,12 +1780,24 @@ static OPS_222: &[WalkOp] = &[
     WalkOp::SubUnknown { va: 0x009d84a0 },
     WalkOp::Bytes { begin: 88, end: 96 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 236 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub { class: 235, at: 4 },
+    WalkOp::Sub { class: 236, at: 32 },
+    WalkOp::Sub {
+        class: 183,
+        at: 100,
+    },
+    WalkOp::Sub {
+        class: 183,
+        at: 124,
+    },
+    WalkOp::Sub {
+        class: 183,
+        at: 148,
+    },
+    WalkOp::Sub {
+        class: 247,
+        at: 172,
+    },
     WalkOp::Bytes {
         begin: 192,
         end: 204,
@@ -1661,14 +1811,26 @@ static OPS_223: &[WalkOp] = &[
 ];
 static OPS_224: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 236 },
-    WalkOp::Sub { class: 208 },
+    WalkOp::Sub { class: 236, at: 0 },
+    WalkOp::Sub { class: 208, at: 28 },
     WalkOp::SubUnknown { va: 0x009d84a0 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 183 },
-    WalkOp::Sub { class: 247 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 154 },
+    WalkOp::Sub {
+        class: 235,
+        at: 184,
+    },
+    WalkOp::Sub { class: 183, at: 84 },
+    WalkOp::Sub {
+        class: 247,
+        at: 108,
+    },
+    WalkOp::Sub {
+        class: 235,
+        at: 128,
+    },
+    WalkOp::Sub {
+        class: 154,
+        at: 156,
+    },
     WalkOp::Bytes {
         begin: 212,
         end: 221,
@@ -1677,9 +1839,9 @@ static OPS_224: &[WalkOp] = &[
 static OPS_225: &[WalkOp] = &[WalkOp::Tag, WalkOp::Bytes { begin: 16, end: 20 }];
 static OPS_226: &[WalkOp] = &[WalkOp::Tag, WalkOp::Bytes { begin: 16, end: 20 }];
 static OPS_227: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnknown { va: 0x009d84a0 }];
-static OPS_228: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 247 }];
+static OPS_228: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 247, at: 16 }];
 static OPS_229: &[WalkOp] = &[
-    WalkOp::Sub { class: 131 },
+    WalkOp::Sub { class: 131, at: 0 },
     WalkOp::Tag,
     WalkOp::Bytes {
         begin: 2512,
@@ -1688,8 +1850,8 @@ static OPS_229: &[WalkOp] = &[
 ];
 static OPS_230: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Sub { class: 21 },
-    WalkOp::Sub { class: 21 },
+    WalkOp::SubUnbased { class: 21 },
+    WalkOp::SubUnbased { class: 21 },
 ];
 static OPS_231: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1749,7 +1911,7 @@ static OPS_238: &[WalkOp] = &[
 ];
 static OPS_239: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 24 }];
 static OPS_240: &[WalkOp] = &[
-    WalkOp::Sub { class: 10 },
+    WalkOp::Sub { class: 10, at: 4 },
     WalkOp::Bytes { begin: 36, end: 42 },
 ];
 static OPS_241: &[WalkOp] = &[
@@ -1765,12 +1927,15 @@ static OPS_242: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 10 },
+    WalkOp::SubUnbased { class: 10 },
     WalkOp::Unresolved,
 ];
 static OPS_243: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 116,
+    },
     WalkOp::Bytes {
         begin: 456,
         end: 504,
@@ -1782,12 +1947,21 @@ static OPS_244: &[WalkOp] = &[
         begin: 64,
         end: 100,
     },
-    WalkOp::Sub { class: 25 },
-    WalkOp::Sub { class: 234 },
-    WalkOp::Sub { class: 234 },
-    WalkOp::Sub { class: 234 },
-    WalkOp::Sub { class: 25 },
-    WalkOp::Sub { class: 25 },
+    WalkOp::Sub { class: 25, at: 100 },
+    WalkOp::Sub {
+        class: 234,
+        at: 128,
+    },
+    WalkOp::Sub {
+        class: 234,
+        at: 184,
+    },
+    WalkOp::Sub {
+        class: 234,
+        at: 156,
+    },
+    WalkOp::Sub { class: 25, at: 212 },
+    WalkOp::Sub { class: 25, at: 240 },
 ];
 static OPS_245: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 13 }, WalkOp::Unresolved];
 static OPS_246: &[WalkOp] = &[
@@ -1826,17 +2000,23 @@ static OPS_250: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 6 }];
 static OPS_251: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_252: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 116,
+    },
     WalkOp::Bytes {
         begin: 456,
         end: 483,
     },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 484,
+    },
 ];
 static OPS_253: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved, WalkOp::Unresolved];
 static OPS_254: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_255: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 5 }];
-static OPS_256: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 247 }];
+static OPS_256: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 247 }];
 static OPS_257: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Scratch { bytes: 10 },
@@ -1853,7 +2033,7 @@ static OPS_258: &[WalkOp] = &[
         end: 1520,
     },
 ];
-static OPS_259: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 184 }];
+static OPS_259: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 184, at: 4 }];
 static OPS_260: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Global {
@@ -1868,7 +2048,10 @@ static OPS_260: &[WalkOp] = &[
 ];
 static OPS_261: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
-    WalkOp::Sub { class: 247 },
+    WalkOp::Sub {
+        class: 247,
+        at: 116,
+    },
 ];
 static OPS_262: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_263: &[WalkOp] = &[
@@ -1898,19 +2081,28 @@ static OPS_268: &[WalkOp] = &[
     WalkOp::Unresolved,
 ];
 static OPS_269: &[WalkOp] = &[
-    WalkOp::Sub { class: 167 },
+    WalkOp::Sub { class: 167, at: 0 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes {
         begin: 72,
         end: 183,
     },
-    WalkOp::Sub { class: 245 },
-    WalkOp::Sub { class: 193 },
-    WalkOp::Sub { class: 204 },
+    WalkOp::Sub {
+        class: 245,
+        at: 184,
+    },
+    WalkOp::Sub {
+        class: 193,
+        at: 200,
+    },
+    WalkOp::Sub {
+        class: 204,
+        at: 228,
+    },
 ];
 static OPS_270: &[WalkOp] = &[
-    WalkOp::Sub { class: 185 },
+    WalkOp::Sub { class: 185, at: 0 },
     WalkOp::Bytes {
         begin: 692,
         end: 716,
@@ -1929,9 +2121,9 @@ static OPS_270: &[WalkOp] = &[
     },
 ];
 static OPS_271: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
-static OPS_272: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 48 }];
+static OPS_272: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnbased { class: 48 }];
 static OPS_273: &[WalkOp] = &[
-    WalkOp::Sub { class: 123 },
+    WalkOp::SubUnbased { class: 123 },
     WalkOp::Global {
         bytes: 32,
         base: "*(void**)0x00c06210",
@@ -1952,13 +2144,13 @@ static OPS_273: &[WalkOp] = &[
         bytes: 12,
         base: "*(void**)0x00c06190",
     },
-    WalkOp::Sub { class: 121 },
+    WalkOp::SubUnbased { class: 121 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 184 },
-    WalkOp::Sub { class: 153 },
-    WalkOp::Sub { class: 262 },
-    WalkOp::Sub { class: 256 },
-    WalkOp::Sub { class: 162 },
+    WalkOp::SubUnbased { class: 184 },
+    WalkOp::SubUnbased { class: 153 },
+    WalkOp::SubUnbased { class: 262 },
+    WalkOp::SubUnbased { class: 256 },
+    WalkOp::SubUnbased { class: 162 },
     WalkOp::Global {
         bytes: 3392,
         base: "*(void**)0x00c061f0",
@@ -1975,35 +2167,35 @@ static OPS_273: &[WalkOp] = &[
         bytes: 4,
         base: "*(void**)0x00c061c4",
     },
-    WalkOp::Sub { class: 8 },
-    WalkOp::Sub { class: 40 },
+    WalkOp::SubUnbased { class: 8 },
+    WalkOp::SubUnbased { class: 40 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 176 },
-    WalkOp::Sub { class: 202 },
-    WalkOp::Sub { class: 206 },
-    WalkOp::Sub { class: 142 },
+    WalkOp::SubUnbased { class: 176 },
+    WalkOp::SubUnbased { class: 202 },
+    WalkOp::SubUnbased { class: 206 },
+    WalkOp::SubUnbased { class: 142 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 205 },
-    WalkOp::Sub { class: 242 },
-    WalkOp::Sub { class: 276 },
-    WalkOp::Sub { class: 120 },
-    WalkOp::Sub { class: 63 },
-    WalkOp::Sub { class: 188 },
-    WalkOp::Sub { class: 249 },
-    WalkOp::Sub { class: 38 },
+    WalkOp::SubUnbased { class: 205 },
+    WalkOp::SubUnbased { class: 242 },
+    WalkOp::SubUnbased { class: 276 },
+    WalkOp::SubUnbased { class: 120 },
+    WalkOp::SubUnbased { class: 63 },
+    WalkOp::SubUnbased { class: 188 },
+    WalkOp::SubUnbased { class: 249 },
+    WalkOp::SubUnbased { class: 38 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 177 },
-    WalkOp::Sub { class: 152 },
-    WalkOp::Sub { class: 191 },
+    WalkOp::SubUnbased { class: 177 },
+    WalkOp::SubUnbased { class: 152 },
+    WalkOp::SubUnbased { class: 191 },
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 16 },
+    WalkOp::SubUnbased { class: 16 },
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 186 },
+    WalkOp::SubUnbased { class: 186 },
     WalkOp::Tag,
-    WalkOp::Sub { class: 17 },
-    WalkOp::Sub { class: 277 },
+    WalkOp::SubUnbased { class: 17 },
+    WalkOp::SubUnbased { class: 277 },
     WalkOp::Global {
         bytes: 40,
         base: "*(void**)0x00c061bc",
@@ -2012,16 +2204,16 @@ static OPS_273: &[WalkOp] = &[
         bytes: 4,
         base: "*(void**)0x00c06184",
     },
-    WalkOp::Sub { class: 130 },
-    WalkOp::Sub { class: 221 },
+    WalkOp::SubUnbased { class: 130 },
+    WalkOp::SubUnbased { class: 221 },
     WalkOp::Tag,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 15 },
-    WalkOp::Sub { class: 268 },
-    WalkOp::Sub { class: 263 },
-    WalkOp::Sub { class: 266 },
-    WalkOp::Sub { class: 48 },
+    WalkOp::SubUnbased { class: 15 },
+    WalkOp::SubUnbased { class: 268 },
+    WalkOp::SubUnbased { class: 263 },
+    WalkOp::SubUnbased { class: 266 },
+    WalkOp::SubUnbased { class: 48 },
     WalkOp::Unresolved,
     WalkOp::Tag,
     WalkOp::Global {
@@ -2033,9 +2225,9 @@ static OPS_273: &[WalkOp] = &[
         base: "*(void**)0x00c06200",
     },
     WalkOp::Tag,
-    WalkOp::Sub { class: 21 },
-    WalkOp::Sub { class: 21 },
-    WalkOp::Sub { class: 19 },
+    WalkOp::SubUnbased { class: 21 },
+    WalkOp::SubUnbased { class: 21 },
+    WalkOp::SubUnbased { class: 19 },
     WalkOp::Tag,
     WalkOp::Global {
         bytes: 92,
@@ -2045,24 +2237,24 @@ static OPS_273: &[WalkOp] = &[
         bytes: 18,
         base: "*(void**)0x00c06204",
     },
-    WalkOp::Sub { class: 45 },
-    WalkOp::Sub { class: 207 },
-    WalkOp::Sub { class: 253 },
-    WalkOp::Sub { class: 160 },
-    WalkOp::Sub { class: 253 },
-    WalkOp::Sub { class: 44 },
-    WalkOp::Sub { class: 64 },
+    WalkOp::SubUnbased { class: 45 },
+    WalkOp::SubUnbased { class: 207 },
+    WalkOp::SubUnbased { class: 253 },
+    WalkOp::SubUnbased { class: 160 },
+    WalkOp::SubUnbased { class: 253 },
+    WalkOp::SubUnbased { class: 44 },
+    WalkOp::SubUnbased { class: 64 },
     WalkOp::Global {
         bytes: 8,
         base: "*(void**)0x00c061b8",
     },
-    WalkOp::Sub { class: 179 },
-    WalkOp::Sub { class: 26 },
-    WalkOp::Sub { class: 253 },
+    WalkOp::SubUnbased { class: 179 },
+    WalkOp::SubUnbased { class: 26 },
+    WalkOp::SubUnbased { class: 253 },
     WalkOp::Unresolved,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 0 },
+    WalkOp::SubUnbased { class: 0 },
     WalkOp::SubUnknown { va: 0x00997ad0 },
     WalkOp::SubUnknown { va: 0x009c41a0 },
     WalkOp::Tag,
@@ -2075,10 +2267,10 @@ static OPS_273: &[WalkOp] = &[
         bytes: 341,
         base: "*(void**)0x00c06180",
     },
-    WalkOp::Sub { class: 121 },
+    WalkOp::SubUnbased { class: 121 },
 ];
 static OPS_274: &[WalkOp] = &[
-    WalkOp::Sub { class: 167 },
+    WalkOp::Sub { class: 167, at: 0 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Bytes {
@@ -2104,12 +2296,12 @@ static OPS_277: &[WalkOp] = &[
         bytes: 8,
         base: "*(void**)0x00c06188",
     },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
-    WalkOp::Sub { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
+    WalkOp::SubUnbased { class: 233 },
     WalkOp::Global {
         bytes: 120,
         base: "*(void**)0x00c06188",
@@ -2125,10 +2317,10 @@ static OPS_277: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Unresolved,
     WalkOp::Unresolved,
-    WalkOp::Sub { class: 26 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
-    WalkOp::Sub { class: 235 },
+    WalkOp::SubUnbased { class: 26 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
+    WalkOp::SubUnbased { class: 235 },
 ];
 
 pub static SPECS: [WalkSpec; NUM_CLASSES] = [

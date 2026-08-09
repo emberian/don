@@ -41,8 +41,13 @@
 //! # What is deliberately *not* here
 //!
 //! * **Target ranking.** `Object::compare_target` (`0x0064E5C0`, 3,553 B) and
-//!   `Object::find_nearby_target` (`0x00648DA0`, 4,042 B) were mapped but not reduced.
-//!   Only the cheap gates — [`poor_target`], [`in_attack_range`] — are ported.
+//!   `Object::find_nearby_target` (`0x00648DA0`, 4,042 B) were mapped but not reduced here.
+//!   Only the cheap gates — [`poor_target`], [`in_attack_range`] — are in this file.
+//!   **They now live in [`crate::systems::target`]** (lane `assembly:target-selection`),
+//!   together with the `World::wdata` acquisition grid, `attack_dir`'s settled semantics,
+//!   and an engagement driver that composes this module's range/recharge pieces with
+//!   `crate::mechanics::damage`. That module imports this one; nothing here imports it, so
+//!   this file still builds standalone.
 //! * **Experience / veterancy.** There is none. `ObjectData` has no experience field,
 //!   `UnitData` has no kill counter, and no `Object::*` function reads one. The only
 //!   per-unit progression is the player-wide `military_level` upgrade term already in
@@ -1477,36 +1482,12 @@ impl DeathRing {
 // ===========================================================================================
 
 /// zlib `adler32` — `0x00A46830`, the hash behind every `CheckSum` channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Adler32 {
-    a: u32,
-    b: u32,
-}
-
-impl Default for Adler32 {
-    fn default() -> Self {
-        Adler32::new()
-    }
-}
-
-impl Adler32 {
-    /// zlib's initial value, which is also what `CheckSums::check_all` stores into
-    /// `CheckSum::accum` before each channel (`local_1c[0] = 1` at `0x0093658A`).
-    pub const fn new() -> Adler32 {
-        Adler32 { a: 1, b: 0 }
-    }
-    /// Absorb bytes.
-    pub fn update(&mut self, bytes: &[u8]) {
-        for &x in bytes {
-            self.a = (self.a + x as u32) % 65521;
-            self.b = (self.b + self.a) % 65521;
-        }
-    }
-    /// `(b << 16) | a`.
-    pub const fn finish(&self) -> u32 {
-        (self.b << 16) | self.a
-    }
-}
+///
+/// Re-exported from [`crate::checksum`]; this module used to carry its own copy of the
+/// arithmetic. `Adler32::new()` is still the seed `check_all` stores into `CheckSum::accum`
+/// before each channel (`local_1c[0] = 1` at `0x0093658A`), and `finish()` is still
+/// `(s2 << 16) | s1`.
+pub use crate::checksum::Adler32;
 
 /// One `CheckSum` walker — the object `CheckSums::check_all` builds on its own stack at
 /// `0x00936583`.

@@ -241,26 +241,9 @@ impl Rng {
 // adler-32 — `0x00A46830` [measured, Tier B: 500k oracle trials]
 // ============================================================================
 
-const ADLER_BASE: u32 = 65521;
-const ADLER_NMAX: usize = 5552;
-
-/// zlib `adler32`, the lockstep checksum primitive.
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    let mut s1 = adler & 0xFFFF;
-    let mut s2 = (adler >> 16) & 0xFFFF;
-    if buf.is_empty() {
-        return adler;
-    }
-    for chunk in buf.chunks(ADLER_NMAX) {
-        for &b in chunk {
-            s1 += b as u32;
-            s2 += s1;
-        }
-        s1 %= ADLER_BASE;
-        s2 %= ADLER_BASE;
-    }
-    (s2 << 16) | s1
-}
+/// zlib `adler32`, the lockstep checksum primitive — re-exported from
+/// [`crate::checksum`], which is the crate's only implementation of it.
+pub use crate::checksum::{adler32, ADLER_BASE, ADLER_NMAX};
 
 // ============================================================================
 // `AmmoData` — the walked state, laid out to match the engine byte-for-byte

@@ -10,3 +10,12 @@ description = "Batch-parallel simulation core: world storage and the fixed-tick 
 [[bin]]
 name = "don-bench"
 path = "src/bin/bench.rs"
+
+[[bin]]
+name = "don-tick-trace"
+path = "src/bin/tick-trace.rs"
+
+# The deviation registry, and the fidelity gate tools/replay-validate.sh runs.
+[[bin]]
+name = "don-deviations"
+path = "src/bin/deviations.rs"
