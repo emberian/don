@@ -53,18 +53,52 @@ at zero to four `game_random` draws per projectile); RELEASE_PLANE reaches `Unit
 paths write checksummed object or guy state. Shipped event/node tables are not present in the
 repository, so an empty synthetic event table would be a fidelity bug rather than a fallback.
 
+The simulation arms of `GraphicEvents::execute_game_events` `0x008E48E0` are now transcribed
+behind a fail-loud world/resource sink. RELEASE applies the exact target and low-node-bit
+gates, temporarily translates the package to the extracted node, calls
+`Objects::add_ammo -> Ammo::init`, then restores its scratch package. RELEASE_PLANE uses the
+upper node bits, calls the first queued child's `Unit::come_out(0)` before removing that value,
+places guy 0, and intentionally leaves the package translation accumulated for later events.
+The bridge copies/sign-extends shooter `(who,o)`, target `(whom,ox)`, projectile gpiece, and
+muzzle coordinates synchronously; it does not retain the package pointer.
+
+These operations are checksummed. A successful projectile contributes the fixed live-ammo
+walk plus optional spline in pool-slot order, including ballistic floats bit-for-bit. An
+early `Ammo::init` abort leaves the first-free slot reusable but still advances
+`Objects::ammo_index`. Plane launching-array removal changes the object/unit walk; placement,
+angle, `last_z/z`, `des_angle`, and `last_pitch/pitch` change the unit and guy channels.
+`AmmoInitReceipt` and `ComeOutReceipt` therefore require complete transitive RNG accounting;
+the existing inexact tick launcher is not accepted as an implementation of this sink.
+
 `GraphicEvents::verify_load` at `0x008E4780` is transcribed as an exact resource dispatcher:
 before graphics initialization it queues the gpiece; afterwards it conditionally calls
 `init_unit_events`, installs animations 7 through 11 with the measured `(0,0,3)` arguments,
-and marks the gpiece loaded. `init_unit_events` itself remains an asset-backed sink—there is
-no default empty event group.
+and marks the gpiece loaded.
+
+The supported install provides `Data/unit_graphics.xml` as a loose 3,440,809-byte file
+(SHA-256 `f01b091f1df8c79207683f54daa417c2fb9861fbbb6595e33e4a0d74d108e54d`).
+Retail resolves that XML through its live RData, animation, graphic-piece, object-type, and
+sound registries. The resolved global is `graphic_events` at preferred VA `0x00C0B010`:
+`events +0x04` points to per-gpiece 0x430-byte roots, each containing 38 event pointer arrays,
+`civ/age` at `+0x428/+0x429`, and `next` at `+0x42C`. Normal XML loading creates one
+unconditional `(-1,-1)` root. Within an animation bucket it preserves XML order in three
+phases: RELEASEEVENT, PLANERELEASE, then SOUNDEVENT.
+
+Because those resolved tables are proprietary installed data, this repository carries no
+copied event table. `init_unit_events_from_extractor` instead admits a coherent extracted
+result only when both the pinned executable hash and the exact installed XML hash match. It
+requires all 38 buckets and a root, validates every event's animation bucket, and fails on
+missing/malformed data. A live read-only extractor can walk the global layout above; an
+offline extractor must run the same name resolution. Neither path has an empty default.
 
 ## Runtime blockers
 
 - full `Guy::set_anim` integration, including captain/uber recursion and state writes
-- shipped `GraphicEvents` / `EventGroup` / graphic-node tables
-- RELEASE and RELEASE_PLANE integration from `GraphicEvents::execute_game_events` `0x008E48E0`
-- `GraphicEvents::init_unit_events` `0x008E2520`
+- a coherent extracted `GraphicEvents` / `EventGroup` / graphic-node pack wired at runtime
+- complete `Objects::add_ammo` / `Ammo::init` RELEASE adapter, including target abort,
+  anti-air-before-scatter RNG, slot reuse, unconditional graph index, and ammo checksum
+- complete `Unit::come_out`, launching-array, and Guy-storage RELEASE_PLANE adapter, including
+  all transitive RNG and checksum mutations
 - shipped `AnimationPacket` / `.anm` durations
 - `Wall::inc_time` `0x0063FB60`
 - `DeathObj::inc_time` `0x008D5240`

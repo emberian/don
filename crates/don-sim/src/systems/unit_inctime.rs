@@ -125,7 +125,8 @@
 //! | `Guy::execute_events` | `0x005D99C0` | 1093 | exact body in [`guy_execute_events`] over explicit lookup inputs |
 //! | `GraphicEvents::get_event_group` | `0x008E23C0` | 397 | exact linked selector in [`select_event_group`] |
 //! | `GraphicEvents::verify_load` | `0x008E4780` | 256 | exact resource dispatcher in [`graphic_events_verify_load`] |
-//! | `GraphicEvents::execute_game_events` | `0x008E48E0` | 1115 | interval/type dispatch exact; RELEASE bodies unintegrated |
+//! | `GraphicEvents::init_unit_events` | `0x008E2520` | 5053 | installed-data result admitted by [`init_unit_events_from_extractor`] |
+//! | `GraphicEvents::execute_game_events` | `0x008E48E0` | 1115 | RELEASE/PLANE bridge exact in [`execute_simulation_graphic_event`]; runtime sinks absent |
 //! | anim-class table | `0x00AF4370` | 38×4 | transcribed in [`ANIM_CLASS`] |
 //!
 //! # Fidelity
@@ -168,8 +169,9 @@ pub const RUNTIME_FIDELITY_READY: bool = false;
 /// a completeness claim.
 pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
     "Guy::set_anim 0x005DA300 full state/RNG integration (including recursive activations)",
-    "shipped GraphicEvents/EventGroup tables and RELEASE/RELEASE_PLANE integration",
-    "GraphicEvents::init_unit_events 0x008E2520 and shipped event resources",
+    "extracted shipped GraphicEvents/EventGroup and graphic-node resource pack wired at runtime",
+    "complete Objects::add_ammo/Ammo::init RELEASE adapter (target abort, anti-air RNG, scatter, counter/checksum)",
+    "complete Unit::come_out/launching/Guy storage RELEASE_PLANE adapter with transitive RNG accounting",
     "retail AnimationPacket/.anm data",
     "Wall::inc_time 0x0063FB60",
     "DeathObj::inc_time 0x008D5240",
@@ -463,6 +465,50 @@ pub fn fast_angle_to_degrees(angle: i32) -> f32 {
     ((high.wrapping_mul(360).wrapping_add(128)) >> 8) as f32
 }
 
+/// `angle_to_degrees` `0x00A28E00`, including its integer approximation constants.
+///
+/// This deliberately follows the retail quotient/remainder decomposition rather than
+/// replacing it with a mathematically cleaner 64-bit multiply. The latter disagrees at
+/// boundary values because the shipped function rounds through several reciprocal-multiply
+/// chunks.
+#[inline]
+pub fn angle_to_degrees(angle: i32) -> i32 {
+    let angle = angle as u32;
+    let quadrants = angle >> 30;
+    let within_quadrant = angle.wrapping_add(quadrants.wrapping_mul(0xC000_0000));
+    let fifteens = within_quadrant >> 29;
+    let within_fifteen = within_quadrant.wrapping_add(fifteens.wrapping_mul(0xE000_0000));
+    let within_five = within_fifteen % 0x1555_5555;
+    let within_degree = within_five % 0x0AAA_AAAA;
+    let result = (within_degree % 0x038E_38E3 + 0x005B_05B0) / 0x00B6_0B60
+        + (within_degree / 0x038E_38E3) * 5
+        + ((fifteens + quadrants * 2) * 3
+            + within_five / 0x0AAA_AAAA
+            + (within_fifteen / 0x1555_5555) * 2)
+            * 15;
+    result as i32
+}
+
+/// `degrees_to_angle` `0x00A28EB0`, preserving signed x86 quotient/remainder and wrapping
+/// arithmetic. Retail event color at `GraphicEvent +0x10` is passed through this helper by
+/// RELEASE_PLANE before being added to the source unit's binary angle.
+#[inline]
+pub fn degrees_to_angle(degrees: i32) -> i32 {
+    let mod_90 = degrees % 90;
+    let mod_45 = mod_90 % 45;
+    let mod_30 = mod_45 % 30;
+    let mod_15 = mod_30 % 15;
+    ((mod_45 / 30)
+        .wrapping_mul(0x071C_71C7)
+        .wrapping_add(mod_15 / 5))
+    .wrapping_mul(3)
+    .wrapping_add(
+        ((mod_90 / 45).wrapping_add((degrees / 90).wrapping_mul(2))).wrapping_mul(0x2000_0000),
+    )
+    .wrapping_add((mod_30 / 15).wrapping_mul(0x0AAA_AAAA))
+    .wrapping_add(mod_15.wrapping_mul(0x00B6_0B60))
+}
+
 /// Target identity carried beside a [`GameDataPackage`] while Guy events are validated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GuyEventTarget {
@@ -637,8 +683,15 @@ pub struct GraphicEventView {
     pub animation: i32,
     pub start_time: u16,
     pub end_time: u16,
+    /// Raw `GraphicEvent +0x10`; `color` for the ordinary event view and the first
+    /// underlay union word for underlay events.
+    pub color_or_underlay: u32,
     pub subject: i32,
     pub sound: i32,
+    pub emit_subject: u16,
+    pub time: u16,
+    pub type_code: i16,
+    pub axis: i8,
     pub node_num: i8,
 }
 
@@ -648,6 +701,167 @@ pub enum GraphicEventAction {
     Release,
     ReleasePlane,
     Sound,
+}
+
+/// Number of animation-indexed `PtrArray<GraphicEvent>` members in retail `EventGroup`.
+pub const GRAPHIC_EVENT_ANIMATION_SLOTS: usize = 38;
+
+/// SHA-256 of the only executable for which the PDB layouts and instruction addresses in
+/// this module are admitted.
+pub const SUPPORTED_RETAIL_EXE_SHA256: [u8; 32] = [
+    0x30, 0x47, 0x8a, 0x44, 0xb5, 0x77, 0xcb, 0x11, 0xeb, 0xcb, 0xbb, 0xf5, 0x3d, 0x3e, 0x93, 0xba,
+    0x02, 0xfd, 0x2a, 0xac, 0xf3, 0xbd, 0xef, 0xa6, 0x55, 0x2c, 0x9b, 0x64, 0x49, 0x62, 0x50, 0x79,
+];
+
+/// SHA-256 of the supported retail `Data/unit_graphics.xml` (3,440,809 bytes).
+pub const SUPPORTED_UNIT_GRAPHICS_SHA256: [u8; 32] = [
+    0xf0, 0x1b, 0x09, 0x1f, 0x1d, 0xf8, 0xc7, 0x92, 0x07, 0x68, 0x3f, 0x54, 0xda, 0xa4, 0x17, 0xc2,
+    0xfb, 0x98, 0x61, 0xfb, 0xbb, 0x65, 0x95, 0xe3, 0x3e, 0x4a, 0x0d, 0x74, 0xd1, 0x08, 0xe5, 0x4d,
+];
+
+/// Provenance supplied by the installed-data/live-memory event extractor.
+///
+/// `GraphicEvents::init_unit_events` resolves XML names through the loaded `RData`, graphic
+/// piece, animation, sound, and object-type registries. Those resolved tables are retail
+/// data and are not redistributed by this crate. A runtime pack must therefore be captured
+/// from the user's supported installation and must retain both identities. The capture is
+/// accepted only when its main-thread observer reported one coherent game frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphicEventResourceProvenance {
+    pub executable_sha256: [u8; 32],
+    pub installed_event_data_sha256: [u8; 32],
+    pub coherent_capture: bool,
+}
+
+/// One `EventGroup` after retail has resolved all XML/RData names to integer IDs.
+///
+/// Vector order is the exact `PtrArray` order. `next` is represented by the enclosing
+/// gpiece vector order, beginning with the unconditional root selected by
+/// [`select_event_group`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtractedEventGroup {
+    pub selector: EventGroupSelector,
+    pub events: [Vec<GraphicEventView>; GRAPHIC_EVENT_ANIMATION_SLOTS],
+}
+
+/// The resolved result of one retail `GraphicEvents::init_unit_events(gpiece)` call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtractedGpieceEvents {
+    pub gpiece: i32,
+    pub groups_in_link_order: Vec<ExtractedEventGroup>,
+}
+
+/// Fail-loud resource errors shared by the extractor and installer boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GraphicEventResourceError {
+    UnsupportedExecutable,
+    UnsupportedInstalledEventData,
+    IncoherentCapture,
+    MissingInstalledDataIdentity,
+    MissingGpiece(i32),
+    WrongGpiece {
+        requested: i32,
+        extracted: i32,
+    },
+    MissingRootGroup(i32),
+    InvalidAnimationBucket {
+        gpiece: i32,
+        group: usize,
+        bucket: usize,
+        event_animation: i32,
+    },
+    ExtractorFailure(String),
+    InstallerFailure(String),
+}
+
+/// Extract resolved events from the supported user's retail installation/live process.
+///
+/// There is intentionally no built-in empty implementation. The live extractor walks
+/// `graphic_events` at preferred VA `0x00C0B010` (RVA `0x0080B010`), whose PDB layout is
+/// `GraphicEvents.events +0x04 -> EventGroup[38] -> GraphicEvent`. An offline extractor may
+/// instead run the retail resolver over the installed graphics XML and registries, but it
+/// must produce the same normalized IDs and provenance.
+pub trait GraphicEventExtractor {
+    fn provenance(&self) -> GraphicEventResourceProvenance;
+    fn extract_gpiece(
+        &mut self,
+        gpiece: i32,
+    ) -> Result<ExtractedGpieceEvents, GraphicEventResourceError>;
+}
+
+/// Destination for a validated, resolved gpiece event chain.
+pub trait GraphicEventInstaller {
+    fn install_gpiece_events(
+        &mut self,
+        events: ExtractedGpieceEvents,
+    ) -> Result<(), GraphicEventResourceError>;
+}
+
+/// Counts produced by a successful extracted `init_unit_events` installation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InitUnitEventsStats {
+    pub groups: usize,
+    pub events: usize,
+}
+
+/// Extractor-backed runtime equivalent of `GraphicEvents::init_unit_events` `0x008E2520`.
+///
+/// The retail body is a 5 KiB parser/resolver over copyrighted installed data. This
+/// function admits its *resolved result*, validates every simulation-relevant structural
+/// invariant, and installs it without inventing IDs or presentation defaults. It fails on
+/// absent data, an unsupported executable, incoherent live memory, an absent root, or an
+/// event stored under a different animation bucket.
+pub fn init_unit_events_from_extractor<E: GraphicEventExtractor, I: GraphicEventInstaller>(
+    gpiece: i32,
+    extractor: &mut E,
+    installer: &mut I,
+) -> Result<InitUnitEventsStats, GraphicEventResourceError> {
+    let provenance = extractor.provenance();
+    if provenance.executable_sha256 != SUPPORTED_RETAIL_EXE_SHA256 {
+        return Err(GraphicEventResourceError::UnsupportedExecutable);
+    }
+    if !provenance.coherent_capture {
+        return Err(GraphicEventResourceError::IncoherentCapture);
+    }
+    if provenance.installed_event_data_sha256 == [0; 32] {
+        return Err(GraphicEventResourceError::MissingInstalledDataIdentity);
+    }
+    if provenance.installed_event_data_sha256 != SUPPORTED_UNIT_GRAPHICS_SHA256 {
+        return Err(GraphicEventResourceError::UnsupportedInstalledEventData);
+    }
+
+    let extracted = extractor.extract_gpiece(gpiece)?;
+    if extracted.gpiece != gpiece {
+        return Err(GraphicEventResourceError::WrongGpiece {
+            requested: gpiece,
+            extracted: extracted.gpiece,
+        });
+    }
+    if extracted.groups_in_link_order.is_empty() {
+        return Err(GraphicEventResourceError::MissingRootGroup(gpiece));
+    }
+
+    let mut stats = InitUnitEventsStats {
+        groups: extracted.groups_in_link_order.len(),
+        events: 0,
+    };
+    for (group_index, group) in extracted.groups_in_link_order.iter().enumerate() {
+        for (bucket, events) in group.events.iter().enumerate() {
+            stats.events += events.len();
+            for event in events {
+                if event.animation != bucket as i32 {
+                    return Err(GraphicEventResourceError::InvalidAnimationBucket {
+                        gpiece,
+                        group: group_index,
+                        bucket,
+                        event_animation: event.animation,
+                    });
+                }
+            }
+        }
+    }
+    installer.install_gpiece_events(extracted)?;
+    Ok(stats)
 }
 
 /// The common interval predicate used by RELEASE(1), RELEASE_PLANE(5), and EV_SOUND(7).
@@ -670,6 +884,327 @@ pub fn graphic_event_action(
         7 => Some(GraphicEventAction::Sound),
         _ => None,
     }
+}
+
+/// One object-table identity. The package narrows `o` to i16, while a launching entry is
+/// read as a full i32, so the normalized bridge retains the wider object index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphicEventObject {
+    pub who: i8,
+    pub o: i32,
+}
+
+/// Result of `GraphicPieces::get_position` `0x0090B750` before x86 float-to-int
+/// truncation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GraphicNodeOffset {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// All measured arguments that choose the RELEASE/RELEASE_PLANE node transform.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphicNodeQuery {
+    pub source: GraphicEventObject,
+    pub node_num: i8,
+    pub animation: i32,
+    pub start_time: u16,
+    pub angle_degrees: f32,
+    pub pivot_angles: [f32; 4],
+    pub restriction_count: i32,
+}
+
+/// Exact receipt required from `Objects::add_ammo -> Ammo::init`.
+///
+/// `ammo_index` advances even when `Ammo::init` aborts and leaves the claimed slot free.
+/// `rng_draws` includes the anti-air gate first and aim scatter second (zero through four
+/// total for the measured ordinary path), not merely the two currently common scatter
+/// draws. The projectile's shooter/target ownership is the package passed to the sink.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmmoInitReceipt {
+    pub slot: usize,
+    pub graph_index: i32,
+    pub occupied_after_init: bool,
+    pub rng_draws: u32,
+}
+
+/// Exact receipt required from the complete `Unit::come_out(0)` body.
+///
+/// The wrapper has two mutually exclusive direct random sites (zero or one draw), but
+/// recursively reached `set_anim` and helper bodies can draw too. The adapter reports the
+/// complete transitive count rather than presenting the direct count as a bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComeOutReceipt {
+    pub rng_draws: u32,
+}
+
+/// World/object operations behind the exact simulation arms of
+/// `GraphicEvents::execute_game_events` `0x008E48E0`.
+///
+/// No method has a default implementation. A headless runtime must supply the extracted
+/// node tables, the first-free ammo allocator plus complete `Ammo::init`, the launching
+/// array, and complete `Unit::come_out`; it cannot silently consume an event.
+pub trait GraphicEventSimulationSink {
+    type Error;
+
+    /// For RELEASE's targetless exception, return the source unit's current order type;
+    /// `None` means the source object is absent or `vt+0x08` says it is not a valid unit.
+    fn source_unit_order_type(
+        &mut self,
+        source: GraphicEventObject,
+    ) -> Result<Option<i32>, Self::Error>;
+
+    /// Normal RELEASE uses `GraphicPieces::has_restrictions(gpiece)`.
+    fn release_restriction_count(&mut self, gpiece: i32) -> Result<i32, Self::Error>;
+
+    /// RELEASE_PLANE uses the equivalent `gpiece_type-50` unit-data table field at +0x14.
+    fn release_plane_restriction_count(&mut self, gpiece: i32) -> Result<i32, Self::Error>;
+
+    /// Source virtual `get_gpiece` followed by extracted `GraphicPieces::get_position`.
+    fn graphic_node_offset(
+        &mut self,
+        query: GraphicNodeQuery,
+    ) -> Result<GraphicNodeOffset, Self::Error>;
+
+    /// Must perform the exact first-free `Objects::add_ammo`, complete `Ammo::init`, and
+    /// unconditional `Objects::ammo_index++` sequence.
+    fn objects_add_ammo_and_init(
+        &mut self,
+        package: &GameDataPackage,
+    ) -> Result<AmmoInitReceipt, Self::Error>;
+
+    fn first_launching_o(&mut self, source: GraphicEventObject)
+        -> Result<Option<i32>, Self::Error>;
+    fn unit_is_active(&mut self, unit: GraphicEventObject) -> Result<bool, Self::Error>;
+    fn unit_come_out(
+        &mut self,
+        unit: GraphicEventObject,
+        arg: i32,
+    ) -> Result<ComeOutReceipt, Self::Error>;
+    /// Retail removes by value, not blindly by index, and also removes an invalid first
+    /// entry.
+    fn remove_launching_value(
+        &mut self,
+        source: GraphicEventObject,
+        launched_o: i32,
+    ) -> Result<(), Self::Error>;
+    fn unit_set_new_location(
+        &mut self,
+        unit: GraphicEventObject,
+        x: i32,
+        y: i32,
+        arg3: i32,
+        arg4: i32,
+    ) -> Result<(), Self::Error>;
+    /// Must perform both checksummed writes in order: `last_z = z; z = new_z`.
+    fn unit_guy0_set_z(&mut self, unit: GraphicEventObject, z: i32) -> Result<(), Self::Error>;
+    fn source_angle(&mut self, source: GraphicEventObject) -> Result<i32, Self::Error>;
+    /// Retail also pushes the owner object-table pointer, but `Unit::set_angle` does not
+    /// read that argument in this binary. `arg` is the live trailing zero passed onward to
+    /// `Guy::set_angle`, which updates checksummed `des_angle` and can propagate desired
+    /// angle/location and tracked offsets through the allocated crew suffix. This method
+    /// means the complete Unit/Guy body, not a single unit-angle write.
+    fn unit_set_angle(
+        &mut self,
+        unit: GraphicEventObject,
+        angle: i32,
+        arg: i32,
+    ) -> Result<(), Self::Error>;
+    /// Must perform both checksummed writes in order: `last_pitch = pitch; pitch = 0`.
+    fn unit_guy0_zero_pitch(&mut self, unit: GraphicEventObject) -> Result<(), Self::Error>;
+}
+
+/// Simulation result of one GraphicEvent. SOUND is named but remains presentation-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicEventSimulationEffect {
+    NotDueOrNotSimulation,
+    Sound,
+    ReleaseTargetRejected,
+    ReleaseNodeRejected,
+    Projectile(AmmoInitReceipt),
+    ReleasePlaneNodeRejected,
+    ReleasePlaneQueueEmpty,
+    InvalidReleasedPlaneRemoved(GraphicEventObject),
+    ReleasedPlane {
+        unit: GraphicEventObject,
+        come_out: ComeOutReceipt,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum GraphicEventSimulationError<E> {
+    Sink(E),
+}
+
+#[inline]
+fn graphic_release_node_allowed(
+    restriction_count: i32,
+    node_num: i8,
+    node_flag_base: u32,
+    node_flags: u16,
+) -> bool {
+    let node = (node_num as i32) & 3;
+    restriction_count == 0
+        || node >= restriction_count
+        || (node_flags as u32 & (1u32 << (node as u32 + node_flag_base))) != 0
+}
+
+/// x86 `cvttss2si`: invalid/non-finite/out-of-range values produce `INT_MIN`, while Rust's
+/// float cast saturates. Shipped nodes are finite, but preserving the exceptional result
+/// keeps malformed extracted data from silently taking a different coordinate.
+#[inline]
+fn cvttss2si(value: f32) -> i32 {
+    if !value.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        i32::MIN
+    } else {
+        value.trunc() as i32
+    }
+}
+
+/// Exact RELEASE and RELEASE_PLANE bridge from `GraphicEvents::execute_game_events`.
+///
+/// RELEASE temporarily replaces the package projectile gpiece/angle and position, invokes
+/// the ammo allocator/initializer, then restores every byte even when the sink reports an
+/// error. RELEASE_PLANE intentionally leaves its node-offset position accumulated in the
+/// package, because retail's event loop exposes that mutation to later events.
+pub fn execute_simulation_graphic_event<S: GraphicEventSimulationSink>(
+    package: &mut GameDataPackage,
+    event: GraphicEventView,
+    sink: &mut S,
+) -> Result<GraphicEventSimulationEffect, GraphicEventSimulationError<S::Error>> {
+    let Some(action) = graphic_event_action(package, event) else {
+        return Ok(GraphicEventSimulationEffect::NotDueOrNotSimulation);
+    };
+    if action == GraphicEventAction::Sound {
+        return Ok(GraphicEventSimulationEffect::Sound);
+    }
+
+    let source = GraphicEventObject {
+        who: package.who,
+        o: package.o as i32,
+    };
+
+    if action == GraphicEventAction::Release {
+        if (package.whom == -1 || package.ox == -1)
+            && !matches!(
+                sink.source_unit_order_type(source)
+                    .map_err(GraphicEventSimulationError::Sink)?,
+                Some(23 | 24)
+            )
+        {
+            return Ok(GraphicEventSimulationEffect::ReleaseTargetRejected);
+        }
+
+        let restrictions = sink
+            .release_restriction_count(package.gpiece)
+            .map_err(GraphicEventSimulationError::Sink)?;
+        if !graphic_release_node_allowed(restrictions, event.node_num, 0, package.node_flags) {
+            return Ok(GraphicEventSimulationEffect::ReleaseNodeRejected);
+        }
+
+        let old_gpiece = package.gpiece;
+        let old_angle = package.angle;
+        package.gpiece = event.subject;
+        let offset = match sink.graphic_node_offset(GraphicNodeQuery {
+            source,
+            node_num: event.node_num,
+            animation: event.animation,
+            start_time: event.start_time,
+            angle_degrees: fast_angle_to_degrees(old_angle.wrapping_sub(i32::MIN)),
+            pivot_angles: package.pivot_angles,
+            restriction_count: restrictions,
+        }) {
+            Ok(offset) => offset,
+            Err(err) => {
+                package.gpiece = old_gpiece;
+                return Err(GraphicEventSimulationError::Sink(err));
+            }
+        };
+        let dx = cvttss2si(offset.x);
+        let dy = cvttss2si(offset.y);
+        let dz = cvttss2si(offset.z);
+        package.x = package.x.wrapping_add(dx);
+        package.y = package.y.wrapping_add(dy);
+        package.z = package.z.wrapping_add(dz);
+        package.angle = event.node_num as i32;
+        let result = sink.objects_add_ammo_and_init(package);
+        package.gpiece = old_gpiece;
+        package.angle = old_angle;
+        package.x = package.x.wrapping_sub(dx);
+        package.y = package.y.wrapping_sub(dy);
+        package.z = package.z.wrapping_sub(dz);
+        return result
+            .map(GraphicEventSimulationEffect::Projectile)
+            .map_err(GraphicEventSimulationError::Sink);
+    }
+
+    let restrictions = sink
+        .release_plane_restriction_count(package.gpiece)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    if !graphic_release_node_allowed(restrictions, event.node_num, 4, package.node_flags) {
+        return Ok(GraphicEventSimulationEffect::ReleasePlaneNodeRejected);
+    }
+    let Some(plane_o) = sink
+        .first_launching_o(source)
+        .map_err(GraphicEventSimulationError::Sink)?
+    else {
+        return Ok(GraphicEventSimulationEffect::ReleasePlaneQueueEmpty);
+    };
+    let plane = GraphicEventObject {
+        who: package.who,
+        o: plane_o,
+    };
+    if plane_o < 0
+        || !sink
+            .unit_is_active(plane)
+            .map_err(GraphicEventSimulationError::Sink)?
+    {
+        sink.remove_launching_value(source, plane_o)
+            .map_err(GraphicEventSimulationError::Sink)?;
+        return Ok(GraphicEventSimulationEffect::InvalidReleasedPlaneRemoved(
+            plane,
+        ));
+    }
+
+    let come_out = sink
+        .unit_come_out(plane, 0)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    sink.remove_launching_value(source, plane_o)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    let offset = sink
+        .graphic_node_offset(GraphicNodeQuery {
+            source,
+            node_num: event.node_num,
+            animation: event.animation,
+            start_time: event.start_time,
+            angle_degrees: angle_to_degrees(package.angle.wrapping_sub(i32::MIN)) as f32,
+            pivot_angles: package.pivot_angles,
+            restriction_count: restrictions,
+        })
+        .map_err(GraphicEventSimulationError::Sink)?;
+    package.x = package.x.wrapping_add(cvttss2si(offset.x));
+    package.y = package.y.wrapping_add(cvttss2si(offset.y));
+    package.z = package.z.wrapping_add(cvttss2si(offset.z));
+    sink.unit_set_new_location(plane, package.x, package.y, 1, 1)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    sink.unit_guy0_set_z(plane, package.z)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    let source_angle = sink
+        .source_angle(source)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    sink.unit_set_angle(
+        plane,
+        source_angle.wrapping_add(degrees_to_angle(event.color_or_underlay as i32)),
+        0,
+    )
+    .map_err(GraphicEventSimulationError::Sink)?;
+    sink.unit_guy0_zero_pitch(plane)
+        .map_err(GraphicEventSimulationError::Sink)?;
+    Ok(GraphicEventSimulationEffect::ReleasedPlane {
+        unit: plane,
+        come_out,
+    })
 }
 
 /// Metadata on one linked `EventGroup` (PDB offsets `civ +0x428`, `age +0x429`).
@@ -2004,6 +2539,506 @@ mod tests {
         assert_eq!(select_event_group(&[], 3, 4), None);
         assert_eq!(select_event_group(&groups, 3, 3), Some(2));
         assert_eq!(select_event_group(&groups, 2, 3), Some(1));
+    }
+
+    #[derive(Clone)]
+    struct ExtractorProbe {
+        provenance: GraphicEventResourceProvenance,
+        extracted: Option<ExtractedGpieceEvents>,
+    }
+
+    impl GraphicEventExtractor for ExtractorProbe {
+        fn provenance(&self) -> GraphicEventResourceProvenance {
+            self.provenance
+        }
+
+        fn extract_gpiece(
+            &mut self,
+            gpiece: i32,
+        ) -> Result<ExtractedGpieceEvents, GraphicEventResourceError> {
+            self.extracted
+                .take()
+                .ok_or(GraphicEventResourceError::MissingGpiece(gpiece))
+        }
+    }
+
+    #[derive(Default)]
+    struct InstallerProbe {
+        installed: Vec<ExtractedGpieceEvents>,
+    }
+
+    impl GraphicEventInstaller for InstallerProbe {
+        fn install_gpiece_events(
+            &mut self,
+            events: ExtractedGpieceEvents,
+        ) -> Result<(), GraphicEventResourceError> {
+            self.installed.push(events);
+            Ok(())
+        }
+    }
+
+    fn supported_event_provenance() -> GraphicEventResourceProvenance {
+        GraphicEventResourceProvenance {
+            executable_sha256: SUPPORTED_RETAIL_EXE_SHA256,
+            installed_event_data_sha256: SUPPORTED_UNIT_GRAPHICS_SHA256,
+            coherent_capture: true,
+        }
+    }
+
+    fn extracted_release(gpiece: i32, bucket: usize) -> ExtractedGpieceEvents {
+        let mut events: [Vec<GraphicEventView>; GRAPHIC_EVENT_ANIMATION_SLOTS] =
+            std::array::from_fn(|_| Vec::new());
+        events[bucket].push(GraphicEventView {
+            event_type: 1,
+            animation: bucket as i32,
+            start_time: 10,
+            subject: 77,
+            ..GraphicEventView::default()
+        });
+        ExtractedGpieceEvents {
+            gpiece,
+            groups_in_link_order: vec![ExtractedEventGroup {
+                selector: EventGroupSelector { civ: -1, age: -1 },
+                events,
+            }],
+        }
+    }
+
+    #[test]
+    fn init_unit_events_requires_pinned_coherent_resolved_retail_data() {
+        let mut extractor = ExtractorProbe {
+            provenance: supported_event_provenance(),
+            extracted: Some(extracted_release(44, 12)),
+        };
+        let mut installer = InstallerProbe::default();
+        assert_eq!(
+            init_unit_events_from_extractor(44, &mut extractor, &mut installer),
+            Ok(InitUnitEventsStats {
+                groups: 1,
+                events: 1,
+            })
+        );
+        assert_eq!(installer.installed.len(), 1);
+
+        for (provenance, error) in [
+            (
+                GraphicEventResourceProvenance {
+                    executable_sha256: [1; 32],
+                    ..supported_event_provenance()
+                },
+                GraphicEventResourceError::UnsupportedExecutable,
+            ),
+            (
+                GraphicEventResourceProvenance {
+                    coherent_capture: false,
+                    ..supported_event_provenance()
+                },
+                GraphicEventResourceError::IncoherentCapture,
+            ),
+            (
+                GraphicEventResourceProvenance {
+                    installed_event_data_sha256: [2; 32],
+                    ..supported_event_provenance()
+                },
+                GraphicEventResourceError::UnsupportedInstalledEventData,
+            ),
+        ] {
+            let mut extractor = ExtractorProbe {
+                provenance,
+                extracted: Some(extracted_release(44, 12)),
+            };
+            let mut installer = InstallerProbe::default();
+            assert_eq!(
+                init_unit_events_from_extractor(44, &mut extractor, &mut installer),
+                Err(error)
+            );
+            assert!(installer.installed.is_empty());
+        }
+    }
+
+    #[test]
+    fn init_unit_events_rejects_empty_roots_and_cross_bucket_events() {
+        let mut no_root = ExtractorProbe {
+            provenance: supported_event_provenance(),
+            extracted: Some(ExtractedGpieceEvents {
+                gpiece: 9,
+                groups_in_link_order: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            init_unit_events_from_extractor(9, &mut no_root, &mut InstallerProbe::default()),
+            Err(GraphicEventResourceError::MissingRootGroup(9))
+        );
+
+        let mut bad = extracted_release(9, 12);
+        bad.groups_in_link_order[0].events[12][0].animation = 11;
+        let mut extractor = ExtractorProbe {
+            provenance: supported_event_provenance(),
+            extracted: Some(bad),
+        };
+        assert_eq!(
+            init_unit_events_from_extractor(9, &mut extractor, &mut InstallerProbe::default()),
+            Err(GraphicEventResourceError::InvalidAnimationBucket {
+                gpiece: 9,
+                group: 0,
+                bucket: 12,
+                event_animation: 11,
+            })
+        );
+    }
+
+    #[derive(Default)]
+    struct SimulationEventProbe {
+        log: Vec<&'static str>,
+        order_type: Option<i32>,
+        release_restrictions: i32,
+        plane_restrictions: i32,
+        node_offset: GraphicNodeOffset,
+        node_queries: Vec<GraphicNodeQuery>,
+        ammo_packages: Vec<GameDataPackage>,
+        launching_o: Option<i32>,
+        active_plane: bool,
+        source_angle: i32,
+        locations: Vec<(GraphicEventObject, i32, i32)>,
+        z_writes: Vec<(GraphicEventObject, i32)>,
+        angle_writes: Vec<(GraphicEventObject, i32)>,
+    }
+
+    impl GraphicEventSimulationSink for SimulationEventProbe {
+        type Error = &'static str;
+
+        fn source_unit_order_type(
+            &mut self,
+            _source: GraphicEventObject,
+        ) -> Result<Option<i32>, Self::Error> {
+            self.log.push("order");
+            Ok(self.order_type)
+        }
+
+        fn release_restriction_count(&mut self, _gpiece: i32) -> Result<i32, Self::Error> {
+            self.log.push("release-restrict");
+            Ok(self.release_restrictions)
+        }
+
+        fn release_plane_restriction_count(&mut self, _gpiece: i32) -> Result<i32, Self::Error> {
+            self.log.push("plane-restrict");
+            Ok(self.plane_restrictions)
+        }
+
+        fn graphic_node_offset(
+            &mut self,
+            query: GraphicNodeQuery,
+        ) -> Result<GraphicNodeOffset, Self::Error> {
+            self.log.push("node");
+            self.node_queries.push(query);
+            Ok(self.node_offset)
+        }
+
+        fn objects_add_ammo_and_init(
+            &mut self,
+            package: &GameDataPackage,
+        ) -> Result<AmmoInitReceipt, Self::Error> {
+            self.log.push("ammo");
+            self.ammo_packages.push(*package);
+            Ok(AmmoInitReceipt {
+                slot: 4,
+                graph_index: 99,
+                occupied_after_init: true,
+                rng_draws: 3,
+            })
+        }
+
+        fn first_launching_o(
+            &mut self,
+            _source: GraphicEventObject,
+        ) -> Result<Option<i32>, Self::Error> {
+            self.log.push("front");
+            Ok(self.launching_o)
+        }
+
+        fn unit_is_active(&mut self, _unit: GraphicEventObject) -> Result<bool, Self::Error> {
+            self.log.push("active");
+            Ok(self.active_plane)
+        }
+
+        fn unit_come_out(
+            &mut self,
+            _unit: GraphicEventObject,
+            arg: i32,
+        ) -> Result<ComeOutReceipt, Self::Error> {
+            assert_eq!(arg, 0);
+            self.log.push("come-out");
+            Ok(ComeOutReceipt { rng_draws: 2 })
+        }
+
+        fn remove_launching_value(
+            &mut self,
+            _source: GraphicEventObject,
+            _launched_o: i32,
+        ) -> Result<(), Self::Error> {
+            self.log.push("remove");
+            Ok(())
+        }
+
+        fn unit_set_new_location(
+            &mut self,
+            unit: GraphicEventObject,
+            x: i32,
+            y: i32,
+            arg3: i32,
+            arg4: i32,
+        ) -> Result<(), Self::Error> {
+            assert_eq!((arg3, arg4), (1, 1));
+            self.log.push("location");
+            self.locations.push((unit, x, y));
+            Ok(())
+        }
+
+        fn unit_guy0_set_z(&mut self, unit: GraphicEventObject, z: i32) -> Result<(), Self::Error> {
+            self.log.push("z");
+            self.z_writes.push((unit, z));
+            Ok(())
+        }
+
+        fn source_angle(&mut self, _source: GraphicEventObject) -> Result<i32, Self::Error> {
+            self.log.push("source-angle");
+            Ok(self.source_angle)
+        }
+
+        fn unit_set_angle(
+            &mut self,
+            unit: GraphicEventObject,
+            angle: i32,
+            arg: i32,
+        ) -> Result<(), Self::Error> {
+            assert_eq!(arg, 0);
+            self.log.push("angle");
+            self.angle_writes.push((unit, angle));
+            Ok(())
+        }
+
+        fn unit_guy0_zero_pitch(&mut self, _unit: GraphicEventObject) -> Result<(), Self::Error> {
+            self.log.push("pitch");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn release_temporarily_builds_the_ammo_package_then_restores_it() {
+        let mut package = GameDataPackage {
+            gpiece: 10,
+            x: 100,
+            y: 200,
+            z: 300,
+            cur_anim: 12,
+            cur_time: 10,
+            last_time: 9,
+            angle: 0x1000_0000,
+            node_flags: 1 << 2,
+            o: 7,
+            ox: 8,
+            who: 3,
+            whom: 4,
+            ..GameDataPackage::default()
+        };
+        let original = package;
+        let event = GraphicEventView {
+            event_type: 1,
+            animation: 12,
+            start_time: 10,
+            subject: 99,
+            node_num: 2,
+            ..GraphicEventView::default()
+        };
+        let mut sink = SimulationEventProbe {
+            release_restrictions: 3,
+            node_offset: GraphicNodeOffset {
+                x: 1.9,
+                y: -2.9,
+                z: 3.9,
+            },
+            ..SimulationEventProbe::default()
+        };
+        assert_eq!(
+            execute_simulation_graphic_event(&mut package, event, &mut sink),
+            Ok(GraphicEventSimulationEffect::Projectile(AmmoInitReceipt {
+                slot: 4,
+                graph_index: 99,
+                occupied_after_init: true,
+                rng_draws: 3,
+            }))
+        );
+        assert_eq!(package, original, "RELEASE restores its stack package");
+        assert_eq!(sink.log, ["release-restrict", "node", "ammo"]);
+        assert_eq!(sink.ammo_packages.len(), 1);
+        let ammo = sink.ammo_packages[0];
+        assert_eq!((ammo.gpiece, ammo.angle), (99, 2));
+        assert_eq!((ammo.x, ammo.y, ammo.z), (101, 198, 303));
+        assert_eq!((ammo.who, ammo.o, ammo.whom, ammo.ox), (3, 7, 4, 8));
+        assert_eq!(
+            sink.node_queries[0].angle_degrees,
+            fast_angle_to_degrees(0x9000_0000u32 as i32)
+        );
+    }
+
+    #[test]
+    fn release_uses_exact_minus_one_target_and_masked_raw_node_gates() {
+        let event = GraphicEventView {
+            event_type: 1,
+            animation: 12,
+            start_time: 10,
+            subject: 99,
+            node_num: -1,
+            ..GraphicEventView::default()
+        };
+        let mut targetless = GameDataPackage {
+            cur_anim: 12,
+            cur_time: 10,
+            last_time: 9,
+            node_flags: 1 << 3,
+            whom: -1,
+            ox: -1,
+            ..GameDataPackage::default()
+        };
+        let mut allowed = SimulationEventProbe {
+            order_type: Some(23),
+            release_restrictions: 4,
+            ..SimulationEventProbe::default()
+        };
+        assert!(matches!(
+            execute_simulation_graphic_event(&mut targetless, event, &mut allowed),
+            Ok(GraphicEventSimulationEffect::Projectile(_))
+        ));
+        assert_eq!(allowed.log, ["order", "release-restrict", "node", "ammo"]);
+        assert_eq!(allowed.node_queries[0].node_num, -1, "query keeps raw i8");
+
+        let mut minus_two_target = GameDataPackage {
+            whom: -2,
+            ox: -2,
+            ..targetless
+        };
+        let mut bypass = SimulationEventProbe::default();
+        assert!(matches!(
+            execute_simulation_graphic_event(&mut minus_two_target, event, &mut bypass),
+            Ok(GraphicEventSimulationEffect::Projectile(_))
+        ));
+        assert!(!bypass.log.contains(&"order"), "only exact -1 is absent");
+
+        assert!(!graphic_release_node_allowed(4, -1, 0, 0));
+        assert!(graphic_release_node_allowed(4, -1, 0, 1 << 3));
+        assert!(graphic_release_node_allowed(4, -1, 4, 1 << 7));
+    }
+
+    #[test]
+    fn release_plane_orders_come_out_and_checksummed_writes_and_keeps_offset() {
+        let mut package = GameDataPackage {
+            gpiece: 10,
+            x: 100,
+            y: 200,
+            z: 300,
+            cur_anim: 11,
+            cur_time: 20,
+            last_time: 19,
+            angle: 0,
+            node_flags: 1 << 5,
+            o: 7,
+            who: 3,
+            ..GameDataPackage::default()
+        };
+        let event = GraphicEventView {
+            event_type: 5,
+            animation: 11,
+            start_time: 20,
+            color_or_underlay: 90,
+            node_num: 1,
+            ..GraphicEventView::default()
+        };
+        let plane = GraphicEventObject { who: 3, o: 33 };
+        let mut sink = SimulationEventProbe {
+            plane_restrictions: 2,
+            node_offset: GraphicNodeOffset {
+                x: 5.9,
+                y: -6.9,
+                z: 7.9,
+            },
+            launching_o: Some(33),
+            active_plane: true,
+            source_angle: 0x1000_0000,
+            ..SimulationEventProbe::default()
+        };
+        assert_eq!(
+            execute_simulation_graphic_event(&mut package, event, &mut sink),
+            Ok(GraphicEventSimulationEffect::ReleasedPlane {
+                unit: plane,
+                come_out: ComeOutReceipt { rng_draws: 2 },
+            })
+        );
+        assert_eq!((package.x, package.y, package.z), (105, 194, 307));
+        assert_eq!(
+            sink.log,
+            [
+                "plane-restrict",
+                "front",
+                "active",
+                "come-out",
+                "remove",
+                "node",
+                "location",
+                "z",
+                "source-angle",
+                "angle",
+                "pitch",
+            ]
+        );
+        assert_eq!(sink.locations, vec![(plane, 105, 194)]);
+        assert_eq!(sink.z_writes, vec![(plane, 307)]);
+        assert_eq!(
+            sink.angle_writes,
+            vec![(plane, 0x5000_0000)],
+            "source angle + degrees_to_angle(90)"
+        );
+        assert_eq!(sink.node_queries[0].angle_degrees, 180.0);
+    }
+
+    #[test]
+    fn release_plane_removes_an_invalid_front_by_value_without_coming_out() {
+        let mut package = GameDataPackage {
+            cur_anim: 11,
+            cur_time: 20,
+            last_time: 19,
+            who: 2,
+            ..GameDataPackage::default()
+        };
+        let event = GraphicEventView {
+            event_type: 5,
+            animation: 11,
+            start_time: 20,
+            ..GraphicEventView::default()
+        };
+        let mut sink = SimulationEventProbe {
+            launching_o: Some(-4),
+            ..SimulationEventProbe::default()
+        };
+        assert_eq!(
+            execute_simulation_graphic_event(&mut package, event, &mut sink),
+            Ok(GraphicEventSimulationEffect::InvalidReleasedPlaneRemoved(
+                GraphicEventObject { who: 2, o: -4 }
+            ))
+        );
+        assert_eq!(sink.log, ["plane-restrict", "front", "remove"]);
+    }
+
+    #[test]
+    fn retail_angle_helpers_keep_the_shipped_integer_approximations() {
+        assert_eq!(angle_to_degrees(0), 0);
+        assert_eq!(angle_to_degrees(0x4000_0000), 90);
+        assert_eq!(angle_to_degrees(i32::MIN), 180);
+        assert_eq!(angle_to_degrees(-1), 360);
+        assert_eq!(degrees_to_angle(0), 0);
+        assert_eq!(degrees_to_angle(90), 0x4000_0000);
+        assert_eq!(degrees_to_angle(180), i32::MIN);
+        assert_eq!(degrees_to_angle(360), 0);
+        assert_eq!(degrees_to_angle(359) as u32, 0xff49_f49b);
     }
 
     #[derive(Default)]
