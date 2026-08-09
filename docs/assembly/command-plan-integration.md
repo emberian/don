@@ -5,6 +5,11 @@ This integration makes the landed command proof plans reachable from the shared
 world store. The proof modules remain owned by `command.rs` through explicit path modules;
 their tests no longer imply reachability by themselves.
 
+For the rows listed below, this ledger supersedes the historical “inert”, “planner only”,
+or “dispatcher-partial” integration labels in `command-bridge.md`,
+`object-command-opcodes.md`, and `late-command-state.md`. Their derivation evidence remains
+unchanged.
+
 ## Closure decision
 
 | Opcode | Command | Closure | Atomic transaction rule |
