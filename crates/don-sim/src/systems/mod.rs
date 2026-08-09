@@ -30,6 +30,8 @@ pub mod armies;
 /// to the complete nearby-spot service; building targets retain perimeter order plus the
 /// terrain/bitmap/ordered-collision/RNG gate order and fail closed without those views.
 pub mod attack_position;
+/// Exact synchronized-rules producer and immutable-backup provenance for the BHS type owner.
+pub mod bhs_type_factory;
 /// Exact declaration gate, dispatch receipts, and persistence/checksum admission for that owner.
 pub mod bhs_type_runtime;
 /// Canonical mutable `Types[806]` / Leader-mask owner for the recovered BHS type cohort.
