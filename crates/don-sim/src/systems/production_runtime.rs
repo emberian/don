@@ -54,6 +54,8 @@ pub enum LiveBuildingCompletion {
     /// Same-footprint, uncaptured in-place type replacement. `mask_me(1,0)` has no
     /// additional Sim-owned terrain delta for this explicitly installed profile.
     InPlaceUncaptured,
+    /// In-place type replacement followed by the captured city/population/region tail.
+    InPlaceCaptured,
     /// The build-shaped type falls through to `Leader::gain_tech` (`build_flags & 4`).
     GainTech,
     Unsupported,
@@ -181,6 +183,13 @@ impl LiveProductionType {
             ..Self::research(type_index, train_time)
         }
     }
+
+    pub fn captured_in_place_building(type_index: i32, train_time: i32) -> Self {
+        Self {
+            building_completion: LiveBuildingCompletion::InPlaceCaptured,
+            ..Self::in_place_building(type_index, train_time)
+        }
+    }
 }
 
 /// Sim-owned per-player state needed by queue completion but absent from `BuildData`.
@@ -197,6 +206,9 @@ pub struct LiveProductionLeader {
     pub aircraft_limit: i32,
     /// Live `current_upgrade(HELICOPTER=308)` used when a new Carrier seeds its payload.
     pub helicopter_current_upgrade: Option<i32>,
+    /// `LeaderData::pop` and the 64 signed-region population buckets.
+    pub population: i32,
+    pub region_population: [i16; 64],
     pub ai_speed: i32,
     pub unit_counts: Vec<i32>,
     pub queued_counts: Vec<i32>,
@@ -220,6 +232,8 @@ impl Default for LiveProductionLeader {
             caravan_limit: i32::MAX,
             aircraft_limit: i32::MAX,
             helicopter_current_upgrade: None,
+            population: 0,
+            region_population: [0; 64],
             ai_speed: 1,
             unit_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
             queued_counts: vec![0; crate::systems::tech_cities::ty::NUM_TYPES],
@@ -256,6 +270,9 @@ pub struct LiveProductionRuntime {
     pub university_gather_checks: Vec<LiveUniversityGatherCheck>,
     /// Exact Carrier `action_unqueue(1)`/payload allocation transactions.
     pub carrier_payloads: Vec<LiveCarrierPayloadTransaction>,
+    /// City-owned inputs and receipts required by captured building completion, keyed by
+    /// the live `Sim::builds` row.
+    pub captured_buildings: Vec<Option<LiveCapturedBuildingState>>,
 }
 
 impl Default for LiveProductionRuntime {
@@ -275,6 +292,7 @@ impl Default for LiveProductionRuntime {
             unit_presentations: Vec::new(),
             university_gather_checks: Vec::new(),
             carrier_payloads: Vec::new(),
+            captured_buildings: Vec::new(),
         }
     }
 }
@@ -309,6 +327,19 @@ pub struct LiveCarrierPayloadTransaction {
     pub allocations: Vec<UnitAllocationReceipt>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveCapturedBuildingState {
+    /// Current `CityData::get_pop_value`, read once before the type swap.
+    pub city_population: i32,
+    /// Value exposed after the mandatory `City::find_buildings` refresh.
+    pub post_scan_city_population: i32,
+    /// Exact result the mandatory `Leader::calc_pop_cap` callback commits.
+    pub population_cap_after: i32,
+    pub city_scans: u32,
+    pub population_cap_recalculations: u32,
+    pub border_repairs: u32,
+}
+
 impl LiveProductionRuntime {
     pub fn install_type(&mut self, facts: LiveProductionType) {
         let type_index = facts.type_index as usize;
@@ -323,6 +354,13 @@ impl LiveProductionRuntime {
             self.build_types.resize(row + 1, None);
         }
         self.build_types[row] = Some(type_index);
+    }
+
+    pub fn install_captured_building(&mut self, row: usize, state: LiveCapturedBuildingState) {
+        if self.captured_buildings.len() <= row {
+            self.captured_buildings.resize(row + 1, None);
+        }
+        self.captured_buildings[row] = Some(state);
     }
 
     fn facts(&self, type_index: i32) -> Option<&LiveProductionType> {
@@ -430,6 +468,8 @@ pub enum LiveProductionError {
     UnsupportedTechEffects(i32),
     UnsupportedSpell(i32),
     CapturedBuildingCompletion(i32),
+    MissingCapturedBuildingState(usize),
+    InvalidCapturedBuildingRegion(i32),
     RecursiveTechUnlock(i32),
     MissingQueuedCounter(i32),
     MalformedUniversityGatherChain(&'static str),
@@ -734,13 +774,59 @@ fn preflight(
                     }
                 }
             }
-            LiveTypeClass::Building
-                if facts.building_completion == LiveBuildingCompletion::InPlaceUncaptured =>
-            {
-                if build.flags & flag::CAPTURED != 0 {
-                    return Err(LiveProductionError::CapturedBuildingCompletion(type_index));
+            LiveTypeClass::Building => match facts.building_completion {
+                LiveBuildingCompletion::InPlaceUncaptured => {
+                    if build.flags & flag::CAPTURED != 0 {
+                        return Err(LiveProductionError::CapturedBuildingCompletion(type_index));
+                    }
                 }
-            }
+                LiveBuildingCompletion::InPlaceCaptured => {
+                    if build.flags & flag::CAPTURED == 0 {
+                        return Err(LiveProductionError::UnsupportedBuildingCompletion(
+                            type_index,
+                        ));
+                    }
+                    if runtime
+                        .captured_buildings
+                        .get(row)
+                        .and_then(Option::as_ref)
+                        .is_none()
+                    {
+                        return Err(LiveProductionError::MissingCapturedBuildingState(row));
+                    }
+                    let (x, y) = build.position();
+                    let tx = x >> 8;
+                    let ty = y >> 8;
+                    if tx < 0
+                        || ty < 0
+                        || tx >= sim.map.world.tile_xs
+                        || ty >= sim.map.world.tile_ys
+                    {
+                        return Err(LiveProductionError::InvalidCapturedBuildingRegion(-1));
+                    }
+                    let region = sim.map.world.get_tregion(tx, ty);
+                    if region < 0 {
+                        return Err(LiveProductionError::InvalidCapturedBuildingRegion(region));
+                    }
+                }
+                LiveBuildingCompletion::GainTech => {
+                    if facts.tech_effects != LiveTechEffects::GenericOnly
+                        || has_recursive_unlock(runtime, leader, type_index)
+                        || leader
+                            .resource_sell_tech
+                            .iter()
+                            .any(|&sell_tech| sell_tech == type_index)
+                        || producer.is_capitol
+                    {
+                        return Err(LiveProductionError::UnsupportedTechEffects(type_index));
+                    }
+                }
+                LiveBuildingCompletion::Unsupported => {
+                    return Err(LiveProductionError::UnsupportedBuildingCompletion(
+                        type_index,
+                    ));
+                }
+            },
             LiveTypeClass::Spell => {
                 return Err(LiveProductionError::UnsupportedSpell(type_index));
             }
@@ -1416,7 +1502,19 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
 }
 
 impl BuildingCompletionHost for SimFinishedHost<'_> {
-    fn city_pop_value(&mut self, _build: &BuildData) -> i32 {
+    fn city_pop_value(&mut self, build: &BuildData) -> i32 {
+        if build.flags & flag::CAPTURED != 0 {
+            if let Some(state) = self
+                .runtime
+                .captured_buildings
+                .get(self.producer_row)
+                .and_then(Option::as_ref)
+            {
+                return state.city_population;
+            }
+            self.unsupported("captured-building city population");
+            return 0;
+        }
         self.type_facts(self.producer_type)
             .map_or(0, |facts| facts.city_pop_value)
     }
@@ -1434,33 +1532,72 @@ impl BuildingCompletionHost for SimFinishedHost<'_> {
     }
 
     fn find_city_buildings(&mut self, _build: &BuildData) {
-        self.unsupported("captured-building city scan");
+        let Some(state) = self
+            .runtime
+            .captured_buildings
+            .get_mut(self.producer_row)
+            .and_then(Option::as_mut)
+        else {
+            self.unsupported("captured-building city scan");
+            return;
+        };
+        state.city_population = state.post_scan_city_population;
+        state.city_scans = state.city_scans.wrapping_add(1);
     }
 
-    fn adjust_leader_population(&mut self, _build: &BuildData, _delta: i32) {
-        self.unsupported("captured-building leader population");
+    fn adjust_leader_population(&mut self, build: &BuildData, delta: i32) {
+        let population = &mut self.runtime.leaders[build.who as usize].population;
+        *population = population.wrapping_add(delta);
     }
 
     fn adjust_world_population(&mut self, delta: i32) {
-        self.unsupported("captured-building world population");
         self.runtime.world_population = self.runtime.world_population.wrapping_add(delta);
     }
 
-    fn building_region_index(&mut self, _build: &BuildData) -> i32 {
-        self.unsupported("captured-building region lookup");
-        64
+    fn building_region_index(&mut self, build: &BuildData) -> i32 {
+        let (x, y) = build.position();
+        self.sim.map.world.get_tregion(x >> 8, y >> 8)
     }
 
-    fn adjust_region_population(&mut self, _build: &BuildData, _region: i32, _delta: i16) {
-        self.unsupported("captured-building region population");
+    fn adjust_region_population(&mut self, build: &BuildData, region: i32, delta: i16) {
+        let Some(population) = self.runtime.leaders[build.who as usize]
+            .region_population
+            .get_mut(region as usize)
+        else {
+            self.unsupported("captured-building region population");
+            return;
+        };
+        *population = population.wrapping_add(delta);
     }
 
-    fn calc_population_cap(&mut self, _build: &BuildData) {
-        self.unsupported("captured-building population-cap calculation");
+    fn calc_population_cap(&mut self, build: &BuildData) {
+        let Some(state) = self
+            .runtime
+            .captured_buildings
+            .get_mut(self.producer_row)
+            .and_then(Option::as_mut)
+        else {
+            self.unsupported("captured-building population-cap calculation");
+            return;
+        };
+        self.sim.step8.leaders[build.who as usize].pop_cap = state.population_cap_after;
+        state.population_cap_recalculations = state.population_cap_recalculations.wrapping_add(1);
     }
 
     fn fix_region_borders(&mut self) {
-        self.unsupported("captured-building border repair");
+        for region in &mut self.sim.map.regions {
+            region.borders = 0;
+        }
+        let Some(state) = self
+            .runtime
+            .captured_buildings
+            .get_mut(self.producer_row)
+            .and_then(Option::as_mut)
+        else {
+            self.unsupported("captured-building border repair");
+            return;
+        };
+        state.border_repairs = state.border_repairs.wrapping_add(1);
     }
 }
 
@@ -1678,8 +1815,9 @@ pub struct LiveProductionReceipt {
 /// patrol and held-inside/gather-inside routes, including their capacity-destruction tails,
 /// University Scholar gather-chain pruning, and new-Carrier payload seeding are executable.
 /// A Carrier's later Unit-owned production queue, single-rally missile/Helicopter, spell,
-/// captured-building, recursive-tech, or opaque special-tech effects return an error with
-/// the Build queue and RNG untouched.
+/// recursive-tech, or opaque special-tech effects return an error with the Build queue and
+/// RNG untouched. Captured building completion requires an explicit live city projection;
+/// its population, region, cap, and border mutations are otherwise fully ordered here.
 pub fn process_sim_build_queue(
     sim: &mut Sim,
     runtime: &mut LiveProductionRuntime,
@@ -1917,10 +2055,10 @@ mod tests {
 
     fn harness_with_capacity(
         type_indices: &[i32],
-        capacity: usize,
+        capacity: u16,
     ) -> (Sim, LiveProductionRuntime, usize) {
         let mut sim = Sim::new(0x51de, 16);
-        sim.world = crate::world::World::with_capacity(capacity, 0x51de);
+        sim.world = crate::world::World::with_capacity(capacity as usize, 0x51de);
         sim.activate(0);
         let row = sim.spawn_build(0, queue_build(type_indices));
         let mut runtime = LiveProductionRuntime::default();
@@ -1991,6 +2129,84 @@ mod tests {
             0
         );
         assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn captured_building_completion_updates_city_population_region_cap_and_borders() {
+        let completed_type = 501;
+        let (mut sim, mut runtime, row) = harness(&[completed_type]);
+        runtime.install_type(LiveProductionType::captured_in_place_building(
+            completed_type,
+            1,
+        ));
+        runtime.install_captured_building(
+            row,
+            LiveCapturedBuildingState {
+                city_population: 10,
+                post_scan_city_population: 14,
+                population_cap_after: 77,
+                city_scans: 0,
+                population_cap_recalculations: 0,
+                border_repairs: 0,
+            },
+        );
+        sim.builds[row].flags |= flag::CAPTURED;
+        sim.map.world.wdata_mut(0, 0).region = 7;
+        sim.map.regions[0].borders = 9;
+        runtime.leaders[0].population = 100;
+        runtime.leaders[0].region_population[7] = 3;
+        runtime.world_population = 200;
+        sim.step8.leaders[0].pop_cap = 33;
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(runtime.build_types[row], Some(completed_type));
+        assert_eq!(runtime.leaders[0].population, 104);
+        assert_eq!(runtime.world_population, 204);
+        assert_eq!(runtime.leaders[0].region_population[7], 7);
+        assert_eq!(sim.step8.leaders[0].pop_cap, 77);
+        assert!(sim.map.regions.iter().all(|region| region.borders == 0));
+        assert_eq!(
+            runtime.captured_buildings[row],
+            Some(LiveCapturedBuildingState {
+                city_population: 14,
+                post_scan_city_population: 14,
+                population_cap_after: 77,
+                city_scans: 1,
+                population_cap_recalculations: 1,
+                border_repairs: 1,
+            })
+        );
+        assert_eq!(runtime.mask_effects, 1);
+        assert_ne!(
+            sim.step8.leaders[0].flags & LEADER_BUILDING_COMPLETED_FLAG,
+            0
+        );
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn captured_building_missing_city_state_fails_before_queue_or_world_mutation() {
+        let completed_type = 501;
+        let (mut sim, mut runtime, row) = harness(&[completed_type]);
+        runtime.install_type(LiveProductionType::captured_in_place_building(
+            completed_type,
+            1,
+        ));
+        sim.builds[row].flags |= flag::CAPTURED;
+        let queue_before = sim.builds[row].queue.clone();
+        let world_population_before = runtime.world_population;
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::MissingCapturedBuildingState(row))
+        );
+        assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+        assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
+        assert_eq!(runtime.world_population, world_population_before);
+        assert_eq!(runtime.mask_effects, 0);
+        assert_eq!(runtime.build_types[row], Some(PRODUCER_TYPE));
+        assert!(!runtime.leaders[0].queue_dirty);
     }
 
     #[test]

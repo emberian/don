@@ -439,6 +439,14 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
   Missing upgrade/capacity/type facts fail during preflight before allocation. The
   Carrier's subsequent Unit-owned implicit queue is separate from this Build queue and
   remains outside the live Build-row adapter.
+  Captured in-place building completion is also executable behind a mandatory per-row city
+  projection. Preflight requires that projection and a valid signed terrain region before
+  any queue mutation. The live callback order is the recovered
+  `find_buildings -> leader pop -> world pop -> optional reg_pop -> calc_pop_cap ->
+  Region::fix_borders` sequence: city population switches atomically to the post-scan
+  value, wrapping population deltas hit their concrete sidecars, `pop_cap` updates the
+  step-8 leader, and every modeled Region border cursor resets to zero. Missing city state
+  fails before type replacement, masking, paid unqueue, or world mutation.
   `can_queue` / `could_queue` / `can_make` were read (they gate on `queued < num` and a
   scholar cap of 7 via `count_queue(1, 0x34) + num_gatherers > 6`) but are type-tree
   dependent.
@@ -551,7 +559,8 @@ placement/rally mutation transaction. The live adapter executes ordinary ground,
 Holds-Air patrol/containment/capacity, gather-inside, University Scholar placement, and
 new-Carrier payload seeding. A Carrier's later Unit-owned implicit queue, single-rally
 missile/Helicopter, strafe/carry target lookup, cast, building-leaf, and one-shot world
-owners remain typed fail-closed boundaries. Parallel production needs the live leader slot
+owners remain typed fail-closed boundaries; captured building population/border completion
+is live, while initial `Build::activate` remains outside this adapter. Parallel production needs the live leader slot
 limit, and Library aggregation needs city assimilation, type-tree, stockpile, and
 queued-counter hosts. `production::train_time_ramp` also supersedes
 `mechanics::ramped_rate` (§3.5); the latter should be retired when its remaining callers
