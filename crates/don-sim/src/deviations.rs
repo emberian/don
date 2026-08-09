@@ -246,8 +246,8 @@ pub enum Deviation {
     ArenaGatherModel = 12,
     /// Arena MODEL 4: incomplete retail target-acquisition host.
     ArenaTargetAcquisitionModel = 13,
-    /// Arena MODEL 5: incomplete flank-input host.
-    ArenaFlankModel = 14,
+    /// Arena roster prerequisite: graphics-turret Guys are not materialized.
+    ArenaGuyTurretModel = 14,
     /// Arena MODEL 6a: no retail water terrain/pathing host.
     ArenaWaterModel = 15,
     /// Arena MODEL 6b: no retail naval object/order/production host.
@@ -739,20 +739,24 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::ArenaFlankModel,
-        slug: "arena-flank-model",
-        title: "Arena MODEL 5 has incomplete retail flank inputs",
+        id: Deviation::ArenaGuyTurretModel,
+        slug: "arena-guy-turret-model",
+        title: "Arena does not materialize graphics-turret Guys",
         kind: Kind::Drift,
-        retail: "Retail derives attack direction, defender facing and type predicates at the \
-                 live fight/damage call boundary.",
-        ours: "MODEL 5 still marks one or more arena flank inputs as incomplete.",
-        why: "The damage multiplier is derived, but invented inputs still change combat outcomes.",
+        retail: "Types carrying `GUY_FLAG_TURRETS` materialize their graphics-turret Guy \
+                 components and their live angles/state before `Unit::fight` plans a volley.",
+        ours: "MODEL 5's direct-land volley/flank path is wired, but the arena hard-rejects \
+               `GUY_FLAG_TURRETS` because their Guy components are not materialized.",
+        why: "The exact supported-roster flank path is complete. Silently treating a turret \
+              type as an ordinary Guy would create a different approximation, so the roster \
+              prerequisite remains independently product-blocking.",
         derived_from: &[
-            "Unit::fight 0x005FE872..0x005FE89B",
-            "crates/don-ai/src/arena/world.rs MODEL 5 declaration",
+            "Unit::fight 0x005FD4D0",
+            "don_sim::systems::fight::direct_land_volley_plan",
+            "crates/don-ai/src/arena/world.rs GUY_FLAG_TURRETS gate",
         ],
-        evidence: "docs/mechanics/combat.md; leave blocked until the arena runtime caller and \
-                   focused tests are green.",
+        evidence: "MODEL 5 runtime integration is covered by don-sim fight and arena combat \
+                   tests; this separate gate names only the unmaterialized turret prerequisite.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -981,7 +985,7 @@ impl Deviation {
         Deviation::ArenaConstructionModel,
         Deviation::ArenaGatherModel,
         Deviation::ArenaTargetAcquisitionModel,
-        Deviation::ArenaFlankModel,
+        Deviation::ArenaGuyTurretModel,
         Deviation::ArenaWaterModel,
         Deviation::ArenaNavalModel,
         Deviation::ArenaAirModel,

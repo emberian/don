@@ -40,7 +40,7 @@ cargo run -p don-sim --bin don-deviations -- --show ai-gather-handicap
 | **`caravan-heuristic-goal-y`** | The caravan pathfinder's heuristic ignores the node's own `y`, degenerating to Dijkstra | Available, off by default — see below |
 | **`refinery-bonus-dead`** | `REFINERY_BONUS` is parsed from the rules and then never used | Available, off by default — see below |
 
-Three further entries record divergences in **our** code that nobody chose, and two record
+Twelve further entries record divergences in **our** code that nobody chose, and two record
 candidates we investigated and rejected. Both kinds are at the bottom, because a register
 that only lists the flattering entries is not a register.
 
@@ -276,7 +276,7 @@ playable surface while their runtime path remains incomplete:
 | `arena-construction-model` | 2 | build-site, builder-order, interruption and completion state |
 | `arena-gather-model` | 3 | resource-object ownership, capacity, occupancy and depletion |
 | `arena-target-acquisition-model` | 4 | complete stable spatial scan with diplomacy, fog, validity, region and priority gates |
-| `arena-flank-model` | 5 | live fight-call direction, facing and type inputs |
+| `arena-guy-turret-model` | post-5 prerequisite | graphics-turret Guy materialization and state |
 | `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
 | `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
 | `arena-air-model` | 6c | `do_air_physics`, target/host scans, Ammo RNG insertion, orders and walked state |
@@ -291,6 +291,13 @@ still missing. Its air, diplomacy, attrition and supply adapters are deliberatel
 they require live type-table fields, the caller's main RNG, explicit bilateral declaration
 state, and explicit world-query results. They do not spawn an aircraft, pretend every unit is
 supplied, or promote `naval::*_proxy` functions into product behavior.
+
+MODEL 5 itself is no longer a blocker. The arena now calls the exact direct-land volley
+planner, `target::attack_dir`/`flank_tier`, live Guy marks and per-Guy destination angles,
+with retail one-byte cadence. The focused don-sim fight suite and arena combat suite are
+green. Types carrying `GUY_FLAG_TURRETS` remain hard-rejected because their graphics-turret
+Guys are not materialized; that honest roster gap is the separate
+`arena-guy-turret-model` entry above, not an excuse to retain or reintroduce a flank heuristic.
 
 Unlike `ai-model-simplifications`, these are **playable-product blockers** because the arena
 feeds head-to-head matches and the WebGPU client. Clear an entry only after its real arena

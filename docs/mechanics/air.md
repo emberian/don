@@ -48,9 +48,11 @@ fingerprint or Tier-B comparison.
 
 ## Wiring status
 
-`apply_antiair_gate` has no caller outside `air.rs`. In particular, `systems/ammo.rs` does not
-invoke it from its `Ammo::init` model. Likewise, the patrol, fuel, host-capacity, and
-air-attack helpers are not called from the current world tick or order dispatcher.
+`arena::retail_systems` now provides a fail-closed host adapter over the anti-air and fuel
+primitives: it obtains `AirTypeData` from the live tables, borrows the caller's main RNG, and
+requires an explicit completed host-search verdict. This is integration scaffolding, not a
+world caller. In particular, `systems/ammo.rs` still does not invoke `apply_antiair_gate` from
+its `Ammo::init` model, and no current world tick executes the full airframe/order path.
 
 Declaring the module means its types and 37 local tests compile in the workspace. It does not
 mean:

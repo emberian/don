@@ -44,9 +44,6 @@
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
 //! 4. Target acquisition is "nearest hostile inside `UNIT_RESPOND_RANGE`". Retail's is
 //!    `Object::poor_target` plus a scan whose scheduling is not derived.
-//! 5. Flanking is fed **real geometry** and whatever `mechanics::damage` then does with
-//!    it. `attack_dir`'s semantics are a known-open question in this project, so the
-//!    arena measures the resulting flank-level distribution rather than assuming it.
 //! 6. No water, no naval, no air, no diplomacy, no attrition, no supply.
 //!
 //! Fidelity: **C**. Nothing here is differentially tested against retail.
@@ -56,8 +53,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use don_sim::balance::BalanceTable;
 use don_sim::mechanics::{
-    commerce_cap, credit_resource, damage_traced, flank_level, get_armor, get_attack,
-    resource_period, resource_tick, CommerceCapGates, DamageInput, DamagePredicates, EconomyRules,
+    commerce_cap, credit_resource, damage_traced, get_armor, get_attack, resource_period,
+    resource_tick, CommerceCapGates, DamageInput, DamagePredicates, EconomyRules,
     ResourceTickInput,
 };
 use don_sim::rng::Random;
@@ -68,6 +65,7 @@ use don_sim::systems::combat::{
     below_min_range, in_attack_range, scale_damage_build, scale_damage_unit, vector_dist_between,
     AttackCycle, CombatConstants, HitPoints, RANGE_UNITS_PER_TILE,
 };
+use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
 use don_sim::systems::movement::{PathFinder, PathUnit, UnitWorld, UCELL};
 use don_sim::systems::order_dispatch::{
@@ -1164,10 +1162,7 @@ impl World {
     }
 
     fn tick_cycle(&mut self, i: usize) {
-        let c = self.ents[i].cycle.recharging;
-        if c > 0 {
-            self.ents[i].cycle.recharging = c - 1;
-        }
+        self.ents[i].cycle.tick();
     }
 
     fn tick_queue(&mut self, i: usize) {
@@ -1553,11 +1548,52 @@ impl World {
             }
             return;
         }
-        self.ents[i].facing = dir_between(attacker.x, attacker.y, tgt.x, tgt.y);
         if self.ents[i].cycle.recharging != 0 {
             return;
         }
-        let dealt = self.fire(i, target, &at, &dt);
+
+        let (damage_attack_dir, flank, shot_count) = if !attacker.building {
+            // MODEL 6 keeps non-land domains outside this arena. Do not run their broadside
+            // or aircraft state through the direct-land firing arm.
+            if at.domain != 0 {
+                return;
+            }
+            let aim_mode = AimMode::from_guys(&self.ents[i].guys);
+            let input = UnitVolleyInput {
+                attacker_x: attacker.x,
+                attacker_y: attacker.y,
+                attacker_facing: attacker.facing,
+                target_x: tgt.x,
+                target_y: tgt.y,
+                defender_facing: tgt.facing,
+                squad_size: at.squad_size,
+                guys: &self.ents[i].guys,
+                aim_mode,
+            };
+            let Ok(plan) = plan_direct_land_volley(at.domain, &input) else {
+                // In particular, graphics-turret Guys stop here until the graphics graph
+                // supplies `AimMode::GraphicsTurret { aligned }`; target-bearing is not a
+                // safe substitute for the retained-body retail arm.
+                return;
+            };
+            self.apply_unit_volley_aim(i, &plan);
+            (
+                plan.damage_attack_dir,
+                (!tgt.building).then_some(plan.flank_tier),
+                plan.shot_count,
+            )
+        } else {
+            // Buildings do not enter the Unit/Unit flank predicate. Their own projectile
+            // body is a single Object::do_damage producer.
+            let dir = don_sim::systems::target::attack_dir(attacker.x, attacker.y, tgt.x, tgt.y);
+            self.ents[i].facing = dir;
+            (dir, None, 1)
+        };
+
+        let mut dealt = 0i32;
+        for _ in 0..shot_count {
+            dealt = dealt.wrapping_add(self.fire(i, target, &at, &dt, damage_attack_dir, flank));
+        }
         let rech = don_sim::systems::combat::recharge_frames(
             &don_sim::systems::combat::RechargeInput {
                 base_recharge: at.recharge,
@@ -1575,6 +1611,44 @@ impl World {
         self.players[tw].damage_taken += dealt as i64;
     }
 
+    /// Apply the exact checksum-visible aim writes prepared by `Unit::fight`'s direct-land
+    /// volley arm. Current Guy angles remain animation state; retail writes `des_angle`.
+    fn apply_unit_volley_aim(&mut self, i: usize, plan: &UnitVolleyPlan) {
+        for aim in &plan.guy_aims {
+            self.ents[i].guys.guys[aim.slot]
+                .as_mut()
+                .expect("volley planner validated the live Guy pointer")
+                .des_angle = aim.des_angle;
+        }
+        let lead = self.ents[i]
+            .guys
+            .guys
+            .first()
+            .and_then(Option::as_ref)
+            .copied();
+        self.ents[i].facing = plan.unit_facing;
+        if let Some(u) = &mut self.ents[i].motion {
+            u.body.angle = plan.unit_facing;
+            if plan.toggle_unit_mask_2 {
+                u.unit_masks ^= 2;
+            }
+            if let Some(g) = lead {
+                u.lead_guy = g;
+            }
+        }
+        let (who, o, masks) = self.ents[i]
+            .motion
+            .as_ref()
+            .map_or((self.ents[i].who as i32, i as i32, 0), |u| {
+                (u.who as i32, u.o as i32, u.unit_masks)
+            });
+        if let Some(ci) = self.collision_units.find(who, o) {
+            let row = &mut self.collision_units.rows[ci];
+            row.angle = plan.unit_facing;
+            row.unit_masks = masks;
+        }
+    }
+
     /// `ObjectData::attack_dist` is edge-to-edge: `vector_dist` with the target's
     /// footprint subtracted (`block_radius + 0x18`, or `x_size`/`y_size` x `0x60` for a
     /// building). The footprint term is a **reading** of that comment, not a measurement.
@@ -1583,13 +1657,21 @@ impl World {
         let foot = if bt.kind_building {
             bt.x_size.max(bt.y_size) * 0x60
         } else {
-            0x18
+            bt.block_radius.wrapping_add(0x18)
         };
         (d - foot).max(0)
     }
 
     /// One shot. Everything numeric here comes out of `don_sim::mechanics::damage`.
-    fn fire(&mut self, i: usize, target: EntId, at: &TypeRow, dt: &TypeRow) -> i32 {
+    fn fire(
+        &mut self,
+        i: usize,
+        target: EntId,
+        at: &TypeRow,
+        dt: &TypeRow,
+        attack_dir: i32,
+        flank: Option<u32>,
+    ) -> i32 {
         let a = self.ents[i].clone();
         let b = self.ent(target).cloned().unwrap();
         let balance_pct = self.balance.get(at.id, dt.id).unwrap_or(100);
@@ -1601,7 +1683,7 @@ impl World {
             armor: get_armor(dt.armor, false, 0, 0),
             attacker_masks: at.obj_masks,
             defender_masks: dt.obj_masks,
-            attack_dir: dir_between(a.x, a.y, b.x, b.y),
+            attack_dir,
             splash_flag: 0,
             overkill_gate: 0,
             attacker_player: a.who as u32,
@@ -1640,16 +1722,8 @@ impl World {
         let rules = don_sim::systems::target::combat_rules(&self.combat);
         let terms = don_sim::systems::target::unreached_terms(&self.combat, 0);
         let (raw, trace) = damage_traced(&input, &preds, &rules, &terms);
-        // MODEL 5 — record what the flank classifier actually did with real geometry.
-        if !a.building && !b.building {
-            let delta = (b.facing as u32)
-                .wrapping_sub(input.attack_dir as u32)
-                .wrapping_sub(0x8000_0000);
-            let lvl = if delta >= 0x2AAA_AAAA {
-                flank_level(delta) as usize
-            } else {
-                0
-            };
+        if let Some(lvl) = flank {
+            let lvl = lvl as usize;
             self.flank_hist[lvl.min(2)] += 1;
         }
         let _ = trace;
@@ -2433,23 +2507,108 @@ impl WorkWorld for ArenaMoveWorld<'_> {
     }
 }
 
-/// The 8-way lattice direction as a 32-bit turn angle.
-fn dir8(dx: i32, dy: i32) -> i32 {
-    let k = match (dx.signum(), dy.signum()) {
-        (1, 0) => 0,
-        (1, 1) => 1,
-        (0, 1) => 2,
-        (-1, 1) => 3,
-        (-1, 0) => 4,
-        (-1, -1) => 5,
-        (0, -1) => 6,
-        _ => 7,
-    };
-    (k as i32).wrapping_mul(0x2000_0000)
-}
+#[cfg(test)]
+mod combat_integration {
+    use super::*;
+    use crate::arena::match_run::{load_world, MatchConfig};
+    use don_sim::systems::groups_guys::GUY_FLAG_TURRETS;
 
-fn dir_between(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
-    dir8(bx - ax, by - ay)
+    fn world() -> Option<World> {
+        load_world(&MatchConfig::default()).ok()
+    }
+
+    fn minuteman(w: &World) -> i32 {
+        w.types
+            .rows
+            .values()
+            .find(|t| t.name == "Minuteman")
+            .expect("live tables contain Minuteman")
+            .id
+    }
+
+    fn cardinal_pair(w: &mut World, dx: i32, dy: i32) -> (usize, EntId, i32) {
+        let ty = minuteman(w);
+        let cx = w.map.w / 2;
+        let cy = w.map.h / 2;
+        w.map.test_set(cx, cy, Terrain::Grass);
+        w.map.test_set(cx + dx, cy + dy, Terrain::Grass);
+        let defender = w.spawn(1, ty, cx, cy, true);
+        let attacker = w.spawn(0, ty, cx + dx, cy + dy, true);
+        let ai = attacker.index().expect("spawned attacker");
+        w.ent_mut(defender).unwrap().facing = 0;
+        (ai, defender, ty)
+    }
+
+    #[test]
+    fn retail_cardinal_geometry_drives_unit_guy_and_flank_state() {
+        // Defender faces north. South is rear/tier 1, east is broadside/tier 2, north is
+        // front/tier 0. Each case is a fresh ready volley.
+        for (dx, dy, tier) in [(0, 1, 1usize), (1, 0, 2usize), (0, -1, 0usize)] {
+            let Some(mut w) = world() else { return };
+            let (ai, defender, ty) = cardinal_pair(&mut w, dx, dy);
+            let before_hist = w.flank_hist;
+            let before_shots = w.shots;
+            let a0 = w.ents[ai].clone();
+            let d0 = w.ent(defender).unwrap().clone();
+            let expected = don_sim::systems::target::attack_dir(a0.x, a0.y, d0.x, d0.y);
+
+            w.do_attack(ai, defender);
+
+            assert_eq!(w.shots, before_shots + 1);
+            for n in 0..3 {
+                assert_eq!(
+                    w.flank_hist[n],
+                    before_hist[n] + u64::from(n == tier),
+                    "offset ({dx},{dy}) tier {tier}"
+                );
+            }
+            assert_eq!(w.ents[ai].facing, expected);
+            assert_eq!(w.ents[ai].motion.as_ref().unwrap().body.angle, expected);
+            assert_eq!(
+                w.ents[ai].guys.guys[0].as_ref().unwrap().des_angle,
+                expected
+            );
+            assert_eq!(
+                w.ents[ai].cycle.recharging,
+                w.types.get(ty).unwrap().recharge as u8
+            );
+        }
+    }
+
+    #[test]
+    fn recharge_is_written_once_after_the_volley_and_ticks_as_a_byte() {
+        let Some(mut w) = world() else { return };
+        let (ai, defender, ty) = cardinal_pair(&mut w, 0, 1);
+        let recharge = w.types.get(ty).unwrap().recharge as u8;
+        assert!(recharge > 1);
+
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 1);
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 1, "no second volley before Unit::inc_time ticks");
+        for _ in 0..recharge - 1 {
+            w.tick_cycle(ai);
+        }
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 1, "one cooldown frame remains");
+        w.tick_cycle(ai);
+        w.do_attack(ai, defender);
+        assert_eq!(w.shots, 2);
+    }
+
+    #[test]
+    fn unresolved_graphics_turret_cannot_be_laundered_into_body_aim() {
+        let Some(mut w) = world() else { return };
+        let (ai, defender, _) = cardinal_pair(&mut w, 1, 0);
+        let old_facing = w.ents[ai].facing;
+        w.ents[ai].guys.guys[0].as_mut().unwrap().guy_flags |= GUY_FLAG_TURRETS;
+
+        w.do_attack(ai, defender);
+
+        assert_eq!(w.shots, 0);
+        assert_eq!(w.ents[ai].cycle.recharging, 0);
+        assert_eq!(w.ents[ai].facing, old_facing);
+    }
 }
 
 #[cfg(test)]

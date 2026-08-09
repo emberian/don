@@ -216,7 +216,19 @@ pub fn anti_air_gate(shot: &ArenaAntiAirShot<'_>, rng: &mut Random) -> AntiAirGa
 }
 
 /// Fuel transition over exact live type fields. Host discovery remains a mandatory caller
-/// result; passing `None` means the retail scans completed and found nothing, not “unmodeled”.
+/// result; [`AirHostSearch::Exhausted`] means the retail scans completed and found nothing,
+/// not “unmodeled”.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirHostSearch {
+    Found { o: i32, who: i32 },
+    Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirAdapterError {
+    NotAirDomain { type_id: i32 },
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn air_fuel_transition(
     ty: &TypeRow,
@@ -225,23 +237,31 @@ pub fn air_fuel_transition(
     has_space_program: bool,
     space_air_range_pct: i32,
     returning: i32,
-    current_host_ok: bool,
+    // A currently assigned host only when the caller's retail capacity test passed.
     current_host: Option<(i32, i32)>,
-    nearest_host: Option<(i32, i32)>,
-) -> (i16, i32, FuelVerdict) {
+    nearest_host: AirHostSearch,
+) -> Result<(i16, i32, FuelVerdict), AirAdapterError> {
+    let type_id = ty.id;
     let ty = ty.air_type_data();
+    if !ty.is_air_domain() {
+        return Err(AirAdapterError::NotAirDomain { type_id });
+    }
     let cap = air::mana_cap(&ty, has_space_program, space_air_range_pct);
     let burn = air::air_fuel_step(mana_burn, cap, on_map);
     let left = (cap - burn as i32).max(0);
+    let nearest_host = match nearest_host {
+        AirHostSearch::Found { o, who } => Some((o, who)),
+        AirHostSearch::Exhausted => None,
+    };
     let (returning, verdict) = air::check_fuel(
         &ty,
         returning,
         left,
-        current_host_ok,
+        current_host.is_some(),
         current_host,
         nearest_host,
     );
-    (burn, returning, verdict)
+    Ok((burn, returning, verdict))
 }
 
 /// Which already-derived `Unit::process_attrition` period source the host selected. The
@@ -272,12 +292,39 @@ pub fn attrition_period(source: AttritionPeriodSource, rules: &AttritionRules) -
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct SupplyFacts {
+    pub already_flagged: bool,
+    pub always_supplied: bool,
+    pub militia: bool,
+    /// Result of a completed `Supplies::find_supply` query.
+    pub near_supply_source: bool,
+    /// Results of the three ordered building proximity queries.
+    pub near_building_16b: bool,
+    pub near_building_176: bool,
+    pub near_building_16e: bool,
+}
+
+impl SupplyFacts {
+    fn retail(self) -> SupplyInput {
+        SupplyInput {
+            already_flagged: self.already_flagged,
+            always_supplied: self.always_supplied,
+            militia: self.militia,
+            near_supply_source: self.near_supply_source,
+            near_building_16b: self.near_building_16b,
+            near_building_176: self.near_building_176,
+            near_building_16e: self.near_building_16e,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct AttritionTickInput {
     pub frame: i32,
     pub unit_id: i16,
     pub period: i16,
     /// Every world query consumed by `Unit::process_supply`, already resolved by the host.
-    pub supply: SupplyInput,
+    pub supply: SupplyFacts,
     pub type_308: i32,
     pub curr_uber_size: i32,
 }
@@ -293,7 +340,7 @@ pub fn attrition_tick(input: &AttritionTickInput) -> AttritionTick {
     if !borders_fog::attrition_due(input.frame, input.unit_id, input.period) {
         return AttritionTick::NotDue;
     }
-    if borders_fog::supply_state(&input.supply) {
+    if borders_fog::supply_state(&input.supply.retail()) {
         return AttritionTick::SupplyFound;
     }
     AttritionTick::Damage(borders_fog::attrition_damage(
@@ -346,10 +393,58 @@ mod tests {
     fn fuel_adapter_owns_no_host_search_or_rng_state() {
         let ty = row();
         let (burn, returning, verdict) =
-            air_fuel_transition(&ty, 2, true, false, 0, 0, false, None, None);
+            air_fuel_transition(&ty, 2, true, false, 0, 0, None, AirHostSearch::Exhausted).unwrap();
         assert_eq!(burn, 3);
         assert_eq!(returning, 1);
         assert_eq!(verdict, FuelVerdict::Crash);
+
+        let mut ground = ty;
+        ground.id = 50;
+        ground.domain = air::DOMAIN_LAND;
+        assert_eq!(
+            air_fuel_transition(
+                &ground,
+                0,
+                true,
+                false,
+                0,
+                0,
+                None,
+                AirHostSearch::Exhausted,
+            ),
+            Err(AirAdapterError::NotAirDomain { type_id: 50 })
+        );
+    }
+
+    #[test]
+    fn anti_air_adapter_advances_the_callers_main_stream() {
+        let mut shooter = TypeRow {
+            kind_unit: true,
+            domain: air::DOMAIN_LAND,
+            obj_masks: air::OBJ_ANTI_AIR,
+            fly_low: 100,
+            ..TypeRow::default()
+        };
+        shooter.id = 1;
+        let target = row();
+        let mut rng = Random::new(9);
+        let before = rng.state();
+        let gate = anti_air_gate(
+            &ArenaAntiAirShot {
+                whom: 1,
+                ox: 1,
+                target_active: true,
+                target_is_unit: true,
+                target: &target,
+                target_flying_low: true,
+                shooter_is_unit: true,
+                shooter_order: 0,
+                shooter: &shooter,
+            },
+            &mut rng,
+        );
+        assert_eq!(gate.draws, 1);
+        assert_ne!(rng.state(), before);
     }
 
     #[test]
@@ -358,9 +453,14 @@ mod tests {
             frame: 47,
             unit_id: 0,
             period: 48,
-            supply: SupplyInput {
+            supply: SupplyFacts {
+                already_flagged: false,
+                always_supplied: false,
+                militia: false,
                 near_supply_source: true,
-                ..SupplyInput::default()
+                near_building_16b: false,
+                near_building_176: false,
+                near_building_16e: false,
             },
             type_308: 1,
             curr_uber_size: 4,

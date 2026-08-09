@@ -22,6 +22,7 @@
 //! | [`cmd`] | the command set — each variant *is* a `don-env` unit verb, round-trippable to its ten action heads |
 //! | [`world`] | the simulation: economy, construction, production, movement, combat, fog, defeat |
 //! | [`obs`] | the fog-limited view a bot decides from |
+//! | [`retail_systems`] | fail-closed MODEL 6 inventory and host adapters; not a world caller |
 //! | [`bots`] | the players: `ShippedOpening`, `CapFirst`, `Marshal`, and a policy adapter |
 //! | [`match_run`] | running a match and reporting it honestly |
 //!

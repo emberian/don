@@ -3,7 +3,7 @@
 **What a human can now do that they could not before.**
 
 1. **Ask the program what our edition changes about Rise of Nations, and get a real answer.**
-   `cargo run -p don-sim --bin don-deviations` prints fourteen catalogued entries; `--show
+   `cargo run -p don-sim --bin don-deviations` prints twenty-three catalogued entries; `--show
    <slug>` prints one in full with the retail address it was derived from and the doc that
    measured it. Before this, that list existed only as scattered paragraphs in nine
    different derivation documents, and nobody could have told you how long it was.
@@ -26,7 +26,7 @@
 
 ## 1. The shape of it
 
-`crates/don-sim/src/deviations.rs` — one module, no dependencies, 14 registry entries and
+`crates/don-sim/src/deviations.rs` — one module, no dependencies, 23 registry entries and
 the scoped readiness policy. `crates/don-sim/tests/fidelity_mode.rs` — integration tests
 for both mode immutability and reachable-gap gating. `crates/don-sim/src/bin/deviations.rs`
 — the CLI, `--assert-fidelity`, and `--assert-ready` checks.
@@ -101,7 +101,7 @@ is *right* is cheaper than watching a third lane "fix" it.
 
 ## 2. The registry as seeded
 
-Nine fixes, three drift, two rejected. Full prose in `docs/tracks/deviations.md`; the short
+Nine fixes, twelve drift, two rejected. Full prose in `docs/tracks/deviations.md`; the short
 form:
 
 | slug | retail | ours | improved default |
@@ -120,7 +120,7 @@ form:
 | `arena-construction-model` | retail build-site/worker state | *drift*: MODEL 2 builder-frame construction | — |
 | `arena-gather-model` | retail resource objects/occupancy | *drift*: MODEL 3 inferred gather state | — |
 | `arena-target-acquisition-model` | complete retail spatial target scan | *drift*: MODEL 4 incomplete host | — |
-| `arena-flank-model` | live retail fight inputs | *drift*: MODEL 5 incomplete host | — |
+| `arena-guy-turret-model` | graphics-turret Guy materialization | *drift*: exact MODEL 5 path hard-gates unresolved turret types | — |
 | `arena-water-model` | water terrain/regions and water A* | *drift*: MODEL 6a absent host | — |
 | `arena-naval-model` | naval objects, orders, queues and supply | *drift*: MODEL 6b absent host | — |
 | `arena-air-model` | air physics, orders, ammo RNG and walked state | *drift*: MODEL 6c local adapters only | — |

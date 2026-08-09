@@ -84,6 +84,10 @@ pub struct TypeRow {
     /// Retail's unit-path A* reads `UnitTypeData::new_block_radius` at `+0x248` as the
     /// footprint size.  The live table carries it in 48-world-unit cells.
     pub new_block_radius: i32,
+    /// `ObjectTypeData::block_radius` `+0x240`. `ObjectData::attack_dist` subtracts this
+    /// live radius plus 24 world units for a unit target; it is distinct from the
+    /// per-Guy collision `new_block_radius` and must not be substituted with it.
+    pub block_radius: i32,
     pub big_radius: i32,
     /// Per-guy formation/collision fields from the live `UnitTypeData`.  They are retained
     /// together because retail stamps collision occupancy for every squad guy, not once
@@ -321,6 +325,7 @@ impl Types {
                     moves: num(h, r, "moves") as i32,
                     turn_speed: num(h, r, "turn_speed") as i32,
                     new_block_radius: num(h, r, "new_block_radius") as i32,
+                    block_radius: num(h, r, "block_radius") as i32,
                     big_radius: num(h, r, "big_radius") as i32,
                     guy_spacing: num(h, r, "guy_spacing") as i32,
                     x_spacing: num(h, r, "x_spacing") as i32,
@@ -436,7 +441,9 @@ mod tests {
         let Some(t) = types() else { return };
         let citizen = t.get(50).unwrap();
         assert_eq!(citizen.turn_speed, 0x2000_0000);
+        assert_eq!(citizen.block_radius, 48);
         assert_eq!(citizen.new_block_radius, 1);
+        assert_ne!(citizen.block_radius, citizen.new_block_radius);
         assert_eq!(citizen.squad_size, 1);
         assert_eq!(citizen.crew_size, 0);
         assert_eq!(citizen.role, 262_912);
