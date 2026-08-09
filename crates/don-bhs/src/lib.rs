@@ -92,7 +92,7 @@ pub use corpus::{scan_dir, Census};
 pub use host::{Coverage, Host, HostError, HostResult, NullHost};
 pub use program::{Program, Script, ScriptFile};
 pub use value::{Obj, ScriptTy, Value};
-pub use vm::{RunOutcome, RuntimeError, VarRef, Vm, VmError};
+pub use vm::{MissingBuiltinPolicy, RunOutcome, RuntimeError, VarRef, Vm, VmError};
 
 /// The `.bhs` entry-point convention for the *game script* slot.
 ///

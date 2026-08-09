@@ -122,11 +122,11 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
         7 => Ok(Value::Real(f32::from_bits(f0().to_bits() & 0x7fff_ffff))),
         8 => Ok(Value::Int(i0().wrapping_abs())), // absl_int   0x00a043e0
         // rand_int(min, max) -> Random::get(min, max) on GameAccess::game_random.
-        9 => Ok(Value::Int(host.game_random(i0(), arg(args, 1).as_int()))),
+        9 => Ok(Value::Int(host.game_random(i0(), arg(args, 1).as_int())?)),
         // rand_real() -> the mantissa trick on the same stream:
         //   s = s*1664525 + 1013904223;  f = bits(0x3f800000 | (s & 0x7fffff)) - 1.0
         10 => {
-            let s = host.game_random_step();
+            let s = host.game_random_step()?;
             let bits = 0x3f80_0000u32 | (s & 0x007f_ffff);
             let x = f32::from_bits(bits);
             // The engine widens to double, subtracts 1.0, and narrows back.
@@ -136,13 +136,13 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
         11 => {
             let n = i0();
             if n < 0 {
-                host.reseed_from_clock();
+                host.reseed_from_clock()?;
             } else {
-                host.set_game_random_seed(n as u32);
+                host.set_game_random_seed(n as u32)?;
             }
             Ok(Value::Null)
         }
-        12 => Ok(Value::Int(host.game_random_seed() as i32)), // rand_get_seed
+        12 => Ok(Value::Int(host.game_random_seed()? as i32)), // rand_get_seed
         13 => Ok(Value::Real(minss(f0(), arg(args, 1).as_real()))), // min_val
         14 => Ok(Value::Real(maxss(f0(), arg(args, 1).as_real()))), // max_val
 
@@ -179,11 +179,11 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
         // stays unimplemented rather than invented.
         21 => Err(HostError::Unimplemented),
         22 => {
-            host.script_print(&arg(args, 0).as_string(), false);
+            host.script_print(&arg(args, 0).as_string(), false)?;
             Ok(Value::Null)
         }
         23 => {
-            host.script_print(&arg(args, 0).as_string(), true);
+            host.script_print(&arg(args, 0).as_string(), true)?;
             Ok(Value::Null)
         }
 
@@ -326,37 +326,38 @@ impl Host for UtilHost {
         }
     }
 
-    /// **This is not `Random::get(int,int)`.** `UtilHost` exists to run scripts
-    /// without a simulation, so it advances its own copy of the LCG and reduces
-    /// modulo the span. `int Random::get(int,int)` (`0x00a39d70`) has not been
-    /// decoded, so a host that cares about lockstep must override this and call the
-    /// real routine; using `UtilHost` in a checksum-bearing context would desync.
-    fn game_random(&mut self, lo: i32, hi: i32) -> i32 {
-        let s = self.game_random_step();
-        if hi <= lo {
-            return lo;
+    /// Retail `Random::get(int,int)` (`0x00a39d70`): equal bounds do not advance,
+    /// inverted bounds are swapped, and the low 16 seed bits scale an exclusive
+    /// range. Differential: 1,500,012 retail cases, zero mismatches.
+    fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError> {
+        if lo == hi {
+            return Ok(lo);
         }
-        let span = (hi as i64 - lo as i64 + 1) as u64;
-        (lo as i64 + (s as u64 % span) as i64) as i32
+        let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+        let s = self.game_random_step()?;
+        let span = hi.wrapping_sub(lo) as u32;
+        let scaled = ((s & 0xffff).wrapping_mul(span)) >> 16;
+        Ok(lo.wrapping_add(scaled as i32))
     }
 
-    fn game_random_step(&mut self) -> u32 {
+    fn game_random_step(&mut self) -> Result<u32, HostError> {
         self.seed = self
             .seed
             .wrapping_mul(1_664_525)
             .wrapping_add(1_013_904_223);
-        self.seed
+        Ok(self.seed)
     }
 
-    fn game_random_seed(&self) -> u32 {
-        self.seed
+    fn game_random_seed(&self) -> Result<u32, HostError> {
+        Ok(self.seed)
     }
 
-    fn set_game_random_seed(&mut self, s: u32) {
+    fn set_game_random_seed(&mut self, s: u32) -> Result<(), HostError> {
         self.seed = s;
+        Ok(())
     }
 
-    fn script_print(&mut self, s: &str, newline: bool) {
+    fn script_print(&mut self, s: &str, newline: bool) -> Result<(), HostError> {
         if newline {
             self.output.push(s.to_string());
         } else {
@@ -365,6 +366,7 @@ impl Host for UtilHost {
                 None => self.output.push(s.to_string()),
             }
         }
+        Ok(())
     }
 }
 
@@ -472,6 +474,37 @@ mod tests {
         for _ in 0..1000 {
             match call(&mut h, 10, &[]) {
                 Ok(Value::Real(v)) => assert!((0.0..1.0).contains(&v), "{v}"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rand_int_matches_retail_reduction_and_state_rules() {
+        let mut h = UtilHost::with_seed(0);
+        assert_eq!(
+            call(&mut h, 9, &[Value::Int(0), Value::Int(0)]),
+            Ok(Value::Int(0))
+        );
+        assert_eq!(h.seed, 0, "equal bounds do not advance retail Random");
+
+        assert_eq!(
+            call(&mut h, 9, &[Value::Int(0), Value::Int(1)]),
+            Ok(Value::Int(0))
+        );
+        assert_eq!(h.seed, 0x3c6e_f35f);
+
+        let mut forward = UtilHost::with_seed(0x89ab_cdef);
+        let mut inverted = UtilHost::with_seed(0x89ab_cdef);
+        let a = call(&mut forward, 9, &[Value::Int(-30), Value::Int(30)]);
+        let b = call(&mut inverted, 9, &[Value::Int(30), Value::Int(-30)]);
+        assert_eq!(a, b, "retail swaps inverted bounds");
+        assert_eq!(forward.seed, inverted.seed);
+
+        let mut h = UtilHost::with_seed(u32::MAX);
+        for _ in 0..10_000 {
+            match call(&mut h, 9, &[Value::Int(-5), Value::Int(7)]) {
+                Ok(Value::Int(v)) => assert!((-5..7).contains(&v), "{v}"),
                 other => panic!("{other:?}"),
             }
         }

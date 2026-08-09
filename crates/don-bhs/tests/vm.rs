@@ -9,7 +9,7 @@ use don_bhs::disasm::{asm, asm_len, disassemble};
 use don_bhs::host::{Coverage, Host, HostError, HostResult, NullHost};
 use don_bhs::program::{Program, Script, ScriptFile};
 use don_bhs::value::Value;
-use don_bhs::vm::{VarRef, Vm, VmError};
+use don_bhs::vm::{MissingBuiltinPolicy, VarRef, Vm, VmError};
 use don_bhs::{builtin, find_builtin, BuiltinDecl, BUILTIN_COUNT};
 
 fn prog(code: Vec<u8>, consts: Vec<Value>, statics: usize) -> Program {
@@ -123,8 +123,7 @@ impl Host for PartialHost {
     }
 }
 
-#[test]
-fn unimplemented_builtins_are_recorded_not_fatal() {
+fn missing_builtin_program() -> (Program, &'static BuiltinDecl, &'static BuiltinDecl) {
     let num_cities = find_builtin("num_cities").unwrap();
     let population = find_builtin("population").unwrap();
     let code = asm(&[
@@ -135,11 +134,40 @@ fn unimplemented_builtins_are_recorded_not_fatal() {
         (0x38, &[population.index]),
         (0x3e, &[]),
     ]);
-    let mut p = prog(code, vec![Value::Int(1)], 0);
+    (prog(code, vec![Value::Int(1)], 0), num_cities, population)
+}
+
+#[test]
+fn unimplemented_builtins_fail_by_default_and_are_recorded() {
+    let (mut p, num_cities, population) = missing_builtin_program();
     let mut host = PartialHost;
     let mut vm = Vm::new(&mut p, &mut host);
+    assert_eq!(
+        vm.run_script(0, "tick"),
+        Err(VmError::UnimplementedBuiltin {
+            index: population.index,
+            name: "population",
+        })
+    );
+    assert_eq!(
+        vm.coverage.unimplemented().collect::<Vec<_>>(),
+        vec![(population.index, "population", 1)]
+    );
+    assert_eq!(
+        vm.coverage.implemented().collect::<Vec<_>>(),
+        vec![(num_cities.index, 1)]
+    );
+}
+
+#[test]
+fn coverage_survey_is_explicitly_lossy() {
+    let (mut p, num_cities, _population) = missing_builtin_program();
+    let mut host = PartialHost;
+    let mut vm =
+        Vm::new(&mut p, &mut host).with_missing_builtin_policy(MissingBuiltinPolicy::Survey);
     let out = vm.run_script(0, "tick").unwrap();
-    // The engine substitutes its error return rather than aborting the frame.
+    // This is ScriptFuncSet::get_err_return, but continuing is a survey device,
+    // not a retail-faithful response to an incomplete DoN host.
     assert_eq!(out.returned, Some(Value::Int(-1)));
     let missing: Vec<_> = vm
         .coverage

@@ -18,12 +18,12 @@
 //!   (void). The VM then asserts the stack ended at `orig - nargs + (ret?1:0)` and
 //!   raises `run_time_error` if not.
 //!
-//! On a rejected call the engine substitutes `ScriptFuncSet::get_err_return`
-//! (`0x009d41d0`). We have **not** read that function; the shipped
-//! `ron-data/paramtypes.xml` documents the pervasive `int_return` type as
-//! "1 if true or success, 0 if false, -1 if failed", so we return `-1` for int
-//! returns. `[inferred]`, and flagged as such in [`HostError::Unimplemented`]
-//! handling so a differential run will catch it if it is wrong.
+//! On a call rejected by the retail function set, the engine substitutes
+//! `ScriptFuncSet::get_err_return` (`0x009d41d0`): `-1`, `-1.0`, an empty string,
+//! null for void, or an empty object according to the declared return type.
+//! That retail rejection path is **not** permission to conceal an incomplete DoN
+//! host. [`Vm`](crate::vm::Vm) therefore fails on [`HostError::Unimplemented`] by
+//! default; substitution exists only in an explicitly selected coverage-survey mode.
 
 use crate::builtin_table::BuiltinDecl;
 use crate::value::{ScriptTy, Value};
@@ -33,10 +33,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostError {
     /// The host does not implement this builtin. The VM records it in
-    /// [`Coverage`] and substitutes the engine's error return, so a script that
-    /// calls an unimplemented builtin keeps running rather than aborting the frame
-    /// — which is what makes coverage *measurable* over a whole replay instead of
-    /// stopping at the first gap.
+    /// [`Coverage`]. Strict execution then returns a `VmError`; the explicitly
+    /// lossy survey policy may substitute the retail rejected-call value so a
+    /// workload can discover more than its first missing builtin.
     Unimplemented,
     /// The host implements the builtin but rejected these arguments.
     BadArgs(&'static str),
@@ -59,34 +58,40 @@ pub trait Host {
     /// pathfinder). A script that rolls dice perturbs exactly the sequence the rest
     /// of the project is trying to reproduce. Implementations must route this to the
     /// real stream, never to a private one.
-    fn game_random(&mut self, _lo: i32, _hi: i32) -> i32 {
-        0
+    fn game_random(&mut self, _lo: i32, _hi: i32) -> Result<i32, HostError> {
+        Err(HostError::Unimplemented)
     }
 
     /// Advance that same stream one step and return the new seed word.
     /// `rand_real` (`0x009e18b0`) inlines `s = s*1664525 + 1013904223` against it and
     /// then builds a float from the low 23 bits, so it must share the state with
     /// [`Host::game_random`] or the stream splits.
-    fn game_random_step(&mut self) -> u32 {
-        0
+    fn game_random_step(&mut self) -> Result<u32, HostError> {
+        Err(HostError::Unimplemented)
     }
 
     /// `rand_get_seed()` (`0x009e1930`) — a bare `mov eax, [[0x00c06184]]`.
-    fn game_random_seed(&self) -> u32 {
-        0
+    fn game_random_seed(&self) -> Result<u32, HostError> {
+        Err(HostError::Unimplemented)
     }
 
     /// `rand_seed(n)` for `n >= 0` (`0x009e1900`).
-    fn set_game_random_seed(&mut self, _s: u32) {}
+    fn set_game_random_seed(&mut self, _s: u32) -> Result<(), HostError> {
+        Err(HostError::Unimplemented)
+    }
 
     /// `rand_seed(n)` for `n < 0`: the engine calls the CRT import at
     /// `[0x00ac5460]` and installs whatever it returns.
-    fn reseed_from_clock(&mut self) {}
+    fn reseed_from_clock(&mut self) -> Result<(), HostError> {
+        Err(HostError::Unimplemented)
+    }
 
     /// `print` / `print_line` (`0x00a048d0` / `0x00a04950`) — the script log.
     /// Capturing it is what makes a whole-VM differential trace against the live
     /// game possible at all.
-    fn script_print(&mut self, _s: &str, _newline: bool) {}
+    fn script_print(&mut self, _s: &str, _newline: bool) -> Result<(), HostError> {
+        Err(HostError::Unimplemented)
+    }
 }
 
 /// Per-builtin call accounting, so "which builtins do we still owe?" is a
@@ -144,9 +149,11 @@ impl Coverage {
     }
 }
 
-/// The engine's substitute value for a call that could not be made.
-/// See the module docs for the provenance of `-1`.
-pub fn err_return(ret: ScriptTy) -> Value {
+/// The engine's substitute value for a call that retail rejected.
+///
+/// Private to the VM's opt-in coverage survey: it must never make an incomplete
+/// host look like a successful fidelity run.
+pub(crate) fn survey_err_return(ret: ScriptTy) -> Value {
     match ret {
         ScriptTy::Void => Value::Null,
         ScriptTy::Real => Value::Real(-1.0),

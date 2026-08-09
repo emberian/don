@@ -43,13 +43,13 @@ run against the retail evaluator** and is the weakest part; `docs/tracks/bhs-eng
 
 ## Coverage
 
-Unimplemented builtins are recorded, not fatal: `Host::call` returns
-`HostError::Unimplemented`, the VM logs `(index, name, count)` and substitutes the
-engine's error return, so a workload yields an exact debt list instead of stopping at
-the first gap.
+Unimplemented builtins are recorded **and fail execution by default**: implementation
+debt must never masquerade as retail behavior. An explicitly lossy coverage survey can
+substitute `ScriptFuncSet::get_err_return` long enough to collect a wider debt list:
 
 ```rust
-let mut vm = Vm::new(&mut prog, &mut host);
+let mut vm = Vm::new(&mut prog, &mut host)
+    .with_missing_builtin_policy(don_bhs::MissingBuiltinPolicy::Survey);
 vm.run_script(0, "tick")?;
 print!("{}", vm.coverage.report());
 ```

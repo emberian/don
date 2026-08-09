@@ -76,7 +76,7 @@
 //! assignment *target* (the array) from the top of the stack and the value beneath.
 
 use crate::builtin_table::{builtin, BuiltinDecl};
-use crate::host::{err_return, Coverage, Host, HostError};
+use crate::host::{survey_err_return, Coverage, Host, HostError};
 use crate::opcode::{self, OP_POP};
 use crate::program::Program;
 use crate::value::{cell, Cell, Obj, OpError, ScriptTy, Value};
@@ -163,6 +163,17 @@ pub enum VmError {
     /// An opcode this implementation has not recovered well enough to run. Named
     /// rather than silently wrong — the whole point of the coverage discipline.
     Unimplemented(&'static str),
+    /// A script reached a builtin that the supplied host does not implement.
+    UnimplementedBuiltin {
+        index: u32,
+        name: &'static str,
+    },
+    /// A host claimed a builtin but rejected the values it received.
+    HostRejected {
+        index: u32,
+        name: &'static str,
+        reason: &'static str,
+    },
     /// The instruction budget was exhausted (our addition; the engine has no such
     /// limit, it has a `break_callback` instead).
     BudgetExhausted,
@@ -227,6 +238,19 @@ pub struct Vm<'a, H: Host> {
     /// `RunTimeEnv::err_count` (+44).
     pub err_count: u32,
     budget: u64,
+    missing_builtin_policy: MissingBuiltinPolicy,
+}
+
+/// Policy for implementation gaps at the simulation host boundary.
+///
+/// Fidelity execution is [`Fail`](Self::Fail). [`Survey`](Self::Survey) is an
+/// explicitly lossy debt-discovery mode: it substitutes retail's rejected-call
+/// value and therefore must not be used for gameplay, replay validation, or hashes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MissingBuiltinPolicy {
+    #[default]
+    Fail,
+    Survey,
 }
 
 /// Control flow out of one instruction.
@@ -250,11 +274,18 @@ impl<'a, H: Host> Vm<'a, H> {
             // The engine has no instruction cap; this exists so a malformed program
             // fails a test instead of hanging a lane. Raise it freely.
             budget: 50_000_000,
+            missing_builtin_policy: MissingBuiltinPolicy::Fail,
         }
     }
 
     pub fn with_budget(mut self, budget: u64) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// Opt into lossy missing-builtin coverage collection.
+    pub fn with_missing_builtin_policy(mut self, policy: MissingBuiltinPolicy) -> Self {
+        self.missing_builtin_policy = policy;
         self
     }
 
@@ -1027,14 +1058,25 @@ impl<'a, H: Host> Vm<'a, H> {
             }
             Err(HostError::Unimplemented) => {
                 self.coverage.record_unimplemented(decl.index, decl.name);
-                if push_ret {
-                    self.stack.push(Slot::Val(err_return(decl.ret)));
+                match self.missing_builtin_policy {
+                    MissingBuiltinPolicy::Fail => {
+                        return Err(VmError::UnimplementedBuiltin {
+                            index: decl.index,
+                            name: decl.name,
+                        });
+                    }
+                    MissingBuiltinPolicy::Survey if push_ret => {
+                        self.stack.push(Slot::Val(survey_err_return(decl.ret)));
+                    }
+                    MissingBuiltinPolicy::Survey => {}
                 }
             }
-            Err(HostError::BadArgs(_)) => {
-                if push_ret {
-                    self.stack.push(Slot::Val(err_return(decl.ret)));
-                }
+            Err(HostError::BadArgs(reason)) => {
+                return Err(VmError::HostRejected {
+                    index: decl.index,
+                    name: decl.name,
+                    reason,
+                });
             }
         }
         Ok(())
