@@ -93,7 +93,7 @@ union and enum layouts with member names and offsets). No dependencies.
 | 4 | Complete `CommandTypes` enum (82) and the **exact `sizeof` and field layout of all 82 command structs**, from the PDB type stream. 79/79 fixed sizes agree with the independently derived table | C [measured] |
 | 5 | **Multiplayer command streams are statically decodable.** The pad RNG is a stack-local `Random` reseeded per package from one game global, not the simulation RNG. This refutes `docs/derivation/replay-stream.md` §5 | C [measured] |
 | 6 | `crates/don-net` round-trips **1,296,192 of 1,296,194 command packages** (5,055,253 commands, 59 opcodes) across 61 recordings, byte for byte | C [measured] |
-| 7 | Cross-player checksum agreement across the whole corpus: **265,910 of 265,931 (0.999921)**. The 21 disagreements are **real simulation drift, not decode error** — they never touch `rules`, `walls`, `items`, `scenario_data` or `script_run_time` | C [measured] |
+| 7 | Cross-player checksum tuples joined on the lockstep turn serial are **265,619 of 265,619 identical (100%)**. The older 21 apparent disagreements came from joining different turns on the local simulation-frame stamp | C [measured] |
 | 8 | `GameInfo+0x04` **is** `seed` — settled by name, closing an open question in `replay-format.md` | structural [measured] |
 | 9 | `.rcx` is **not always gzipped**: 3 of 63 files are stored raw | C [measured] |
 | 10 | **A headless client cannot be built from this evidence alone.** §6 says why, precisely | — |
@@ -430,15 +430,18 @@ and I do not assert what the losing client does — resync, drop, or continue.
 
 ### 4.3 Corpus evidence for determinism [measured]
 
-Across the 62-file multiplayer corpus, comparing the two 16-tuples that different players
-serialised for the same turn from different machines:
+Across the multiplayer corpus, comparing the two 16-tuples that different players serialized
+for the same lockstep turn from different machines:
 
 ```
-265,931 comparisons in 21 files   ->   265,910 identical   (0.999921)
+joined by CommandPackage::group: 265,619 / 265,619 identical (100.0000%)
+joined by local frame stamp:      265,910 / 265,931 identical (0.999921)
 ```
 
-21 disagreements, all in 4 files, each first appearing **mid-game** with the recording
-continuing for tens of thousands of frames afterwards:
+The 21 by-stamp disagreements, all in four files, compare packages from different lockstep
+turns. `stamp` is the local simulation frame when a package was built; `group` is the monotone
+lockstep turn serial. Local frame counters can drift without lockstep state diverging. All 21
+old rows disappear under the correct join:
 
 | file | disagreeing turns | first at stamp | last stamp | channels that differed |
 |---|---|---|---|---|
@@ -447,25 +450,11 @@ continuing for tens of thousands of frames afterwards:
 | `Playback - 2024.03.20 17'28'53` | 4 | 11,357 | 61,655 | units 2, builds 3, groups 4, guys 1, leaders 3, world 1, **all 4** |
 | `Playback - 2024.04.10 17'05'19` | 6 | 17,701 | 78,193 | units 4, builds 5, ammo 2, deaths 2, groups 3, guys 2, leaders 6, cities 1, goods 1, world 3, **all 6** |
 
-**These are real simulation divergences, not decode artefacts.** [measured] The channel
-breakdown is the discriminator, and it is one-sided in a way a decode error could not be:
-
-- `all` differs on **every** disagreeing turn (7/7, 4/4, 4/4, 6/6), exactly as an aggregate
-  channel must.
-- The channels that ever differ are precisely the **mutable simulation** ones — `units`,
-  `builds`, `groups`, `guys`, `leaders`, `world`, and occasionally `ammo`, `deaths`,
-  `cities`, `goods`.
-- `rules`, `scenario_data`, `script_run_time`, `walls` and `items` **never** differ, across
-  all 21 events. `rules` in particular is constant for a whole match, so a byte-level decode
-  error — which would scramble the 65-byte packet arbitrarily — would corrupt it about as
-  often as anything else. It never does.
-
-That the games then ran on for tens of thousands of frames is consistent with §4.2: a
-transient divergence is put to a plurality vote and the match continues. So the corpus shows
-both that RoN lockstep is near-perfectly deterministic (0.999921 over a quarter-million
-cross-machine comparisons) and that it does drift occasionally and has machinery to absorb
-it. **What I still have not established is the mechanism of the drift** — whether it is
-floating point, timing, or a genuine engine bug.
+The per-channel differences in that historical table are therefore comparisons between two
+different turns, not evidence of retail desynchronization. The corpus contains no cross-player
+checksum mismatch when keyed correctly. The replay harness now reports both joins and asserts
+that every by-stamp disagreement crosses lockstep turns, preventing the old interpretation from
+returning silently.
 
 ---
 
@@ -565,7 +554,7 @@ catches every size-formula regression: `12 files, 186,113/186,113 packages, 12/1
 5,055,253 commands, 59 distinct opcodes
 59/61 files at 100%
 96,197 recorded packages converted to NetMsg_CommandPackageData and back
-cross-player checksum tuples: 265,910 / 265,931 identical  (0.999921)
+cross-player checksum tuples by group: 265,619 / 265,619 identical (1.000000)
 ```
 
 For each package the test asserts (a) the record framing tiles the payload to EOF with zero

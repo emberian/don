@@ -334,19 +334,20 @@ path compiled in. `SteamAuthentication::GetEncryptedAppTicket` /
 | # | blocker | status | what it would take |
 |---|---|---|---|
 | 1 | **A Steam auth session ticket for the RoN:EE app** | **hard blocker** | A running Steam client, signed in, owning the game. `SteamAPI_Init` + `GetAuthSessionTicket`. There is no `SteamAPI_RestartAppIfNecessary` call in the exe, so the app id is supplied by the Steam client / `steam_appid.txt`, not baked into the binary [measured]. **A ticket cannot be minted offline; this is the one irreducible dependency.** |
-| 2 | **The PlayFab title id** | **blocker, not yet located** | `CrossplayProxy.dll` carries the error string `PlayFabSettings::staticSettings->titleId has not been set properly`, so it is set at runtime, not a literal in the DLL's strings. It is not in the exe's strings and not in any `ron-data/` config we hold. Next probes, in order: read `PlayFabSettings::staticSettings` out of the **live process** with `donscan`/RPM while the game sits at the multiplayer menu — cheapest and decisive; or trace `ICrossPlayService::Init` (vtable +0) / `SetServiceUrl` (+4) call sites in the exe; or capture one HTTPS request line (the title id is the URL subdomain, `https://<titleid>.playfabapi.com`). |
+| 2 | **The PlayFab title id value** | **address recovered; one bounded live read remains** | The pointer to `PlayFabSettings::staticSettings` is at `CrossplayProxy.dll+0xC2ED8`. The 80-byte `PlayFabApiSettings` stores only its `titleId` string object at `+56`; the developer secret begins at `+0` and must never be read or logged. A menu-state probe must bracket the shared pointer, read only that 24-byte string object plus its bounded title bytes, validate the MSVC string length/capacity, and refuse a torn or malformed snapshot. |
 | 3 | Party network configuration | soft | `PartyCreateNewNetwork`'s configuration struct is not established. Only needed to *create* a network; a *joining* peer takes the serialized descriptor from the lobby. |
 | 4 | 32-bit Windows host for the SDKs | soft | `PartyWin.dll` and `PlayFabMultiplayerWin.dll` are PE32 i386, so this side runs in the VM or gets reimplemented. |
 
-Blockers 3 and 4 are engineering. **Blockers 1 and 2 are credentials**, and 1 is the one
-that cannot be engineered around: PlayFab is configured for Steam login only, so an internet
-join is gated on a Steam ticket for an account that owns the game. That is a licensing
-fact, not a missing measurement.
+Blockers 2–4 are bounded engineering or observation. **Only blocker 1 is a credential**, and
+it cannot be engineered around: PlayFab is configured for Steam login only, so an internet
+join is gated on a Steam ticket for an account that owns the game. That is a licensing fact,
+not a missing measurement. The title id is an endpoint identifier, not a secret; nevertheless,
+the probe is deliberately narrow so adjacent credentials cannot enter an evidence artifact.
 
-**Recommended next step, and it is small:** blocker 2 is a single live read. With the game
-sitting at the multiplayer menu, dump `PlayFabSettings::staticSettings` from
-`CrossplayProxy.dll`'s data section. That closes the last *unknown*; blocker 1 then becomes
-a decision about how the harness obtains a ticket rather than a research question.
+**Recommended next step:** while the game sits at the multiplayer menu, run the bounded
+title-only read above together with a double-read snapshot of Crossplay's scalar session roots.
+That closes the last unknown value without inspecting a ticket, token, player name, platform id,
+lobby id, descriptor, or developer secret.
 
 ### 5.3 What this means for "internet games work"
 
@@ -355,7 +356,8 @@ Two honest routes, and they are different products:
 - **Our own peers over the internet: working today.** `donnet-peer` needs no PlayFab, no
   Steam, and no relay — one forwarded port. This is the right substrate for self-play and
   for a headless RL environment, which is what the project is actually for.
-- **Joining a retail player's lobby: blocked on §5.2 #1 and #2.** Everything else — the
+- **Joining a retail player's lobby: not yet exercised; blocked first on §5.2 #1 and the
+  bounded #2 live read.** Everything else — the
   lobby key schema, every packet layout, the readiness protocol, the turn channel — is now
   specified and implemented.
 
@@ -386,7 +388,7 @@ cd ron-bin && uv run --with pefile --with capstone python <the script in this la
 ## 7. What I could not establish
 
 - Whether the retail game runs with the replacement DLL. **Untested.** Needs the VM.
-- The PlayFab title id (§5.2 #2).
+- The live PlayFab title-id value at the recovered, bounded address (§5.2 #2).
 - The exact `send_game` key→field assignment. The key *values* are measured and the pairing
   is by name; the individual `mov`s in `0x0094E200` were not traced one at a time, and
   `don_net::lobby::SETTING_KEYS` is marked `[inferred]` for the pairing only.

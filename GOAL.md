@@ -25,14 +25,14 @@ Snapshot date: 2026-08-09. Generated records override prose if the tree advances
 | Surface | State | Evidence |
 |---|---|---|
 | Retail differential oracle | green | `schema/oracle-regression.json`: 23/23 cases, 18,722,565 trials, zero mismatches/skips/crashes/errors; includes full-state turning, map/start writers, radial/fairness calculations, and regional start placement |
-| Replay corpus | structurally green, dynamically incomplete | 61 recordings, 585,152 turns, 488,557 valid checksum packets; initial-world reconstruction is still absent, so current matches are not non-trivial whole-game agreement |
+| Replay corpus | structurally green, substantive first divergence | 61 recordings, 585,152 turns, 488,557 valid checksum packets; exact prefix setup drives a non-empty `world` walk on all 222,938 comparisons, but missing terrain/start generation diverges on the first checksummed turn and every current agreement remains trivial/unmodelled |
 | Simulation | broad and actively integrating | retail tick/order foundations plus economy, production, combat, movement/A*, collision/boats, spatial chains, groups/guys, cities, borders/fog, air, naval, walls, items, animation events, RNG, walkers |
 | Product readiness | intentionally red | default improved seams are wired; current reachable drift is tracked by `tools/product-readiness.sh`, not waived |
-| RL environment | working over incomplete dynamics | native/Gymnasium/VectorEnv/PettingZoo APIs, derived action taxonomy, parameter masks, zero-copy observations, deterministic batch stepping; performance remeasurement is active |
+| RL environment | working over incomplete dynamics | native/Gymnasium/VectorEnv/PettingZoo APIs, derived action taxonomy, exact parameter masks, zero-copy observations, deterministic batch stepping; an exhaustive 806-TypeIndex contract plus a 128-step eight-world rollout now reports zero accepted-no-effect and zero illegal advertised actions |
 | AI / playable arena | working integration, not release-ready | deterministic observation-driven Marshal, real command path and A* movement; remaining arena world models are declared product blockers |
 | Browser | working integration build | WebGPU/WebGL2/Canvas2D, responsive touch/desktop command dock, cluster/replay views, wasm/native digest paths; labels do not claim whole-game fidelity |
-| Live retail | tactical move gameplay-validated; stop recheck pending | RoNtoy plus versioned main-thread command ingress, current-visible v4 observation, and supervised Marshal scout proof; the hardened STOP fallback is validated, while its new active-match acknowledgement awaits a fresh match |
-| BHS / content | substantial, fail-closed | compiler, decoder, VM, aggregate execution, builtin registry, overlays and mod paths; current fidelity work is resolving retail type/member quirks rather than guessing |
+| Live retail | prelaunch hardened; active-match recheck pending | RoNtoy plus versioned main-thread command ingress, current-visible v4 observation, passive network evidence, and supervised Marshal scout proof; deterministic hash-bound injection and the STOP/rearm lifecycle are fail-closed in tests, while a fresh match must exercise the new active callback acknowledgement |
+| BHS / content | substantial, fail-closed | compiler, decoder, VM, aggregate execution, builtin registry, overlays and mod paths; five body-bearing fixtures captured through the shipped compiler are now 5/5 byte-identical across code, constant pools, and script metadata |
 | License/workflow | established | GPL-3.0-or-later; permanent `dev` branch; no branches or worktrees |
 
 ## The gates
