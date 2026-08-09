@@ -141,6 +141,37 @@ try {
     bad++;
   }
 
+  // The recovered playable page must say what it is, show a usable initial catalog, and
+  // keep its controls live at boot. These checks caught the cut-off lane's blank palette
+  // and the old whole-world "fidelity" label.
+  out.ui = await c.eval(`(() => {
+    const filter = document.getElementById('palette-filter');
+    const pause = document.getElementById('pause');
+    const initialCatalog = document.querySelectorAll('#palette button').length;
+    filter.value = 'barracks';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    const filteredCatalog = document.querySelectorAll('#palette button').length;
+    filter.value = '';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    pause.click();
+    const pauseLabel = pause.textContent;
+    pause.click();
+    return JSON.stringify({
+      initialCatalog, filteredCatalog, pauseLabel,
+      integrationLabel: document.querySelector('.status-note')?.textContent ?? '',
+      incomeOptions: [...document.querySelectorAll('#income option')].map(o => o.textContent),
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the initial order catalog is populated', out.ui.initialCatalog > 0],
+    ['catalog filtering works', out.ui.filteredCatalog === 1],
+    ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
+    ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
+    ['no whole-world fidelity option is advertised', out.ui.incomeOptions.every((x) => !/^fidelity\b/i.test(x))],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
   // ---- 1. does it actually draw? -------------------------------------------------------
   out.readback = await c.eval('window.don.snapshot().then(r => JSON.stringify(r))').then(JSON.parse);
   const px = out.readback.w * out.readback.h;
