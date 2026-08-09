@@ -693,6 +693,131 @@ fn retail_chunk_executes_the_same_leader_ai_policy_effects() {
     execute_ai_policy_effect_sequence(&mut sim, &mut scripts);
 }
 
+const SCRIPT_UNIT_MASK_AI_OFF: u32 = 0x0100_0000;
+
+fn configure_unit_ai_effect_state(sim: &mut Sim) -> [usize; 3] {
+    sim.activate(0);
+    sim.activate(1);
+
+    // Script player 2 is in-game but not processing. A positive address must reject,
+    // while the negative all-unit sentinel still mutates LeaderFlag2.
+    sim.step8.leaders[1].flags &= !leaders::flag::PROCESS;
+    sim.vic_leaders.slots[1].leader_flags &= !victory_score::leader_flag::ACTIVE;
+    sim.vic_leaders.slots[0].leader_flags2 = 0x4000;
+    sim.vic_leaders.slots[1].leader_flags2 = 0x8000;
+
+    let captain = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let addressed = sim.spawn_unit(0, 7, 4 * 192, 5 * 192, 4).unwrap();
+    let tail = sim.spawn_unit(0, 7, 6 * 192, 7 * 192, 4).unwrap();
+    let rows = [
+        sim.world.row_of(captain).unwrap(),
+        sim.world.row_of(addressed).unwrap(),
+        sim.world.row_of(tail).unwrap(),
+    ];
+    sim.world.units.o_up_mut()[rows[0]] = -1;
+    sim.world.units.o_down_mut()[rows[0]] = 1;
+    sim.world.units.o_up_mut()[rows[1]] = 0;
+    sim.world.units.o_down_mut()[rows[1]] = 2;
+    sim.world.units.o_up_mut()[rows[2]] = 0;
+    sim.world.units.o_down_mut()[rows[2]] = -1;
+
+    // `active_unit_slot` admits an inactive formation member when `o_up >= 0`.
+    let addressed_flags = sim.world.units.get_flags(rows[1]);
+    sim.world.units.set_flags(rows[1], addressed_flags & !1);
+    for (row, masks) in rows
+        .into_iter()
+        .zip([0x0040_0000, 0x0080_0000, 0x0200_0000])
+    {
+        sim.world.units.set_unit_masks(row, masks);
+    }
+    rows
+}
+
+fn execute_unit_ai_effect_sequence(sim: &mut Sim, scripts: &mut ScriptRuntime, rows: [usize; 3]) {
+    let original = [0x0040_0000, 0x0080_0000, 0x0200_0000];
+
+    sim.world.seconds = 0;
+    let disabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(disabled.steps[4], StepRun::Executed);
+    assert!(disabled.work[4] > 0);
+    for (row, masks) in rows.into_iter().zip(original) {
+        assert_eq!(
+            sim.world.units.get_unit_masks(row),
+            masks | SCRIPT_UNIT_MASK_AI_OFF,
+            "a subordinate address must toggle the full captain-to-tail formation"
+        );
+    }
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x4000);
+    assert_eq!(sim.vic_leaders.slots[1].leader_flags2, 0x8002);
+
+    sim.world.seconds = 1;
+    let enabled = sim.do_frame_with_scripts(scripts).unwrap();
+    assert_eq!(enabled.steps[4], StepRun::Executed);
+    assert!(enabled.work[4] > 0);
+    for (row, masks) in rows.into_iter().zip(original) {
+        assert_eq!(sim.world.units.get_unit_masks(row), masks);
+    }
+    assert_eq!(sim.vic_leaders.slots[0].leader_flags2, 0x4000);
+    assert_eq!(sim.vic_leaders.slots[1].leader_flags2, 0x8000);
+}
+
+#[test]
+fn ordinary_source_executes_unit_specific_ai_effects() {
+    let program = compile_source_fixture("scenario_unit_ai_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "unit_ai_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x813a, 8);
+    let rows = configure_unit_ai_effect_state(&mut sim);
+
+    execute_unit_ai_effect_sequence(&mut sim, &mut scripts, rows);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_unit_specific_ai_effects() {
+    let compiled = compile_source_fixture("scenario_unit_ai_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "unit_ai_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x813b, 8);
+    let rows = configure_unit_ai_effect_state(&mut sim);
+
+    execute_unit_ai_effect_sequence(&mut sim, &mut scripts, rows);
+}
+
+#[test]
+fn unit_ai_effect_fails_closed_before_a_malformed_formation_write() {
+    let mut scripts = game_runtime(one_builtin_program(
+        "disable_unit_ai",
+        &[Value::Int(1), Value::Int(0)],
+    ));
+    let mut sim = Sim::new(0x813c, 8);
+    sim.activate(0);
+    let captain = sim.spawn_unit(0, 7, 2 * 192, 3 * 192, 4).unwrap();
+    let row = sim.world.row_of(captain).unwrap();
+    sim.world.units.o_up_mut()[row] = -1;
+    sim.world.units.o_down_mut()[row] = 1;
+    sim.world.units.set_unit_masks(row, 0x0040_0000);
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "disable_unit_ai",
+            ..
+        })
+    ));
+    assert_eq!(sim.world.units.get_unit_masks(row), 0x0040_0000);
+}
+
 fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
     use victory_score::Victory;
 

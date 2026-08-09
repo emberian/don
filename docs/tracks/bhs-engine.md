@@ -525,14 +525,16 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 790 | `disable_combat_ai` | valid Leader, then set `leader_flags2` bit `0x08` (`0x009ff860`) |
 | 791 | `enable_all_unit_ai` | valid Leader, then clear `leader_flags2` bit `0x02` (`0x009ff8a0`) |
 | 792 | `disable_all_unit_ai` | valid Leader, then set `leader_flags2` bit `0x02` (`0x009ff8e0`) |
+| 793 | `enable_unit_ai` | active addressed formation clears `UnitData+0x68` bit `0x01000000`, or negative sentinel clears Leader bit `0x02` (`0x009ff920`) |
+| 794 | `disable_unit_ai` | active addressed formation sets `UnitData+0x68` bit `0x01000000`, or negative sentinel sets Leader bit `0x02` (`0x009ffa10`) |
 | 796 | `enable_city_ai` | active non-human Leader, then clear `leader_flags2` bit `0x10` (`0x009ffba0`) |
 | 797 | `disable_city_ai` | active non-human Leader, then set `leader_flags2` bit `0x10` (`0x009ffbf0`) |
 | 798 | `enable_city_defeat` | active Leader, then clear `leader_flags2` bit `0x01` (`0x009ffc40`) |
 | 799 | `disable_city_defeat` | active Leader, then set `leader_flags2` bit `0x01` (`0x009ffc80`) |
 
-The current 363-file census contains 8,380 calls to those seventy registrations. Together
+The current 363-file census contains 8,384 calls to those seventy-two registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-9,171 of 39,957 measured shipped-corpus call sites (**22.95%**, up from **1.98%**).
+9,175 of 39,957 measured shipped-corpus call sites (**22.96%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
@@ -580,9 +582,19 @@ human city-AI rejection versus human city-defeat acceptance, and the invalid pla
 
 This is authoritative state mutation and persistence coverage, not a claim that every AI
 consumer is wired. `army_leader_flags2` is a separate unsynchronised step-13 facade and is
-deliberately not mirror-written. Adjacent #793/#794 require exact addressed-unit mutation;
-#795 `force_transport_ability` changes two Leader fields and scans every owned unit to set
-a third bit, so none is approximated as a single Leader flag write.
+deliberately not mirror-written. The adjacent unit-specific pair contributes four more
+shipped calls, two each at global #793 and #794. An active unit address accepts a live unit
+or an inactive subordinate with `o_up >= 0`, resolves its captain, then clears or sets
+`UnitMask::UNIT_AI_OFF` (`0x01000000`) captain-first along the signed `o_down` chain. Links
+are preflighted before mutation so a missing or cyclic formation fails closed without a
+partial write. A negative object id instead uses only the one-bit in-game Leader gate and
+clears or sets the all-unit `leader_flags2` bit `0x02`; non-negative failed addresses and
+invalid players return -1. Both targets are canonical walked state: generated UnitData
+column `unit_masks` and checksum-channel-8 LeaderFlag2. Source and loaded-chunk fixtures
+mutation-test subordinate redirection, an inactive subordinate, the complete formation,
+unrelated-bit preservation, the negative sentinel, and invalid player/object rejection.
+#795 `force_transport_ability` remains excluded: it changes two Leader fields and scans
+every owned unit to set a third bit, so it is not approximated as a single Leader flag write.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
@@ -700,7 +712,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-785 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+783 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

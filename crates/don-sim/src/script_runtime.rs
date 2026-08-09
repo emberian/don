@@ -481,6 +481,7 @@ const SCRIPT_UNIT_AI_OFF: i32 = 0x02;
 const SCRIPT_PRODUCTION_AI_OFF: i32 = 0x04;
 const SCRIPT_COMBAT_AI_OFF: i32 = 0x08;
 const SCRIPT_NO_EXPANSION: i32 = 0x10;
+const SCRIPT_UNIT_MASK_AI_OFF: u32 = 0x0100_0000;
 
 impl Sim {
     /// The `flags & 1` Leader gate used by retail reads that remain valid while the
@@ -617,6 +618,104 @@ impl Sim {
             leader.leader_flags2 |= bit;
         }
         1
+    }
+
+    /// `ScenarioFuncSet::{enable,disable}_unit_ai` (`0x009ff920` / `0x009ffa10`).
+    ///
+    /// A live addressed unit redirects to its captain and mutates every member in
+    /// captain-to-`o_down` order. A negative object id is a distinct retail sentinel:
+    /// it accepts the weaker one-bit Leader gate and toggles the all-unit policy bit.
+    /// Formation links are preflighted before the first write so absent host facts fail
+    /// closed instead of leaving a partially mutated chain.
+    fn script_set_unit_ai(&mut self, who: i32, o: i32, enabled: bool) -> Result<i32, HostError> {
+        let slot = who.wrapping_sub(1) as u32 as usize;
+        let active_unit = self.step8.leaders.get(slot).and_then(|leader| {
+            (leader.flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                == (leaders::flag::IN_GAME | leaders::flag::PROCESS))
+                .then(|| self.script_object(slot, o))
+                .flatten()
+        });
+        let active_unit = active_unit.and_then(|object| match object {
+            object @ ScriptObject::Unit { row, .. }
+                if self.world.units.get_flags(row) & 1 != 0
+                    || self.world.units.o_up()[row] >= 0 =>
+            {
+                Some(object)
+            }
+            _ => None,
+        });
+
+        if let Some(object) = active_unit {
+            let captain = self.script_captain(object)?;
+            let ScriptObject::Unit {
+                who: captain_who,
+                row: captain_row,
+                ..
+            } = captain
+            else {
+                return Err(HostError::Unimplemented);
+            };
+            if captain_who != slot {
+                return Err(HostError::Unimplemented);
+            }
+
+            let limit = self.world.objects.total_objects().saturating_add(1);
+            let mut rows = Vec::new();
+            let mut row = captain_row;
+            let mut terminated = false;
+            for _ in 0..limit {
+                if rows.contains(&row) {
+                    return Err(HostError::Unimplemented);
+                }
+                rows.push(row);
+                let down = self.world.units.o_down()[row] as i32;
+                if down < 0 {
+                    terminated = true;
+                    break;
+                }
+                let Some(ScriptObject::Unit {
+                    who: next_who,
+                    row: next_row,
+                    ..
+                }) = self.script_object(slot, down)
+                else {
+                    return Err(HostError::Unimplemented);
+                };
+                if next_who != slot {
+                    return Err(HostError::Unimplemented);
+                }
+                row = next_row;
+            }
+            if !terminated {
+                return Err(HostError::Unimplemented);
+            }
+
+            for row in rows {
+                let masks = self.world.units.get_unit_masks(row);
+                self.world.units.set_unit_masks(
+                    row,
+                    if enabled {
+                        masks & !SCRIPT_UNIT_MASK_AI_OFF
+                    } else {
+                        masks | SCRIPT_UNIT_MASK_AI_OFF
+                    },
+                );
+            }
+            return Ok(1);
+        }
+
+        let Some(slot) = self.in_game_script_leader(who) else {
+            return Ok(-1);
+        };
+        if o >= 0 {
+            return Ok(-1);
+        }
+        if enabled {
+            self.vic_leaders.slots[slot].leader_flags2 &= !SCRIPT_UNIT_AI_OFF;
+        } else {
+            self.vic_leaders.slots[slot].leader_flags2 |= SCRIPT_UNIT_AI_OFF;
+        }
+        Ok(1)
     }
 
     fn script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
@@ -1566,6 +1665,13 @@ impl ScenarioHost for Sim {
                     reject_human,
                 )))
             }
+            // The unit-specific pair first tries retail's active-unit address path,
+            // then falls back to the negative-id all-unit Leader policy sentinel.
+            793 | 794 => Ok(Value::Int(self.script_set_unit_ai(
+                args[0].as_int(),
+                args[1].as_int(),
+                decl.index == 793,
+            )?)),
             _ => Err(HostError::Unimplemented),
         }
     }

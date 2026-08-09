@@ -1,0 +1,15 @@
+int scenario unit_ai_effects_tick()
+{
+    if (time_sec() == 0) {
+        if (disable_unit_ai(0, -1) == -1 &&
+            disable_unit_ai(9, -1) == -1 &&
+            disable_unit_ai(2, 0) == -1) {
+            disable_unit_ai(1, 1);
+            disable_unit_ai(2, -1);
+        }
+    } else {
+        enable_unit_ai(1, 1);
+        enable_unit_ai(2, -1);
+    }
+    return 1;
+}
