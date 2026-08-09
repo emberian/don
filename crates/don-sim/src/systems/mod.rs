@@ -65,6 +65,7 @@ pub mod gathering;
 /// retail hierarchy resolver to checksum-visible Guy graphics/turret state.
 pub mod graphics_turret;
 pub mod groups_guys;
+pub mod held_target;
 /// Recovered from an interrupted lane and audited as a Tier-C goody-box registry/checksum
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
 /// remain explicit boundaries; see `docs/mechanics/items.md`.

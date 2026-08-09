@@ -355,11 +355,11 @@ not mine.
   `Build::check_capture` `0x006276A0`, `Object::eject_contents` and
   `IStatsAndAchievements::IncrementStatForNation`. **Some of those are sim-critical.** I did
   not separate them. Anyone chasing a `units` desync on building kills should start here.
-* **`attack_dist` `0x006488F0` is not ported**, only its *use*. It indexes a coordinate
-  table at `0x00CAE5FC` with `coord >> 4` and `coord >> 8` and multiplies by `0x30`; I could
-  not reconcile that with the `× 192` range space without the world lane's coordinate
-  derivation, so the module takes `attack_dist` as an input rather than inventing a
-  conversion.
+* **`attack_dist` `0x006488F0` is ported for resolved ordinary objects** in
+  `systems::held_target`. The `0x00CAE5FC` read is the same measured divide-three table used
+  by the movement lane: `T[coord >> 4] * 0x30 + 0x18` snaps to a 48-unit-cell centre. Retail
+  subtracts target and attacker footprints per axis before `vector_dist`; object virtuals
+  selecting the raw vtable-`+0xC0` bypass remain required host inputs rather than defaults.
 * **The `CheckSum::label` question.** `check_units` and `check_deaths` both call
   `DataWalk::label(const char*)` (vtable `+4`) once per record with a `StringTable` pointer.
   Whether `CheckSum`'s implementation folds bytes into `accum` is **not established** —

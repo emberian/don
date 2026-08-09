@@ -288,21 +288,24 @@ stacking on one victim, and it is a checksummed counter that saturates at 100.
   ported**, only their position in the pipeline. They are the `admit` closure's
   responsibility, because they need diplomacy, fog and the region map. `check_target`'s
   distance computation *is* ported (`attack_dist`); its four gates are not.
-* **`ObjectData::attack_dist` `0x006488F0` is ported only in its centre-to-centre form** with
-  the footprint as a caller-supplied subtrahend. The real 676-byte function computes the
-  footprint from `block_radius + 0x18` or `max(x_size, y_size) × 0x60` and handles cargo and
-  garrison indirection.
-* **`Engagement` is not `Unit::fight`.** It is the spine of what `Unit::fight` does with the
-  pieces this repository has — range test, recharge byte, `attack_dir`, flank tier, damage —
-  so that combat can run end to end. It does not do order-list interaction, guy-level firing,
-  projectile spawning, `Object::do_damage`'s splash or retaliation, or any of `Unit::fight`'s
-  other branches. Its straight-line approach is a placeholder for the movement lane's
-  pathfinder.
-* **`Unit::find_attack_pos` `0x00601280` (7,124 B) is still uncited.** It is the
-  *positioning* half — where to stand to shoot — and it is reached from `Unit::do_attack` and
-  `Group::action_attack`, not from the acquisition path. This lane deliberately spent its
-  budget on acquisition + ranking, because that is what `get_damage` was starving for; the
-  positioning half remains open and is the natural next slice.
+* **`ObjectData::attack_dist` `0x006488F0` is now ported for resolved ordinary objects** in
+  `systems::held_target`. Capstone shows that retail snaps both anchors to 48-unit cell
+  centres, subtracts target and attacker footprints from the x and y legs independently,
+  then calls `vector_dist`; a rectangular building is therefore not a scalar
+  `max(x_size,y_size)` subtraction. The early vtable-`+0xC0`/objmask-`0x08000000` bypass is
+  explicit, but a host must still resolve that raw virtual/type gate from the real object.
+* **The range/pursuit seam is only part of `Unit::fight`.** `systems::held_target` now carries
+  `ObjectData::is_in_range`'s preconditions, fixed `0x66/0xF6` reach, ranged `-6/+6` edges,
+  unit `big_radius` minimum rescue, and `Unit::fight`'s exact retire-after-lost-contact gate.
+  `systems::fight` carries direct land-volley Guy/facing geometry. Projectile spawning,
+  splash/retaliation and the remaining duty/retarget/order arms are still outside those two
+  APIs and fail closed where the common slice cannot choose a retail branch.
+* **`Unit::find_attack_pos` `0x00601280` (7,124 B) is now bounded, not implemented.** Its
+  ordinary unit arm calls `UnitType::find_nearby_spot`; its building arm scans a perimeter,
+  checks terrain and ordered collision, and draws from `game_random` while scoring candidates.
+  `HeldTargetStep::FindAttackPosition` emits the exact ordinary six-argument wrapper request,
+  never a guessed target or reflected back-off destination. A faithful spatial provider is
+  still required before Arena may turn that request into a move order.
 * **The `mode` (`param_4`) flag's meaning is transcribed, not understood.** It is
   `find_nearby_target`'s `local_40`, set when the owner is not AI-flagged, `0x006EC000`
   returns 0, and `Game +0x821 & 2` is clear. It flips `compare_target` from multiplying by
