@@ -214,6 +214,15 @@ impl<T: Transport> Session<T> {
         self.emit_all(&InternalPacket::Dsync { frame })
     }
 
+    /// Announce an orderly local departure with the exact five-byte
+    /// `IPT_DESTROYPLAYER` packet before the transport is closed. A later
+    /// connection may reuse the same owned id as a new membership epoch.
+    pub fn announce_disconnect(&mut self) -> io::Result<()> {
+        self.emit_all(&InternalPacket::DestroyPlayer {
+            unique_id: self.local_id(),
+        })
+    }
+
     /// Send a game message to every peer — `NetSys::send_all`.
     pub fn send_all(&mut self, msg: &NetMsg<'_>) -> io::Result<()> {
         let mut b = Vec::new();
@@ -254,6 +263,13 @@ impl<T: Transport> Session<T> {
             .get(&stamp)
             .map(|m| m.len() >= want)
             .unwrap_or(false)
+    }
+
+    /// Borrow one received/local package without consuming the turn. This is
+    /// the inspection point used to validate retail checksum traffic before a
+    /// reactive peer emits its same-stamp reply.
+    pub fn package_for_turn(&self, stamp: u32, play: i8) -> Option<&TurnPackage> {
+        self.turns.get(&stamp)?.get(&play)
     }
 
     /// Take every package for a stamp, in slot order.
@@ -486,6 +502,7 @@ impl<T: Transport> Session<T> {
                     .collect();
                 for id in dropped {
                     self.players.retain(|p| p.unique_id != id);
+                    self.announced_to.retain(|peer| *peer != id);
                     self.events.push(Event::PlayerLeft(id));
                 }
                 self.players.sort_by_key(|p| p.slot);
@@ -521,6 +538,10 @@ impl<T: Transport> Session<T> {
             }
             // `process_destroy_player_message`
             InternalPacket::DestroyPlayer { unique_id } => {
+                // This id may reconnect on a fresh TCP channel. Forget the
+                // previous greeting even if another authoritative roster
+                // transition already removed its player object.
+                self.announced_to.retain(|peer| *peer != unique_id);
                 if self.players.iter().any(|p| p.unique_id == unique_id) {
                     self.players.retain(|p| p.unique_id != unique_id);
                     self.events.push(Event::PlayerLeft(unique_id));
@@ -584,6 +605,7 @@ impl<T: Transport> Session<T> {
             .collect();
         for id in dropped {
             self.players.retain(|p| p.unique_id != id);
+            self.announced_to.retain(|peer| *peer != id);
             self.events.push(Event::PlayerLeft(id));
         }
     }

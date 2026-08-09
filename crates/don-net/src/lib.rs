@@ -35,6 +35,7 @@ pub mod lobby;
 pub mod msg;
 pub mod obfuscate;
 pub mod opcodes;
+pub mod retail;
 pub mod session;
 pub mod setup;
 pub mod stream;
@@ -44,6 +45,7 @@ pub use internal::InternalPacket;
 pub use msg::{Framed, MsgType, NetMsg};
 pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
+pub use retail::{decode_retail_checksum_package, DecodedRetailChecksum, RetailChecksumError};
 pub use session::{Event, Player, Role, Session, TurnPackage};
 pub use setup::{
     GameConnectionData, GameConnectionDataFull, PlayerConnectionData, PlayerSlotPod,
