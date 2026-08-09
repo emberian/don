@@ -51,10 +51,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,614 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 21 `InlineDef` + 82 `OpDef` | 171 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,693 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 22 `InlineDef` + 82 `OpDef` | 172 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–65/69/72/74/76/79/81, 7 tests | 406 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–66/69/72/74/76/79/81, 8 tests | 509 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -62,9 +62,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-52 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+53 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 7/7,
+`cargo test -p don-sim --test command_speed_state` 8/8,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -276,6 +276,7 @@ remain honestly `orders_partial`.
 | 60 | `process_cheat_give_techs` `0x00945070` | set technology bits 0..805, status = 0, accumulated-cheat byte | `complete` |
 | 61 | `process_cheat_zero_techs` `0x00944FA0` | clear technology bits 0..805, status 0→2, accumulated-cheat byte | `complete` |
 | 65 | `process_cheat_increase_buckets` `0x00944C50` | add 1000 to six XOR-encoded resource buckets, accumulated-cheat byte | `complete` |
+| 66 | `process_cheat_zero_buckets` `0x00944B80` | zero six encoded buckets, consume sound RNG, typed external sound receipt | `complete` |
 
 The tech actions reproduce the exact 806-bit loops from `Game::action_cheat_give_techs`
 `0x00593180` and `Game::action_cheat_zero_techs` `0x00593120`; the two padding bits in
@@ -283,10 +284,17 @@ the final byte are preserved. Give writes status zero throughout. Zero changes o
 initial zero status to two and preserves every other nonzero value.
 
 The six resource buckets retain their retail encoding: decode with XOR `0x8221`, add
-1000 with wrapping `u32` arithmetic, then XOR again. Opcode 66 ZERO_BUCKETS remains red:
-its leaf clears the same buckets but, in network mode, consumes the game RNG to select an
-external response. Omitting that draw would silently move the lockstep stream, so the
-bounded mutation alone is not promoted.
+1000 with wrapping `u32` arithmetic, then XOR again. ZERO_BUCKETS writes the literal
+encoded zero `0x8221` to all six slots and retains the same wrapped diagnostic byte.
+
+Its network-only response tail calls `SoundGlobal::random` at `0x00E85F0C` with
+`(0, response_count - 1)`. This measured ECX target refutes the earlier hypothesis that
+ZERO_BUCKETS consumes the main `game_random` stream (`0x00E37A8C`). Because
+`Random::get` is half-open, a one-entry list consumes no draw and the last entry of every
+longer list is unreachable; the bridge intentionally preserves both quirks. A valid
+selected ID becomes a typed `CheatResponseReceipt` for the product layer's external
+`SoundRef::play` call; invalid IDs still consume the sound draw but produce no receipt.
+Solo and empty-list paths consume no draw.
 
 ## Five things worth keeping
 

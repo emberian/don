@@ -4,9 +4,10 @@
 //! are never called directly.
 
 use don_sim::command::{
-    Bridge, InlineDef, InlinePort, ObjectTable, Package, Slot, CHEAT_TECH_BYTES,
-    PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
+    Bridge, CheatResponseReceipt, InlineDef, InlinePort, ObjectTable, Package, Slot,
+    CHEAT_TECH_BYTES, PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
 };
+use don_sim::rng::Random;
 
 fn fixed_i32(op: u8, value: i32) -> Vec<u8> {
     let mut bytes = vec![op];
@@ -402,5 +403,107 @@ fn technology_and_bucket_cheats_preserve_padding_status_and_xor_arithmetic() {
     );
     assert_eq!(bridge.inline.accum_cheated[6], 4);
     assert_eq!(bridge.stats.inline_state, 4);
+    assert_eq!(bridge.stats.inert, 0);
+}
+
+#[test]
+fn zero_buckets_preserves_sound_rng_quirk_and_surfaces_external_sound_receipts() {
+    assert_eq!(InlineDef::find(66).unwrap().port, InlinePort::Complete);
+
+    let mut bridge = Bridge::new();
+    let mut package = Package::new(0, 0);
+    bridge.inline.resource_buckets_encoded[6] = [
+        0,
+        1,
+        u32::MAX,
+        RESOURCE_BUCKET_XOR,
+        0x8000_0000,
+        0x1234_5678,
+    ];
+    bridge.inline.accum_cheated[6] = u8::MAX;
+    bridge.inline.sound_random = Random::new(0x1234_5678);
+    bridge.inline.cheat_response_sound_refs = vec![7, 99];
+    bridge.inline.sound_ref_count = 8;
+
+    let solo_seed = bridge.inline.sound_random.state();
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(
+        bridge.inline.resource_buckets_encoded[6], [RESOURCE_BUCKET_XOR; 6],
+        "all six buckets become the literal retail encoding of zero"
+    );
+    assert_eq!(
+        bridge.inline.accum_cheated[6], 0,
+        "the diagnostic counter keeps byte wrapping"
+    );
+    assert_eq!(
+        bridge.inline.sound_random.state(),
+        solo_seed,
+        "solo processing does not touch the sound RNG"
+    );
+    assert!(bridge.take_cheat_response_receipts().is_empty());
+
+    bridge.inline.network = true;
+    bridge.inline.cheat_response_sound_refs.clear();
+    let empty_seed = bridge.inline.sound_random.state();
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(
+        bridge.inline.sound_random.state(),
+        empty_seed,
+        "network mode with no response IDs consumes no draw"
+    );
+    assert!(bridge.take_cheat_response_receipts().is_empty());
+
+    bridge.inline.cheat_response_sound_refs = vec![7];
+    let one_seed = bridge.inline.sound_random.state();
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(
+        bridge.inline.sound_random.state(),
+        one_seed,
+        "retail get(0, 0) returns before consuming a draw"
+    );
+    assert_eq!(
+        bridge.take_cheat_response_receipts(),
+        vec![CheatResponseReceipt {
+            who: 6,
+            response_slot: 0,
+            sound_ref: 7,
+        }]
+    );
+
+    bridge.inline.cheat_response_sound_refs = vec![7, 99];
+    let mut oracle = bridge.inline.sound_random;
+    assert_eq!(oracle.get(0, 1), 0, "half-open high bound is unreachable");
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(bridge.inline.sound_random.state(), oracle.state());
+    assert_eq!(
+        bridge.take_cheat_response_receipts(),
+        vec![CheatResponseReceipt {
+            who: 6,
+            response_slot: 0,
+            sound_ref: 7,
+        }],
+        "the second response is unreachable even though the RNG advances"
+    );
+
+    bridge.inline.cheat_response_sound_refs = vec![-1, 7];
+    let mut invalid_oracle = bridge.inline.sound_random;
+    assert_eq!(invalid_oracle.get(0, 1), 0);
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(bridge.inline.sound_random.state(), invalid_oracle.state());
+    assert!(
+        bridge.take_cheat_response_receipts().is_empty(),
+        "negative SoundRef IDs suppress only the external play tail"
+    );
+
+    bridge.inline.cheat_response_sound_refs = vec![8];
+    let high_seed = bridge.inline.sound_random.state();
+    issue(&mut bridge, &mut package, &fixed_i32(66, 6));
+    assert_eq!(bridge.inline.sound_random.state(), high_seed);
+    assert!(
+        bridge.take_cheat_response_receipts().is_empty(),
+        "a SoundRef ID equal to the array count is out of range"
+    );
+    assert_eq!(bridge.inline.accum_cheated[6], 5);
+    assert_eq!(bridge.stats.inline_state, 6);
     assert_eq!(bridge.stats.inert, 0);
 }

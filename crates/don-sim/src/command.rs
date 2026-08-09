@@ -1138,6 +1138,20 @@ pub const CHEAT_TECH_BYTES: usize = CHEAT_TECH_COUNT.div_ceil(8);
 pub const RESOURCE_BUCKETS: usize = 6;
 pub const RESOURCE_BUCKET_XOR: u32 = 0x8221;
 
+/// External `SoundRef::play` request selected by `Game::action_cheat_zero_buckets`.
+///
+/// The command bridge owns the exact response selection and sound-stream consumption.
+/// Audio remains outside the headless simulation, so the product layer drains these
+/// receipts and performs the corresponding sound request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CheatResponseReceipt {
+    pub who: u8,
+    /// Index selected from `DAT_00EB2604`, before resolving its sound-reference ID.
+    pub response_slot: u32,
+    /// Index into the retail `SoundRef` array at `0x00ECB000`.
+    pub sound_ref: i32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HotKeyCamera {
     /// Raw IEEE-754 bits from `HotKeyCommand::x/y`; retaining bits preserves NaN payloads.
@@ -1197,6 +1211,13 @@ pub struct InlineCommandState {
     pub tech_bits: [[u8; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
     pub tech_status: [i32; NUM_NETWORK_PLAYERS],
     pub resource_buckets_encoded: [[u32; RESOURCE_BUCKETS]; NUM_NETWORK_PLAYERS],
+    /// `SoundGlobal::random` at `0x00E85F0C`, consumed by opcode 66 in network mode.
+    pub sound_random: crate::rng::Random,
+    /// Retail's `DAT_00EB2604` response-ID list and `DAT_00ECAFF4` SoundRef count.
+    pub cheat_response_sound_refs: Vec<i32>,
+    pub sound_ref_count: i32,
+    /// Product-facing requests for the external `SoundRef::play` tail.
+    pub cheat_response_receipts: Vec<CheatResponseReceipt>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
@@ -1228,6 +1249,10 @@ impl Default for InlineCommandState {
             tech_status: [0; NUM_NETWORK_PLAYERS],
             resource_buckets_encoded: [[RESOURCE_BUCKET_XOR; RESOURCE_BUCKETS];
                 NUM_NETWORK_PLAYERS],
+            sound_random: crate::rng::Random::new(0),
+            cheat_response_sound_refs: Vec::new(),
+            sound_ref_count: 0,
+            cheat_response_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
@@ -1305,6 +1330,11 @@ impl Bridge {
         if let Some(slot) = self.transport_level.get_mut(who as usize) {
             *slot = level;
         }
+    }
+
+    /// Drain external sound-response calls selected by completed command processing.
+    pub fn take_cheat_response_receipts(&mut self) -> Vec<CheatResponseReceipt> {
+        std::mem::take(&mut self.inline.cheat_response_receipts)
     }
 
     /// `CommandPackage::process_all` `0x0094C500`: walk a payload, dispatching each
@@ -1477,6 +1507,11 @@ impl Bridge {
                     self.process_cheat_increase_buckets(who);
                 }
             }
+            66 => {
+                if let Some(who) = i32_at(cmd, 1) {
+                    self.process_cheat_zero_buckets(who);
+                }
+            }
             // ChatSetCommand replaces all eight recipient status words for the sender's
             // Player::who row. These values later gate chat and ping delivery.
             69 => {
@@ -1588,6 +1623,50 @@ impl Bridge {
             *encoded = (*encoded ^ RESOURCE_BUCKET_XOR).wrapping_add(1000) ^ RESOURCE_BUCKET_XOR;
         }
         self.process_cheat_warning(who as i32);
+    }
+
+    /// `Game::action_cheat_zero_buckets` `0x00592E70`.
+    ///
+    /// Retail passes `(0, response_count - 1)` to the half-open `Random::get`. Thus a
+    /// one-entry list consumes no draw, and the final entry of every longer list is
+    /// unreachable. This oddity is intentional and observable in the sound RNG stream.
+    fn process_cheat_zero_buckets(&mut self, who: i32) {
+        let Ok(who) = usize::try_from(who) else {
+            return;
+        };
+        let Some(buckets) = self.inline.resource_buckets_encoded.get_mut(who) else {
+            return;
+        };
+        buckets.fill(RESOURCE_BUCKET_XOR);
+        self.process_cheat_warning(who as i32);
+
+        if !self.inline.network || self.inline.cheat_response_sound_refs.is_empty() {
+            return;
+        }
+        let Ok(response_count) = i32::try_from(self.inline.cheat_response_sound_refs.len()) else {
+            return;
+        };
+        let response_slot = self.inline.sound_random.get(0, response_count - 1);
+        let Ok(response_slot_index) = usize::try_from(response_slot) else {
+            return;
+        };
+        let Some(&sound_ref) = self
+            .inline
+            .cheat_response_sound_refs
+            .get(response_slot_index)
+        else {
+            return;
+        };
+        if sound_ref < 0 || sound_ref >= self.inline.sound_ref_count {
+            return;
+        }
+        self.inline
+            .cheat_response_receipts
+            .push(CheatResponseReceipt {
+                who: who as u8,
+                response_slot: response_slot as u32,
+                sound_ref,
+            });
     }
 
     /// `CommandPackage::process_turn_data` `0x00943D20`.
