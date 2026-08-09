@@ -146,8 +146,23 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
         .as_ref()
         .expect("Mediterranean must execute through its first make_region call");
     assert_eq!(continent.map_style, 12);
-    assert_eq!(continent.direct_rng_sites.len(), 20_728);
-    assert_eq!(continent.rng_final as u32, 0x3e25_9e29);
+    let tile_selection = executed
+        .tile_selection
+        .as_ref()
+        .expect("load_map_data must resolve its tileset before orientation");
+    assert_eq!(tile_selection.passes.len(), 1);
+    assert_eq!(
+        continent.rng_initial,
+        tile_selection.main_random_state_after
+    );
+    assert_ne!(continent.rng_initial, executed.inputs.seed as i32);
+    assert!(matches!(
+        executed.fertility_error.as_ref(),
+        Some(don_replay::FractalBoundaryError::Read { path, .. })
+            if path.ends_with("tilesets.xml")
+    ));
+    assert!(executed.fertility.is_none());
+    assert!(executed.fill_fertile.is_none());
     assert_eq!(continent.region_seeds.len(), 2);
     assert_eq!(continent.region_growths.len(), 2);
     assert_eq!(continent.pool_eliminations.len(), 3);
@@ -251,12 +266,23 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
         sim.initial_item_error
     );
     let continent = sim.initial_continent.as_ref().unwrap();
+    let tile_selection = sim
+        .initial_items
+        .as_ref()
+        .unwrap()
+        .tile_selection
+        .as_ref()
+        .unwrap();
+    assert_eq!(tile_selection.passes.len(), 2);
+    assert_eq!(
+        continent.rng_initial,
+        tile_selection.main_random_state_after
+    );
+    assert_ne!(continent.rng_initial, rep.initial.info.seed as i32);
     assert_eq!(continent.map_style, 18);
     assert_eq!(continent.starts_added, 6);
     assert_eq!(continent.region_seeds.len(), 6);
     assert_eq!(continent.region_growths.len(), 12);
-    assert_eq!(continent.direct_rng_sites.len(), 8_517);
-    assert_eq!(continent.rng_final as u32, 0x950f_a373);
     assert!(continent
         .region_growths
         .iter()

@@ -47,6 +47,7 @@
 pub mod check_all;
 pub mod checksum;
 pub mod continent;
+pub mod fractal_boundary;
 pub mod growth;
 pub mod harness;
 pub mod image;
@@ -70,8 +71,15 @@ mod wire_gen;
 pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use continent::{
-    execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError,
-    ContinentReceipt, ContinentStop, LandDistanceCall, RegionSeedCall, RegionSeedReceipt,
+    execute_continent_prefix, execute_continent_prefix_from_rng,
+    execute_continent_prefix_with_regions, execute_continent_prefix_with_regions_from_rng,
+    ContinentError, ContinentReceipt, ContinentStop, LandDistanceCall, RegionSeedCall,
+    RegionSeedReceipt,
+};
+pub use fractal_boundary::{
+    resolve_fertility_boundary, resolve_tile_selection, FertilityBoundary, FractalBoundaryError,
+    FractalBoundarySources, FractalReplayInputs, RetailFractalPlane, TileSelectionBoundary,
+    TileSelectionPass, TileSelectionSource, TERRAIN_GROUPS_PLACE_ALL_VA,
 };
 pub use growth::{
     execute_grow_region, GrowRegionCall, GrowRegionError, GrowRegionReceipt, MapGrowthConfig,

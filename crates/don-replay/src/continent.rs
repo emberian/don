@@ -1,7 +1,8 @@
 //! Executable replay reconstruction of the admitted map-style continent prefix.
 //!
-//! The retail driver seeds the main `Random`, resolves `BASE_EDGE`, then calls
-//! one virtual `Map*::make_continents` implementation.  This module executes
+//! The retail driver seeds the main `Random`, selects the tileset while loading
+//! map data, resolves `BASE_EDGE`, then calls one virtual
+//! `Map*::make_continents` implementation. This module executes
 //! every instruction whose inputs and effects are represented by the replay,
 //! the admitted map-style XML, and `don_sim::systems::map_terrain::World`.
 //! It stops at the first unported geometry/region primitive and returns that
@@ -186,7 +187,26 @@ pub fn execute_continent_prefix(
     world: &mut World,
 ) -> Result<ContinentReceipt, ContinentError> {
     let mut regions = Regions::default();
-    execute_continent_prefix_with_regions(inputs, style, world, &mut regions)
+    execute_continent_prefix_with_regions_from_rng(
+        inputs,
+        style,
+        inputs.seed as i32,
+        world,
+        &mut regions,
+    )
+}
+
+/// Execute from an explicitly proven main-RNG state. Replay integration uses
+/// the post-tileset-selection state; the legacy wrapper above remains useful
+/// for isolated style-virtual tests which intentionally begin at the seed.
+pub fn execute_continent_prefix_from_rng(
+    inputs: &InitialWorldgenInputs,
+    style: &MapStyleStaticData,
+    rng_initial: i32,
+    world: &mut World,
+) -> Result<ContinentReceipt, ContinentError> {
+    let mut regions = Regions::default();
+    execute_continent_prefix_with_regions_from_rng(inputs, style, rng_initial, world, &mut regions)
 }
 
 /// Stateful form used by replay reconstruction. `Regions` is retained beside
@@ -195,6 +215,23 @@ pub fn execute_continent_prefix(
 pub fn execute_continent_prefix_with_regions(
     inputs: &InitialWorldgenInputs,
     style: &MapStyleStaticData,
+    world: &mut World,
+    regions: &mut Regions,
+) -> Result<ContinentReceipt, ContinentError> {
+    execute_continent_prefix_with_regions_from_rng(
+        inputs,
+        style,
+        inputs.seed as i32,
+        world,
+        regions,
+    )
+}
+
+/// Stateful, explicit-RNG form used by the real replay map flow.
+pub fn execute_continent_prefix_with_regions_from_rng(
+    inputs: &InitialWorldgenInputs,
+    style: &MapStyleStaticData,
+    rng_initial: i32,
     world: &mut World,
     regions: &mut Regions,
 ) -> Result<ContinentReceipt, ContinentError> {
@@ -277,7 +314,7 @@ pub fn execute_continent_prefix_with_regions(
             value: base_edge.to_string(),
         });
     }
-    let mut rng = Random::new(seed);
+    let mut rng = Random::new(rng_initial);
     let mut sites = Vec::new();
     let orientation = if base_edge < 0 {
         sites.push(MAP_MAKE_ORIENTATION_RNG_VA);
@@ -285,8 +322,6 @@ pub fn execute_continent_prefix_with_regions(
     } else {
         base_edge
     };
-    let rng_initial = seed;
-
     // The geometry algorithms are written against clones so every Rust-side
     // validation failure leaves both authoritative stores unchanged.
     let mut next_world = world.clone();

@@ -4,6 +4,7 @@
 #[path = "../src/fractal_boundary.rs"]
 mod fractal_boundary;
 
+use don_sim::rng::Random;
 use fractal_boundary::{
     build_partitions, generate_retail_fractal, resolve_fertility_boundary_xml,
     FractalBoundaryError, FractalReplayInputs,
@@ -130,10 +131,33 @@ fn selected_subtrees_override_default_and_one_weight_consumes_no_draw() {
 
     assert_eq!(resolved.tileset, "Snowy");
     assert_eq!(resolved.tile_selection_draw, None);
-    assert_eq!(resolved.main_random_state_after_tileset, 108);
+    assert_eq!(resolved.main_random_state_after_tileset, 1_193_672_923);
+    assert_eq!(resolved.tile_selection_passes.len(), 2);
+    assert_eq!(resolved.tile_selection_passes[0].draw, Some(218));
+    assert_eq!(resolved.tile_selection_passes[1].draw, None);
     assert_eq!(resolved.clump_factor, 3);
     assert_eq!(resolved.baseland_frequencies, vec![25, 25, 25, 25]);
     assert_eq!(resolved.partitions, vec![63, 126, 189]);
+}
+
+#[test]
+fn selected_tileset_table_is_a_second_ordered_rng_pass() {
+    let selected = r#"
+    <ROOT>
+      <MAP><TILESET><TILECHANCE type="Snowy" chance="100"/></TILESET></MAP>
+    </ROOT>
+    "#;
+    let resolved =
+        resolve_fertility_boundary_xml(inputs(), DEFAULT_XML, selected, TILESETS_XML).unwrap();
+    let mut expected = Random::new(108);
+    let default_draw = expected.get(0, 0xffff);
+    let selected_draw = expected.get(0, 0xffff);
+
+    assert_eq!(resolved.tileset, "Snowy");
+    assert_eq!(resolved.tile_selection_passes.len(), 2);
+    assert_eq!(resolved.tile_selection_passes[0].draw, Some(default_draw));
+    assert_eq!(resolved.tile_selection_passes[1].draw, Some(selected_draw));
+    assert_eq!(resolved.main_random_state_after_tileset, expected.state());
 }
 
 #[test]

@@ -258,8 +258,34 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             .as_ref()
             .map(|v| format!("\"{}\"", esc(v)))
             .unwrap_or_else(|| "null".into());
+        let tile_selection = r
+            .initial_tile_selection
+            .as_ref()
+            .map(|selection| {
+                format!(
+                    "{{ \"tileset\": \"{}\", \"draw\": {}, \"bucket\": {}, \"passes\": {}, \"main_rng_after\": \"0x{:08x}\" }}",
+                    esc(&selection.tileset),
+                    selection
+                        .draw
+                        .map(|draw| draw.to_string())
+                        .unwrap_or_else(|| "null".into()),
+                    selection.bucket,
+                    selection.passes.len(),
+                    selection.main_random_state_after as u32,
+                )
+            })
+            .unwrap_or_else(|| "null".into());
+        let fertility_error = r
+            .initial_fertility_error
+            .as_ref()
+            .map(|v| format!("\"{}\"", esc(v)))
+            .unwrap_or_else(|| "null".into());
+        let fill_fertile_cells = r
+            .initial_fill_fertile_cells
+            .map(|cells| cells.to_string())
+            .unwrap_or_else(|| "null".into());
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"tile_selection\": {}, \"fertility\": {{ \"fill_fertile_cells\": {}, \"error\": {} }}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -271,6 +297,9 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.initial_item_scalar_source_bytes,
             style_json,
             style_error,
+            tile_selection,
+            fill_fertile_cells,
+            fertility_error,
             r.initial_rules_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_rules_serialized_bytes,
             r.initial_rules_walked_bytes,

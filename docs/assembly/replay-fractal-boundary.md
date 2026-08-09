@@ -46,8 +46,8 @@ The replay contributes:
 
 Static content contributes:
 
-- effective `MAP/TILESET/TILECHANCE` rows from the selected map-style XML, with
-  `default.xml` fallback;
+- ordered `MAP/TILESET/TILECHANCE` rows: `default.xml` is applied first, and a
+  selected-map table is applied second when present;
 - effective `TILESET_DATA/<selected>/LANDKEY[name=baseland]` frequencies; and
 - `TILESET/TERRAINGROUP/CLUMP_FACTOR` plus the number of
   `TILESET/BASELAND/BASE` rows from the user's installed `Data/tilesets.xml`.
@@ -62,15 +62,19 @@ exact boundary value remains in the earlier row. This seemingly biased edge is
 frozen by seed 108: the draw is 218, the bucket for a total of 100 is 18, and a
 first row with chance 18 is selected.
 
-The resolver returns the main RNG state after this draw as evidence. This is
+`Map::load_map_data` calls `init_map_data` first for the default MAP and then
+for the selected MAP. A selected TILESET table is therefore an override pass,
+not a replacement parsed in isolation: both tables consume a draw when both
+totals are at least two. `TileSelectionBoundary::passes` preserves that order.
+
+The resolver returns the main RNG state after the final pass as evidence. This is
 separate from fractal generation. Each `Fractal::init` random call sets `ECX`
 to the `Random` at `Fractal + 100`; it is reseeded directly from `world.seed`
 and is independent of all continent and tileset-selection draws.
 
-The current continent adapter initializes its own main `Random` directly from
-the seed at the orientation branch. Composition must decide where
-`init_map_data` occurs and thread this earlier tileset-selection state instead
-of silently running both consumers from the same seed.
+Replay integration now threads this state into the explicit-RNG continent
+entry point before the orientation branch. Seed-start continent wrappers remain
+only for isolated style-virtual tests.
 
 ## Exact byte-plane algorithm
 
@@ -143,8 +147,5 @@ tools/swarm-cargo-remote submit hbox replay-fractal-boundary \
   -- test --locked -p don-replay --test fractal_boundary_reconstruction
 ```
 
-After that passes, root-owned integration can export the module, construct
-`FractalBoundarySources` from the admitted `MapStyleStaticData` evidence paths
-and installed `tilesets.xml`, thread the tileset RNG state into the existing
-continent chain, and invoke the already complete `TerrainGroups::fill_fertile`
-port.
+The subsequent integration and its `TerrainGroups::place_all` frontier are
+documented in `docs/assembly/replay-fractal-integration.md`.

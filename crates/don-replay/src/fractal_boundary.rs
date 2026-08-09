@@ -22,6 +22,7 @@ pub const FRACTAL_INIT_CALL_VA: u32 = 0x006a_6453;
 pub const FRACTAL_INIT_VA: u32 = 0x006a_a2d0;
 pub const TERRAIN_GROUPS_FILL_FERTILE_VA: u32 = 0x006a_6f90;
 pub const FRACTAL_RANDOM_SITES: [u32; 4] = [0x006a_a5eb, 0x006a_a67f, 0x006a_a717, 0x006a_a7a3];
+pub const TERRAIN_GROUPS_PLACE_ALL_VA: u32 = 0x006a_70d0;
 
 /// Replay-carried values which are sufficient to regenerate the fertility
 /// plane once the three static XML inputs have been admitted.
@@ -72,11 +73,13 @@ pub struct FertilityBoundary {
     pub map_style: u8,
     pub tileset: String,
     pub tile_chances: Vec<TileChance>,
-    /// The value returned by `game_random.get(0, 0xffff)` before `% total`.
-    /// `None` means retail's total-chance fast path consumed no draw.
+    /// The final applied pass's value from `game_random.get(0, 0xffff)` before
+    /// `% total`. `None` means that pass took the total-chance no-draw path;
+    /// earlier draws remain visible in `tile_selection_passes`.
     pub tile_selection_draw: Option<i32>,
     pub tile_selection_bucket: i32,
     pub main_random_state_after_tileset: i32,
+    pub tile_selection_passes: Vec<TileSelectionPass>,
     pub baseland_frequencies: Vec<i32>,
     pub partitions: Vec<u8>,
     pub clump_factor: i32,
@@ -84,6 +87,17 @@ pub struct FertilityBoundary {
 }
 
 impl FertilityBoundary {
+    pub fn tile_selection(&self) -> TileSelectionBoundary {
+        TileSelectionBoundary {
+            tileset: self.tileset.clone(),
+            tile_chances: self.tile_chances.clone(),
+            draw: self.tile_selection_draw,
+            bucket: self.tile_selection_bucket,
+            main_random_state_after: self.main_random_state_after_tileset,
+            passes: self.tile_selection_passes.clone(),
+        }
+    }
+
     /// Construct the exact deterministic inputs already consumed by the
     /// instruction-complete `TerrainGroups::fill_fertile` port.
     pub fn terrain_groups_input(&self) -> TerrainGroups {
@@ -103,8 +117,40 @@ pub struct TileChance {
     pub chance: i32,
 }
 
+/// Complete main-RNG effect of `Map::init_map_data`'s tileset table. This
+/// precedes Map's orientation draw and does not require `Data/tilesets.xml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileSelectionBoundary {
+    pub tileset: String,
+    pub tile_chances: Vec<TileChance>,
+    pub draw: Option<i32>,
+    pub bucket: i32,
+    pub main_random_state_after: i32,
+    /// `load_map_data` applies default MAP first, then selected MAP. A selected
+    /// TILESET subtree therefore overrides the result and consumes a second
+    /// chance-table draw.
+    pub passes: Vec<TileSelectionPass>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TileSelectionSource {
+    DefaultMapStyle,
+    SelectedMapStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileSelectionPass {
+    pub source: TileSelectionSource,
+    pub tileset: String,
+    pub tile_chances: Vec<TileChance>,
+    pub draw: Option<i32>,
+    pub bucket: i32,
+    pub main_random_state_after: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FractalBoundaryError {
+    MissingInstalledTilesetsSource,
     Read {
         path: PathBuf,
         message: String,
@@ -163,6 +209,9 @@ pub enum FractalBoundaryError {
 impl fmt::Display for FractalBoundaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingInstalledTilesetsSource => {
+                write!(f, "installed Data/tilesets.xml source was not supplied")
+            }
             Self::Read { path, message } => write!(f, "{}: {message}", path.display()),
             Self::CustomScenario { scenario_type } => {
                 write!(
@@ -238,6 +287,59 @@ pub fn resolve_fertility_boundary(
     resolve_fertility_boundary_xml(inputs, &default, &selected, &tilesets)
 }
 
+/// Resolve the tileset-selection prefix from admitted map-style evidence.
+/// The returned state is the correct main-RNG handoff to Map's orientation
+/// branch even when installed tileset data is unavailable.
+pub fn resolve_tile_selection(
+    seed: u32,
+    default_map_style_xml: &Path,
+    selected_map_style_xml: &Path,
+) -> Result<TileSelectionBoundary, FractalBoundaryError> {
+    let default = read_xml(default_map_style_xml)?;
+    let selected = read_xml(selected_map_style_xml)?;
+    resolve_tile_selection_xml(seed, &default, &selected)
+}
+
+pub fn resolve_tile_selection_xml(
+    seed: u32,
+    default_map_style_xml: &str,
+    selected_map_style_xml: &str,
+) -> Result<TileSelectionBoundary, FractalBoundaryError> {
+    let default = strip_comments(default_map_style_xml, "default map-style")?;
+    let selected = strip_comments(selected_map_style_xml, "selected map-style")?;
+    let default_chances = tile_chances_in(&default, "default map-style")?.ok_or_else(|| {
+        FractalBoundaryError::MissingElement {
+            context: "default map-style",
+            element: "MAP/TILESET".into(),
+        }
+    })?;
+    let mut passes = vec![select_tileset_pass(
+        seed,
+        TileSelectionSource::DefaultMapStyle,
+        default_chances,
+    )?];
+    if let Some(selected_chances) = tile_chances_in(&selected, "selected map-style")? {
+        let state = passes
+            .last()
+            .expect("default pass was just installed")
+            .main_random_state_after;
+        passes.push(select_tileset_pass(
+            state as u32,
+            TileSelectionSource::SelectedMapStyle,
+            selected_chances,
+        )?);
+    }
+    let final_pass = passes.last().expect("default pass is mandatory");
+    Ok(TileSelectionBoundary {
+        tileset: final_pass.tileset.clone(),
+        tile_chances: final_pass.tile_chances.clone(),
+        draw: final_pass.draw,
+        bucket: final_pass.bucket,
+        main_random_state_after: final_pass.main_random_state_after,
+        passes,
+    })
+}
+
 /// Pure form used by mutation-sensitive tests and callers which already own
 /// the admitted file bytes.
 pub fn resolve_fertility_boundary_xml(
@@ -261,13 +363,20 @@ pub fn resolve_fertility_boundary_xml(
         return Err(FractalBoundaryError::InvalidWorldDimensions { xs: edge, ys: edge });
     }
 
+    let selection =
+        resolve_tile_selection_xml(inputs.seed, default_map_style_xml, selected_map_style_xml)?;
     let default = strip_comments(default_map_style_xml, "default map-style")?;
     let selected = strip_comments(selected_map_style_xml, "selected map-style")?;
     let tilesets = strip_comments(tilesets_xml, "tilesets")?;
 
-    let tile_chances = effective_tile_chances(&default, &selected)?;
-    let (tileset, selection_draw, selection_bucket, main_random_state_after_tileset) =
-        select_tileset(inputs.seed, &tile_chances)?;
+    let TileSelectionBoundary {
+        tileset,
+        tile_chances,
+        draw: selection_draw,
+        bucket: selection_bucket,
+        main_random_state_after: main_random_state_after_tileset,
+        passes: tile_selection_passes,
+    } = selection;
     let installed = installed_tileset(&tilesets, &tileset)?;
     let baseland = unique_element(&installed.body, "BASELAND", "tilesets")?.ok_or_else(|| {
         FractalBoundaryError::MissingElement {
@@ -309,6 +418,7 @@ pub fn resolve_fertility_boundary_xml(
         tile_selection_draw: selection_draw,
         tile_selection_bucket: selection_bucket,
         main_random_state_after_tileset,
+        tile_selection_passes,
         baseland_frequencies,
         partitions,
         clump_factor,
@@ -421,24 +531,17 @@ pub fn generate_retail_fractal(
     })
 }
 
-fn effective_tile_chances(
-    default: &str,
-    selected: &str,
-) -> Result<Vec<TileChance>, FractalBoundaryError> {
-    let selected_table = unique_element(selected, "TILESET", "selected map-style")?;
-    let table = match selected_table {
-        Some(table) => table,
-        None => unique_element(default, "TILESET", "default map-style")?.ok_or_else(|| {
-            FractalBoundaryError::MissingElement {
-                context: "default map-style",
-                element: "MAP/TILESET".into(),
-            }
-        })?,
+fn tile_chances_in(
+    text: &str,
+    context: &'static str,
+) -> Result<Option<Vec<TileChance>>, FractalBoundaryError> {
+    let Some(table) = unique_element(text, "TILESET", context)? else {
+        return Ok(None);
     };
     let mut chances = Vec::new();
-    for element in open_tags(&table.body, "TILECHANCE", "map-style")? {
-        let tileset = required_attribute(&element, "type", "map-style")?.to_owned();
-        let chance = element_i32(&element, "chance", "map-style")?;
+    for element in open_tags(&table.body, "TILECHANCE", context)? {
+        let tileset = required_attribute(&element, "type", context)?.to_owned();
+        let chance = element_i32(&element, "chance", context)?;
         if chance <= 0 {
             return Err(FractalBoundaryError::InvalidTileChance { tileset, chance });
         }
@@ -447,7 +550,23 @@ fn effective_tile_chances(
     if chances.is_empty() {
         return Err(FractalBoundaryError::EmptyTileChanceTable);
     }
-    Ok(chances)
+    Ok(Some(chances))
+}
+
+fn select_tileset_pass(
+    seed: u32,
+    source: TileSelectionSource,
+    tile_chances: Vec<TileChance>,
+) -> Result<TileSelectionPass, FractalBoundaryError> {
+    let (tileset, draw, bucket, main_random_state_after) = select_tileset(seed, &tile_chances)?;
+    Ok(TileSelectionPass {
+        source,
+        tileset,
+        tile_chances,
+        draw,
+        bucket,
+        main_random_state_after,
+    })
 }
 
 fn select_tileset(

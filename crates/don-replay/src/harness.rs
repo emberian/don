@@ -124,6 +124,9 @@ pub struct RunResult {
     /// schedule for the replay's concrete branch.
     pub initial_continent: Option<crate::continent::ContinentReceipt>,
     pub initial_item_style_error: Option<String>,
+    pub initial_tile_selection: Option<crate::fractal_boundary::TileSelectionBoundary>,
+    pub initial_fertility_error: Option<String>,
+    pub initial_fill_fertile_cells: Option<i32>,
     /// Distinct `.rcx` bytes carrying the known scalar worldgen tuple.
     pub initial_item_scalar_source_bytes: usize,
     pub initial_rules_offset: Option<usize>,
@@ -441,6 +444,14 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
             .unwrap_or_default(),
         initial_continent,
         initial_item_style_error,
+        initial_tile_selection: initial_items.tile_selection.clone(),
+        initial_fertility_error: initial_items
+            .fertility_error
+            .as_ref()
+            .map(ToString::to_string),
+        initial_fill_fertile_cells: initial_items
+            .fill_fertile
+            .map(|receipt| receipt.fertile_cells),
         initial_item_scalar_source_bytes: initial_items.scalar_source_bytes(),
         initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
         initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),
@@ -593,7 +604,8 @@ fn initial_items_for_replay(
                 let mut receipt = None;
                 let mut execution_error = None;
                 if let Some(map) = map.as_deref_mut() {
-                    match plan.advance_continent_prefix(map) {
+                    let tilesets_xml = root.join("tilesets.xml");
+                    match plan.advance_continent_prefix_with_tilesets(map, &tilesets_xml) {
                         Ok(done) => {
                             map.checksum = map.world.checksum_sections();
                             receipt = Some(done);
@@ -744,6 +756,23 @@ pub fn format_table(r: &RunResult) -> String {
         ));
     } else if let Some(error) = &r.initial_item_style_error {
         s.push_str(&format!("  map style static data unavailable: {error}\n"));
+    }
+    if let Some(selection) = &r.initial_tile_selection {
+        s.push_str(&format!(
+            "  tileset {} selected at bucket {} from {:?} after {} map-style pass(es); main RNG handoff {:08x}\n",
+            selection.tileset,
+            selection.bucket,
+            selection.draw,
+            selection.passes.len(),
+            selection.main_random_state_after as u32,
+        ));
+    }
+    if let Some(cells) = r.initial_fill_fertile_cells {
+        s.push_str(&format!(
+            "  fill_fertile completed for {cells} fertile cells; next TerrainGroups::place_all\n"
+        ));
+    } else if let Some(error) = &r.initial_fertility_error {
+        s.push_str(&format!("  fertility static input unavailable: {error}\n"));
     }
     if let Some(checksum) = r.initial_rules_checksum {
         s.push_str(&format!(
