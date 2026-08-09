@@ -88,8 +88,27 @@ impl LiveCollisionSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InstalledSource {
+    pub(crate) actor: Handle,
+    pub(crate) state_revision: u64,
     pub(crate) facts: LiveCollisionSource,
     pub(crate) linked: bool,
+}
+
+/// Identity- and revision-bound image of the current action fields consumed by movement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovementSourceState {
+    pub actor: Handle,
+    pub row: usize,
+    pub revision: u64,
+    pub moving: bool,
+    pub action: i32,
+}
+
+/// Complete result of one atomic installed-source state transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovementSourceStateReceipt {
+    pub before: MovementSourceState,
+    pub after: MovementSourceState,
 }
 
 /// Per-current-order collision fields not represented by the compact generic `Order` union.
@@ -106,21 +125,41 @@ pub struct CollisionOrderState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveCollisionFault {
     RowOutOfRange(usize),
+    StaleActor(Handle),
     MissingSource(usize),
     MissingPath(usize),
     MissingOrderState(usize),
     SourceAlreadyInstalled(usize),
+    ForeignSource {
+        row: usize,
+        requested: Handle,
+        installed: Handle,
+    },
+    StaleSourceRevision {
+        row: usize,
+        expected: u64,
+        observed: u64,
+    },
     InactiveActor(usize),
     OffMapActor(usize),
     InvalidDomain(i32),
     InvalidBlockRadius(i32),
-    InvalidGuyCount { column: i32, supplied: usize },
+    InvalidGuyCount {
+        column: i32,
+        supplied: usize,
+    },
     InvalidGuyLocation(usize),
     InvalidActorLocation,
     UnlinkedAnchor(usize),
-    BrokenWorldChain { who: i32, o: i32 },
+    BrokenWorldChain {
+        who: i32,
+        o: i32,
+    },
     UnsupportedBoatSolver(usize),
-    UnsupportedMovingFormation { row: usize, guys: usize },
+    UnsupportedMovingFormation {
+        row: usize,
+        guys: usize,
+    },
     UnsupportedAttackSlack(usize),
     MissingRepathHost(usize),
     StaleActorCommit(usize),
@@ -179,6 +218,65 @@ impl LiveCollisionRuntime {
             .map(|s| &s.facts)
     }
 
+    /// Read the exact installed action-state image for one live actor.
+    pub fn source_state(
+        &self,
+        world: &World,
+        actor: Handle,
+    ) -> Result<MovementSourceState, LiveCollisionFault> {
+        let row = world
+            .row_of(actor)
+            .ok_or(LiveCollisionFault::StaleActor(actor))?;
+        if world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+            return Err(LiveCollisionFault::InactiveActor(row));
+        }
+        let installed = self
+            .sources
+            .get(row)
+            .and_then(Option::as_ref)
+            .ok_or(LiveCollisionFault::MissingSource(row))?;
+        if installed.actor != actor {
+            return Err(LiveCollisionFault::ForeignSource {
+                row,
+                requested: actor,
+                installed: installed.actor,
+            });
+        }
+        Ok(installed.state(row))
+    }
+
+    /// Compare-and-set the action fields consumed by the authoritative movement adapter.
+    ///
+    /// Handle resolution, activity, installed identity and revision are all checked before
+    /// either field changes. The revision advances even when the requested values equal the
+    /// current image, so replaying a successfully consumed request is observably stale.
+    pub fn compare_exchange_source_state(
+        &mut self,
+        world: &World,
+        actor: Handle,
+        expected_revision: u64,
+        moving: bool,
+        action: OrderIndex,
+    ) -> Result<MovementSourceStateReceipt, LiveCollisionFault> {
+        let before = self.source_state(world, actor)?;
+        if before.revision != expected_revision {
+            return Err(LiveCollisionFault::StaleSourceRevision {
+                row: before.row,
+                expected: expected_revision,
+                observed: before.revision,
+            });
+        }
+
+        let installed = self.sources[before.row]
+            .as_mut()
+            .expect("source_state proved installed source");
+        installed.facts.moving = moving;
+        installed.facts.action = action as i32;
+        installed.state_revision = installed.state_revision.wrapping_add(1);
+        let after = installed.state(before.row);
+        Ok(MovementSourceStateReceipt { before, after })
+    }
+
     /// Atomically attach an authoritative collision source, world anchor and Guy stamps.
     pub fn install(
         &mut self,
@@ -217,6 +315,8 @@ impl LiveCollisionRuntime {
             );
         }
         self.sources[row] = Some(InstalledSource {
+            actor: handle,
+            state_revision: 0,
             facts: source,
             linked: true,
         });
@@ -241,6 +341,16 @@ impl LiveCollisionRuntime {
             let installed = self.sources[row]
                 .as_ref()
                 .ok_or(LiveCollisionFault::MissingSource(row))?;
+            let actor = world
+                .handle_at_row(row)
+                .ok_or(LiveCollisionFault::RowOutOfRange(row))?;
+            if installed.actor != actor {
+                return Err(LiveCollisionFault::ForeignSource {
+                    row,
+                    requested: actor,
+                    installed: installed.actor,
+                });
+            }
             if paths.get(row).is_none() {
                 return Err(LiveCollisionFault::MissingPath(row));
             }
@@ -284,6 +394,18 @@ impl LiveCollisionRuntime {
             });
         }
         Ok(())
+    }
+}
+
+impl InstalledSource {
+    fn state(&self, row: usize) -> MovementSourceState {
+        MovementSourceState {
+            actor: self.actor,
+            row,
+            revision: self.state_revision,
+            moving: self.facts.moving,
+            action: self.facts.action,
+        }
     }
 }
 

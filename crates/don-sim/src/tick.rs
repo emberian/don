@@ -1083,6 +1083,46 @@ impl Sim {
             .install(&mut self.world, &mut self.map.world, h, source)
     }
 
+    /// Snapshot the identity- and revision-bound movement action state for one actor.
+    pub fn movement_source_state(
+        &self,
+        actor: Handle,
+    ) -> Result<movement_live::MovementSourceState, movement_live::LiveCollisionFault> {
+        self.movement_collision.source_state(&self.world, actor)
+    }
+
+    /// Apply one revision-checked transition to the Sim-owned movement source.
+    pub fn compare_exchange_movement_source_state(
+        &mut self,
+        actor: Handle,
+        expected_revision: u64,
+        moving: bool,
+        action: OrderIndex,
+    ) -> Result<movement_live::MovementSourceStateReceipt, movement_live::LiveCollisionFault> {
+        self.movement_collision.compare_exchange_source_state(
+            &self.world,
+            actor,
+            expected_revision,
+            moving,
+            action,
+        )
+    }
+
+    /// Compatibility wrapper for callers which already own the surrounding transaction.
+    ///
+    /// Exact adapters should prefer the snapshot plus compare-exchange pair so a request
+    /// prepared against an earlier source image cannot overwrite a newer transition.
+    pub fn set_movement_source_state(
+        &mut self,
+        actor: Handle,
+        moving: bool,
+        action: OrderIndex,
+    ) -> Result<usize, movement_live::LiveCollisionFault> {
+        let expected_revision = self.movement_source_state(actor)?.revision;
+        self.compare_exchange_movement_source_state(actor, expected_revision, moving, action)
+            .map(|receipt| receipt.after.row)
+    }
+
     /// Attach an exact PDB Guy array and owner `get_gpiece` result to a live unit row.
     pub fn install_crash_unit_source(&mut self, h: Handle, source: CrashUnitSource) -> bool {
         let Some(row) = self.world.row_of(h) else {
