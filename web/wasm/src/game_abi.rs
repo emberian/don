@@ -14,6 +14,7 @@ use don_sim::order::{Order, OrderIndex};
 use don_sim::systems::production::runtime::LiveProductionType;
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
 use don_sim::systems::save_load::{load_sim, save_sim};
+use don_sim::systems::victory_score;
 use don_sim::tick::Sim as CoreSim;
 use don_sim::Handle;
 use std::cell::UnsafeCell;
@@ -1462,6 +1463,69 @@ pub unsafe extern "C" fn game_players_ptr(g: *mut Game) -> *mut i32 {
 pub extern "C" fn game_player_fields() -> u32 {
     PLAYER_FIELDS as u32
 }
+/// Read the setup-owned team hook on the authoritative leader table. The current Sim host
+/// defaults an unconfigured leader to its own slot; this query does not assign a team.
+#[no_mangle]
+pub unsafe extern "C" fn game_team(g: *mut Game, who: u32) -> i32 {
+    let game = game_ref!(g);
+    let who = who as usize;
+    if who >= PLAYERS {
+        return -1;
+    }
+    game.core.vic_leaders.team_of(who)
+}
+/// Effective mutual diplomacy (`War=0`, `Peace=1`, `Ally=2`) from the live leader table.
+/// Invalid browser slots return `-1` rather than indexing one of Sim's unused leader rows.
+#[no_mangle]
+pub unsafe extern "C" fn game_diplomacy(g: *mut Game, who: u32, other: u32) -> i32 {
+    let game = game_ref!(g);
+    let (who, other) = (who as usize, other as usize);
+    if who >= PLAYERS || other >= PLAYERS {
+        return -1;
+    }
+    game.core.vic_leaders.get_diplo(who, other) as i32
+}
+/// Raw live `LeaderData::leader_flags` projection. JavaScript decodes only recovered bits.
+#[no_mangle]
+pub unsafe extern "C" fn game_leader_flags(g: *mut Game, who: u32) -> u32 {
+    let game = game_ref!(g);
+    game.core
+        .vic_leaders
+        .slots
+        .get(who as usize)
+        .map_or(0, |leader| leader.leader_flags as u32)
+}
+#[no_mangle]
+pub unsafe extern "C" fn game_victory_mode(g: *mut Game) -> i32 {
+    game_ref!(g).core.vic_match.options.victory as i32
+}
+#[no_mangle]
+pub unsafe extern "C" fn game_victory_score(g: *mut Game, who: u32) -> i32 {
+    let game = game_ref!(g);
+    game.core
+        .vic_leaders
+        .slots
+        .get(who as usize)
+        .map_or(0, |leader| leader.score)
+}
+#[no_mangle]
+pub unsafe extern "C" fn game_team_score(g: *mut Game, who: u32) -> i32 {
+    let game = game_ref!(g);
+    let who = who as usize;
+    if who >= PLAYERS {
+        return 0;
+    }
+    game.core
+        .vic_leaders
+        .get_team_score(&game.core.vic_match, who)
+}
+#[no_mangle]
+pub unsafe extern "C" fn game_is_over(g: *mut Game) -> u32 {
+    game_ref!(g)
+        .core
+        .vic_match
+        .sem(victory_score::game_sem::GAME_OVER) as u32
+}
 #[no_mangle]
 pub unsafe extern "C" fn game_gaps_ptr(g: *mut Game) -> *mut u32 {
     game_ptr!(g).gaps.as_mut_ptr()
@@ -1864,6 +1928,29 @@ mod tests {
         packet[13..17].copy_from_slice(&ty.to_le_bytes());
         packet[17..21].copy_from_slice(&type_id.to_le_bytes());
         packet
+    }
+
+    #[test]
+    fn setup_diplomacy_and_victory_queries_are_read_only_core_projections() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x1234_5678);
+        let before = game.core.channel_digest();
+
+        for who in 0..PLAYERS as u32 {
+            assert_eq!(unsafe { game_team(&mut game, who) }, who as i32);
+            assert_eq!(unsafe { game_diplomacy(&mut game, who, who) }, 2);
+            assert_eq!(unsafe { game_leader_flags(&mut game, who) }, 0);
+            assert_eq!(unsafe { game_victory_score(&mut game, who) }, 0);
+            assert_eq!(unsafe { game_team_score(&mut game, who) }, 0);
+        }
+        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 1) }, 0);
+        assert_eq!(unsafe { game_victory_mode(&mut game) }, 0);
+        assert_eq!(unsafe { game_is_over(&mut game) }, 0);
+        assert_eq!(game.core.channel_digest(), before);
     }
 
     #[test]

@@ -1315,13 +1315,13 @@ function sessionUrl() {
   url.searchParams.set('map', SESSION_MAP);
   url.searchParams.set('size', `${state.mod.tiles}x${state.mod.tiles}`);
   url.searchParams.set('nation', 'unavailable');
-  url.searchParams.set('team', 'unavailable');
+  url.searchParams.set('team', `unconfigured-${state.mod.leader(state.who).team}`);
   url.searchParams.set('slots', `${state.mod.playerCount}-manual`);
   url.searchParams.set('ai_slots', 'unavailable');
   url.searchParams.set('ai_difficulty', 'unavailable');
   url.searchParams.set('income', 'unavailable');
   url.searchParams.set('population', 'unavailable');
-  url.searchParams.set('victory', 'unavailable');
+  url.searchParams.set('victory', state.mod.match().slug);
   if (state.settings.performance.renderer !== 'auto') {
     url.searchParams.set('backend', state.settings.performance.renderer);
   }
@@ -1362,33 +1362,48 @@ function renderSessionStatus() {
 }
 
 function sessionDescriptor() {
+  const leader = state.mod.leader(state.who);
+  const match = state.mod.match();
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
     player: state.who,
     map: SESSION_MAP,
     size: `${state.mod.tiles}x${state.mod.tiles}`,
     nation: 'unavailable',
-    team: 'unavailable',
+    team: leader.team,
+    teamConfigured: leader.teamConfigured,
+    teamMutable: false,
     slots: state.mod.playerCount,
     aiSlots: 'unavailable',
     aiDifficulty: 'unavailable',
     income: 'unavailable',
     population: 'unavailable',
-    victory: 'unavailable',
+    victory: match.slug,
+    victoryMutable: false,
   });
 }
 
 function renderSessionSummary() {
   if (!$('session-summary') || !state.mod) return;
   const setup = sessionDescriptor();
+  const leader = state.mod.leader(setup.player);
+  const match = state.mod.match();
+  const teamOption = $('session-team').options[0];
+  teamOption.value = String(leader.team);
+  teamOption.textContent = `unconfigured slot ${leader.team} — core read-only`;
+  $('session-team').value = String(leader.team);
+  const victoryOption = $('session-victory').options[0];
+  victoryOption.value = match.slug;
+  victoryOption.textContent = `${match.label} — core read-only`;
+  $('session-victory').value = match.slug;
   $('summary-world').textContent =
     `integration land · ${state.mod.tiles} × ${state.mod.tiles} tiles · fixed`;
   $('summary-player').textContent =
-    `P${setup.player} · nation unavailable · team unavailable`;
+    `P${setup.player} · nation unavailable · unconfigured team slot ${setup.team} (read-only)`;
   $('summary-slots').textContent =
     `${setup.slots} manual command perspectives · AI unavailable`;
   $('summary-rules').textContent =
-    'income unavailable · population unavailable · victory unavailable';
+    `income unavailable · population unavailable · ${match.label} victory (read-only)`;
 }
 
 function initializeObjectivesPanel() {
@@ -1432,15 +1447,21 @@ function initializeObjectivesPanel() {
 
 function exportedWorldSnapshot() {
   const m = state.mod;
-  const owners = Array.from({ length: m.playerCount }, (_, player) => ({
-    player,
-    objects: 0,
-    units: 0,
-    buildings: 0,
-    foundations: 0,
-    ledger: m.player(player),
-    relation: player === state.who ? 'local perspective' : 'unavailable',
-  }));
+  const match = m.match();
+  const owners = Array.from({ length: m.playerCount }, (_, player) => {
+    const ledger = m.player(player);
+    return {
+      player,
+      objects: 0,
+      units: 0,
+      buildings: 0,
+      foundations: 0,
+      ledger,
+      economyStock: ledger.stock.reduce((sum, value) => sum + value, 0),
+      leader: m.leader(player),
+      relation: m.relation(state.who, player).name,
+    };
+  });
   const views = m.views();
   for (let row = 0; row < m.live; row++) {
     const tag = views.tag[row];
@@ -1459,9 +1480,11 @@ function exportedWorldSnapshot() {
     frame: m.frame,
     elapsedSeconds: m.frame * TICK_MS / 1000,
     visibility: 'omniscient-export',
-    diplomacy: 'unavailable',
-    victory: 'unavailable',
-    score: 'unavailable',
+    diplomacy: 'effective-core-readonly',
+    victory: match.slug,
+    gameOver: match.gameOver,
+    score: owners[state.who].leader.score,
+    teamScore: owners[state.who].leader.teamScore,
     countdown: 'unavailable',
     owners: Object.freeze(owners.map(Object.freeze)),
   });
@@ -1487,7 +1510,7 @@ function focusPlayerStart(player, source = 'player panel') {
   centreOn(x, y);
   state.cameraSource = `${source}: P${p}`;
   renderObjectivesPanel();
-  say(`camera focused on P${p} exported start; relation and visibility remain unavailable`, 'hi');
+  say(`camera focused on P${p} exported start; diplomacy is read-only and visibility stays omniscient`, 'hi');
   return cameraSnapshot();
 }
 
@@ -1496,13 +1519,21 @@ function renderObjectivesPanel() {
   const snapshot = exportedWorldSnapshot();
   const camera = cameraSnapshot();
   const colours = ownerColours();
+  const match = state.mod.match();
+  const local = snapshot.owners[state.who];
+  const outcome = local.leader.won ? 'won' : local.leader.defeated ? 'defeated' :
+    local.leader.active ? 'active' : 'leader slot inactive';
   $('objective-time').textContent =
     `frame ${snapshot.frame.toLocaleString()} · elapsed ${snapshot.elapsedSeconds.toFixed(1)} s`;
-  $('objective-state').textContent = 'unavailable — no victory/endgame host';
-  $('objective-score').textContent = 'unavailable — object counts are not a victory score';
-  $('objective-countdown').textContent = 'unavailable — elapsed time only';
+  $('objective-state').textContent =
+    `${match.label} · ${snapshot.gameOver ? 'game over' : outcome} · core read-only`;
+  $('objective-score').textContent =
+    `P${state.who} victory ${snapshot.score} · team ${snapshot.teamScore} · ` +
+    `economy stock ${local.economyStock}`;
+  $('objective-countdown').textContent = 'unavailable — mode-specific countdown is not exported';
   for (const owner of snapshot.owners) {
-    const relation = owner.player === state.who ? 'you' : 'relation unavailable';
+    const relation = owner.player === state.who ? 'you' : owner.relation;
+    const inactive = owner.leader.active ? '' : ' · inactive leader slot';
     const key = $(`owner-key-${owner.player}`);
     if (key) key.textContent = `P${owner.player} ${relation}`;
     const swatch = key?.previousElementSibling;
@@ -1520,7 +1551,8 @@ function renderObjectivesPanel() {
         `${owner.objects} ${objectWord} · ${owner.units} ${unitWord} · ` +
         `${owner.buildings} ${buildingWord}` +
         (owner.foundations ? ` (${owner.foundations} foundations)` : '') +
-        ` · pop ${owner.ledger.pop}/${owner.ledger.popCap} · age ${owner.ledger.age} · ${relation}`;
+        ` · pop ${owner.ledger.pop}/${owner.ledger.popCap} · age ${owner.ledger.age} · ` +
+        `team unconfigured/${owner.leader.team} · ${relation}${inactive}`;
     }
   }
   $('camera-status').textContent =
@@ -1528,7 +1560,7 @@ function renderObjectivesPanel() {
     'minimap click/drag navigates; right-click issues a move for the current selection';
   $('mini').setAttribute('aria-label',
     `Omniscient integration minimap, camera at tile ${camera.tileX}, ${camera.tileY}. ` +
-    'All exported owners are visible; diplomacy and fog are unavailable.');
+    'All exported owners are visible; diplomacy is read-only and fog is unavailable.');
 }
 
 // ---------------------------------------------------------------------------------------

@@ -385,10 +385,10 @@
           <option value="unavailable">unavailable — no nation host</option>
         </select>
       </label>
-      <label class="unavailable">team
+      <label>team
         <select id="session-team" style="width:150px" disabled
-          title="Unavailable: team and diplomacy state are not accepted by the current WASM core">
-          <option value="unavailable">unavailable — no team host</option>
+          title="Read-only: projected from the authoritative Sim team query; no team setter is exported">
+          <option value="0">unconfigured slot 0 — core read-only</option>
         </select>
       </label>
       <label class="unavailable">AI slots
@@ -421,10 +421,10 @@
           <option value="6">175</option><option value="7">200</option>
         </select>
       </label>
-      <label class="unavailable">victory
+      <label>victory
         <select id="session-victory" style="width:150px" disabled
-          title="Unavailable: the current WASM world has no victory or endgame host">
-          <option value="unavailable">unavailable — no endgame</option>
+          title="Read-only: projected from the authoritative Sim victory options; no victory setter is exported">
+          <option value="standard">Standard — core read-only</option>
         </select>
       </label>
 
@@ -442,10 +442,11 @@
         session loading…
       </div>
       <div class="hint" style="margin-top:4px">
-        The seed reaches the authoritative <code>don_sim::Sim</code> initializer. Map style,
-        player setup, income, population, victory, nation, team, and AI options remain disabled
-        until the same core owns their exact state. Disabled choices are not frontend-only rules
-        pretending to affect play.
+        The seed reaches the authoritative <code>don_sim::Sim</code> initializer. The current
+        unconfigured team-slot hook and victory mode are live read-only core facts. Map style,
+        player activation, income, population,
+        nation, AI, and every team/victory setter remain disabled until an exact core command owns
+        them. Disabled choices are not frontend-only rules pretending to affect play.
       </div>
     </fieldset>
 
@@ -457,11 +458,11 @@
         </div>
         <div class="endgame-fact">
           <div class="rh">objective</div>
-          <div id="objective-state" class="rv" aria-disabled="true">unavailable — no victory host</div>
+          <div id="objective-state" class="rv">Standard — loading core state</div>
         </div>
         <div class="endgame-fact">
           <div class="rh">victory score</div>
-          <div id="objective-score" class="rv" aria-disabled="true">unavailable — no score ABI</div>
+          <div id="objective-score" class="rv">loading core score…</div>
         </div>
         <div class="endgame-fact">
           <div class="rh">countdown</div>
@@ -469,8 +470,9 @@
         </div>
       </div>
       <div id="visibility-honesty" class="status-note">
-        Omniscient integration view: every exported object is drawn. Fog, seen-state, teams,
-        allies, and enemy relations are not exported, so other owners are not labelled enemies.
+        Omniscient integration view: every exported object is drawn. Effective diplomacy and the
+        setup-owned team query are read-only core facts; the current browser leader slots remain
+        inactive. Fog and seen-state are not exported, so relations never hide objects.
       </div>
       <div id="owner-legend" aria-label="Minimap owner colours"></div>
       <div id="world-players" aria-label="Exported per-player world snapshot"></div>
@@ -614,7 +616,9 @@
         bounded Library construction, sequential age research, deterministic core save, and
         atomic core load use that same state.<br><br>
         Other buildings and technologies, gather-resource composition, live rule setters, fog,
-        market, diplomacy, AI, and victory remain unavailable in this adapter. The central save
+        market, diplomacy mutation, AI, victory mutation, and objective countdowns remain
+        unavailable in this adapter. Team, effective diplomacy, victory mode/status, and score are
+        read-only projections from the same Sim. The central save
         format derives and verifies exact step-8 leader views on load, so supported live frames
         roundtrip and resume without storing a second view. Remaining boundaries are disabled or reported as refusals;
         the browser no longer carries a second gameplay world to make them appear complete.

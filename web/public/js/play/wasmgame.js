@@ -17,6 +17,23 @@ export const GAP_NAMES = [
   'placement blocked', 'not a producer', 'queue full', 'no worker',
   'tile not gatherable', 'wrong age', 'object capacity full', 'movement route failed',
 ];
+export const DIPLOMACY = Object.freeze(['war', 'peace', 'ally']);
+export const VICTORY_MODES = Object.freeze([
+  Object.freeze({ slug: 'standard', label: 'Standard' }),
+  Object.freeze({ slug: 'sudden-death', label: 'Sudden Death' }),
+  Object.freeze({ slug: 'conquest', label: 'Conquest' }),
+  Object.freeze({ slug: 'score', label: 'Score' }),
+  Object.freeze({ slug: 'time-limit', label: 'Time Limit' }),
+  Object.freeze({ slug: 'musical-chairs', label: 'Musical Chairs' }),
+  Object.freeze({ slug: 'wonder', label: 'Wonder' }),
+  Object.freeze({ slug: 'territory', label: 'Territory' }),
+  Object.freeze({ slug: 'economic', label: 'Economic' }),
+  Object.freeze({ slug: 'tech-race', label: 'Tech Race' }),
+  Object.freeze({ slug: 'scenario', label: 'Scenario' }),
+]);
+const LEADER_FLAG = Object.freeze({
+  valid: 1, active: 2, won: 0x20, defeated: 0x40, survived: 0x80,
+});
 
 /** Tag bit layout — must match the authoritative-core projection in `game_abi`. */
 export const TAG = {
@@ -252,6 +269,44 @@ export class GameModule {
       gross: Array.from(b.subarray(24, 30)),
       pop: b[30], popCap: b[31], age: b[32], research: b[33],
     };
+  }
+
+  /** Read-only setup/victory facts projected directly from the authoritative Sim. */
+  leader(p) {
+    if (!Number.isInteger(p) || p < 0 || p >= this.playerCount) {
+      throw new RangeError(`leader slot ${p} is outside the browser player cohort`);
+    }
+    const flags = this.x.game_leader_flags(this.g, p) >>> 0;
+    return Object.freeze({
+      player: p,
+      team: this.x.game_team(this.g, p),
+      teamConfigured: false,
+      teamSource: 'Sim victory Leaders::team_of default-own-slot hook',
+      flags,
+      active: (flags & (LEADER_FLAG.valid | LEADER_FLAG.active)) ===
+        (LEADER_FLAG.valid | LEADER_FLAG.active),
+      won: (flags & LEADER_FLAG.won) !== 0,
+      defeated: (flags & LEADER_FLAG.defeated) !== 0,
+      survived: (flags & LEADER_FLAG.survived) !== 0,
+      score: this.x.game_victory_score(this.g, p),
+      teamScore: this.x.game_team_score(this.g, p),
+    });
+  }
+
+  relation(who, other) {
+    if (![who, other].every(p => Number.isInteger(p) && p >= 0 && p < this.playerCount)) {
+      throw new RangeError(`diplomacy query ${who} -> ${other} leaves the browser player cohort`);
+    }
+    const id = this.x.game_diplomacy(this.g, who, other);
+    return Object.freeze({ id, name: DIPLOMACY[id] ?? 'invalid' });
+  }
+
+  match() {
+    const modeId = this.x.game_victory_mode(this.g);
+    const mode = VICTORY_MODES[modeId] ?? Object.freeze({
+      slug: `unknown-${modeId}`, label: `Unknown mode ${modeId}`,
+    });
+    return Object.freeze({ modeId, ...mode, gameOver: this.x.game_is_over(this.g) === 1 });
   }
 
   gaps() { return Array.from(this.views().gaps); }

@@ -119,8 +119,8 @@ try {
   await c.send('Page.enable');
   out.userAgent = (await (await fetch(`http://127.0.0.1:${CDP}/json/version`)).json())['User-Agent'];
 
-  // Ask for unsupported setup values on purpose. The client must canonicalize those to
-  // unavailable while honoring the two rule parameters the current WASM ABI really accepts.
+  // Ask for unsupported setup values on purpose. The client must canonicalize those to its
+  // fixed/read-only core facts; no URL-only lobby option may become browser shadow state.
   const requested = new URLSearchParams({
     map: 'requested-ocean', nation: 'requested-nation', team: '2',
     ai_slots: '3', ai_difficulty: 'hard', victory: 'conquest',
@@ -228,17 +228,24 @@ try {
       sessionShare: !!document.getElementById('session-share'),
       sessionSetup: window.don.session.setup(),
       sessionUrl: window.don.session.url(),
-      sessionUnavailableDisabled: [
-        'session-map', 'session-size', 'session-nation', 'session-team',
-        'session-ai-slots', 'session-ai-difficulty', 'income', 'popset', 'session-victory',
+      sessionUnsupportedDisabled: [
+        'session-map', 'session-size', 'session-nation',
+        'session-ai-slots', 'session-ai-difficulty', 'income', 'popset',
       ].every(id => document.getElementById(id)?.disabled),
+      sessionReadOnlyDisabled: ['session-team', 'session-victory']
+        .every(id => document.getElementById(id)?.disabled),
       sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
+      coreMatch: m.match(),
+      coreLeader: m.leader(0),
+      coreRelation: m.relation(0, 1),
       objectiveTime: document.getElementById('objective-time')?.textContent ?? '',
       objectiveState: document.getElementById('objective-state')?.textContent ?? '',
       objectiveScore: document.getElementById('objective-score')?.textContent ?? '',
       objectiveCountdown: document.getElementById('objective-countdown')?.textContent ?? '',
-      objectiveFactsDisabled: ['objective-state', 'objective-score', 'objective-countdown']
-        .every(id => document.getElementById(id)?.getAttribute('aria-disabled') === 'true'),
+      objectiveFactsProjected:
+        ['objective-state', 'objective-score']
+          .every(id => document.getElementById(id)?.getAttribute('aria-disabled') !== 'true') &&
+        document.getElementById('objective-countdown')?.getAttribute('aria-disabled') === 'true',
       visibilityHonesty: document.getElementById('visibility-honesty')?.textContent ?? '',
       ownerLegend: document.querySelectorAll('#owner-legend .owner-key').length,
       ownerRows: document.querySelectorAll('#world-players .world-player').length,
@@ -310,29 +317,41 @@ try {
       out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('owned by don_sim::Sim')],
     ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
     ['session links are shareable', out.ui.sessionShare],
-    ['unsupported setup choices stay disabled', out.ui.sessionUnavailableDisabled],
-    ['unsupported URL requests are canonicalized rather than fabricated',
+    ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
+    ['read-only team and victory facts have no pretend setter', out.ui.sessionReadOnlyDisabled],
+    ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
       out.ui.sessionSetup.map === 'integration-land' && out.ui.sessionSetup.size === '128x128' &&
-      out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 'unavailable' &&
+      out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 0 &&
       out.ui.sessionSetup.aiSlots === 'unavailable' && out.ui.sessionSetup.aiDifficulty === 'unavailable' &&
-      out.ui.sessionSetup.victory === 'unavailable'],
+      out.ui.sessionSetup.victory === 'standard' && !out.ui.sessionSetup.teamConfigured &&
+      !out.ui.sessionSetup.teamMutable &&
+      !out.ui.sessionSetup.victoryMutable],
+    ['team, diplomacy, and victory values come through the read-only core ABI',
+      out.ui.coreMatch.slug === 'standard' && !out.ui.coreMatch.gameOver &&
+      out.ui.coreLeader.team === 0 && !out.ui.coreLeader.teamConfigured &&
+      out.ui.coreLeader.teamSource.includes('default-own-slot') && out.ui.coreLeader.score === 0 &&
+      out.ui.coreRelation.name === 'war'],
     ['unsupported rules are canonicalized instead of accepted from the URL',
       out.ui.sessionSetup.income === 'unavailable' && out.ui.sessionSetup.population === 'unavailable' &&
       out.boot.player.popCap === 0],
-    ['the pregame summary exposes world, slots, rules, and unavailable systems',
+    ['the pregame summary exposes world, slots, read-only facts, and unavailable systems',
       out.ui.sessionSummary.includes('128 × 128') && out.ui.sessionSummary.includes('manual') &&
-      out.ui.sessionSummary.includes('population unavailable') && out.ui.sessionSummary.includes('victory unavailable')],
-    ['the objective panel reports real elapsed time but disables absent endgame facts',
-      out.ui.objectiveTime.includes('frame') && out.ui.objectiveFactsDisabled &&
-      out.ui.objectiveState.includes('unavailable') && out.ui.objectiveScore.includes('not a victory score') &&
-      out.ui.objectiveCountdown.includes('elapsed time only')],
-    ['the objective panel labels omniscient visibility and unknown relations honestly',
+      out.ui.sessionSummary.includes('population unavailable') &&
+      out.ui.sessionSummary.includes('Standard victory (read-only)')],
+    ['the objective panel projects core mode/score but disables the absent countdown',
+      out.ui.objectiveTime.includes('frame') && out.ui.objectiveFactsProjected &&
+      out.ui.objectiveState.includes('Standard') && out.ui.objectiveState.includes('core read-only') &&
+      out.ui.objectiveScore.includes('victory 0') &&
+      out.ui.objectiveCountdown.includes('not exported')],
+    ['the objective panel labels omniscient visibility and inactive relations honestly',
       out.ui.visibilityHonesty.includes('Omniscient integration view') &&
-      out.ui.visibilityHonesty.includes('not exported') &&
-      out.ui.ownerStates.slice(1).every(text => text.includes('relation unavailable'))],
-    ['the real minimap exposes every owner without inventing teams',
+      out.ui.visibilityHonesty.includes('read-only core facts') &&
+      out.ui.ownerStates.slice(1).every(text =>
+        text.includes('war') && text.includes('inactive leader slot'))],
+    ['the real minimap exposes every owner with queried teams but no fog claim',
       out.ui.ownerLegend === 4 && out.ui.ownerRows === 4 &&
-      out.ui.minimapLabel.includes('All exported owners are visible')],
+      out.ui.minimapLabel.includes('All exported owners are visible') &&
+      out.ui.minimapLabel.includes('fog is unavailable')],
     ['the command journal exposes playback, timeline, import, and export controls',
       out.ui.replayProtocol === 'don.command-journal.v1' && out.ui.replayControls >= 5 &&
       out.ui.replayTimeline.includes('Command journal frame') && out.ui.replayJournalActionsEnabled &&
@@ -678,14 +697,14 @@ try {
       out.session.newDigest !== out.session.oldDigest && out.session.status.includes('owned by don_sim::Sim')],
     ['the share URL carries the canonical seed and player',
       out.session.urlSeed === '0x1234abcd' && out.session.urlPlayer === '0'],
-    ['the share URL records the fixed world and missing player systems',
+    ['the share URL records the fixed world, queried team, and missing player systems',
       out.session.urlMap === 'integration-land' && out.session.urlSize === '128x128' &&
-      out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unavailable' &&
+      out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unconfigured-0' &&
       out.session.urlSlots === '4-manual' && out.session.urlAiSlots === 'unavailable' &&
       out.session.urlAiDifficulty === 'unavailable'],
-    ['the share URL records unavailable rule hosts rather than frontend-only values',
+    ['the share URL records the read-only victory and unavailable rule hosts',
       out.session.urlIncome === 'unavailable' && out.session.urlPopulation === 'unavailable' &&
-      out.session.urlVictory === 'unavailable'],
+      out.session.urlVictory === 'standard'],
     ['a malformed seed preserves the live session', out.session.invalidPreserved],
     ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
     ['session status returns to player zero', out.session.status.includes('player 0')],
@@ -995,9 +1014,9 @@ try {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
 
-  // The minimap is an exported-world navigator, not fog or diplomacy evidence. Exercise
-  // panel, pointer, and keyboard navigation while checking the snapshot totals and explicit
-  // unavailable victory surface.
+  // The minimap is an omniscient exported-world navigator, not fog evidence. Exercise panel,
+  // pointer, and keyboard navigation while checking authoritative read-only diplomacy/victory
+  // facts and the explicitly unavailable countdown.
   out.objectives = await c.eval(`(() => {
     const d = window.don, m = d.state.mod;
     const snapshot = d.objectives.snapshot();
@@ -1027,10 +1046,15 @@ try {
   for (const [name, ok] of [
     ['the world snapshot accounts for every live exported object',
       out.objectives.snapshot.owners.reduce((n, owner) => n + owner.objects, 0) === out.objectives.live],
-    ['the world snapshot refuses victory, score, countdown, diplomacy, and fog claims',
+    ['the world snapshot projects victory, score, and diplomacy but refuses countdown/fog claims',
       out.objectives.snapshot.visibility === 'omniscient-export' &&
-      out.objectives.snapshot.victory === 'unavailable' && out.objectives.snapshot.score === 'unavailable' &&
-      out.objectives.snapshot.countdown === 'unavailable' && out.objectives.snapshot.diplomacy === 'unavailable'],
+      out.objectives.snapshot.victory === 'standard' && out.objectives.snapshot.score === 0 &&
+      out.objectives.snapshot.teamScore === 0 && !out.objectives.snapshot.gameOver &&
+      out.objectives.snapshot.countdown === 'unavailable' &&
+      out.objectives.snapshot.diplomacy === 'effective-core-readonly' &&
+      out.objectives.snapshot.owners[0].relation === 'ally' &&
+      out.objectives.snapshot.owners.slice(1).every(owner =>
+        owner.relation === 'war' && owner.leader.active === false)],
     ['player focus buttons navigate to exported starts',
       out.objectives.focused.source.includes('P2') && out.objectives.panel.source.includes('P1')],
     ['minimap pointer navigation moves the camera',
@@ -1322,7 +1346,9 @@ try {
       out.objectivesAfterPlay.snapshot.owners.reduce((n, owner) => n + owner.objects, 0) ===
         out.objectivesAfterPlay.live],
     ['object growth is never relabelled as victory score',
-      out.objectivesAfterPlay.scoreText.includes('not a victory score')],
+      out.objectivesAfterPlay.snapshot.score === out.objectives.snapshot.score &&
+      out.objectivesAfterPlay.scoreText.includes(
+        `victory ${out.objectivesAfterPlay.snapshot.score}`)],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

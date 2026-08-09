@@ -83,8 +83,10 @@ sequential age research, frame stepping, digest, RNG, and core save/load use tha
 Training and research use packed `WHERE`, cost, and job-time records with the Sim's concrete
 `BuildData` queue and live production/tech runtime; construction uses Sim `BuildAt` orders and
 creates a saved core foundation rather than browser state. Gather, other building placement,
-ordinary technologies, live rule setters, fog/LOS, diplomacy, AI, and victory remain disabled
-until their exact core hosts are exposed.
+ordinary technologies, live rule setters, fog/LOS, diplomacy mutation, AI, victory mutation, and
+objective countdowns remain disabled until their exact core hosts are exposed. Team identity,
+effective diplomacy, victory mode/status, and personal/team score are read-only projections from
+the authoritative Sim; the setup controls stay disabled because those queries do not assign state.
 
 Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
 browser adapter (not `don_ai::arena::World`), the playable blocker list is read from
