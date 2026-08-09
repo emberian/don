@@ -653,6 +653,13 @@ class RetailCtlTests(unittest.TestCase):
         target_swap = rollover.index("[IO.File]::Replace({ps_literal(target_temp)}")
         self.assertLess(archive, target_swap)
         self.assertNotIn("[IO.File]::Replace({ps_literal(NETSYS_BACKUP)}", rollover)
+        self.assertNotIn(", $null)", rollover)
+        self.assertIn("$target_backup", rollover)
+        self.assertIn("$staged_backup", rollover)
+        self.assertIn(
+            "[IO.File]::Replace($target_backup, {ps_literal(RETAIL_NETSYS_DLL)}",
+            rollover,
+        )
         self.assertIn('"mode": "load-only"', rollover)
         self.assertIn('"rollover": None', rollover)
 

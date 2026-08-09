@@ -4519,11 +4519,16 @@ def netsys_replace(shim: Path, port: int) -> dict:
         temp = RETAIL_NETSYS_DLL + ".don-next"
         script = f"""
 $ErrorActionPreference = 'Stop'
+$replace_backup = {ps_literal(temp + ".previous")}
 if (Test-Path -LiteralPath {ps_literal(temp)}) {{
     Remove-Item -LiteralPath {ps_literal(temp)} -Force
 }}
+if (Test-Path -LiteralPath $replace_backup) {{
+    Remove-Item -LiteralPath $replace_backup -Force
+}}
 [IO.File]::Copy({ps_literal(NETSYS_STAGED)}, {ps_literal(temp)}, $false)
-[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
+[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $replace_backup)
+Remove-Item -LiteralPath $replace_backup -Force
 """
         guest_ps_encoded(script)
         installed = guest_file_record(RETAIL_NETSYS_DLL)
@@ -4604,12 +4609,27 @@ def netsys_next_generation(shim: Path, port: int) -> dict:
         target_temp = RETAIL_NETSYS_DLL + ".don-next-generation"
         script = f"""
 $ErrorActionPreference = 'Stop'
+$target_backup = {ps_literal(target_temp + ".previous")}
+$staged_backup = {ps_literal(NETSYS_NEXT + ".previous-staged")}
 if (Test-Path -LiteralPath {ps_literal(target_temp)}) {{
     Remove-Item -LiteralPath {ps_literal(target_temp)} -Force
 }}
+if (Test-Path -LiteralPath $target_backup) {{
+    Remove-Item -LiteralPath $target_backup -Force
+}}
+if (Test-Path -LiteralPath $staged_backup) {{
+    Remove-Item -LiteralPath $staged_backup -Force
+}}
 [IO.File]::Copy({ps_literal(NETSYS_NEXT)}, {ps_literal(target_temp)}, $false)
-[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
-[IO.File]::Replace({ps_literal(NETSYS_NEXT)}, {ps_literal(NETSYS_STAGED)}, $null)
+[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $target_backup)
+try {{
+    [IO.File]::Replace({ps_literal(NETSYS_NEXT)}, {ps_literal(NETSYS_STAGED)}, $staged_backup)
+}} catch {{
+    [IO.File]::Replace($target_backup, {ps_literal(RETAIL_NETSYS_DLL)}, {ps_literal(target_temp)})
+    throw
+}}
+Remove-Item -LiteralPath $target_backup -Force
+Remove-Item -LiteralPath $staged_backup -Force
 """
         guest_ps_encoded(script)
         installed = guest_file_record(RETAIL_NETSYS_DLL)
@@ -5114,11 +5134,16 @@ def netsys_restore() -> dict:
         temp = RETAIL_NETSYS_DLL + ".don-restore"
         script = f"""
 $ErrorActionPreference = 'Stop'
+$replace_backup = {ps_literal(temp + ".previous")}
 if (Test-Path -LiteralPath {ps_literal(temp)}) {{
     Remove-Item -LiteralPath {ps_literal(temp)} -Force
 }}
+if (Test-Path -LiteralPath $replace_backup) {{
+    Remove-Item -LiteralPath $replace_backup -Force
+}}
 [IO.File]::Copy({ps_literal(NETSYS_BACKUP)}, {ps_literal(temp)}, $false)
-[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
+[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $replace_backup)
+Remove-Item -LiteralPath $replace_backup -Force
 """
         guest_ps_encoded(script)
     restored = guest_file_record(RETAIL_NETSYS_DLL)
