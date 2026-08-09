@@ -19,7 +19,7 @@ use don_bhs::{
 };
 
 use crate::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
-use crate::systems::{economy, leaders};
+use crate::systems::{economy, leaders, victory_score};
 use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
@@ -477,6 +477,15 @@ enum ScriptObject {
 }
 
 impl Sim {
+    /// The `(flags & 3) == 3` leader gate shared by the retail player-state readers.
+    fn active_script_leader(&self, who: i32) -> Option<usize> {
+        let who = who.wrapping_sub(1) as u32 as usize;
+        let flags = self.step8.leaders.get(who)?.flags;
+        (flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+            == (leaders::flag::IN_GAME | leaders::flag::PROCESS))
+            .then_some(who)
+    }
+
     fn script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
         if who >= crate::objects::OWNER_SLOTS || o < 0 {
             return None;
@@ -679,6 +688,21 @@ impl ScenarioHost for Sim {
                 let leader = &self.leaders[who as usize];
                 Ok(Value::Int(leader.econ.age_alt))
             }
+            // `population_cap` `0x009e8eb0`: both Leader flags, then the direct
+            // `LeaderData::pop_cap` read at +0x7e4.
+            246 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(self.step8.leaders[who].pop_cap))
+            }
+            // `score` `0x009e8fa0`: the same gate, then `LeaderData::score` at +0x18.
+            249 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(self.vic_leaders.slots[who].score))
+            }
             // `is_defeated` `0x009e9070`: active slot, then bit 6 of the low flags byte.
             252 => {
                 let who = args[0].as_int().wrapping_sub(1) as u32;
@@ -694,6 +718,20 @@ impl ScenarioHost for Sim {
                     return Ok(Value::Int(-1));
                 }
                 Ok(Value::Int(((flags >> 6) & 1) as i32))
+            }
+            // `num_units` `0x009e9d60`: sum all 352 unsigned-short unit counters at
+            // LeaderData +0x5762. The paired retail loop only unrolls that exact sum.
+            273 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(
+                    self.vic_leaders.slots[who]
+                        .num_units
+                        .iter()
+                        .map(|&count| i32::from(count))
+                        .sum(),
+                ))
             }
             // Both handlers share the exact address validation, captain resolution,
             // outer-container walk, coordinate deobfuscation, and `div_3_table` tile
@@ -758,6 +796,20 @@ impl ScenarioHost for Sim {
                 }
                 leader.gather_ctx.extra_income[resource] = amount.wrapping_shl(4);
                 Ok(Value::Int(1))
+            }
+            // `have_alliance` `0x009fcf50`: both players pass the two-bit active gate,
+            // then the first player's directed diplomacy slot is exactly value 2.
+            706 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(other) = self.active_script_leader(args[1].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(
+                    (self.step8.leaders[who].diplo[other] == victory_score::Diplo::Ally as i32)
+                        as i32,
+                ))
             }
             _ => Err(HostError::Unimplemented),
         }

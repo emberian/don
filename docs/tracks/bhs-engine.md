@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Twenty
+`Program`, and `ScriptRuntime` runs either producer against that live host. Twenty-four
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -467,8 +467,11 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 86 | `world_x_size` | direct `WorldData::tile_xs` read at `+0x18` (`0x009e4ee0`) |
 | 87 | `world_y_size` | direct `WorldData::tile_ys` read at `+0x1c` (`0x009e4ef0`) |
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
+| 246 | `population_cap` | active Leader's direct `pop_cap` field at `+0x7e4` (`0x009e8eb0`) |
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
+| 249 | `score` | active Leader's direct score field at `+0x18` (`0x009e8fa0`) |
 | 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
+| 273 | `num_units` | sum all 352 `unsigned short` unit counters at `+0x5762` (`0x009e9d60`) |
 | 296 | `time` | signed `Game::seconds / 60` (`0x009ead00`) |
 | 297 | `time_min` | instruction-identical alias of `time` (`0x009ead20`) |
 | 298 | `time_sec` | direct `Game::seconds` read (`0x009ead40`) |
@@ -479,10 +482,11 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
 | 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
+| 706 | `have_alliance` | both Leaders active, then directed diplomacy slot equals 2 (`0x009fcf50`) |
 
-The current 363-file census contains 6,665 calls to those twenty registrations. Together
+The current 363-file census contains 7,060 calls to those twenty-four registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-7,456 of 39,957 measured shipped-corpus call sites (**18.66%**, up from **1.98%**).
+7,851 of 39,957 measured shipped-corpus call sites (**19.65%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
@@ -519,8 +523,15 @@ tile dimensions, not the world-cell dimensions used internally by `get_map_size`
 unscaled clock, and `time_earlier_than` is strictly less-than. Both ordinary source and a
 tag-0/tag-2/tag-3/tag-4 loaded chunk execute all six handlers against two nonzero clocks.
 
+Four player-state readers add 395 more shipped calls directly from the stores already
+driven by the tick. `population_cap` and `score` are direct Leader fields, `num_units`
+reproduces retail's paired loop over all 352 unsigned-short counters, and
+`have_alliance` deliberately reads the first player's directed diplomacy slot rather
+than replacing it with the later victory subsystem's mutual-alliance helper. The source
+and loaded-chunk tests cover an asymmetric alliance and the invalid-player `-1` sentinel.
+
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-822 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+818 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

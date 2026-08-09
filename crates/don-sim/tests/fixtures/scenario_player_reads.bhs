@@ -1,0 +1,10 @@
+int scenario player_reads_tick()
+{
+    set_good(1, "Food", population_cap(1));
+    set_good(1, "Timber", score(1));
+    set_good(1, "Wealth", num_units(1));
+    set_good(1, "Knowledge", have_alliance(1, 2));
+    set_good(1, "Metal", have_alliance(2, 1));
+    set_good(1, "Oil", num_units(9) + 1);
+    return 1;
+}

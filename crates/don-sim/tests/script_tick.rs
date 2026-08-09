@@ -6,6 +6,7 @@ use don_sim::rng::Random;
 use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
 };
+use don_sim::systems::victory_score;
 use don_sim::tick::{Sim, StepRun};
 use std::path::Path;
 
@@ -482,6 +483,64 @@ fn retail_chunk_executes_the_same_world_and_clock_handlers() {
         sim.leaders[0].econ.stockpile,
         [48, 48, 3, 3, 239, 0],
         "loaded chunks must retain the strict time comparison and live map dimensions"
+    );
+}
+
+fn configure_player_read_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    sim.step8.leaders[0].pop_cap = 275;
+    sim.vic_leaders.slots[0].score = 1_234;
+    sim.vic_leaders.slots[0].num_units[0] = 7;
+    sim.vic_leaders.slots[0].num_units[175] = 11;
+    sim.vic_leaders.slots[0].num_units[351] = 13;
+    sim.step8.leaders[0].diplo[1] = victory_score::Diplo::Ally as i32;
+    sim.step8.leaders[1].diplo[0] = victory_score::Diplo::War as i32;
+}
+
+#[test]
+fn ordinary_source_executes_authoritative_player_state_reads() {
+    let program = compile_source_fixture("scenario_player_reads.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "player_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8123, 8);
+    configure_player_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [275, 1_234, 31, 1, 0, 0],
+        "population cap, score, all 352 counters, directed alliance, and invalid-player sentinel must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_player_state_reads() {
+    let compiled = compile_source_fixture("scenario_player_reads.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "player_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8124, 12);
+    configure_player_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [275, 1_234, 31, 1, 0, 0],
+        "loaded chunks must read the same authoritative leader stores"
     );
 }
 
