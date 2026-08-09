@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "status": "types-exact-tribes-blocked",
+  "types": {
+    "slots": 806,
+    "source": "schema/live/types-runtime.bin",
+    "source_checked_in": false,
+    "source_sha256": "c35309ff7297b36795bc97cea72d11df56be6b6781ef901edf954bbfdcc94d93",
+    "pointed_arrays": 1088,
+    "pointed_u16_values": 2363,
+    "after_types": "0x72e0c3b6",
+    "bytes_walked": 473984
+  },
+  "tribes": {
+    "records_required": 24,
+    "record_size": 1520,
+    "graft_entries_per_record": 352,
+    "complete_records": 0
+  },
+  "blockers": [
+    "The exact type images currently depend on a gitignored DONTYPE1 capture; checked-in scalar TSVs are not a lossless replacement.",
+    "The 24 nation XML files named by rules.xml are absent.",
+    "No checked-in value-level capture exists for the 24 Tribe graft arrays."
+  ]
+}
