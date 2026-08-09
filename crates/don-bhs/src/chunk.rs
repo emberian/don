@@ -4,9 +4,10 @@
 //! `[size: u32, tag: u16, children: u16]`; `size` includes that header. The retail
 //! compiler emits one tag-0 root containing the leaf chunks dispatched by
 //! `ScriptFile::read_script_chunk` (`0x009c5440`). This module implements the exact
-//! pointer-free subset needed by scalar scripts. Non-empty tag-6 include tables are
-//! resolved against the already-loaded file sequence exactly as `find_script_file`
-//! does; the still-global struct type registry (tag 9) remains fail-closed.
+//! pointer-free subset needed by executable scripts. Non-empty tag-6 include tables
+//! are resolved against the already-loaded file sequence exactly as
+//! `find_script_file` does. Tag 9 contributes only a declaration name to the
+//! process-global runtime type-name registry; it contains no aggregate layout.
 
 use std::fmt;
 
@@ -44,13 +45,13 @@ pub enum ChunkError {
     },
     DuplicateSingletonTag(u16),
     UnsupportedTag(u16),
-    UnsupportedStructTypes,
     UnsupportedConstantType(u32),
     UnresolvedLink {
         source_file: String,
         linked_file: String,
     },
     NonAsciiLinkName(String),
+    NonAsciiStructTypeName(String),
     InvalidUtf16,
     CountExceedsInput {
         what: &'static str,
@@ -172,6 +173,7 @@ impl<'a> Cursor<'a> {
 
 struct Loader {
     file: ScriptFile,
+    global_type_names: Vec<String>,
     current_script: Option<usize>,
     input_len: usize,
     saw_code: bool,
@@ -186,6 +188,7 @@ impl Loader {
                 source_file,
                 ..Default::default()
             },
+            global_type_names: Vec::new(),
             current_script: None,
             input_len,
             saw_code: false,
@@ -238,7 +241,7 @@ impl Loader {
                 self.load_line_info(&mut cursor)?;
             }
             8 => self.load_variable(&mut cursor)?,
-            9 => return Err(ChunkError::UnsupportedStructTypes),
+            9 => self.load_struct_type(&mut cursor)?,
             other => return Err(ChunkError::UnsupportedTag(other)),
         }
         cursor.finish(tag)
@@ -401,6 +404,21 @@ impl Loader {
         Ok(())
     }
 
+    fn load_struct_type(&mut self, cursor: &mut Cursor<'_>) -> Result<(), ChunkError> {
+        // `StructType::write` (0x009db230) writes one String from StructType+0x10.
+        // `ScriptFile::load_struct_types` (0x009c4d70) reads exactly that String and
+        // calls the process-global `ScriptGameInterfaceBase::add_new_type`. No field
+        // list, schema signature, ownership record, or alias relation is serialized.
+        let name = cursor.string()?;
+        if !name.is_ascii() {
+            // add_new_type compares with String::operator== (0x00a1f140), whose
+            // non-cached path is locale-sensitive `_wcsicmp`.
+            return Err(ChunkError::NonAsciiStructTypeName(name));
+        }
+        self.global_type_names.push(name);
+        Ok(())
+    }
+
     fn finish(self) -> LoadedFile {
         fn shape(count: usize) -> ArrayWalkMeta {
             ArrayWalkMeta {
@@ -440,6 +458,7 @@ impl Loader {
         LoadedFile {
             file: self.file,
             meta: file_meta,
+            global_type_names: self.global_type_names,
         }
     }
 }
@@ -447,6 +466,7 @@ impl Loader {
 struct LoadedFile {
     file: ScriptFile,
     meta: ScriptFileWalkMeta,
+    global_type_names: Vec<String>,
 }
 
 /// One compiled file supplied in the same order it entered retail's global
@@ -457,7 +477,7 @@ pub struct CompiledScriptFile<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Load one scalar/no-include compiled ScriptFile rooted at a retail tag-0 chunk.
+/// Load one no-include compiled ScriptFile rooted at a retail tag-0 chunk.
 ///
 /// The resulting [`Program`] includes the same complete channel-15 sidecar as the
 /// normal source compiler path. A non-empty tag 6 cannot resolve in a one-file load
@@ -487,8 +507,10 @@ pub fn load_program_files(files: &[CompiledScriptFile<'_>]) -> Result<Program, C
     }
     let mut loaded_files: Vec<ScriptFile> = Vec::with_capacity(files.len());
     let mut loaded_meta = Vec::with_capacity(files.len());
+    let mut global_type_names = Vec::new();
     for input in files {
         let mut loaded = load_file(input.bytes, input.source_file.to_owned())?;
+        global_type_names.append(&mut loaded.global_type_names);
         let mut linked_indices = Vec::with_capacity(loaded.file.linked_file_names.len());
         for linked_name in &loaded.file.linked_file_names {
             if !linked_name.is_ascii() {
@@ -512,6 +534,12 @@ pub fn load_program_files(files: &[CompiledScriptFile<'_>]) -> Result<Program, C
     }
 
     let mut program = Program::default();
+    for name in global_type_names {
+        // add_new_type scans forward, returns the first case-insensitive match, and
+        // appends only when absent. Its returned index is ignored by the retail
+        // ScriptFile loader and therefore by this loader too.
+        program.register_global_type_name(name);
+    }
     program.files = loaded_files;
     program.set_walk_meta(ProgramWalkMeta { files: loaded_meta });
     Ok(program)
@@ -876,11 +904,48 @@ mod tests {
     }
 
     #[test]
-    fn global_struct_state_and_standalone_links_fail_closed() {
-        let struct_root = root(&[chunk(9, Vec::new())]);
+    fn tag9_registers_names_globally_in_first_insertion_order() {
+        let mut pair = Vec::new();
+        push_string(&mut pair, "Pair");
+        let mut pair_case_alias = Vec::new();
+        push_string(&mut pair_case_alias, "PAIR");
+        let mut box_name = Vec::new();
+        push_string(&mut box_name, "Box");
+
+        let first = root(&[chunk(9, pair), chunk(9, pair_case_alias)]);
+        let second = root(&[chunk(9, box_name)]);
+        let program = load_program_files(&[
+            CompiledScriptFile {
+                source_file: "first.bhs",
+                bytes: &first,
+            },
+            CompiledScriptFile {
+                source_file: "second.bhs",
+                bytes: &second,
+            },
+        ])
+        .unwrap();
+
+        // The five root names are installed before any ScriptFile is loaded. The
+        // case alias returns Pair's existing index and preserves its first spelling.
+        assert_eq!(
+            program.global_type_names(),
+            ["int", "float", "string", "void", "bool", "Pair", "Box"]
+        );
+        // load_struct_types initializes both String hash caches to zero; registry
+        // insertion does not infer either declaration hash or schema-signature tag.
+        assert_eq!(program.type_name(0x000b_40e8), None);
+        assert_eq!(program.type_name(0), Some("Pair"));
+    }
+
+    #[test]
+    fn unsupported_locale_aliasing_and_standalone_links_fail_closed() {
+        let mut non_ascii = Vec::new();
+        push_string(&mut non_ascii, "Päir");
+        let struct_root = root(&[chunk(9, non_ascii)]);
         assert!(matches!(
             load_program(&struct_root, "struct.bhs"),
-            Err(ChunkError::UnsupportedStructTypes)
+            Err(ChunkError::NonAsciiStructTypeName(name)) if name == "Päir"
         ));
 
         let mut links = Vec::new();

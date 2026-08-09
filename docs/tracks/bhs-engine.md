@@ -191,15 +191,23 @@ chunk header is 8 bytes, since `load_bytecode` is handed `*(int*)chunk - 8`.
 | 6 | `load_links` `0x009c5120` | `include` links |
 | 7 | `load_line_info` `0x009c4ec0` | line → code offset map |
 | 8 | `load_variable` `0x009c4e30` | a variable name record |
-| 9 | `load_struct_types` `0x009c4d70` | struct type definitions |
+| 9 | `load_struct_types` `0x009c4d70` | one process-global struct type name |
 
-`don_bhs::chunk` now parses the exact scalar subset: the tag-0 root and tags 2–8,
-including UTF-16 Strings and loader-created channel-15 metadata.
+`don_bhs::chunk` now parses the exact pointer-free subset: the tag-0 root and tags
+2–9, including UTF-16 Strings and loader-created channel-15 metadata.
 `load_program_files` resolves non-empty tag-6 links by scanning already-loaded source
 names backward, matching `ScriptFile::find_script_file` (`0x009c6a10`); the VM then
-resolves `OP_CALL_INCLUDE` through that table. Tag 9 (the process-global struct type
-registry) remains fail-closed. Malformed sizes, child counts, ordering, and trailing
-payload are rejected.
+resolves `OP_CALL_INCLUDE` through that table. `StructType::write` (`0x009db230`)
+writes only the declaration name at `StructType+0x10` into each tag-9 leaf.
+`load_struct_types` registers it through `ScriptGameInterfaceBase::add_new_type`
+(`0x009d5250`), which preserves first insertion order and deduplicates names by
+case-insensitive full-string equality. It does **not** serialize field layout, the
+schema-signature tag, or aliases. The registry is process-global and is not part of
+`RunTimeEnv::walk_data`/channel 15. The loaded temporary `String` has both cached hash
+words zero, and `add_new_type` copies them unchanged; `get_type_name` compares the
+cached insensitive word directly rather than deriving a struct identity from the
+name. Malformed sizes, child counts, ordering, trailing payload, and the unresolved
+locale-sensitive non-ASCII comparison are rejected.
 
 ### 2.5 The free disassembly channel
 
@@ -536,9 +544,11 @@ non-empty directory argument rather than by hosting the compiler at all.
 2. **String and aggregate operator differentials.** Integer and float operators are
    Tier B after 6,993 retail cases with zero mismatches. Retail comparisons for
    strings and aggregates, including `ScriptObject::get_string`, remain open.
-3. **Finish the chunk container** (§2.4). Scalar files and their include graph now
-   load without a compiler. Struct type registration (tag 9) remains before arbitrary
-   shipped compiled scripts can use this path.
+3. **Extend compiled-constant coverage only when the writer emits it.** The tag-0
+   container, scalar constants, include graph, and tag-9 global name registration now
+   load without a compiler. Aggregate constant payloads and non-ASCII locale aliases
+   remain explicit errors; no layout or alias relation is inferred from tag 9 because
+   the retail chunk contains neither.
 4. **Register game script qualifiers in the hbox compiler environment.** This is now the
    direct blocker to compiling a body and extracting reference bytecode.
 

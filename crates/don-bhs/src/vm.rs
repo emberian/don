@@ -425,11 +425,29 @@ impl<'a, H: Host> Vm<'a, H> {
     }
 
     fn rte_op(&mut self, e: OpError, bip: usize, op: u8) -> Step {
-        let mut r: RuntimeError = e.into();
-        r.bip = bip;
-        r.op = op;
-        self.err_count += 1;
-        Step::Abort(r)
+        // Every retail do_operator type-mismatch path calls
+        // ScriptGameInterfaceBase::get_type_name (0x009d52d0) for both tags before
+        // raising run_time_error (for example ScriptObject at 0x009d66a9/0x009d66c6).
+        // Keep our wording explicitly ours, but use the recovered registry for the
+        // same runtime identities and retain hexadecimal fail-closed output when no
+        // registered name hashes to the tag.
+        let message = match e {
+            OpError::TypeMismatch { lhs, rhs } => {
+                let lhs = self
+                    .prog
+                    .type_name(lhs)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{lhs:#x}"));
+                let rhs = self
+                    .prog
+                    .type_name(rhs)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{rhs:#x}"));
+                format!("operator type mismatch: lhs {lhs}, rhs {rhs}")
+            }
+            other => RuntimeError::from(other).message,
+        };
+        self.rte(message, bip, op)
     }
 
     // ---------------------------------------------------------------- frames

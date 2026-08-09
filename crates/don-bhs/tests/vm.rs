@@ -50,6 +50,22 @@ fn arithmetic_and_return() {
 }
 
 #[test]
+fn operator_type_errors_use_the_runtime_global_type_registry() {
+    let code = asm(&[
+        (0x26, &[VarRef::Const(0).encode()]),
+        (0x26, &[VarRef::Const(1).encode()]),
+        (0x0f, &[]), // OP_MUL: int.do_operator(real) rejects before arithmetic.
+    ]);
+    let mut p = prog(code, vec![Value::Int(6), Value::Real(7.0)], 0);
+    let mut host = NullHost;
+    let out = Vm::new(&mut p, &mut host).run_script(0, "tick").unwrap();
+    assert_eq!(
+        out.error.unwrap().message,
+        "operator type mismatch: lhs int, rhs float"
+    );
+}
+
+#[test]
 fn static_growth_mirrors_retail_scalar_ownership_metadata() {
     // The shipped static_int compiler capture: const[0], OP_INIT_COPY static[0].
     // The source constant remains VM_CONST (2/0); its duplicate is promoted by

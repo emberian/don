@@ -1399,6 +1399,53 @@ mod tests {
     }
 
     #[test]
+    fn tag9_global_type_registry_is_outside_channel15_script_file_walk() {
+        fn chunk_with_type_name(name: &str) -> Vec<u8> {
+            fn push_u32(out: &mut Vec<u8>, value: u32) {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+
+            let units = name.encode_utf16().collect::<Vec<_>>();
+            let mut type_payload = Vec::new();
+            push_u32(&mut type_payload, units.len() as u32);
+            for unit in units {
+                type_payload.extend_from_slice(&unit.to_le_bytes());
+            }
+
+            let mut type_chunk = Vec::new();
+            push_u32(&mut type_chunk, (8 + type_payload.len()) as u32);
+            type_chunk.extend_from_slice(&9u16.to_le_bytes());
+            type_chunk.extend_from_slice(&0u16.to_le_bytes());
+            type_chunk.extend_from_slice(&type_payload);
+
+            let code_chunk = vec![
+                9, 0, 0, 0, 4, 0, 0, 0,    // tag 4, one-byte payload
+                0x47, // OP_SCRIPT_MARKER
+            ];
+            let mut root = Vec::new();
+            push_u32(&mut root, (8 + type_chunk.len() + code_chunk.len()) as u32);
+            root.extend_from_slice(&0u16.to_le_bytes());
+            root.extend_from_slice(&2u16.to_le_bytes());
+            root.extend_from_slice(&type_chunk);
+            root.extend_from_slice(&code_chunk);
+            root
+        }
+
+        let pair = don_bhs::chunk::load_program(&chunk_with_type_name("Pair"), "registry_only.bhs")
+            .unwrap();
+        let boxed = don_bhs::chunk::load_program(&chunk_with_type_name("Box"), "registry_only.bhs")
+            .unwrap();
+        assert_eq!(pair.global_type_names().last().unwrap(), "Pair");
+        assert_eq!(boxed.global_type_names().last().unwrap(), "Box");
+
+        // RunTimeEnv::walk_data (0x009c41a0) walks the global ScriptFile list and
+        // delegates to ScriptFile::walk_data; it never walks ScriptGameInterfaceBase's
+        // process-global type-name table. Mutating only tag 9 must therefore leave
+        // channel 15 byte-for-byte unchanged.
+        assert_eq!(checksum_program(&pair), checksum_program(&boxed));
+    }
+
+    #[test]
     fn stale_live_link_resolution_is_rejected_before_hashing() {
         let mut program = BhsProgram::default();
         program.files = vec![

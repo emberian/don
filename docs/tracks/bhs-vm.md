@@ -340,10 +340,13 @@ committed.
    by zero, mixed types, bad opcode — need the `StringTable` at `[0x00C06378]` alive;
    that is the same blocker the compiler lane is working through, so the two should
    land together.
-3. **Finish the chunk container.** `don_bhs::chunk` now mirrors the tag-0 root and
-   scalar tags 2–8, including backward global-file resolution for non-empty tag 6,
-   and produces checksum metadata without a compiler. Tag 9's global struct
-   registration remains an explicit error rather than a partial load.
+3. **Extend compiled-constant coverage only from writer evidence.**
+   `don_bhs::chunk` now mirrors the tag-0 root and pointer-free tags 2–9, including
+   backward global-file resolution for non-empty tag 6 and process-global name
+   registration for tag 9, and produces checksum metadata without a compiler. Tag 9
+   contains only `StructType+0x10`'s declaration name—not aggregate layout, its unique
+   schema tag, or aliases—and its freshly loaded retail `String` retains zero cached
+   hash words, so those semantics remain deliberately uninferred.
 4. **The `bhs.log` decode differential.** `OpCode::write_code` (`0x009c2d90`) emits a
    symbolic listing whenever handed a non-empty directory. It remains free the moment
    the compiler lane produces bytecode, and `disasm::format_all` is already shaped for

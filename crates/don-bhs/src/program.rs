@@ -43,14 +43,14 @@
 //! | 6 | `load_links`       `0x009c5120` | `include` links |
 //! | 7 | `load_line_info`   `0x009c4ec0` | line -> code offset map |
 //! | 8 | `load_variable`    `0x009c4e30` | a variable name record |
-//! | 9 | `load_struct_types``0x009c4d70` | struct type definitions |
+//! | 9 | `load_struct_types``0x009c4d70` | one process-global struct type name |
 //!
-//! [`crate::chunk`] parses the scalar subset of that container, including tag-6 links
-//! resolved in retail global-file order, and rejects the global struct registry
-//! explicitly. This module is the *in-memory* shape shared by that reader and the
-//! source compiler.
+//! [`crate::chunk`] parses the pointer-free container, including tag-6 links resolved
+//! in retail global-file order and tag-9 names registered in the process-global type
+//! name table. Tag 9 does not contain a struct layout or its schema-signature tag.
+//! This module is the *in-memory* shape shared by that reader and the source compiler.
 
-use crate::value::Value;
+use crate::value::{ScriptTy, Value};
 
 /// The three checksum-visible fields of a non-empty retail Array container.
 ///
@@ -258,23 +258,56 @@ impl ScriptFile {
 /// `RunTimeEnv::call_script(file_idx, script_idx)` resolves `file_idx` through
 /// `ScriptFile::linked_files` when non-negative, and means "the current file" when
 /// negative (which is how `OP_CALL` is encoded: `call_script(-1, script_idx)`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub files: Vec<ScriptFile>,
     /// Resolved indices in [`Self::files`], parallel to each file's
     /// [`ScriptFile::linked_file_names`]. `OP_CALL_INCLUDE` carries a slot in this
     /// table, not a global file index.
     linked_files: Vec<Vec<usize>>,
+    /// `ScriptGameInterfaceBase::types` (+60): process-global names used by
+    /// `get_type_name(tag)` for runtime diagnostics. The first five entries are
+    /// installed by `ScriptGameInterfaceBase::init`; tag-9 chunks append to this
+    /// table through `add_new_type`.
+    global_type_names: Vec<String>,
+    /// `String::hash_value_insensitive` (+16), parallel to
+    /// [`Self::global_type_names`]. Tag-9 loading constructs a fresh String with this
+    /// word zero and copies it unchanged into the registry.
+    global_type_name_hashes: Vec<u32>,
     walk_meta: Option<ProgramWalkMeta>,
+}
+
+impl Default for Program {
+    fn default() -> Self {
+        let global_type_names = ["int", "float", "string", "void", "bool"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let global_type_name_hashes = vec![
+            ScriptTy::Int.tag(),
+            ScriptTy::Real.tag(),
+            ScriptTy::Str.tag(),
+            ScriptTy::Void.tag(),
+            0x000a_6192, // String::generate_hash("bool")
+        ];
+        Self {
+            files: Vec::new(),
+            linked_files: Vec::new(),
+            // `ScriptGameInterfaceBase::init` (0x009d5a60), in exact insertion
+            // order. The spellings are measured from shipped internal_strings.xml.
+            global_type_names,
+            global_type_name_hashes,
+            walk_meta: None,
+        }
+    }
 }
 
 impl Program {
     pub fn single(file: ScriptFile) -> Program {
-        Program {
-            files: vec![file],
-            linked_files: vec![Vec::new()],
-            walk_meta: None,
-        }
+        let mut program = Program::default();
+        program.files.push(file);
+        program.linked_files.push(Vec::new());
+        program
     }
 
     /// Attach an independently recovered retail checksum sidecar.
@@ -311,6 +344,48 @@ impl Program {
         self.linked_files.get(file).map(Vec::as_slice)
     }
 
+    /// Process-global type-name registry in retail insertion order.
+    ///
+    /// This deliberately exposes names, not struct layouts. `StructType::write`
+    /// serializes only its declaration name at +0x10; its fields and unique schema
+    /// token are absent from tag 9.
+    pub fn global_type_names(&self) -> &[String] {
+        &self.global_type_names
+    }
+
+    /// `ScriptGameInterfaceBase::get_type_name` (`0x009d52d0`).
+    ///
+    /// Retail scans the name array from the beginning and compares the cached
+    /// case-insensitive `String::generate_hash` word at String+16. It does not hash
+    /// the text here. Consequently, a unique tag-9 name has cached word zero exactly
+    /// as `load_struct_types` constructed it; registering a name does not imply a
+    /// mapping from that name's text hash to a struct schema tag.
+    pub fn type_name(&self, tag: u32) -> Option<&str> {
+        self.global_type_names
+            .iter()
+            .zip(&self.global_type_name_hashes)
+            .find(|(_, &cached_hash)| cached_hash == tag)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// `ScriptGameInterfaceBase::add_new_type` (`0x009d5250`).
+    pub(crate) fn register_global_type_name(&mut self, name: String) -> usize {
+        if let Some(index) = self
+            .global_type_names
+            .iter()
+            .position(|registered| registered.eq_ignore_ascii_case(&name))
+        {
+            return index;
+        }
+        let index = self.global_type_names.len();
+        self.global_type_names.push(name);
+        // `ScriptFile::load_struct_types` initializes the temporary String's +12
+        // and +16 cache words to zero. Its buffer allocation and memcpy do not hash
+        // the text; String::operator= copies both zero words into this array.
+        self.global_type_name_hashes.push(0);
+        index
+    }
+
     pub fn walk_meta(&self) -> Option<&ProgramWalkMeta> {
         self.walk_meta.as_ref()
     }
@@ -322,5 +397,32 @@ impl Program {
     /// proceeds without pretending checksum fidelity.
     pub fn walk_meta_mut(&mut self) -> Option<&mut ProgramWalkMeta> {
         self.walk_meta.as_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_type_registry_has_retail_order_dedup_and_hash_lookup() {
+        let mut program = Program::default();
+        assert_eq!(
+            program.global_type_names(),
+            ["int", "float", "string", "void", "bool"]
+        );
+        assert_eq!(program.type_name(ScriptTy::Int.tag()), Some("int"));
+        assert_eq!(program.type_name(ScriptTy::Real.tag()), Some("float"));
+        assert_eq!(program.type_name(ScriptTy::Str.tag()), Some("string"));
+        assert_eq!(program.type_name(ScriptTy::Void.tag()), Some("void"));
+        assert_eq!(program.type_name(0x000a_6192), Some("bool"));
+
+        assert_eq!(program.register_global_type_name("INT".into()), 0);
+        assert_eq!(program.register_global_type_name("Pair".into()), 5);
+        assert_eq!(program.register_global_type_name("PAIR".into()), 5);
+        assert_eq!(program.register_global_type_name("Box".into()), 6);
+        assert_eq!(program.global_type_names()[5..], ["Pair", "Box"]);
+        assert_eq!(program.type_name(0x000b_40e8), None);
+        assert_eq!(program.type_name(0), Some("Pair"));
     }
 }
