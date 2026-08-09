@@ -142,7 +142,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - uncited; only the Ammo half of Objects::inc_time runs",
     "step 17 Leaders::end_process_all 0x006ED070 - uncited",
     "step 19 Leader::process_event_frame 0x006EC180 - uncited",
-    "step 22 Roads::scan_and_kill_stray_roads 0x008956A0 - uncited",
+    "step 22 Roads::scan_and_kill_stray_roads - exact scanner executes; live road tiles without their renderer-owned RoadElementCandidate fail closed",
     "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
 ];
 
@@ -722,6 +722,7 @@ pub struct Sim {
 
     // ---- step 12: fog, borders, groups ------------------------------------------------
     pub map: MapState,
+    pub road_scan: crate::systems::roads::RoadScanState,
     pub groups: groups_guys::Groups,
 
     // ---- step 14: the object bands ----------------------------------------------------
@@ -792,6 +793,7 @@ impl Sim {
             wonder_error: None,
             cannon_time: CannonTimeState::default(),
             map,
+            road_scan: crate::systems::roads::RoadScanState::default(),
             groups: groups_guys::Groups::default(),
             prod_rules: production::ProdRules::shipped(),
             combat_rules: combat::CombatConstants::shipped(),
@@ -1090,7 +1092,9 @@ impl Sim {
         // 21 — OrdersMemManager::cycle: 28 recycler pools, no analogue here.
         t.steps[21] = StepRun::OutOfScope;
         // 22 — stray roads.
-        t.steps[22] = StepRun::Unimplemented(Gap::RoadsScanStray);
+        let (r, w) = self.roads_scan_and_kill_stray();
+        t.steps[22] = r;
+        t.work[22] = w;
 
         // 23 — 15 sim frames is one game second, exactly.
         t.steps[23] = StepRun::Executed;
@@ -1502,6 +1506,23 @@ impl Sim {
             (StepRun::Vacuous, 0)
         } else {
             (StepRun::Executed, work)
+        }
+    }
+
+    // -- step 22 ----------------------------------------------------------------------
+
+    /// `Roads::scan_and_kill_stray_roads` `0x008956A0`, including both direct tile
+    /// cleanup children. Renderer-owned candidate facts remain explicit fail-closed inputs.
+    fn roads_scan_and_kill_stray(&mut self) -> (StepRun, u32) {
+        let trace = crate::systems::roads::scan_and_kill_stray_roads(
+            &mut self.road_scan,
+            &mut self.map.world,
+        );
+        self.cover.gaps[Gap::RoadsScanStray.index()] += trace.missing_candidate_tiles as u64;
+        if trace.tiles_scanned == 0 {
+            (StepRun::Vacuous, 0)
+        } else {
+            (StepRun::Executed, trace.tiles_scanned)
         }
     }
 

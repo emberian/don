@@ -170,7 +170,7 @@ code actually does.
 | 19 | **`Leader::process_event_frame`** | `0x006EC180` | **dispatcher and deterministic body executed** | exact 50-frame rate smoothing, combat-mood selection and battle-event thresholds; JukeBox/Achieve calls emitted as typed presentation events |
 | 20 | **`Game::frame++`** | `0x005924BF` | **implemented** | after step 14 — rotation uses pre-increment frame |
 | 21 | `OrdersMemManager::cycle` | `0x00730E20` | out of scope | |
-| 22 | `Roads::scan_and_kill_stray_roads` | `0x008956A0` | **absent** | |
+| 22 | `Roads::scan_and_kill_stray_roads` | `0x008956A0` | **dispatcher and deterministic body executed** | exact cursor/budget, cache population, bad/straggled-road cleanup and candidate release; renderer candidate facts are explicit |
 | 23 | `frame % 15 → seconds++` | `0x005924CF` | **implemented** | |
 | 24 | `TurnControl::check_cannon_time` | `0x009579E0` | runtime wired: exact 75-frame expiry and `end_cannon_time` state transition; UI/audio side effects out of scope | `tick.rs` |
 | 25 | `SaveGame` / `LoadGame` | `0x005A8220` | out of scope | |

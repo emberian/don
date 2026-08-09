@@ -188,6 +188,7 @@ fn build_scenario(seed: u64) -> Sim {
             whom: 1,
             ox: 1,
             angle: 0,
+            cruise_pose: ammo::CruiseLaunchPose::default(),
             cosmetic: false,
         };
         sim.launch_ammo(&ord, &shooter, Some(&target), 3000, 11);
