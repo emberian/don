@@ -180,7 +180,7 @@ mod tests {
     fn canonical_inventory_cardinalities() {
         assert_eq!((DO_FRAME.len(), EXECUTORS.len()), (29, 28));
         assert_eq!((GROUP_ACTIONS.len(), OPCODES.len()), (42, 82));
-        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 26);
+        assert_eq!(don_sim::command::INLINE_COMMANDS.len(), 37);
         assert_eq!(NUM_WALKED, 15);
     }
 
@@ -198,10 +198,20 @@ mod tests {
     #[test]
     fn recovered_inline_commands_are_complete() {
         for op in [
-            34, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 72,
-            74, 76, 79, 81,
+            34, 37, 39, 40, 43, 44, 45, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+            65, 66, 67, 68, 69, 72, 74, 75, 76, 77, 79, 81,
         ] {
             assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
+        }
+    }
+
+    #[test]
+    fn diplomacy_rows_with_unrecovered_tails_stay_red() {
+        for op in [38, 41, 42] {
+            assert_eq!(
+                inline_status(InlineDef::find(op).unwrap().port),
+                "state_wired"
+            );
         }
     }
 }

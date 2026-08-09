@@ -123,6 +123,29 @@ use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
 };
 
+// These command proof modules deliberately landed outside `systems.rs` so their recovery
+// tests could not be mistaken for dispatcher integration.  The command bridge is now their
+// sole executable owner; keeping the path declarations here avoids exposing them as tick or
+// world systems.
+#[path = "systems/diplomacy_command_plans.rs"]
+pub mod diplomacy_command_plans;
+#[path = "systems/late_command_plans.rs"]
+pub mod late_command_plans;
+#[path = "systems/object_command_plans.rs"]
+pub mod object_command_plans;
+#[path = "systems/setup_diplomacy.rs"]
+pub mod setup_diplomacy;
+
+use self::diplomacy_command_plans::{
+    DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
+};
+use self::late_command_plans::{
+    CannonTimeFacts, CannonTimeReceipt, CannonTimeRequest, PlanStatus as LateCommandPlanStatus,
+};
+use self::object_command_plans::{
+    RenameCityCommand, RenameCityTransactionReceipt, RenameCityTransactionStatus,
+};
+
 /// Owner slots, as `Objects::process_all` iterates them.
 pub const NUM_OWNER_SLOTS: usize = 10;
 
@@ -276,9 +299,9 @@ impl ActionDef {
     }
 }
 
-/// How much of an inline `CommandPackage::process_*` body the bridge carries.
-/// These handlers write `Game` / `TurnControl` / per-player state directly or emit an
-/// explicit receipt for presentation-only work rather than calling an `action_*` receiver.
+/// How much of a non-group `CommandPackage::process_*` row the bridge carries.
+/// Most rows write state inline; recovered Leader/object/product actions use a validated
+/// atomic [`Fleet`] transaction instead of entering the `Group::action_*` table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InlinePort {
     /// Every deterministic simulation-side state mutation and gate is reproduced.
@@ -989,6 +1012,50 @@ pub trait Fleet {
         request: PauseTransactionRequest,
     ) -> PauseTransactionReceipt {
         PauseTransactionReceipt::unavailable(request)
+    }
+
+    /// Atomic host boundary for opcode 75. `Applied` means the object lookup, optional
+    /// city-name write, all reached hot-key normalizations/stamps, and both presentation
+    /// updates committed as the single validated plan. `Unavailable` performs no mutation.
+    fn apply_rename_city_transaction(
+        &mut self,
+        request: RenameCityCommand,
+        _frame: i32,
+    ) -> RenameCityTransactionReceipt {
+        RenameCityTransactionReceipt::unavailable(request)
+    }
+
+    /// Snapshot the complete host-owned state read by opcode 77. The subsequent atomic
+    /// callback must reject the request if this snapshot is no longer current.
+    fn cannon_time_facts(&self, _request: CannonTimeRequest) -> Option<CannonTimeFacts> {
+        None
+    }
+
+    /// Atomic host boundary for opcode 77. A `Planned` receipt is accepted here only when
+    /// the host has committed every ordered state, UI, audio, and wall-clock effect and
+    /// echoes the exact facts supplied by the bridge.
+    fn apply_cannon_time_transaction(
+        &mut self,
+        request: CannonTimeRequest,
+        _facts: CannonTimeFacts,
+    ) -> CannonTimeReceipt {
+        CannonTimeReceipt::unavailable(request)
+    }
+
+    /// Snapshot the diplomacy image used to plan one opcode 37..45 transaction.
+    fn diplomacy_command_state(&self) -> Option<DiplomacyCommandState> {
+        None
+    }
+
+    /// Atomic host boundary for the diplomacy cohort. Hosts may return `Applied` only
+    /// after verifying `request.before` is still current and committing a planner `Apply`
+    /// decision. Declaration, acceptance, and hostile-rejection boundary decisions must
+    /// remain `Unavailable` until their resource/`set_diplo` tails are recovered.
+    fn apply_diplomacy_command_transaction(
+        &mut self,
+        request: DiplomacyCommandRequest,
+    ) -> DiplomacyCommandReceipt {
+        DiplomacyCommandReceipt::unavailable(request)
     }
 }
 
@@ -1851,7 +1918,7 @@ pub struct BridgeStats {
     /// Commands whose handler calls no `*::action_*` (lockstep, chat, camera, cheats we
     /// do not implement).
     pub inert: u64,
-    /// Inline state or presentation-receipt handlers reproduced by this bridge.
+    /// Non-group state, receipt, or atomic transaction handlers reproduced by this bridge.
     pub inline_state: u64,
     /// Orders actually installed on a unit.
     pub orders_installed: u64,
@@ -2528,11 +2595,12 @@ impl Bridge {
         self.dispatch_action(pkg.group, name, cmd, f);
     }
 
-    /// Inline `CommandPackage::process_*` handlers which mutate state without an
-    /// `action_*` receiver.
+    /// Non-group `CommandPackage::process_*` handlers. Rows with an external receiver
+    /// cross one validated atomic [`Fleet`] transaction rather than mutating a prefix.
     fn process_inline(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
         match cmd[0] {
             34 => self.process_hotkey(pkg, cmd),
+            37..=45 => self.process_diplomacy(cmd, f),
             50 => self.process_ping(pkg, cmd),
             51 => self.process_spline(pkg, cmd),
             // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
@@ -2680,11 +2748,13 @@ impl Bridge {
                     });
             }
             74 => self.process_turn_data(pkg, cmd),
+            75 => self.process_rename_city(cmd, f),
             76 => {
                 if let Some(&state) = cmd.get(1) {
                     self.process_pause(pkg.play, state, f);
                 }
             }
+            77 => self.process_cannon_time(pkg, cmd, f),
             79 => {
                 let Ok(play) = usize::try_from(pkg.play) else {
                     return;
@@ -3108,6 +3178,70 @@ impl Bridge {
         self.inline.restart_gate_2 = plan.state.restart_gate_2;
         self.inline.restart_gate_4 = plan.state.restart_gate_4;
         self.inline.chat_filter_bypass = plan.state.chat_filter_bypass;
+    }
+
+    /// Opcode 75 through the complete atomic object/hot-key/presentation transaction.
+    fn process_rename_city(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+        let Ok(request) = object_command_plans::decode_rename_city(cmd) else {
+            return;
+        };
+        let receipt = f.apply_rename_city_transaction(request.clone(), self.frame);
+        if receipt.status == RenameCityTransactionStatus::Applied
+            && (!receipt.validates(&request)
+                || !receipt
+                    .facts
+                    .as_ref()
+                    .is_some_and(|facts| facts.frame == self.frame))
+        {
+            return;
+        }
+    }
+
+    /// Opcode 77 through the complete atomic TurnControl/product transaction. The bridge
+    /// mirrors the speed column it already owns only after a validated host commit.
+    fn process_cannon_time(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
+        let Some(request) = late_command_plans::decode_cannon_time(pkg.play, cmd) else {
+            return;
+        };
+        let Some(facts) = f.cannon_time_facts(request) else {
+            return;
+        };
+        if facts.package_player_who != self.sender_who(pkg.play)
+            || facts.frame != self.frame
+            || facts.state.current_speed != self.inline.speed
+        {
+            return;
+        }
+        let receipt = f.apply_cannon_time_transaction(request, facts);
+        if receipt.status != LateCommandPlanStatus::Planned
+            || receipt.facts.as_ref() != Some(&facts)
+            || !receipt.validates(&request)
+        {
+            return;
+        }
+        if let Some(plan) = receipt.plan {
+            self.inline.speed = plan.state.current_speed;
+        }
+    }
+
+    /// Opcodes 37..45 through one host-owned diplomacy image and atomic commit. The
+    /// receipt validator rejects every planner boundary, so incomplete declaration,
+    /// acceptance, and hostile-rejection branches cannot partially mutate state here.
+    fn process_diplomacy(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+        let Some(before) = f.diplomacy_command_state() else {
+            return;
+        };
+        if before.frame != self.frame {
+            return;
+        }
+        let request = DiplomacyCommandRequest {
+            before,
+            wire: cmd.to_vec(),
+        };
+        let receipt = f.apply_diplomacy_command_transaction(request.clone());
+        if !receipt.validates(&request) {
+            return;
+        }
     }
 
     /// `CommandPackage::process_group` `0x0094A0C0`, opcode 0.

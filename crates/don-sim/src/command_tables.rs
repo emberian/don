@@ -420,12 +420,21 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     },
 ];
 
-pub const NUM_INLINE_COMMANDS: usize = 26;
+pub const NUM_INLINE_COMMANDS: usize = 37;
 
-/// Inline state/receipt handlers recovered beyond the `action_*` receiver table.
+/// Non-group state/receipt/transaction handlers recovered beyond the group-action table.
 #[rustfmt::skip]
 pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 34, name: "hotkey", port: InlinePort::Complete },
+    InlineDef { op: 37, name: "treaty", port: InlinePort::Complete },
+    InlineDef { op: 38, name: "declare", port: InlinePort::StateWired },
+    InlineDef { op: 39, name: "clear_tributes", port: InlinePort::Complete },
+    InlineDef { op: 40, name: "clear_all", port: InlinePort::Complete },
+    InlineDef { op: 41, name: "accept", port: InlinePort::StateWired },
+    InlineDef { op: 42, name: "reject", port: InlinePort::StateWired },
+    InlineDef { op: 43, name: "tribute", port: InlinePort::Complete },
+    InlineDef { op: 44, name: "demand_tribute", port: InlinePort::Complete },
+    InlineDef { op: 45, name: "propose_attack", port: InlinePort::Complete },
     InlineDef { op: 50, name: "ping", port: InlinePort::Complete },
     InlineDef { op: 51, name: "spline", port: InlinePort::Complete },
     InlineDef { op: 52, name: "speed_set", port: InlinePort::Complete },
@@ -448,7 +457,9 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 69, name: "chat_set", port: InlinePort::Complete },
     InlineDef { op: 72, name: "camera", port: InlinePort::Complete },
     InlineDef { op: 74, name: "turn_data", port: InlinePort::Complete },
+    InlineDef { op: 75, name: "rename_city", port: InlinePort::Complete },
     InlineDef { op: 76, name: "pause", port: InlinePort::Complete },
+    InlineDef { op: 77, name: "cannon_time", port: InlinePort::Complete },
     InlineDef { op: 79, name: "player_speed", port: InlinePort::Complete },
     InlineDef { op: 81, name: "marwan", port: InlinePort::Complete },
 ];
