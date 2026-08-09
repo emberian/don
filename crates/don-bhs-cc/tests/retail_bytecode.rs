@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use don_bhs::builtins::UtilHost;
 use don_bhs::host::NullHost;
-use don_bhs::program::{Program, Script, ScriptFile};
+use don_bhs::program::{ArrayWalkMeta, Program, Script, ScriptFile, ValueWalkMeta};
 use don_bhs::value::Value;
 use don_bhs::vm::Vm;
 use don_bhs_cc::sema::{self, Severity};
@@ -334,6 +334,52 @@ fn a_one_bit_retail_mutation_is_detected() {
             fixture.id
         );
     }
+}
+
+#[test]
+fn successful_compile_populates_the_captured_walk_sidecar() {
+    let empty = compile_program(&fixture_path("empty_main"));
+    let empty_file = &empty.files[0];
+    let empty_meta = &empty
+        .walk_meta()
+        .expect("successful compiler sidecar")
+        .files[0];
+    let shape = |count: usize| ArrayWalkMeta {
+        capacity: count as i32,
+        grow: u16::MAX,
+        flags: 0,
+    };
+
+    // These values are from the supported-image empty_main capture, including the
+    // otherwise-invisible allocator fields. A Vec-derived capacity would be 16 for
+    // the eleven code bytes on this toolchain and must not leak into channel 15.
+    assert_eq!(empty_meta.code, shape(11));
+    assert_ne!(
+        empty_meta.code.capacity as usize,
+        empty_file.code.capacity()
+    );
+    assert_eq!(empty_meta.scripts, shape(1));
+    assert_eq!(empty_meta.script_meta.len(), 1);
+    assert_eq!(empty_meta.script_meta[0].params, shape(0));
+    assert_eq!(empty_meta.script_meta[0].refs, shape(0));
+    assert_eq!(empty_meta.script_meta[0].trigger_names, shape(0));
+    assert_eq!(empty_meta.script_meta[0].var_names, shape(0));
+    assert_eq!(empty_meta.script_meta[0].static_var_names, shape(0));
+    assert!(empty_meta.const_pool.is_empty());
+    assert_eq!(empty_meta.linked_files, shape(0));
+    assert!(empty_meta.linked_file_indices.is_empty());
+
+    let static_int = compile_program(&fixture_path("static_int"));
+    let file = &static_int.files[0];
+    let meta = &static_int
+        .walk_meta()
+        .expect("successful compiler sidecar")
+        .files[0];
+    assert_eq!(meta.code, shape(file.code.len()));
+    assert_eq!(meta.scripts, shape(file.scripts.len()));
+    assert_eq!(meta.const_pool, [Some(ValueWalkMeta::scalar(2, 0))]);
+    assert_eq!(meta.script_meta[0].statics, []);
+    assert_eq!(meta.script_meta[0].static_var_names, shape(1));
 }
 
 #[test]

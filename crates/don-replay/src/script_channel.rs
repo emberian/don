@@ -1322,6 +1322,35 @@ mod tests {
     }
 
     #[test]
+    fn recursive_array_projection_hashes_blank_base_and_live_elements() {
+        let program = BhsProgram::single(BhsScriptFile {
+            const_pool: vec![Value::array(0x0005_7bad, Value::Int(0), 1)],
+            ..Default::default()
+        })
+        .with_walk_meta(ProgramWalkMeta {
+            files: vec![ScriptFileWalkMeta {
+                const_pool: vec![Some(ValueWalkMeta {
+                    scope: 2,
+                    ref_count: 0,
+                    nested: ValueWalkNested::Array {
+                        blank_base: Some(Box::new(ValueWalkMeta::scalar(3, 1))),
+                        values: vec![Some(ValueWalkMeta::scalar(3, 1))],
+                    },
+                })],
+                ..Default::default()
+            }],
+        });
+        let before = checksum_program(&program).unwrap();
+        let Value::Obj(array) = &program.files[0].const_pool[0] else {
+            unreachable!()
+        };
+        *array.borrow().values[0].borrow_mut() = Value::Int(1);
+        let after = checksum_program(&program).unwrap();
+        assert_ne!(before.checksum, after.checksum);
+        assert_eq!(before.bytes_walked, after.bytes_walked);
+    }
+
+    #[test]
     fn program_projection_rejects_missing_and_stale_sidecars() {
         let bare = BhsProgram::single(BhsScriptFile::default());
         assert_eq!(

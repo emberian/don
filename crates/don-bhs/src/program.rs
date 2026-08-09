@@ -288,4 +288,13 @@ impl Program {
     pub fn walk_meta(&self) -> Option<&ProgramWalkMeta> {
         self.walk_meta.as_ref()
     }
+
+    /// Mutable access for runtime operations that mirror retail ownership fields.
+    ///
+    /// A producer must install a complete sidecar first. The VM never fabricates a
+    /// missing sidecar: without one, channel 15 remains unavailable and execution
+    /// proceeds without pretending checksum fidelity.
+    pub fn walk_meta_mut(&mut self) -> Option<&mut ProgramWalkMeta> {
+        self.walk_meta.as_mut()
+    }
 }

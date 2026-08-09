@@ -78,7 +78,7 @@
 use crate::builtin_table::{builtin, BuiltinDecl};
 use crate::host::{survey_err_return, Coverage, Host, HostError};
 use crate::opcode::{self, OP_POP};
-use crate::program::Program;
+use crate::program::{Program, ValueWalkMeta, ValueWalkNested};
 use crate::value::{cell, Cell, Obj, OpError, ScriptTy, Value};
 
 /// A decoded variable reference.
@@ -575,7 +575,12 @@ impl<'a, H: Host> Vm<'a, H> {
     /// `VirtualMachine::set_value` (`0x009e07b0`). Note the engine *grows* the
     /// target array with null entries until the index is in range rather than
     /// failing, so we do the same.
-    fn set_slot(&mut self, r: VarRef, v: Slot) -> Result<(), VmError> {
+    fn set_slot(
+        &mut self,
+        r: VarRef,
+        v: Slot,
+        static_walk_meta: Option<ValueWalkMeta>,
+    ) -> Result<(), VmError> {
         let f = self.frames.last().unwrap();
         let (file, script) = (f.file, f.script);
         match r {
@@ -584,13 +589,34 @@ impl<'a, H: Host> Vm<'a, H> {
                 // Retail stores a ScriptType* here. Program statics are the public,
                 // checksummed value representation rather than a VM-frame pointer
                 // graph, so materialise the value. The shipped compiler uses
-                // OP_INIT_COPY for static initialisers; ref parameters are locals.
+                // OP_INIT_COPY for aliased initialisers and OP_INIT for fresh
+                // temporaries; ref parameters are locals.
                 let v = self.deref(&v)?;
                 let s = &mut self.prog.files[file].scripts[script];
                 if s.statics.len() <= i as usize {
                     s.statics.resize(i as usize + 1, None);
                 }
                 s.statics[i as usize] = Some(v);
+
+                // `VirtualMachine::set_value` (0x009e07b0) grows the parallel retail
+                // static pointer array with nulls, then promotes a non-VM_VAR source
+                // to scope 3. Compiler-generated scalar initialisers arrive either as
+                // an OP_INIT_COPY duplicate or a fresh VM_TEMP, both with ref_count 0.
+                // Aggregate children carry additional ownership transitions that are
+                // not recoverable from `Value` alone; mark those slots unavailable so
+                // the channel-15 adapter fails closed instead of hashing guessed data.
+                if let Some(program_meta) = self.prog.walk_meta_mut() {
+                    if let Some(script_meta) = program_meta
+                        .files
+                        .get_mut(file)
+                        .and_then(|file_meta| file_meta.script_meta.get_mut(script))
+                    {
+                        if script_meta.statics.len() <= i as usize {
+                            script_meta.statics.resize(i as usize + 1, None);
+                        }
+                        script_meta.statics[i as usize] = static_walk_meta;
+                    }
+                }
                 Ok(())
             }
             VarRef::Local(i) => {
@@ -660,11 +686,33 @@ impl<'a, H: Host> Vm<'a, H> {
                 script,
                 index,
             }) => {
+                let preserves_scalar_meta = !matches!(v, Value::Obj(_) | Value::Null);
                 let slot = self.prog.files[*file].scripts[*script]
                     .statics
                     .get_mut(*index as usize)
                     .ok_or(VmError::BadVarRef(VarRef::Static(*index)))?;
                 *slot = Some(v);
+                if let Some(meta) = self
+                    .prog
+                    .walk_meta_mut()
+                    .and_then(|meta| meta.files.get_mut(*file))
+                    .and_then(|meta| meta.script_meta.get_mut(*script))
+                    .and_then(|meta| meta.statics.get_mut(*index as usize))
+                {
+                    // Assignment invokes do_operator on the existing ScriptType; for
+                    // scalars the object identity, scope and ref-count do not change.
+                    // A shape-changing crafted program cannot preserve this sidecar.
+                    if !matches!(
+                        meta,
+                        Some(ValueWalkMeta {
+                            nested: ValueWalkNested::Scalar,
+                            ..
+                        })
+                    ) || !preserves_scalar_meta
+                    {
+                        *meta = None;
+                    }
+                }
                 Ok(())
             }
             Slot::Ref(BoundRef::Local { frame, index }) => {
@@ -797,13 +845,22 @@ impl<'a, H: Host> Vm<'a, H> {
             // 0x33 for `ref`. It therefore matters for scalars as well as aggregates.
             0x32 => {
                 let v = self.pop_value()?.duplicate();
+                let static_walk_meta = promoted_scalar_walk_meta(&v);
                 let r = VarRef::decode(self.fetch_u32()?);
-                self.set_slot(r, Slot::Val(v))?;
+                self.set_slot(r, Slot::Val(v), static_walk_meta)?;
             }
             0x33 => {
                 let v = self.pop()?;
+                // A direct transfer is ownership-exact only for a fresh temporary.
+                // OP_PUSH yields Ref/Cell and would mutate the source object's scope
+                // in retail; without pointer-level sidecar identity that path must not
+                // leave an apparently complete checksum projection.
+                let static_walk_meta = match &v {
+                    Slot::Val(value) => promoted_scalar_walk_meta(value),
+                    Slot::Ref(_) | Slot::Cell(_) => None,
+                };
                 let r = VarRef::decode(self.fetch_u32()?);
-                self.set_slot(r, v)?;
+                self.set_slot(r, v, static_walk_meta)?;
             }
             // ---- OP_CAST_BOOL: push is_false ? 0 : 1
             0x35 => {
@@ -1269,6 +1326,17 @@ impl<'a, H: Host> Vm<'a, H> {
             }
             _ => None,
         }
+    }
+}
+
+/// Checksum-visible ownership after `set_value` installs a duplicated or transferred
+/// temporary scalar. Scalar constructors and `duplicate()` allocate with ref-count
+/// zero; the store promotes scope 1 to `VM_VAR` (3). Aggregate ownership is
+/// intentionally not inferred from the Rust value graph.
+fn promoted_scalar_walk_meta(value: &Value) -> Option<ValueWalkMeta> {
+    match value {
+        Value::Int(_) | Value::Real(_) | Value::Str(_) => Some(ValueWalkMeta::scalar(3, 0)),
+        Value::Obj(_) | Value::Null => None,
     }
 }
 

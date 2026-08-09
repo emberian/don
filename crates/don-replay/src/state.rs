@@ -451,10 +451,13 @@ impl SimBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use don_bhs::program::{
-        ArrayWalkMeta, Program, ProgramWalkMeta, Script, ScriptFile, ScriptFileWalkMeta,
-        ScriptWalkMeta,
-    };
+    use std::path::Path;
+
+    use don_bhs::host::NullHost;
+    use don_bhs::program::{Program, ScriptFile, ValueWalkMeta};
+    use don_bhs::value::Value;
+    use don_bhs::vm::Vm;
+    use don_bhs_cc::sema::{self, Severity};
 
     /// Exactly the two channels documented as unresolved may be unresolved. If
     /// a third goes missing, the schema regressed; if one is recovered, this
@@ -484,25 +487,32 @@ mod tests {
 
     #[test]
     fn authoritative_script_runtime_installs_a_non_vacuous_channel_fifteen() {
-        let program = Program::single(ScriptFile {
-            scripts: vec![Script {
-                name: "tick".into(),
-                return_type: 0x0008_4048,
-                ..Default::default()
-            }],
-            ..Default::default()
-        })
-        .with_walk_meta(ProgramWalkMeta {
-            files: vec![ScriptFileWalkMeta {
-                scripts: ArrayWalkMeta {
-                    capacity: 1,
-                    grow: u16::MAX,
-                    flags: 0,
-                },
-                script_meta: vec![ScriptWalkMeta::default()],
-                ..Default::default()
-            }],
-        });
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../don-bhs/oracle/fixtures/static_int.bhs");
+        let includes = sema::IncludePath::with_roots([source.parent().unwrap().to_path_buf()]);
+        let unit = sema::analyze(&source, &includes).unwrap();
+        let (mut program, diags, _) = don_bhs_cc::codegen::compile(&unit);
+        let errors: Vec<String> = unit
+            .diags
+            .iter()
+            .chain(&diags)
+            .filter(|diag| diag.severity == Severity::Error)
+            .map(ToString::to_string)
+            .collect();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+
+        // Exercise the normal compiler-produced metadata through the measured
+        // OP_INIT_COPY static growth path before handing ownership to ScriptRuntime.
+        let mut host = NullHost;
+        let outcome = Vm::new(&mut program, &mut host)
+            .run_script(0, "static_int")
+            .unwrap();
+        assert_eq!(outcome.returned, Some(Value::Int(0)));
+        assert_eq!(
+            program.walk_meta().unwrap().files[0].script_meta[0].statics,
+            [Some(ValueWalkMeta::scalar(3, 0))]
+        );
+
         let runtime = don_sim::script_runtime::ScriptRuntime::new(program, None, None).unwrap();
         let mut state = SimState::new();
         let script = SimBridge::populate_script_runtime(&runtime, &mut state).unwrap();

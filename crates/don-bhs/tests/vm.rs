@@ -8,7 +8,9 @@
 use don_bhs::builtins::UtilHost;
 use don_bhs::disasm::{asm, asm_len, disassemble};
 use don_bhs::host::{Coverage, Host, HostError, HostResult, NullHost};
-use don_bhs::program::{Program, Script, ScriptFile};
+use don_bhs::program::{
+    Program, ProgramWalkMeta, Script, ScriptFile, ScriptFileWalkMeta, ScriptWalkMeta, ValueWalkMeta,
+};
 use don_bhs::value::Value;
 use don_bhs::vm::{MissingBuiltinPolicy, VarRef, Vm, VmError};
 use don_bhs::{builtin, find_builtin, BuiltinDecl, BUILTIN_COUNT};
@@ -45,6 +47,89 @@ fn arithmetic_and_return() {
     ]);
     let mut p = prog(code, vec![Value::Int(6), Value::Int(7)], 0);
     assert_eq!(run_once(&mut p), Some(Value::Int(42)));
+}
+
+#[test]
+fn static_growth_mirrors_retail_scalar_ownership_metadata() {
+    // The shipped static_int compiler capture: const[0], OP_INIT_COPY static[0].
+    // The source constant remains VM_CONST (2/0); its duplicate is promoted by
+    // set_value to VM_VAR (3/0).
+    let mut p = Program::single(ScriptFile {
+        code: decode_hex("47000000004400000040180000002600000020320000004028ad7b05003e"),
+        const_pool: vec![Value::Int(1)],
+        scripts: vec![Script {
+            name: "static_int".into(),
+            return_type: don_bhs::ScriptTy::Int.tag(),
+            static_var_names: vec!["value".into()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .with_walk_meta(ProgramWalkMeta {
+        files: vec![ScriptFileWalkMeta {
+            script_meta: vec![ScriptWalkMeta::default()],
+            const_pool: vec![Some(ValueWalkMeta::scalar(2, 0))],
+            ..Default::default()
+        }],
+    });
+
+    let mut host = NullHost;
+    assert_eq!(
+        Vm::new(&mut p, &mut host)
+            .run_script(0, "static_int")
+            .unwrap()
+            .returned,
+        Some(Value::Int(0))
+    );
+    assert_eq!(p.files[0].scripts[0].statics, [Some(Value::Int(1))]);
+    assert_eq!(
+        p.walk_meta().unwrap().files[0].script_meta[0].statics,
+        [Some(ValueWalkMeta::scalar(3, 0))]
+    );
+    assert_eq!(
+        p.walk_meta().unwrap().files[0].const_pool,
+        [Some(ValueWalkMeta::scalar(2, 0))]
+    );
+}
+
+#[test]
+fn direct_alias_static_install_invalidates_erased_ownership_metadata() {
+    // OP_INIT (not COPY) receives a const-pool pointer here. Retail set_value changes
+    // that same object's scope, so a Rust value clone cannot update both aliases
+    // exactly. The live static grows, but its sidecar slot must remain absent.
+    let code = asm(&[
+        (0x26, &[VarRef::Const(0).encode()]),
+        (0x33, &[VarRef::Static(2).encode()]),
+        (0x28, &[don_bhs::ScriptTy::Int.tag()]),
+        (0x3e, &[]),
+    ]);
+    let mut p = Program::single(ScriptFile {
+        code,
+        const_pool: vec![Value::Int(7)],
+        scripts: vec![Script {
+            name: "tick".into(),
+            return_type: don_bhs::ScriptTy::Int.tag(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .with_walk_meta(ProgramWalkMeta {
+        files: vec![ScriptFileWalkMeta {
+            script_meta: vec![ScriptWalkMeta::default()],
+            const_pool: vec![Some(ValueWalkMeta::scalar(2, 0))],
+            ..Default::default()
+        }],
+    });
+
+    assert_eq!(run_once(&mut p), Some(Value::Int(0)));
+    assert_eq!(
+        p.files[0].scripts[0].statics,
+        [None, None, Some(Value::Int(7))]
+    );
+    assert_eq!(
+        p.walk_meta().unwrap().files[0].script_meta[0].statics,
+        [None, None, None]
+    );
 }
 
 fn decode_hex(s: &str) -> Vec<u8> {

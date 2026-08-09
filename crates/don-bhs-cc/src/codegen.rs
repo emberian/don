@@ -35,7 +35,10 @@
 
 use std::collections::HashMap;
 
-use don_bhs::program::{Program, Script, ScriptFile};
+use don_bhs::program::{
+    ArrayWalkMeta, Program, ProgramWalkMeta, Script, ScriptFile, ScriptFileWalkMeta,
+    ScriptWalkMeta, ValueWalkMeta,
+};
 use don_bhs::value::{ScriptTy, Value};
 
 use crate::ast::*;
@@ -328,8 +331,79 @@ pub fn compile(unit: &Unit) -> (Program, Vec<Diag>, Stats) {
                 script.entry = 0;
             }
         }
+    } else if let Some(walk_meta) = compiler_walk_meta(unit, &prog) {
+        prog.set_walk_meta(walk_meta);
     }
     (prog, diags, stats)
+}
+
+/// Reconstruct the retail compiler's freshly-created container and ownership state.
+///
+/// The supported-image oracle captures show the same invariant for every emitted
+/// Array: capacity equals count, grow is `0xffff`, and flags are zero. Constants are
+/// freshly allocated `VM_CONST` values with ref-count zero. This producer deliberately
+/// returns `None` if a future lowering introduces a constant shape not covered by that
+/// evidence, leaving channel 15 unavailable instead of inventing ownership fields.
+fn compiler_walk_meta(unit: &Unit, prog: &Program) -> Option<ProgramWalkMeta> {
+    fn shape(count: usize) -> Option<ArrayWalkMeta> {
+        Some(ArrayWalkMeta {
+            capacity: i32::try_from(count).ok()?,
+            grow: u16::MAX,
+            flags: 0,
+        })
+    }
+
+    if unit.files.len() != prog.files.len() {
+        return None;
+    }
+
+    let mut files = Vec::with_capacity(prog.files.len());
+    for (source, file) in unit.files.iter().zip(&prog.files) {
+        let mut script_meta = Vec::with_capacity(file.scripts.len());
+        for script in &file.scripts {
+            script_meta.push(ScriptWalkMeta {
+                statics: Vec::new(),
+                params: shape(script.params.len())?,
+                refs: shape(script.refs.len())?,
+                trigger_names: shape(script.trigger_names.len())?,
+                var_names: shape(script.var_names.len())?,
+                static_var_names: shape(script.static_var_names.len())?,
+            });
+        }
+
+        let mut const_pool = Vec::with_capacity(file.const_pool.len());
+        for value in &file.const_pool {
+            match value {
+                Value::Int(_) | Value::Real(_) | Value::Str(_) => {
+                    const_pool.push(Some(ValueWalkMeta::scalar(2, 0)));
+                }
+                // The captured compiler corpus contains only scalar constants. A new
+                // aggregate/null lowering needs its own oracle evidence first.
+                Value::Obj(_) | Value::Null => return None,
+            }
+        }
+
+        let linked_file_indices = source
+            .includes
+            .iter()
+            .copied()
+            .map(i32::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        if linked_file_indices.len() != file.linked_file_names.len() {
+            return None;
+        }
+
+        files.push(ScriptFileWalkMeta {
+            code: shape(file.code.len())?,
+            scripts: shape(file.scripts.len())?,
+            script_meta,
+            const_pool,
+            linked_files: shape(linked_file_indices.len())?,
+            linked_file_indices,
+        });
+    }
+    Some(ProgramWalkMeta { files })
 }
 
 impl<'a> FileGen<'a> {

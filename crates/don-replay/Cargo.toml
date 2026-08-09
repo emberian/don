@@ -13,6 +13,9 @@ don-bhs = { path = "../don-bhs" }
 don-net = { path = "../don-net" }
 don-sim = { path = "../don-sim" }
 
+[dev-dependencies]
+don-bhs-cc = { path = "../don-bhs-cc" }
+
 [[bin]]
 name = "don-replay"
 path = "src/bin/don-replay.rs"
