@@ -41,7 +41,7 @@ fn form_command_resolves_writes_and_reforms_through_the_wire_bridge() {
 
     // FROM_LEADER writes the leader's signed form byte to every unit, records the retail
     // -2 sentinel on GroupData, and QUEUE_LAST appends the delegated move.
-    fleet.get_mut(1, 0).unwrap().form = 7;
+    fleet.get_mut(1, 0).unwrap().form = 5;
     bridge
         .process_all(
             &mut package,
@@ -51,7 +51,7 @@ fn form_command_resolves_writes_and_reforms_through_the_wire_bridge() {
         .unwrap();
     for o in 0..3 {
         let unit = fleet.get(1, o).unwrap();
-        assert_eq!(unit.form, 7);
+        assert_eq!(unit.form, 5);
         assert_eq!(unit.orders.iter().count(), 2);
         assert!(unit
             .orders

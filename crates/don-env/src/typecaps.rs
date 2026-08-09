@@ -23,6 +23,207 @@
 use crate::generated::{NUM_COMMON, NUM_TYPES};
 use std::path::Path;
 
+/// The runtime type-table facts consumed by retail formation construction.
+///
+/// These do not come from `env-typecaps.bin`: six unit flag rows are changed during
+/// retail postload, and formation category reads those live values. The exact source is
+/// the captured `schema/live/live-tables-unit.tsv`; when it is absent the product host
+/// returns no [`don_sim::systems::groups_guys::FormationMember`] rather than substituting
+/// the XML values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormationTypeCap {
+    pub category_leader_flag_clear: i8,
+    pub category_leader_flag_set: i8,
+    pub guy_spacing: i32,
+    pub x_spacing: i32,
+    pub y_spacing: i32,
+    pub uber_size: i32,
+    pub unit_flags: u32,
+    pub level: i32,
+    pub role: i32,
+    pub domain: i32,
+}
+
+impl FormationTypeCap {
+    #[inline]
+    pub fn category(self, leader_flags: u32) -> i32 {
+        i32::from(if leader_flags & 4 != 0 {
+            self.category_leader_flag_set
+        } else {
+            self.category_leader_flag_clear
+        })
+    }
+
+    /// `UnitData::is_modern_infantry` `0x00607B40` for an EnvWorld whose effective type
+    /// is the spawned type: tech 0x12 makes the raw 0x100 flag sufficient; otherwise the
+    /// type's resolved level must exceed 5.
+    #[inline]
+    pub fn modern_infantry(self, has_tech_0x12: bool) -> bool {
+        self.unit_flags & 0x100 != 0 && (has_tech_0x12 || self.level > 5)
+    }
+}
+
+/// Dense TypeIndex-keyed formation facts. `None` is a deliberate unavailable result.
+pub type FormationCaps = Vec<Option<FormationTypeCap>>;
+
+/// `FormData::type_cat` `0x0072DFC0`, specialized to the shipped `UnitType` vtable.
+fn formation_category(
+    type_id: i32,
+    attack: i32,
+    max_range: i32,
+    obj_masks: u32,
+    unit_flags2: u32,
+    leader_flag_4: bool,
+) -> i8 {
+    if attack != 0
+        && unit_flags2 & 0x40 == 0
+        && unit_flags2 & 8 == 0
+        && !matches!(type_id, 0x3d | 0x3e | 400)
+    {
+        if obj_masks & 4 != 0 {
+            return 10;
+        }
+        if obj_masks & 0x20 != 0 {
+            return 3 + i8::from(max_range != 0);
+        }
+        if unit_flags2 & 4 != 0 || obj_masks & 0x8000_0000 != 0 {
+            return 6;
+        }
+        if obj_masks & 0x1000 != 0 {
+            return if max_range != 0 && leader_flag_4 {
+                5
+            } else {
+                2
+            };
+        }
+        return if obj_masks & 0x0020_0000 != 0 { 0 } else { 6 };
+    }
+    if unit_flags2 & 0x60 != 0 {
+        6
+    } else if obj_masks & 4 != 0 {
+        10
+    } else {
+        8
+    }
+}
+
+/// Load the captured retail runtime table used by the formation host. Any malformed row
+/// rejects the whole table: mixing exact and shifted columns would be worse than making
+/// formation unavailable.
+pub fn load_formation_caps(path: Option<&Path>) -> std::io::Result<FormationCaps> {
+    let path = path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_formation_path);
+    parse_formation_caps(&std::fs::read_to_string(path)?)
+}
+
+fn parse_formation_caps(text: &str) -> std::io::Result<FormationCaps> {
+    use std::io::{Error, ErrorKind};
+    let bad = |message: &str| Error::new(ErrorKind::InvalidData, message.to_string());
+    let mut lines = text.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| bad("live-tables-unit.tsv: missing header"))?;
+    let names: Vec<&str> = header.split('\t').collect();
+    let required = [
+        "type_id",
+        "obj_masks",
+        "attack",
+        "max_range",
+        "guy_spacing",
+        "x_spacing",
+        "y_spacing",
+        "unit_flags",
+        "unit_flags2",
+        "role",
+        "domain",
+        "age",
+        "uber_size",
+    ];
+    let mut columns = [0usize; 13];
+    for (dst, name) in columns.iter_mut().zip(required) {
+        *dst = names
+            .iter()
+            .position(|candidate| *candidate == name)
+            .ok_or_else(|| bad("live-tables-unit.tsv: formation column missing"))?;
+    }
+    let mut out = vec![None; NUM_TYPES];
+    let mut rows = 0usize;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let values: Vec<&str> = line.split('\t').collect();
+        let read_i32 = |column: usize| -> std::io::Result<i32> {
+            values
+                .get(column)
+                .ok_or_else(|| bad("live-tables-unit.tsv: short row"))?
+                .parse::<i32>()
+                .map_err(|_| bad("live-tables-unit.tsv: non-integer formation fact"))
+        };
+        let read_u32 = |column: usize| -> std::io::Result<u32> {
+            values
+                .get(column)
+                .ok_or_else(|| bad("live-tables-unit.tsv: short row"))?
+                .parse::<u32>()
+                .map_err(|_| bad("live-tables-unit.tsv: non-integer formation mask"))
+        };
+        let type_id = read_i32(columns[0])?;
+        let obj_masks = read_u32(columns[1])?;
+        let attack = read_i32(columns[2])?;
+        let max_range = read_i32(columns[3])?;
+        let guy_spacing = read_i32(columns[4])?;
+        let x_spacing = read_i32(columns[5])?;
+        let y_spacing = read_i32(columns[6])?;
+        let unit_flags = read_u32(columns[7])?;
+        let unit_flags2 = read_u32(columns[8])?;
+        let role = read_i32(columns[9])?;
+        let domain = read_i32(columns[10])?;
+        let level = read_i32(columns[11])?;
+        let uber_size = read_i32(columns[12])?;
+        let index = usize::try_from(type_id)
+            .ok()
+            .filter(|index| *index < NUM_TYPES)
+            .ok_or_else(|| bad("live-tables-unit.tsv: TypeIndex out of range"))?;
+        if out[index].is_some()
+            || guy_spacing <= 0
+            || x_spacing <= 0
+            || y_spacing <= 0
+            || uber_size <= 0
+        {
+            return Err(bad("live-tables-unit.tsv: invalid formation row"));
+        }
+        out[index] = Some(FormationTypeCap {
+            category_leader_flag_clear: formation_category(
+                type_id,
+                attack,
+                max_range,
+                obj_masks,
+                unit_flags2,
+                false,
+            ),
+            category_leader_flag_set: formation_category(
+                type_id,
+                attack,
+                max_range,
+                obj_masks,
+                unit_flags2,
+                true,
+            ),
+            guy_spacing,
+            x_spacing,
+            y_spacing,
+            uber_size,
+            unit_flags,
+            level,
+            role,
+            domain,
+        });
+        rows += 1;
+    }
+    if rows != 364 {
+        return Err(bad("live-tables-unit.tsv: expected 364 runtime unit rows"));
+    }
+    Ok(out)
+}
+
 pub const F_MOVE: u16 = 1 << 0;
 pub const F_ATTACK: u16 = 1 << 1;
 pub const F_CIVILIAN: u16 = 1 << 2;
@@ -258,6 +459,13 @@ pub fn default_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/env-typecaps.bin")
 }
 
+pub fn default_formation_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("DON_FORMATION_TYPES") {
+        return path.into();
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/live-tables-unit.tsv")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +493,32 @@ mod tests {
             TypeCaps::from_bytes(&b).is_err(),
             "v1's reserved zero byte cannot be treated as an is_plane table"
         );
+    }
+
+    #[test]
+    fn formation_category_keeps_the_only_leader_dependent_branch_explicit() {
+        assert_eq!(formation_category(200, 1, 10, 0x1000, 0, false), 2);
+        assert_eq!(formation_category(200, 1, 10, 0x1000, 0, true), 5);
+        assert_eq!(formation_category(200, 1, 0, 0x20, 0, false), 3);
+        assert_eq!(formation_category(200, 1, 10, 0x20, 0, false), 4);
+        assert_eq!(formation_category(200, 1, 10, 4, 0, false), 10);
+        assert_eq!(formation_category(200, 0, 0, 0, 0, false), 8);
+    }
+
+    #[test]
+    fn captured_formation_table_has_every_runtime_unit_when_present() {
+        let Ok(table) = load_formation_caps(None) else {
+            eprintln!("SKIP: schema/live/live-tables-unit.tsv absent");
+            return;
+        };
+        assert_eq!(table.iter().flatten().count(), 364);
+        let citizen = table[50].expect("Citizen runtime row");
+        assert_eq!(
+            (citizen.guy_spacing, citizen.x_spacing, citizen.y_spacing),
+            (144, 144, 144)
+        );
+        assert_eq!(citizen.category(0), 10);
+        assert!(!citizen.modern_infantry(false));
     }
 
     /// Only meaningful on a tree that has run the generator; skips otherwise so the

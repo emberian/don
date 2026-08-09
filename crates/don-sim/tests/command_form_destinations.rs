@@ -173,9 +173,17 @@ fn form_command_installs_distinct_retail_captain_destinations() {
     for (o, destination) in expected.into_iter().enumerate() {
         let orders: Vec<_> = fleet.get(1, o as i16).unwrap().orders.iter().collect();
         assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].kind, OrderIndex::MoveTo);
+        assert_eq!(orders[0].kind, OrderIndex::GroupMove);
         assert_eq!((orders[0].x, orders[0].y), destination);
-        assert_eq!(orders[0].facing, 1);
+        assert_eq!(orders[0].flags, 5, "allocated + nonzero form flags");
+        assert_eq!(orders[0].facing, 0);
+        assert_eq!(orders[0].group_oxx, 0);
+        assert_eq!(orders[0].group_whose, 1);
+        assert_eq!(orders[0].group_id, 6_400);
+        assert_eq!(orders[0].group_form_id, 0);
+        assert_eq!(orders[0].group_angle, 0);
+        assert_eq!(orders[0].in_group, 0);
+        assert_eq!((orders[0].orig_x, orders[0].orig_y), (4_800, 9_600));
     }
     assert_eq!(formation_order_coord(4_800), 100);
     assert_eq!(
@@ -190,4 +198,115 @@ fn form_command_installs_distinct_retail_captain_destinations() {
     assert_eq!(group.off_x[3], 0x1122_3344);
     assert_eq!(group.curr_y[3], -0x5060_7080);
     assert_eq!(group.angles[3], 0x31);
+    assert_eq!(group.order_num, 1);
+}
+
+#[test]
+fn group_move_promotion_applies_each_recovered_member_gate() {
+    let mut fleet = ObjectTable::new(8);
+    for o in 0..5 {
+        let mut slot = Slot::unit(200 + o as u16, 4_800, 9_600);
+        slot.formation_member = Some(captain_profile());
+        fleet.put(1, o, slot);
+    }
+    fleet
+        .get_mut(1, 1)
+        .unwrap()
+        .formation_member
+        .as_mut()
+        .unwrap()
+        .modern_infantry = true;
+    fleet.get_mut(1, 2).unwrap().domain = 1;
+    fleet.get_mut(1, 3).unwrap().role = 0x10;
+    fleet.get_mut(1, 4).unwrap().unit_masks = 4;
+
+    let mut bridge = Bridge::new();
+    bridge.frame = 7;
+    let mut package = Package::new(1, 7);
+    bridge
+        .process_all(&mut package, &build::group(1, &[0, 1, 2, 3, 4]), &mut fleet)
+        .unwrap();
+    bridge
+        .process_all(
+            &mut package,
+            &build::move_to(8_000, 9_000, QueuePos::Last, 2),
+            &mut fleet,
+        )
+        .unwrap();
+
+    assert_eq!(
+        fleet.get(1, 0).unwrap().orders.current().unwrap().kind,
+        OrderIndex::GroupAttackTo
+    );
+    assert_eq!(
+        fleet.get(1, 0).unwrap().orders.current().unwrap().group_id,
+        13_400
+    );
+    assert_eq!(
+        fleet.get(1, 1).unwrap().orders.current().unwrap().kind,
+        OrderIndex::AttackTo
+    );
+    assert_eq!(
+        fleet.get(1, 2).unwrap().orders.current().unwrap().kind,
+        OrderIndex::AttackTo
+    );
+    assert_eq!(
+        fleet.get(1, 3).unwrap().orders.current().unwrap().kind,
+        OrderIndex::AttackTo
+    );
+    assert_eq!(
+        fleet.get(1, 4).unwrap().orders.current().unwrap().kind,
+        OrderIndex::AttackTo
+    );
+
+    // Role bit 0x10 admits GROUP_MOVE only while the exact instance latch is present;
+    // installation then clears the separate 0x400 pending bit and leaves this bit alone.
+    fleet.get_mut(1, 3).unwrap().unit_masks = 0x0004_0400;
+    let mut disembark_move = build::move_to(8_500, 9_500, QueuePos::Last, 1);
+    disembark_move[21] = 1;
+    bridge
+        .process_all(&mut package, &disembark_move, &mut fleet)
+        .unwrap();
+    let admitted = fleet.get(1, 3).unwrap();
+    assert_eq!(
+        admitted.orders.iter().last().unwrap().kind,
+        OrderIndex::GroupMove
+    );
+    assert_eq!(admitted.orders.iter().last().unwrap().flags, 0x21);
+    assert_eq!(admitted.orders.iter().last().unwrap().group_id, 13_401);
+    assert_eq!(admitted.unit_masks, 0x0004_0000);
+}
+
+#[test]
+fn unsupported_form_command_changes_nothing() {
+    for unsupported in [Formation::Square, Formation::Wedge, Formation::Mob] {
+        let mut fleet = ObjectTable::new(4);
+        for o in 0..2 {
+            let mut slot = Slot::unit(300 + o as u16, 4_800, 9_600);
+            slot.form = Formation::Line as i8;
+            slot.formation_member = Some(captain_profile());
+            fleet.put(1, o, slot);
+        }
+        let mut bridge = Bridge::new();
+        let mut package = Package::new(1, 0);
+        bridge
+            .process_all(&mut package, &build::group(1, &[0, 1]), &mut fleet)
+            .unwrap();
+        let before = bridge.groups.get(package.group).unwrap().clone();
+
+        bridge
+            .process_all(
+                &mut package,
+                &build::form(unsupported as i32, 0, QueuePos::Last),
+                &mut fleet,
+            )
+            .unwrap();
+
+        assert_eq!(bridge.groups.get(package.group).unwrap(), &before);
+        for o in 0..2 {
+            let slot = fleet.get(1, o).unwrap();
+            assert_eq!(slot.form, Formation::Line as i8);
+            assert!(slot.orders.is_empty());
+        }
+    }
 }

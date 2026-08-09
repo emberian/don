@@ -110,8 +110,8 @@
 
 use crate::order::{Order, OrderIndex};
 use crate::systems::groups_guys::{
-    formation_order_coord, resolve_form, vector_dist, FormationMember, GroupData, MemberState,
-    GROUP_MAX_MEMBERS,
+    formation_order_coord, resolve_form, vector_dist, Formation, FormationMember, GroupData,
+    MemberState, GROUP_MAX_MEMBERS,
 };
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
@@ -488,6 +488,15 @@ pub trait Fleet {
         let _ = (who, o);
         0
     }
+    /// `ObjectTypeData::domain` at `+0x218`.
+    fn domain(&self, _who: u8, _o: i16) -> i32 {
+        0
+    }
+    /// Live `UnitData::unit_masks` at `+0x68`.
+    fn unit_masks(&self, _who: u8, _o: i16) -> u32 {
+        0
+    }
+    fn set_unit_masks(&mut self, _who: u8, _o: i16, _masks: u32) {}
     /// Can this object be given movement orders at all? Retail asks
     /// `UnitData::get_speed() > 0` plus a stack of "entering/exiting", "is_blown" and
     /// garrison predicates; a port supplies whichever of those it holds.
@@ -548,6 +557,25 @@ pub trait Fleet {
     }
     fn orders(&self, who: u8, o: i16) -> Option<&OrderQueue>;
     fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderQueue>;
+    /// Whether an order can be installed without crossing a host-owned lifecycle which
+    /// could fail midway through a group action. Product hosts use this as the
+    /// transaction preflight; the in-memory bridge table has no external lifecycle.
+    fn can_install_order(&self, who: u8, o: i16, _queue: QueuePos) -> bool {
+        self.orders(who, o).is_some()
+    }
+    /// Install one already-constructed order after [`Fleet::can_install_order`] succeeds.
+    /// Hosts with retirement side effects override this instead of exposing their queue
+    /// for mutation behind the lifecycle's back.
+    fn install_order_rec(&mut self, who: u8, o: i16, order: OrderRec, queue: QueuePos) -> bool {
+        let Some(list) = self.orders_mut(who, o) else {
+            return false;
+        };
+        if queue == QueuePos::New {
+            list.clear();
+        }
+        list.push_back(order);
+        true
+    }
     /// `Unit::set_stance` — `action_stance` writes it and installs no order.
     fn set_stance(&mut self, who: u8, o: i16, stance: i8);
     /// `Object::disband` `0x006455C0`.
@@ -570,6 +598,8 @@ pub struct Slot {
     pub form: i8,
     pub angle: i32,
     pub role: i32,
+    pub domain: i32,
+    pub unit_masks: u32,
     pub group: i16,
     pub uid: u16,
     pub x: i32,
@@ -702,6 +732,17 @@ impl Fleet for ObjectTable {
     fn role(&self, who: u8, o: i16) -> i32 {
         self.get(who, o).map_or(0, |s| s.role)
     }
+    fn domain(&self, who: u8, o: i16) -> i32 {
+        self.get(who, o).map_or(0, |s| s.domain)
+    }
+    fn unit_masks(&self, who: u8, o: i16) -> u32 {
+        self.get(who, o).map_or(0, |s| s.unit_masks)
+    }
+    fn set_unit_masks(&mut self, who: u8, o: i16, masks: u32) {
+        if let Some(s) = self.get_mut(who, o) {
+            s.unit_masks = masks;
+        }
+    }
     fn can_move(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.can_move)
     }
@@ -768,7 +809,15 @@ impl Default for Groups {
 impl Groups {
     pub fn new() -> Groups {
         Groups {
-            slots: vec![GroupData::default(); NUM_OWNER_SLOTS * GROUP_SLOTS_STRIDE],
+            // `Group::clear(slot)` preserves/writes this identity at `GroupData+0x04`;
+            // `Groups::copy_group` deliberately does not copy it from the transient
+            // selection. GROUP_MOVE embeds it in the order id.
+            slots: (0..NUM_OWNER_SLOTS * GROUP_SLOTS_STRIDE)
+                .map(|id| GroupData {
+                    id: id as i32,
+                    ..GroupData::default()
+                })
+                .collect(),
             cur: [-1; NUM_OWNER_SLOTS],
         }
     }
@@ -847,7 +896,9 @@ impl Groups {
         if !reuse {
             slot = self.get_open_slot(who);
             let dst = slot as usize;
+            let id = self.slots[dst].id;
             self.slots[dst] = g.clone();
+            self.slots[dst].id = id;
             self.slots[dst].stamp = frame;
             self.cur[who as usize % NUM_OWNER_SLOTS] = slot;
         }
@@ -1183,17 +1234,16 @@ impl Action<'_> {
     }
 
     fn install_rec(&mut self, who: u8, o: i16, order: OrderRec, q: QueuePos, f: &mut dyn Fleet) {
-        let Some(list) = f.orders_mut(who, o) else {
+        let Some(was_empty) = f.orders(who, o).map(OrderQueue::is_empty) else {
             return;
         };
-        if q == QueuePos::New {
-            if !list.is_empty() {
-                self.stats.orders_cleared += 1;
-            }
-            list.clear();
-        }
         let kind = order.kind;
-        list.push_back(order);
+        if !f.install_order_rec(who, o, order, q) {
+            return;
+        }
+        if q == QueuePos::New && !was_empty {
+            self.stats.orders_cleared += 1;
+        }
         self.stats.orders_installed += 1;
         self.stats.by_order[kind.index()] += 1;
     }
@@ -1257,7 +1307,10 @@ impl Action<'_> {
                 let q = QueuePos::from_i64(i8_at(cmd, 18).unwrap_or(0) as i64);
                 let form = i8_at(cmd, 19).unwrap_or(-1) as i32;
                 let width = i8_at(cmd, 20).unwrap_or(-1) as i32;
-                self.action_move_near(x, y, 0, q, set_angle, angle, orders, form, width, f);
+                let disembark = i8_at(cmd, 21).unwrap_or(0) != 0;
+                self.action_move_near(
+                    x, y, 0, q, set_angle, angle, orders, form, width, disembark, f,
+                );
             }
             "move_near" => {
                 // MoveNearCommand adds tolerance@9 and shifts the tail by four
@@ -1273,7 +1326,10 @@ impl Action<'_> {
                 let q = QueuePos::from_i64(i8_at(cmd, 22).unwrap_or(0) as i64);
                 let form = i8_at(cmd, 23).unwrap_or(-1) as i32;
                 let width = i8_at(cmd, 24).unwrap_or(-1) as i32;
-                self.action_move_near(x, y, tol, q, set_angle, angle, orders, form, width, f);
+                let disembark = i8_at(cmd, 25).unwrap_or(0) != 0;
+                self.action_move_near(
+                    x, y, tol, q, set_angle, angle, orders, form, width, disembark, f,
+                );
             }
             "attack" => {
                 // AttackCommand: ox@1 whom@5 ignore@9 queued@13; the handler calls
@@ -1574,6 +1630,19 @@ impl Action<'_> {
             }
         }
         let resolved = resolve_form(form, current, f.form(who, leader) as i32);
+        if matches!(resolved, 6 | 7 | 9) {
+            // Square depends on the unrecovered `FormData::space[4][18]` table, Wedge
+            // consumes a caller stack cell which is uninitialized in the shipped build,
+            // and Mob needs its evolving binary-angle ring. Refuse the whole command so
+            // neither UnitData::form nor the order queues are partially changed.
+            return;
+        }
+        let (_, members) = self.members();
+        if members.iter().copied().any(|o| {
+            f.alive(who, o) && f.can_move(who, o) && !f.can_install_order(who, o, QueuePos::Last)
+        }) {
+            return;
+        }
 
         // Unlike the other queue-first actions, FORM runs this insert dance for both
         // QUEUE_FIRST and QUEUE_NEW. `set_up_insert` copies only the leader's GROUP-flagged
@@ -1636,7 +1705,19 @@ impl Action<'_> {
                     };
                     base.wrapping_add(rotate)
                 };
-                self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, -1, -1, f);
+                self.action_move_near(
+                    x,
+                    y,
+                    0,
+                    QueuePos::Last,
+                    rotate != 0,
+                    angle,
+                    1,
+                    -1,
+                    -1,
+                    false,
+                    f,
+                );
             }
             return;
         }
@@ -1660,7 +1741,19 @@ impl Action<'_> {
                 };
                 base.wrapping_add(rotate)
             };
-            self.action_move_near(x, y, 0, QueuePos::Last, rotate != 0, angle, 1, -1, -1, f);
+            self.action_move_near(
+                x,
+                y,
+                0,
+                QueuePos::Last,
+                rotate != 0,
+                angle,
+                1,
+                -1,
+                -1,
+                false,
+                f,
+            );
         }
     }
 
@@ -1677,10 +1770,11 @@ impl Action<'_> {
     /// switch (orders) { 2 -> ATTACK_TO; 3 -> EXPLORE_TO; 4 -> FLEE_TO; default -> MOVE_TO }
     /// ```
     ///
-    /// Wedge/Square/Mob, subordinate (non-captain) sorting, GROUP_MOVE promotion,
-    /// garrison-into-transport, and disembark remain explicit gaps. A fleet which does not
-    /// provide complete [`FormationMember`] facts retains the flat order spine; the bridge
-    /// never invents spacing values.
+    /// Wedge/Square/Mob and subordinate (non-captain) sorting remain explicit gaps, as do
+    /// garrison-into-transport and the disembark executor. GROUP_MOVE construction is
+    /// recovered through its complete per-member predicate and `GroupOrder` payload. A
+    /// fleet which does not provide complete [`FormationMember`] facts retains the flat
+    /// order spine; the bridge never invents spacing values.
     #[allow(clippy::too_many_arguments)]
     fn action_move_near(
         &mut self,
@@ -1693,12 +1787,20 @@ impl Action<'_> {
         orders: i64,
         form: i32,
         width: i32,
+        disembark: bool,
         f: &mut dyn Fleet,
     ) {
         self.normalize_for_action(f);
         let mut body = |a: &mut Action<'_>, q: QueuePos, f: &mut dyn Fleet| {
             let kind = move_order_kind(orders);
             let (who, list) = a.members();
+            if list
+                .iter()
+                .copied()
+                .any(|o| f.alive(who, o) && f.can_move(who, o) && !f.can_install_order(who, o, q))
+            {
+                return;
+            }
             let water = f.formation_water_destination(x, y);
             let profiles: Option<Vec<FormationMember>> = list
                 .iter()
@@ -1747,7 +1849,7 @@ impl Action<'_> {
                             .fold((0i32, 0i32), |(sum, count), member| {
                                 (sum.wrapping_add(member.width), count + 1)
                             });
-                        (count != 0).then_some(sum / count)
+                        (count != 0).then(|| sum / count)
                     })
                     .unwrap_or(50)
             } else {
@@ -1789,6 +1891,12 @@ impl Action<'_> {
                     f.force_formation_facing_zero(),
                 )
             });
+            // Complete type facts opt into the exact formation transaction. A shape whose
+            // recovered solver is not authoritative must not silently collapse every unit
+            // onto the click point. Hosts without facts remain on the older flat spine.
+            if profiles.is_some() && computed.is_none() {
+                return;
+            }
             if q == QueuePos::Last || q == QueuePos::New {
                 if let Some((_, actual_angle)) = computed.as_ref() {
                     if let Some(group) = a.groups.get_mut(a.slot) {
@@ -1799,6 +1907,17 @@ impl Action<'_> {
                     }
                 }
             }
+
+            let group_order_id = a.groups.get(a.slot).map(|group| {
+                a.frame
+                    .wrapping_mul(10)
+                    .wrapping_add(group.id)
+                    .wrapping_mul(100)
+                    .wrapping_add(group.order_num)
+            });
+            let group_leader = computed
+                .as_ref()
+                .and_then(|(layout, _)| list.get(layout.leader_index).copied());
 
             for (i, o) in list.iter().copied().enumerate() {
                 if !f.alive(who, o) || !f.can_move(who, o) {
@@ -1816,19 +1935,59 @@ impl Action<'_> {
                 } else {
                     (x, y, angle)
                 };
-                let ord = Order {
-                    kind,
-                    x: to_x,
-                    y: to_y,
-                    tolerance,
-                    ..Order::default()
+                let profile = profiles.as_ref().and_then(|profiles| profiles.get(i));
+                let masks = f.unit_masks(who, o);
+                let promote_group = computed.is_some()
+                    && matches!(orders, 1 | 2)
+                    && resolved_form != Formation::Mob as i32
+                    && list.len() > 1
+                    && profile.is_some_and(|member| !member.modern_infantry)
+                    && (f.role(who, o) & 0x10 == 0 || masks & 0x0004_0000 != 0)
+                    && masks & 4 == 0
+                    && f.domain(who, o) != 1;
+
+                let mut ord = if promote_group {
+                    let layout = &computed.as_ref().expect("checked above").0;
+                    OrderRec {
+                        kind: if orders == 2 {
+                            OrderIndex::GroupAttackTo
+                        } else {
+                            OrderIndex::GroupMove
+                        },
+                        flags: 1 | if form != 0 { 4 } else { 0 } | if disembark { 0x20 } else { 0 },
+                        x: to_x,
+                        y: to_y,
+                        angle: member_angle,
+                        facing: i32::from(layout.reverse),
+                        dest_x: to_x,
+                        dest_y: to_y,
+                        orig_x: x,
+                        orig_y: y,
+                        group_oxx: i32::from(group_leader.expect("computed layout has leader")),
+                        group_whose: i32::from(who),
+                        group_id: group_order_id.expect("computed layout has group"),
+                        group_form_id: i32::from(set_angle),
+                        group_angle: member_angle,
+                        ..OrderRec::default()
+                    }
+                } else {
+                    let ord = Order {
+                        kind,
+                        x: to_x,
+                        y: to_y,
+                        tolerance,
+                        ..Order::default()
+                    };
+                    let mut ord = OrderRec::from(ord);
+                    ord.angle = member_angle;
+                    // `action_move_near` pushes literal 1 as
+                    // `Unit::add_move_facing_order`'s fifth argument at 0x00705F98.
+                    ord.facing = 1;
+                    ord
                 };
-                let mut ord = OrderRec::from(ord);
                 ord.angle = member_angle;
-                // `action_move_near` pushes literal 1 as
-                // `Unit::add_move_facing_order`'s fifth argument at 0x00705F98.
-                ord.facing = 1;
                 a.install_rec(who, o, ord, q, f);
+                f.set_unit_masks(who, o, masks & !0x400);
             }
 
             if computed.is_some() {
@@ -1838,6 +1997,9 @@ impl Action<'_> {
                         group.update_positions(update_angle);
                     }
                 }
+            }
+            if let Some(group) = a.groups.get_mut(a.slot) {
+                group.order_num = group.order_num.wrapping_add(1);
             }
         };
         if self.with_queue_first(q, f, &mut body) {

@@ -28,7 +28,7 @@ Concretely, what executes now:
   writes the slot into `CommandPackage::group`, and back-links every member's
   `ObjectData::group`. Without this every other command is a no-op, which is exactly why
   nothing downstream could act before.
-* **17 of the 34 wire-reachable `Group::action_*`** — order installation per member, with
+* **18 of the 34 wire-reachable `Group::action_*`** — order installation per member, with
   real `QueuePos` semantics.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
@@ -70,12 +70,12 @@ They carry **209 direct `call`/`jmp` sites** across all named procedures in `.te
 
 | status | count | meaning |
 |---|---:|---|
-| `Port::Orders` | 14 | installs orders per member, with `QueuePos`, from a command |
+| `Port::Orders` | 15 | installs orders per member, with `QueuePos`, from a command |
 | `Port::State` | 3 | reproduced, and retail installs no order either (`halt`, `stance`, `disband`) |
-| `Port::Todo` | 17 | dispatched and counted, body not ported |
+| `Port::Todo` | 16 | dispatched and counted, body not ported |
 | `Port::NotOnTheWire` | 8 | no `CommandPackage` handler reaches them |
 
-So **17 of the 34 wire-reachable actions are ported** and 17 remain. `BridgeStats` counts
+So **18 of the 34 wire-reachable actions are ported** and 16 remain. `BridgeStats` counts
 the split at runtime (`acted` vs `unported`), so the number is measured per run rather than
 asserted.
 
@@ -97,7 +97,7 @@ asserted.
 | `garrison` | `0x00700490` | 1791 | 7 | `GARRISON` on each member → `halt` | Orders |
 | `flight` | `0x006FB260` | 3398 | 6 | `STRAFE` for aircraft → `attack`, `guard`, `launch_flight` | Todo |
 | `queue_up` | `0x006FDBB0` | 1516 | 6 | `Build::queue_up` `0x00620F40` on producers; installs no unit order | Todo |
-| `form` | `0x00707220` | 746 | 6 | sets `GroupData::form`, then re-issues movement → `halt`, `move_to` | Todo |
+| `form` | `0x00707220` | 746 | 6 | sets `GroupData::form`, computes the captain destination, then installs `GROUP_MOVE`/`GROUP_ATTACK_TO` | Orders |
 | `air_patrol` | `0x007029D0` | 1763 | 5 | `AIR_PATROL` → `move_to` | NotOnTheWire |
 | `patrol` | `0x007030C0` | 1215 | 5 | **`GROUP_PATROL`** (not `PATROL`) → `air_patrol` for aircraft | Orders |
 | `follow` | `0x006FD510` | 645 | 4 | `FOLLOW` on each member except the target itself → `halt` | Orders |
@@ -338,7 +338,7 @@ Two sentences each, per the standing rule. None of these files was edited.
   cycles whose modulus is 6/4/2/2 by stance type `[measured, the switch at 0x0070D47B]`.
   The type needs unit-type data the bridge does not hold, so a negative argument resolves
   against the combat cycle of 6 and the assumption is stated in the doc comment.
-* **The 17 `Port::Todo` actions.** They dispatch and increment `BridgeStats::unported`
+* **The 16 `Port::Todo` actions.** They dispatch and increment `BridgeStats::unported`
   rather than pretending to act, so a replay run reports its own coverage.
 
 ## Regenerating `command_tables.rs`

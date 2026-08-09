@@ -16,8 +16,11 @@
 //! is the point: an RL surface whose gaps are silent is worse than no surface at all.
 
 use crate::generated as g;
-use crate::typecaps::{TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE};
-use don_sim::command::QueuePos;
+use crate::typecaps::{
+    load_formation_caps, FormationCaps, TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE,
+};
+use don_sim::command::{Fleet, QueuePos};
+use don_sim::objects::Band;
 use don_sim::order::OrderIndex;
 use don_sim::systems::collision::{UnitRow, UnitTable, DOMAIN_LAND};
 use don_sim::systems::containment::NearbyUnitType;
@@ -33,6 +36,7 @@ use don_sim::systems::gathering::{
     GatherAssignment, GatherCount, GatherOrderWalk, GatherSite, GatherWorker, NonFlatGatherState,
     NO_OBJECT,
 };
+use don_sim::systems::groups_guys::FormationMember;
 use don_sim::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, AirPatrolSearch, OrderQueue, OrderRec, PatrolInstall,
     PatrolPayload, UnitWork,
@@ -48,6 +52,9 @@ use std::sync::Arc;
 /// Static tables shared by every world in a batch; never mutated after construction.
 pub struct Rules {
     pub caps: TypeCaps,
+    /// Captured postload runtime facts used by `Form::categorize`. Empty/`None` when the
+    /// ignored live table is unavailable; formation then remains masked at the host seam.
+    pub formation_caps: FormationCaps,
     /// `Balance::final_balance_table` at `0x00C12BF4`, `short[493][493]` [measured].
     /// `None` when `schema/live/balance-real.bin` is absent; the damage chain then sees a
     /// flat 100 % balance term and [`Rules::balance_is_real`] is false.
@@ -63,6 +70,7 @@ impl Rules {
         balance: Option<&std::path::Path>,
     ) -> (Arc<Rules>, bool, bool) {
         let (caps, caps_real) = TypeCaps::load_or_permissive(typecaps);
+        let formation_caps = load_formation_caps(None).unwrap_or_else(|_| vec![None; g::NUM_TYPES]);
         let p = balance.map(|p| p.to_path_buf()).unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../schema/live/balance-real.bin")
@@ -83,6 +91,7 @@ impl Rules {
         (
             Arc::new(Rules {
                 caps,
+                formation_caps,
                 balance,
                 building_types,
             }),
@@ -93,6 +102,11 @@ impl Rules {
 
     pub fn balance_is_real(&self) -> bool {
         self.balance.is_some()
+    }
+
+    #[inline]
+    pub fn formation_cap(&self, type_id: u16) -> Option<crate::typecaps::FormationTypeCap> {
+        self.formation_caps.get(type_id as usize).copied().flatten()
     }
 
     /// `(i32)(i16) balance[atk * 493 + def]`, the operand `get_damage` reads at
@@ -178,6 +192,12 @@ pub struct PlayerState {
     pub who: u8,
     pub team: u8,
     pub alive: bool,
+    /// `LeaderData::leader_flags` at `+0x00`; formation category tests bit 2.
+    pub leader_flags: u32,
+    /// Exact host fact for `Leader::has_tech(0x12)`, the first branch of
+    /// `UnitData::is_modern_infantry`. Research remains outside the compact env, so this
+    /// starts false and changes only when an explicit host supplies that tech state.
+    pub has_modern_infantry_tech: bool,
     /// `LeaderData::defeat_type` (0 = not defeated) and `victory_type`.
     pub defeat_type: i32,
     pub victory_type: i32,
@@ -222,6 +242,8 @@ impl PlayerState {
             who,
             team: who,
             alive: true,
+            leader_flags: 0,
+            has_modern_infantry_tech: false,
             defeat_type: 0,
             victory_type: 0,
             // Placeholder starting stock. The real start economy comes from
@@ -655,7 +677,8 @@ impl EnvWorld {
         self.dest_x[row] = x;
         self.dest_y[row] = y;
         self.stance[row] = 0;
-        self.form[row] = 0;
+        let initial_form = if matches!(t, 50..=53) { 9 } else { 0 };
+        self.form[row] = initial_form;
         self.attack[row] = c.attack;
         self.armor[row] = c.armor;
         self.max_hits[row] = c.hits.max(1);
@@ -670,6 +693,14 @@ impl EnvWorld {
         );
         self.sim.hits_mut()[row] = c.hits.max(1);
         self.sim.cooldown_mut()[row] = 0;
+        // Unit::init `0x00612100`: the four Citizen type ids start in Mob, every other
+        // type in Line; form_mod is the signed -1 non-contributor sentinel, and a newly
+        // spawned object belongs to no command group.
+        self.sim.units.group_mut()[row] = -1;
+        self.sim.units.form_mut()[row] = initial_form as i8;
+        self.sim.units.form_mod_mut()[row] = -1;
+        self.sim.units.stance_mut()[row] = 0;
+        self.sim.units.set_unit_masks(row, 0);
         let p = owner as usize;
         if p < g::NUM_PLAYERS {
             if c.has(F_BUILDING) {
@@ -2014,6 +2045,226 @@ impl EnvWorld {
             }
         }
         self.recompute_scores();
+    }
+}
+
+// The command bridge's product host. Every lookup resolves the engine's `(who,o)`
+// identity through ObjectRegistry; dense EnvWorld row indices never leak across this
+// boundary.
+impl EnvWorld {
+    fn fleet_row(&self, who: u8, o: i16) -> Option<usize> {
+        // ObjectRegistry::slot indexes the fixed retail owner table directly.
+        // Reject an invalid wire owner before reaching that indexing operation.
+        if usize::from(who) >= crate::generated::NUM_PLAYERS {
+            return None;
+        }
+        let index = usize::try_from(o).ok()?;
+        let row = *self
+            .sim
+            .objects
+            .slot(who as usize)
+            .band(Band::Unit)
+            .get(index)?;
+        let row = row as usize;
+        (row < self.sim.live_count() as usize).then_some(row)
+    }
+
+    fn fleet_row_has_gather(&self, row: usize) -> bool {
+        let owner = self.sim.owner()[row];
+        let object = self.sim.units.o()[row];
+        u8::try_from(owner).is_ok_and(|owner| {
+            self.gather
+                .farm_orders
+                .iter()
+                .any(|order| order.worker_owner == owner && order.worker_o == object)
+        })
+    }
+}
+
+impl Fleet for EnvWorld {
+    fn alive(&self, who: u8, o: i16) -> bool {
+        self.fleet_row(who, o)
+            .is_some_and(|row| self.sim.hits()[row] > 0)
+    }
+
+    fn is_unit(&self, who: u8, o: i16) -> bool {
+        self.fleet_row(who, o).is_some_and(|row| {
+            let cap = self.cap(self.type_index[row]);
+            cap.has(crate::typecaps::F_UNIT) && !cap.has(F_BUILDING)
+        })
+    }
+
+    fn is_building(&self, who: u8, o: i16) -> bool {
+        self.fleet_row(who, o)
+            .is_some_and(|row| self.cap(self.type_index[row]).has(F_BUILDING))
+    }
+
+    fn is_on_map(&self, who: u8, o: i16) -> bool {
+        // EnvWorld currently has no containment transition: every live row is on-map.
+        self.alive(who, o)
+    }
+
+    fn is_captain(&self, who: u8, o: i16) -> bool {
+        // EnvWorld spawns only root Unit rows; subordinate Guy rows are not entities.
+        self.is_unit(who, o)
+    }
+
+    fn form_category(&self, who: u8, o: i16) -> i32 {
+        let Some(row) = self.fleet_row(who, o) else {
+            return 18;
+        };
+        let Some(cap) = self.rules.formation_cap(self.type_index[row]) else {
+            return 18;
+        };
+        let leader_flags = self
+            .players
+            .get(who as usize)
+            .map_or(0, |player| player.leader_flags);
+        cap.category(leader_flags)
+    }
+
+    fn formation_member(
+        &self,
+        who: u8,
+        o: i16,
+        water_destination: bool,
+    ) -> Option<FormationMember> {
+        // The compact EnvWorld map has no water/transport effective-type substitution.
+        if water_destination {
+            return None;
+        }
+        let row = self.fleet_row(who, o)?;
+        let cap = self.rules.formation_cap(self.type_index[row])?;
+        let player = self.players.get(who as usize)?;
+        Some(FormationMember {
+            category: cap.category(player.leader_flags),
+            x_spacing: cap.x_spacing,
+            y_spacing: cap.y_spacing,
+            formation_size: cap.uber_size,
+            guy_spacing: cap.guy_spacing,
+            modern_infantry: cap.modern_infantry(player.has_modern_infantry_tech),
+            width: i32::from(self.sim.units.form_mod()[row]),
+            angle: self.sim.units.angle()[row],
+        })
+    }
+
+    fn formation_water_destination(&self, _x: i32, _y: i32) -> bool {
+        // EnvWorld's current grid has no terrain-domain column; all admitted positions
+        // are land. This is an authoritative fact of this reduced world, not a retail-map
+        // guess.
+        false
+    }
+
+    fn form(&self, who: u8, o: i16) -> i8 {
+        self.fleet_row(who, o)
+            .map_or(-1, |row| self.sim.units.form()[row])
+    }
+
+    fn set_form(&mut self, who: u8, o: i16, form: i8) {
+        if let Some(row) = self.fleet_row(who, o) {
+            self.sim.units.form_mut()[row] = form;
+            self.form[row] = form as u8;
+        }
+    }
+
+    fn angle(&self, who: u8, o: i16) -> i32 {
+        self.fleet_row(who, o)
+            .map_or(0, |row| self.sim.units.angle()[row])
+    }
+
+    fn role(&self, who: u8, o: i16) -> i32 {
+        self.fleet_row(who, o)
+            .and_then(|row| self.rules.formation_cap(self.type_index[row]))
+            .map_or(0, |cap| cap.role)
+    }
+
+    fn domain(&self, who: u8, o: i16) -> i32 {
+        self.fleet_row(who, o)
+            .and_then(|row| self.rules.formation_cap(self.type_index[row]))
+            .map_or(-1, |cap| cap.domain)
+    }
+
+    fn unit_masks(&self, who: u8, o: i16) -> u32 {
+        self.fleet_row(who, o)
+            .map_or(0, |row| self.sim.units.get_unit_masks(row))
+    }
+
+    fn set_unit_masks(&mut self, who: u8, o: i16, masks: u32) {
+        if let Some(row) = self.fleet_row(who, o) {
+            self.sim.units.set_unit_masks(row, masks);
+        }
+    }
+
+    fn can_move(&self, who: u8, o: i16) -> bool {
+        self.fleet_row(who, o).is_some_and(|row| {
+            self.sim.hits()[row] > 0 && self.cap(self.type_index[row]).has(F_MOVE)
+        })
+    }
+
+    fn is_plane(&self, who: u8, o: i16) -> bool {
+        self.fleet_row(who, o)
+            .is_some_and(|row| self.cap(self.type_index[row]).is_plane)
+    }
+
+    fn group_of(&self, who: u8, o: i16) -> i16 {
+        self.fleet_row(who, o)
+            .map_or(-1, |row| self.sim.units.group()[row])
+    }
+
+    fn set_group_of(&mut self, who: u8, o: i16, slot: i16) {
+        if let Some(row) = self.fleet_row(who, o) {
+            self.sim.units.group_mut()[row] = slot;
+        }
+    }
+
+    fn uid(&self, who: u8, o: i16) -> u16 {
+        self.fleet_row(who, o)
+            .map_or(u16::MAX, |row| self.sim.units.get_uid(row))
+    }
+
+    fn pos(&self, who: u8, o: i16) -> (i32, i32) {
+        self.fleet_row(who, o)
+            .map_or((0, 0), |row| (self.sim.pos_x()[row], self.sim.pos_y()[row]))
+    }
+
+    fn valid_pos(&self, x: i32, y: i32) -> bool {
+        (0..self.subtile_w).contains(&x) && (0..self.subtile_h).contains(&y)
+    }
+
+    fn orders(&self, who: u8, o: i16) -> Option<&OrderQueue> {
+        let row = self.fleet_row(who, o)?;
+        self.orders.get(row)
+    }
+
+    fn orders_mut(&mut self, who: u8, o: i16) -> Option<&mut OrderQueue> {
+        let row = self.fleet_row(who, o)?;
+        self.orders.get_mut(row)
+    }
+
+    fn can_install_order(&self, who: u8, o: i16, _queue: QueuePos) -> bool {
+        self.fleet_row(who, o)
+            .is_some_and(|row| !self.fleet_row_has_gather(row))
+    }
+
+    fn install_order_rec(&mut self, who: u8, o: i16, order: OrderRec, queue: QueuePos) -> bool {
+        let Some(row) = self.fleet_row(who, o) else {
+            return false;
+        };
+        EnvWorld::install_order(self, row, order, queue).is_ok()
+    }
+
+    fn set_stance(&mut self, who: u8, o: i16, stance: i8) {
+        if let Some(row) = self.fleet_row(who, o) {
+            self.sim.units.stance_mut()[row] = stance;
+            self.stance[row] = stance as u8;
+        }
+    }
+
+    fn disband(&mut self, who: u8, o: i16) {
+        if let Some(row) = self.fleet_row(who, o) {
+            let handle = self.handle_at(row);
+            let _ = self.try_despawn(handle);
+        }
     }
 }
 

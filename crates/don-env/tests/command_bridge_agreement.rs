@@ -533,7 +533,7 @@ fn the_ported_share_of_wire_reachable_actions_is_recorded() {
         .filter(|a| matches!(a.port, cb::Port::Orders | cb::Port::State))
         .count();
     assert_eq!(
-        ported, 17,
+        ported, 18,
         "ported action count changed; update docs/assembly/command-bridge.md"
     );
 }

@@ -412,6 +412,24 @@ pub struct OrderRec {
     pub off_x: i16,
     pub off_y: i16,
 
+    // ---- GroupOrder / GroupMoveOrder ----
+    /// `GroupOrder::oxx` at concrete offset `+84`: the formation leader's owner-local
+    /// object index.
+    pub group_oxx: i32,
+    /// `GroupOrder::whose` at concrete offset `+88`.
+    pub group_whose: i32,
+    /// `GroupOrder::id` at concrete offset `+92`. `Group::action_move_near` constructs
+    /// this as `(Game::frame * 10 + group.id) * 100 + group.order_num`.
+    pub group_id: i32,
+    /// `GroupOrder::form_id` at concrete offset `+96`. Despite the PDB field name, the
+    /// shipped GROUP_MOVE constructor receives `action_move_near`'s `set_angle` value.
+    pub group_form_id: i32,
+    /// `GroupOrder::group_angle` at concrete offset `+100`.
+    pub group_angle: i32,
+    /// `GroupMoveOrder::in_group` at concrete offset `+104`; its clear constructor
+    /// initializes this to zero.
+    pub in_group: i32,
+
     // ---- TargetOrder ----
     /// `TargetOrder::ox` at `+8` — the target's index in its owner's object band.
     pub target_o: i32,
@@ -485,6 +503,12 @@ impl Default for OrderRec {
             orig_y: 0,
             off_x: 0,
             off_y: 0,
+            group_oxx: -1,
+            group_whose: -1,
+            group_id: -1,
+            group_form_id: 0,
+            group_angle: 0,
+            in_group: 0,
             target_o: -1,
             target_who: -1,
             target_uid: 0,
