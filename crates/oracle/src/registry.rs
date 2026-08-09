@@ -150,6 +150,19 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// The unmodified entry of `Map::make` through the seed writes at `0x0068bcd0`.
+    /// The executor replaces the *following* instruction with a jump to the function's
+    /// real epilogue, isolating the prefix without pretending to construct the full map.
+    MapMakeSeedPrefix {
+        random: u32,
+        distribution: &'static str,
+    },
+    /// `WorldData::start_city_wcoord`, with the two World references and its bit plane
+    /// installed in a private arena.
+    StartCityWcoord {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -471,6 +484,56 @@ pub static REGISTRY: &[Case] = &[
         },
     },
     Case {
+        id: "map_make_seed_prefix",
+        va: 0x0068_BC90,
+        abi: "void __thiscall Map::make(int map_arg, int seed, int mode), ret 0x0C. PDB; \
+              the tested prefix is entry..0x0068bcd0 inclusive",
+        model: "don_sim::systems::map_terrain::World::seed_map_generation",
+        subsystem: "world generation / deterministic seeding",
+        ledger: "docs/mechanics/map-terrain.md §7 — deterministic map generation seed",
+        derivation: "docs/mechanics/map-terrain.md §7 and §7.1; \
+                     docs/derivation/rng.md §6; PDB Map::make",
+        reachability: "Map::make is the common virtual map driver in 21 map-style vtables. \
+                       Its entry prefix has no calls and touches only Map+0x110, \
+                       World+0x7C, game_random+0, and the SEH chain",
+        caveat: "This executes the retail bytes from Map::make entry through 0x0068bcd0, \
+                 then a case-local five-byte jump at the original 0x0068bcd2 instruction \
+                 reaches the function's unmodified epilogue at 0x0068c84a. It proves the \
+                 signed seed gate and the two state writes; it does NOT execute terrain \
+                 creation, consume the RNG, select an orientation, or place starts. Full \
+                 construction remains an explicitly recorded gap.",
+        plan: Plan::MapMakeSeedPrefix {
+            random: 100_000,
+            distribution: "seven signed-gate/map-argument edges, then xorshift64: seed and \
+                           initial World/RNG/map words uniform over all 32-bit patterns; \
+                           exact positive/negative branch counts reported",
+        },
+    },
+    Case {
+        id: "start_city_wcoord",
+        va: 0x006B_30E0,
+        abi: "int __thiscall WorldData::start_city_wcoord(WCoord const& x, WCoord const& y), \
+              ret 8; ECX is unread",
+        model: "oracle::models::worldgen::start_city_wcoord — exact gap marker; waiting for \
+                don_sim::systems::map_terrain::World::start_city_wcoord",
+        subsystem: "world generation / starting-position occupancy",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable start-placement foothold",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
+                     WorldData::start_city_wcoord; retail 0x006b30e0..0x006b311d",
+        reachability: "64-byte pure leaf once GameAccessConst::worldc, GameAccess::world, \
+                       and World::start_city_locs are installed; no calls or allocations",
+        caveat: "Valid-domain claim only: width 1..512, height 1..128, and x/y in bounds. \
+                 Retail performs no bounds check. This proves exact row-major flattening \
+                 and LSB-first bit order for the start-city occupancy plane, not how \
+                 Map::place_start_in_region chooses a coordinate and not ring/radius \
+                 exclusion semantics. No shipped don-sim accessor exists yet.",
+        plan: Plan::StartCityWcoord {
+            random: 250_000,
+            distribution: "byte/row boundary edges plus xorshift64 widths 1..512, heights \
+                           1..128, valid coordinates, and uniform selected-byte patterns",
+        },
+    },
+    Case {
         id: "accessor_movsx_word_0xa",
         va: 0x0047_2400,
         abi: "__thiscall, no stack args (movsx eax, word ptr [ecx+0xA])",
@@ -748,6 +811,16 @@ pub struct Gap {
 }
 
 pub static KNOWN_GAPS: &[Gap] = &[
+    Gap {
+        claim: "Full seeded Map::make terrain and start-position equivalence",
+        why: "Map::make is a 3,021-byte virtual orchestration routine that immediately \
+              needs the selected one of 21 map-style objects, GameInfo, Rules/Constants, \
+              RString leaves, engine arrays and allocators. The registry executes and \
+              proves its exact seed prefix and the independent start-city bit accessor, \
+              but deliberately does not substitute approximate continent, fairness, \
+              region, ring or start-placement logic. docs/mechanics/map-terrain.md §7.1 \
+              records the executable dependency plan for extending this boundary.",
+    },
     Gap {
         claim: "§1.4 entrench_dir_level — the entrenchment direction classifier",
         why: "Inlined at 0x00644E0E–0x00644E2D inside ObjectData::get_damage; there is no \

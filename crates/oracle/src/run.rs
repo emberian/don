@@ -131,6 +131,45 @@ unsafe fn call_turn_towards(
     r
 }
 
+/// `Map::make`: `__thiscall` plus three dwords, callee cleans (`ret 0x0C`).
+unsafe fn call_map_make(f: *const u8, this: *mut u8, map_arg: i32, seed: i32, mode: i32) {
+    std::arch::asm!(
+        "push {mode:e}",
+        "push {seed:e}",
+        "push {map_arg:e}",
+        "call {f}",
+        mode = in(reg) mode,
+        seed = in(reg) seed,
+        map_arg = in(reg) map_arg,
+        f = in(reg) f,
+        in("ecx") this,
+        out("eax") _,
+        clobber_abi("C"),
+    );
+}
+
+/// `WorldData::start_city_wcoord`: two pointer arguments, callee cleans (`ret 8`).
+unsafe fn call_start_city_wcoord(
+    f: *const u8,
+    this: *mut u8,
+    x: *const i32,
+    y: *const i32,
+) -> i32 {
+    let r: i32;
+    std::arch::asm!(
+        "push {y:e}",
+        "push {x:e}",
+        "call {f}",
+        y = in(reg) y,
+        x = in(reg) x,
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") r,
+        clobber_abi("C"),
+    );
+    r
+}
+
 /// `Random::next_float` — result in xmm0, state updated through ECX.
 unsafe fn call_next_float(f: *const u8, p: *mut u32) -> (u32, f32) {
     let out_f: f32;
@@ -898,6 +937,268 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 ),
             ));
             unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
+        }
+
+        Plan::MapMakeSeedPrefix {
+            random,
+            distribution,
+        } => {
+            if let Err(e) = image::install_fake_teb() {
+                a.skip = Some(format!("fake TEB: {e}"));
+                return a;
+            }
+            let Some(arena) = scratch_page(PAGE) else {
+                a.skip = Some("map seed fixture scratch mmap failed".into());
+                return a;
+            };
+            const O_MAP: usize = 0x000;
+            const O_WORLD: usize = 0x200;
+            const O_RANDOM: usize = 0x400;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            const VA_RANDOM_PTR: u32 = 0x00C0_6184;
+            const PREFIX_END: usize = 0x0068_BCD2 - 0x0068_BC90;
+            const EPILOGUE: u32 = 0x0068_C84A;
+
+            let patch = unsafe { f.add(PREFIX_END) };
+            let Some(epilogue) = ctx.at(EPILOGUE) else {
+                a.skip = Some("Map::make epilogue VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+                return a;
+            };
+            let prefix_next = unsafe { std::slice::from_raw_parts(patch, 3) };
+            let epilogue_head = unsafe { std::slice::from_raw_parts(epilogue, 3) };
+            if prefix_next != [0x8b, 0x75, 0x10] || epilogue_head != [0x8b, 0x4d, 0xf4] {
+                a.skip = Some(format!(
+                    "Map::make isolation boundary bytes changed: next={prefix_next:02x?} \
+                     epilogue={epilogue_head:02x?}"
+                ));
+                unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+                return a;
+            }
+            let page = (patch as usize) & !(PAGE - 1);
+            if unsafe {
+                libc::mprotect(
+                    page as *mut c_void,
+                    PAGE,
+                    libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                )
+            } != 0
+            {
+                a.skip = Some("cannot make Map::make prefix boundary RWX".into());
+                unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+                return a;
+            }
+            let displacement = (epilogue as isize).wrapping_sub(patch as isize + 5) as i32;
+            unsafe {
+                std::ptr::write_volatile(patch, 0xe9);
+                std::ptr::write_unaligned(patch.add(1) as *mut i32, displacement);
+            }
+
+            let Some(world_slot) = ctx.at(VA_WORLD_PTR) else {
+                a.skip = Some("GameAccess::world pointer VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+                return a;
+            };
+            let Some(random_slot) = ctx.at(VA_RANDOM_PTR) else {
+                a.skip = Some("GameAccess::game_random pointer VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+                return a;
+            };
+            let map = unsafe { arena.add(O_MAP) };
+            let world = unsafe { arena.add(O_WORLD) };
+            let random_state = unsafe { arena.add(O_RANDOM) as *mut i32 };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(random_slot as *mut u32, random_state as usize as u32);
+            }
+
+            let mut model_world = don_sim::systems::map_terrain::World::init_default_rules(0, 0);
+            let mut counts = [0u64; 2];
+            let mut check = |map_arg: i32,
+                             seed: i32,
+                             initial_world: i32,
+                             initial_rng: i32,
+                             initial_map_arg: i32,
+                             label: &str,
+                             a: &mut Acc| {
+                unsafe {
+                    std::ptr::write_unaligned(map.add(0x110) as *mut i32, initial_map_arg);
+                    std::ptr::write_unaligned(world.add(0x7c) as *mut i32, initial_world);
+                    std::ptr::write_unaligned(random_state, initial_rng);
+                }
+                model_world.seed = initial_world;
+                let model_rng = model_world.seed_map_generation(seed).unwrap_or(initial_rng);
+                unsafe { call_map_make(f, map, map_arg, seed, 0) };
+                let got_map_arg = unsafe { std::ptr::read_unaligned(map.add(0x110) as *const i32) };
+                let got_world = unsafe { std::ptr::read_unaligned(world.add(0x7c) as *const i32) };
+                let got_rng = unsafe { std::ptr::read_unaligned(random_state) };
+                a.trials += 1;
+                counts[(seed >= 0) as usize] += 1;
+                if got_map_arg != map_arg || got_world != model_world.seed || got_rng != model_rng {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "{label} seed={seed} initial=({initial_world},{initial_rng},\
+                         {initial_map_arg}) map_arg={map_arg} model=({map_arg},{},{model_rng}) \
+                         retail=({got_map_arg},{got_world},{got_rng})",
+                        model_world.seed,
+                    ));
+                }
+            };
+            let edges = [
+                (0, i32::MIN, 1, 2, 3),
+                (-1, -2, i32::MIN, i32::MAX, 0),
+                (i32::MAX, -1, -7, 11, -13),
+                (i32::MIN, 0, 1, 2, 3),
+                (1, 1, -1, -2, -3),
+                (-123, i32::MAX, i32::MIN, 0, i32::MAX),
+                (0x1234_5678, 0x7654_3210, -1, -1, -1),
+            ];
+            for &(map_arg, seed, iw, ir, im) in &edges {
+                check(map_arg, seed, iw, ir, im, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "signed seed gate boundaries plus independent prior World/RNG/map words",
+            );
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x4D41_5053_4545_4445);
+            for _ in 0..n {
+                check(
+                    rng.next() as i32,
+                    rng.next() as i32,
+                    rng.next() as i32,
+                    rng.next() as i32,
+                    rng.next() as i32,
+                    "random",
+                    &mut a,
+                );
+            }
+            a.phase("random", n as u64, distribution);
+            a.extras.push((
+                "branch_counts".into(),
+                format!("negative_preserve={} nonnegative_seed={}", counts[0], counts[1]),
+            ));
+            a.extras.push((
+                "isolation_boundary".into(),
+                "retail entry..0x0068bcd0; case-local jmp at 0x0068bcd2 -> original epilogue \
+                 0x0068c84a"
+                    .into(),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, PAGE) };
+        }
+
+        Plan::StartCityWcoord {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 4;
+            const O_WORLDC: usize = 0x000;
+            const O_WORLD: usize = 0x200;
+            const O_BITS: usize = 0x400;
+            const BIT_BYTES: usize = 8192;
+            const O_X: usize = 0x3000;
+            const O_Y: usize = 0x3010;
+            const VA_WORLDC_PTR: u32 = 0x00C0_61D0;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("start-city fixture scratch mmap failed".into());
+                return a;
+            };
+            let worldc = unsafe { arena.add(O_WORLDC) };
+            let world = unsafe { arena.add(O_WORLD) };
+            let bits = unsafe { arena.add(O_BITS) };
+            let x_ptr = unsafe { arena.add(O_X) as *mut i32 };
+            let y_ptr = unsafe { arena.add(O_Y) as *mut i32 };
+            let (Some(worldc_slot), Some(world_slot)) =
+                (ctx.at(VA_WORLDC_PTR), ctx.at(VA_WORLD_PTR))
+            else {
+                a.skip = Some("World access pointer VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            unsafe {
+                std::ptr::write_unaligned(worldc_slot as *mut u32, worldc as usize as u32);
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(world.add(0xf8) as *mut u32, bits as usize as u32);
+                std::ptr::write_bytes(bits, 0, BIT_BYTES);
+            }
+            let f = f as *const u8;
+            let mut byte_boundary = 0u64;
+            let mut row_boundary = 0u64;
+            let mut check = |width: i32,
+                             height: i32,
+                             x: i32,
+                             y: i32,
+                             byte: u8,
+                             label: &str,
+                             a: &mut Acc| {
+                debug_assert!(width > 0 && height > 0 && x >= 0 && x < width && y >= 0 && y < height);
+                let index = y * width + x;
+                let byte_index = (index >> 3) as usize;
+                debug_assert!(byte_index < BIT_BYTES);
+                unsafe {
+                    std::ptr::write_unaligned(worldc as *mut i32, width);
+                    std::ptr::write_unaligned(x_ptr, x);
+                    std::ptr::write_unaligned(y_ptr, y);
+                    std::ptr::write_volatile(bits.add(byte_index), byte);
+                }
+                let plane = unsafe { std::slice::from_raw_parts(bits, BIT_BYTES) };
+                let want = models::worldgen::start_city_wcoord(width, plane, x, y) as i32;
+                let got = unsafe { call_start_city_wcoord(f, world, x_ptr, y_ptr) };
+                a.trials += 1;
+                if index & 7 == 0 || index & 7 == 7 {
+                    byte_boundary += 1;
+                }
+                if x == 0 || x == width - 1 {
+                    row_boundary += 1;
+                }
+                if got != want {
+                    a.mismatches += 1;
+                    a.first_detail(format!(
+                        "{label} width={width} height={height} x={x} y={y} index={index} \
+                         byte={byte:#04x} model={want} retail={got}"
+                    ));
+                }
+            };
+            let edges = [
+                (1, 1, 0, 0, 0x00),
+                (1, 1, 0, 0, 0x01),
+                (8, 2, 7, 0, 0x80),
+                (8, 2, 0, 1, 0x01),
+                (9, 2, 8, 0, 0x01),
+                (9, 2, 0, 1, 0x02),
+                (9, 2, 8, 1, 0x02),
+                (31, 3, 30, 2, 0x80),
+                (32, 3, 31, 2, 0xff),
+                (33, 3, 32, 2, 0x55),
+                (512, 128, 511, 127, 0x80),
+            ];
+            for &(w, h, x, y, byte) in &edges {
+                check(w, h, x, y, byte, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "LSB/MSB and byte, row, non-byte-width, and maximum-domain boundaries",
+            );
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x5354_4152_5442_4954);
+            for _ in 0..n {
+                let r = rng.next();
+                let width = (r as i32 & 0x1ff).max(1);
+                let height = (((r >> 9) as i32 & 0x7f) + 1).min(128);
+                let x = ((r >> 16) as u32 % width as u32) as i32;
+                let y = (rng.next() as u32 % height as u32) as i32;
+                let byte = (rng.next() >> 29) as u8;
+                check(width, height, x, y, byte, "random", &mut a);
+            }
+            a.phase("random", n as u64, distribution);
+            a.extras.push((
+                "boundary_counts".into(),
+                format!("byte_edge={byte_boundary} row_edge={row_boundary}"),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }
 
         Plan::Damage {

@@ -441,6 +441,59 @@ and blocked only on porting the generator logic, not on any numerical obstacle.*
 the difference between starting replay validation from a captured state and starting it
 from scratch.
 
+### 7.1 Executable world-generation oracle boundary
+
+The structural result above now has two fork-isolated retail cases in
+`crates/oracle`; neither case substitutes simplified map logic.
+
+| case | retail bytes executed | exact claim | deliberately not claimed |
+|---|---|---|---|
+| `map_make_seed_prefix` | `Map::make` entry `0x0068bc90` through the seed write at `0x0068bcd0` | the signed-negative preserve gate; `Map+0x110 = map_arg`; and identical nonnegative seed writes to `World+0x7c` and `game_random+0` | terrain construction, RNG consumption, orientation, continents, fairness or starts |
+| `start_city_wcoord` | complete leaf `0x006b30e0`–`0x006b311d` | valid coordinates flatten as `y * world_xs + x`; `start_city_locs` is LSB-first | coordinate selection, radius tests, or placement policy |
+
+The seed-prefix case isolates an exact instruction boundary rather than invoking a fake
+constructor. In its already-forked case process it replaces the first instruction *after*
+the two writes (`0x0068bcd2`) with a five-byte jump to `Map::make`'s original epilogue at
+`0x0068c84a`. The entry, SEH setup, signed branch, map-argument store and seed stores are
+the relocated retail instructions. The boundary bytes are checked before patching, and
+the case record states the patch and limitation. The Rust side is the shipped
+`World::seed_map_generation`, not another transcription in the harness.
+
+`start_city_wcoord` needs only the two retail World reference globals and an owned bit
+plane. Its present Rust model lives in `oracle::models` and is named as a gap marker in the
+registry because `don-sim` has no corresponding accessor yet. The valid-domain predicate
+is exact: positive width, in-bounds nonnegative x/y, and enough bit-plane storage. Retail
+has no bounds check, so invalid coordinates are excluded rather than converted into a
+made-up policy.
+
+This establishes the following evidence ladder for a pinned-seed world oracle:
+
+1. **Landed:** prove seed installation and negative-seed preservation without entering
+   the unconstructed map body.
+2. **Landed:** prove the final start-city occupancy representation and indexing.
+3. **Next isolatable writer:** `World::add_starting_location` `0x006b2de0` appends to the
+   four start-coordinate `SimpleArray`s and sets the exact 2×2 bit block `(x,y)`,
+   `(x-1,y)`, `(x,y-1)`, `(x-1,y-1)`. Its only calls are array-growth vtable calls; a
+   fixture with measured `SimpleArray` layouts and sufficient preallocated capacity can
+   keep all of them untaken and compare every append and bit write.
+4. **Then distance/exclusion leaves:** `WorldData::start_city_rad_wcoord` `0x006b3850`
+   walks the recorded start-city coordinate arrays and applies the engine's integer
+   `vector_dist` threshold; `MapFairness::calc_distances` `0x0068a1c0` writes its binary32
+   distance table and extrema. These require exact array/count and Constants fields, but
+   no guessed ring geometry.
+5. **Only after those fixtures are executable:** expand into
+   `Map::place_start_in_region` and the per-style continent hooks, recording the consumed
+   RNG state and complete integer terrain/start arrays after each stage.
+6. **Full constructor last:** `Map::make` is 3,021 bytes and requires the selected one of
+   21 map-style objects, `GameInfo`, Rules/Constants, `RString` leaves, engine arrays and
+   allocators. Until those dependencies are real or exactly substituted, the full seeded
+   terrain/start comparison remains a machine-readable `known_gap` in
+   `schema/oracle-regression.json`.
+
+No annulus, ring, fairness, continent or start-position rule is inferred from a convenient
+shape in this plan. A stage advances only when its retail inputs and side effects can be
+executed and compared.
+
 ---
 
 ## 8. What the Rust module does, and how it was measured
