@@ -491,6 +491,117 @@ fn retail_chunk_executes_the_same_world_and_clock_handlers() {
     );
 }
 
+fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
+    use victory_score::Victory;
+
+    let packed_other_modes = match victory {
+        Victory::Economic => 1,
+        Victory::MusicalChairs => 2,
+        Victory::Score => 4,
+        Victory::SuddenDeath => 8,
+        Victory::TechRace => 16,
+        Victory::Population => 32,
+        _ => 0,
+    };
+    [
+        if victory == Victory::TimeLimit {
+            time_limit + 1
+        } else {
+            0
+        },
+        (victory == Victory::Standard) as i32,
+        (victory == Victory::Conquest) as i32,
+        (victory == Victory::TimeLimit) as i32,
+        (victory == Victory::Wonder) as i32,
+        packed_other_modes,
+    ]
+}
+
+const SCRIPT_VICTORY_MODES: [victory_score::Victory; 10] = [
+    victory_score::Victory::Standard,
+    victory_score::Victory::Conquest,
+    victory_score::Victory::Economic,
+    victory_score::Victory::MusicalChairs,
+    victory_score::Victory::Score,
+    victory_score::Victory::SuddenDeath,
+    victory_score::Victory::TechRace,
+    victory_score::Victory::Population,
+    victory_score::Victory::TimeLimit,
+    victory_score::Victory::Wonder,
+];
+
+#[test]
+fn ordinary_source_executes_all_victory_option_readers() {
+    let program = compile_source_fixture("scenario_victory_option_reads.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "victory_option_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8133, 8);
+    sim.activate(0);
+    sim.vic_match.options.time_limit = 3;
+
+    for victory in SCRIPT_VICTORY_MODES {
+        sim.vic_match.options.victory = victory as u8;
+        let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+        assert_eq!(trace.steps[4], StepRun::Executed);
+        assert!(trace.work[4] > 0);
+        assert_eq!(
+            sim.leaders[0].econ.stockpile,
+            expected_victory_option_reads(victory, 60),
+            "ordinary source must track the live {victory:?} selector"
+        );
+    }
+}
+
+#[test]
+fn retail_chunk_executes_all_victory_option_readers() {
+    let compiled = compile_source_fixture("scenario_victory_option_reads.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "victory_option_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8134, 12);
+    sim.activate(0);
+    sim.vic_match.options.time_limit = 7;
+
+    for victory in SCRIPT_VICTORY_MODES {
+        sim.vic_match.options.victory = victory as u8;
+        let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+        assert_eq!(trace.steps[4], StepRun::Executed);
+        assert!(trace.work[4] > 0);
+        assert_eq!(
+            sim.leaders[0].econ.stockpile,
+            expected_victory_option_reads(victory, 240),
+            "loaded chunk must track the live {victory:?} selector"
+        );
+    }
+}
+
+#[test]
+fn custom_time_limit_fails_closed_without_scenario_override_state() {
+    let mut scripts = game_runtime(one_builtin_program("get_time_limit", &[]));
+    let mut sim = Sim::new(0x8135, 8);
+    sim.activate(0);
+    sim.vic_match.options.victory = victory_score::Victory::TimeLimit as u8;
+    sim.vic_match.options.time_limit = 8;
+
+    let error = sim.do_frame_with_scripts(&mut scripts).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ScriptFailure::Vm(VmError::UnimplementedBuiltin {
+            name: "get_time_limit",
+            ..
+        })
+    ));
+}
+
 fn configure_player_read_state(sim: &mut Sim) {
     sim.activate(0);
     sim.activate(1);

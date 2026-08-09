@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Forty-five
+`Program`, and `ScriptRuntime` runs either producer against that live host. Fifty-six
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -469,6 +469,17 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 86 | `world_x_size` | direct `WorldData::tile_xs` read at `+0x18` (`0x009e4ee0`) |
 | 87 | `world_y_size` | direct `WorldData::tile_ys` read at `+0x1c` (`0x009e4ef0`) |
 | 88 | `territory_owner` | tile bounds, then the containing WData `who` byte plus one (`0x009e4f00`) |
+| 96 | `is_victory_standard` | direct `GameInfo::victory == 0` (`0x009e5250`) |
+| 97 | `is_victory_conquest` | direct `GameInfo::victory == 2` (`0x009e5260`) |
+| 98 | `is_victory_economic` | direct `GameInfo::victory == 8` (`0x009e5270`) |
+| 99 | `is_victory_musical_chairs` | direct `GameInfo::victory == 5` (`0x009e5280`) |
+| 100 | `is_victory_score` | direct `GameInfo::victory == 3` (`0x009e5290`) |
+| 101 | `is_victory_sudden_death` | direct `GameInfo::victory == 1` (`0x009e52a0`) |
+| 102 | `is_victory_tech_race` | direct `GameInfo::victory == 9` (`0x009e52b0`) |
+| 103 | `is_victory_territory` | direct `GameInfo::victory == 7` (`0x009e52c0`) |
+| 104 | `is_victory_time_limit` | direct `GameInfo::victory == 4` (`0x009e52d0`) |
+| 105 | `is_victory_wonder` | direct `GameInfo::victory == 6` (`0x009e52e0`) |
+| 137 | `get_time_limit` | Time Limit mode's indexed category value; scenario override fails closed (`0x009e5bf0`) |
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
 | 245 | `population` | active Leader's live control total at `+0x940` (`0x009e8e70`) |
 | 246 | `population_cap` | active Leader's direct `pop_cap` field at `+0x7e4` (`0x009e8eb0`) |
@@ -505,10 +516,20 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 7,904 calls to those forty-five registrations. Together
+The current 363-file census contains 8,060 calls to those fifty-six registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,695 of 39,957 measured shipped-corpus call sites (**21.76%**, up from **1.98%**).
+8,851 of 39,957 measured shipped-corpus call sites (**22.15%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
+
+The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
+call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
+predicates. The ten predicates are instruction-identical apart from the literal compared
+with `GameInfo::victory` at `Game+0x38`. `get_time_limit` first requires the Time Limit
+selector, then reads category indices 0 through 7 from the live `VictoryOptions::time_limits`
+table. Retail index 8 instead consults two ScenarioData flags and the separate custom-limit
+global at `0x00cc21b4`; neither fact has a `Sim` owner, so that branch fails closed.
+Ordinary-source and loaded-chunk fixtures cycle all ten selector values and mutation-test
+two different category indices.
 
 The unit-status cohort contributes 58 shipped calls. Its object gate is the exact
 `valid_object_o` body at `0x009e32a0`; missing object/container links fail closed. The

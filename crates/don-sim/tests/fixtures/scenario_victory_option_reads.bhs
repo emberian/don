@@ -1,0 +1,16 @@
+int scenario victory_option_reads_tick()
+{
+    set_good(1, "Food", get_time_limit() + 1);
+    set_good(1, "Timber", is_victory_standard());
+    set_good(1, "Wealth", is_victory_conquest());
+    set_good(1, "Knowledge", is_victory_time_limit());
+    set_good(1, "Metal", is_victory_wonder());
+    set_good(1, "Oil",
+        is_victory_economic()
+        + 2 * is_victory_musical_chairs()
+        + 4 * is_victory_score()
+        + 8 * is_victory_sudden_death()
+        + 16 * is_victory_tech_race()
+        + 32 * is_victory_territory());
+    return 1;
+}

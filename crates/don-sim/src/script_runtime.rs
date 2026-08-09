@@ -994,6 +994,48 @@ impl ScenarioHost for Sim {
                     self.map.world.get_who(x >> 2, y >> 2).wrapping_add(1),
                 ))
             }
+            // `is_victory_*` (`0x009e5250..0x009e52e0`): each handler is a direct
+            // byte comparison against `GameInfo::victory` (`Game +0x38`).
+            96..=105 => {
+                let expected = match decl.index {
+                    96 => victory_score::Victory::Standard,
+                    97 => victory_score::Victory::Conquest,
+                    98 => victory_score::Victory::Economic,
+                    99 => victory_score::Victory::MusicalChairs,
+                    100 => victory_score::Victory::Score,
+                    101 => victory_score::Victory::SuddenDeath,
+                    102 => victory_score::Victory::TechRace,
+                    103 => victory_score::Victory::Population,
+                    104 => victory_score::Victory::TimeLimit,
+                    105 => victory_score::Victory::Wonder,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Int(
+                    (self.vic_match.options.victory == expected as u8) as i32,
+                ))
+            }
+            // `get_time_limit` `0x009e5bf0`: only Time Limit victory is valid. The
+            // ordinary category indices read `time_limits[index].data[0]` directly.
+            // Index 8 is retail's scenario override and depends on two ScenarioData
+            // flags plus the separate `0x00cc21b4` custom-limit global, none of which
+            // Sim owns; that branch therefore remains deliberately fail-closed.
+            137 => {
+                if self.vic_match.options.victory != victory_score::Victory::TimeLimit as u8 {
+                    return Ok(Value::Int(-1));
+                }
+                let index = self.vic_match.options.time_limit as usize;
+                if index >= 8 {
+                    return Err(HostError::Unimplemented);
+                }
+                let value = self
+                    .vic_match
+                    .victory_options
+                    .time_limits
+                    .get(index)
+                    .copied()
+                    .ok_or(HostError::Unimplemented)?;
+                Ok(Value::Int(value))
+            }
             // `num_players` `0x009e5df0`: count `Leader::flags & 1` across all slots.
             142 => Ok(Value::Int(
                 self.step8
