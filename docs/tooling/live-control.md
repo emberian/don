@@ -1,8 +1,8 @@
 # Bidirectional live retail control
 
-Status: **live-validated for pause, unit movement, exact own-state observation, and a
-bounded supervised scout policy against a retail solo skirmish. The current STOP hardening is
-dormant-process validated; its new active-main-thread acknowledgement still needs a fresh match.**
+Status: **live-validated for pause, unit movement, exact own-state observation, a bounded
+supervised scout policy, and repeated active-main-thread STOP/rearm against retail solo
+skirmishes. Multiplayer turn agreement and real-host peering remain separate open gates.**
 Target: the one supported `riseofnations.exe`, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
 
@@ -478,6 +478,39 @@ found `E8 45 67 3C 00`, and no new Application Error was recorded. That delibera
 in for an active-match exercise of the new acknowledgement path. The incident and remediation are
 captured in
 [`schema/live/retail-control-stop-incident-v1.json`](../../schema/live/retail-control-stop-incident-v1.json).
+
+Generation `relaunch-v22` supplied that missing active-match exercise on 2026-08-09 in a freshly
+paused solo skirmish, PID `13876`, supported executable SHA-256 and runtime base `0x00D60000`. The
+immutable controller DLL had SHA-256
+`e2829ae2ae93e24e95b87d2d9e469fc79e915b67e30f53d9638b84fbe6c92527`, loaded once at
+`0x6AEA0000` with image size `0x165000`. Five consecutive rearm cycles and a final park each
+acknowledged on the main-thread boundary with `dropped_events=0`; after every STOP, the host's
+independent external read reproduced `E8 45 67 3C 00`. No new file appeared in the scoped WER dump
+directory.
+
+The run also exercised the refusal boundary rather than bypassing it. The first preflight rejected
+the injector's enriched `peek` header because the host still expected the older three-field form.
+After that parser was made exact, deployment armed the controller but host identity comparison
+rejected the ready root: POSIX tokenization had removed one leading slash from the canonical
+`\\?\C:\Users\...` Toolhelp path. The host immediately requested STOP, and the controller parked with
+the original bytes restored. The host now parses the injector's quoted machine records without
+POSIX backslash semantics and compares normalized Windows paths; only then was the same immutable
+generation rearmed. Both failure modes have negative regressions.
+
+Passive post-frame evidence in that paused match reported `network=0`, `network_is_solo=1`,
+`playback=0`, `immediate_process=0`, a valid local play slot, package size zero, checksum room, and
+zero peer totals, with `mutates_outgoing_package=0` and `checksum_gate=network_clear`. A bounded
+`don.retail-player.v4` observation contained 15 owned objects with no unknown class, unknown type,
+or truncation: eight units and seven buildings at frame zero, including live `GatherOrder`
+identities for the starting Citizens. The observation command then parked the controller itself.
+
+Finally, while the process remained parked, an exact external read of all 24 live Tribe records
+completed the local Rules input channel without retaining raw memory on the host. The normalized
+Tribe image SHA-256 was
+`4a271dcca8a7c1223e61b9f58b4e5809f45f0fcfd43ce1b5f79a8c55dfde14bb`; the independent walk
+reproduced Types `0x72e0c3b6`, Constants `0x50625668`, Balance `0x56daabc1`, final Rules
+`0x12ba3104`, and exactly 997,846 walked bytes. This closes the active solo lifecycle and local
+Rules-capture gates, not the multiplayer turn/replay or real-host client gates.
 
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 

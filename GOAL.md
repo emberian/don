@@ -31,7 +31,7 @@ Snapshot date: 2026-08-09. Generated records override prose if the tree advances
 | RL environment | working over incomplete dynamics | native/Gymnasium/VectorEnv/PettingZoo APIs, derived action taxonomy, exact parameter masks, zero-copy observations, deterministic batch stepping; an exhaustive 806-TypeIndex contract plus a 128-step eight-world rollout now reports zero accepted-no-effect and zero illegal advertised actions |
 | AI / playable arena | working integration, not release-ready | deterministic observation-driven Marshal, real command path and A* movement; remaining arena world models are declared product blockers |
 | Browser | working integration build | WebGPU/WebGL2/Canvas2D, responsive touch/desktop command dock, cluster/replay views, wasm/native digest paths; labels do not claim whole-game fidelity |
-| Live retail | prelaunch hardened; active-match recheck pending | RoNtoy plus versioned main-thread command ingress, current-visible v4 observation, passive network evidence, and supervised Marshal scout proof; deterministic hash-bound injection and the STOP/rearm lifecycle are fail-closed in tests, while a fresh match must exercise the new active callback acknowledgement |
+| Live retail | active-match lifecycle green; multiplayer pending | RoNtoy plus versioned main-thread command ingress, current-visible v4 observation, passive network evidence, and supervised Marshal scout proof; deterministic hash-bound injection and five consecutive active-match STOP/rearm cycles restored the exact stock call bytes with zero dropped events, while real-host peering and multiplayer turn/replay evidence remain unexercised |
 | BHS / content | substantial, fail-closed | compiler, decoder, VM, aggregate execution, builtin registry, overlays and mod paths; five body-bearing fixtures captured through the shipped compiler are now 5/5 byte-identical across code, constant pools, and script metadata |
 | License/workflow | established | GPL-3.0-or-later; permanent `dev` branch; no branches or worktrees |
 
@@ -145,8 +145,9 @@ current record is `schema/replay-validation.json`; caveats are in
 - Keep retail-control main-thread-only, target-hash/call-site gated, generation-isolated, and
   byte-restoring on every exit.
 - Extend fog-safe observations and bounded action batches into a supervised policy loop.
-- Re-exercise the hardened main-thread STOP acknowledgement in a fresh active match before
-  calling the current controller lifecycle fully converged.
+- Preserve the now-exercised main-thread STOP acknowledgement and exact external byte check in
+  every live-control release gate; next capture passive multiplayer turn totals and replay evidence
+  without exposing the disabled duplicate checksum sender.
 - Capture stable trajectories and state deltas that can become retail-vs-DoN differential
   fixtures without redistributing proprietary content.
 
