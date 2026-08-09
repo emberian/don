@@ -438,6 +438,54 @@ fn retail_chunk_position_reader_resolves_captain_and_outer_container() {
 }
 
 #[test]
+fn ordinary_source_executes_world_dimensions_and_full_clock_family() {
+    let program = compile_source_fixture("scenario_world_clock.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "world_clock_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8121, 8);
+    sim.activate(0);
+    sim.world.seconds = 125;
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [32, 32, 2, 2, 125, 1],
+        "tile dimensions, both minute aliases, seconds, and strict earlier-than must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_world_and_clock_handlers() {
+    let compiled = compile_source_fixture("scenario_world_clock.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "world_clock_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8122, 12);
+    sim.activate(0);
+    sim.world.seconds = 239;
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [48, 48, 3, 3, 239, 0],
+        "loaded chunks must retain the strict time comparison and live map dimensions"
+    );
+}
+
+#[test]
 fn unsupported_scenario_builtin_stops_before_the_rest_of_the_tick() {
     let mut scripts = game_runtime(one_builtin_program("num_cities", &[Value::Int(1)]));
     let mut sim = Sim::new(99, 8);

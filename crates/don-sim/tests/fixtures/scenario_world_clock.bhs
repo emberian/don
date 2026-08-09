@@ -1,0 +1,10 @@
+int scenario world_clock_tick()
+{
+    set_good(1, "Food", world_x_size());
+    set_good(1, "Timber", world_y_size());
+    set_good(1, "Wealth", time());
+    set_good(1, "Knowledge", time_min());
+    set_good(1, "Metal", time_sec());
+    set_good(1, "Oil", time_earlier_than(3));
+    return 1;
+}

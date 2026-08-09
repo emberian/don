@@ -131,6 +131,8 @@ pub trait ScenarioHost {
     fn script_frame(&self) -> i32;
     fn game_seconds(&self) -> i32;
     fn map_size(&self) -> i32;
+    fn map_tile_width(&self) -> i32;
+    fn map_tile_height(&self) -> i32;
     fn call_scenario(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult;
     fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError>;
     fn game_random_step(&mut self) -> Result<u32, HostError>;
@@ -392,9 +394,21 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                 )),
                 // `get_map_size` `0x009e4cb0`: `WorldData::xs << 2`.
                 80 => Ok(Value::Int(self.scenario.map_size())),
+                // `world_{x,y}_size` `0x009e4ee0` / `0x009e4ef0`: direct reads of
+                // `WorldData::tile_xs` / `tile_ys` at +0x18 / +0x1c.
+                86 => Ok(Value::Int(self.scenario.map_tile_width())),
+                87 => Ok(Value::Int(self.scenario.map_tile_height())),
+                // `time` and `time_min` are instruction-identical signed divisions of
+                // `Game::seconds` by 60. `time_sec` returns that field unmodified.
+                296 | 297 => Ok(Value::Int(self.scenario.game_seconds() / 60)),
+                298 => Ok(Value::Int(self.scenario.game_seconds())),
                 // `time_later_than` `0x009ee120`: Game::seconds / 60 >= argument.
                 351 => Ok(Value::Int(
                     (self.scenario.game_seconds() / 60 >= args[0].as_int()) as i32,
+                )),
+                // `time_earlier_than` `0x009ee160`: the complementary strict compare.
+                352 => Ok(Value::Int(
+                    (self.scenario.game_seconds() / 60 < args[0].as_int()) as i32,
                 )),
                 _ => self.scenario.call_scenario(decl, args),
             },
@@ -612,6 +626,14 @@ impl ScenarioHost for Sim {
 
     fn map_size(&self) -> i32 {
         self.map.world.xs.wrapping_shl(2)
+    }
+
+    fn map_tile_width(&self) -> i32 {
+        self.map.world.tile_xs
+    }
+
+    fn map_tile_height(&self) -> i32 {
+        self.map.world.tile_ys
     }
 
     fn call_scenario(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {

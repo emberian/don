@@ -454,7 +454,7 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Fourteen
+`Program`, and `ScriptRuntime` runs either producer against that live host. Twenty
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
@@ -464,19 +464,25 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 79 | `timer_expired` | compare against `Game::seconds`; expired checks consume the timer |
 | 80 | `get_map_size` | `WorldData::xs << 2` (`0x009e4cb0`) |
 | 83 | `map_is_land` | tile bounds, then the exact `tdata` mask (`0x009e4d90`) |
+| 86 | `world_x_size` | direct `WorldData::tile_xs` read at `+0x18` (`0x009e4ee0`) |
+| 87 | `world_y_size` | direct `WorldData::tile_ys` read at `+0x1c` (`0x009e4ef0`) |
 | 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
 | 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
 | 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
+| 296 | `time` | signed `Game::seconds / 60` (`0x009ead00`) |
+| 297 | `time_min` | instruction-identical alias of `time` (`0x009ead20`) |
+| 298 | `time_sec` | direct `Game::seconds` read (`0x009ead40`) |
 | 351 | `time_later_than` | signed `Game::seconds / 60 >= argument` (`0x009ee120`) |
+| 352 | `time_earlier_than` | signed `Game::seconds / 60 < argument` (`0x009ee160`) |
 | 411 | `object_position_x` | validate `(who,o)`, resolve captain and outer container, then `div_3_table[(x ^ 0x63637) >> 6]` (`0x009f1360`) |
 | 412 | `object_position_y` | the same object walk over the encrypted y coordinate (`0x009f1470`) |
 | 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
 | 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
 | 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
 
-The current 363-file census contains 6,258 calls to those fourteen registrations. Together
+The current 363-file census contains 6,665 calls to those twenty registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-7,049 of 39,957 measured shipped-corpus call sites (**17.64%**, up from **1.98%**).
+7,456 of 39,957 measured shipped-corpus call sites (**18.66%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
 
 Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
@@ -506,8 +512,15 @@ closed instead of producing a synthetic location. Ordinary source executes direc
 and building reads; a loaded retail chunk proves captain-to-container redirection through
 the same handler.
 
+The map-dimension and clock family adds another 407 shipped calls without introducing a
+second state owner. `world_x_size` / `world_y_size` are the nine-byte reads of the live
+tile dimensions, not the world-cell dimensions used internally by `get_map_size`.
+`time` and `time_min` are instruction-identical signed divisions, `time_sec` returns the
+unscaled clock, and `time_earlier_than` is strictly less-than. Both ordinary source and a
+tag-0/tag-2/tag-3/tag-4 loaded chunk execute all six handlers against two nonzero clocks.
+
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-828 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+822 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 
