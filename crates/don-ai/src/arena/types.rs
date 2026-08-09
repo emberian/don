@@ -84,6 +84,7 @@ pub struct TypeRow {
     /// Retail's unit-path A* reads `UnitTypeData::new_block_radius` at `+0x248` as the
     /// footprint size.  The live table carries it in 48-world-unit cells.
     pub new_block_radius: i32,
+    pub big_radius: i32,
     /// Per-guy formation/collision fields from the live `UnitTypeData`.  They are retained
     /// together because retail stamps collision occupancy for every squad guy, not once
     /// for the parent unit.
@@ -93,6 +94,12 @@ pub struct TypeRow {
     pub guy_radius: i32,
     pub squad_size: i32,
     pub crew_size: i32,
+    pub role: i32,
+    pub base_form: i32,
+    pub push_size: i32,
+    pub push_circles: i32,
+    pub unit_flags: u32,
+    pub unit_flags2: u32,
     /// `OBJ_MASK`, the `UnitType[+0x1E4]` bit-set `get_damage` reads.
     pub obj_masks: u32,
     pub uber_size: i32,
@@ -252,6 +259,10 @@ impl Types {
             "turn_speed",
             "new_block_radius",
             "squad_size",
+            "role",
+            "base_form",
+            "push_size",
+            "push_circles",
         ] {
             if col(&unit.hdr, want).is_none() {
                 return Err(format!("live-tables-unit.tsv has no `{want}` column"));
@@ -286,12 +297,19 @@ impl Types {
                     moves: num(h, r, "moves") as i32,
                     turn_speed: num(h, r, "turn_speed") as i32,
                     new_block_radius: num(h, r, "new_block_radius") as i32,
+                    big_radius: num(h, r, "big_radius") as i32,
                     guy_spacing: num(h, r, "guy_spacing") as i32,
                     x_spacing: num(h, r, "x_spacing") as i32,
                     y_spacing: num(h, r, "y_spacing") as i32,
                     guy_radius: num(h, r, "guy_radius") as i32,
                     squad_size: num(h, r, "squad_size") as i32,
                     crew_size: num(h, r, "crew_size") as i32,
+                    role: num(h, r, "role") as i32,
+                    base_form: num(h, r, "base_form") as i32,
+                    push_size: num(h, r, "push_size") as i32,
+                    push_circles: num(h, r, "push_circles") as i32,
+                    unit_flags: num(h, r, "unit_flags") as u32,
+                    unit_flags2: num(h, r, "unit_flags2") as u32,
                     obj_masks: num(h, r, "obj_masks") as u32,
                     uber_size: num(h, r, "uber_size").max(1) as i32,
                     ammo_per_att: num(h, r, "ammo_per_att").max(1) as i32,
@@ -394,6 +412,10 @@ mod tests {
         assert_eq!(citizen.new_block_radius, 1);
         assert_eq!(citizen.squad_size, 1);
         assert_eq!(citizen.crew_size, 0);
+        assert_eq!(citizen.role, 262_912);
+        assert_eq!(citizen.base_form, 0);
+        assert_eq!(citizen.push_size, 48);
+        assert_eq!(citizen.push_circles, 1);
     }
 
     #[test]

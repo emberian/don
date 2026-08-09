@@ -161,6 +161,11 @@ impl Map {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_set(&mut self, x: i32, y: i32, t: Terrain) {
+        self.set(x, y, t);
+    }
+
     /// Rotate a point 90° × `k` about the map centre. Exact on an integer grid, which is
     /// why the symmetry claim is a claim and not an approximation.
     fn rot(&self, x: i32, y: i32, k: usize) -> (i32, i32) {

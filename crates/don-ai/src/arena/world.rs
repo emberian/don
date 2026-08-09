@@ -27,6 +27,8 @@
 //! | damage scaling / hit points | `don_sim::systems::combat::{scale_damage_unit, scale_damage_build, HitPoints}` |
 //! | range tests | `don_sim::systems::combat::{in_attack_range, below_min_range, vector_dist_between}` |
 //! | recharge | `don_sim::systems::combat::{recharge_frames, AttackCycle}` |
+//! | unit orders / route search / turning | `don_sim::systems::{order_dispatch, movement}` |
+//! | per-guy occupancy / unit collision response | `don_sim::systems::collision` |
 //! | balance percentages | `schema/live/balance-real.bin`, the real 493x493 table |
 //! | unit and building stats | `schema/live/live-tables-*.tsv`, live reads |
 //! | rules constants | `ron-data/rules.xml` |
@@ -49,6 +51,7 @@
 //!
 //! Fidelity: **C**. Nothing here is differentially tested against retail.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use don_sim::balance::BalanceTable;
@@ -58,11 +61,14 @@ use don_sim::mechanics::{
     ResourceTickInput,
 };
 use don_sim::rng::Random;
+use don_sim::systems::collision::{
+    self, CollCheck, CollGuy, UnitRow as CollisionUnit, UnitTable as CollisionUnits,
+};
 use don_sim::systems::combat::{
     below_min_range, in_attack_range, scale_damage_build, scale_damage_unit, vector_dist_between,
     AttackCycle, CombatConstants, HitPoints, RANGE_UNITS_PER_TILE,
 };
-use don_sim::systems::groups_guys::{GuyData, GuyEnv, UnitGuys, UnitTypeStats};
+use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
 use don_sim::systems::movement::{PathFinder, PathUnit, UnitWorld, UCELL};
 use don_sim::systems::order_dispatch::{
     self, ArmResult, AttackOutcome, DispatchCoverage, GatherOutcome, KillReason, OrderRec,
@@ -346,6 +352,9 @@ pub struct World {
     pathfinder: PathFinder,
     game_random: Random,
     pub movement_coverage: DispatchCoverage,
+    collision_world: don_sim::systems::map_terrain::World,
+    collision_check: CollCheck,
+    collision_units: CollisionUnits,
     age_techs: Vec<i32>,
 }
 
@@ -374,6 +383,10 @@ impl World {
         };
         let age_techs = types.age_techs();
         let spatial = map.spatial;
+        let collision_world = don_sim::systems::map_terrain::World::init_default_rules(
+            ((map.w + 3) / 4).max(1),
+            ((map.h + 3) / 4).max(1),
+        );
         let mut w = World {
             roster: tribes.iter().map(|&t| types.for_tribe(t)).collect(),
             players: tribes
@@ -419,6 +432,9 @@ impl World {
             pathfinder: PathFinder::new(),
             game_random: Random::new(sim_seed),
             movement_coverage: DispatchCoverage::default(),
+            collision_world,
+            collision_check: CollCheck::new(),
+            collision_units: CollisionUnits::default(),
             age_techs,
         };
         for i in 0..w.players.len() {
@@ -481,9 +497,12 @@ impl World {
         };
         let x = tx * RANGE_UNITS_PER_TILE + HALF;
         let y = ty * RANGE_UNITS_PER_TILE + HALF;
+        // `Unit::init` writes this binary angle before its first `set_new_location` call.
+        const INITIAL_UNIT_ANGLE: i32 = 0x5555_5555;
         let type_stats = unit_type_stats(&t);
         let mut motion = if t.kind_unit {
             let mut u = UnitWork::at(who, self.ents.len() as i16, x, y);
+            u.body.angle = INITIAL_UNIT_ANGLE;
             u.ptype = type_id;
             u.myspeed = t.moves.clamp(0, i16::MAX as i32) as i16;
             u.path_unit = PathUnit {
@@ -492,7 +511,25 @@ impl World {
                 small_footprint: t.domain < 2,
                 can_transport: false,
             };
-            u.turn_rate = t.turn_speed;
+            u.guy_env = GuyEnv {
+                ut: type_stats,
+                unit_speed: t.moves,
+                order_speed_bonus: false,
+                unit_mask_turn_scale2: false,
+                turn_scale: 256,
+                turn_scale2: 2,
+                ai_speed: 1,
+            };
+            u.type_moves_while_turning = t.unit_flags & 0x20 != 0;
+            u.type_snap_arm = t.unit_flags2 & 4 != 0;
+            u.type_ignores_recharge = t.unit_flags & 0x400 != 0;
+            u.type_wants_work = t.unit_flags & 0x4_0000 != 0;
+            u.type_blocks_work = t.unit_flags & 0x4000 != 0;
+            u.lead_guy.ty = type_id;
+            u.lead_guy.x = x;
+            u.lead_guy.y = y;
+            u.lead_guy.des_x = x;
+            u.lead_guy.des_y = y;
             Some(u)
         } else {
             None
@@ -502,11 +539,22 @@ impl World {
         } else {
             UnitGuys::default()
         };
-        for g in guys.guys.iter_mut().flatten() {
-            g.x = x;
-            g.y = y;
-            g.des_x = x;
-            g.des_y = y;
+        if t.kind_unit {
+            guys.set_initial_locations(
+                x,
+                y,
+                INITIAL_UNIT_ANGLE,
+                0,
+                0,
+                self.map.w * RANGE_UNITS_PER_TILE,
+                self.map.h * RANGE_UNITS_PER_TILE,
+                &type_stats,
+            );
+            if let (Some(u), Some(g)) =
+                (motion.as_mut(), guys.guys.first().and_then(Option::as_ref))
+            {
+                u.lead_guy = *g;
+            }
         }
         self.ents.push(Ent {
             id,
@@ -525,7 +573,7 @@ impl World {
             build_left: if complete { 0 } else { t.job_time },
             job: Job::Idle,
             cycle: AttackCycle::default(),
-            facing: 0,
+            facing: if t.kind_unit { INITIAL_UNIT_ANGLE } else { 0 },
             city,
             workers: 0,
             worker_cap,
@@ -537,6 +585,28 @@ impl World {
             motion: motion.take(),
             guys,
         });
+        if t.kind_unit {
+            let ent = self.ents.last().expect("unit was just pushed");
+            let row = collision_row(ent, &t);
+            let live_guys: Vec<CollGuy> = ent
+                .guys
+                .guys
+                .iter()
+                .take(t.squad_size.max(0) as usize)
+                .flatten()
+                .map(|g| CollGuy {
+                    x: g.x,
+                    y: g.y,
+                    block_radius: t.new_block_radius,
+                })
+                .collect();
+            collision::place(
+                &mut self.collision_world,
+                &mut self.collision_units,
+                row,
+                live_guys,
+            );
+        }
         id
     }
 
@@ -1241,10 +1311,10 @@ impl World {
         }
     }
 
-    /// Execute one frame of retail `Unit::do_move` against the arena map.  The `UnitWork`
-    /// stored on the entity owns the real order queue, waypoint stack, movement masks and
-    /// parked-search state; the world's singleton [`PathFinder`] and main [`Random`] are
-    /// passed through unchanged.
+    /// Execute one frame of retail `Unit::work` against the arena map. The persistent
+    /// [`UnitWork`] therefore services periodic masks, safe countdown, order dispatch,
+    /// `do_move`, path/collision response and parked searches in their measured order; the
+    /// world's singleton [`PathFinder`] and main [`Random`] pass through unchanged.
     fn step_toward(&mut self, i: usize, gx: i32, gy: i32, tolerance: i32) -> MoveProgress {
         let Some(t) = self.types.get(self.ents[i].type_id).cloned() else {
             return MoveProgress::Failed;
@@ -1260,8 +1330,8 @@ impl World {
         };
         let replace = u.orders.front().is_none_or(|o| {
             o.kind != don_sim::order::OrderIndex::MoveTo
-                || o.dest_x != gx
-                || o.dest_y != gy
+                || o.x != gx
+                || o.y != gy
                 || u.tolerance != tol
         });
         if replace {
@@ -1271,67 +1341,140 @@ impl World {
         }
         u.tolerance = tol;
 
-        // `GuyData::turn_speed(0)` is the exact retail damping calculation.  The live
-        // `turn_speed` is already a binary angle; `(turn_speed >> 8) * 256` reconstructs
-        // it through the shipped `UNIT_TURN_SPEED` master scale.
+        // `do_move` calls `GuyData::turn_speed(0)` using these exact live type fields.
         if let Some(g) = self.ents[i].guys.guys.first().and_then(Option::as_ref) {
-            let env = GuyEnv {
-                ut: unit_type_stats(&t),
-                unit_speed: t.moves,
-                order_speed_bonus: false,
-                unit_mask_turn_scale2: u.unit_masks & 0x0008_0000 != 0,
-                turn_scale: 256,
-                turn_scale2: 2,
-                ai_speed: 1,
-            };
-            u.turn_rate = g.turn_speed(&env, 0) as i32;
+            u.lead_guy = *g;
         }
 
-        let mover_radius = t.new_block_radius.max(1) * UCELL;
-        let obstacles = self
+        let collision_frame = self.frame as i32;
+        if self.collision_units.frame != collision_frame {
+            self.collision_units.frame = collision_frame;
+            self.collision_units.budget = [0; 10];
+        }
+        let coll_index = self
+            .collision_units
+            .find(u.who as i32, u.o as i32)
+            .expect("every moving arena unit is registered in collision");
+        {
+            let row = &mut self.collision_units.rows[coll_index];
+            row.x = u.body.x;
+            row.y = u.body.y;
+            row.safe = u.safe;
+            row.unit_masks = u.unit_masks;
+            row.moving = !u.orders.is_empty();
+            row.order = u.orders.front().map_or(0, |o| o.kind as i32);
+            row.action = row.order;
+            row.has_orders = !u.orders.is_empty();
+            row.searching = u.parked_search;
+            row.path_top_flags = u.path.peek().map_or(0, |p| p.flags as u8);
+        }
+        let collision_me = self.collision_units.rows[coll_index];
+        let occupied_tiles = self
             .ents
             .iter()
-            .enumerate()
-            .filter(|(j, e)| *j != i && e.alive)
-            .map(|(_, e)| {
-                let r = self.types.get(e.type_id).map_or(UCELL, |ot| {
-                    if ot.kind_building {
-                        ot.x_size.max(ot.y_size).max(1) * (RANGE_UNITS_PER_TILE / 2)
-                    } else {
-                        ot.new_block_radius.max(1) * UCELL
-                    }
-                });
-                (e.x, e.y, r)
-            })
+            .filter(|e| e.alive && e.building)
+            .map(Ent::tile)
             .collect();
         let before = (u.body.x, u.body.y);
         let mut host = ArenaMoveWorld {
             map: &self.map,
-            obstacles,
-            mover_radius,
+            occupied_tiles,
+            collision: RefCell::new(ArenaCollisionProbe {
+                world: &mut self.collision_world,
+                check: &mut self.collision_check,
+                units: &mut self.collision_units,
+                me: collision_me,
+                step_dest: None,
+            }),
             frame: self.frame as i32,
             rng: &mut self.game_random,
         };
-        let result = order_dispatch::do_move(
+        let result = order_dispatch::work(
             &mut u,
             &mut host,
             &mut self.pathfinder,
             &mut self.movement_coverage,
-        );
-
+        )
+        .result;
         let after = (u.body.x, u.body.y);
+        drop(host);
+        assert!(
+            collision::relocate_unit_anchor(
+                &mut self.collision_world,
+                &mut self.collision_units,
+                u.who as i32,
+                u.o as i32,
+                after.0,
+                after.1,
+            ),
+            "moving arena unit must remain linked in its retail WData chain"
+        );
         self.ents[i].x = after.0;
         self.ents[i].y = after.1;
         self.ents[i].facing = u.body.angle;
         let moved = don_sim::systems::movement::vector_dist(after.0 - before.0, after.1 - before.1);
-        for g in self.ents[i].guys.guys.iter_mut().flatten() {
-            g.x = g.x.wrapping_add(after.0 - before.0);
-            g.y = g.y.wrapping_add(after.1 - before.1);
+        for g in self.ents[i]
+            .guys
+            .guys
+            .iter_mut()
+            .take(t.squad_size.max(0) as usize)
+            .flatten()
+        {
+            let old = (g.x, g.y);
+            let new = (
+                g.x.wrapping_add(after.0 - before.0),
+                g.y.wrapping_add(after.1 - before.1),
+            );
+            collision::guy_set_new_location(
+                &mut self.collision_world,
+                old,
+                new,
+                t.domain,
+                g.guy_num as i32,
+                t.squad_size,
+                t.new_block_radius,
+            );
+            g.x = new.0;
+            g.y = new.1;
             g.des_x = g.x;
             g.des_y = g.y;
             g.angle = u.body.angle;
             g.last_speed = moved;
             g.update_avg_speed();
+        }
+        if let Some(g) = self.ents[i].guys.guys.first().and_then(Option::as_ref) {
+            u.lead_guy = *g;
+        }
+        if let Some(ci) = self.collision_units.find(u.who as i32, u.o as i32) {
+            let row = &mut self.collision_units.rows[ci];
+            row.x = after.0;
+            row.y = after.1;
+            row.safe = u.safe;
+            row.unit_masks = u.unit_masks;
+            row.moving = !u.orders.is_empty();
+            row.order = u.orders.front().map_or(0, |o| o.kind as i32);
+            row.action = row.order;
+            row.has_orders = !u.orders.is_empty();
+            row.searching = u.parked_search;
+            row.path_top_flags = u.path.peek().map_or(0, |p| p.flags as u8);
+        }
+        let live_positions: Vec<(i32, i32)> = self.ents[i]
+            .guys
+            .guys
+            .iter()
+            .take(t.squad_size.max(0) as usize)
+            .flatten()
+            .map(|g| (g.x, g.y))
+            .collect();
+        for (tg, (x, y)) in self
+            .collision_units
+            .guys
+            .iter_mut()
+            .filter(|tg| tg.who == u.who as i32 && tg.o == u.o as i32)
+            .zip(live_positions)
+        {
+            tg.body.x = x;
+            tg.body.y = y;
         }
         self.ents[i].motion = Some(u);
 
@@ -1344,7 +1487,8 @@ impl World {
             ArmResult::NotPorted
             | ArmResult::Empty
             | ArmResult::Fired(_)
-            | ArmResult::Gathered(_) => MoveProgress::Failed,
+            | ArmResult::Gathered(_)
+            | ArmResult::MalformedOrder => MoveProgress::Failed,
         }
     }
 
@@ -1709,65 +1853,583 @@ pub fn ring(r: i32) -> Vec<(i32, i32)> {
     v
 }
 
-/// The 8-way movement lattice, in the order `dir_index` numbers it.
-const DIR8: [(i32, i32); 8] = [
-    (1, 0),
-    (1, 1),
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-];
+fn unit_type_stats(t: &TypeRow) -> UnitTypeStats {
+    UnitTypeStats {
+        domain: t.domain,
+        guy_spacing: t.guy_spacing,
+        x_spacing: t.x_spacing,
+        y_spacing: t.y_spacing,
+        guy_radius: t.guy_radius,
+        new_block_radius: t.new_block_radius,
+        turn_speed: t.turn_speed,
+        role: t.role,
+        squad_size: t.squad_size,
+        uber_size: t.uber_size,
+        crew_size: t.crew_size,
+        base_form: t.base_form,
+    }
+}
 
-/// The lattice index nearest the direction `(dx, dy)`.
-fn dir_index(dx: i32, dy: i32) -> i32 {
-    // Octant by comparing |dx| and |dy| against each other -- no trigonometry, no floats.
-    let (ax, ay) = (dx.abs(), dy.abs());
-    let diag = ax * 2 > ay && ay * 2 > ax;
-    match (dx.signum(), dy.signum()) {
-        (1, 0) => 0,
-        (1, 1) => {
-            if diag {
-                1
-            } else if ax > ay {
-                0
-            } else {
-                2
+fn collision_row(e: &Ent, t: &TypeRow) -> CollisionUnit {
+    let (o, safe, unit_masks, moving, order, searching, path_top_flags) = e
+        .motion
+        .as_ref()
+        .map(|u| {
+            (
+                u.o as i32,
+                u.safe,
+                u.unit_masks,
+                !u.orders.is_empty(),
+                u.orders.front().map_or(0, |o| o.kind as i32),
+                u.parked_search,
+                u.path.peek().map_or(0, |p| p.flags as u8),
+            )
+        })
+        .unwrap_or((
+            e.id.index().unwrap_or_default() as i32,
+            0,
+            0,
+            false,
+            0,
+            false,
+            0,
+        ));
+    CollisionUnit {
+        who: e.who as i32,
+        o,
+        x: e.x,
+        y: e.y,
+        down: -1,
+        down_who: -1,
+        domain: t.domain,
+        block_radius: t.new_block_radius,
+        big_radius: t.big_radius,
+        push_size: t.push_size,
+        push_circles: t.push_circles,
+        angle: e.facing,
+        first_guy_angle: e
+            .guys
+            .guys
+            .first()
+            .and_then(Option::as_ref)
+            .map_or(e.facing, |g| g.angle),
+        group: e.motion.as_ref().map_or(-1, |u| u.group),
+        collide_o: -1,
+        collide_who: -1,
+        safe,
+        unit_masks,
+        on_map: e.alive,
+        active: e.alive,
+        moving,
+        action: order,
+        order,
+        has_orders: moving,
+        searching,
+        path_top_flags,
+        unit_flags: t.unit_flags,
+        unit_flags2: t.unit_flags2,
+        attack_value: t.attack,
+        spell_id: -1,
+        ..CollisionUnit::default()
+    }
+}
+
+/// The arena host presented to the retail order executor. The actor is omitted from
+/// `obstacles`, so the A* and integrator cannot collide it with its own footprint while
+/// its mutable `UnitWork` is held outside the entity table.
+struct ArenaMoveWorld<'a> {
+    map: &'a Map,
+    occupied_tiles: Vec<(i32, i32)>,
+    collision: RefCell<ArenaCollisionProbe<'a>>,
+    frame: i32,
+    rng: &'a mut Random,
+}
+
+struct ArenaCollisionProbe<'a> {
+    world: &'a mut don_sim::systems::map_terrain::World,
+    check: &'a mut CollCheck,
+    units: &'a mut CollisionUnits,
+    me: CollisionUnit,
+    /// `MoveOrder::coll_x/coll_y`: written by the side-effecting step detector and
+    /// consumed by `resolve_unit_collision`. `OrderRec` does not otherwise carry these
+    /// two retail fields, so the host persists them alongside the collision row.
+    step_dest: Option<(i32, i32)>,
+}
+
+/// Mutable order fields collision reads and writes while `do_move` owns the actor. Keeping
+/// this bridge separate from [`ArenaCollisionAdapter`] lets the resolver's path callback
+/// borrow the actor and park a real suspended search without aliasing the object table.
+#[derive(Default)]
+struct ArenaCollisionOrder {
+    actor: (i32, i32),
+    step_dest: Option<(i32, i32)>,
+    detour: Option<(i32, i32)>,
+    wait: Option<i32>,
+    clear_dest: bool,
+    target: Option<(i32, i32)>,
+    actor_location: Option<(i32, i32)>,
+    actor_angle: Option<i32>,
+}
+
+struct ArenaCollisionAdapter<'a> {
+    table: &'a mut CollisionUnits,
+    order: &'a mut ArenaCollisionOrder,
+    map: &'a Map,
+    occupied_tiles: &'a [(i32, i32)],
+}
+
+impl collision::CollUnits for ArenaCollisionAdapter<'_> {
+    fn row(&self, who: i32, o: i32) -> Option<CollisionUnit> {
+        collision::CollUnits::row(&*self.table, who, o)
+    }
+
+    fn unit_corner(&self, who: i32, o: i32, cx: i32, cy: i32) -> i32 {
+        collision::CollUnits::unit_corner(&*self.table, who, o, cx, cy)
+    }
+
+    fn find_boat_units(&mut self, query: collision::BoatQuery) -> Vec<(i32, i32)> {
+        collision::CollUnits::find_boat_units(&mut *self.table, query)
+    }
+
+    fn effective_owner(&self, who: i32) -> i32 {
+        collision::CollUnits::effective_owner(&*self.table, who)
+    }
+
+    fn diplomacy(&self, who: i32, other: i32) -> i32 {
+        collision::CollUnits::diplomacy(&*self.table, who, other)
+    }
+
+    fn boat_invalid_loc(&self, _: i32, _: i32, tx: i32, ty: i32) -> bool {
+        !self.map.at(tx, ty).passable() || self.occupied_tiles.contains(&(tx, ty))
+    }
+
+    fn set_boat_location(&mut self, who: i32, o: i32, x: i32, y: i32) {
+        collision::CollUnits::set_boat_location(&mut *self.table, who, o, x, y);
+        if (who, o) == self.order.actor {
+            self.order.actor_location = Some((x, y));
+        }
+    }
+
+    fn face_pushed_idle_unit(
+        &mut self,
+        who: i32,
+        o: i32,
+        angle: i32,
+        pusher_who: i32,
+        pusher_o: i32,
+    ) {
+        collision::CollUnits::face_pushed_idle_unit(
+            &mut *self.table,
+            who,
+            o,
+            angle,
+            pusher_who,
+            pusher_o,
+        );
+        if (who, o) == self.order.actor {
+            self.order.actor_angle = Some(angle);
+        }
+    }
+
+    fn write(&mut self, who: i32, o: i32, row: &CollisionUnit) {
+        collision::CollUnits::write(&mut *self.table, who, o, row)
+    }
+
+    fn is_enemy(&self, me: i32, them: i32) -> bool {
+        collision::CollUnits::is_enemy(&*self.table, me, them)
+    }
+
+    fn order_dest(&self, who: i32, o: i32) -> Option<(i32, i32)> {
+        ((who, o) == self.order.actor)
+            .then_some(self.order.step_dest)
+            .flatten()
+    }
+
+    fn set_order_dest(&mut self, who: i32, o: i32, x: i32, y: i32) {
+        if (who, o) == self.order.actor {
+            self.order.step_dest = Some((x, y));
+        }
+    }
+
+    fn set_order_detour(&mut self, who: i32, o: i32, x: i32, y: i32) {
+        if (who, o) == self.order.actor {
+            self.order.detour = Some((x, y));
+        }
+    }
+
+    fn set_order_wait(&mut self, who: i32, o: i32, ticks: i32) {
+        if (who, o) == self.order.actor {
+            self.order.wait = Some(ticks);
+        }
+    }
+
+    fn clear_order_retry(&mut self, who: i32, o: i32) {
+        if (who, o) == self.order.actor {
+            self.order.clear_dest = true;
+        }
+    }
+
+    fn order_targets(&self, who: i32, o: i32, target_who: i32, target_o: i32) -> bool {
+        (who, o) == self.order.actor && self.order.target == Some((target_who, target_o))
+    }
+
+    fn attack_slack(&self, who: i32, o: i32, nx: i32, ny: i32) -> i32 {
+        collision::CollUnits::attack_slack(&*self.table, who, o, nx, ny)
+    }
+
+    fn repath_budget(&self, who: i32) -> i32 {
+        collision::CollUnits::repath_budget(&*self.table, who)
+    }
+
+    fn bump_repath_budget(&mut self, who: i32) {
+        collision::CollUnits::bump_repath_budget(&mut *self.table, who)
+    }
+
+    fn frame(&self) -> i32 {
+        collision::CollUnits::frame(&*self.table)
+    }
+}
+
+/// Read-only collision view for a resolver-triggered local repath. Retail's validity probes
+/// are read-only apart from scratch caches, so cloning the object/collision image preserves
+/// the queried state while the real table remains mutably borrowed by the resolver.
+struct ArenaPathSnapshot<'a> {
+    map: &'a Map,
+    occupied_tiles: &'a [(i32, i32)],
+    world: RefCell<don_sim::systems::map_terrain::World>,
+    check: RefCell<CollCheck>,
+    units: RefCell<CollisionUnits>,
+    me: CollisionUnit,
+}
+
+impl UnitWorld for ArenaPathSnapshot<'_> {
+    fn tiles_w(&self) -> i32 {
+        self.map.w
+    }
+
+    fn tiles_h(&self) -> i32 {
+        self.map.h
+    }
+
+    fn wcells_w(&self) -> i32 {
+        ((self.map.w + 3) / 4).max(1)
+    }
+
+    fn invalid_loc(&self, tx: i32, ty: i32) -> bool {
+        !self.map.at(tx, ty).passable() || self.occupied_tiles.contains(&(tx, ty))
+    }
+
+    fn unit_collides(&self, x: i32, y: i32) -> bool {
+        collision::unit_collides(
+            &mut self.world.borrow_mut(),
+            &mut self.check.borrow_mut(),
+            &mut *self.units.borrow_mut(),
+            &self.me,
+            x,
+            y,
+        )
+    }
+
+    fn needs_transport(&self, _: i32, _: i32, _: i32, _: i32) -> i32 {
+        0
+    }
+
+    fn tregion(&self, tx: i32, ty: i32) -> i32 {
+        if self.invalid_loc(tx, ty) {
+            -1
+        } else {
+            0
+        }
+    }
+}
+
+impl UnitWorld for ArenaMoveWorld<'_> {
+    fn tiles_w(&self) -> i32 {
+        self.map.w
+    }
+
+    fn tiles_h(&self) -> i32 {
+        self.map.h
+    }
+
+    fn wcells_w(&self) -> i32 {
+        ((self.map.w + 3) / 4).max(1)
+    }
+
+    fn invalid_loc(&self, tile_x: i32, tile_y: i32) -> bool {
+        !self.map.at(tile_x, tile_y).passable() || self.occupied_tiles.contains(&(tile_x, tile_y))
+    }
+
+    fn unit_collides(&self, x: i32, y: i32) -> bool {
+        let mut c = self.collision.borrow_mut();
+        let ArenaCollisionProbe {
+            world,
+            check,
+            units,
+            me,
+            ..
+        } = &mut *c;
+        collision::unit_collides(*world, *check, *units, me, x, y)
+    }
+
+    fn needs_transport(&self, _: i32, _: i32, _: i32, _: i32) -> i32 {
+        0
+    }
+
+    fn tregion(&self, tile_x: i32, tile_y: i32) -> i32 {
+        if self.invalid_loc(tile_x, tile_y) {
+            -1
+        } else {
+            0
+        }
+    }
+}
+
+impl WorkWorld for ArenaMoveWorld<'_> {
+    fn frame(&self) -> i32 {
+        self.frame
+    }
+
+    fn target(&self, _: i32, _: i32) -> Option<TargetState> {
+        None
+    }
+
+    fn attack(&mut self, _: &UnitWork, _: &OrderRec) -> AttackOutcome {
+        AttackOutcome::Impossible
+    }
+
+    fn gather(&mut self, _: &UnitWork, _: &OrderRec) -> GatherOutcome {
+        GatherOutcome::Exhausted
+    }
+
+    fn draw_path_retry_delay(&mut self) -> i32 {
+        self.rng.get(0, 0xFFFF) % 3 + 6
+    }
+
+    fn patrol_think_bird(
+        &mut self,
+        _: &mut UnitWork,
+        _: &mut don_sim::systems::patrol::AirPatrolOrder,
+    ) {
+        panic!("arena movement host cannot dispatch air patrol orders")
+    }
+
+    fn air_patrol_physics(
+        &mut self,
+        _: &mut UnitWork,
+        _: &mut don_sim::systems::patrol::AirPatrolOrder,
+        _: i32,
+        _: i32,
+    ) -> bool {
+        panic!("arena movement host cannot dispatch air patrol orders")
+    }
+
+    fn group_patrol_move(
+        &mut self,
+        _: &mut UnitWork,
+        _: don_sim::systems::patrol::GroupMoveRequest,
+    ) {
+        panic!("arena movement host cannot dispatch group patrol orders")
+    }
+
+    fn patrol_actor_is_type(&self, _: &UnitWork, _: i32, _: bool) -> bool {
+        panic!("arena movement host cannot dispatch air patrol orders")
+    }
+
+    fn patrol_inside_is_scramblable(&self, _: u8, _: i16) -> bool {
+        panic!("arena movement host cannot dispatch air patrol orders")
+    }
+
+    fn patrol_scramble_inside(&mut self, _: &mut UnitWork, _: i16) {
+        panic!("arena movement host cannot dispatch air patrol orders")
+    }
+
+    fn move_collision(
+        &mut self,
+        actor: &mut UnitWork,
+        pf: &mut PathFinder,
+        event: don_sim::systems::movement::MoveCollisionEvent<'_>,
+    ) -> don_sim::systems::movement::MoveCollisionReply {
+        use don_sim::systems::movement::{
+            MoveCollisionEvent, MoveCollisionProbe, MoveCollisionReply,
+        };
+
+        let map = self.map;
+        let occupied_tiles = self.occupied_tiles.as_slice();
+        match event {
+            MoveCollisionEvent::Detect { x, y, probe } => {
+                let c = self.collision.get_mut();
+                let mut row = c.me;
+                let target = actor.orders.front().map(|o| (o.target_who, o.target_o));
+                let mut order = ArenaCollisionOrder {
+                    actor: (row.who, row.o),
+                    step_dest: c.step_dest,
+                    target,
+                    ..ArenaCollisionOrder::default()
+                };
+                let mut units = ArenaCollisionAdapter {
+                    table: c.units,
+                    order: &mut order,
+                    map,
+                    occupied_tiles,
+                };
+                let args = match probe {
+                    MoveCollisionProbe::MoveStep => collision::DetectArgs::MOVE_STEP,
+                    MoveCollisionProbe::Waypoint => collision::DetectArgs::DETOUR_PROBE,
+                };
+                let detected = collision::detect_unit_collision(
+                    c.world, c.check, &mut units, &row, x, y, args,
+                );
+                if probe == MoveCollisionProbe::MoveStep {
+                    detected.apply(&mut units, &mut row, self.frame);
+                    collision::CollUnits::write(&mut units, row.who, row.o, &row);
+                    actor.safe = row.safe;
+                    actor.unit_masks = row.unit_masks;
+                    actor.collide_frame = row.collide_frame;
+                    c.me = row;
+                    c.step_dest = order.step_dest;
+                }
+                if detected.blocked() {
+                    MoveCollisionReply::Hit
+                } else {
+                    MoveCollisionReply::Clear
+                }
+            }
+            MoveCollisionEvent::Resolve {
+                x: _,
+                y: _,
+                body,
+                path,
+            } => {
+                let rng = &mut *self.rng;
+                let c = self.collision.get_mut();
+                let mut row = c.me;
+                let snapped = (
+                    don_sim::systems::movement::ucell_centre(don_sim::systems::movement::ucell_of(
+                        row.x,
+                    )),
+                    don_sim::systems::movement::ucell_centre(don_sim::systems::movement::ucell_of(
+                        row.y,
+                    )),
+                );
+
+                // `resolve_unit_collision` can call the same budgeted `find_upath` wrapper.
+                // Its raw suspended return is -1 and retail treats that as success (`!= 0`).
+                // A scratch clone provides the exact pre-resolve bitmap/object image while
+                // the real object adapter remains exclusively borrowed by the resolver.
+                let mut snapshot_units = c.units.clone();
+                if let Some(i) = snapshot_units.find(row.who, row.o) {
+                    snapshot_units.rows[i].x = snapped.0;
+                    snapshot_units.rows[i].y = snapped.1;
+                }
+                let mut snapshot_me = row;
+                snapshot_me.x = snapped.0;
+                snapshot_me.y = snapped.1;
+                let snapshot = ArenaPathSnapshot {
+                    map,
+                    occupied_tiles,
+                    world: RefCell::new(c.world.clone()),
+                    check: RefCell::new(CollCheck::new()),
+                    units: RefCell::new(snapshot_units),
+                    me: snapshot_me,
+                };
+                let repath_dest = actor
+                    .orders
+                    .front()
+                    .map_or((body.x, body.y), |o| (o.dest_x, o.dest_y));
+                let target = actor.orders.front().map(|o| (o.target_who, o.target_o));
+                let mut order = ArenaCollisionOrder {
+                    actor: (row.who, row.o),
+                    step_dest: c.step_dest,
+                    target,
+                    ..ArenaCollisionOrder::default()
+                };
+                let mut units = ArenaCollisionAdapter {
+                    table: c.units,
+                    order: &mut order,
+                    map,
+                    occupied_tiles,
+                };
+
+                // The repath callback seeds its stack from UnitData's snapped body.
+                actor.body.x = snapped.0;
+                actor.body.y = snapped.1;
+                let invalid_loc = |tx: i32, ty: i32| {
+                    !map.at(tx, ty).passable() || occupied_tiles.contains(&(tx, ty))
+                };
+                let _resolved = collision::resolve_unit_collision(
+                    c.world,
+                    c.check,
+                    &mut units,
+                    &mut row,
+                    path,
+                    rng,
+                    &invalid_loc,
+                    |repath, quick| {
+                        std::mem::swap(&mut actor.path, repath);
+                        let outcome = order_dispatch::find_path(
+                            pf,
+                            &snapshot,
+                            actor,
+                            repath_dest.0,
+                            repath_dest.1,
+                            i32::from(quick),
+                        );
+                        std::mem::swap(&mut actor.path, repath);
+                        matches!(
+                            outcome,
+                            order_dispatch::PathOutcome::Found
+                                | order_dispatch::PathOutcome::Suspended
+                        )
+                    },
+                );
+                // `Unit::set_new_location` owns the spatial remove/write/add sequence. The
+                // arena invokes it immediately after `do_move`, before moving guy stamps;
+                // retain the table row's old anchor/link here while persisting resolver state.
+                let linked = collision::CollUnits::row(&units, row.who, row.o)
+                    .expect("resolving actor remains in collision table");
+                let mut stored = row;
+                stored.x = linked.x;
+                stored.y = linked.y;
+                stored.down = linked.down;
+                stored.down_who = linked.down_who;
+                collision::CollUnits::write(&mut units, row.who, row.o, &stored);
+                drop(units);
+
+                if let Some((x, y)) = order.detour {
+                    if let Some(o) = actor.orders.front_mut() {
+                        o.dest_x = x;
+                        o.dest_y = y;
+                    }
+                }
+                if let Some(wait) = order.wait {
+                    if let Some(o) = actor.orders.front_mut() {
+                        o.pause = wait;
+                    }
+                }
+                if order.clear_dest {
+                    if let Some(o) = actor.orders.front_mut() {
+                        o.dest = 0;
+                    }
+                }
+                body.x = row.x;
+                body.y = row.y;
+                if let Some((x, y)) = order.actor_location {
+                    body.x = x;
+                    body.y = y;
+                }
+                if let Some(angle) = order.actor_angle {
+                    body.angle = angle;
+                }
+                actor.body = *body;
+                actor.safe = row.safe;
+                actor.unit_masks = row.unit_masks;
+                actor.collide_frame = row.collide_frame;
+                c.me = row;
+                c.step_dest = order.step_dest;
+                MoveCollisionReply::Handled
             }
         }
-        (0, 1) => 2,
-        (-1, 1) => {
-            if diag {
-                3
-            } else if ax > ay {
-                4
-            } else {
-                2
-            }
-        }
-        (-1, 0) => 4,
-        (-1, -1) => {
-            if diag {
-                5
-            } else if ax > ay {
-                4
-            } else {
-                6
-            }
-        }
-        (0, -1) => 6,
-        (1, -1) => {
-            if diag {
-                7
-            } else if ax > ay {
-                0
-            } else {
-                6
-            }
-        }
-        _ => 0,
     }
 }
 
@@ -1788,4 +2450,296 @@ fn dir8(dx: i32, dy: i32) -> i32 {
 
 fn dir_between(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
     dir8(bx - ax, by - ay)
+}
+
+#[cfg(test)]
+mod movement_integration {
+    use super::*;
+    use crate::arena::match_run::{load_world, MatchConfig};
+
+    struct OpenMoveWorld {
+        w: i32,
+        h: i32,
+    }
+
+    impl UnitWorld for OpenMoveWorld {
+        fn tiles_w(&self) -> i32 {
+            self.w
+        }
+        fn tiles_h(&self) -> i32 {
+            self.h
+        }
+        fn wcells_w(&self) -> i32 {
+            ((self.w + 3) / 4).max(1)
+        }
+        fn invalid_loc(&self, _: i32, _: i32) -> bool {
+            false
+        }
+        fn unit_collides(&self, _: i32, _: i32) -> bool {
+            false
+        }
+        fn needs_transport(&self, _: i32, _: i32, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn tregion(&self, _: i32, _: i32) -> i32 {
+            0
+        }
+    }
+
+    /// Run the exact integrator on copies to learn the next translated candidate without
+    /// mutating the real arena. `None` means this frame only turns or stays within the
+    /// actor's current collision cell.
+    fn next_candidate(w: &World, i: usize) -> Option<(i32, i32)> {
+        let u = w.ents[i].motion.as_ref()?;
+        let target = u
+            .path
+            .peek()
+            .map(|p| (p.to_x, p.to_y))
+            .or_else(|| u.orders.front().map(|o| (o.x, o.y)))?;
+        if u.path.peek().is_some_and(|p| p.flags & 8 != 0) {
+            return None;
+        }
+        let speed = u.myspeed.max(1) as i32;
+        let mut env = u.guy_env;
+        env.unit_speed = speed;
+        env.unit_mask_turn_scale2 =
+            u.unit_masks & don_sim::systems::groups_guys::UNIT_MASK_TURN_SCALE2 != 0;
+        let turn_rate = u.lead_guy.turn_speed(&env, 0) as i32;
+        let mut profile = don_sim::systems::movement::MoveTurnProfile {
+            unit_flags: if u.type_moves_while_turning {
+                don_sim::systems::movement::UNIT_FLAG_MOVE_WHILE_TURNING
+            } else {
+                0
+            },
+            type_turn_speed: u.guy_env.ut.turn_speed as u32,
+            domain: u.guy_env.ut.domain,
+            special_wide_turner: u.type_special_wide_turner,
+            speed_half_latch: u.unit_masks & order_dispatch::masks::HALF_SPEED_ON_TURN != 0,
+        };
+        let mut body = u.body;
+        let mut path = u.path.clone();
+        let mut open = OpenMoveWorld {
+            w: w.map.w,
+            h: w.map.h,
+        };
+        let _ = don_sim::systems::movement::move_step_profile(
+            &mut open,
+            &mut body,
+            &mut path,
+            target,
+            speed,
+            turn_rate,
+            &mut profile,
+        );
+        let old_cell = (
+            don_sim::systems::movement::ucell_of(u.body.x),
+            don_sim::systems::movement::ucell_of(u.body.y),
+        );
+        let new_cell = (
+            don_sim::systems::movement::ucell_of(body.x),
+            don_sim::systems::movement::ucell_of(body.y),
+        );
+        ((body.x, body.y) != (u.body.x, u.body.y) && new_cell != old_cell)
+            .then_some((body.x, body.y))
+    }
+
+    fn world(seed: u32) -> Option<World> {
+        let mut cfg = MatchConfig::default();
+        cfg.map.seed = seed;
+        load_world(&cfg).ok()
+    }
+
+    fn scout_index(w: &World) -> usize {
+        w.ents
+            .iter()
+            .rposition(|e| e.who == 0 && e.type_id == w.ids.citizen)
+            .expect("seed start has three citizens")
+    }
+
+    #[test]
+    fn retail_pathfinder_walks_around_a_ridge_across_map_seeds() {
+        for k in 0..8u32 {
+            let seed = 0x5EED_0001u32.wrapping_add(k.wrapping_mul(0x9E37_79B9));
+            let Some(mut w) = world(seed) else { return };
+            let i = scout_index(&w);
+            let (sx, sy) = w.ents[i].tile();
+            let ridge_x = sx + 5;
+            for y in sy - 7..=sy + 7 {
+                w.map.test_set(ridge_x, y, Terrain::Mountain);
+            }
+            // One opening beyond the north end forces a real detour; the destination is
+            // directly east, so a straight/greedy mover cannot satisfy this test.
+            w.map.test_set(ridge_x, sy - 8, Terrain::Grass);
+            let goal = (sx + 11, sy);
+            w.map.test_set(goal.0, goal.1, Terrain::Grass);
+            let target = (
+                goal.0 * RANGE_UNITS_PER_TILE + HALF,
+                goal.1 * RANGE_UNITS_PER_TILE + HALF,
+            );
+            let mut outcome = MoveProgress::Working;
+            for _ in 0..2_000 {
+                outcome = w.step_toward(i, target.0, target.1, 0);
+                w.frame += 1;
+                if outcome != MoveProgress::Working {
+                    break;
+                }
+            }
+            assert_eq!(outcome, MoveProgress::Arrived, "seed {seed:#x}");
+            assert!(w.ents[i].tile().0 > ridge_x, "seed {seed:#x}");
+        }
+    }
+
+    #[test]
+    fn unreachable_move_retires_and_consumes_exactly_one_retry_draw_across_seeds() {
+        for k in 0..8u32 {
+            let seed = 0x5EED_0001u32.wrapping_add(k.wrapping_mul(0x9E37_79B9));
+            let Some(mut w) = world(seed) else { return };
+            let i = scout_index(&w);
+            let (sx, sy) = w.ents[i].tile();
+            let wall_x = sx + 5;
+            for y in 0..w.map.h {
+                w.map.test_set(wall_x, y, Terrain::Mountain);
+            }
+            let rng_before = w.game_random.state();
+            let draws_before = w.movement_coverage.path_retry_draws;
+            let target = (
+                (sx + 10) * RANGE_UNITS_PER_TILE + HALF,
+                sy * RANGE_UNITS_PER_TILE + HALF,
+            );
+            let mut outcome = MoveProgress::Working;
+            for _ in 0..128 {
+                outcome = w.step_toward(i, target.0, target.1, 0);
+                w.frame += 1;
+                if outcome != MoveProgress::Working {
+                    break;
+                }
+            }
+            assert_eq!(outcome, MoveProgress::Failed, "seed {seed:#x}");
+            assert_eq!(w.movement_coverage.path_retry_draws, draws_before + 1);
+            assert_ne!(w.game_random.state(), rng_before);
+            assert!(w.ents[i]
+                .motion
+                .as_ref()
+                .expect("citizen motion")
+                .orders
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn retail_collision_resolver_finishes_the_original_order_after_a_new_blocker() {
+        for k in 0..8u32 {
+            let seed = 0xC011_1DE0u32.wrapping_add(k.wrapping_mul(0x9E37_79B9));
+            let Some(mut w) = world(seed) else { return };
+            let cy = w.map.h / 2;
+            let start = (w.map.w / 2 - 10, cy);
+            let goal = (w.map.w / 2 + 10, cy);
+            for y in cy - 3..=cy + 3 {
+                for x in start.0 - 2..=goal.0 + 2 {
+                    w.map.test_set(x, y, Terrain::Grass);
+                }
+            }
+            let actor = w.spawn(0, w.ids.citizen, start.0, start.1, true);
+            let i = actor.index().expect("spawned actor");
+            let target = (
+                goal.0 * RANGE_UNITS_PER_TILE + HALF,
+                goal.1 * RANGE_UNITS_PER_TILE + HALF,
+            );
+
+            // Build the route first, then materialise a body on its current leading
+            // waypoint. This forces the move-step Detect -> Resolve arm rather than merely
+            // letting the initial A* bitmap probe route around a pre-existing unit.
+            let mut candidate = None;
+            for _ in 0..64 {
+                assert_eq!(
+                    w.step_toward(i, target.0, target.1, 0),
+                    MoveProgress::Working
+                );
+                w.frame += 1;
+                if let Some(next) = next_candidate(&w, i) {
+                    candidate = Some(next);
+                    break;
+                }
+            }
+            let candidate = candidate.expect("long move exposes a translated candidate");
+            let blocker_tile = (
+                don_sim::systems::movement::tile_of(candidate.0),
+                don_sim::systems::movement::tile_of(candidate.1),
+            );
+            let blocker = w.spawn(0, w.ids.citizen, blocker_tile.0, blocker_tile.1, true);
+            assert!(!blocker.is_none());
+            let blocker_i = blocker.index().expect("spawned blocker");
+            let blocker_o = blocker_i as i16;
+            let old = (w.ents[blocker_i].x, w.ents[blocker_i].y);
+            let exact = candidate;
+            collision::guy_set_new_location(&mut w.collision_world, old, exact, 0, 0, 1, 1);
+            w.ents[blocker_i].x = exact.0;
+            w.ents[blocker_i].y = exact.1;
+            if let Some(g) = w.ents[blocker_i]
+                .guys
+                .guys
+                .first_mut()
+                .and_then(Option::as_mut)
+            {
+                g.x = exact.0;
+                g.y = exact.1;
+            }
+            if let Some(u) = w.ents[blocker_i].motion.as_mut() {
+                u.body.x = exact.0;
+                u.body.y = exact.1;
+                u.lead_guy.x = exact.0;
+                u.lead_guy.y = exact.1;
+            }
+            let blocker_row_i = w
+                .collision_units
+                .find(0, blocker_i as i32)
+                .expect("blocker collision row");
+            w.collision_units.rows[blocker_row_i].x = exact.0;
+            w.collision_units.rows[blocker_row_i].y = exact.1;
+            for guy in w
+                .collision_units
+                .guys
+                .iter_mut()
+                .filter(|g| g.who == 0 && g.o == blocker_i as i32)
+            {
+                guy.body.x = exact.0;
+                guy.body.y = exact.1;
+            }
+            let actor_row = w.collision_units.rows[w
+                .collision_units
+                .find(0, i as i32)
+                .expect("actor collision row")];
+            assert!(collision::unit_collides(
+                &mut w.collision_world,
+                &mut w.collision_check,
+                &mut w.collision_units,
+                &actor_row,
+                candidate.0,
+                candidate.1,
+            ));
+
+            let mut outcome = MoveProgress::Working;
+            let mut detected_blocker = false;
+            for _ in 0..2_000 {
+                outcome = w.step_toward(i, target.0, target.1, 0);
+                w.frame += 1;
+                detected_blocker |= w
+                    .collision_units
+                    .find(0, i as i32)
+                    .is_some_and(|ci| w.collision_units.rows[ci].collide_o == blocker_o);
+                if outcome != MoveProgress::Working {
+                    break;
+                }
+            }
+            assert_eq!(outcome, MoveProgress::Arrived, "seed {seed:#x}");
+            assert!(detected_blocker, "seed {seed:#x} never entered Detect::Hit");
+            assert!(
+                don_sim::systems::movement::vector_dist(
+                    w.ents[i].x - target.0,
+                    w.ents[i].y - target.1
+                ) <= UCELL,
+                "seed {seed:#x} retired at a collision detour instead of the order goal"
+            );
+        }
+    }
 }

@@ -112,10 +112,6 @@ pub struct Marshal {
     scout: Option<EntId>,
     scout_goal: Option<(i32, i32)>,
     scout_until: i64,
-    /// Last tile at which the scout made progress, and the frame it reached it. The
-    /// arena's deliberately small movement model can retain an unreachable `MoveTo`
-    /// forever; without this watchdog one blocked ridge ends scouting for the match.
-    scout_progress: Option<(i32, i32, i64)>,
     /// Where we believe the enemy lives.
     pub enemy_base: Option<(i32, i32)>,
     /// Army value when the current push began.
@@ -138,7 +134,6 @@ impl Marshal {
             scout: None,
             scout_goal: None,
             scout_until: 420 * FPS,
-            scout_progress: None,
             enemy_base: None,
             push_value: 0,
             mode_until: 0,
@@ -496,32 +491,14 @@ impl Marshal {
         };
         let Some(e) = obs.own_ent(scout) else { return };
         let (sx, sy) = e.tile();
-        let moved = self
-            .scout_progress
-            .map(|(px, py, _)| (px, py) != (sx, sy))
-            .unwrap_or(true);
-        if moved {
-            self.scout_progress = Some((sx, sy, obs.frame));
-        }
-        let stuck = self
-            .scout_progress
-            .map(|(_, _, frame)| obs.frame - frame >= 4 * FPS)
-            .unwrap_or(false);
         let arrived = self
             .scout_goal
             .map(|(gx, gy)| (gx - sx).abs().max((gy - sy).abs()) <= 3)
             .unwrap_or(true);
-        if std::env::var("ARENA_DEBUG_SCOUT").is_ok() && obs.frame % 150 == 0 {
-            eprintln!(
-                "f{} scout at ({sx},{sy}) goal {:?} job {:?} leg {}",
-                obs.frame, self.scout_goal, e.job, self.scout_leg
-            );
-        }
-        if arrived || stuck || matches!(e.job, Job::Idle) {
+        if arrived || matches!(e.job, Job::Idle) {
             self.scout_leg += 1;
             if let Some(g) = scout_waypoint(obs, sx, sy, self.scout_leg) {
                 self.scout_goal = Some(g);
-                self.scout_progress = Some((sx, sy, obs.frame));
                 out.push(Cmd::Move {
                     unit: scout,
                     tx: g.0,
