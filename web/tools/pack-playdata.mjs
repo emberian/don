@@ -149,6 +149,7 @@ function main() {
       id,
       name: t.name_display,
       cost: [0, 1, 2, 3, 4, 5].map((k) => num(t, `cost${k}`, 0)),
+      jobTime: num(t, 'job_time', 0),
     };
   });
 
@@ -187,7 +188,7 @@ function main() {
   for (const a of ages) {
     out.writeInt32LE(a.id, o); o += 4;
     for (const c of a.cost) { out.writeInt32LE(c, o); o += 4; }
-    out.writeInt32LE(0, o); o += 4;
+    out.writeInt32LE(a.jobTime, o); o += 4;
   }
   for (let i = 0; i < RULES_DWORDS; i++) { out.writeInt32LE(rules.dwords[i], o); o += 4; }
   if (o !== out.length) throw new Error(`wrote ${o} of ${out.length}`);

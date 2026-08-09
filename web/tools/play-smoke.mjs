@@ -6,8 +6,8 @@
 //
 //   1. reads back pixels the *renderer itself* owns (`window.don.snapshot()`), and counts
 //      non-black pixels and distinct colours;
-//   2. drives selection, MoveTo, and City training through real input, proves unsupported
-//      economy actions fail closed, and round-trips core save bytes without shadow state;
+//   2. drives selection, MoveTo, City training, Library construction, and age research through
+//      real input, proves unsupported actions fail closed, and resumes post-step core saves;
 //   3. measures frames per second over a fixed window at a stated unit count, and reports
 //      the browser, backend and viewport it measured on.
 //
@@ -174,6 +174,10 @@ try {
     filter.dispatchEvent(new Event('input', { bubbles: true }));
     const filteredCatalog = document.querySelectorAll('#palette button').length;
     const buildButtonEnabled = !document.querySelector('#palette button')?.disabled;
+    filter.value = 'library';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    const libraryBuildEnabled = !!document.querySelector('#palette [data-kind="build"]:not(:disabled)');
+    const buildDockEnabled = !document.getElementById('cmd-build').disabled;
     filter.value = '';
     filter.dispatchEvent(new Event('input', { bubbles: true }));
     const futureBuildDisabled = [...document.querySelectorAll('#palette button')]
@@ -205,6 +209,7 @@ try {
     replaySpeed.dispatchEvent(new Event('change', { bubbles: true }));
     return JSON.stringify({
       initialCatalog, initialCatalogDisabled, filteredCatalog, buildButtonEnabled,
+      libraryBuildEnabled, buildDockEnabled,
       futureBuildDisabled, keyboardTrain, trainHasEnabledUnit, trainDockEnabled, trainContext,
       keyboardResearch, researchHasEnabledAge,
       unavailableResearchDisabled, orderTabs: document.querySelectorAll('.tabs .tab').length,
@@ -281,13 +286,13 @@ try {
     ['the initial order catalog is populated', out.ui.initialCatalog > 0],
     ['build commands require a selection', out.ui.initialCatalogDisabled],
     ['catalog filtering works', out.ui.filteredCatalog === 1],
-    ['a selected object still exposes catalog evidence while build stays disabled',
-      !out.ui.buildButtonEnabled],
+    ['only the bounded Library build is enabled for a selected Citizen',
+      !out.ui.buildButtonEnabled && out.ui.libraryBuildEnabled && out.ui.buildDockEnabled],
     ['known future-age prerequisites disable building actions', out.ui.futureBuildDisabled],
     ['keyboard shortcuts open train and research modes', out.ui.keyboardTrain && out.ui.keyboardResearch],
     ['the opening City exposes an enabled authoritative train action and touch dock affordance',
       out.ui.trainHasEnabledUnit && out.ui.trainDockEnabled && out.ui.trainContext.includes('production runtime')],
-    ['research data remains inspectable while every unavailable action is disabled',
+    ['age research waits for a selected completed Library while other tech stays disabled',
       !out.ui.researchHasEnabledAge && out.ui.unavailableResearchDisabled && out.ui.orderTabs === 3],
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
     ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
@@ -690,8 +695,8 @@ try {
 
   // The playable ABI owns `don_sim::Sim`: save bytes must be the core serializer's image,
   // load must atomically restore frame/digest/RNG/handles, and malformed input must leave
-  // the live world and browser UI usable. The current central format deliberately refuses
-  // a post-step save while live step-8 state is outside its supported tranche.
+  // the live world and browser UI usable. Derived step-8 views must roundtrip from a live
+  // post-step frame and resume without becoming a second serialized authority.
   out.coreSave = await c.eval(`(() => {
     const d = window.don;
     d.session.restart('0x5a17c0de');
@@ -712,19 +717,23 @@ try {
     d.controlGroups.replace(1, ids.slice(0, 2));
     m.moveTo(0, before.first.x + m.subtile * 8, before.first.y);
     d.replay.step();
-    const advanced = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
-    let postStepRefused = false, postStepReason = '';
-    try { d.save.export(); } catch (error) {
-      postStepRefused = true; postStepReason = error.message;
-    }
-    const loaded = d.save.import(bytes);
+    const advanced = {
+      frame: m.frame, digest: m.digest(), rngState: m.rngState,
+      live: m.live, first: m.info(ids[0]),
+    };
+    const postStepBytes = d.save.export();
+    d.select([ids[0]]);
+    m.moveTo(0, before.first.x + m.subtile * 12, before.first.y);
+    d.replay.step();
+    const mutated = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
+    const loaded = d.save.import(postStepBytes);
     const restored = {
       frame: m.frame, digest: m.digest(), rngState: m.rngState,
       live: m.live, first: m.info(ids[0]), selection: d.state.selection.length,
       groups: d.controlGroups.snapshot().groups,
     };
     const stableBeforeMalformed = { frame: m.frame, digest: m.digest(), rngState: m.rngState };
-    const corrupt = new Uint8Array(bytes);
+    const corrupt = new Uint8Array(postStepBytes);
     corrupt[0] ^= 0xff;
     let malformedRefused = false, malformedReason = '';
     try { d.save.import(corrupt); } catch (error) {
@@ -742,7 +751,7 @@ try {
     d.session.restart('0x1234abcd');
     d.replay.play();
     return JSON.stringify({
-      before, bytes: bytes.length, magic, advanced, postStepRefused, postStepReason,
+      before, bytes: bytes.length, magic, advanced, postStepBytes: postStepBytes.length, mutated,
       loaded, restored, malformedRefused, malformedReason,
       stableBeforeMalformed, stableAfterMalformed, resumed,
     });
@@ -751,24 +760,26 @@ try {
     ['core save exports the deterministic DoNSave image from a non-empty world',
       out.coreSave.before.live > 0 && out.coreSave.bytes > 0 &&
       String.fromCharCode(...out.coreSave.magic).startsWith('DoNSave')],
-    ['core load restores equal frame, digest, RNG, population, and object identity',
-      out.coreSave.restored.frame === out.coreSave.before.frame &&
-      out.coreSave.restored.digest === out.coreSave.before.digest &&
-      out.coreSave.restored.rngState === out.coreSave.before.rngState &&
-      out.coreSave.restored.live === out.coreSave.before.live &&
-      out.coreSave.restored.first.id === out.coreSave.before.first.id],
+    ['post-step core load restores equal frame, digest, RNG, population, and object identity',
+      out.coreSave.restored.frame === out.coreSave.advanced.frame &&
+      out.coreSave.restored.digest === out.coreSave.advanced.digest &&
+      out.coreSave.restored.rngState === out.coreSave.advanced.rngState &&
+      out.coreSave.restored.live === out.coreSave.advanced.live &&
+      out.coreSave.restored.first.id === out.coreSave.advanced.first.id],
     ['successful load resets browser-only selection and control groups and pauses safely',
       out.coreSave.loaded.selection === 0 && out.coreSave.loaded.groups === 0 &&
       out.coreSave.loaded.paused && out.coreSave.restored.selection === 0 &&
       Object.values(out.coreSave.restored.groups).every(ids => ids.length === 0)],
-    ['live post-step state is refused until the central step-8 save tranche lands',
-      out.coreSave.advanced.frame === 1 && out.coreSave.postStepRefused &&
-      out.coreSave.postStepReason.includes('step-8')],
+    ['live post-step state saves and load rewinds a later mutation exactly',
+      out.coreSave.advanced.frame === 1 && out.coreSave.postStepBytes > 0 &&
+      out.coreSave.mutated.frame === 2 && out.coreSave.mutated.digest !== out.coreSave.advanced.digest &&
+      out.coreSave.restored.digest === out.coreSave.advanced.digest],
     ['malformed core bytes fail closed without changing frame, digest, or RNG',
       out.coreSave.malformedRefused && out.coreSave.malformedReason.includes('load refused') &&
       JSON.stringify(out.coreSave.stableAfterMalformed) === JSON.stringify(out.coreSave.stableBeforeMalformed)],
     ['post-load generational handles remain selectable and accept core orders',
-      out.coreSave.resumed.frame === 1 && out.coreSave.resumed.transport.ordersApplied > 0 &&
+      out.coreSave.resumed.frame === out.coreSave.advanced.frame + 1 &&
+      out.coreSave.resumed.transport.ordersApplied > 0 &&
       out.coreSave.resumed.info.id === out.coreSave.before.first.id],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
@@ -1047,8 +1058,8 @@ try {
   }
 
   // ---- 2. authoritative-core action boundary -------------------------------------------
-  // Move and City training are playable through Sim. Gather/build/research stay disabled
-  // until their exact state is owned by don_sim rather than a browser-only GameWorld.
+  // Move, bounded Library construction, City training, and sequential age research are
+  // playable through Sim. Gather, other buildings, and ordinary tech stay fail-closed.
   const script = `(async () => {
     const s = window.don.state, m = s.mod;
     const R = { steps: [] };
@@ -1095,24 +1106,55 @@ try {
     note('stockBefore', before); note('stockAfter', after);
     note('workers', m.player(0).workers);
 
-    // Building placement remains catalog evidence only.
+    // Barracks remains inspect-only. Library is the one bounded construction cohort because
+    // the exported age records name it as their exact WHERE host.
     window.don.select(ids.slice(0, 3));
     document.getElementById('tab-build').click();
     const paletteFilter = document.getElementById('palette-filter');
     paletteFilter.value = 'barracks';
     paletteFilter.dispatchEvent(new Event('input', { bubbles: true }));
     const barracksAction = document.querySelector('#palette [data-kind="build"][data-type-id="427"]');
-    note('buildPaletteAction', !!barracksAction && !barracksAction.disabled);
+    note('barracksActionDisabled', !!barracksAction && barracksAction.disabled);
     barracksAction?.click();
-    note('buildPaletteArmed', s.buildType === 427);
-    paletteFilter.value = '';
+    note('barracksPaletteArmed', s.buildType === 427);
+    paletteFilter.value = 'library';
     paletteFilter.dispatchEvent(new Event('input', { bubbles: true }));
+    const libraryAction = document.querySelector('#palette [data-kind="build"][data-type-id="435"]');
+    note('libraryPaletteAction', !!libraryAction && !libraryAction.disabled);
+    const libraryCost = s.play.buildings['435']?.cost ?? null;
+    const stockBeforeLibrary = m.player(0).stock.slice();
+    let librarySite = null;
+    for (let radius = 6; radius < 16 && !librarySite; radius++) {
+      for (const [tx, ty] of [[stx + radius, sty], [stx, sty + radius], [stx - radius, sty], [stx, sty - radius]]) {
+        if (m.placementGrade(0, 435, tx, ty) === 4) { librarySite = [tx, ty]; break; }
+      }
+    }
+    libraryAction?.click();
+    note('libraryPaletteArmed', s.buildType === 435);
+    if (librarySite && s.buildType === 435) {
+      window.don.order.build([
+        (librarySite[0] + 2.5) * m.subtile,
+        (librarySite[1] + 2.5) * m.subtile,
+      ]);
+      m.step(1);
+    }
+    const stockAfterLibrary = m.player(0).stock.slice();
+    let library = -1;
     let barracks = -1;
     for (let i = 0; i < m.live; i++) {
       const id = m.idAtRow(i);
       const inf = id >= 0 ? m.info(id) : null;
-      if (inf && inf.typeId === 427 && inf.buildProgress < 0) { barracks = id; break; }
+      if (inf && inf.owner === 0 && inf.typeId === 435) library = id;
+      if (inf && inf.typeId === 427) barracks = id;
     }
+    note('libraryFoundation', library >= 0 && (m.info(library)?.buildProgress ?? -1) >= 0);
+    for (let i = 0; i < 800 && library >= 0 && (m.info(library)?.buildProgress ?? -1) >= 0; i++) {
+      m.step(1);
+    }
+    note('libraryCompleted', library >= 0 && (m.info(library)?.buildProgress ?? 0) < 0);
+    note('libraryCost', libraryCost);
+    note('stockBeforeLibrary', stockBeforeLibrary);
+    note('stockAfterLibrary', stockAfterLibrary);
     note('barracksBuilt', barracks >= 0);
 
     // The opening Small City is a concrete Sim Build row. Queue two packed WHERE products,
@@ -1134,6 +1176,7 @@ try {
       const prods = m.products(414);
       note('cityProducts', prods.slice());
       document.getElementById('tab-train').click();
+      note('paletteFilterAfterTrain', paletteFilter.value);
       const trainAction = document.querySelector('#palette [data-kind="train"]:not(:disabled)');
       const futureTrainDisabled = [...document.querySelectorAll('#palette [data-kind="train"]:disabled')]
         .some(button => button.querySelector('.why')?.textContent.includes('requires age'));
@@ -1172,19 +1215,38 @@ try {
     note('queueAfterTwo', queueAfterTwo); note('queueAfterCancel', queueAfterCancel);
     note('queueAfterTrain', queueAfterTrain); note('trained', trained);
 
-    // Advance an age through the only implemented research path. The second card stays
-    // disabled because ordinary technology/prerequisite execution is not exported.
+    // Advance an age through the selected completed Library. Queue/unqueue first proves
+    // exact refund, then the second queue completes through the live tech transaction.
     const ageBefore = m.player(0).age;
+    if (library >= 0) window.don.select([library]);
     document.getElementById('tab-research').click();
+    note('paletteFilterAfterResearch', paletteFilter.value);
     const ageAction = document.querySelector('#palette [data-kind="research"]:not(:disabled)');
     const otherTechDisabled = !!document.querySelector('#palette [data-kind="unavailable"]:disabled');
+    const researchCost = s.play.ages[ageBefore]?.cost ?? null;
+    const stockBeforeResearch = m.player(0).stock.slice();
     note('researchPaletteAction', !!ageAction);
     note('otherTechDisabled', otherTechDisabled);
     note('researchContext', document.getElementById('palette-context').textContent);
     ageAction?.click();
+    m.unqueue(0, -1);
     m.step(1);
-    note('researchStarted', m.player(0).research > 0);
-    for (let i = 0; i < 900; i++) m.step(1);
+    const stockAfterResearchCancel = m.player(0).stock.slice();
+    const queueAfterResearchCancel = m.info(library)?.queueN ?? -1;
+    if (library >= 0) window.don.select([library]);
+    document.getElementById('tab-research').click();
+    const retryAgeAction = document.querySelector('#palette [data-kind="research"]:not(:disabled)');
+    retryAgeAction?.click();
+    m.step(1);
+    const stockAfterResearchQueue = m.player(0).stock.slice();
+    note('researchStarted', m.player(0).research > 0 || (m.info(library)?.queueN ?? 0) > 0);
+    for (let i = 0; i < 900 && m.player(0).age === ageBefore; i++) m.step(1);
+    note('researchCost', researchCost);
+    note('stockBeforeResearch', stockBeforeResearch);
+    note('stockAfterResearchCancel', stockAfterResearchCancel);
+    note('stockAfterResearchQueue', stockAfterResearchQueue);
+    note('queueAfterResearchCancel', queueAfterResearchCancel);
+    note('queueAfterResearch', m.info(library)?.queueN ?? -1);
     note('age', [ageBefore, m.player(0).age]);
     note('gaps', m.gaps());
     note('digest', m.digest());
@@ -1203,11 +1265,17 @@ try {
     ['a citizen was selected', S.selected > 0],
     ['gather is unavailable without a core resource-node command host', S.gatherOrders === 0],
     ['the unsupported economy path does not mutate the core ledger', !stockMoved],
-    ['build data remains inspectable but the action is visibly disabled',
-      S.buildPaletteAction === false && S.buildPaletteArmed === false],
-    ['no shadow building state is created', S.barracksBuilt === false],
+    ['only Library is enabled and its packet creates a concrete completed BuildData row',
+      S.barracksActionDisabled === true && S.barracksPaletteArmed === false &&
+      S.libraryPaletteAction === true && S.libraryPaletteArmed === true &&
+      S.libraryFoundation === true && S.libraryCompleted === true],
+    ['Library construction charges its exact packed cost and creates no shadow Barracks',
+      S.libraryCost && S.stockAfterLibrary.every((v, i) => v === S.stockBeforeLibrary[i] - S.libraryCost[i]) &&
+      S.barracksBuilt === false],
     ['the authoritative opening City exposes packed WHERE products',
       S.cityFound === true && Array.isArray(S.cityProducts) && S.cityProducts.includes(S.trainedType)],
+    ['switching catalog families clears the prior building-only search',
+      S.paletteFilterAfterTrain === '' && S.paletteFilterAfterResearch === ''],
     ['training action is enabled only through the selected producer', S.trainPaletteAction === true],
     ['two queue packets charge twice, then cancel refunds exactly one packed cost',
       S.queueAfterTwo === 2 && [0, 1].includes(S.queueAfterCancel) && S.trainCost &&
@@ -1216,9 +1284,13 @@ try {
     ['the live production runtime completes exactly one unit and drains the queue',
       S.trained === 1 && S.queueAfterTrain === 0 &&
       S.stockAfterTrain.every((v, i) => v === S.stockAfterCancel[i])],
-    ['research is visibly unavailable and does not mutate core age',
-      S.researchPaletteAction === false && S.otherTechDisabled === true &&
-      S.researchStarted === false && S.age[1] === S.age[0]],
+    ['age research is enabled only on Library and cancel refunds its exact packed cost',
+      S.researchPaletteAction === true && S.otherTechDisabled === true &&
+      S.queueAfterResearchCancel === 0 && S.researchCost &&
+      S.stockAfterResearchCancel.every((v, i) => v === S.stockBeforeResearch[i])],
+    ['the live tech runtime charges, completes, drains, and advances authoritative age',
+      S.researchStarted === true && S.age[1] === S.age[0] + 1 && S.queueAfterResearch === 0 &&
+      S.stockAfterResearchQueue.every((v, i) => v === S.stockBeforeResearch[i] - S.researchCost[i])],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -1242,8 +1314,8 @@ try {
     });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
-    ['the owner snapshot includes the one authoritative trained unit',
-      out.objectivesAfterPlay.snapshot.owners[0].objects === out.objectives.snapshot.owners[0].objects + 1 &&
+    ['the owner snapshot includes the authoritative Library and trained unit',
+      out.objectivesAfterPlay.snapshot.owners[0].objects === out.objectives.snapshot.owners[0].objects + 2 &&
       out.objectivesAfterPlay.playerZeroText.includes(
         `${out.objectivesAfterPlay.snapshot.owners[0].objects} objects`)],
     ['post-play owner totals still equal the live world',

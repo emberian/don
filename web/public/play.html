@@ -503,10 +503,10 @@
       </div>
       <div id="replay-capabilities" aria-label="Save and replay capability boundaries">
         <div class="replay-capability"><span>Command journal: tick-boundary restart plus exact frame-stamped wire packets; seek and resume supported.</span><b>supported</b></div>
-        <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes. The current format refuses unsupported live step-8 state instead of dropping it.</span><button id="core-save" type="button">download save</button></div>
+        <div class="replay-capability"><span>DoN core save: deterministic authoritative <code>don_sim</code> bytes, including exact derived step-8 leader views for post-step resume.</span><button id="core-save" type="button">download save</button></div>
         <div class="replay-capability"><span>DoN core load: bounded, validated, and atomic; malformed files leave the running session unchanged.</span><button id="core-load" type="button">load save</button></div>
         <input id="core-load-file" type="file" accept="application/octet-stream,.donsave">
-        <div id="core-save-status" class="status-note" role="status" aria-live="polite">Core save/load ready. Save support is state-dependent.</div>
+        <div id="core-save-status" class="status-note" role="status" aria-live="polite">Core save/load ready. Live supported Sim frames roundtrip and resume.</div>
         <div class="replay-capability"><span>Retail .rcx replay: unavailable because no retail replay playback bridge is exported.</span><button type="button" disabled title="Unavailable: no retail replay playback bridge">open .rcx</button></div>
       </div>
     </fieldset>
@@ -611,11 +611,12 @@
         This page now owns the repository's authoritative <code>don_sim::Sim</code> and
         projects its unit columns, terrain, frame, checksum digest, and RNG state into the
         existing renderer ABI. Move, attack, halt, City unit training/cancellation/completion,
-        deterministic core save, and atomic core load use that same state.<br><br>
-        Build, research, gather-resource composition, live rule setters, fog, market,
-        diplomacy, AI, and victory remain unavailable in this adapter. The central save format
-        also refuses post-step live leader views until that owner joins its receipt-checked
-        transaction. These boundaries are disabled or reported as refusals;
+        bounded Library construction, sequential age research, deterministic core save, and
+        atomic core load use that same state.<br><br>
+        Other buildings and technologies, gather-resource composition, live rule setters, fog,
+        market, diplomacy, AI, and victory remain unavailable in this adapter. The central save
+        format derives and verifies exact step-8 leader views on load, so supported live frames
+        roundtrip and resume without storing a second view. Remaining boundaries are disabled or reported as refusals;
         the browser no longer carries a second gameplay world to make them appear complete.
       </div>
     </fieldset>

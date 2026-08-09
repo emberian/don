@@ -83,11 +83,12 @@ const state = {
   toastTimer: 0,
   rendererErrorCount: 0,
   paletteNotice: '',
+  paletteAge: -1,
   cameraSource: 'home',
   settings: null,
   bindingCapture: null,
   settingsStatus: 'loading browser settings',
-  coreSaveStatus: 'core save/load ready; support is state-dependent',
+  coreSaveStatus: 'core save/load ready; live supported Sim frames roundtrip and resume',
   replay: {
     events: [], baseline: null, headFrame: 0,
     applying: false, playback: false, restoring: false,
@@ -2245,8 +2246,10 @@ function initializeReplayPanel() {
 function wirePanels() {
   for (const id of ['tab-build', 'tab-train', 'tab-research']) {
     $(id).addEventListener('click', () => {
+      const previousMode = paletteMode();
       document.querySelectorAll('.tab').forEach((t) => t.classList.remove('sel'));
       $(id).classList.add('sel');
+      if ($(id).dataset.mode !== previousMode) $('palette-filter').value = '';
       if (id !== 'tab-build') state.buildType = null;
       renderMenus();
     });
@@ -2373,12 +2376,14 @@ function renderMenus() {
   paletteItems = [];
   const filter = $('palette-filter').value.trim().toLocaleLowerCase();
   const ctx = selectedPaletteContext();
+  state.paletteAge = ctx.me.age;
 
   if (mode === 'build') {
-    $('palette-context').textContent = ctx.mobiles.length
-      ? `${ctx.mobiles.length} selected non-building object(s) · age ${ctx.me.age} · ` +
-        'catalog evidence only; the authoritative core build command is unavailable'
-      : 'select a non-building object to inspect costs · authoritative build is unavailable';
+    const workers = ctx.mobiles.filter((info) => info.typeId === 50 || info.typeId === 51);
+    $('palette-context').textContent = workers.length
+      ? `${workers.length} selected Citizen worker(s) · age ${ctx.me.age} · ` +
+        'Library construction uses the authoritative Sim BuildAt transaction; other buildings remain inspect-only'
+      : 'select a Citizen worker · only Library construction is executable in the authoritative core';
     if (!state.buildable) {
       paletteItems.push(unavailablePaletteItem('Building catalog unavailable', 'packed play data missing'));
     } else if (!ctx.mobiles.length) {
@@ -2407,14 +2412,15 @@ function renderMenus() {
       paletteItems.push(unavailablePaletteItem('Training unavailable', 'selected producer has no exported WHERE edges'));
     }
   } else {
-    $('palette-context').textContent =
-      `player age ${ctx.me.age} · age costs are evidence only; ` +
-      'research and prerequisite hosts are unavailable in the authoritative core adapter';
+    const libraries = ctx.producers.filter((producer) => producer.typeId === 435);
+    $('palette-context').textContent = libraries.length
+      ? `player age ${ctx.me.age} · selected completed Library queues the next age through the authoritative tech runtime`
+      : `player age ${ctx.me.age} · select a completed Library to research the next age`;
     const age = state.play?.ages?.[ctx.me.age];
     if (age && ctx.me.age < 7) {
       paletteItems.push({
         kind: 'research', id: age.id, name: age.name, cost: age.cost,
-        age: ctx.me.age, jobTime: 600,
+        age: ctx.me.age, jobTime: age.jobTime,
       });
     } else {
       paletteItems.push(unavailablePaletteItem('Age research complete', 'no later exported age record'));
@@ -2465,11 +2471,12 @@ function missingCost(cost, stock) {
 function paletteGate(it, ctx = selectedPaletteContext()) {
   if (it.kind === 'unavailable') return { enabled: false, reasons: [it.reason], detail: '' };
   const reasons = [];
-  if (['build', 'research'].includes(it.kind)) {
-    reasons.push(`${it.kind} is unavailable in the authoritative don_sim browser adapter`);
-  }
   if (it.kind === 'build') {
-    if (!ctx.mobiles.length) reasons.push('select a non-building object');
+    if (!state.mod.supports('build')) reasons.push('authoritative building capability unavailable');
+    if (it.id !== 435) reasons.push('only Library construction is live');
+    if (!ctx.mobiles.some((info) => info.typeId === 50 || info.typeId === 51)) {
+      reasons.push('select a Citizen worker');
+    }
     if (it.age > ctx.me.age) reasons.push(`requires age ${it.age}`);
   } else if (it.kind === 'train') {
     const producers = ctx.producers.filter((p) => p.typeId === it.producerType);
@@ -2481,6 +2488,11 @@ function paletteGate(it, ctx = selectedPaletteContext()) {
     }
     if (!state.mod.supports('train')) reasons.push('authoritative training capability unavailable');
   } else if (it.kind === 'research') {
+    if (!state.mod.supports('research')) reasons.push('authoritative research capability unavailable');
+    if (!ctx.producers.some((producer) => producer.typeId === 435)) {
+      reasons.push('select a completed Library');
+    }
+    if (it.age !== ctx.me.age) reasons.push('age changed; refresh the research catalog');
     if (ctx.me.research > 0) reasons.push('age research already active');
     if (state.paletteNotice.includes('research packet submitted') && state.mod.transport().pending > 0) {
       reasons.push('research command pending');
@@ -2494,7 +2506,10 @@ function paletteGate(it, ctx = selectedPaletteContext()) {
     const queues = ctx.producers.filter((p) => p.typeId === it.producerType).map((p) => p.queueN);
     detail = `${typeName(it.producerType)} · queue ${queues.length ? Math.min(...queues) : 0}/${QUEUE_CAPACITY}`;
   }
-  if (it.kind === 'research') detail = 'age data record · command host unavailable';
+  if (it.kind === 'research') {
+    const queues = ctx.producers.filter((p) => p.typeId === 435).map((p) => p.queueN);
+    detail = `Library · queue ${queues.length ? Math.min(...queues) : 0}/${QUEUE_CAPACITY}`;
+  }
   return { enabled: reasons.length === 0, reasons, detail };
 }
 
@@ -2564,7 +2579,8 @@ function renderPaletteFeedback(ctx = selectedPaletteContext()) {
     message = `live queue · ${queues.join(' · ')} · cancel the last item in Selection`;
     cls = 'ok';
   } else if (ctx.me.research > 0) {
-    message = `age research active · ${Math.min(100, Math.floor(ctx.me.research / 6))}%`;
+    const jobTime = Math.max(1, state.play?.ages?.[ctx.me.age]?.jobTime ?? 1);
+    message = `age research active · ${Math.min(100, Math.floor(ctx.me.research / jobTime * 100))}%`;
     cls = 'ok';
   } else if (state.paletteNotice) {
     message = `${state.paletteNotice} · command drained`;
@@ -2586,6 +2602,7 @@ function costText(cost, verbose) {
 function typeName(id) {
   return state.play?.units?.[String(id)]?.name
     ?? state.play?.buildings?.[String(id)]?.name
+    ?? state.play?.ages?.find((age) => age.id === id)?.name
     ?? `type ${id}`;
 }
 
@@ -2636,7 +2653,7 @@ function renderReadinessStatic() {
   const localSlug = document.createElement('code');
   localSlug.textContent = 'web-core-adapter-incomplete';
   local.append(localSlug, document.createTextNode(
-    ' — the browser now owns don_sim::Sim and its live unit-production queue, but build/research and live step-8 save coverage remain fail-closed'));
+    ' — the browser now owns don_sim::Sim, including bounded Library construction, sequential age research, and resumable post-step core saves; other buildings/tech remain fail-closed'));
   list.appendChild(local);
   for (const blocker of registry.blockers) {
     const li = document.createElement('li');
@@ -2691,9 +2708,10 @@ function renderHud() {
   }
   const ageName = me.age === 0 ? 'Ancient Age'
     : (state.play?.ages?.[me.age - 1]?.name ?? `age ${me.age}`);
+  const researchJobTime = Math.max(1, state.play?.ages?.[me.age]?.jobTime ?? 1);
   $('meta').textContent =
     `P${state.who}   ${formatSeed(state.sessionSeed)}   pop ${me.pop}/${me.popCap}   ${ageName}` +
-    (me.research ? `   researching ${(me.research / 600 * 100) | 0}%` : '');
+    (me.research ? `   researching ${(me.research / researchJobTime * 100) | 0}%` : '');
 
   const stat = $('stat');
   stat.textContent =
@@ -2704,7 +2722,8 @@ function renderHud() {
     `${state.paused ? '  PAUSED' : ''}`;
 
   renderSelection();
-  refreshPaletteAvailability();
+  if (paletteMode() === 'research' && state.paletteAge !== me.age) renderMenus();
+  else refreshPaletteAvailability();
   renderPaletteFeedback();
   renderSessionStatus();
   renderObjectivesPanel();
@@ -2785,8 +2804,15 @@ function renderActionDock() {
     const active = state.buildType !== null;
     build.classList.toggle('active', active);
     build.setAttribute('aria-pressed', String(active));
-    build.disabled = true;
-    build.title = 'Build unavailable in the authoritative don_sim adapter';
+    const workers = selectedPaletteContext().mobiles
+      .filter((info) => info.typeId === 50 || info.typeId === 51);
+    const supported = state.mod.supports('build');
+    build.disabled = !supported || workers.length === 0;
+    build.title = supported
+      ? (workers.length
+        ? 'Open building catalog; only authoritative Library construction is enabled'
+        : 'Select a Citizen worker to construct a Library')
+      : 'Build unavailable in the authoritative don_sim adapter';
   }
   const train = $('cmd-train');
   if (train) {

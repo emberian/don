@@ -5,7 +5,7 @@
 //! a second game world.  Save/load delegates directly to `don_sim`'s deterministic format
 //! and atomically swaps the core only after a complete, bounded decode.
 
-use crate::game::{gap, PlayData, FIRST_BUILDING, PLAYERS, QUEUE_MAX, W_CELLS};
+use crate::game::{gap, PlayData, AGE_TECH_BASE, FIRST_BUILDING, PLAYERS, QUEUE_MAX, W_CELLS};
 use crate::gamedata::GameData;
 use crate::wire_gen;
 use don_sim::deviations::{Deviation, ModeConfig, Surface};
@@ -28,6 +28,8 @@ const MAP_SPAN: i32 = MAP_TILES * TILE_COORD;
 const STARTING_GOODS_RULE: usize = 564;
 const BUILD_VIEW_ID_BASE: i32 = 0x4000;
 const BUILD_PROJECTION_CAPACITY: usize = (WALL_BAND_BASE - BUILD_BAND_BASE) as usize;
+/// Every age record in `schema/live/live-tables-tech.tsv` names Library (`WHERE=435`).
+const AGE_RESEARCH_BUILDING: i32 = 435;
 /// `i32`s per player in the block [`game_players_ptr`] exposes.
 pub const PLAYER_FIELDS: usize = 34;
 
@@ -38,6 +40,8 @@ pub mod capability {
     pub const ATTACK: u32 = 1 << 3;
     pub const HALT: u32 = 1 << 4;
     pub const TRAIN: u32 = 1 << 5;
+    pub const RESEARCH: u32 = 1 << 6;
+    pub const BUILD: u32 = 1 << 7;
 }
 
 struct Stage(UnsafeCell<Vec<u8>>);
@@ -83,21 +87,25 @@ pub struct Game {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrainingRefusal {
     NoProducer,
+    NoWorker,
     QueueFull,
     WrongAge,
     CannotAfford,
     UnsupportedCost,
     CapacityFull,
+    PlacementBlocked,
 }
 
 impl TrainingRefusal {
     fn gap(self) -> usize {
         match self {
             TrainingRefusal::NoProducer => gap::NOT_A_PRODUCER,
+            TrainingRefusal::NoWorker => gap::NO_WORKER,
             TrainingRefusal::QueueFull => gap::QUEUE_FULL,
             TrainingRefusal::WrongAge => gap::WRONG_AGE,
             TrainingRefusal::CannotAfford | TrainingRefusal::UnsupportedCost => gap::CANNOT_AFFORD,
             TrainingRefusal::CapacityFull => gap::CAPACITY_FULL,
+            TrainingRefusal::PlacementBlocked => gap::PLACEMENT_BLOCKED,
         }
     }
 }
@@ -127,9 +135,9 @@ impl Game {
             };
             start_x[p] = tx * TILE_COORD;
             start_y[p] = ty * TILE_COORD;
-            // Activate only the core object band, not a leader host the current save
-            // tranche cannot yet restore.  Units therefore take part in step 14 while
-            // save/load can still roundtrip the supported pre-step state.
+            // Activate only the core object band. Step-8 leader views remain derived from
+            // their canonical saved inputs, so live frames roundtrip without serializing a
+            // second copy of those views.
             core.world.objects.set_active(p, true);
             for resource in 0..core.leaders[p].econ.stockpile.len() {
                 let value = play.rules.at(STARTING_GOODS_RULE + resource * 4);
@@ -274,9 +282,12 @@ impl Game {
 
     fn install_production_facts(&mut self) {
         self.core.production_runtime = Default::default();
-        if let Some(building) = self.play.bld(FIRST_BUILDING) {
+        for type_id in [FIRST_BUILDING, AGE_RESEARCH_BUILDING] {
+            let Some(building) = self.play.bld(type_id) else {
+                continue;
+            };
             let mut facts =
-                LiveProductionType::in_place_building(FIRST_BUILDING, building.job_time.max(1));
+                LiveProductionType::in_place_building(building.type_id, building.job_time.max(1));
             facts.object_masks = building.obj_masks as u32;
             self.core.production_runtime.install_type(facts);
         }
@@ -296,6 +307,14 @@ impl Game {
                 }
                 facts.unit_flags = record.unit_flags as u32;
                 facts.object_masks = record.obj_masks as u32;
+            }
+            self.core.production_runtime.install_type(facts);
+        }
+        for (slot, &job_time) in self.play.age_job_time.iter().take(7).enumerate() {
+            let type_id = AGE_TECH_BASE + slot as i32;
+            let mut facts = LiveProductionType::research(type_id, job_time.max(1));
+            if slot > 0 {
+                facts.prerequisites.push(type_id - 1);
             }
             self.core.production_runtime.install_type(facts);
         }
@@ -324,6 +343,12 @@ impl Game {
         for owner in 0..PLAYERS {
             self.core.production_runtime.leaders[owner].resources =
                 self.core.leaders[owner].econ.stockpile;
+            let age = self.core.leaders[owner].econ.age.clamp(0, 7);
+            let tech = &mut self.core.production_runtime.leaders[owner].tech;
+            tech.counters.ages = age;
+            for slot in 0..age {
+                tech.tech.set(AGE_TECH_BASE + slot, true);
+            }
         }
         self.core.production_runtime.world_population = self.core.world.live_count() as i32;
         for row in 0..self.core.world.live_count() as usize {
@@ -347,6 +372,33 @@ impl Game {
                         .wrapping_add(unit.pop.max(0));
             }
         }
+    }
+
+    fn validate_adapter_queues(&self, core: &CoreSim) -> Result<(), String> {
+        for build in core.builds.iter().filter(|build| build.is_valid()) {
+            for entry in build.queue.entries.iter().take(build.queue.queued as usize) {
+                let type_id = entry.type_index as i32;
+                let supported = if (AGE_TECH_BASE..AGE_TECH_BASE + 7).contains(&type_id) {
+                    build.orig_type == AGE_RESEARCH_BUILDING
+                } else {
+                    build.orig_type == FIRST_BUILDING
+                        && self.play.unit(type_id).is_some_and(|unit| {
+                            unit.where_ == FIRST_BUILDING
+                                && self
+                                    .play
+                                    .products_of(FIRST_BUILDING)
+                                    .any(|product| product == type_id)
+                        })
+                };
+                if !supported {
+                    return Err(format!(
+                        "queue type {type_id} is not executable at producer {} in the bounded browser adapter",
+                        build.orig_type
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn refresh(&mut self) {
@@ -435,7 +487,16 @@ impl Game {
             b[30] = pop[p];
             b[31] = 0; // core population-limit host is not yet exported
             b[32] = econ.age;
-            b[33] = 0; // core research progress is not yet exported
+            b[33] = self
+                .core
+                .builds
+                .iter()
+                .filter(|build| build.who as usize == p)
+                .flat_map(|build| build.queue.entries.iter().take(build.queue.queued as usize))
+                .find(|entry| {
+                    (AGE_TECH_BASE..AGE_TECH_BASE + 7).contains(&(entry.type_index as i32))
+                })
+                .map_or(0, |entry| entry.elapsed.max(1));
         }
     }
 
@@ -472,6 +533,231 @@ impl Game {
                     .then_some(row)
             })
             .collect()
+    }
+
+    fn selected_workers(&self, who: usize) -> Vec<(Handle, usize)> {
+        self.selected_handles(who)
+            .into_iter()
+            .filter_map(|handle| {
+                let row = self.core.world.row_of(handle)?;
+                matches!(self.type_at(row), 50 | 51).then_some((handle, row))
+            })
+            .collect()
+    }
+
+    fn build_anchor(&self, row: usize) -> Option<(i32, i32, i32, i32)> {
+        let build = self.core.builds.get(row)?;
+        let facts = self.play.bld(self.build_type(row))?;
+        let (x, y) = build.position();
+        let sx = facts.x_size.max(1);
+        let sy = facts.y_size.max(1);
+        Some((x / TILE_COORD - sx / 2, y / TILE_COORD - sy / 2, sx, sy))
+    }
+
+    /// Grade only the bounded building transaction the browser can execute. The recovered
+    /// terrain predicate covers 4x4 probes, so a 5x5 Library must pass each overlapping
+    /// probe; the explicit BuildData rectangle test covers foundations not yet stamped into
+    /// the terrain plane.
+    fn placement_grade(&self, who: usize, type_id: i32, tx: i32, ty: i32) -> i32 {
+        if who >= PLAYERS || type_id != AGE_RESEARCH_BUILDING {
+            return 0;
+        }
+        let Some(facts) = self.play.bld(type_id) else {
+            return 0;
+        };
+        let sx = facts.x_size.max(1);
+        let sy = facts.y_size.max(1);
+        if tx < 0 || ty < 0 || tx + sx > MAP_TILES || ty + sy > MAP_TILES {
+            return 0;
+        }
+        let mut grade = don_sim::systems::map_terrain::space::FULLY_CLEAR;
+        for oy in 0..=(sy - 4).max(0) {
+            for ox in 0..=(sx - 4).max(0) {
+                grade = grade.min(self.core.map.world.space_at_corner(
+                    tx + ox,
+                    ty + oy,
+                    who as i32,
+                    false,
+                ));
+            }
+        }
+        if grade == 0 {
+            return 0;
+        }
+        let overlaps = self.core.builds.iter().enumerate().any(|(row, build)| {
+            if !build.is_valid() {
+                return false;
+            }
+            self.build_anchor(row).is_some_and(|(bx, by, bsx, bsy)| {
+                tx < bx + bsx && tx + sx > bx && ty < by + bsy && ty + sy > by
+            })
+        });
+        if overlaps {
+            0
+        } else {
+            grade
+        }
+    }
+
+    fn builders_near(
+        &self,
+        who: usize,
+        tx: i32,
+        ty: i32,
+        sx: i32,
+        sy: i32,
+    ) -> Vec<(Handle, usize)> {
+        let x = (tx * TILE_COORD).saturating_add(sx * TILE_COORD / 2);
+        let y = (ty * TILE_COORD).saturating_add(sy * TILE_COORD / 2);
+        let reach = 16 * TILE_COORD;
+        self.selected_workers(who)
+            .into_iter()
+            .filter(|&(_, row)| {
+                (self.core.world.pos_x()[row] - x).abs() <= reach
+                    && (self.core.world.pos_y()[row] - y).abs() <= reach
+            })
+            .collect()
+    }
+
+    fn issue_build_orders(
+        &mut self,
+        who: usize,
+        row: usize,
+        x: i32,
+        y: i32,
+        builders: &[(Handle, usize)],
+    ) -> usize {
+        let Some(target_o) = i16::try_from(row).ok() else {
+            return 0;
+        };
+        builders
+            .iter()
+            .filter(|&&(handle, _)| {
+                self.core.issue(
+                    handle,
+                    Order {
+                        kind: OrderIndex::BuildAt,
+                        x,
+                        y,
+                        target_who: who as i8,
+                        target_o,
+                        ..Order::default()
+                    },
+                )
+            })
+            .count()
+    }
+
+    fn enqueue_building(
+        &mut self,
+        who: usize,
+        type_id: i32,
+        tx: i32,
+        ty: i32,
+    ) -> (usize, Option<TrainingRefusal>) {
+        if who >= PLAYERS || type_id != AGE_RESEARCH_BUILDING {
+            return (0, Some(TrainingRefusal::PlacementBlocked));
+        }
+        let Some(facts) = self.play.bld(type_id).copied() else {
+            return (0, Some(TrainingRefusal::PlacementBlocked));
+        };
+        if facts.age > self.core.leaders[who].econ.age {
+            return (0, Some(TrainingRefusal::WrongAge));
+        }
+        if facts.cost.iter().any(|&amount| amount < 0) {
+            return (0, Some(TrainingRefusal::UnsupportedCost));
+        }
+        let sx = facts.x_size.max(1);
+        let sy = facts.y_size.max(1);
+        let builders = self.builders_near(who, tx, ty, sx, sy);
+        if builders.is_empty() {
+            return (0, Some(TrainingRefusal::NoWorker));
+        }
+        let x = tx * TILE_COORD + sx * TILE_COORD / 2;
+        let y = ty * TILE_COORD + sy * TILE_COORD / 2;
+
+        if let Some(row) = self
+            .core
+            .builds
+            .iter()
+            .enumerate()
+            .find_map(|(row, build)| {
+                (build.is_valid()
+                    && !build.is_active()
+                    && build.who as usize == who
+                    && self.build_type(row) == type_id
+                    && self
+                        .build_anchor(row)
+                        .is_some_and(|(bx, by, _, _)| bx == tx && by == ty))
+                .then_some(row)
+            })
+        {
+            let applied = self.issue_build_orders(who, row, x, y, &builders);
+            return if applied == 0 {
+                (0, Some(TrainingRefusal::NoWorker))
+            } else {
+                (applied, None)
+            };
+        }
+
+        if self.placement_grade(who, type_id, tx, ty)
+            != don_sim::systems::map_terrain::space::FULLY_CLEAR
+        {
+            return (0, Some(TrainingRefusal::PlacementBlocked));
+        }
+        if self.core.builds.len() >= BUILD_PROJECTION_CAPACITY
+            || self.core.builds.len() > i16::MAX as usize
+        {
+            return (0, Some(TrainingRefusal::CapacityFull));
+        }
+        let local_builds = self.core.world.objects.slot(who).band(Band::Build).len();
+        if local_builds >= (WALL_BAND_BASE - BUILD_BAND_BASE) as usize {
+            return (0, Some(TrainingRefusal::CapacityFull));
+        }
+        if facts
+            .cost
+            .iter()
+            .enumerate()
+            .any(|(resource, &amount)| self.core.leaders[who].econ.stockpile[resource] < amount)
+        {
+            return (0, Some(TrainingRefusal::CannotAfford));
+        }
+
+        for (resource, &amount) in facts.cost.iter().enumerate() {
+            self.core.leaders[who].econ.stockpile[resource] -= amount;
+        }
+        self.core.production_runtime.leaders[who].resources = self.core.leaders[who].econ.stockpile;
+        let local_o = BUILD_BAND_BASE as usize + local_builds;
+        let mut build = BuildData {
+            flags: production::flag::VALID | production::flag::STARTED,
+            myhits: facts.hits.max(1),
+            construct_hits: 0,
+            constr_time: facts.job_time.max(1) as u32,
+            orig_type: type_id,
+            frame_started: self.core.world.frame,
+            gather_down: -1,
+            city: -1,
+            city_down: -1,
+            wonder: -1,
+            dock: -1,
+            attack_ox: -1,
+            attack_whom: -1,
+            ..BuildData::default()
+        };
+        build.other[0x28..0x2a].copy_from_slice(&(-1i16).to_le_bytes());
+        build.other[production::off::OBJECT_ID..production::off::OBJECT_ID + 2]
+            .copy_from_slice(&(local_o as i16).to_le_bytes());
+        build.other[production::off::X_INTERNAL..production::off::X_INTERNAL + 4]
+            .copy_from_slice(&(x ^ 0x63637).to_le_bytes());
+        build.other[production::off::Y_INTERNAL..production::off::Y_INTERNAL + 4]
+            .copy_from_slice(&(y ^ 0x63637).to_le_bytes());
+        let row = self.core.spawn_build(who, build);
+        self.core.production_runtime.register_build(row, type_id);
+        let applied = self.issue_build_orders(who, row, x, y, &builders);
+        if applied == 0 {
+            return (0, Some(TrainingRefusal::NoWorker));
+        }
+        (applied, None)
     }
 
     fn packed_cost(cost: &[i32; 6]) -> Result<([i16; 3], [i16; 3]), TrainingRefusal> {
@@ -601,6 +887,83 @@ impl Game {
         (queued, None)
     }
 
+    fn enqueue_research(&mut self, who: usize, type_id: i32) -> (usize, Option<TrainingRefusal>) {
+        if who >= PLAYERS || !(AGE_TECH_BASE..AGE_TECH_BASE + 7).contains(&type_id) {
+            return (0, Some(TrainingRefusal::NoProducer));
+        }
+        let slot = (type_id - AGE_TECH_BASE) as usize;
+        if slot as i32 != self.core.leaders[who].econ.age {
+            return (0, Some(TrainingRefusal::WrongAge));
+        }
+        let Some(cost) = self.play.age_cost.get(slot).copied() else {
+            return (0, Some(TrainingRefusal::WrongAge));
+        };
+        if self.core.production_runtime.leaders[who]
+            .tech
+            .tech
+            .get(type_id)
+            || self.core.builds.iter().any(|build| {
+                build.who as usize == who
+                    && build
+                        .queue
+                        .entries
+                        .iter()
+                        .take(build.queue.queued as usize)
+                        .any(|entry| {
+                            (AGE_TECH_BASE..AGE_TECH_BASE + 7).contains(&(entry.type_index as i32))
+                        })
+            })
+        {
+            return (0, Some(TrainingRefusal::WrongAge));
+        }
+        let (resources, amounts) = match Self::packed_cost(&cost) {
+            Ok(cost) => cost,
+            Err(refusal) => return (0, Some(refusal)),
+        };
+        let Some(row) = self.selected_build_rows(who).into_iter().find(|&row| {
+            self.core.builds[row].is_active() && self.build_type(row) == AGE_RESEARCH_BUILDING
+        }) else {
+            return (0, Some(TrainingRefusal::NoProducer));
+        };
+        if self.core.builds[row].queue.queued as usize >= QUEUE_MAX.min(u8::MAX as usize) {
+            return (0, Some(TrainingRefusal::QueueFull));
+        }
+        if cost
+            .iter()
+            .enumerate()
+            .any(|(resource, &amount)| self.core.leaders[who].econ.stockpile[resource] < amount)
+        {
+            return (0, Some(TrainingRefusal::CannotAfford));
+        }
+        for (resource, &amount) in cost.iter().enumerate() {
+            self.core.leaders[who].econ.stockpile[resource] -= amount;
+        }
+        self.core.production_runtime.leaders[who].resources = self.core.leaders[who].econ.stockpile;
+        let build = &mut self.core.builds[row];
+        let queue_slot = build.queue.queued as usize;
+        let entry = BuildQueueEntry {
+            elapsed: 0,
+            type_index: type_id as i16,
+            res: resources,
+            amt: amounts,
+            tail: 0,
+        };
+        if queue_slot < build.queue.entries.len() {
+            build.queue.entries[queue_slot] = entry;
+        } else {
+            build.queue.entries.push(entry);
+        }
+        build.queue.queued += 1;
+        if let Some(count) = self.core.production_runtime.leaders[who]
+            .queued_counts
+            .get_mut(type_id as usize)
+        {
+            *count = count.wrapping_add(1);
+        }
+        self.core.production_runtime.leaders[who].queue_dirty = true;
+        (1, None)
+    }
+
     fn cancel_training(&mut self, who: usize, type_id: i32) -> bool {
         if who >= PLAYERS {
             return false;
@@ -647,6 +1010,33 @@ impl Game {
             return true;
         }
         false
+    }
+
+    fn advance_core_frame(&mut self) {
+        self.core.do_frame();
+        for owner in 0..PLAYERS {
+            let completed_age = self.core.production_runtime.leaders[owner]
+                .tech
+                .counters
+                .ages
+                .clamp(0, 7);
+            if completed_age > self.core.leaders[owner].econ.age {
+                let gates = self.core.leaders[owner].cap_gates;
+                let caps = don_sim::systems::economy::calc_resource_caps(
+                    &self.core.econ_rules,
+                    completed_age,
+                    &gates,
+                );
+                self.core.leaders[owner].econ.age = completed_age;
+                self.core.leaders[owner].econ.age_alt = completed_age;
+                self.core.leaders[owner].econ.commerce_cap = caps;
+            }
+            // The installed browser cohort has no opaque resource effects: its one-shot age
+            // costs were charged to LeaderEcon before queueing. Keep the runtime mirror exact
+            // after the ordinary economy phase rather than treating it as a second ledger.
+            self.core.production_runtime.leaders[owner].resources =
+                self.core.leaders[owner].econ.stockpile;
+        }
     }
 
     fn apply_commands(&mut self) {
@@ -747,13 +1137,26 @@ impl Game {
                     }
                 }
                 wire_gen::op::GATHER => self.gaps[gap::NOT_GATHERABLE] += 1,
-                wire_gen::op::BUILD => self.gaps[gap::PLACEMENT_BLOCKED] += 1,
-                wire_gen::op::QUEUE_UP => {
-                    let (applied, refusal) = self.enqueue_training(
+                wire_gen::op::BUILD => {
+                    let (applied, refusal) = self.enqueue_building(
                         who,
-                        wire_gen::queue_up::type_(bytes),
-                        wire_gen::queue_up::num(bytes),
+                        wire_gen::build::type_(bytes),
+                        wire_gen::build::x(bytes),
+                        wire_gen::build::y(bytes),
                     );
+                    self.orders_applied += applied as u64;
+                    if let Some(refusal) = refusal {
+                        self.gaps[refusal.gap()] += 1;
+                    }
+                }
+                wire_gen::op::QUEUE_UP => {
+                    let type_id = wire_gen::queue_up::type_(bytes);
+                    let (applied, refusal) =
+                        if (AGE_TECH_BASE..AGE_TECH_BASE + 7).contains(&type_id) {
+                            self.enqueue_research(who, type_id)
+                        } else {
+                            self.enqueue_training(who, type_id, wire_gen::queue_up::num(bytes))
+                        };
                     self.orders_applied += applied as u64;
                     if let Some(refusal) = refusal {
                         self.gaps[refusal.gap()] += 1;
@@ -831,7 +1234,7 @@ pub unsafe extern "C" fn game_step(g: *mut Game, frames: u32) {
     let game = game_ref!(g);
     for _ in 0..frames {
         game.apply_commands();
-        game.core.do_frame();
+        game.advance_core_frame();
     }
     game.refresh();
 }
@@ -1113,15 +1516,11 @@ pub extern "C" fn game_playable_blocker_title_len(index: u32) -> u32 {
 pub unsafe extern "C" fn game_placement_grade(
     g: *mut Game,
     who: u32,
-    _type_id: i32,
+    type_id: i32,
     tx: i32,
     ty: i32,
 ) -> i32 {
-    game_ref!(g)
-        .core
-        .map
-        .world
-        .space_at_corner(tx, ty, who as i32, false)
+    game_ref!(g).placement_grade(who as usize, type_id, tx, ty)
 }
 #[no_mangle]
 pub unsafe extern "C" fn game_check_wcell(g: *mut Game, who: u32, tx: i32, ty: i32) -> i32 {
@@ -1273,6 +1672,10 @@ pub unsafe extern "C" fn game_load_commit(g: *mut Game) -> u32 {
     let game = game_ref!(g);
     match load_sim(&game.load_bytes) {
         Ok(core) if core.map.world.tile_xs == MAP_TILES && core.map.world.tile_ys == MAP_TILES => {
+            if let Err(reason) = game.validate_adapter_queues(&core) {
+                game.set_error(format!("load refused: {reason}"));
+                return 0;
+            }
             game.core = core;
             game.install_production_facts();
             game.pending.clear();
@@ -1315,6 +1718,8 @@ pub extern "C" fn game_capabilities() -> u32 {
         | capability::ATTACK
         | capability::HALT
         | capability::TRAIN
+        | capability::RESEARCH
+        | capability::BUILD
 }
 
 #[no_mangle]
@@ -1347,10 +1752,10 @@ mod tests {
         let mut words = vec![
             1, // units
             crate::game::PLAY_UNIT_FIELDS as i32,
-            1, // buildings
+            2, // buildings
             crate::game::PLAY_BLD_FIELDS as i32,
             1, // product edges
-            0, // age records
+            1, // age records
             values.len() as i32,
             0, // reserved header word
         ];
@@ -1389,7 +1794,28 @@ mod tests {
             0,
             6,
         ]);
+        words.extend_from_slice(&[
+            AGE_RESEARCH_BUILDING,
+            0,
+            6,
+            0,
+            0,
+            0,
+            0, // type + cost
+            2,
+            5,
+            5,
+            1200,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            6,
+        ]);
         words.extend_from_slice(&[FIRST_BUILDING, 50]);
+        words.extend_from_slice(&[AGE_TECH_BASE, 25, 0, 0, 0, 0, 0, 4]);
         words.extend(values);
         let play = stage(&PLAYDATA);
         play.clear();
@@ -1426,6 +1852,17 @@ mod tests {
         packet[1..5].copy_from_slice(&0i32.to_le_bytes());
         packet[5..9].copy_from_slice(&BUILD_BAND_BASE.to_le_bytes());
         packet[9..13].copy_from_slice(&type_id.to_le_bytes());
+        packet
+    }
+
+    fn build_packet(type_id: i32, tx: i32, ty: i32) -> [u8; 25] {
+        let mut packet = [0u8; 25];
+        packet[0] = wire_gen::op::BUILD;
+        packet[1..5].copy_from_slice(&tx.to_le_bytes());
+        packet[5..9].copy_from_slice(&ty.to_le_bytes());
+        packet[9..13].copy_from_slice(&tx.to_le_bytes());
+        packet[13..17].copy_from_slice(&ty.to_le_bytes());
+        packet[17..21].copy_from_slice(&type_id.to_le_bytes());
         packet
     }
 
@@ -1518,6 +1955,112 @@ mod tests {
             type_count_before + 1
         );
         assert_eq!(game.core.leaders[0].econ.stockpile[0], 198);
+    }
+
+    #[test]
+    fn library_build_and_age_research_use_core_state_and_rehydrate_saved_age() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage_test_playdata();
+        let mut game = Game::new(0x1234_5678);
+        let citizen = game
+            .core
+            .world
+            .handle_at_row(0)
+            .expect("opening citizen handle");
+        let start_tx = game.start_x[0] / TILE_COORD;
+        let start_ty = game.start_y[0] / TILE_COORD;
+        let (tx, ty) = (6..16)
+            .flat_map(|offset| [(start_tx + offset, start_ty), (start_tx, start_ty + offset)])
+            .find(|&(tx, ty)| {
+                game.placement_grade(0, AGE_RESEARCH_BUILDING, tx, ty)
+                    == don_sim::systems::map_terrain::space::FULLY_CLEAR
+            })
+            .expect("clear bounded Library site near the opening workers");
+
+        submit_packet(&mut game, 0, &select_packet(0, citizen.id as i16));
+        submit_packet(&mut game, 0, &build_packet(AGE_RESEARCH_BUILDING, tx, ty));
+        game.apply_commands();
+        let library_row = PLAYERS;
+        assert_eq!(game.core.builds.len(), PLAYERS + 1);
+        assert_eq!(game.build_type(library_row), AGE_RESEARCH_BUILDING);
+        assert!(!game.core.builds[library_row].is_active());
+        assert_eq!(game.core.leaders[0].econ.stockpile[1], 194);
+        assert_eq!(
+            game.core.world.orders(0).current().map(|order| order.kind),
+            Some(OrderIndex::BuildAt)
+        );
+
+        for _ in 0..64 {
+            game.advance_core_frame();
+            if game.core.builds[library_row].is_active() {
+                break;
+            }
+        }
+        assert!(game.core.builds[library_row].is_active());
+        let library_id = Game::build_view_id(library_row).unwrap() as i16;
+        submit_packet(&mut game, 0, &select_packet(0, library_id));
+        submit_packet(&mut game, 0, &queue_packet(AGE_TECH_BASE, 1));
+        game.apply_commands();
+        assert_eq!(game.core.builds[library_row].queue.queued, 1);
+        assert_eq!(game.core.leaders[0].econ.stockpile[0], 175);
+
+        submit_packet(&mut game, 0, &unqueue_packet(AGE_TECH_BASE));
+        game.apply_commands();
+        assert_eq!(game.core.builds[library_row].queue.queued, 0);
+        assert_eq!(game.core.leaders[0].econ.stockpile[0], 200);
+        assert_eq!(game.core.leaders[0].econ.age, 0);
+
+        submit_packet(&mut game, 0, &queue_packet(AGE_TECH_BASE, 1));
+        game.apply_commands();
+        assert_eq!(game.core.builds[library_row].queue.queued, 1);
+        assert_eq!(
+            game.core.production_runtime.leaders[0].queued_counts[544],
+            1
+        );
+
+        for _ in 0..64 {
+            game.advance_core_frame();
+            if game.core.leaders[0].econ.age == 1 {
+                break;
+            }
+        }
+        assert_eq!(game.core.leaders[0].econ.age, 1);
+        assert_eq!(game.core.leaders[0].econ.age_alt, 1);
+        assert!(game.core.production_runtime.leaders[0]
+            .tech
+            .tech
+            .get(AGE_TECH_BASE));
+        assert_eq!(game.core.builds[library_row].queue.queued, 0);
+        assert_eq!(game.core.leaders[0].econ.stockpile[0], 175);
+        let saved_frame = game.core.world.frame;
+        let saved_digest = game.core.channel_digest();
+        let saved_rng = game.core.world.random.state();
+        let completed = save_sim(&game.core).expect("post-step age state must save");
+        game.advance_core_frame();
+        let resumed_frame = game.core.world.frame;
+        let resumed_digest = game.core.channel_digest();
+        let resumed_rng = game.core.world.random.state();
+
+        game.core = load_sim(&completed).expect("post-step age state must load");
+        game.install_production_facts();
+        assert_eq!(game.core.world.frame, saved_frame);
+        assert_eq!(game.core.channel_digest(), saved_digest);
+        assert_eq!(game.core.world.random.state(), saved_rng);
+        assert_eq!(game.core.leaders[0].econ.age, 1);
+        assert!(game.core.production_runtime.leaders[0]
+            .tech
+            .tech
+            .get(AGE_TECH_BASE));
+        assert_eq!(
+            game.core.production_runtime.leaders[0].tech.counters.ages,
+            1
+        );
+        game.advance_core_frame();
+        assert_eq!(game.core.world.frame, resumed_frame);
+        assert_eq!(game.core.channel_digest(), resumed_digest);
+        assert_eq!(game.core.world.random.state(), resumed_rng);
     }
 
     #[test]

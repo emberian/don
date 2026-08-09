@@ -174,6 +174,8 @@ pub struct PlayData {
     pub edges: Vec<(i32, i32)>,
     /// Age tech costs, index 0 = Classical (advancing *to* age 1).
     pub age_cost: Vec<[i32; econ::NUM_RESOURCES]>,
+    /// Exact age-tech `JOB_TIME`, parallel to [`Self::age_cost`].
+    pub age_job_time: Vec<i32>,
     pub rules: econ::EconRules,
     /// False when `playdata.bin` was absent or did not parse: the client then has no
     /// costs, no menus and no economy, and says so rather than inventing any.
@@ -191,6 +193,7 @@ impl PlayData {
             bld_by_id: Vec::new(),
             edges: Vec::new(),
             age_cost: Vec::new(),
+            age_job_time: Vec::new(),
             rules: econ::EconRules::shipped(),
             is_real: false,
         }
@@ -255,8 +258,17 @@ impl PlayData {
         }
         edges.sort_unstable();
         let mut age_cost = Vec::with_capacity(na);
+        let mut age_job_time = Vec::with_capacity(na);
         for _ in 0..na {
-            age_cost.push([rd(o + 4), rd(o + 8), rd(o + 12), rd(o + 16), rd(o + 20), rd(o + 24)]);
+            age_cost.push([
+                rd(o + 4),
+                rd(o + 8),
+                rd(o + 12),
+                rd(o + 16),
+                rd(o + 20),
+                rd(o + 24),
+            ]);
+            age_job_time.push(rd(o + 28).max(1));
             o += 32;
         }
         let mut block = vec![0i32; nr];
@@ -283,6 +295,7 @@ impl PlayData {
             bld_by_id,
             edges,
             age_cost,
+            age_job_time,
             rules: econ::EconRules::from_block(&block),
             is_real: true,
         })
@@ -716,8 +729,12 @@ impl GameWorld {
     }
 
     fn spawn_unit(&mut self, gd: &GameData, owner: u8, type_id: i32, x: i32, y: i32) -> i32 {
-        let Some(tidx) = gd.index_of_type(type_id) else { return -1 };
-        let Some(row) = self.alloc_row() else { return -1 };
+        let Some(tidx) = gd.index_of_type(type_id) else {
+            return -1;
+        };
+        let Some(row) = self.alloc_row() else {
+            return -1;
+        };
         let ut = gd.units[tidx];
         self.pos_x[row] = x.clamp(0, MAP_SPAN - 1);
         self.pos_y[row] = y.clamp(0, MAP_SPAN - 1);
@@ -747,7 +764,9 @@ impl GameWorld {
     /// is covered by tiling blocks over it and taking the worst grade, which is this file's
     /// composition of a derived primitive, not a derived rule of its own.
     pub fn grade_placement(&self, pd: &PlayData, who: i32, type_id: i32, tx: i32, ty: i32) -> i32 {
-        let Some(b) = pd.bld(type_id) else { return terr::space::CORE_BLOCKED };
+        let Some(b) = pd.bld(type_id) else {
+            return terr::space::CORE_BLOCKED;
+        };
         let mut worst = terr::space::FULLY_CLEAR;
         let mut bx = 0;
         while bx < b.x_size {
@@ -771,7 +790,8 @@ impl GameWorld {
     /// the engine's own "is there room near here" query, exposed for the client's
     /// snap-to-buildable hint.
     pub fn check_wcell(&self, who: i32, wx: i32, wy: i32, rx: i32, ry: i32, max_dist: i32) -> i32 {
-        self.terrain.check_building_wcoord(wx, wy, who, rx, ry, max_dist, false)
+        self.terrain
+            .check_building_wcoord(wx, wy, who, rx, ry, max_dist, false)
     }
 
     fn stamp_building(&mut self, row: usize, started_only: bool) {
@@ -868,7 +888,11 @@ impl GameWorld {
             a.order_x = b.x_size;
             a.order_y = b.y_size;
             a.max_hits = b.hits.max(1);
-            a.hits = if instant { b.hits.max(1) } else { (b.hits / 10).max(1) };
+            a.hits = if instant {
+                b.hits.max(1)
+            } else {
+                (b.hits / 10).max(1)
+            };
             a.build_progress = if instant { -1 } else { 0 };
             a.order_a = NO_TARGET;
             a.gather_res = -1;
@@ -909,7 +933,7 @@ impl GameWorld {
             if let Some(row) = self.row_of_id(id) {
                 if self.aux[row].build_progress < 0 {
                     return match self.aux[row].type_id {
-                        417 => Some(econ::RES_FOOD), // Farm
+                        417 => Some(econ::RES_FOOD),      // Farm
                         421 | 422 => Some(econ::RES_OIL), // Oil Well / Oil Platform
                         _ => None,
                     };
@@ -1028,8 +1052,22 @@ impl GameWorld {
         if self.blocked_at_sub(nx as i32, ny as i32) {
             // Try the two axis-aligned slides before giving up. Cheap, and it stops units
             // wedging themselves permanently on a forest edge.
-            let ax = px as i64 + if dx > 0 { s } else if dx < 0 { -s } else { 0 };
-            let ay = py as i64 + if dy > 0 { s } else if dy < 0 { -s } else { 0 };
+            let ax = px as i64
+                + if dx > 0 {
+                    s
+                } else if dx < 0 {
+                    -s
+                } else {
+                    0
+                };
+            let ay = py as i64
+                + if dy > 0 {
+                    s
+                } else if dy < 0 {
+                    -s
+                } else {
+                    0
+                };
             if !self.blocked_at_sub(ax as i32, py) {
                 nx = ax;
                 ny = py as i64;
@@ -1125,7 +1163,14 @@ impl GameWorld {
             (b.attack, b.type_id, 0, b.obj_masks, 0, 0)
         } else {
             let u = gd.units[a.tidx as usize];
-            (u.attack, u.type_id, u.domain, u.obj_masks, u.military_level, u.splash_percent)
+            (
+                u.attack,
+                u.type_id,
+                u.domain,
+                u.obj_masks,
+                u.military_level,
+                u.splash_percent,
+            )
         }
     }
     fn armor_of(&self, gd: &GameData, pd: &PlayData, row: usize) -> i32 {
@@ -1144,7 +1189,11 @@ impl GameWorld {
             (b.max_range.max(0) * SUBTILE, b.recharge.max(1), 0)
         } else {
             let u = gd.units[a.tidx as usize];
-            let reach = if u.max_range > 0 { u.max_range * SUBTILE } else { SUBTILE };
+            let reach = if u.max_range > 0 {
+                u.max_range * SUBTILE
+            } else {
+                SUBTILE
+            };
             (reach, u.recharge.max(1), u.moves.max(1))
         }
     }
@@ -1193,8 +1242,7 @@ impl GameWorld {
                 let (mut sx, mut sy) = (tx, ty);
                 if self.terrain.tmask(tx, ty) & terr::tflag::BLOCKED != 0 {
                     for i in 0..4 {
-                        let (nx, ny) =
-                            (tx + terr::NEIGHBOUR4_DX[i], ty + terr::NEIGHBOUR4_DY[i]);
+                        let (nx, ny) = (tx + terr::NEIGHBOUR4_DX[i], ty + terr::NEIGHBOUR4_DY[i]);
                         if self.terrain.valid_t(nx, ny)
                             && self.terrain.tmask(nx, ny) & terr::tflag::BLOCKED == 0
                         {
@@ -1238,7 +1286,11 @@ impl GameWorld {
                 let span = (self.aux[brow].order_x.max(self.aux[brow].order_y) + 2) * SUBTILE;
                 if dx * dx + dy * dy <= (span as i64) * (span as i64) {
                     self.aux[brow].build_progress += 1;
-                    let b = pd.blds.get(self.aux[brow].tidx as usize).copied().unwrap_or_default();
+                    let b = pd
+                        .blds
+                        .get(self.aux[brow].tidx as usize)
+                        .copied()
+                        .unwrap_or_default();
                     let jt = b.job_time.max(1);
                     let p = self.aux[brow].build_progress;
                     self.aux[brow].hits =
@@ -1448,16 +1500,19 @@ impl GameWorld {
                 continue;
             }
             nu[p] += 1;
-            pop[p] += pd.unit(a.type_id).map(|u| u.pop.max(0)).unwrap_or(1).max(if pd.is_real {
-                0
-            } else {
-                1
-            });
+            pop[p] += pd
+                .unit(a.type_id)
+                .map(|u| u.pop.max(0))
+                .unwrap_or(1)
+                .max(if pd.is_real { 0 } else { 1 });
             if a.gather_res >= 0 {
                 let r = a.gather_res as usize;
                 workers[p][r] += 1;
-                income[p][r] = income[p][r]
-                    .wrapping_add(if r == econ::RES_OIL { rate_oil } else { rate_land });
+                income[p][r] = income[p][r].wrapping_add(if r == econ::RES_OIL {
+                    rate_oil
+                } else {
+                    rate_land
+                });
             }
         }
 
@@ -1535,7 +1590,11 @@ impl GameWorld {
                 let u = gd.units[a.tidx as usize];
                 (2 + (u.hits / 90).clamp(0, 5)) as u32
             };
-            let carry = if a.gather_res >= 0 { (a.gather_res as u32 + 1) & 0xf } else { 0 };
+            let carry = if a.gather_res >= 0 {
+                (a.gather_res as u32 + 1) & 0xf
+            } else {
+                0
+            };
             self.tag[row] = 0x8000_0000
                 | ((a.selected as u32) << 30)
                 | ((a.is_building as u32) << 29)
@@ -1911,7 +1970,11 @@ impl GameWorld {
             let dx = (self.pos_x[row] - x) as i64;
             let dy = (self.pos_y[row] - y) as i64;
             let d2 = dx * dx + dy * dy;
-            let bias = if a.is_building { (half as i64) * (half as i64) } else { 0 };
+            let bias = if a.is_building {
+                (half as i64) * (half as i64)
+            } else {
+                0
+            };
             if d2 <= (half as i64 + SUBTILE as i64) * (half as i64 + SUBTILE as i64)
                 && d2 + bias < best_d2
             {
@@ -2020,7 +2083,10 @@ mod tests {
         // A tile we blocked ourselves must grade CORE_BLOCKED for any footprint over it.
         w.terrain.set_blocked_at(60, 60, true);
         w.terrain.set_blocked_at(61, 61, true);
-        assert_eq!(w.terrain.space_at_corner(59, 59, 0, false), terr::space::CORE_BLOCKED);
+        assert_eq!(
+            w.terrain.space_at_corner(59, 59, 0, false),
+            terr::space::CORE_BLOCKED
+        );
     }
 
     #[test]
@@ -2088,7 +2154,10 @@ mod tests {
             w.step(&gd, &pd);
         }
         let after = w.players[0].econ.stockpile[econ::RES_TIMBER];
-        assert!(w.players[0].workers[econ::RES_TIMBER] > 0, "nobody is on the node");
+        assert!(
+            w.players[0].workers[econ::RES_TIMBER] > 0,
+            "nobody is on the node"
+        );
         assert!(after > before, "timber did not move: {before} -> {after}");
     }
 }

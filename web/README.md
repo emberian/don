@@ -78,11 +78,13 @@ node web/tools/play-smoke.mjs --json web/play-results.json
 The playable page requires both packed data files; it will not fall back to synthetic data.
 Its authoritative state is `don_sim::tick::Sim`; the browser-facing position, tag, player,
 and query arrays are projections rebuilt from that core rather than a second gameplay world.
-Move, attack, halt, City unit training/cancellation/completion, frame stepping, digest, RNG,
-and core save/load use that same state. Training uses packed `WHERE` edges and costs with the
-Sim's concrete `BuildData` queue and live production runtime; it does not maintain a browser
-queue. Gather, building placement, research, live rule setters, fog/LOS, diplomacy, AI, and
-victory remain disabled until their exact core hosts are exposed.
+Move, attack, halt, City unit training/cancellation/completion, bounded Library construction,
+sequential age research, frame stepping, digest, RNG, and core save/load use that same state.
+Training and research use packed `WHERE`, cost, and job-time records with the Sim's concrete
+`BuildData` queue and live production/tech runtime; construction uses Sim `BuildAt` orders and
+creates a saved core foundation rather than browser state. Gather, other building placement,
+ordinary technologies, live rule setters, fog/LOS, diplomacy, AI, and victory remain disabled
+until their exact core hosts are exposed.
 
 Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
 browser adapter (not `don_ai::arena::World`), the playable blocker list is read from
@@ -92,8 +94,9 @@ pending, and fail-closed commands, so UI activity is not mistaken for engine act
 
 The Save and Load controls exchange the bounded deterministic `DoNSave` byte image owned by
 `don_sim::systems::save_load`. Decode is atomic: malformed input leaves the current session
-unchanged. The present central format refuses post-step live step-8 state instead of silently
-dropping it; the page shows that refusal and retains the last successful save image.
+unchanged. Supported post-step worlds roundtrip and resume: load derives and verifies the exact
+step-8 leader views from saved canonical inputs instead of serializing a second copy. Unsupported
+subsystems and adapter queue shapes still fail closed rather than being silently dropped.
 
 ## Playing
 
@@ -101,7 +104,9 @@ Left click selects — that emits a real `GroupCommand` (`0x00`): `num`, `who`, 
 two-byte object indices. Right click emits `AttackCommand` (`0x04`, 17 bytes) for an enemy
 or `MoveToCommand` (`0x07`, 22 bytes) for open ground. The visible command dock exposes the
 same supported packet builders for touch users; unavailable actions are disabled instead of
-mutating browser-only state. The halt button emits `HaltCommand` (`0x0c`, 1 byte). The bytes
+mutating browser-only state. A selected Citizen can emit `BuildCommand` (`0x19`) for the exact
+Library cohort, and a selected completed Library can emit `QueueUpCommand` (`0x18`) for the next
+age; every other catalog entry remains disabled. The halt button emits `HaltCommand` (`0x0c`, 1 byte). The bytes
 are laid out by `wire.gen.js` at the offsets `schema/command-wire.json` gives, decoded by the
 WASM adapter in `game_abi.rs`, and applied to `don_sim::Sim` at a tick boundary in arrival order.
 
