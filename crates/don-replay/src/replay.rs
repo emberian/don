@@ -8,6 +8,7 @@
 //! harness can step.
 
 use crate::checksum::{Channels, NUM_CHANNELS};
+use crate::initial::{parse_initial_state, InitialState};
 use don_net::obfuscate::{rank_xor_keys, xor_payload};
 use don_net::{
     decode_commands, find_stream, CheckSums, Command, Obfuscation, PackageHeader, PackageRecord,
@@ -70,6 +71,9 @@ pub struct Replay {
     /// Build string from the payload's leading UTF-16 version field, e.g.
     /// `00.2024.06.20`.
     pub version: Option<String>,
+    /// The authoritative `Game::walk_data` / `GameInfo::walk_data` setup that
+    /// precedes both the opaque initial-state block and the first command.
+    pub initial: InitialState,
     pub stream_start: usize,
     pub payload_len: usize,
     pub packages: usize,
@@ -91,6 +95,7 @@ pub struct Replay {
 #[derive(Debug)]
 pub enum LoadError {
     Unreadable(String),
+    Initial(String),
     NoStream,
     FramingResidue(usize),
     NoKey,
@@ -100,6 +105,7 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadError::Unreadable(s) => write!(f, "unreadable: {s}"),
+            LoadError::Initial(s) => write!(f, "initial setup: {s}"),
             LoadError::NoStream => write!(f, "no command-package chain"),
             LoadError::FramingResidue(n) => write!(f, "framing residue: {n} bytes"),
             LoadError::NoKey => write!(f, "no viable obfuscation key"),
@@ -128,33 +134,6 @@ pub fn load_payload(p: &Path) -> Result<Vec<u8>, LoadError> {
     } else {
         Ok(out.stdout)
     }
-}
-
-/// The payload opens with a `String`-serialised version field: a `u32` count
-/// then that many UTF-16LE code units (`String::walk_data 0x00a1b2d0`). Scan the
-/// first kilobyte for the `Version: ` literal rather than assuming an offset,
-/// because the leading tag byte differs between solo and multiplayer captures.
-fn version_string(payload: &[u8]) -> Option<String> {
-    let window = &payload[..payload.len().min(4096)];
-    let mut wide = String::new();
-    for i in (0..window.len().saturating_sub(1)).step_by(1) {
-        if window[i] == b'V' && window[i + 1] == 0 {
-            wide.clear();
-            let mut j = i;
-            while j + 1 < window.len() {
-                let c = u16::from_le_bytes([window[j], window[j + 1]]);
-                if c == 0 || c > 0x7E {
-                    break;
-                }
-                wide.push(c as u8 as char);
-                j += 2;
-            }
-            if wide.starts_with("Version") {
-                return Some(wide.trim().to_string());
-            }
-        }
-    }
-    None
 }
 
 /// Recover `(xor key, pad seed)` by decoding evidence, then decode every
@@ -224,6 +203,8 @@ fn recover_obfuscation(
 impl Replay {
     pub fn open(path: &Path) -> Result<Replay, LoadError> {
         let payload = load_payload(path)?;
+        let initial =
+            parse_initial_state(&payload).map_err(|e| LoadError::Initial(e.to_string()))?;
         let loc = find_stream(&payload).ok_or(LoadError::NoStream)?;
         let recs: Vec<PackageRecord> = PackageStream::new(&payload, loc.start).collect();
         if recs.is_empty() {
@@ -244,7 +225,14 @@ impl Replay {
 
         let mut rep = Replay {
             path: path.to_path_buf(),
-            version: version_string(&payload),
+            version: Some(
+                initial
+                    .info
+                    .version_string
+                    .trim_start_matches('(')
+                    .to_string(),
+            ),
+            initial,
             stream_start: loc.start,
             payload_len: payload.len(),
             packages: recs.len(),

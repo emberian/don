@@ -514,8 +514,7 @@ pub static REGISTRY: &[Case] = &[
         va: 0x006B_30E0,
         abi: "int __thiscall WorldData::start_city_wcoord(WCoord const& x, WCoord const& y), \
               ret 8; ECX is unread",
-        model: "oracle::models::worldgen::start_city_wcoord — exact gap marker; waiting for \
-                don_sim::systems::map_terrain::World::start_city_wcoord",
+        model: "don_sim::systems::map_terrain::World::start_city_wcoord",
         subsystem: "world generation / starting-position occupancy",
         ledger: "docs/mechanics/map-terrain.md §7.1 — executable start-placement foothold",
         derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
@@ -526,7 +525,7 @@ pub static REGISTRY: &[Case] = &[
                  Retail performs no bounds check. This proves exact row-major flattening \
                  and LSB-first bit order for the start-city occupancy plane, not how \
                  Map::place_start_in_region chooses a coordinate and not ring/radius \
-                 exclusion semantics. No shipped don-sim accessor exists yet.",
+                 exclusion semantics.",
         plan: Plan::StartCityWcoord {
             random: 250_000,
             distribution: "byte/row boundary edges plus xorshift64 widths 1..512, heights \
@@ -799,7 +798,6 @@ pub static REGISTRY: &[Case] = &[
         },
     },
 ];
-
 /// Tier-B claims in `docs/provenance-ledger.md` that this suite **cannot** re-run.
 ///
 /// They are listed here, and copied into the JSON, so the ledger generator can mark those

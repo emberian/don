@@ -190,6 +190,16 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?} }},\n",
+            r.initial_prefix_bytes,
+            r.initial_seed,
+            r.initial_map_style,
+            r.initial_map_size,
+            r.initial_map_edge.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
+            r.initial_active_players,
+            r.initial_teams,
+        ));
+        s.push_str(&format!(
             "      \"phase\": \"{}\", \"latency_turns\": {},\n",
             r.phase.name(),
             r.latency
@@ -235,7 +245,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         for (i, name) in CHANNEL_NAMES.iter().enumerate() {
             let c = &r.channels[i];
             s.push_str(&format!(
-                "        \"{name}\": {{ \"survived\": {}, \"first_divergence_turn\": {}, \"expected\": \"0x{:08x}\", \"got\": \"0x{:08x}\", \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"unmodelled\": {}, \"nontrivial_compares\": {}, \"our_bytes_walked\": {}, \"retail_empty_compares\": {}, \"retail_first_nonempty_turn\": {}, \"retail_disagreed\": {} }}{}\n",
+                "        \"{name}\": {{ \"survived\": {}, \"first_divergence_turn\": {}, \"expected\": \"0x{:08x}\", \"got\": \"0x{:08x}\", \"compares\": {}, \"matches\": {}, \"trivial\": {}, \"unmodelled\": {}, \"nontrivial_compares\": {}, \"our_bytes_walked\": {}, \"our_unsourced_walked\": {}, \"retail_empty_compares\": {}, \"retail_first_nonempty_turn\": {}, \"retail_disagreed\": {} }}{}\n",
                 c.survived,
                 c.first_divergence_turn.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
                 c.expected,
@@ -246,6 +256,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 c.unmodelled_matches,
                 c.nontrivial_compares,
                 c.our_bytes_walked,
+                c.our_unsourced_walked,
                 c.retail_empty_compares,
                 c.retail_first_nonempty_turn.map(|t| t.to_string()).unwrap_or_else(|| "null".into()),
                 c.retail_disagreed,

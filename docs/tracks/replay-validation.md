@@ -19,31 +19,55 @@ file, and rolled up into `schema/replay-validation.json`.
 Over the whole corpus — 61 files, 21 with checksums, **585,152 turns**,
 **488,557 checksum packets**, 30 seconds wall clock:
 
-| channel | best survival (turns) | matches / compares | of which trivial |
-|---|---:|---:|---:|
-| `walls` | **25,442** | 222,938 / 222,938 | 222,938 |
-| `deaths` | **5,734** | 82,943 / 222,938 | 82,943 |
-| `ammo` | **3,696** | 106,634 / 222,938 | 106,634 |
-| `items` | 0 | 107,882 / 222,938 | 107,882 |
-| every other channel | 0 | 0 / 222,938 | 0 |
+| channel | best survival (turns) | matches / compares | trivial matches | non-trivial compares |
+|---|---:|---:|---:|---:|
+| `walls` | **25,442** | 222,938 / 222,938 | 222,938 | 0 |
+| `deaths` | **5,734** | 82,943 / 222,938 | 82,943 | 0 |
+| `ammo` | **3,696** | 106,634 / 222,938 | 106,634 | 0 |
+| `items` | 0 | 107,882 / 222,938 | 107,882 | 0 |
+| **`world`** | 0 | 0 / 222,938 | 0 | **222,938** |
+| every other channel | 0 | 0 / 222,938 | 0 | 0 |
 
 `survived` = consecutive agreeing turns from the recording's first checksummed
 turn. **The honest headline is 25,442 turns on `walls`, and it is a weak
-number**: our simulation state is empty, `walls` was empty in every recorded
-game, and adler-32 over nothing is 1 on both sides. `trivial` counts exactly
-that case, and it is currently 100 % of our agreements. The number to watch is
-not the biggest one; it is the first time `trivial` is less than `matches`.
+number**: `walls` was empty in every recorded game, and adler-32 over nothing is
+1 on both sides. `trivial` counts exactly that case, and it remains 100 % of our
+agreements. The scoreboard is no longer wholly empty, however: every one of the
+222,938 `world` comparisons now walks a real prefix-derived world channel.
 
-The two numbers with real content today are `ammo` and `deaths`: for 3,696 and
-5,734 consecutive turns respectively, our model asserts "no projectile is in
-flight" / "nothing has died yet" and retail agrees. That assertion *can* fail,
-and does — at turn 1,584 and turn 847 in the 2025 recording — which is exactly
-the failure mode a validation harness is supposed to have.
+`ammo` and `deaths` still measure absent producers, not mechanics: they read 1
+until retail creates the first projectile or corpse. Their measured deadlines
+remain useful, but those matches are explicitly labelled `unmodelled`.
 
-`units`, `builds`, `leaders`, `cities`, `goods`, `world`, `rules`,
+`units`, `builds`, `leaders`, `cities`, `goods`, `rules`,
 `scenario_data`, `script_run_time`, `groups`, `guys` diverge on the **first**
 checksummed turn, because those are non-empty from game start and we hold none
-of them. That is the expected result and it is the work queue.
+of them. `world` also diverges on the first checksummed turn, for a better
+reason: it now hashes 280,968–780,168 bytes per comparison (map-size dependent)
+through the exact `World::walk_data` traversal. Only 52–76 of those bytes are
+currently sourced from the prefix; generated terrain, resources, start arrays,
+fog and collision remain explicitly unsourced.
+
+### Initial-world slice now on the scoreboard
+
+`Replay::open` structurally parses the complete recording prefix through
+`game.info.save_name`, inferring the v15/v16 `GameInfo` mod tail by the PDB
+`Game::semaphore` invariant. Across all 61 command streams it recovers:
+
+- `GameInfo::seed` and all 30 setup bytes, including map style/size, game rules
+  and starting-town policy;
+- all eight `Player` gates and every active player's synchronized counters,
+  tribe, `who`, team, handicap, `play`, pauses, difficulty and name;
+- the 404-byte `Game` block's named frame/tick/market/world counters plus the
+  semaphore, graphic tick and save name.
+
+The map-size selector is resolved through the shipped seven-entry world-edge
+list `[40, 50, 60, 70, 80, 90, 100]`. `World::init` supplies the exact derived
+dimension arithmetic, and `GameInfo::seed` enters through the oracle-backed
+signed `Map::make` seed gate. Starting coordinates are not guessed: the newly
+shipped, 250,011-trial oracle-backed `World::start_city_wcoord` supplies the
+retail row-major/LSB-first accessor, but its bit plane stays empty until the
+actual placement writer/generator is reconstructed.
 
 ---
 
@@ -104,40 +128,22 @@ cargo run --release -p don-replay -- scan --corpus           # decode only
 cargo run --release -p don-replay -- crossplay --corpus      # the control experiment
 cargo run --release -p don-replay -- walkers                 # generated-table coverage
 
-cargo test --release -p don-replay                           # 17 unit + 5 corpus tests
+cargo test --release -p don-replay --all-targets             # 54 lib + 8 corpus + 6 integration tests
 ```
 
 Exit codes mirror `tools/oracle-regress.sh`: `0` ran, `2` corpus missing
 (**SKIPPED is never a pass** — the banner says so), `3` harness failure.
 
-Sample output, the one recording built by *our exact binary*
-(`Playback___2025.02.10 21'26'50`, `Version: 00.2024.06.20`, 11,322 checksummed
-turns, 6.0 frames/turn):
+Representative current output (`Playback___2018.11.17_13_21_42__Sat_.rcx`):
 
 ```
-channel           survived first-div   expected        got  matches
-units                    0         2 0xa204dc4c 0x00000001        0
-builds                   0         2 0x3b5dcbf0 0x00000001        0
-walls                11322      None                            11322
-ammo                  1582      1584 0xe0a21695 0x00000001     6150
-deaths                 845       847 0x8f2c0d2d 0x00000001     4979
-groups                   0         2 0x0cd4f2a9 0x00000001        0
-guys                     0         2 0x3e54eb9e 0x00000001        0
-leaders                  0         2 0x231d5aec 0x00000001        0
-cities                   0         2 0xd2251759 0x00000001        0
-items                    0         2 0x7bfcb73b 0x00000001     4752
-goods                    0         2 0x307b7792 0x00000001        0
-world                    0         2 0x4f651430 0x00000001        0
-rules                    0         2 0x12ba3104 0x00000001        0
-scenario_data            0         2 0x09922b90 0x00000001        0
-script_run_time          0         2 0x6a91bf5d 0x00000001        0
-all                      0         2 0xa08a57b9 0x0000000f        0
+channel           survived first-div   expected        got  matches   bytes  unsourced
+world                    0         2 0xd63a3a53 0x1389cbbb        0  780168     780092
 ```
 
-`all = 0x0000000f = 15` on our side is the arithmetic self-check: fifteen
-channels each holding adler-32's initial value of 1, summed. `rules` reads
-`0x12ba3104`, the shipped-rule-set constant, exactly as
-`docs/derivation/replay-checksum.md` §5 predicts.
+That world row is deliberately not credited as agreement. The initial prefix
+sources 76 walked bytes; the remaining 780,092 generated terrain bytes are
+reported as unsourced until the complete retail `Map::make` path is reproduced.
 
 ---
 
@@ -150,13 +156,14 @@ channels each holding adler-32's initial value of 1, summed. `rules` reads
 |---|---|
 | `src/checksum.rs` | `adler32` mirroring `0x00a46830` including the `NMAX = 5552` chunk boundary; the two-method `DataWalk` trait; `CheckSum` with `+0x0c` mask, `+0x10` adler, `+0x14` byte counter; `Channel`, `Channels`, `computed_total` |
 | `src/walk.rs` + `src/walk_gen.rs` | **generated** traversal: 278 classes, all 1,421 ordered ops from `schema/state-schema.json`, run table-driven over object byte images |
-| `src/state.rs` | per-channel object lists in PDB layout; `check_all` over them; the explicit `don-sim` bridge and its gap list |
+| `src/initial.rs` | exact `Game`/`GameInfo`/Player prefix parser; map-size and seed reconstruction; sourced/unsourced accounting |
+| `src/state.rs` | per-channel object lists plus direct dynamic walkers; `units` image bridge and exact `world` checksum bridge |
 | `src/wire.rs` + `src/wire_gen.rs` | **generated** field table for all 82 `*Command` structs; typed field reads; `Order`; `CommandClass` |
-| `src/replay.rs` | `.rcx` → turns: framing, XOR/pad recovery, per-turn per-player commands and checksums, `frames_per_turn`, both crossplay joins |
-| `src/harness.rs` | the loop, the `Simulation` trait, `NullSim`, the divergence profile |
+| `src/replay.rs` | `.rcx` → authoritative initial setup + turns: framing, XOR/pad recovery, commands/checksums, both crossplay joins |
+| `src/harness.rs` | the loop, `WorldSim::from_replay`, cached initial-world walk, and the divergence profile |
 | `src/report.rs` | `schema/replay-validation.json` |
 | `gen/gen_walk.py`, `gen/gen_wire.py` | the generators; re-run after any schema change |
-| `tests/corpus.rs` | 5 corpus tests including a mutation test that proves the comparator bites |
+| `tests/corpus.rs` | 8 corpus tests including mutation, initial-prefix, and non-empty-world gates |
 
 **Both tables are generated, not typed.** Hand-writing a 1,421-op traversal is
 precisely how a walker silently drifts from the binary; the generators are two
@@ -230,9 +237,10 @@ count changes in either direction.
   has 107,882 matches corpus-wide and 0 survival: the channel returns to 1
   mid-game when the item list empties, and our permanently-empty model
   coincidentally agrees. Only `survived` is a progress metric.
-- **Every current agreement is `trivial`** — zero bytes walked on our side.
-  We are matching "nothing" against "nothing". This is real (it fails the moment
-  retail acquires an object) but it is not evidence about any mechanic.
+- **Every current agreement is still `trivial`, but the scoreboard is not.**
+  The `world` producer walks bytes on all 222,938 comparisons and disagrees on
+  the first checksummed turn. The remaining 520,397 agreements are all absent
+  channels matching retail's empty state and are not evidence about mechanics.
 - **The checksum phase is a parameter, not a finding.** The sender builds its
   package during `PROCESS_TURN` and appends the tuple to the same package that
   carries that turn's new commands, but lockstep executes a turn's commands some
@@ -268,12 +276,11 @@ count changes in either direction.
   offset. `WalkOutcome` counts every op it could not execute
   (`ops_unresolved`, `ops_global`, `ops_virtual`, `ops_sub_unknown`,
   `ops_out_of_range`) so a partial walk can never be mistaken for a complete one.
-- **`SimBridge::populate` is a deliberate no-op returning 0.** `don-sim::World`
-  holds `pos/vel/hits/armor/attack/cooldown` over anonymous rows and no
-  engine-layout record. Converting it would mean *inventing* a layout, and an
-  invented layout that hashes to a plausible number is the exact failure this
-  project exists to avoid. `SimBridge::CARRIED` and `SimBridge::MISSING` are the
-  gap, as data rather than prose.
+- **`SimBridge` produces two real channels, not a full initial save.** `units`
+  images generated PDB columns. `world` executes `map_terrain::World::walk_data`
+  directly because its dynamic arrays cannot be represented by a 372-byte flat
+  image. The prefix proves dimensions and seed, not generated contents; their
+  walked zeros are counted as unsourced and the channel is expected to diverge.
 - **`cargo test --workspace --exclude don-net --exclude don-ai` currently has 4
   failures in `don-sim::trig`** (`sin_table`, `find_angle`, the index-255 wrap).
   Those are a concurrent lane's in-flight module; this lane touched no shared
@@ -284,13 +291,10 @@ count changes in either direction.
 
 ## The next three moves, in order
 
-1. **Bridge `don_sim::generated::state`.** A sibling lane landed
-   `crates/don-sim/src/generated/state.rs` — real PDB-layout SoA columns with
-   `FieldDesc { name, offset, size, repr }` per class. A `row_image(row) ->
-   Vec<u8>` that scatters a row's columns back to their PDB offsets plugs
-   straight into `SimState::channels[i].objects` and the harness starts walking
-   real bytes with no change to the loop. That is the single highest-leverage
-   follow-on and it is mechanical.
+1. **Port the retail map generator from the pinned seed.** The replay now feeds
+   its exact generation tuple and exact checksum owner. The first divergence is
+   therefore localized to the missing `Map::make` body/start-placement writers,
+   rather than hidden behind an empty channel.
 2. **`rules` first — it is one 32-bit word.** `Game::walk_rules_data`
    (`0x00589550`) over the loaded `Constants` must produce `0x12ba3104`. It is
    static, so it needs no simulation at all, and it validates the entire loaded
@@ -332,7 +336,7 @@ count changes in either direction.
 | All 488,557 recorded `CheckSumsCommand` packets satisfy `word16 == Σ(words 1..15)` and are adler-32-shaped | `crates/don-replay/src/replay.rs`, corpus | **C [measured]** | 488,557/488,557 both tests; ≈2⁻³² false-positive rate per packet |
 | `rules` channel = `0x12ba3104` in every recording that carries checksums | corpus | **C [measured]** | constant within and across all 21 checksummed files, two engine builds |
 | A multiplayer lockstep turn spans **2, 4, 6 or 8 simulation frames**, per recording | `stamp`/`group` deltas | **C [measured]** | current corpus distribution: 1 / 6 / 37 / 16 files; the solo recording measures 1.0; 6.0 for the 00.2024.06.20 recording |
-| Our simulation survives **25,442 turns on `walls`, 5,734 on `deaths`, 3,696 on `ammo`, 0 on every other channel** | `tools/replay-validate.sh` | **C [measured]** | 222,938 comparisons per channel; every current agreement is `trivial` (zero bytes walked) |
+| Prefix-derived world reconstruction enters the checksum scoreboard | `tools/replay-validate.sh` | **C [measured]** | all 61 initial prefixes parsed; 222,938/222,938 `world` comparisons non-trivial; first divergence is the first checksummed turn; 280,968–780,168 bytes walked by map size, with generated bytes explicitly unsourced |
 
 And **correct** in `docs/tracks/headless-client.md` claim 7: the 21 cross-player
 disagreements are not simulation drift. Under the correct join key the corpus

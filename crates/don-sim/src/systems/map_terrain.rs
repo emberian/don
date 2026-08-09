@@ -866,6 +866,17 @@ impl World {
         Some(seed)
     }
 
+    /// `WorldData::start_city_wcoord(WCoord const&, WCoord const&)` `0x006b30e0`.
+    ///
+    /// The complete retail leaf is a row-major flatten followed by an LSB-first
+    /// bit test.  It performs no bounds check; callers must pass a valid world
+    /// coordinate backed by `start_city_locs`, just as the engine does.
+    #[inline]
+    pub fn start_city_wcoord(&self, x: WCoord, y: WCoord) -> bool {
+        let index = y.0 * self.xs + x.0;
+        self.start_city_locs[(index >> 3) as usize] & (1u8 << ((index & 7) as u32)) != 0
+    }
+
     // -- indexing ------------------------------------------------------------------------
 
     /// `World::get_wdata` `0x0046d220`: `wdata[wy * xs + wx]`, stride 28.
@@ -2080,6 +2091,16 @@ mod tests {
         assert_eq!(w.danger[7].len(), 1200);
         // The whole map, measured in raw Coord units.
         assert_eq!(w.tile_xs * COORD_PER_TILE, w.xs * COORD_PER_WCELL);
+    }
+
+    #[test]
+    fn start_city_bits_are_row_major_and_lsb_first() {
+        let mut w = World::init_default_rules(9, 2);
+        w.start_city_locs = vec![0; 3];
+        // width=9, (8,1) => bit 17 => byte 2, mask 0x02.
+        w.start_city_locs[2] = 0x02;
+        assert!(w.start_city_wcoord(WCoord(8), WCoord(1)));
+        assert!(!w.start_city_wcoord(WCoord(7), WCoord(1)));
     }
 
     /// `World::wipe` leaves every cell in the state the disassembly writes.

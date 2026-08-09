@@ -243,6 +243,44 @@ fn the_harness_produces_a_divergence_profile() {
     assert!(ran > 0, "no multiplayer recording ran");
 }
 
+/// The initial-state vertical slice is measured against retail, not just a
+/// synthetic parser fixture: the complete Game/GameInfo prefix is before the
+/// package stream, and its map setup drives a non-empty world checksum which
+/// records the expected first-turn divergence and its unsourced ceiling.
+#[test]
+fn replay_setup_drives_a_real_nonempty_world_channel() {
+    let reps = mp_replays();
+    if reps.is_empty() {
+        skip_banner();
+        return;
+    }
+    let rep = &reps[0];
+    assert!(rep.initial.bytes_walked < rep.stream_start);
+    assert_eq!(rep.initial.info.players.len(), 8);
+    assert!(rep.initial.active_players().count() > 0);
+    let first = rep
+        .turns
+        .iter()
+        .find(|t| t.any_checksums().is_some())
+        .unwrap()
+        .turn;
+
+    let mut sim = harness::WorldSim::from_replay(rep);
+    let initial = sim
+        .initial_world
+        .as_ref()
+        .expect("checksummed corpus recording has a procedural map setup");
+    assert_eq!(initial.world.seed as u32, rep.initial.info.seed);
+    let run = harness::run(rep, &mut sim, Phase::BeforeCommands, 0);
+    let w = &run.channels[Channel::World as usize];
+    assert_eq!(w.first_divergence_turn, Some(first));
+    assert_eq!(w.nontrivial_compares, w.compares);
+    assert!(w.our_bytes_walked > 0);
+    assert!(w.our_unsourced_walked > 0);
+    assert!(w.our_unsourced_walked < w.our_bytes_walked);
+    assert_eq!(w.matches, 0);
+}
+
 /// The bridge, against a real recording: a `don_sim::World` with rows in it
 /// produces engine-layout `Unit` records, and the `units` channel compares
 /// **bytes against bytes** instead of nothing against something.

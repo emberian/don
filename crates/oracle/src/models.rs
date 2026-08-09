@@ -23,7 +23,6 @@ pub fn accessor_movsx_0xa(obj: *mut u8, r: u64) -> u32 {
     unsafe { std::ptr::write_unaligned(obj.add(0x0A) as *mut u16, v) };
     (v as i16) as i32 as u32
 }
-
 /// `0x0048F770` — `movsx [ecx+0x12C]` minus `movsx [ecx+0x12A]`, both `i16`.
 pub fn accessor_diff_12c_12a(obj: *mut u8, r: u64) -> u32 {
     let a = r as u16;
@@ -126,46 +125,6 @@ pub mod rng {
         let low16 = *s & 0xffff; // movzx eax, cx
         let prod = low16.wrapping_mul(range); // imul eax, edi
         ((prod >> 16) as i32).wrapping_add(lo) // shr eax,0x10 ; add eax, ebx
-    }
-}
-
-// ---------------------------------------------------------------------------------
-// World-generation footholds that do not yet have a shipped don-sim implementation.
-// ---------------------------------------------------------------------------------
-
-pub mod worldgen {
-    /// `WorldData::start_city_wcoord` at `0x006b30e0`.
-    ///
-    /// The retail leaf flattens valid WCoord pairs as `y * world_xs + x`, then tests the
-    /// corresponding LSB-first bit in `World::start_city_locs`.  It has no bounds checks;
-    /// the oracle deliberately generates only coordinates inside the supplied bit plane.
-    ///
-    /// Waiting for: `don_sim::systems::map_terrain::World::start_city_wcoord`.
-    pub fn start_city_wcoord(world_xs: i32, bits: &[u8], x: i32, y: i32) -> bool {
-        let index = y * world_xs + x;
-        let byte = bits[(index >> 3) as usize];
-        byte & (1u8 << ((index & 7) as u32)) != 0
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::start_city_wcoord;
-
-        #[test]
-        fn start_city_bits_are_lsb_first() {
-            assert!(start_city_wcoord(8, &[0b0000_1000], 3, 0));
-            assert!(!start_city_wcoord(8, &[0b0000_1000], 4, 0));
-        }
-
-        #[test]
-        fn start_city_index_is_row_major_with_world_width_stride() {
-            // width=9, (8,1) => bit 17 => byte 2, mask 0x02.  A column-major mutation
-            // would inspect bit 73; a byte-rounded row-stride mutation would inspect 24.
-            let mut bits = [0u8; 10];
-            bits[2] = 0x02;
-            assert!(start_city_wcoord(9, &bits, 8, 1));
-            assert!(!start_city_wcoord(9, &bits, 7, 1));
-        }
     }
 }
 

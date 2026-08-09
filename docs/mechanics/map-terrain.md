@@ -460,9 +460,10 @@ the case record states the patch and limitation. The Rust side is the shipped
 `World::seed_map_generation`, not another transcription in the harness.
 
 `start_city_wcoord` needs only the two retail World reference globals and an owned bit
-plane. Its present Rust model lives in `oracle::models` and is named as a gap marker in the
-registry because `don-sim` has no corresponding accessor yet. The valid-domain predicate
-is exact: positive width, in-bounds nonnegative x/y, and enough bit-plane storage. Retail
+plane. Its Rust model is now the shipped
+`don_sim::systems::map_terrain::World::start_city_wcoord`, so the differential case tests
+the implementation used by replay reconstruction rather than an oracle-local copy. The
+valid-domain predicate is exact: positive width, in-bounds nonnegative x/y, and enough bit-plane storage. Retail
 has no bounds check, so invalid coordinates are excluded rather than converted into a
 made-up policy.
 

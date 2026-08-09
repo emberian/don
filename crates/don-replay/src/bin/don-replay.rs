@@ -12,7 +12,7 @@
 //! ```
 
 use don_replay::checksum::{CHANNEL_NAMES, NUM_CHANNELS, NUM_WALKED};
-use don_replay::harness::{self, NullSim, Phase};
+use don_replay::harness::{self, Phase};
 use don_replay::replay::{corpus, Replay};
 use don_replay::report;
 use std::path::{Path, PathBuf};
@@ -166,7 +166,7 @@ fn validate(args: &Args) {
     let reps = open_all(&args.files, args.quiet);
     let mut runs = Vec::new();
     for r in &reps {
-        let mut sim = NullSim::new();
+        let mut sim = harness::WorldSim::from_replay(r);
         let run = harness::run(r, &mut sim, args.phase, args.latency);
         if !args.quiet && run.checksum_packets > 0 {
             println!("{}", harness::format_table(&run));

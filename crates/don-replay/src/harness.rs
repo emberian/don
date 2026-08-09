@@ -74,6 +74,9 @@ pub struct ChannelResult {
     pub nontrivial_compares: u32,
     /// Bytes our walker handed the visitor on the last compare.
     pub our_bytes_walked: u64,
+    /// Of those bytes, the count present only as explicit zero placeholders
+    /// because the current reconstruction has no authoritative source.
+    pub our_unsourced_walked: u64,
     /// Compares where *retail's* value was 1 — the engine walked nothing either.
     /// A channel we "survive" for its whole recording while this equals
     /// `compares` was never tested at all.
@@ -90,6 +93,13 @@ pub struct ChannelResult {
 pub struct RunResult {
     pub file: String,
     pub version: Option<String>,
+    pub initial_prefix_bytes: usize,
+    pub initial_seed: u32,
+    pub initial_map_style: u8,
+    pub initial_map_size: u8,
+    pub initial_map_edge: Option<i32>,
+    pub initial_active_players: usize,
+    pub initial_teams: Vec<u8>,
     pub phase: Phase,
     pub latency: u32,
     pub turns_total: usize,
@@ -152,6 +162,11 @@ pub trait Simulation {
     fn step_turn(&mut self, _frames: u32) {}
     /// Produce the sixteen channels for the current state.
     fn check_all(&self) -> (Channels, [u64; NUM_WALKED]);
+    /// Per-channel subset of `check_all().1` not yet sourced by simulation
+    /// state. Defaults to zero for external implementations.
+    fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
+        [0; NUM_WALKED]
+    }
 }
 
 /// The null simulation: correct empty state, no mechanics.
@@ -195,6 +210,9 @@ impl Simulation for NullSim {
         }
         (ch, bytes)
     }
+    fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
+        std::array::from_fn(|i| self.state.unsourced_walked_bytes(i))
+    }
 }
 
 /// A simulation that really is a `don_sim::World`: it steps the tick, images
@@ -217,6 +235,10 @@ pub struct WorldSim {
     pub turns: u64,
     pub frames: u64,
     pub seed_units: u32,
+    /// Prefix-derived map slice. Generated terrain and start placement are not
+    /// present until their retail generator is ported; its checksum report
+    /// carries that unsourced byte count explicitly.
+    pub initial_world: Option<crate::initial::InitialWorld>,
 }
 
 impl Default for WorldSim {
@@ -233,6 +255,29 @@ impl WorldSim {
             turns: 0,
             frames: 0,
             seed_units: 0,
+            initial_world: None,
+        }
+    }
+
+    /// Build the largest simulation state justified by the recording before
+    /// its first command: map dimensions, default rule limits, and map seed.
+    pub fn from_replay(rep: &Replay) -> WorldSim {
+        let mut s = WorldSim::new();
+        s.initial_world = rep.initial.reconstruct_world();
+        s.populate_state();
+        s
+    }
+
+    fn populate_state(&mut self) {
+        if let Some(map) = &self.initial_world {
+            crate::state::SimBridge::populate_with_map_checksum(
+                &self.world,
+                &map.checksum,
+                map.unsourced_walked_bytes(),
+                &mut self.state,
+            );
+        } else {
+            crate::state::SimBridge::populate(&self.world, &mut self.state);
         }
     }
 
@@ -247,7 +292,7 @@ impl WorldSim {
                 }
             }
         }
-        crate::state::SimBridge::populate(&s.world, &mut s.state);
+        s.populate_state();
         s
     }
 }
@@ -259,7 +304,7 @@ impl Simulation for WorldSim {
             self.world.step();
             self.frames += 1;
         }
-        crate::state::SimBridge::populate(&self.world, &mut self.state);
+        self.populate_state();
     }
     fn check_all(&self) -> (Channels, [u64; NUM_WALKED]) {
         let (ch, outs) = self.state.check_all();
@@ -268,6 +313,9 @@ impl Simulation for WorldSim {
             bytes[i] = outs[i].bytes_walked;
         }
         (ch, bytes)
+    }
+    fn unsourced_walked(&self) -> [u64; NUM_WALKED] {
+        std::array::from_fn(|i| self.state.unsourced_walked_bytes(i))
     }
 }
 
@@ -280,6 +328,13 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default(),
         version: rep.version.clone(),
+        initial_prefix_bytes: rep.initial.bytes_walked,
+        initial_seed: rep.initial.info.seed,
+        initial_map_style: rep.initial.info.settings.map_style,
+        initial_map_size: rep.initial.info.settings.map_size,
+        initial_map_edge: rep.initial.info.settings.map_edge_world_cells(),
+        initial_active_players: rep.initial.active_players().count(),
+        initial_teams: rep.initial.active_players().map(|p| p.team).collect(),
         phase,
         latency,
         turns_total: rep.turns.len(),
@@ -404,6 +459,7 @@ fn compare<S: Simulation>(
     rep: &Replay,
 ) {
     let (ours, bytes) = sim.check_all();
+    let unsourced = sim.unsourced_walked();
 
     // Which channels do retail's own clients disagree on this turn? Those
     // carry no ground truth and are excluded.
@@ -446,6 +502,7 @@ fn compare<S: Simulation>(
                 r.retail_first_nonempty_turn = Some(turn);
             }
             r.our_bytes_walked = bytes[c];
+            r.our_unsourced_walked = unsourced[c];
             if bytes[c] > 0 {
                 r.nontrivial_compares += 1;
             }
@@ -490,6 +547,18 @@ pub fn format_table(r: &RunResult) -> String {
             .unwrap_or_else(|| "?".into()),
     ));
     s.push_str(&format!(
+        "  initial Game/GameInfo {} bytes  seed {:08x}  map style {} size {} edge {}  active {} teams {:?}\n",
+        r.initial_prefix_bytes,
+        r.initial_seed,
+        r.initial_map_style,
+        r.initial_map_size,
+        r.initial_map_edge
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| "unresolved".into()),
+        r.initial_active_players,
+        r.initial_teams,
+    ));
+    s.push_str(&format!(
         "  packages {}/{} decoded   checksum packets {} (total-ok {}, adler-shaped {})\n",
         r.packages_decoded,
         r.packages,
@@ -504,7 +573,7 @@ pub fn format_table(r: &RunResult) -> String {
         ));
     }
     s.push_str(
-        "  channel          survived  first-div    expected       got  compares  trivial  unmodelled  our-bytes  retail-empty  retail-1st\n",
+        "  channel          survived  first-div    expected       got  compares  trivial  unmodelled  our-bytes  unsourced  retail-empty  retail-1st\n",
     );
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
         let c = &r.channels[i];
@@ -517,7 +586,7 @@ pub fn format_table(r: &RunResult) -> String {
             .map(|_| format!("{:08x}", c.got))
             .unwrap_or_else(|| "-".into());
         s.push_str(&format!(
-            "  {name:<16} {:7}  {:>9}  {:>10}  {:>9}  {:8}  {:7}  {:10}  {:9}  {:12}  {:>10}\n",
+            "  {name:<16} {:7}  {:>9}  {:>10}  {:>9}  {:8}  {:7}  {:10}  {:9}  {:9}  {:12}  {:>10}\n",
             c.survived,
             c.first_divergence_turn
                 .map(|t| t.to_string())
@@ -528,6 +597,7 @@ pub fn format_table(r: &RunResult) -> String {
             c.trivial_matches,
             c.unmodelled_matches,
             c.our_bytes_walked,
+            c.our_unsourced_walked,
             c.retail_empty_compares,
             c.retail_first_nonempty_turn
                 .map(|t| t.to_string())

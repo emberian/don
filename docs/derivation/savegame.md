@@ -298,6 +298,13 @@ A recording then writes `String::walk_data(game.info.save_name)` (`game+0x53c` =
 `GameInfo+0x530`), and that is the end of the header. On `today.rcx` the header is
 `0x349` bytes.
 
+The production Rust reader now consumes this complete prefix in
+`crates/don-replay/src/initial.rs`. It tries the two measured v16/v15 tails and accepts one
+only when the following PDB-sized semaphore satisfies `bits == 8*size`, `0 <= size <= 32`;
+all 61 structurally decoded command streams in the local corpus pass. The parser exposes
+the setup as initial state and stops at `save_name`: it does not relabel the following
+opaque block as a decoded save snapshot.
+
 ### 5.3 `WalkDataGame::walk_data` — `FUN_005a2360` — the save-game table of contents
 
 **This function is absent from `schema/islands.jsonl`** — a Ghidra gap of exactly the kind

@@ -228,9 +228,9 @@ pub enum ChannelSource {
 }
 
 /// Per channel, whether the `don-sim` → engine-layout bridge can produce it.
-/// Kept beside the bridge it describes: [`SimBridge::populate`] fills exactly
-/// the `Modelled` entries, and the test at the bottom of this file fails if the
-/// two ever disagree.
+/// Kept beside the bridge it describes: `populate` supplies units and
+/// `populate_with_map` supplies world; the test at the bottom exercises both
+/// and fails if the capability table disagrees.
 pub const CHANNEL_SOURCE: [ChannelSource; NUM_WALKED] = [
     ChannelSource::Modelled, // units   — World::units + the unit band
     ChannelSource::Absent,   // builds  — no BuildData columns in World
@@ -243,7 +243,7 @@ pub const CHANNEL_SOURCE: [ChannelSource; NUM_WALKED] = [
     ChannelSource::Absent,   // cities
     ChannelSource::Absent,   // items
     ChannelSource::Absent,   // goods
-    ChannelSource::Absent,   // world
+    ChannelSource::Modelled, // world   — exact dynamic World::walk_data bridge
     ChannelSource::Absent,   // rules
     ChannelSource::Absent,   // scenario_data
     ChannelSource::Absent,   // script_run_time
@@ -290,7 +290,7 @@ impl CheckAll {
         for i in 0..NUM_WALKED {
             per[i] = ChannelReport {
                 value: channels.0[i],
-                elements: state.channels[i].len() as u32,
+                elements: state.channel_element_count(i),
                 bytes: outcomes[i].bytes_walked,
                 unsourced_walked_bytes: state.unsourced_walked_bytes(i),
                 outcome: outcomes[i],
@@ -494,7 +494,8 @@ mod tests {
     }
 
     /// An empty world produces the all-ones tuple, and says so honestly: zero
-    /// bytes walked, and only `units` is even claimed.
+    /// bytes walked. This entry point has no replay map; the map-aware bridge
+    /// is exercised separately.
     #[test]
     fn an_empty_world_is_the_all_ones_tuple_and_walks_nothing() {
         let w = don_sim::World::with_capacity(8, 1);
@@ -582,9 +583,10 @@ mod tests {
             w.spawn(who).expect("spawn");
         }
         let mut st = SimState::new();
-        SimBridge::populate(&w, &mut st);
+        let map = don_sim::systems::map_terrain::World::init_default_rules(40, 40);
+        SimBridge::populate_with_map(&w, &map, 0, &mut st);
         for i in 0..NUM_WALKED {
-            let filled = !st.channels[i].is_empty();
+            let filled = st.channel_element_count(i) != 0;
             match CHANNEL_SOURCE[i] {
                 ChannelSource::Modelled => assert!(
                     filled,

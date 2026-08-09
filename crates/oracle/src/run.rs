@@ -46,7 +46,6 @@ impl Xs {
         self.0
     }
 }
-
 // ---------------------------------------------------------------------------------
 // Calling conventions
 // ---------------------------------------------------------------------------------
@@ -1124,6 +1123,9 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 std::ptr::write_bytes(bits, 0, BIT_BYTES);
             }
             let f = f as *const u8;
+            let mut model_world =
+                don_sim::systems::map_terrain::World::init_default_rules(0, 0);
+            model_world.start_city_locs.resize(BIT_BYTES, 0);
             let mut byte_boundary = 0u64;
             let mut row_boundary = 0u64;
             let mut check = |width: i32,
@@ -1143,8 +1145,12 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                     std::ptr::write_unaligned(y_ptr, y);
                     std::ptr::write_volatile(bits.add(byte_index), byte);
                 }
-                let plane = unsafe { std::slice::from_raw_parts(bits, BIT_BYTES) };
-                let want = models::worldgen::start_city_wcoord(width, plane, x, y) as i32;
+                model_world.xs = width;
+                model_world.start_city_locs[byte_index] = byte;
+                let want = model_world.start_city_wcoord(
+                    don_sim::systems::map_terrain::WCoord(x),
+                    don_sim::systems::map_terrain::WCoord(y),
+                ) as i32;
                 let got = unsafe { call_start_city_wcoord(f, world, x_ptr, y_ptr) };
                 a.trials += 1;
                 if index & 7 == 0 || index & 7 == 7 {

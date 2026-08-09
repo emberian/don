@@ -5,9 +5,11 @@
 //! `don-sim::World` now holds PDB-generated `UnitCols` and the engine's own
 //! `(who, o)` object registry, so a `Unit` record in the engine's layout *can*
 //! be produced — and [`SimBridge::populate`] produces it, in the traversal order
-//! `CheckSums::check_units` `0x009371d0` uses. Everything else the fifteen
+//! `CheckSums::check_units` `0x009371d0` uses. The `world` channel has a second,
+//! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
+//! from the authoritative `.rcx` initial setup. Everything else the fifteen
 //! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
-//! items, goods, terrain, rules, scenario, script — has no producer in `don-sim`
+//! items, goods, rules, scenario, and script — has no producer in `don-sim`
 //! at all, so those channels stay empty and are labelled `ChannelSource::Absent`
 //! rather than scored as agreement.
 //!
@@ -92,6 +94,17 @@ pub struct ChannelState {
     pub objects: Vec<Vec<u8>>,
 }
 
+/// A channel already traversed by a shipped exact walker rather than by the
+/// generic fixed-image table. `World::walk_data` follows dynamic arrays and
+/// pointer-owned planes, so flattening its 372-byte owner image cannot execute
+/// it; `don-sim::systems::map_terrain::World::walk` can and does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectChannel {
+    checksum: u32,
+    bytes_walked: u64,
+    elements: u32,
+}
+
 impl ChannelState {
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
@@ -111,6 +124,7 @@ pub struct SimState {
     /// Per channel, walked bytes the bridge could not source from a column and
     /// therefore left zero. Written by [`SimBridge::populate`].
     unsourced_walked: [u64; NUM_WALKED],
+    direct: [Option<DirectChannel>; NUM_WALKED],
 }
 
 impl SimState {
@@ -131,13 +145,47 @@ impl SimState {
     }
 
     pub fn channel_mut(&mut self, c: Channel) -> &mut ChannelState {
-        &mut self.channels[c as usize]
+        let i = c as usize;
+        self.direct[i] = None;
+        self.unsourced_walked[i] = 0;
+        &mut self.channels[i]
     }
 
     /// Total objects across all channels — the one-number answer to "does our
     /// state model anything yet".
     pub fn object_count(&self) -> usize {
-        self.channels.iter().map(|c| c.objects.len()).sum()
+        self.channels.iter().map(|c| c.objects.len()).sum::<usize>()
+            + self
+                .direct
+                .iter()
+                .filter_map(|d| d.map(|d| d.elements as usize))
+                .sum::<usize>()
+    }
+
+    pub fn channel_element_count(&self, i: usize) -> u32 {
+        self.channels.get(i).map_or(0, |c| c.len() as u32)
+            + self
+                .direct
+                .get(i)
+                .and_then(|d| *d)
+                .map_or(0, |d| d.elements)
+    }
+
+    fn set_direct_channel(
+        &mut self,
+        c: Channel,
+        checksum: u32,
+        bytes_walked: u64,
+        unsourced_walked: u64,
+    ) {
+        let i = c as usize;
+        self.channels[i].objects.clear();
+        self.direct[i] = Some(DirectChannel {
+            checksum,
+            bytes_walked,
+            elements: 1,
+        });
+        self.unsourced_walked[i] = unsourced_walked;
     }
 
     /// Walked bytes on channel `i` that the bridge left zero because no column
@@ -158,7 +206,12 @@ impl SimState {
         for i in 0..NUM_WALKED {
             let mut cs = CheckSum::new();
             let mut out = WalkOutcome::default();
-            if let Some(cls) = self.element_class[i] {
+            if let Some(direct) = self.direct[i] {
+                cs.checksum = direct.checksum;
+                cs.bytes = direct.bytes_walked;
+                out.bytes_walked = direct.bytes_walked;
+                out.ops_executed = 1;
+            } else if let Some(cls) = self.element_class[i] {
                 for img in &self.channels[i].objects {
                     out.merge(walk_class(cls, img, &mut cs, 8));
                 }
@@ -185,6 +238,8 @@ impl SimState {
         }
         match self.element_class[i].map(|k| crate::walk_gen::SPECS[k].sizeof as usize) {
             Some(n) if n > 0 => {
+                self.direct[i] = None;
+                self.unsourced_walked[i] = 0;
                 self.channels[i].objects.push(vec![0u8; n]);
                 true
             }
@@ -238,10 +293,10 @@ impl SimBridge {
     /// Channels this bridge produces. Everything else is
     /// `ChannelSource::Absent`: not "we think it is empty", but "nothing in
     /// `don-sim` can say".
-    pub const PRODUCES: &'static [Channel] = &[Channel::Units];
+    pub const PRODUCES: &'static [Channel] = &[Channel::Units, Channel::World];
 
     /// What the engine's checksum walks that `don-sim` has no producer for.
-    /// This is the worklist, and it is the reason fourteen of fifteen channels
+    /// This is the worklist, and it is the reason thirteen of fifteen channels
     /// still agree with retail only by walking nothing.
     pub const MISSING: &'static [&'static str] = &[
         "BuildData / WallData columns (builds, walls) — World has the bands, not the rows",
@@ -252,7 +307,6 @@ impl SimBridge {
         "LeaderData records, 27,182 walked bytes each (leaders)",
         "City records (cities)",
         "Item / Good flat lists (items, goods)",
-        "World terrain planes (world)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
         "ScenarioData (scenario_data) — no derived walker either",
         "RunTimeEnv / BHS (script_run_time) — no derived walker either",
@@ -313,6 +367,42 @@ impl SimBridge {
         rep.elements[ui] = ch.objects.len() as u32;
         rep.unsourced_walked[ui] = rep.elements[ui] as u64 * per_unit_unsourced;
         state.unsourced_walked[ui] = rep.unsourced_walked[ui];
+        rep
+    }
+
+    /// Populate both the object-backed channels and the dynamic `world`
+    /// channel. The latter uses `World::checksum_sections`, which is the same
+    /// exact traversal as `World::walk_data(-1)` and reports its byte count.
+    pub fn populate_with_map(
+        world: &don_sim::World,
+        map: &don_sim::systems::map_terrain::World,
+        map_unsourced_walked: u64,
+        state: &mut SimState,
+    ) -> BridgeReport {
+        let checksum = map.checksum_sections();
+        Self::populate_with_map_checksum(world, &checksum, map_unsourced_walked, state)
+    }
+
+    /// As [`SimBridge::populate_with_map`], using a cached walk result. Initial
+    /// replay terrain is immutable until the world-generation port can produce
+    /// it, so re-walking hundreds of thousands of bytes on every command turn
+    /// would add cost without observing any state change.
+    pub fn populate_with_map_checksum(
+        world: &don_sim::World,
+        checksum: &don_sim::systems::map_terrain::WorldChecksum,
+        map_unsourced_walked: u64,
+        state: &mut SimState,
+    ) -> BridgeReport {
+        let mut rep = Self::populate(world, state);
+        let wi = Channel::World as usize;
+        state.set_direct_channel(
+            Channel::World,
+            checksum.full,
+            checksum.bytes,
+            map_unsourced_walked.min(checksum.bytes),
+        );
+        rep.elements[wi] = 1;
+        rep.unsourced_walked[wi] = map_unsourced_walked.min(checksum.bytes);
         rep
     }
 }
