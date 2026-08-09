@@ -7,7 +7,8 @@ use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, wflag, World};
 use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
 use don_sim::systems::terrain_groups::{
-    FertilityFractal, FillFertileError, PlaceAllError, TerrainGroup, TerrainGroups,
+    FertilityFractal, FillFertileError, PlaceAllError, PlaceAllHostEvent, TerrainGroup,
+    TerrainGroups, TerrainPlacementBoundary,
 };
 
 fn filled_world(xs: i32, ys: i32, terrain: i8) -> World {
@@ -170,7 +171,7 @@ fn skipped_nonfertile_cells_do_not_require_fractal_storage() {
 }
 
 #[test]
-fn place_all_composes_selection_then_fails_closed_at_network_pump() {
+fn place_all_composes_host_and_size_prefix_then_fails_closed_at_player_kernel() {
     let mut world = filled_world(2, 2, land::FERTILE);
     let before_world = world.wdata.clone();
     let mut groups = TerrainGroups {
@@ -200,12 +201,19 @@ fn place_all_composes_selection_then_fails_closed_at_network_pump() {
     let mut random = Random::new(0x1234_5678);
     let before_random = random.state();
 
+    let mut host_events = Vec::new();
     let error = groups
-        .place_all(&mut world, &mut random, &mut mountains, 1, 1)
+        .place_all_with_host(&mut world, &mut random, &mut mountains, 1, 1, |event| {
+            host_events.push(event)
+        })
         .unwrap_err();
-    let PlaceAllError::NetDaemonProcessAllUnavailable { preview } = error else {
+    let PlaceAllError::GameplayPlacementUnavailable { preview, boundary } = error else {
         panic!("unexpected place_all boundary: {error:?}");
     };
+    assert_eq!(
+        boundary,
+        TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index: 0 }
+    );
     assert_eq!(preview.mountain_randomization.draws, 2);
     assert_ne!(
         preview.mountain_randomization.rng_state_after,
@@ -215,6 +223,22 @@ fn place_all_composes_selection_then_fails_closed_at_network_pump() {
     assert_eq!(preview.group_selection.clump_draws, 1);
     assert_eq!(preview.group_selection.groups.len(), 1);
     assert!(preview.group_selection.groups[0].selected);
+    assert_eq!(
+        host_events,
+        vec![
+            PlaceAllHostEvent::NetDaemonProcessAll { group_index: 0 },
+            PlaceAllHostEvent::ProgressDisplay {
+                group_index: 0,
+                pattern: 0,
+            },
+        ]
+    );
+    assert_eq!(preview.placement_preparation.host_events, host_events);
+    assert_eq!(preview.placement_preparation.prepared_groups.len(), 1);
+    assert_eq!(
+        preview.placement_preparation.prepared_groups[0].primary_sizes,
+        vec![1; preview.group_selection.groups[0].clumps as usize]
+    );
     assert_eq!(random.state(), before_random);
     assert_eq!(mountains, before_mountains);
     assert_eq!(world.wdata, before_world);
