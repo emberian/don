@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 import tempfile
@@ -35,8 +36,10 @@ def peek_text(payload: bytes, *, enhanced: bool = False) -> str:
     if enhanced:
         header = (
             "# donject-peek-v1 pid=4242 module=riseofnations.exe "
-            f"base={base:08X} rva={ASSETS.TRIBE_POINTER_RVA:08X} deref=1 off=0 "
-            f"root={base + ASSETS.TRIBE_POINTER_RVA:08X} addr={address:08X} "
+            f"base={base:08X} rva={ASSETS.TRIBE_POINTER_RVA:08X} deref=1 nderef=1 off=0 "
+            f"root={base + ASSETS.TRIBE_POINTER_RVA:08X} "
+            f"pointer_addr={base + ASSETS.TRIBE_POINTER_RVA:08X} "
+            f"root_value={address:08X} addr={address:08X} "
             f"len={len(payload):X} image_sha256={ASSETS.SUPPORTED_EXE_SHA256} stable=true"
         )
     else:
@@ -76,6 +79,12 @@ class TribeCaptureTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ASSETS.AssetError, "Tribe pointer RVA"):
             self.parse(wrong)
+
+        wrong_root = peek_text(raw, enhanced=True).replace(
+            "root_value=12001000", "root_value=12002000", 1
+        )
+        with self.assertRaisesRegex(ASSETS.AssetError, "root_value"):
+            self.parse(wrong_root)
 
     def test_missing_row_and_wrong_row_address_fail_closed(self):
         raw = generated_bytes(ASSETS.TRIBE_CAPTURE_BYTES, 0xA11C_E123)
@@ -129,6 +138,18 @@ class TribeCaptureTests(unittest.TestCase):
         self.assertEqual(ASSETS.normalize_tribe_records(bytes(raw)), baseline)
         raw[0x54] ^= 0xFF
         self.assertNotEqual(ASSETS.normalize_tribe_records(bytes(raw)), baseline)
+
+    def test_repository_asset_round_trips_only_captured_walked_ranges(self):
+        asset = SCRIPT.parents[1] / "schema/rules-channel-tribes.json"
+        records = ASSETS.load_tribe_asset(asset)
+        self.assertEqual(len(records), ASSETS.TRIBE_COUNT)
+        for image in records:
+            self.assertEqual(image[:0x54], bytes(0x54))
+            self.assertEqual(image[0x6C:0x70], bytes(4))
+        self.assertEqual(
+            hashlib.sha256(ASSETS.tribe_walked_payload(records)).hexdigest(),
+            "3110c6fb525ee25185c8dfb48d261be63bed386161f0350c345a015108b8f9bc",
+        )
 
 
 if __name__ == "__main__":

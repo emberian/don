@@ -1,8 +1,9 @@
 # Rules-channel checked-in input audit
 
-Status: **the existing local Type, Constants, and Balance inputs reproduce all three
-retail prefix checkpoints. A fail-closed path is ready for the remaining narrow Tribe
-capture, but that capture has not yet been made.** The full P0 gate therefore remains red.
+Status: **the existing local Type, Constants, and Balance inputs plus the tracked
+walked-only Tribe asset reproduce the complete retail static Rules channel.** The local
+specimen gate is green at `0x12ba3104`; fresh-clone self-containment remains red because
+the exact Type and Balance inputs are still gitignored.
 
 The deterministic audit/extractor is `tools/rules-channel-assets.py`; its small,
 non-memory manifest is `schema/rules-channel-assets.json`. It does not attach to or read a
@@ -78,7 +79,7 @@ gitignored proprietary input. Thus the local prefix calculation is exact, but a 
 clone is still missing both the Type images and Balance table; the manifest records both
 dependencies instead of treating the local green prefix as a distributable builder.
 
-## Tribe result and blocker
+## Exact Tribe result
 
 PDB layout is exact: `sizeof(Tribe) == 0x5f0`, with `graft: TypeIndex[352]` at `+0x70`.
 The checksum visits six dwords at `[+0x54,+0x6c)` and the graft array at
@@ -88,17 +89,15 @@ The checksum visits six dwords at `[+0x54,+0x6c)` and the graft array at
 data set. `Tribes::init` establishes an identity graft baseline, while nation parsing and
 substitution mutate the checksum-visible scalar/graft state. `unitrules.xml` contains
 `GRAFT` and `TRIBE_MASK`, but neither the loader derivation nor a value-level comparison
-establishes that those two columns alone reproduce the final 24 arrays. The tool therefore
-does not manufacture them. No checked-in capture contains their values.
+establishes that those two columns alone reproduce the final 24 arrays. The tool does not
+manufacture them.
 
 `--tribes-capture PATH` ingests the existing address-bearing `donject peek` text format.
 It requires a `base`/`addr`/`len` header, exactly `0x8e80` bytes, contiguous addressed
-hex rows, a plausible x86 image base, and a valid target address range. If a later header
-also includes `rva`, `deref`, `off`, root-pointer address, module name, executable hash,
-or root stability, the parser validates each field against the supported binary and the
-measured Tribe pointer at preferred VA `0x00e7fa34` (RVA `0x00a7fa34`). The current
-three-field `donject` header does not encode those request fields, so provenance also
-depends on retaining the exact capture command below.
+hex rows, a plausible x86 image base, and a valid target address range. The hardened
+header also supplies `module`, `rva`, `deref`/`nderef`, `off`, both root-pointer address
+fields, root value, and root stability; the parser validates every redundant field against
+the measured Tribe pointer at preferred VA `0x00e7fa34` (RVA `0x00a7fa34`).
 
 Immediately after parsing, every record is replaced by a zeroed `0x5f0` image containing
 only `[+0x54,+0x6c)` and `[+0x70,+0x5f0)`. Vtables, pointers, strings, padding, and all
@@ -107,14 +106,42 @@ local input and must not be committed. A supplied specimen is admitted only if t
 prefix plus its normalized records reaches `after Tribes == 0x12ba3104` over 997,846
 walked bytes.
 
+On 2026-08-09 the read-only command ran against owned retail PID 13876 while it was idle
+in the Friend Game staging screen and the controller was parked. The supported module base
+was `0x00d60000`; `base + 0x00a7fa34` was `0x017dfa34`, whose value was
+`0x0c61b9bc` both before and after the exact 36,480-byte read (`stable=1`). No retail
+function was called and no lobby state was changed. The ignored address-bearing capture
+has SHA-256 `39efa69914d0ce494d1d6824ac678004a673e01ccb5f8cad4f7b80e1a8a24a46`.
+
+`schema/rules-channel-tribes.json` is the compact integration artifact emitted from that
+admitted specimen. It contains 24-byte scalar slices and 1,408-byte graft slices for each
+of 24 records—34,368 checksum-visible bytes total—and no vtables, pointers, strings,
+padding, heap addresses, or other unwalked process memory. Its normalized-image SHA-256 is
+`4a271dcca8a7c1223e61b9f58b4e5809f45f0fcfd43ce1b5f79a8c55dfde14bb`;
+the concatenated walked payload SHA-256 is
+`3110c6fb525ee25185c8dfb48d261be63bed386161f0350c345a015108b8f9bc`.
+
+The independently recomputed cumulative result is:
+
+| checkpoint | Adler-32 | cumulative bytes |
+|---|---:|---:|
+| after Types | `0x72e0c3b6` | 473,984 |
+| after Constants | `0x50625668` | 477,380 |
+| after Balance | `0x56daabc1` | 963,478 |
+| after 24 Tribes | **`0x12ba3104`** | **997,846** |
+
+The checked-in asset loader validates its exact schema, provenance boundary, record order,
+base64 lengths, hashes, shape, and checkpoint declarations, reconstructs zeroed normalized
+images, and reruns the complete checksum. `--check` now uses that asset by default.
+
 The remaining concrete work is:
 
-1. make the prepared narrow read-only capture, or supply the 24 shipped nation XML files
-   named in `rules.xml` and implement their exact loader/substitution order;
-2. compare every reconstructed value to that independent specimen;
-3. store a lawful derived representation or a reproducible builder, not raw process
-   memory;
-4. require the final `after_tribes == 0x12ba3104` admission check.
+1. replace the gitignored Type and Balance specimens with lawful reproducible builders or
+   similarly minimized derived inputs;
+2. load the normalized Tribe asset from `don-replay` and set replay checksum channel 13
+   from `after_tribes`;
+3. retain the full `after_tribes == 0x12ba3104` admission check rather than accepting
+   merely well-shaped assets.
 
 ## Commands
 
@@ -126,7 +153,7 @@ python3 tools/rules-channel-assets.py --self-test
 # This also checks the exact Constants and Balance inputs and their cumulative checkpoints.
 python3 tools/rules-channel-assets.py --check-types
 
-# Intentionally exits 2 today and prints the explicit Tribe blockers.
+# Green on this machine: recompute all four cumulative checkpoints from normalized inputs.
 python3 tools/rules-channel-assets.py --check
 
 # In the Windows guest, using the supported retail PID. This requests 24 * 0x5f0 bytes
@@ -136,7 +163,8 @@ donject peek PID riseofnations.exe a7fa34 1 0 8e80 > tribes-pidPID.txt
 # On the host, place the raw ignored file under schema/live/ or pass any local path.
 # This exits 0 only when every cumulative retail checkpoint matches.
 python3 tools/rules-channel-assets.py --check \
-  --tribes-capture schema/live/tribes-pidPID.txt
+  --tribes-capture schema/live/tribes-pidPID.txt \
+  --emit-tribes schema/rules-channel-tribes.json
 
 # Focused generated-specimen parser/normalization tests.
 python3 -m unittest tools/test_rules_channel_assets_tribes.py
@@ -146,5 +174,6 @@ python3 tools/rules-channel-assets.py --check-types --emit-types var/rules-chann
 ```
 
 `--check` exits 1 on malformed or checkpoint-drifted evidence and 2 when a verified input
-remains incomplete. A local capture reaching the final checkpoint makes this specimen gate
-green; it does not make the repository self-contained or license raw memory for check-in.
+remains incomplete. The complete local specimen is green; this does not make the repository
+self-contained because Type and Balance inputs remain local, and it does not license the raw
+memory capture for check-in.

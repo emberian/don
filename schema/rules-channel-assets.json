@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "status": "prefix-exact-tribes-capture-ready",
+  "status": "local-static-rules-exact",
   "types": {
     "slots": 806,
     "source": "schema/live/types-runtime.bin",
@@ -28,6 +28,9 @@
     "bytes_walked": 486098
   },
   "tribes": {
+    "source": "schema/rules-channel-tribes.json",
+    "source_checked_in": true,
+    "source_sha256": "31cd57c79a25471b6bfdc1c442b268b5fbe84735b87cbb3fc87b147918495a63",
     "records_required": 24,
     "record_size": 1520,
     "capture_bytes": 36480,
@@ -40,14 +43,24 @@
     ],
     "graft_entries_per_record": 352,
     "bytes_walked": 34368,
+    "walked_sha256": "3110c6fb525ee25185c8dfb48d261be63bed386161f0350c345a015108b8f9bc",
+    "normalized_images_sha256": "4a271dcca8a7c1223e61b9f58b4e5809f45f0fcfd43ce1b5f79a8c55dfde14bb",
     "after_tribes": "0x12ba3104",
+    "capture_pid": 13876,
+    "capture_module_base": "0x00d60000",
+    "capture_address": "0x0c61b9bc",
+    "capture_root_stable": true,
+    "raw_capture_sha256": "39efa69914d0ce494d1d6824ac678004a673e01ccb5f8cad4f7b80e1a8a24a46",
     "raw_capture_checked_in": false,
-    "complete_records": 0
+    "complete_records": 24,
+    "matches_retail": true
   },
   "blockers": [
     "The exact type images currently depend on a gitignored DONTYPE1 capture; checked-in scalar TSVs are not a lossless replacement.",
-    "The exact Balance table currently depends on gitignored schema/live/final-balance-runtime.bin; a fresh clone has no lawful builder for it.",
-    "No narrow local donject peek capture has yet been ingested for the 24 contiguous Tribe records.",
-    "The 24 nation XML files named by rules.xml are absent, so a fresh-clone Tribe builder remains blocked."
+    "The exact Balance table currently depends on gitignored schema/live/final-balance-runtime.bin; a fresh clone has no lawful builder for it."
+  ],
+  "remaining_integration": [
+    "Load the tracked walked-only Tribe asset in don-replay and set replay checksum channel 13 from after_tribes.",
+    "Replace the gitignored Type and Balance specimen dependencies with lawful reproducible builders or minimized derived assets."
   ]
 }

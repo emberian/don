@@ -7,9 +7,9 @@ type ids, and rebuilds ObjectType's two pointed-to u16 caches from the captured 
 fields.  Emitted images are privacy-safe normalized walker inputs: bytes the walker
 does not visit are zero, including vtables, heap pointers, and String state.
 
-``--check-types`` is the independently useful green gate.  ``--check`` is the full P0
-gate and deliberately remains red until a narrow ``donject peek`` of the 24 contiguous
-Tribe records is supplied with ``--tribes-capture``.  The raw dump is only an input:
+``--check-types`` is the independently useful Types gate.  ``--check`` reconstructs the
+complete local specimen, using the checked-in walked-only Tribe asset by default or a new
+narrow ``donject peek`` supplied with ``--tribes-capture``.  A raw dump is only an input:
 the parser retains the two ranges visited by ``Tribe::walk_rules_data`` and zeroes every
 other byte before it returns a record.
 """
@@ -341,7 +341,11 @@ def validate_state_schema(path: Path) -> None:
 
 
 def validate_manifest(
-    path: Path, capture: Path, constants: bytes, balance_path: Path
+    path: Path,
+    capture: Path,
+    constants: bytes,
+    balance_path: Path,
+    tribe_asset_path: Path,
 ) -> None:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 2:
@@ -377,13 +381,26 @@ def validate_manifest(
             "bytes_walked": BALANCE_BYTES,
         },
         "tribes": {
+            "source": "schema/rules-channel-tribes.json",
+            "source_checked_in": True,
+            "source_sha256": sha256(tribe_asset_path),
             "records_required": TRIBE_COUNT,
             "record_size": TRIBE_SIZE,
             "capture_bytes": TRIBE_CAPTURE_BYTES,
             "pointer_rva": f"0x{TRIBE_POINTER_RVA:08x}",
             "walked_ranges": ["0x54..0x6c", "0x70..0x5f0"],
             "bytes_walked": TRIBE_WALKED_BYTES,
+            "walked_sha256": "3110c6fb525ee25185c8dfb48d261be63bed386161f0350c345a015108b8f9bc",
+            "normalized_images_sha256": "4a271dcca8a7c1223e61b9f58b4e5809f45f0fcfd43ce1b5f79a8c55dfde14bb",
             "after_tribes": f"0x{RULES_CHECKPOINT:08x}",
+            "capture_pid": 13876,
+            "capture_module_base": "0x00d60000",
+            "capture_address": "0x0c61b9bc",
+            "capture_root_stable": True,
+            "raw_capture_sha256": "39efa69914d0ce494d1d6824ac678004a673e01ccb5f8cad4f7b80e1a8a24a46",
+            "raw_capture_checked_in": False,
+            "complete_records": TRIBE_COUNT,
+            "matches_retail": True,
         },
     }
     for section, values in static_expected.items():
@@ -492,18 +509,27 @@ def parse_tribe_capture(path: Path) -> TribeCapture:
         raise AssetError(
             f"{path}: header rva=0x{rva:x}, expected Tribe pointer RVA 0x{TRIBE_POINTER_RVA:x}"
         )
-    deref = _optional_header_hex(header, "deref", "nderef")
-    if deref is not None and deref != 1:
-        raise AssetError(f"{path}: header deref={deref}, expected 1")
+    dereference_fields = [
+        (name, _header_hex(header, name)) for name in ("deref", "nderef") if name in header
+    ]
+    for name, deref in dereference_fields:
+        if deref != 1:
+            raise AssetError(f"{path}: header {name}={deref}, expected 1")
+    if len({value for _name, value in dereference_fields}) > 1:
+        raise AssetError(f"{path}: deref and nderef header fields disagree")
     offset = _optional_header_hex(header, "off", "offset")
     if offset is not None and offset != 0:
         raise AssetError(f"{path}: header off=0x{offset:x}, expected 0")
-    root = _optional_header_hex(header, "root", "source", "pointer_addr")
-    if root is not None and root != module_base + TRIBE_POINTER_RVA:
-        raise AssetError(
-            f"{path}: header pointer address 0x{root:08x}, expected "
-            f"base+rva = 0x{module_base + TRIBE_POINTER_RVA:08x}"
-        )
+    for name in ("root", "source", "pointer_addr"):
+        if name in header:
+            root = _header_hex(header, name)
+            if root != module_base + TRIBE_POINTER_RVA:
+                raise AssetError(
+                    f"{path}: header {name}=0x{root:08x}, expected "
+                    f"base+rva = 0x{module_base + TRIBE_POINTER_RVA:08x}"
+                )
+    if "root_value" in header and _header_hex(header, "root_value") != address:
+        raise AssetError(f"{path}: header root_value does not equal the read address")
     if "module" in header and header["module"].casefold() != "riseofnations.exe":
         raise AssetError(f"{path}: capture module is {header['module']!r}, not riseofnations.exe")
     for name in ("exe_sha256", "image_sha256", "target_sha256"):
@@ -541,6 +567,203 @@ def parse_tribe_capture(path: Path) -> TribeCapture:
         records=normalize_tribe_records(bytes(payload)),
         header=header,
     )
+
+
+def tribe_walked_payload(records: tuple[bytes, ...]) -> bytes:
+    if len(records) != TRIBE_COUNT or any(len(image) != TRIBE_SIZE for image in records):
+        raise AssetError("normalized Tribe set is not exactly 24 records of 0x5f0 bytes")
+    return b"".join(
+        image[begin:end] for image in records for begin, end in TRIBE_RANGES
+    )
+
+
+def _decode_asset_field(value: object, label: str, length: int) -> bytes:
+    if not isinstance(value, str):
+        raise AssetError(f"Tribe asset {label} is not base64 text")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except ValueError as error:
+        raise AssetError(f"Tribe asset {label} is invalid base64: {error}") from error
+    if len(decoded) != length:
+        raise AssetError(f"Tribe asset {label} is {len(decoded)} bytes, expected {length}")
+    return decoded
+
+
+def load_tribe_asset(path: Path) -> tuple[bytes, ...]:
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    expected_top = {
+        "schema_version",
+        "format",
+        "provenance",
+        "shape",
+        "hashes",
+        "checkpoints",
+        "records",
+    }
+    if set(artifact) != expected_top:
+        raise AssetError(f"{path}: unexpected or missing top-level Tribe asset fields")
+    if artifact["schema_version"] != 1 or artifact["format"] != "don-rules-tribes-walked-v1":
+        raise AssetError(f"{path}: unsupported Tribe asset format")
+
+    provenance = artifact["provenance"]
+    expected_provenance = {
+        "capture_tool": "donject peek",
+        "module": "riseofnations.exe",
+        "supported_exe_sha256": SUPPORTED_EXE_SHA256,
+        "pointer_preferred_va": "0x00e7fa34",
+        "pointer_rva": f"0x{TRIBE_POINTER_RVA:08x}",
+        "deref": 1,
+        "offset": 0,
+        "capture_bytes": TRIBE_CAPTURE_BYTES,
+        "root_stable": True,
+        "raw_capture_checked_in": False,
+    }
+    for name, expected in expected_provenance.items():
+        if provenance.get(name) != expected:
+            raise AssetError(
+                f"{path}: provenance.{name}={provenance.get(name)!r}, expected {expected!r}"
+            )
+    if set(provenance) != set(expected_provenance) | {"raw_capture_sha256"}:
+        raise AssetError(f"{path}: unexpected or missing Tribe provenance fields")
+    raw_sha256 = provenance.get("raw_capture_sha256")
+    if not isinstance(raw_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", raw_sha256):
+        raise AssetError(f"{path}: invalid provenance.raw_capture_sha256")
+
+    shape = artifact["shape"]
+    expected_shape = {
+        "records": TRIBE_COUNT,
+        "retail_record_size": TRIBE_SIZE,
+        "walked_ranges": ["0x54..0x6c", "0x70..0x5f0"],
+        "walked_bytes": TRIBE_WALKED_BYTES,
+        "unwalked_bytes_retained": 0,
+    }
+    if shape != expected_shape:
+        raise AssetError(f"{path}: Tribe asset shape does not match the retail walker")
+
+    checkpoints = artifact["checkpoints"]
+    expected_checkpoints = {
+        "after_types": f"0x{TYPE_CHECKPOINT:08x}",
+        "after_constants": f"0x{CONSTANTS_CHECKPOINT:08x}",
+        "after_balance": f"0x{BALANCE_CHECKPOINT:08x}",
+        "after_tribes": f"0x{RULES_CHECKPOINT:08x}",
+        "bytes_walked": RULES_WALKED_BYTES,
+    }
+    if checkpoints != expected_checkpoints:
+        raise AssetError(f"{path}: Tribe asset checkpoints do not match measured retail")
+
+    rows = artifact["records"]
+    if not isinstance(rows, list) or len(rows) != TRIBE_COUNT:
+        raise AssetError(f"{path}: expected {TRIBE_COUNT} Tribe asset records")
+    records = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != {
+            "index",
+            "scalars_le_b64",
+            "graft_le_b64",
+        }:
+            raise AssetError(f"{path}: Tribe asset record {index} has unexpected fields")
+        if row["index"] != index:
+            raise AssetError(f"{path}: Tribe asset record {index} is out of order")
+        image = bytearray(TRIBE_SIZE)
+        image[0x54:0x6C] = _decode_asset_field(
+            row["scalars_le_b64"], f"records[{index}].scalars_le_b64", 0x18
+        )
+        image[0x70:0x5F0] = _decode_asset_field(
+            row["graft_le_b64"], f"records[{index}].graft_le_b64", 0x580
+        )
+        records.append(bytes(image))
+    normalized = tuple(records)
+    hashes = artifact["hashes"]
+    expected_hashes = {
+        "walked_sha256": hashlib.sha256(tribe_walked_payload(normalized)).hexdigest(),
+        "normalized_images_sha256": hashlib.sha256(b"".join(normalized)).hexdigest(),
+    }
+    if hashes != expected_hashes:
+        raise AssetError(f"{path}: Tribe asset hash mismatch")
+    return normalized
+
+
+def emit_tribe_asset(
+    path: Path,
+    capture_path: Path,
+    capture: TribeCapture,
+    checkpoints: dict[str, int],
+) -> None:
+    required_header = {
+        "module",
+        "rva",
+        "deref",
+        "nderef",
+        "off",
+        "root",
+        "pointer_addr",
+        "root_value",
+        "stable",
+    }
+    missing = sorted(required_header - set(capture.header))
+    if missing:
+        raise AssetError(
+            "refusing to emit a tracked Tribe asset from a legacy capture header; missing "
+            + ", ".join(missing)
+        )
+    if capture.header["stable"] != "1":
+        raise AssetError("refusing to emit Tribe asset from an unstable pointer capture")
+    expected_checkpoints = {
+        "after_types": TYPE_CHECKPOINT,
+        "after_constants": CONSTANTS_CHECKPOINT,
+        "after_balance": BALANCE_CHECKPOINT,
+        "after_tribes": RULES_CHECKPOINT,
+        "bytes_walked": RULES_WALKED_BYTES,
+    }
+    if checkpoints != expected_checkpoints:
+        raise AssetError("refusing to emit Tribe asset before all retail checkpoints match")
+
+    normalized = capture.records
+    payload = {
+        "schema_version": 1,
+        "format": "don-rules-tribes-walked-v1",
+        "provenance": {
+            "capture_tool": "donject peek",
+            "module": "riseofnations.exe",
+            "supported_exe_sha256": SUPPORTED_EXE_SHA256,
+            "pointer_preferred_va": "0x00e7fa34",
+            "pointer_rva": f"0x{TRIBE_POINTER_RVA:08x}",
+            "deref": 1,
+            "offset": 0,
+            "capture_bytes": TRIBE_CAPTURE_BYTES,
+            "root_stable": True,
+            "raw_capture_sha256": sha256(capture_path),
+            "raw_capture_checked_in": False,
+        },
+        "shape": {
+            "records": TRIBE_COUNT,
+            "retail_record_size": TRIBE_SIZE,
+            "walked_ranges": ["0x54..0x6c", "0x70..0x5f0"],
+            "walked_bytes": TRIBE_WALKED_BYTES,
+            "unwalked_bytes_retained": 0,
+        },
+        "hashes": {
+            "walked_sha256": hashlib.sha256(tribe_walked_payload(normalized)).hexdigest(),
+            "normalized_images_sha256": hashlib.sha256(b"".join(normalized)).hexdigest(),
+        },
+        "checkpoints": {
+            "after_types": f"0x{checkpoints['after_types']:08x}",
+            "after_constants": f"0x{checkpoints['after_constants']:08x}",
+            "after_balance": f"0x{checkpoints['after_balance']:08x}",
+            "after_tribes": f"0x{checkpoints['after_tribes']:08x}",
+            "bytes_walked": checkpoints["bytes_walked"],
+        },
+        "records": [
+            {
+                "index": index,
+                "scalars_le_b64": base64.b64encode(image[0x54:0x6C]).decode("ascii"),
+                "graft_le_b64": base64.b64encode(image[0x70:0x5F0]).decode("ascii"),
+            }
+            for index, image in enumerate(normalized)
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def walk_static_prefix(after_types: int, constants: bytes, balance: bytes) -> dict[str, int]:
@@ -717,8 +940,13 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
     balance_path = root / "schema/live/final-balance-runtime.bin"
     constants = repository_constants(constants_path)
     balance = repository_balance(balance_path)
+    default_tribe_asset_path = root / "schema/rules-channel-tribes.json"
     validate_manifest(
-        root / "schema/rules-channel-assets.json", capture, constants, balance_path
+        root / "schema/rules-channel-assets.json",
+        capture,
+        constants,
+        balance_path,
+        default_tribe_asset_path,
     )
     check_walker_source(root / "crates/don-replay/src/rules_channel.rs")
     arrays = rebuild_arrays(types)
@@ -744,13 +972,26 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
     tribe_names, xml_blockers = tribe_blockers(root)
     unitrules = audit_unitrules(root / "ron-data/unitrules.xml")
     tribe_capture = None
+    tribe_capture_path = None
+    tribe_asset_path = Path(args.tribes_asset)
+    if not tribe_asset_path.is_absolute():
+        tribe_asset_path = root / tribe_asset_path
+    tribe_records = None
+    tribe_source = None
     checkpoints = None
     if args.tribes_capture:
         tribe_capture_path = Path(args.tribes_capture)
         if not tribe_capture_path.is_absolute():
             tribe_capture_path = root / tribe_capture_path
         tribe_capture = parse_tribe_capture(tribe_capture_path)
-        checkpoints = walk_static_rules(checkpoint, constants, balance, tribe_capture.records)
+        tribe_records = tribe_capture.records
+        tribe_source = "live-capture"
+    elif tribe_asset_path.exists():
+        tribe_records = load_tribe_asset(tribe_asset_path)
+        tribe_source = "normalized-asset"
+
+    if tribe_records is not None:
+        checkpoints = walk_static_rules(checkpoint, constants, balance, tribe_records)
         final_expected = {
             "after_constants": CONSTANTS_CHECKPOINT,
             "after_balance": BALANCE_CHECKPOINT,
@@ -766,10 +1007,20 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
                 raise AssetError(
                     f"capture and repository inputs produce {name}={formatted}, expected {wanted}"
                 )
+        if args.emit_tribes:
+            if tribe_capture is None or tribe_capture_path is None:
+                raise AssetError("--emit-tribes requires --tribes-capture")
+            emitted = Path(args.emit_tribes)
+            if not emitted.is_absolute():
+                emitted = root / emitted
+            emit_tribe_asset(emitted, tribe_capture_path, tribe_capture, checkpoints)
+            if load_tribe_asset(emitted) != tribe_records:
+                raise AssetError("emitted Tribe asset did not round-trip exactly")
         blockers = []
     else:
         blockers = [
-            "no --tribes-capture was supplied; capture exactly 0x8e80 bytes with "
+            f"normalized Tribe asset {tribe_asset_path} is absent and no --tribes-capture "
+            "was supplied; capture exactly 0x8e80 bytes with "
             "`donject peek PID riseofnations.exe a7fa34 1 0 8e80`"
         ] + xml_blockers
 
@@ -806,22 +1057,30 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
         },
         "tribes": {
             "named": len(tribe_names),
-            "complete_records": len(tribe_capture.records) if tribe_capture else 0,
+            "source": tribe_source,
+            "complete_records": len(tribe_records) if tribe_records else 0,
             "raw_bytes_retained": 0,
-            "normalized_bytes_per_record": TRIBE_SIZE if tribe_capture else 0,
-            "walked_bytes": TRIBE_WALKED_BYTES if tribe_capture else 0,
+            "normalized_bytes_per_record": TRIBE_SIZE if tribe_records else 0,
+            "walked_bytes": TRIBE_WALKED_BYTES if tribe_records else 0,
             **unitrules,
         },
         "blockers": blockers,
     }
-    if tribe_capture and checkpoints:
-        normalized = b"".join(tribe_capture.records)
-        result["tribes"]["capture_header"] = {
-            "module_base": f"0x{tribe_capture.module_base:08x}",
-            "address": f"0x{tribe_capture.address:08x}",
-            "length": TRIBE_CAPTURE_BYTES,
-            "normalized_sha256": hashlib.sha256(normalized).hexdigest(),
-        }
+    if tribe_records and checkpoints:
+        normalized = b"".join(tribe_records)
+        if tribe_capture:
+            result["tribes"]["capture_header"] = {
+                "module_base": f"0x{tribe_capture.module_base:08x}",
+                "address": f"0x{tribe_capture.address:08x}",
+                "length": TRIBE_CAPTURE_BYTES,
+                "normalized_sha256": hashlib.sha256(normalized).hexdigest(),
+            }
+        else:
+            result["tribes"]["asset"] = {
+                "path": str(tribe_asset_path.relative_to(root)),
+                "checked_in": True,
+                "normalized_sha256": hashlib.sha256(normalized).hexdigest(),
+            }
         result["rules"] = {
             "after_types": f"0x{checkpoints['after_types']:08x}",
             "after_constants": f"0x{checkpoints['after_constants']:08x}",
@@ -831,8 +1090,6 @@ def report(root: Path, args: argparse.Namespace) -> tuple[dict, bool]:
             "matches_retail": True,
         }
         result["remaining_integration"] = [
-            "derive a reproducible lawful Tribe builder or minimized value representation; "
-            "the raw donject capture remains local and must not be checked in",
             "replace the gitignored Type and Balance specimen dependencies with lawful builders",
             "feed normalized complete assets into don-replay channel 13",
         ]
@@ -853,6 +1110,17 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--tribes-capture",
         metavar="PATH",
         help="address-bearing donject peek text for 24 contiguous 0x5f0-byte Tribe records",
+    )
+    parser.add_argument(
+        "--tribes-asset",
+        default="schema/rules-channel-tribes.json",
+        metavar="PATH",
+        help="normalized walked-only Tribe asset used when no raw capture is supplied",
+    )
+    parser.add_argument(
+        "--emit-tribes",
+        metavar="PATH",
+        help="with --tribes-capture, emit the compact walked-only Tribe integration asset",
     )
     parser.add_argument("--emit-types", metavar="PATH", help="write normalized type assets")
     parser.add_argument("--self-test", action="store_true")
