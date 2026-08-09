@@ -164,7 +164,15 @@ fn scalar_row(w: u32, h: u32, cost: &[u32], src: &[u32], dst: &mut [u32], y: usi
 }
 
 #[inline]
-fn scalar_cell(w: u32, h: u32, cost: &[u32], src: &[u32], dst: &mut [u32], x: usize, y: usize) -> bool {
+fn scalar_cell(
+    w: u32,
+    h: u32,
+    cost: &[u32],
+    src: &[u32],
+    dst: &mut [u32],
+    x: usize,
+    y: usize,
+) -> bool {
     let (wi, hi) = (w as i32, h as i32);
     let i = y * w as usize + x;
     let (c2, c3) = step_weights(cost[i]);
@@ -184,7 +192,13 @@ fn scalar_cell(w: u32, h: u32, cost: &[u32], src: &[u32], dst: &mut [u32], x: us
     best != src[i]
 }
 
-pub fn solve_field_jacobi_rows(w: u32, h: u32, cost: &[u32], dist: &mut [u32], max_sweeps: u32) -> u32 {
+pub fn solve_field_jacobi_rows(
+    w: u32,
+    h: u32,
+    cost: &[u32],
+    dist: &mut [u32],
+    max_sweeps: u32,
+) -> u32 {
     let mut scratch = dist.to_vec();
     let mut sweeps = 0;
     loop {
@@ -357,7 +371,12 @@ pub fn solve_batch_serial(b: &mut FieldBatch, kernel: CpuKernel, max_sweeps: u32
 /// identical to the serial path for any thread count — asserted in the tests, because
 /// silent thread-count-dependent divergence would poison every determinism claim
 /// downstream.
-pub fn solve_batch_parallel(b: &mut FieldBatch, kernel: CpuKernel, max_sweeps: u32, threads: usize) {
+pub fn solve_batch_parallel(
+    b: &mut FieldBatch,
+    kernel: CpuKernel,
+    max_sweeps: u32,
+    threads: usize,
+) {
     debug_check_costs(&b.cost);
     let threads = threads.max(1);
     let per = b.cells_per_field();
@@ -392,7 +411,11 @@ pub fn solve_batch_parallel(b: &mut FieldBatch, kernel: CpuKernel, max_sweeps: u
 }
 
 pub fn max_finite_cost(cost: &[u32]) -> u32 {
-    cost.iter().copied().filter(|&c| c != COST_BLOCKED).max().unwrap_or(1)
+    cost.iter()
+        .copied()
+        .filter(|&c| c != COST_BLOCKED)
+        .max()
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -448,12 +471,23 @@ mod tests {
         b.set_goal(0, 8, 0);
         solve_batch_serial(&mut b, CpuKernel::Dial, 10_000);
         for x in 0..w {
-            assert_eq!(b.dist[b.index(0, x, 4)], INF, "wall cell ({x},4) got a distance");
+            assert_eq!(
+                b.dist[b.index(0, x, 4)],
+                INF,
+                "wall cell ({x},4) got a distance"
+            );
             for y in 5..h {
-                assert_eq!(b.dist[b.index(0, x, y)], INF, "({x},{y}) leaked through the wall");
+                assert_eq!(
+                    b.dist[b.index(0, x, y)],
+                    INF,
+                    "({x},{y}) leaked through the wall"
+                );
             }
         }
-        assert!(b.dist[b.index(0, 0, 3)] < INF, "same side of the wall must be reached");
+        assert!(
+            b.dist[b.index(0, 0, 3)] < INF,
+            "same side of the wall must be reached"
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use don_ai::abi::Difficulty;
 use don_ai::game::{Game, FRAMES_PER_SECOND};
-use don_ai::rules::{default_data_dir, Rules, RES_NAMES, NRES};
+use don_ai::rules::{default_data_dir, Rules, NRES, RES_NAMES};
 use don_ai::scheduler::AiSet;
 
 fn parse_difficulty(s: &str) -> Option<Difficulty> {
@@ -37,6 +37,9 @@ struct Args {
     data: std::path::PathBuf,
     timeline: bool,
     sweep: bool,
+    trigger_model: bool,
+    fast_economy: bool,
+    income_probe: bool,
 }
 
 fn parse_args() -> Args {
@@ -47,6 +50,9 @@ fn parse_args() -> Args {
         data: default_data_dir(),
         timeline: false,
         sweep: false,
+        trigger_model: false,
+        fast_economy: false,
+        income_probe: false,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -54,7 +60,10 @@ fn parse_args() -> Args {
         match argv[i].as_str() {
             "--minutes" => {
                 i += 1;
-                a.minutes = argv.get(i).and_then(|v| v.parse().ok()).unwrap_or(a.minutes);
+                a.minutes = argv
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(a.minutes);
             }
             "--players" => {
                 i += 1;
@@ -75,7 +84,14 @@ fn parse_args() -> Args {
                 }
             }
             "--timeline" => a.timeline = true,
+            // Turns on the UNVERIFIED `city_placement` trigger model. Without
+            // it the shipped build order parks on step 10 and its own hang
+            // watchdog retires it; see crates/don-ai/src/library.rs.
+            "--trigger-model" => a.trigger_model = true,
+            // ModelParams::gather_period_shift = 0. See its doc comment.
+            "--fast-economy" => a.fast_economy = true,
             "--sweep-camp-size" => a.sweep = true,
+            "--income-probe" => a.income_probe = true,
             other => eprintln!("ignoring unknown argument {other}"),
         }
         i += 1;
@@ -83,17 +99,36 @@ fn parse_args() -> Args {
     a
 }
 
-fn run(rules: Rules, nations: &[String], diff: Difficulty, frames: i64, timeline: bool) -> Game {
+fn run(
+    rules: Rules,
+    nations: &[String],
+    diff: Difficulty,
+    frames: i64,
+    timeline: bool,
+    trigger_model: bool,
+    fast_economy: bool,
+) -> Game {
     let refs: Vec<&str> = nations.iter().map(|s| s.as_str()).collect();
     let mut g = Game::new(rules, &refs, diff);
     g.logging = timeline;
-    let mut ai = AiSet::new(refs.len());
+    if fast_economy {
+        g.params.gather_period_shift = 0;
+    }
+    let mut ai = AiSet::new(refs.len()).with_trigger_model(trigger_model);
     for _ in 0..frames {
         ai.tick(&mut g);
         g.step();
     }
     // Stash the counters where the report can read them.
     print_report(&g, &ai, timeline);
+    println!(
+        "\ncity_placement trigger model: {}",
+        if trigger_model {
+            "ON (UNVERIFIED interpretation)"
+        } else {
+            "off (faithful stub)"
+        }
+    );
     g
 }
 
@@ -192,6 +227,61 @@ fn main() {
     };
     let frames = a.minutes * 60 * FRAMES_PER_SECOND as i64;
 
+    if a.income_probe {
+        // Quantify the difficulty cheat in isolation: identical starting town,
+        // no AI at all, so nothing is spent and the only difference between
+        // rows is `LeaderData::get_gather_handicap`.
+        let mut rows = Vec::new();
+        for d in [
+            Difficulty::Easiest,
+            Difficulty::Easy,
+            Difficulty::Moderate,
+            Difficulty::Tough,
+            Difficulty::Tougher,
+            Difficulty::Toughest,
+        ] {
+            let mut g = Game::new(rules.clone(), &["Romans"], d);
+            g.logging = false;
+            if a.fast_economy {
+                g.params.gather_period_shift = 0;
+            }
+            let start = g.players[0].stock;
+            for _ in 0..frames {
+                g.step();
+            }
+            rows.push((
+                d,
+                d.income_bonus_percent(),
+                g.players[0].stock[0] - start[0],
+                g.players[0].stock[1] - start[1],
+            ));
+        }
+        let base_food = rows
+            .iter()
+            .find(|r| r.0 == Difficulty::Tough)
+            .map(|r| r.2)
+            .unwrap_or(1);
+        let base_timber = rows
+            .iter()
+            .find(|r| r.0 == Difficulty::Tough)
+            .map(|r| r.3)
+            .unwrap_or(1);
+        println!("difficulty,bonus_pct,food,timber,food_ratio,timber_ratio,nominal_ratio");
+        for (d, pct, f, t) in rows {
+            println!(
+                "{:?},{},{},{},{:.4},{:.4},{:.4}",
+                d,
+                pct,
+                f,
+                t,
+                f as f64 / base_food as f64,
+                t as f64 / base_timber as f64,
+                (100 + pct) as f64 / 100.0
+            );
+        }
+        return;
+    }
+
     if a.sweep {
         // The one model number that dominates the opening: how many citizens a
         // Woodcutter's Camp absorbs. Sweep it and print the effect, so the
@@ -201,8 +291,11 @@ fn main() {
             let refs: Vec<&str> = a.nations.iter().map(|s| s.as_str()).collect();
             let mut g = Game::new(rules.clone(), &refs[..1], a.difficulty);
             g.logging = false;
+            if a.fast_economy {
+                g.params.gather_period_shift = 0;
+            }
             g.params.gather_max.insert("Woodcutter's Camp".into(), size);
-            let mut ai = AiSet::new(1);
+            let mut ai = AiSet::new(1).with_trigger_model(true);
             for _ in 0..frames {
                 ai.tick(&mut g);
                 g.step();
@@ -220,5 +313,13 @@ fn main() {
         return;
     }
 
-    run(rules, &a.nations, a.difficulty, frames, a.timeline);
+    run(
+        rules,
+        &a.nations,
+        a.difficulty,
+        frames,
+        a.timeline,
+        a.trigger_model,
+        a.fast_economy,
+    );
 }

@@ -90,13 +90,17 @@ impl Obfuscation {
 
     /// Multiplayer, seeded from the game key `G`.
     pub fn multiplayer(g: u32) -> Self {
-        Obfuscation { rng: Some(PadRandom::new(g)) }
+        Obfuscation {
+            rng: Some(PadRandom::new(g)),
+        }
     }
 
     /// Multiplayer with an explicitly chosen pad seed. Useful when only the
     /// low bits of `G` have been recovered — see [`Obfuscation::xor_key`].
     pub fn with_seed(seed: u32) -> Self {
-        Obfuscation { rng: Some(PadRandom::new(seed)) }
+        Obfuscation {
+            rng: Some(PadRandom::new(seed)),
+        }
     }
 
     pub fn next_pad(&mut self) -> usize {
@@ -139,7 +143,9 @@ pub fn rank_xor_keys<'a, I: IntoIterator<Item = &'a [u8]>>(payloads: I, n: usize
     for p in payloads {
         let m = p.len() & !1;
         for i in (0..m).step_by(2) {
-            *counts.entry(u16::from_le_bytes([p[i], p[i + 1]])).or_insert(0) += 1;
+            *counts
+                .entry(u16::from_le_bytes([p[i], p[i + 1]]))
+                .or_insert(0) += 1;
         }
     }
     let mut v: Vec<(u16, u32)> = counts.into_iter().collect();

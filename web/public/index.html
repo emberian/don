@@ -15,16 +15,23 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
-  #app { display: grid; grid-template-columns: 1fr 320px; height: 100%; }
+  #app { display: grid; grid-template-columns: 1fr 340px; height: 100%; }
   #stage { position: relative; min-width: 0; }
-  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+  canvas#c { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
   #hud { position: absolute; left: 12px; top: 12px; padding: 8px 12px; border-radius: 8px;
     background: rgba(10,11,16,.72); border: 1px solid var(--line); font: 11px/1.6 var(--mono);
     pointer-events: none; white-space: pre; backdrop-filter: blur(6px); }
   #hud b { color: var(--accent); font-weight: 600; }
+  #inspect { position: absolute; right: 12px; top: 12px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(10,11,16,.78); border: 1px solid var(--line); font: 11px/1.6 var(--mono);
+    pointer-events: none; white-space: pre; backdrop-filter: blur(6px); max-width: 320px; }
+  #agg { position: absolute; left: 12px; bottom: 12px; right: 12px; height: 104px;
+    border-radius: 8px; background: rgba(10,11,16,.72); border: 1px solid var(--line);
+    backdrop-filter: blur(6px); pointer-events: none; }
+  #aggc { width: 100%; height: 100%; display: block; }
   #side { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px; }
   h1 { font-size: 13px; margin: 0 0 2px; letter-spacing: .02em; }
-  .sub { color: var(--dim); font-size: 11px; margin-bottom: 14px; }
+  .sub { color: var(--dim); font-size: 11px; margin-bottom: 12px; }
   fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 12px; margin: 0 0 12px; }
   legend { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 0 4px; }
   label { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center;
@@ -39,7 +46,7 @@
   button.primary { background: #16354d; border-color: #2b6d99; }
   .row { display: flex; gap: 6px; flex-wrap: wrap; }
   #log { font: 10.5px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap;
-    max-height: 260px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+    max-height: 220px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 8px; }
   #log .ok { color: var(--good); } #log .err { color: var(--bad); } #log .hi { color: var(--ink); }
   #results { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font: 10.5px var(--mono); }
@@ -51,6 +58,7 @@
     border: 1px solid var(--line); color: var(--dim); }
   .badge.on { color: var(--good); border-color: #2d5c46; }
   .badge.off { color: var(--warn); border-color: #5c4a2d; }
+  .badge.bad { color: var(--bad); border-color: #5c2d2d; }
 </style>
 </head>
 <body>
@@ -58,6 +66,8 @@
   <div id="stage">
     <canvas id="c"></canvas>
     <div id="hud">booting…</div>
+    <div id="inspect">click a unit</div>
+    <div id="agg"><canvas id="aggc"></canvas></div>
   </div>
   <div id="side">
     <h1>Descent of Nations — spectator</h1>
@@ -65,14 +75,16 @@
       <span id="iso" class="badge">isolation?</span>
       <span id="be" class="badge">backend?</span>
       <span id="ts" class="badge">timestamps?</span>
+      <span id="data" class="badge">data?</span>
     </div>
 
     <fieldset>
       <legend>cluster</legend>
       <label>worlds <input id="worlds" type="number" min="1" max="16384" value="1" style="width:82px"></label>
-      <label>units / world <input id="units" type="number" min="1" max="4096" value="2048" style="width:82px"></label>
+      <label>sides / world <input id="owners" type="number" min="2" max="10" value="2" style="width:82px"></label>
+      <label>units / side <input id="units" type="number" min="1" max="2048" value="512" style="width:82px"></label>
       <label>data path
-        <select id="path" style="width:118px">
+        <select id="path" style="width:130px">
           <option value="zerocopy">zerocopy (1 world)</option>
           <option value="inline" selected>inline (worker sim)</option>
           <option value="sab">sab (N sim workers)</option>
@@ -80,7 +92,7 @@
       </label>
       <label>sim workers <input id="shards" type="number" min="1" max="32" value="4" style="width:82px"></label>
       <label>backend
-        <select id="prefer" style="width:118px">
+        <select id="prefer" style="width:130px">
           <option value="webgpu" selected>WebGPU</option>
           <option value="webgl2">WebGL2</option>
         </select>
@@ -91,26 +103,51 @@
     <fieldset>
       <legend>view</legend>
       <label>mode
-        <select id="view" style="width:118px">
+        <select id="view" style="width:130px">
           <option value="auto" selected>auto</option>
           <option value="units">units</option>
           <option value="aggregate">aggregate</option>
         </select>
       </label>
       <label>aggregate metric
-        <select id="metric" style="width:118px">
+        <select id="metric" style="width:130px">
           <option value="0" selected>population</option>
           <option value="1">state fingerprint</option>
+          <option value="2">army hit points</option>
+          <option value="3">kills</option>
+          <option value="4">sides alive</option>
         </select>
       </label>
       <label>zoom <span class="v" id="zoomv">1.00</span></label>
       <input id="zoom" type="range" min="0" max="1000" value="0">
       <label>unit size <span class="v" id="psv">1.0</span></label>
       <input id="ps" type="range" min="20" max="400" value="100">
-      <label>sim speed (frames/s, 0 = max) <span class="v" id="hzv">15</span></label>
-      <input id="hz" type="range" min="0" max="600" value="15">
-      <div class="row"><button id="playpause">pause</button><button id="recenter">recenter</button></div>
-      <div class="note">drag to pan · wheel to zoom · click to order the blue team to a point</div>
+      <label>sim frames/s &mdash; 15 is real time <span class="v" id="hzv">60</span></label>
+      <input id="hz" type="range" min="0" max="600" value="60">
+      <div class="row"><button id="playpause">pause</button><button id="recenter">recenter</button>
+        <button id="agg-toggle">stats panel</button></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>play — real engine commands</legend>
+      <label>you are player
+        <select id="who" style="width:130px">
+          <option value="0" selected>0 (blue)</option>
+          <option value="1">1 (red)</option>
+          <option value="2">2 (green)</option>
+          <option value="3">3 (amber)</option>
+        </select>
+      </label>
+      <label>select radius (tiles) <span class="v" id="selrv">24</span></label>
+      <input id="selr" type="range" min="1" max="128" value="24">
+      <div class="row">
+        <button id="sel-all">select all (0x00)</button>
+        <button id="halt">halt (0x0c)</button>
+      </div>
+      <div class="note">left click selects (GroupCommand 0x00) &middot; right click orders a move
+        (MoveToCommand 0x07) &middot; shift + right click attacks the unit there (AttackCommand
+        0x04). The bytes on the wire are the engine's own packet layout.</div>
+      <div id="cmdlog" class="note"></div>
     </fieldset>
 
     <fieldset>
@@ -119,6 +156,7 @@
         <button id="b-raf">rAF 3 s</button>
         <button id="b-unc">uncapped 3 s</button>
         <button id="b-draw">draw-only 3 s</button>
+        <button id="b-sim">sim-only 3 s</button>
       </div>
       <div class="row" style="margin-top:6px">
         <button id="sweep-units">sweep: units</button>

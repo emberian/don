@@ -16,8 +16,13 @@ pub const N_GLOBAL_FEATURES: usize = GLOBAL_FEATURES.len();
 /// `VecEnv::provenance`, because a silently-zero plane is indistinguishable from a real
 /// one to a network and would be discovered only as an unexplained plateau.
 pub const LIVE_PLANES: [&str; 7] = [
-    "own_units", "ally_units", "enemy_units", "own_buildings", "enemy_buildings",
-    "hp_fraction", "cooldown",
+    "own_units",
+    "ally_units",
+    "enemy_units",
+    "own_buildings",
+    "enemy_buildings",
+    "hp_fraction",
+    "cooldown",
 ];
 
 /// Pick the entity rows an agent observes, nearest-first around its own centroid so the
@@ -77,7 +82,10 @@ pub fn write_spatial(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut [f32]) {
     let mut occupancy = vec![0f32; plane];
     for row in 0..n {
         let (tx, ty) = w.tile_of(row);
-        let (tx, ty) = (tx.clamp(0, gw as i32 - 1) as usize, ty.clamp(0, gh as i32 - 1) as usize);
+        let (tx, ty) = (
+            tx.clamp(0, gw as i32 - 1) as usize,
+            ty.clamp(0, gh as i32 - 1) as usize,
+        );
         let idx = ty * gw + tx;
         let owner = w.sim.owner()[row];
         let building = w.rules.caps.get(w.type_index[row]).has(F_BUILDING);
@@ -145,7 +153,10 @@ pub fn write_entities(
     out: &mut [f32],
 ) {
     out.fill(0.0);
-    let (gwx, ghy) = ((cfg.grid_w * SUBTILE as usize) as f32, (cfg.grid_h * SUBTILE as usize) as f32);
+    let (gwx, ghy) = (
+        (cfg.grid_w * SUBTILE as usize) as f32,
+        (cfg.grid_h * SUBTILE as usize) as f32,
+    );
     for (slot, &row) in rows.iter().enumerate().take(cfg.max_entities) {
         let f = &mut out[slot * N_ENTITY_FEATURES..(slot + 1) * N_ENTITY_FEATURES];
         let c = w.rules.caps.get(w.type_index[row]);
@@ -164,7 +175,11 @@ pub fn write_entities(
         f[12] = w.order[row] as f32 / 28.0;
         f[13] = w.dest_x[row] as f32 / gwx;
         f[14] = w.dest_y[row] as f32 / ghy;
-        f[15] = if slot < controlled && w.sim.owner()[row] == who as i8 { 1.0 } else { 0.0 };
+        f[15] = if slot < controlled && w.sim.owner()[row] == who as i8 {
+            1.0
+        } else {
+            0.0
+        };
     }
 }
 
@@ -185,6 +200,10 @@ pub fn write_global(w: &EnvWorld, cfg: &EnvConfig, who: u8, out: &mut [f32]) {
     out[19] = p.territory as f32 / 1000.0;
     out[20] = p.explored as f32 / 1000.0;
     out[21] = w.sim.frame as f32 / 10_000.0;
-    out[22] = if cfg.max_steps > 0 { w.step_index as f32 / cfg.max_steps as f32 } else { 0.0 };
+    out[22] = if cfg.max_steps > 0 {
+        w.step_index as f32 / cfg.max_steps as f32
+    } else {
+        0.0
+    };
     out[23] = w.players.iter().filter(|q| q.alive).count() as f32 / g::NUM_PLAYERS as f32;
 }

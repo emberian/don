@@ -139,39 +139,44 @@ pub struct OrderParams {
 }
 
 const fn p(shape: Shape, step: i32, amount: i32, period: i16) -> OrderParams {
-    OrderParams { shape, step, amount, period }
+    OrderParams {
+        shape,
+        step,
+        amount,
+        period,
+    }
 }
 
 /// The dispatch table. Index by `order as usize`.
 pub const ORDER_PARAMS: [OrderParams; ORDER_COUNT] = [
-    p(Shape::Nothing, 0, 0, 0),   // Idle
-    p(Shape::Strike, 11, 17, 9),  // AirAttackGround
-    p(Shape::Steer, 13, 0, 0),    // AirPatrol
-    p(Shape::Strike, 5, 23, 12),  // Attack
-    p(Shape::Strike, 0, 19, 15),  // AttackGround
-    p(Shape::Strike, 6, 21, 11),  // AttackTo
-    p(Shape::Nothing, 0, 0, 0),   // AwaitBoard
-    p(Shape::Steer, 4, 0, 0),     // Board
-    p(Shape::Draw, 0, 7, 5),      // Build
-    p(Shape::Churn, 0, 3, 7),     // Cast
-    p(Shape::Steer, 7, 0, 0),     // ExploreTo
-    p(Shape::Steer, 9, 0, 0),     // FleeTo
-    p(Shape::Steer, 5, 0, 0),     // Follow
-    p(Shape::Steer, 3, 0, 0),     // Form
-    p(Shape::Steer, 4, 0, 0),     // Garrison
-    p(Shape::Draw, 2, 5, 4),      // Gather
-    p(Shape::Strike, 5, 25, 10),  // GroupAttack
-    p(Shape::Strike, 6, 22, 13),  // GroupAttackTo
-    p(Shape::Steer, 5, 0, 0),     // GroupMove
-    p(Shape::Steer, 5, 0, 0),     // GroupPatrol
-    p(Shape::Strike, 0, 13, 14),  // Guard
-    p(Shape::Steer, 6, 0, 0),     // Move
-    p(Shape::Steer, 6, 0, 0),     // Patrol
-    p(Shape::Draw, 0, 9, 6),      // Repair
-    p(Shape::Churn, 0, 1, 3),     // SpecialAnim
-    p(Shape::Strike, 12, 15, 8),  // Strafe
-    p(Shape::Churn, 0, 2, 17),    // Think
-    p(Shape::Draw, 3, 11, 9),     // Trade
+    p(Shape::Nothing, 0, 0, 0),  // Idle
+    p(Shape::Strike, 11, 17, 9), // AirAttackGround
+    p(Shape::Steer, 13, 0, 0),   // AirPatrol
+    p(Shape::Strike, 5, 23, 12), // Attack
+    p(Shape::Strike, 0, 19, 15), // AttackGround
+    p(Shape::Strike, 6, 21, 11), // AttackTo
+    p(Shape::Nothing, 0, 0, 0),  // AwaitBoard
+    p(Shape::Steer, 4, 0, 0),    // Board
+    p(Shape::Draw, 0, 7, 5),     // Build
+    p(Shape::Churn, 0, 3, 7),    // Cast
+    p(Shape::Steer, 7, 0, 0),    // ExploreTo
+    p(Shape::Steer, 9, 0, 0),    // FleeTo
+    p(Shape::Steer, 5, 0, 0),    // Follow
+    p(Shape::Steer, 3, 0, 0),    // Form
+    p(Shape::Steer, 4, 0, 0),    // Garrison
+    p(Shape::Draw, 2, 5, 4),     // Gather
+    p(Shape::Strike, 5, 25, 10), // GroupAttack
+    p(Shape::Strike, 6, 22, 13), // GroupAttackTo
+    p(Shape::Steer, 5, 0, 0),    // GroupMove
+    p(Shape::Steer, 5, 0, 0),    // GroupPatrol
+    p(Shape::Strike, 0, 13, 14), // Guard
+    p(Shape::Steer, 6, 0, 0),    // Move
+    p(Shape::Steer, 6, 0, 0),    // Patrol
+    p(Shape::Draw, 0, 9, 6),     // Repair
+    p(Shape::Churn, 0, 1, 3),    // SpecialAnim
+    p(Shape::Strike, 12, 15, 8), // Strafe
+    p(Shape::Churn, 0, 2, 17),   // Think
+    p(Shape::Draw, 3, 11, 9),    // Trade
 ];
 
 impl Order {
@@ -232,7 +237,10 @@ mod tests {
         assert_eq!(ORDER_PARAMS.len(), ORDER_COUNT);
         assert_eq!(ORDER_TABLE.len(), ORDER_COUNT);
         for i in 0..ORDER_COUNT {
-            assert_eq!(ORDER_TABLE[i] as usize, i, "order table is not identity at {i}");
+            assert_eq!(
+                ORDER_TABLE[i] as usize, i,
+                "order table is not identity at {i}"
+            );
         }
         let mut names = ORDER_NAMES.to_vec();
         names.sort_unstable();
@@ -244,8 +252,17 @@ mod tests {
     /// a narrower problem than it claims to.
     #[test]
     fn every_shape_is_represented() {
-        for s in [Shape::Nothing, Shape::Steer, Shape::Strike, Shape::Draw, Shape::Churn] {
-            assert!(ORDER_PARAMS.iter().any(|p| p.shape == s), "no order has shape {s:?}");
+        for s in [
+            Shape::Nothing,
+            Shape::Steer,
+            Shape::Strike,
+            Shape::Draw,
+            Shape::Churn,
+        ] {
+            assert!(
+                ORDER_PARAMS.iter().any(|p| p.shape == s),
+                "no order has shape {s:?}"
+            );
         }
     }
 }

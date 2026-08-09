@@ -46,8 +46,13 @@ struct Group {
     used: usize,
     pos_x: Vec<i32>,
     pos_y: Vec<i32>,
-    vel_x: Vec<i32>,
-    vel_y: Vec<i32>,
+    /// The cached per-frame movement step (`sinx(angle, speed)` / `-cosx(...)`), which
+    /// is what `World::step_hot` integrates by. It is constant across a lane-major run
+    /// because nothing here changes a unit's facing — that is the point: this experiment
+    /// measures the element-wise arithmetic, not the order dispatch.
+    step_x: Vec<i32>,
+    step_y: Vec<i32>,
+    /// `ObjectData::hold_frames`.
     cooldown: Vec<i16>,
 }
 
@@ -55,8 +60,8 @@ impl Group {
     #[inline]
     fn step(&mut self) {
         let n = self.rows * LANES;
-        simd::integrate_wrap(&mut self.pos_x[..n], &self.vel_x[..n], MAP_SPAN);
-        simd::integrate_wrap(&mut self.pos_y[..n], &self.vel_y[..n], MAP_SPAN);
+        simd::integrate_wrap(&mut self.pos_x[..n], &self.step_x[..n], MAP_SPAN);
+        simd::integrate_wrap(&mut self.pos_y[..n], &self.step_y[..n], MAP_SPAN);
         simd::tick_down(&mut self.cooldown[..n]);
     }
 }
@@ -76,7 +81,11 @@ impl LaneBatch {
     pub fn from_worlds(worlds: &[World]) -> LaneBatch {
         let mut groups = Vec::with_capacity(worlds.len().div_ceil(LANES));
         for chunk in worlds.chunks(LANES) {
-            let rows = chunk.iter().map(|w| w.live_count() as usize).max().unwrap_or(0);
+            let rows = chunk
+                .iter()
+                .map(|w| w.live_count() as usize)
+                .max()
+                .unwrap_or(0);
             let n = rows * LANES;
             let mut g = Group {
                 rows,
@@ -84,8 +93,8 @@ impl LaneBatch {
                 used: chunk.len(),
                 pos_x: vec![0; n],
                 pos_y: vec![0; n],
-                vel_x: vec![0; n],
-                vel_y: vec![0; n],
+                step_x: vec![0; n],
+                step_y: vec![0; n],
                 cooldown: vec![0; n],
             };
             for (lane, w) in chunk.iter().enumerate() {
@@ -95,14 +104,17 @@ impl LaneBatch {
                     let k = row * LANES + lane;
                     g.pos_x[k] = w.pos_x()[row];
                     g.pos_y[k] = w.pos_y()[row];
-                    g.vel_x[k] = w.vel_x()[row];
-                    g.vel_y[k] = w.vel_y()[row];
+                    g.step_x[k] = w.move_step_x()[row];
+                    g.step_y[k] = w.move_step_y()[row];
                     g.cooldown[k] = w.cooldown()[row];
                 }
             }
             groups.push(g);
         }
-        LaneBatch { groups, frames_run: 0 }
+        LaneBatch {
+            groups,
+            frames_run: 0,
+        }
     }
 
     pub fn groups(&self) -> usize {
@@ -164,13 +176,17 @@ impl LaneBatch {
             for lane in 0..g.used {
                 let w = &mut b.worlds[gi * LANES + lane];
                 let live = g.live[lane];
-                assert_eq!(live, w.live_count() as usize, "world population changed under a LaneBatch");
+                assert_eq!(
+                    live,
+                    w.live_count() as usize,
+                    "world population changed under a LaneBatch"
+                );
                 for row in 0..live {
                     let k = row * LANES + lane;
                     w.set_pos(row, g.pos_x[k], g.pos_y[k]);
                     w.cooldown_mut()[row] = g.cooldown[k];
                 }
-                w.frame += self.frames_run;
+                w.advance_frames(self.frames_run as i32);
             }
         }
     }
@@ -182,19 +198,39 @@ mod tests {
 
     /// The experiment is only worth measuring if it computes the same thing. Bit-identical
     /// or it is not an alternative layout, it is a different simulation.
+    ///
+    /// The reference is [`Batch::run_hot_serial`], **not** `run_serial`: a `LaneBatch`
+    /// mirrors `World::step_hot`, the element-wise subset, not `Game::do_frame`.
+    /// `energise` is not optional — the kernels map zero to zero, so a batch of resting
+    /// units would make this pass without computing anything.
     #[test]
     fn lane_major_stepping_matches_per_world_stepping() {
-        for (worlds, units, frames) in [(4usize, 16usize, 33usize), (9, 1, 5), (17, 64, 101), (1, 7, 9)] {
+        for (worlds, units, frames) in [
+            (4usize, 16usize, 33usize),
+            (9, 1, 5),
+            (17, 64, 101),
+            (1, 7, 9),
+        ] {
             let mut reference = Batch::with_capacity(worlds, 0xC0FFEE, units.max(1));
             reference.populate(units);
+            reference.energise();
             let mut target = Batch::with_capacity(worlds, 0xC0FFEE, units.max(1));
             target.populate(units);
+            target.energise();
+            let before = target.digest();
 
-            reference.run_serial(frames);
+            reference.run_hot_serial(frames);
             let mut lanes = LaneBatch::from_batch(&target);
             lanes.run_serial(frames);
             lanes.write_back(&mut target);
 
+            if units > 0 {
+                assert_ne!(
+                    target.digest(),
+                    before,
+                    "the run must actually change state"
+                );
+            }
             assert_eq!(
                 target.digest(),
                 reference.digest(),
@@ -209,23 +245,26 @@ mod tests {
         }
     }
 
-    /// Uneven populations are where lane padding actually exists; padding must not alter
-    /// any world's state.
     #[test]
     fn ragged_populations_match_per_world_stepping() {
         let build = || {
             let mut b = Batch::with_capacity(11, 0x1234, 128);
             for (i, w) in b.worlds.iter_mut().enumerate() {
                 for k in 0..(i * 13) % 128 {
-                    let h = w.spawn((k % 3) as u8).unwrap();
-                    let row = w.row_of(h).unwrap();
-                    w.cooldown_mut()[row] = (k % 5) as i16;
+                    w.spawn((k % 3) as u8).unwrap();
                 }
             }
+            b.energise();
             b
         };
         let mut reference = build();
-        reference.run_serial(50);
+        let before = reference.digest();
+        reference.run_hot_serial(50);
+        assert_ne!(
+            reference.digest(),
+            before,
+            "the reference run must move state"
+        );
         let mut target = build();
         let mut lanes = LaneBatch::from_batch(&target);
         lanes.run_parallel(50, 3);

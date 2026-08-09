@@ -154,6 +154,68 @@ impl Batch {
         });
     }
 
+    /// Advance every world by one frame of the **element-wise subset**
+    /// ([`World::step_hot`]), single-threaded.
+    ///
+    /// Exists so the lane-major experiment has a like-for-like reference. It is not the
+    /// tick; see the note on `World::step_hot`.
+    pub fn step_hot_serial(&mut self) {
+        for w in &mut self.worlds {
+            w.step_hot();
+        }
+    }
+
+    /// [`Batch::step_hot_serial`] for `frames` frames, world-major.
+    pub fn run_hot_serial(&mut self, frames: usize) {
+        for w in &mut self.worlds {
+            for _ in 0..frames {
+                w.step_hot();
+            }
+        }
+    }
+
+    /// [`Batch::run_hot_serial`] across `threads` workers, spawning once.
+    pub fn run_hot_parallel(&mut self, frames: usize, threads: usize) {
+        let threads = threads.max(1);
+        if frames == 0 {
+            return;
+        }
+        if threads == 1 || self.worlds.len() < 2 {
+            return self.run_hot_serial(frames);
+        }
+        let grab = (self.worlds.len() / (threads * 4)).max(1);
+        let queue = Mutex::new(self.worlds.chunks_mut(grab));
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let queue = &queue;
+                scope.spawn(move || loop {
+                    let next = queue.lock().expect("worker panicked").next();
+                    let Some(part) = next else { break };
+                    for w in part {
+                        for _ in 0..frames {
+                            w.step_hot();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /// Give every live unit a non-zero movement step and cooldown.
+    ///
+    /// The element-wise kernels map zero to zero, so a batch populated with resting units
+    /// makes any comparison between two stepping strategies **vacuously** true. Anything
+    /// measuring or asserting on `step_hot` must call this first.
+    pub fn energise(&mut self) {
+        for (wi, w) in self.worlds.iter_mut().enumerate() {
+            for row in 0..w.live_count() as usize {
+                let k = (wi * 7 + row * 13) as i32;
+                w.set_move_step(row, (k % 251) - 125, (k % 197) - 98);
+                w.cooldown_mut()[row] = (k % 23) as i16;
+            }
+        }
+    }
+
     /// Combined digest across all worlds, for determinism checks.
     pub fn digest(&self) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -188,7 +250,11 @@ mod tests {
             for _ in 0..120 {
                 b.step_parallel(threads);
             }
-            assert_eq!(b.digest(), want, "thread count {threads} changed the result");
+            assert_eq!(
+                b.digest(),
+                want,
+                "thread count {threads} changed the result"
+            );
         }
     }
 
@@ -201,7 +267,11 @@ mod tests {
         for threads in [2usize, 3, 8, 16] {
             let mut b = build();
             b.run_parallel(120, threads);
-            assert_eq!(b.digest(), want, "thread count {threads} changed the result");
+            assert_eq!(
+                b.digest(),
+                want,
+                "thread count {threads} changed the result"
+            );
         }
     }
 

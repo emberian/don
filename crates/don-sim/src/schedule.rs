@@ -134,7 +134,9 @@ pub struct ScheduleCoverage {
 
 impl Default for ScheduleCoverage {
     fn default() -> Self {
-        ScheduleCoverage { entered: [0; DO_FRAME.len()] }
+        ScheduleCoverage {
+            entered: [0; DO_FRAME.len()],
+        }
     }
 }
 
@@ -192,8 +194,14 @@ mod tests {
     /// these two ever swap, every owner-slot rotation is off by one frame.
     #[test]
     fn frame_increment_follows_objects_process_all() {
-        let objs = DO_FRAME.iter().position(|s| s.name == "Objects::process_all").unwrap();
-        let inc = DO_FRAME.iter().position(|s| s.name == "Game::frame++").unwrap();
+        let objs = DO_FRAME
+            .iter()
+            .position(|s| s.name == "Objects::process_all")
+            .unwrap();
+        let inc = DO_FRAME
+            .iter()
+            .position(|s| s.name == "Game::frame++")
+            .unwrap();
         assert!(objs < inc);
     }
 

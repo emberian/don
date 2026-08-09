@@ -33,14 +33,15 @@ pub struct Rules {
 pub const BALANCE_DIM: usize = 493;
 
 impl Rules {
-    pub fn load(typecaps: Option<&std::path::Path>, balance: Option<&std::path::Path>) -> (Arc<Rules>, bool, bool) {
+    pub fn load(
+        typecaps: Option<&std::path::Path>,
+        balance: Option<&std::path::Path>,
+    ) -> (Arc<Rules>, bool, bool) {
         let (caps, caps_real) = TypeCaps::load_or_permissive(typecaps);
-        let p = balance
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../schema/live/balance-real.bin")
-            });
+        let p = balance.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../schema/live/balance-real.bin")
+        });
         let balance = std::fs::read(&p).ok().and_then(|b| {
             if b.len() < BALANCE_DIM * BALANCE_DIM * 2 {
                 return None;
@@ -54,7 +55,15 @@ impl Rules {
         });
         let bal_real = balance.is_some();
         let building_types = caps.building_bitset();
-        (Arc::new(Rules { caps, balance, building_types }), caps_real, bal_real)
+        (
+            Arc::new(Rules {
+                caps,
+                balance,
+                building_types,
+            }),
+            caps_real,
+            bal_real,
+        )
     }
 
     pub fn balance_is_real(&self) -> bool {
@@ -93,20 +102,40 @@ pub struct ScoreTerms {
 
 impl ScoreTerms {
     pub const NAMES: [&'static str; 11] = [
-        "score_explored", "score_territory", "score_units", "score_units_2",
-        "score_buildings", "score_economy", "score_pop", "score_unit_upgrades",
-        "score_research", "score_wonders", "score_combat",
+        "score_explored",
+        "score_territory",
+        "score_units",
+        "score_units_2",
+        "score_buildings",
+        "score_economy",
+        "score_pop",
+        "score_unit_upgrades",
+        "score_research",
+        "score_wonders",
+        "score_combat",
     ];
     /// Terms this build actually computes. The rest are structurally present and always
     /// zero; see `docs/tracks/rl-env.md`.
-    pub const LIVE: [&'static str; 5] =
-        ["score_units", "score_buildings", "score_economy", "score_pop", "score_combat"];
+    pub const LIVE: [&'static str; 5] = [
+        "score_units",
+        "score_buildings",
+        "score_economy",
+        "score_pop",
+        "score_combat",
+    ];
 
     pub fn as_array(&self) -> [i32; 11] {
         [
-            self.score_explored, self.score_territory, self.score_units, self.score_units_2,
-            self.score_buildings, self.score_economy, self.score_pop,
-            self.score_unit_upgrades, self.score_research, self.score_wonders,
+            self.score_explored,
+            self.score_territory,
+            self.score_units,
+            self.score_units_2,
+            self.score_buildings,
+            self.score_economy,
+            self.score_pop,
+            self.score_unit_upgrades,
+            self.score_research,
+            self.score_wonders,
             self.score_combat,
         ]
     }
@@ -244,15 +273,26 @@ pub struct EnvWorld {
     subtile_h: i32,
 }
 
-const NO_HANDLE: Handle = Handle { id: u32::MAX, generation: 0 };
+const NO_HANDLE: Handle = Handle {
+    id: u32::MAX,
+    generation: 0,
+};
 
 impl EnvWorld {
-    pub fn new(rules: Arc<Rules>, capacity: usize, seed: u64, grid_w: usize, grid_h: usize) -> EnvWorld {
+    pub fn new(
+        rules: Arc<Rules>,
+        capacity: usize,
+        seed: u64,
+        grid_w: usize,
+        grid_h: usize,
+    ) -> EnvWorld {
         let cap = capacity.min(don_sim::MAX_UNITS);
         EnvWorld {
             sim: World::with_capacity(cap, seed),
             rules,
-            players: (0..g::NUM_PLAYERS).map(|i| PlayerState::new(i as u8)).collect(),
+            players: (0..g::NUM_PLAYERS)
+                .map(|i| PlayerState::new(i as u8))
+                .collect(),
             type_index: vec![0; cap],
             order: vec![0; cap],
             target: vec![NO_HANDLE; cap],
@@ -313,7 +353,11 @@ impl EnvWorld {
         self.speed[row] = c.move_rate;
         self.range_max[row] = c.range_max;
         self.handle_gen[row] = h.generation;
-        self.sim.set_pos(row, x.rem_euclid(self.subtile_w), y.rem_euclid(self.subtile_h));
+        self.sim.set_pos(
+            row,
+            x.rem_euclid(self.subtile_w),
+            y.rem_euclid(self.subtile_h),
+        );
         self.sim.hits_mut()[row] = c.hits.max(1);
         self.sim.cooldown_mut()[row] = 0;
         let p = owner as usize;
@@ -336,7 +380,9 @@ impl EnvWorld {
 
     /// Remove an entity, mirroring `don-sim`'s swap-remove into the env columns.
     pub fn despawn(&mut self, h: Handle) -> bool {
-        let Some(row) = self.sim.row_of(h) else { return false };
+        let Some(row) = self.sim.row_of(h) else {
+            return false;
+        };
         let last = self.sim.live_count() as usize - 1;
         let t = self.type_index[row];
         let owner = self.sim.owner()[row] as usize;
@@ -413,7 +459,10 @@ impl EnvWorld {
 
     #[inline]
     pub fn tile_of(&self, row: usize) -> (i32, i32) {
-        (self.sim.pos_x()[row] / SUBTILE, self.sim.pos_y()[row] / SUBTILE)
+        (
+            self.sim.pos_x()[row] / SUBTILE,
+            self.sim.pos_y()[row] / SUBTILE,
+        )
     }
 
     #[inline]
@@ -491,7 +540,11 @@ impl EnvWorld {
         let denom = denom.max(1);
         let nx = px + dx * step / denom;
         let ny = py + dy * step / denom;
-        self.sim.set_pos(row, nx.rem_euclid(self.subtile_w), ny.rem_euclid(self.subtile_h));
+        self.sim.set_pos(
+            row,
+            nx.rem_euclid(self.subtile_w),
+            ny.rem_euclid(self.subtile_h),
+        );
     }
 
     fn advance_attack(&mut self, row: usize) {
@@ -528,7 +581,10 @@ impl EnvWorld {
     /// Stable handle for a live row.
     #[inline]
     pub fn handle_at(&self, row: usize) -> Handle {
-        Handle { id: self.sim.handles()[row], generation: self.handle_gen[row] }
+        Handle {
+            id: self.sim.handles()[row],
+            generation: self.handle_gen[row],
+        }
     }
 
     fn reap(&mut self) {
@@ -608,7 +664,12 @@ impl EnvWorld {
                 } else {
                     g::UNIT_TYPE_BASE as u16
                 };
-                self.spawn(a as u8, t, (cx + ox).rem_euclid(self.subtile_w), (cy + oy).rem_euclid(self.subtile_h));
+                self.spawn(
+                    a as u8,
+                    t,
+                    (cx + ox).rem_euclid(self.subtile_w),
+                    (cy + oy).rem_euclid(self.subtile_h),
+                );
             }
         }
         self.recompute_scores();

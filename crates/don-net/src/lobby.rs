@@ -279,10 +279,16 @@ pub fn attributes_to_game(a: &Attributes, g: &mut GameConnectionData) {
             f.set(g, v);
         }
     }
-    if let Some(v) = a.get(lobbykey::GAME_SEED).and_then(|v| v.parse::<u32>().ok()) {
+    if let Some(v) = a
+        .get(lobbykey::GAME_SEED)
+        .and_then(|v| v.parse::<u32>().ok())
+    {
         g.seed = v;
     }
-    if let Some(v) = a.get(lobbykey::LOBBY_FLAGS).and_then(|v| v.parse::<i32>().ok()) {
+    if let Some(v) = a
+        .get(lobbykey::LOBBY_FLAGS)
+        .and_then(|v| v.parse::<i32>().ok())
+    {
         g.flags = v;
     }
     if let Some(v) = a.get(lobbykey::ELORANK).and_then(|v| v.parse::<i32>().ok()) {
@@ -368,7 +374,10 @@ mod tests {
         // Not a typo on our side: STEAM_LOBBY_ECONWIN at 0x00AFC0C8 points at
         // 0x00AFC0C0, which holds "echowin". Reproducing it is required for
         // interop, so the test pins it.
-        let (k, f) = SETTING_KEYS.iter().find(|(_, f)| *f == SettingField::EconWin).unwrap();
+        let (k, f) = SETTING_KEYS
+            .iter()
+            .find(|(_, f)| *f == SettingField::EconWin)
+            .unwrap();
         assert_eq!(*k, "echowin");
         assert_eq!(*f, SettingField::EconWin);
     }
@@ -415,7 +424,12 @@ mod tests {
 
     #[test]
     fn player_delta_publishes_only_what_changed() {
-        let prev = PlayerSlotPod { elo: 1500, team: 1, ready: 0, ..Default::default() };
+        let prev = PlayerSlotPod {
+            elo: 1500,
+            team: 1,
+            ready: 0,
+            ..Default::default()
+        };
         let next = PlayerSlotPod { ready: 1, ..prev };
         let d = player_delta(2, &prev, &next, false);
         assert_eq!(d.len(), 1);

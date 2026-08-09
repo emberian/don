@@ -156,7 +156,7 @@ async function main() {
     const keyed = new Map();
     for (const pass of passes) {
       for (const x of pass) {
-        const k = `${x.kind}|${x.path}|${x.cfg.worlds}|${x.cfg.units}|${x.cfg.shards}`;
+        const k = `${x.kind}|${x.path}|${x.cfg.worlds}|${x.cfg.owners}|${x.cfg.units}|${x.cfg.shards}`;
         if (!keyed.has(k)) keyed.set(k, { ...x, fpsSamples: [], stepSamples: [], uploadSamples: [], gpuSamples: [] });
         const e = keyed.get(k);
         e.fpsSamples.push(x.fps); e.stepSamples.push(x.stepMs ?? 0);
@@ -182,28 +182,32 @@ async function main() {
     suites: {},
   };
 
-  const unitsAxis = QUICK ? [512, 2048] : [128, 512, 1024, 2048, 4096];
+  // `units` is now units *per side*, and every world has two sides, so instance counts are
+  // twice these numbers. Stated here because a sweep axis that silently means something
+  // different from last time is how two reports get compared that should not be.
+  const unitsAxis = QUICK ? [256, 1024] : [64, 256, 512, 1024, 2048];
   const worldsAxis = QUICK ? [64, 1024] : [16, 64, 256, 1024, 4096];
+  const OWNERS = 2;
 
   // 1. One world, zero-copy path: entity count against frame rate.
   out.suites.units_zerocopy = await run('units sweep, zerocopy, uncapped',
-    `return await window.don.sweep('units', ${JSON.stringify(unitsAxis)}, 'uncapped', ${MS}, {worlds:1, path:'zerocopy', simHz:0});`);
+    `return await window.don.sweep('units', ${JSON.stringify(unitsAxis)}, 'uncapped', ${MS}, {worlds:1, owners:${OWNERS}, path:'zerocopy', simHz:0});`);
   out.suites.units_zerocopy_raf = await run('units sweep, zerocopy, rAF',
-    `return await window.don.sweep('units', ${JSON.stringify(unitsAxis)}, 'raf', ${MS}, {worlds:1, path:'zerocopy', simHz:0});`);
+    `return await window.don.sweep('units', ${JSON.stringify(unitsAxis)}, 'raf', ${MS}, {worlds:1, owners:${OWNERS}, path:'zerocopy', simHz:0});`);
 
   // 2. World count against frame rate, sim inline in the render worker.
   out.suites.worlds_inline = await run('worlds sweep, inline, uncapped',
-    `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'uncapped', ${MS}, {units:64, path:'inline', simHz:0});`);
+    `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'uncapped', ${MS}, {units:32, owners:${OWNERS}, path:'inline', simHz:0});`);
   out.suites.worlds_inline_raf = await run('worlds sweep, inline, rAF',
-    `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'raf', ${MS}, {units:64, path:'inline', simHz:0});`);
+    `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'raf', ${MS}, {units:32, owners:${OWNERS}, path:'inline', simHz:0});`);
 
   // 3. The same cluster with the sim moved onto N workers, so the extra copy and the extra
   //    cores can be priced against each other.
   if (env.isolated) {
     out.suites.worlds_sab = await run('worlds sweep, sab (4 sim workers), uncapped',
-      `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'uncapped', ${MS}, {units:64, path:'sab', shards:4, simHz:0});`);
+      `return await window.don.sweep('worlds', ${JSON.stringify(worldsAxis)}, 'uncapped', ${MS}, {units:32, owners:${OWNERS}, path:'sab', shards:4, simHz:0});`);
     out.suites.shards = await run('shard-count sweep at 1024 worlds x 64 units',
-      `return await window.don.sweep('shards', ${JSON.stringify(QUICK ? [1, 4] : [1, 2, 4, 8, 12])}, 'uncapped', ${MS}, {worlds:1024, units:64, path:'sab', simHz:0});`);
+      `return await window.don.sweep('shards', ${JSON.stringify(QUICK ? [1, 4] : [1, 2, 4, 8, 12])}, 'uncapped', ${MS}, {worlds:1024, units:32, owners:${OWNERS}, path:'sab', simHz:0});`);
   }
 
   // 4. Draw-only, to separate GPU cost from sim and upload cost, and to price the
@@ -215,7 +219,7 @@ async function main() {
   for (const w of (QUICK ? [1024] : [1024, 4096, 16384])) {
     for (const v of ['units', 'aggregate']) {
       const rows = await run(`draw-only ${w} worlds x 64 units, ${v} view`,
-        `await window.don.configure({worlds:${w}, units:64, capacity:64, path:'inline', simHz:0});
+        `await window.don.configure({worlds:${w}, units:32, owners:${OWNERS}, path:'inline', simHz:0});
          ${setView(v)}
          const r = await window.don.bench('draw-only', ${MS}); r.forcedView = '${v}'; return [r];`);
       out.suites.draw_only.push(...rows);
@@ -235,7 +239,7 @@ async function main() {
       const samples = [];
       for (let i = 0; i < REPEATS; i++) {
         samples.push(await cdp.eval(`
-          await window.don.configure({worlds:1024, units:64, capacity:64, path:'sab', shards:${shards}, simHz:0});
+          await window.don.configure({worlds:1024, units:32, owners:${OWNERS}, path:'sab', shards:${shards}, simHz:0});
           await new Promise(r=>setTimeout(r,400));
           return await window.don.simRate(2000);`));
       }
@@ -254,11 +258,23 @@ async function main() {
   // 6. Cross-target determinism. The browser advances an exact frame count and reports the
   //    same `Batch::digest()` the native binary reports. This is the check that can fail.
   out.digest = await cdp.eval(`
-    await window.don.configure({worlds:4, units:64, capacity:64, path:'inline', seed:0xC0FFEE, simHz:0, autoplay:false});
-    await window.don.stepFrames(1000);
+    await window.don.configure({worlds:4, owners:2, units:64, capacity:128, path:'inline', seed:0xC0FFEE, simHz:0, autoplay:false});
+    await window.don.stepFrames(600);
     return await window.don.digest();`);
-  console.error(`-- digest (4 worlds x 64 units, seed 0xC0FFEE, after ${out.digest.frames} frames): ${out.digest.digest}`);
-  console.error(`   native reference: run  cargo run --release --bin digest -- digest 4 64 64 1000 0xC0FFEE`);
+  console.error(`-- digest (4 worlds x 2 sides x 64 units, seed 0xC0FFEE, after ${out.digest.frames} frames): ${out.digest.digest}`);
+  console.error(`   kills=${out.digest.kills} damage=${out.digest.damage} live=${out.digest.live}`);
+  console.error(`   native reference: cd web/wasm && cargo run --release --bin digest -- digest 4 2 64 128 600 0xC0FFEE`);
+
+  // 7. The simulation on its own, with no rendering and no uploads: the honest cost of a
+  //    real tick of the derived damage chain in wasm.
+  out.suites.sim_only = [];
+  for (const [w, u] of (QUICK ? [[1, 512]] : [[1, 128], [1, 512], [1, 2048], [64, 64], [1024, 32]])) {
+    const rows = await run(`sim-only ${w} worlds x 2 x ${u} units`,
+      `await window.don.configure({worlds:${w}, owners:2, units:${u}, path:'inline', simHz:0});
+       await new Promise(r=>setTimeout(r,200));
+       return [await window.don.bench('sim-only', ${MS})];`);
+    out.suites.sim_only.push(...rows);
+  }
 
   out.machine.loadavgEnd = loadavg();
   out.pageErrors = pageErrors;

@@ -1,0 +1,5 @@
+# Built by python/build.sh from crates/don-env.
+don_env/_don_env.so
+don_env/_don_env.pyd
+__pycache__/
+*.egg-info/

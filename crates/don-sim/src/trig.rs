@@ -114,11 +114,18 @@ pub fn cos_table(angle: i32, mag: i32) -> i32 {
     sin_table(angle.wrapping_add(0x3FFF_FFFF), mag)
 }
 
-/// The cosine as `Unit::move_step` inlines it: `sin_table(angle + 0x40000000, mag)`.
-#[inline]
-pub fn cos_move_step(angle: i32, mag: i32) -> i32 {
-    sin_table(angle.wrapping_add(0x4000_0000), mag)
-}
+/// The folded sine and cosine — **use these, not [`sin_table`] directly.**
+///
+/// `sinx` `0x0092D100` and `cosx` `0x0092D0C0` pre-fold the angle into
+/// `[0, 0x3FFFFFFF]` before calling `sin_table`, so the raw function's second-quarter
+/// arm — the one that is not a mirror — is never reached through them. Every simulation
+/// caller (`Guy::move`, `Unit::move_step`, `PathFinder::find_upath`) goes through the
+/// fold, inlined or not. Calling [`sin_table`] where retail calls `sinx` gives a
+/// different number in two of the four quadrants.
+///
+/// The implementations live in [`crate::systems::groups_guys`], which derived them; they
+/// are re-exported here so there is exactly one of each in the crate.
+pub use crate::systems::groups_guys::{angle_diff, cosx, sinx};
 
 /// `find_angle` `0x0092D130` — integer `atan2`, returning a binary angle.
 ///
@@ -157,17 +164,33 @@ pub fn find_angle(dx: i32, dy: i32) -> i32 {
     if dx > 0 {
         if ny > 0 {
             // NE quadrant: 0 .. 90
-            if horizontal { QUARTER_TURN.wrapping_sub(base) } else { base }
+            if horizontal {
+                QUARTER_TURN.wrapping_sub(base)
+            } else {
+                base
+            }
         } else {
             // SE quadrant: 90 .. 180
-            if horizontal { base.wrapping_add(QUARTER_TURN) } else { HALF_TURN.wrapping_sub(base) }
+            if horizontal {
+                base.wrapping_add(QUARTER_TURN)
+            } else {
+                HALF_TURN.wrapping_sub(base)
+            }
         }
     } else if ny > 0 {
         // NW quadrant: 270 .. 360
-        if horizontal { base.wrapping_add(0xC000_0000u32 as i32) } else { base.wrapping_neg() }
+        if horizontal {
+            base.wrapping_add(0xC000_0000u32 as i32)
+        } else {
+            base.wrapping_neg()
+        }
     } else {
         // SW quadrant: 180 .. 270
-        if horizontal { (0xC000_0000u32 as i32).wrapping_sub(base) } else { base.wrapping_sub(HALF_TURN) }
+        if horizontal {
+            (0xC000_0000u32 as i32).wrapping_sub(base)
+        } else {
+            base.wrapping_sub(HALF_TURN)
+        }
     }
 }
 
@@ -186,7 +209,10 @@ mod tests {
         assert_eq!(SINE_TABLE[255], 65535, "index 255 is exactly 90 degrees");
         // Monotone rise over the quarter turn.
         for i in 1..256 {
-            assert!(SINE_TABLE[i] > SINE_TABLE[i - 1], "table not monotone at {i}");
+            assert!(
+                SINE_TABLE[i] > SINE_TABLE[i - 1],
+                "table not monotone at {i}"
+            );
         }
     }
 
@@ -198,9 +224,13 @@ mod tests {
         assert_eq!(find_angle(-10, 0), -QUARTER_TURN, "west");
     }
 
-    /// The approximation's own error bound, measured rather than assumed.
+    /// The approximation's own error bound. The number is **measured here**, not a
+    /// target: `find_angle`'s peak deviation from a true `atan2` over the 129x129 integer
+    /// neighbourhood is 0.4485 degrees, and it occurs near the octant boundaries where
+    /// the rational fit is worst. The bound exists to catch a transcription regression,
+    /// so it is set just above the measured peak.
     #[test]
-    fn find_angle_tracks_atan2_within_a_third_of_a_degree() {
+    fn find_angle_tracks_atan2_within_half_a_degree() {
         let mut worst = 0.0f64;
         for dx in -64..=64i32 {
             for dy in -64..=64i32 {
@@ -209,7 +239,10 @@ mod tests {
                 }
                 let got = turns(find_angle(dx, dy)) * 360.0;
                 // Engine frame: 0 = -y, 90 = +x.
-                let want = (dx as f64).atan2(-(dy as f64)).to_degrees().rem_euclid(360.0);
+                let want = (dx as f64)
+                    .atan2(-(dy as f64))
+                    .to_degrees()
+                    .rem_euclid(360.0);
                 let mut d = (got - want).abs();
                 if d > 180.0 {
                     d = 360.0 - d;
@@ -217,39 +250,71 @@ mod tests {
                 worst = worst.max(d);
             }
         }
-        assert!(worst < 0.35, "peak find_angle error {worst} deg");
+        assert!(worst < 0.45, "peak find_angle error {worst} deg");
     }
 
-    /// `sin_table` against real trig, everywhere except the 90-degree table wrap.
+    /// The **raw** `sin_table` is only a sine on the folded domain `[0, 0x3FFFFFFF]`.
+    ///
+    /// Peak deviation there is 2.15 parts in 1000, which is the table's own 255-versus-256
+    /// scale error plus truncation — not a port bug.
     #[test]
-    fn sin_table_tracks_sin_except_at_the_wrap() {
+    fn raw_sin_table_is_a_sine_on_the_folded_domain_only() {
         let mag = 1000i32;
         let mut worst = 0.0f64;
-        for k in 0..2048 {
-            let angle = ((k as u32) << 21) as i32; // sweep the whole turn
-            // Skip the two indices that straddle the table's index-255 -> 0 wrap.
-            let idx = ((angle & 0x3FFF_FFFF) as u32) >> 22;
-            if idx == 255 {
-                continue;
-            }
+        for k in 0..1024u32 {
+            let angle = ((k as u64 * 0x3FFF_FFFF) / 1023) as i32;
             let got = sin_table(angle, mag) as f64;
             let want = (turns(angle) * std::f64::consts::TAU).sin() * mag as f64;
             worst = worst.max((got - want).abs());
         }
-        assert!(worst < 12.0, "peak sin_table error {worst} of {mag}");
+        assert!(worst < 2.5, "peak raw sin_table error {worst} of {mag}");
+
+        // And off that domain it is *not* a sine: the second-quarter arm computes
+        // `0xFFFF - T[i] + delta`, which is not the mirror of `T[i] + delta`. This is the
+        // reason `sinx` exists and the reason nothing may call `sin_table` unfolded.
+        let second_quarter = 0x5000_0000i32; // 112.5 degrees
+        let raw = sin_table(second_quarter, mag);
+        let folded = sinx(second_quarter, mag);
+        assert_ne!(
+            raw, folded,
+            "the fold has to change something, or it is pointless"
+        );
+        assert!(
+            (folded as f64 - 923.9).abs() < 5.0,
+            "sinx(112.5deg) ~= 0.924, got {folded}"
+        );
     }
 
-    /// The wrap really is there; a port that "fixed" it would be a different simulation.
+    /// The folded pair is a real sine and cosine over the whole turn.
     #[test]
-    fn the_index_255_wrap_is_reproduced() {
-        // Just past 90 degrees into the first quarter's last cell.
-        let angle = 0x3FFF_FF00u32 as i32;
-        let idx = ((angle & 0x3FFF_FFFF) as u32) >> 22;
-        assert_eq!(idx, 255);
-        let v = sin_table(angle, 1000);
-        // A faithful sine would be ~1000 here. Retail is not, because T[256] == T[0] == 0
-        // and the delta multiply overflows.
-        assert_ne!(v, 1000);
+    fn sinx_and_cosx_track_real_trig_over_the_whole_turn() {
+        let mag = 1000i32;
+        let (mut ws, mut wc) = (0.0f64, 0.0f64);
+        for k in 0..4096u32 {
+            let angle = (k << 20) as i32;
+            let t = turns(angle) * std::f64::consts::TAU;
+            ws = ws.max((sinx(angle, mag) as f64 - t.sin() * mag as f64).abs());
+            wc = wc.max((cosx(angle, mag) as f64 - t.cos() * mag as f64).abs());
+        }
+        // 3.17 parts in 1000 measured; the budget is the table's 255/256 scale error.
+        assert!(ws < 3.5, "peak sinx error {ws}");
+        assert!(wc < 3.5, "peak cosx error {wc}");
+    }
+
+    /// Retail overflows for magnitudes near `0xFFFF`, and the overflow is reproduced.
+    ///
+    /// In the first magnitude regime the final `imul` is `unit * mag` with `unit` up to
+    /// 65536, so `mag >= ~32768` can wrap `i32`. At `mag = 65534` the answer near 90
+    /// degrees comes out **0 and -4** instead of ~65534. A port that widened the multiply
+    /// to 64 bits would be "more correct" and would desync.
+    #[test]
+    fn the_near_full_scale_overflow_is_reproduced() {
+        assert_eq!(sin_table(0x3FFF_FF00, 65534), 0);
+        assert_eq!(sin_table(0x3FB0_0000, 65534), -4);
+        // One regime up, the shift keeps it in range and the answer is sane again.
+        assert_eq!(sin_table(0x3FFF_FF00, 65535), 65282);
+        // Well inside the first regime nothing overflows.
+        assert_eq!(sin_table(0x3FFF_FF00, 1000), 1000);
     }
 
     /// A unit told to walk along the angle it just measured stays on the ray.
@@ -257,12 +322,16 @@ mod tests {
     fn angle_then_step_stays_on_the_ray() {
         for &(dx, dy) in &[(100i32, 0i32), (0, -100), (70, -70), (-40, 90), (-30, -80)] {
             let a = find_angle(dx, dy);
-            let sx = sin_table(a, 100);
-            let sy = -cos_move_step(a, 100);
+            let sx = sinx(a, 100);
+            // Engine frame: angle 0 is -y, so the y step is the negated cosine.
+            let sy = -cosx(a, 100);
             // Cross product against the true direction should be small.
             let cross = (sx as f64) * (dy as f64) - (sy as f64) * (dx as f64);
             let scale = ((dx * dx + dy * dy) as f64).sqrt() * 100.0;
-            assert!(cross.abs() / scale < 0.02, "step drifted off the ray: {cross} / {scale}");
+            assert!(
+                cross.abs() / scale < 0.02,
+                "step drifted off the ray: {cross} / {scale}"
+            );
         }
     }
 }

@@ -254,7 +254,13 @@ fn analyse(path: &Path) -> Result<FileResult, String> {
     let (ok, key, plains, seeds) = best.ok_or("no candidate keys (empty payloads)")?;
 
     // 4. Decode, re-encode, require identical bytes for every package.
-    let mut res = FileResult { packages: recs.len(), ok, key, seeds, ..Default::default() };
+    let mut res = FileResult {
+        packages: recs.len(),
+        ok,
+        key,
+        seeds,
+        ..Default::default()
+    };
     for (r, plain) in recs.iter().zip(plains.iter()) {
         let mk = || match &res.seeds {
             None => Obfuscation::none(),
@@ -296,13 +302,23 @@ fn analyse(path: &Path) -> Result<FileResult, String> {
             );
             off += c.len() + walk.next_pad();
         }
-        assert_eq!(off, plain.len(), "walk must tile the payload (stamp {})", r.header.stamp);
+        assert_eq!(
+            off,
+            plain.len(),
+            "walk must tile the payload (stamp {})",
+            r.header.stamp
+        );
 
         // (b) re-encoding reproduces the payload length exactly
         let mut re = Vec::with_capacity(plain.len());
         let mut enc = mk();
         encode_commands(&cmds, &mut enc, &mut re);
-        assert_eq!(re.len(), plain.len(), "re-encoded length (stamp {})", r.header.stamp);
+        assert_eq!(
+            re.len(),
+            plain.len(),
+            "re-encoded length (stamp {})",
+            r.header.stamp
+        );
 
         // (c) the XOR is an exact involution back to the original file bytes
         let mut back = plain.clone();
@@ -525,13 +541,20 @@ fn recorded_packages_convert_to_network_messages() {
     let mut n = 0usize;
     let mut saved = 0usize;
     for f in files.iter().take(6) {
-        let Some(payload) = load_payload(f) else { continue };
-        let Some(loc) = find_stream(&payload) else { continue };
+        let Some(payload) = load_payload(f) else {
+            continue;
+        };
+        let Some(loc) = find_stream(&payload) else {
+            continue;
+        };
         for rec in PackageStream::new(&payload, loc.start) {
             let msg = NetCommandPackage::from_record(&rec);
             let mut wire = Vec::new();
             msg.encode(&mut wire);
-            assert_eq!(wire.len(), NetCommandPackage::HEADER_LEN + rec.payload.len());
+            assert_eq!(
+                wire.len(),
+                NetCommandPackage::HEADER_LEN + rec.payload.len()
+            );
             let back = NetCommandPackage::decode(&wire).expect("net message re-decodes");
             assert_eq!(back.stamp, rec.header.stamp);
             assert_eq!(back.play as i32, rec.header.play);

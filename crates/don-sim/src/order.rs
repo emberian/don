@@ -65,23 +65,65 @@ pub enum OrderIndex {
 
 /// `OrderNames`, index-aligned.
 pub const ORDER_NAMES: [&str; NUM_UNIT_ORDERS] = [
-    "NONE", "MOVE_TO", "ATTACK_TO", "EXPLORE_TO", "FLEE_TO", "PATROL", "BUILD_AT",
-    "GATHER", "BOARD_SHIP", "AWAIT_BOARD", "ATTACK", "FOLLOW", "GUARD", "REPAIR",
-    "CAST_SPELL", "TRADE_ROUTE", "STRAFE", "AIR_PATROL", "CHANGE_FORM", "GROUP_MOVE",
-    "GROUP_ATTACK", "GROUP_ATTACK_TO", "GROUP_PATROL", "ATTACK_GROUND",
-    "AIR_ATTACK_GROUND", "SPECIAL_ANIM", "GARRISON", "THINK",
+    "NONE",
+    "MOVE_TO",
+    "ATTACK_TO",
+    "EXPLORE_TO",
+    "FLEE_TO",
+    "PATROL",
+    "BUILD_AT",
+    "GATHER",
+    "BOARD_SHIP",
+    "AWAIT_BOARD",
+    "ATTACK",
+    "FOLLOW",
+    "GUARD",
+    "REPAIR",
+    "CAST_SPELL",
+    "TRADE_ROUTE",
+    "STRAFE",
+    "AIR_PATROL",
+    "CHANGE_FORM",
+    "GROUP_MOVE",
+    "GROUP_ATTACK",
+    "GROUP_ATTACK_TO",
+    "GROUP_PATROL",
+    "ATTACK_GROUND",
+    "AIR_ATTACK_GROUND",
+    "SPECIAL_ANIM",
+    "GARRISON",
+    "THINK",
 ];
 
 impl OrderIndex {
     pub const ALL: [OrderIndex; NUM_UNIT_ORDERS] = [
-        OrderIndex::None, OrderIndex::MoveTo, OrderIndex::AttackTo, OrderIndex::ExploreTo,
-        OrderIndex::FleeTo, OrderIndex::Patrol, OrderIndex::BuildAt, OrderIndex::Gather,
-        OrderIndex::BoardShip, OrderIndex::AwaitBoard, OrderIndex::Attack,
-        OrderIndex::Follow, OrderIndex::Guard, OrderIndex::Repair, OrderIndex::CastSpell,
-        OrderIndex::TradeRoute, OrderIndex::Strafe, OrderIndex::AirPatrol,
-        OrderIndex::ChangeForm, OrderIndex::GroupMove, OrderIndex::GroupAttack,
-        OrderIndex::GroupAttackTo, OrderIndex::GroupPatrol, OrderIndex::AttackGround,
-        OrderIndex::AirAttackGround, OrderIndex::SpecialAnim, OrderIndex::Garrison,
+        OrderIndex::None,
+        OrderIndex::MoveTo,
+        OrderIndex::AttackTo,
+        OrderIndex::ExploreTo,
+        OrderIndex::FleeTo,
+        OrderIndex::Patrol,
+        OrderIndex::BuildAt,
+        OrderIndex::Gather,
+        OrderIndex::BoardShip,
+        OrderIndex::AwaitBoard,
+        OrderIndex::Attack,
+        OrderIndex::Follow,
+        OrderIndex::Guard,
+        OrderIndex::Repair,
+        OrderIndex::CastSpell,
+        OrderIndex::TradeRoute,
+        OrderIndex::Strafe,
+        OrderIndex::AirPatrol,
+        OrderIndex::ChangeForm,
+        OrderIndex::GroupMove,
+        OrderIndex::GroupAttack,
+        OrderIndex::GroupAttackTo,
+        OrderIndex::GroupPatrol,
+        OrderIndex::AttackGround,
+        OrderIndex::AirAttackGround,
+        OrderIndex::SpecialAnim,
+        OrderIndex::Garrison,
         OrderIndex::Think,
     ];
 
@@ -240,11 +282,22 @@ impl Default for Order {
 
 impl Order {
     pub fn move_to(x: i32, y: i32, tolerance: i32) -> Order {
-        Order { kind: OrderIndex::MoveTo, x, y, tolerance, ..Order::default() }
+        Order {
+            kind: OrderIndex::MoveTo,
+            x,
+            y,
+            tolerance,
+            ..Order::default()
+        }
     }
 
     pub fn attack(target_who: i8, target_o: i16) -> Order {
-        Order { kind: OrderIndex::Attack, target_who, target_o, ..Order::default() }
+        Order {
+            kind: OrderIndex::Attack,
+            target_who,
+            target_o,
+            ..Order::default()
+        }
     }
 
     #[inline]
@@ -390,7 +443,10 @@ mod tests {
         for (i, o) in OrderIndex::ALL.iter().enumerate() {
             assert_eq!(o.index(), i);
             assert_eq!(o.name(), ORDER_NAMES[i]);
-            assert_eq!(EXECUTORS[i].order, *o, "executor table is misaligned at {i}");
+            assert_eq!(
+                EXECUTORS[i].order, *o,
+                "executor table is misaligned at {i}"
+            );
         }
         assert_eq!(OrderIndex::ALL.len(), NUM_UNIT_ORDERS);
     }
@@ -404,7 +460,10 @@ mod tests {
             EXECUTORS[OrderIndex::MoveTo.index()].va
         );
         assert_eq!(EXECUTORS[OrderIndex::Patrol.index()].va, None);
-        assert_eq!(EXECUTORS[OrderIndex::Patrol.index()].status, ArmStatus::FaithfullyEmpty);
+        assert_eq!(
+            EXECUTORS[OrderIndex::Patrol.index()].status,
+            ArmStatus::FaithfullyEmpty
+        );
         assert_ne!(EXECUTORS[OrderIndex::GroupPatrol.index()].va, None);
     }
 

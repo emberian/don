@@ -73,11 +73,20 @@ pub enum Event {
     /// Every peer in the roster has its ready flag set. This is the gate the
     /// host uses before `StartGame`.
     AllReady,
-    ReadyChanged { unique_id: i32, ready: bool },
+    ReadyChanged {
+        unique_id: i32,
+        ready: bool,
+    },
     /// A peer reported a desync at `frame` (`IPT_DSYNCMSG`).
-    Desync { unique_id: i32, frame: i32 },
+    Desync {
+        unique_id: i32,
+        frame: i32,
+    },
     /// A game-layer message arrived. `from` is the sender's unique id.
-    Game { from: i32, msg: OwnedMsg },
+    Game {
+        from: i32,
+        msg: OwnedMsg,
+    },
 }
 
 /// An owned copy of a decoded game message, so events can outlive the buffer.
@@ -140,7 +149,7 @@ impl<T: Transport> Session<T> {
             players: Vec::new(),
             events: Vec::new(),
             turns: BTreeMap::new(),
-            announced: false,
+            announced_to: Vec::new(),
             all_ready_fired: false,
             now_ms: 0,
             last_pulse_sent_ms: 0,
@@ -220,17 +229,20 @@ impl<T: Transport> Session<T> {
     }
 
     /// Queue the local command package for `stamp` and broadcast it.
-    pub fn send_command_package(
-        &mut self,
-        stamp: u32,
-        play: i8,
-        payload: &[u8],
-    ) -> io::Result<()> {
+    pub fn send_command_package(&mut self, stamp: u32, play: i8, payload: &[u8]) -> io::Result<()> {
         self.turns.entry(stamp).or_default().insert(
             play,
-            TurnPackage { stamp, play, payload: payload.to_vec() },
+            TurnPackage {
+                stamp,
+                play,
+                payload: payload.to_vec(),
+            },
         );
-        self.send_all(&NetMsg::CommandPackage { stamp, play, payload })
+        self.send_all(&NetMsg::CommandPackage {
+            stamp,
+            play,
+            payload,
+        })
     }
 
     /// Have we got a package from every player for this stamp? This is the
@@ -238,12 +250,18 @@ impl<T: Transport> Session<T> {
     /// advance without one package per participating slot.
     pub fn turn_ready(&self, stamp: u32) -> bool {
         let want = self.players.len();
-        self.turns.get(&stamp).map(|m| m.len() >= want).unwrap_or(false)
+        self.turns
+            .get(&stamp)
+            .map(|m| m.len() >= want)
+            .unwrap_or(false)
     }
 
     /// Take every package for a stamp, in slot order.
     pub fn take_turn(&mut self, stamp: u32) -> Vec<TurnPackage> {
-        self.turns.remove(&stamp).map(|m| m.into_values().collect()).unwrap_or_default()
+        self.turns
+            .remove(&stamp)
+            .map(|m| m.into_values().collect())
+            .unwrap_or_default()
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -256,17 +274,52 @@ impl<T: Transport> Session<T> {
     pub fn poll(&mut self, now_ms: u64, budget: Duration) -> io::Result<()> {
         self.now_ms = now_ms;
 
-        // A client announces itself once the transport reports a peer, which is
-        // the earliest moment `IPT_ADDPLAYER` can be delivered.
-        if !self.announced && !self.transport.peers().is_empty() {
+        // Introduce ourselves to every transport peer we have not greeted yet,
+        // and immediately restate our ready flag to that peer.
+        //
+        // Both halves are load-bearing, and the second one was paid for. The
+        // netlib's `process_ready_flag(const CrossplayNetLibPlayer*,
+        // ReadyFlagRequest*)` takes an already-resolved player, so a flag from
+        // a peer the receiver has not yet added is *dropped* — and nothing in
+        // the protocol ever asks for it again. The shipped game never hits that
+        // race because membership is lobby-driven: `OnPlayerJoined` materialises
+        // the peer object before any P2P channel to it exists. We have no lobby
+        // in front of the transport, so ordering is not guaranteed, and an
+        // edge-triggered ready flag deadlocks: measured, two TCP peers hung
+        // forever with each believing the other was not ready.
+        //
+        // The fix is to treat readiness as *state* rather than an event and
+        // republish it whenever the peer set changes. That is strictly more
+        // robust than the shipped behaviour and cannot desynchronise it: the
+        // packet is byte-identical, only the retransmit policy differs.
+        let fresh: Vec<i32> = self
+            .transport
+            .peers()
+            .into_iter()
+            .filter(|p| !self.announced_to.contains(p))
+            .collect();
+        if !fresh.is_empty() {
             let me = self.local_id();
             let name = self.local_name.clone();
-            self.emit_all(&InternalPacket::AddPlayer {
-                player_name: name,
-                unique_id: me,
-                is_hosting: self.role == Role::Host,
-            })?;
-            self.announced = true;
+            let hosting = self.role == Role::Host;
+            let ready = self
+                .players
+                .iter()
+                .find(|p| p.is_local)
+                .map(|p| p.ready)
+                .unwrap_or(false);
+            for peer in fresh {
+                self.emit_to(
+                    peer,
+                    &InternalPacket::AddPlayer {
+                        player_name: name.clone(),
+                        unique_id: me,
+                        is_hosting: hosting,
+                    },
+                )?;
+                self.emit_to(peer, &InternalPacket::ReadyFlag { ready })?;
+                self.announced_to.push(peer);
+            }
         }
 
         if now_ms.saturating_sub(self.last_pulse_sent_ms) >= self.pulse_interval_ms {
@@ -298,10 +351,32 @@ impl<T: Transport> Session<T> {
         self.transport.send(Dest::All, &b)
     }
 
+    fn emit_to(&mut self, peer: i32, p: &InternalPacket) -> io::Result<()> {
+        let mut b = Vec::new();
+        p.encode(&mut b);
+        self.transport.send(Dest::One(peer), &b)
+    }
+
+    /// Restate our own ready flag to everyone. Called whenever the roster
+    /// grows, so a peer that joined after we readied still learns our state.
+    fn republish_ready(&mut self) -> io::Result<()> {
+        let ready = self
+            .players
+            .iter()
+            .find(|p| p.is_local)
+            .map(|p| p.ready)
+            .unwrap_or(false);
+        self.emit_all(&InternalPacket::ReadyFlag { ready })
+    }
+
     fn handle(&mut self, d: Datagram) -> io::Result<()> {
-        let Some(&first) = d.bytes.first() else { return Ok(()) };
+        let Some(&first) = d.bytes.first() else {
+            return Ok(());
+        };
         if first >= crate::internal::IPT_BASE {
-            let Ok(p) = InternalPacket::decode(&d.bytes) else { return Ok(()) };
+            let Ok(p) = InternalPacket::decode(&d.bytes) else {
+                return Ok(());
+            };
             self.handle_internal(d.from, p)
         } else {
             self.handle_game(d)
@@ -311,19 +386,38 @@ impl<T: Transport> Session<T> {
     fn handle_internal(&mut self, from: i32, p: InternalPacket) -> io::Result<()> {
         match p {
             // `process_create_player_message`
-            InternalPacket::AddPlayer { player_name, unique_id, is_hosting } => {
-                if self.find(unique_id).is_none() {
-                    let slot = self.players.len();
-                    self.players.push(Player {
-                        unique_id,
-                        name: player_name,
-                        is_host: is_hosting,
-                        is_local: false,
-                        ready: false,
-                        last_pulse_ms: self.now_ms,
-                        slot,
-                    });
-                    self.events.push(Event::PlayerJoined(unique_id));
+            InternalPacket::AddPlayer {
+                player_name,
+                unique_id,
+                is_hosting,
+            } => {
+                let mut grew = false;
+                match self.players.iter_mut().find(|p| p.unique_id == unique_id) {
+                    // A peer we already know from `IPT_PLAYERLIST` has no name
+                    // yet — the roster packet carries ids only. Fill it in.
+                    Some(p) => {
+                        if p.name.is_empty() {
+                            p.name = player_name;
+                        }
+                        p.is_host = is_hosting;
+                    }
+                    None => {
+                        let slot = self.players.len();
+                        self.players.push(Player {
+                            unique_id,
+                            name: player_name,
+                            is_host: is_hosting,
+                            is_local: false,
+                            ready: false,
+                            last_pulse_ms: self.now_ms,
+                            slot,
+                        });
+                        self.events.push(Event::PlayerJoined(unique_id));
+                        grew = true;
+                    }
+                }
+                if grew {
+                    self.republish_ready()?;
                 }
                 // `send_playerlist()` — the host is the only authority on the
                 // roster, so it answers every announcement with the full list.
@@ -350,11 +444,15 @@ impl<T: Transport> Session<T> {
                 Ok(())
             }
             // `process_playerlist`
-            InternalPacket::PlayerList { num_players, unique_ids } => {
+            InternalPacket::PlayerList {
+                num_players,
+                unique_ids,
+            } => {
                 if self.role == Role::Host {
                     return Ok(()); // host-authoritative; ignore inbound lists
                 }
                 let n = (num_players as usize).min(MAX_PLAYERS);
+                let mut grew = false;
                 for (slot, &id) in unique_ids.iter().take(n).enumerate() {
                     if id == 0 {
                         continue;
@@ -372,8 +470,12 @@ impl<T: Transport> Session<T> {
                                 slot,
                             });
                             self.events.push(Event::PlayerJoined(id));
+                            grew = true;
                         }
                     }
+                }
+                if grew {
+                    self.republish_ready()?;
                 }
                 let keep: Vec<i32> = unique_ids[..n].to_vec();
                 let dropped: Vec<i32> = self
@@ -394,7 +496,10 @@ impl<T: Transport> Session<T> {
                 if let Some(p) = self.players.iter_mut().find(|p| p.unique_id == from) {
                     if p.ready != ready {
                         p.ready = ready;
-                        self.events.push(Event::ReadyChanged { unique_id: from, ready });
+                        self.events.push(Event::ReadyChanged {
+                            unique_id: from,
+                            ready,
+                        });
                     }
                 }
                 Ok(())
@@ -408,7 +513,10 @@ impl<T: Transport> Session<T> {
             }
             // `process_dsync`
             InternalPacket::Dsync { frame } => {
-                self.events.push(Event::Desync { unique_id: from, frame });
+                self.events.push(Event::Desync {
+                    unique_id: from,
+                    frame,
+                });
                 Ok(())
             }
             // `process_destroy_player_message`
@@ -431,23 +539,36 @@ impl<T: Transport> Session<T> {
             }
             // Drop requests are surfaced as nothing yet; `DropControl` in the
             // engine owns the vote, and we do not model the vote here.
-            InternalPacket::DropRequest { .. } | InternalPacket::CancelDropRequest { .. } => {
-                Ok(())
-            }
+            InternalPacket::DropRequest { .. } | InternalPacket::CancelDropRequest { .. } => Ok(()),
         }
     }
 
     fn handle_game(&mut self, d: Datagram) -> io::Result<()> {
-        let Ok(f) = NetMsg::decode(&d.bytes) else { return Ok(()) };
-        if let NetMsg::CommandPackage { stamp, play, payload } = f.msg {
+        let Ok(f) = NetMsg::decode(&d.bytes) else {
+            return Ok(());
+        };
+        if let NetMsg::CommandPackage {
+            stamp,
+            play,
+            payload,
+        } = f.msg
+        {
             self.turns.entry(stamp).or_default().insert(
                 play,
-                TurnPackage { stamp, play, payload: payload.to_vec() },
+                TurnPackage {
+                    stamp,
+                    play,
+                    payload: payload.to_vec(),
+                },
             );
         }
         self.events.push(Event::Game {
             from: d.from,
-            msg: OwnedMsg { id: f.ty.id, response: f.ty.response, bytes: d.bytes },
+            msg: OwnedMsg {
+                id: f.ty.id,
+                response: f.ty.response,
+                bytes: d.bytes,
+            },
         });
         Ok(())
     }
@@ -506,14 +627,26 @@ mod tests {
         settle(&mut host, &mut client, &mut now, 8);
 
         assert_eq!(host.players().len(), 2, "host roster: {:?}", host.players());
-        assert_eq!(client.players().len(), 2, "client roster: {:?}", client.players());
+        assert_eq!(
+            client.players().len(),
+            2,
+            "client roster: {:?}",
+            client.players()
+        );
         assert!(host.find(202).is_some());
         assert!(client.find(101).is_some());
         assert_eq!(client.find(101).unwrap().is_host, true);
         // slots agree
-        let hs: Vec<(i32, usize)> = host.players().iter().map(|p| (p.unique_id, p.slot)).collect();
-        let cs: Vec<(i32, usize)> =
-            client.players().iter().map(|p| (p.unique_id, p.slot)).collect();
+        let hs: Vec<(i32, usize)> = host
+            .players()
+            .iter()
+            .map(|p| (p.unique_id, p.slot))
+            .collect();
+        let cs: Vec<(i32, usize)> = client
+            .players()
+            .iter()
+            .map(|p| (p.unique_id, p.slot))
+            .collect();
         assert_eq!(hs, cs);
     }
 
@@ -553,15 +686,21 @@ mod tests {
         client.drain_events();
 
         for stamp in 0u32..5 {
-            host.send_command_package(stamp, 0, &[0x39, stamp as u8]).unwrap();
+            host.send_command_package(stamp, 0, &[0x39, stamp as u8])
+                .unwrap();
             // Before the client's package arrives the host must NOT be able to
             // advance: that is the whole point of lockstep.
             assert!(!host.turn_ready(stamp), "host advanced on its own package");
-            client.send_command_package(stamp, 1, &[0x39, (stamp + 100) as u8]).unwrap();
+            client
+                .send_command_package(stamp, 1, &[0x39, (stamp + 100) as u8])
+                .unwrap();
             settle(&mut host, &mut client, &mut now, 3);
 
             assert!(host.turn_ready(stamp), "host missing a package for {stamp}");
-            assert!(client.turn_ready(stamp), "client missing a package for {stamp}");
+            assert!(
+                client.turn_ready(stamp),
+                "client missing a package for {stamp}"
+            );
             let ht = host.take_turn(stamp);
             let ct = client.take_turn(stamp);
             assert_eq!(ht, ct, "the two peers disagree about turn {stamp}");
@@ -569,6 +708,35 @@ mod tests {
             assert_eq!(ht[0].payload, vec![0x39, stamp as u8]);
             assert_eq!(ht[1].payload, vec![0x39, (stamp + 100) as u8]);
         }
+    }
+
+    /// Regression: readiness must be level-triggered.
+    ///
+    /// A peer that sets its ready flag *before* the other side has added it to
+    /// the roster used to deadlock — `process_ready_flag` resolves the sender
+    /// to a known player and drops the packet otherwise, and nothing retried.
+    /// Two TCP peers hung for the full 15 s timeout on this. The session now
+    /// republishes the flag whenever the roster grows.
+    #[test]
+    fn a_ready_flag_sent_before_the_peer_knows_us_still_converges() {
+        let mut ta = LoopTransport::new(101);
+        let mut tb = LoopTransport::new(202);
+        ta.connect(202);
+        tb.connect(101);
+        let mut host = Session::new(ta, Role::Host, "host");
+        let mut client = Session::new(tb, Role::Client, "client");
+
+        // The client readies immediately — before a single packet has moved,
+        // so the flag is on the wire ahead of its own IPT_ADDPLAYER.
+        client.send_ready_flag(true).unwrap();
+        host.send_ready_flag(true).unwrap();
+
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 10);
+
+        assert_eq!(host.players().len(), 2);
+        assert!(host.all_ready(), "host roster: {:?}", host.players());
+        assert!(client.all_ready(), "client roster: {:?}", client.players());
     }
 
     #[test]
@@ -595,9 +763,10 @@ mod tests {
         host.drain_events();
         client.send_dsync(4242).unwrap();
         settle(&mut host, &mut client, &mut now, 3);
-        assert!(host
-            .drain_events()
-            .contains(&Event::Desync { unique_id: 202, frame: 4242 }));
+        assert!(host.drain_events().contains(&Event::Desync {
+            unique_id: 202,
+            frame: 4242
+        }));
     }
 
     #[test]

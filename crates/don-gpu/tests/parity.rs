@@ -67,7 +67,10 @@ fn gpu_result_is_invariant_under_the_schedule() {
                         per_field_convergence: per_field,
                     },
                 );
-                assert_eq!(b.dist, want, "inner={inner} poll={poll} per_field={per_field}");
+                assert_eq!(
+                    b.dist, want,
+                    "inner={inner} poll={poll} per_field={per_field}"
+                );
             }
         }
     }
@@ -104,24 +107,39 @@ fn active_list_compaction_is_bit_identical_to_running_the_whole_batch() {
         let s_off = don_gpu::gpu::solve_batch_gpu(
             &g,
             &mut off,
-            SolveOptions { per_field_convergence: false, ..SolveOptions::default() },
+            SolveOptions {
+                per_field_convergence: false,
+                ..SolveOptions::default()
+            },
         );
         let mut on = b.clone();
         let s_on = don_gpu::gpu::solve_batch_gpu(
             &g,
             &mut on,
-            SolveOptions { per_field_convergence: true, ..SolveOptions::default() },
+            SolveOptions {
+                per_field_convergence: true,
+                ..SolveOptions::default()
+            },
         );
 
-        assert!(s_off.converged && s_on.converged, "{w}x{h} x{fields} hit the round cap");
-        assert_eq!(off.dist, want.dist, "batch-wide flag disagreed with Dial");
-        assert_eq!(on.dist, want.dist, "compacted run disagreed with Dial at {w}x{h} x{fields}");
-        // The test is only meaningful if compaction actually kicked in.
         assert!(
-            s_on.field_rounds < s_on.field_rounds_uncompacted,
-            "compaction never dropped a field at {w}x{h} x{fields}; fixture is too uniform"
+            s_off.converged && s_on.converged,
+            "{w}x{h} x{fields} hit the round cap"
         );
+        assert_eq!(off.dist, want.dist, "batch-wide flag disagreed with Dial");
+        assert_eq!(
+            on.dist, want.dist,
+            "compacted run disagreed with Dial at {w}x{h} x{fields}"
+        );
+        // The test is only meaningful if compaction actually kicked in somewhere. A
+        // three-field batch can legitimately converge inside one poll group, so the
+        // vacuity guard is an aggregate one.
+        ever_compacted |= s_on.field_rounds < s_on.field_rounds_uncompacted;
     }
+    assert!(
+        ever_compacted,
+        "compaction never dropped a field on any shape; the fixture is too uniform to test it"
+    );
 }
 
 /// The active list must survive being reused: a solver is allocated once per batch shape and
@@ -142,7 +160,11 @@ fn a_reused_solver_resets_its_active_list() {
         let st = s.run(SolveOptions::default());
         s.download(&mut got);
         assert!(st.converged);
-        assert_eq!(s.active_fields(), 0, "a converged solve must have emptied the active list");
+        assert_eq!(
+            s.active_fields(),
+            0,
+            "a converged solve must have emptied the active list"
+        );
         assert_eq!(got.dist, want.dist, "seed {seed} on a reused solver");
     }
 }
@@ -174,7 +196,13 @@ fn gpu_directions_match_cpu_directions() {
         let mut want = vec![0u8; want_batch.total_cells()];
         for f in 0..fields as usize {
             let r = f * per..(f + 1) * per;
-            directions_field(w, h, &want_batch.cost[r.clone()], &want_batch.dist[r.clone()], &mut want[r]);
+            directions_field(
+                w,
+                h,
+                &want_batch.cost[r.clone()],
+                &want_batch.dist[r.clone()],
+                &mut want[r],
+            );
         }
 
         let mut b = FieldBatch::synth_terrain(w, h, fields, 55);

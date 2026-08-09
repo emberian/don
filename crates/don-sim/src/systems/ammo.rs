@@ -380,7 +380,11 @@ impl AmmoWalk {
 /// Every offset below is `engine_offset - 4` from `schema/pdb-types.json`.
 pub fn assert_layout() {
     use core::mem::size_of;
-    assert_eq!(size_of::<AmmoWalk>(), 100, "AmmoData +0x04..+0x68 is 100 bytes");
+    assert_eq!(
+        size_of::<AmmoWalk>(),
+        100,
+        "AmmoData +0x04..+0x68 is 100 bytes"
+    );
     let z = AmmoWalk::default();
     let base = &z as *const AmmoWalk as usize;
     macro_rules! off {
@@ -445,7 +449,10 @@ impl Default for AmmoPool {
 impl AmmoPool {
     /// `Objects::init` `0x0065EA80`: 200 constructed-but-free slots, `ammo_index = 0`.
     pub fn new() -> Self {
-        AmmoPool { slots: vec![Ammo::default(); AMMO_POOL_SLOTS], ammo_index: 0 }
+        AmmoPool {
+            slots: vec![Ammo::default(); AMMO_POOL_SLOTS],
+            ammo_index: 0,
+        }
     }
 
     /// `Objects::add_ammo` (`0x00658B10`) slot selection: scan from 0 for the first slot
@@ -643,7 +650,11 @@ pub fn fire_ammo_spawns(
         // One per guy, in guy-list order. `for (i = 0; i < unit->guy_mark; i++)`.
         let n = shooter.guy_mark.max(0) as usize;
         for g in guys.iter().take(n) {
-            out.push(SpawnPoint { x: g.x, y: g.y, z: g.z + MUZZLE_Z_UNIT });
+            out.push(SpawnPoint {
+                x: g.x,
+                y: g.y,
+                z: g.z + MUZZLE_Z_UNIT,
+            });
         }
     } else {
         let w = shooter.rules.x_size * 0x60;
@@ -882,7 +893,10 @@ pub fn ammo_init(
     dist_for_accuracy: i32,
     rng: &mut Rng,
 ) -> Ammo {
-    let mut a = AmmoWalk { flags: 0, ..Default::default() };
+    let mut a = AmmoWalk {
+        flags: 0,
+        ..Default::default()
+    };
 
     a.flags &= 0xE3;
     a.who = ord.who;
@@ -905,7 +919,11 @@ pub fn ammo_init(
     a.sy = ord.start.y;
     a.sz = ord.start.z;
 
-    let acc = accuracy(shooter.rules.to_hit, shooter.rules.attenuate, dist_for_accuracy);
+    let acc = accuracy(
+        shooter.rules.to_hit,
+        shooter.rules.attenuate,
+        dist_for_accuracy,
+    );
     a.accuracy = acc;
 
     let r = miss_radius(radius_kind, acc as i32);
@@ -937,7 +955,10 @@ pub fn ammo_init(
     a.traj = TRAJ_ARC;
     arc_ballistics(&mut a);
 
-    Ammo { w: a, has_spline: false }
+    Ammo {
+        w: a,
+        has_spline: false,
+    }
 }
 
 // ============================================================================
@@ -1255,6 +1276,14 @@ pub struct Impact {
 /// entirely rather than clamping to zero. Note the box inset here is `size * 192` (a full
 /// tile per size unit) whereas [`hit_target`]'s rectangle uses `size * 96` — the two tests
 /// genuinely use different extents.
+///
+/// The two splash call sites disagree by one instruction and it is worth recording rather
+/// than smoothing over: `0x00678937` is `js` (skip only when **negative**, so a victim at
+/// exactly `scale == 0` still gets a call), while `0x006788C1`/`0x00678AC3` is
+/// `test ecx,ecx ; jle` (skip at zero too). The observable behaviour is identical because
+/// `Object::do_damage` itself opens with `cmp [ebp+0x1c], 0 ; jle <return>`, so a
+/// zero-scale call is a no-op — but the *call count* differs, which matters for anything
+/// that counts damage events. This function follows the `js` form and returns `Some(0)`.
 #[inline]
 pub fn splash_scale(
     impact_x: i32,
@@ -1503,7 +1532,10 @@ pub fn split_damage(
     let sixteenths = sar4(d);
     let frac = rem16(sixteenths);
     let hits = sar4(sixteenths);
-    Some(SplitDamage { hits, frac16: frac as i8 })
+    Some(SplitDamage {
+        hits,
+        frac16: frac as i8,
+    })
 }
 
 /// `cdq ; and edx,0xf ; add eax,edx ; sar eax,4` — a truncating divide by 16.
@@ -1573,7 +1605,7 @@ mod tests {
         assert_eq!(vector_dist(3, 4), 4 + 9 / 8); // 5
         assert_eq!(vector_dist(-4, 3), 4 + 9 / 8);
         assert_eq!(vector_dist(192, 192), 192 + (192 * 192) / 384); // 288
-        // the >= 60000 fallback: (2*hi + lo)/2
+                                                                    // the >= 60000 fallback: (2*hi + lo)/2
         assert_eq!(vector_dist(70000, 60000), (60000 + 140000) >> 1);
         // it is an approximation, and deliberately so: never assert it equals sqrt.
         let approx = vector_dist(1000, 1000) as f64;
@@ -1610,7 +1642,11 @@ mod tests {
             p.slots[s].w.flags = FLAG_ALIVE | FLAG_FLYING;
         }
         p.slots[2].close();
-        assert_eq!(p.alloc_slot(), 2, "add_ammo scans from 0 for flags & 3 == 0");
+        assert_eq!(
+            p.alloc_slot(),
+            2,
+            "add_ammo scans from 0 for flags & 3 == 0"
+        );
     }
 
     #[test]
@@ -1657,7 +1693,10 @@ mod tests {
     #[test]
     fn checksum_walk_length_is_101_bytes_per_live_slot() {
         // flags(1) + body(99) + has_spline(1)
-        let mut p = AmmoPool { slots: vec![Ammo::default()], ammo_index: 0 };
+        let mut p = AmmoPool {
+            slots: vec![Ammo::default()],
+            ammo_index: 0,
+        };
         p.slots[0].w.flags = FLAG_FLYING;
         let via_pool = p.checksum();
         let b = p.slots[0].w.as_bytes();
@@ -1680,7 +1719,11 @@ mod tests {
     fn accuracy_loses_attenuate_per_tile() {
         // to_hit 100, attenuate 3
         assert_eq!(accuracy(100, 3, 0), 100);
-        assert_eq!(accuracy(100, 3, TILE - 1), 100, "sub-tile range costs nothing");
+        assert_eq!(
+            accuracy(100, 3, TILE - 1),
+            100,
+            "sub-tile range costs nothing"
+        );
         assert_eq!(accuracy(100, 3, TILE), 97);
         assert_eq!(accuracy(100, 3, 10 * TILE), 70);
         assert_eq!(accuracy(100, 3, 100 * TILE), 5, "floored at 5, not at 0");
@@ -1703,7 +1746,10 @@ mod tests {
         let (mut x, mut y) = (500, 500);
         apply_aim_scatter(&mut x, &mut y, 1, &mut rng);
         assert_eq!((x, y), (500, 500));
-        assert_eq!(rng.0, before, "R <= 1 consumes no RNG -- a stream-position hazard");
+        assert_eq!(
+            rng.0, before,
+            "R <= 1 consumes no RNG -- a stream-position hazard"
+        );
 
         let (mut x, mut y) = (500, 500);
         apply_aim_scatter(&mut x, &mut y, 96, &mut rng);
@@ -1726,7 +1772,10 @@ mod tests {
         assert_eq!(a.total_time, 30);
         arc_ballistics(&mut a);
         let land = z_at(&a, a.total_time as f32);
-        assert!((land - a.ez as f32).abs() < 0.05, "z(T) must equal ez, got {land}");
+        assert!(
+            (land - a.ez as f32).abs() < 0.05,
+            "z(T) must equal ez, got {land}"
+        );
         let (x, y) = xy_at(&a, a.total_time as f32);
         assert_eq!((x, y), (a.ex, a.ey));
         // and the apex is above both ends
@@ -1737,7 +1786,11 @@ mod tests {
     #[test]
     fn total_time_is_never_zero() {
         assert_eq!(arc_total_time(0, 0, 0, 0, 100), 1);
-        assert_eq!(arc_total_time(0, 0, 5, 0, 100), 1, "float truncation would give 0");
+        assert_eq!(
+            arc_total_time(0, 0, 5, 0, 100),
+            1,
+            "float truncation would give 0"
+        );
     }
 
     #[test]
@@ -1764,13 +1817,66 @@ mod tests {
             }
             assert!(frames < 1000, "did not converge");
         }
-        assert_eq!(a.w.cur_time, t, "impact on the frame cur_time reaches total_time");
+        assert_eq!(
+            a.w.cur_time, t,
+            "impact on the frame cur_time reaches total_time"
+        );
+    }
+
+    #[test]
+    fn flat_ground_can_never_clip_a_ballistic_shot() {
+        // Worth pinning: `arc_ballistics` solves v1z so that z(T) == ez under negative
+        // gravity, which makes the parabola strictly ABOVE the chord between its endpoints.
+        // On level terrain below both ends the clip branch is therefore unreachable -- it
+        // exists for rising ground, not for "the shot is low".
+        let env = FlatWorld {
+            w: 64,
+            h: 64,
+            z: 400,
+        };
+        let mut a = Ammo::default();
+        a.w.flags = FLAG_ALIVE | FLAG_FLYING;
+        a.w.sz = 500;
+        a.w.ex = 6000;
+        a.w.ez = 500;
+        a.w.traj = TRAJ_ARC;
+        a.w.total_time = arc_total_time(0, 0, 6000, 0, 100);
+        arc_ballistics(&mut a.w);
+        let launched_total = a.w.total_time;
+        while ammo_inc_time(&mut a, &env, |_| true, |_| true) == Step::Flying {}
+        assert_eq!(
+            a.w.total_time, launched_total,
+            "no clip over flat low ground"
+        );
+        assert_eq!(a.w.ex, 6000, "it reached the aim point");
     }
 
     #[test]
     fn terrain_clips_a_shot_that_would_pass_through_a_hill() {
-        // A high plateau under a long flat shot: the parabola dips into it early.
-        let env = FlatWorld { w: 64, h: 64, z: 400 };
+        // Ground rises as `z = x`, steeper than the arc's descent: the shell buries itself
+        // in the hillside well before it reaches the aim point.
+        struct Ramp;
+        impl AmmoEnv for Ramp {
+            fn object(&self, _w: i32, _o: i32) -> Option<ObjView> {
+                None
+            }
+            fn terrain_z(&self, x: i32, _y: i32) -> i32 {
+                x
+            }
+            fn world_tiles(&self) -> (i32, i32) {
+                (64, 64)
+            }
+            fn find_unit_near(&self, _x: i32, _y: i32, _w: i32) -> Option<(i32, i32, i32)> {
+                None
+            }
+            fn find_building_at(&self, _tx: i32, _ty: i32) -> Option<(i32, i32)> {
+                None
+            }
+            fn is_water_tile(&self, _tx: i32, _ty: i32) -> bool {
+                false
+            }
+        }
+        let env = Ramp;
         let mut a = Ammo::default();
         a.w.flags = FLAG_ALIVE | FLAG_FLYING;
         a.w.sz = 500;
@@ -1785,13 +1891,25 @@ mod tests {
             match ammo_inc_time(&mut a, &env, |_| true, |_| true) {
                 Step::Flying => steps += 1,
                 Step::Impact => break,
-                Step::Closed => panic!(),
+                Step::Closed => panic!("clipped shots impact, they do not vanish"),
             }
-            assert!(steps < 1000);
+            assert!(steps < 1000, "did not converge");
         }
-        assert!(a.w.total_time < launched_total, "total_time is rewritten by the ground clip");
-        assert_eq!(a.w.ez, 400, "impact height becomes the terrain height");
-        assert!(a.w.ex < 6000, "it landed short");
+        assert!(
+            a.w.total_time < launched_total,
+            "total_time is REWRITTEN by the ground clip: {} -> {}",
+            launched_total,
+            a.w.total_time
+        );
+        assert!(
+            a.w.ex < 6000,
+            "it landed short of the aim point, at x={}",
+            a.w.ex
+        );
+        assert_eq!(
+            a.w.ez, a.w.ex,
+            "impact height becomes the terrain height there"
+        );
     }
 
     #[test]
@@ -1801,10 +1919,16 @@ mod tests {
         a.w.flags = 1; // exactly what the miss path writes
         a.w.cur_time = 0;
         for i in 1..SPENT_LINGER_FRAMES {
-            assert_eq!(ammo_inc_time(&mut a, &env, |_| true, |_| true), Step::Flying);
+            assert_eq!(
+                ammo_inc_time(&mut a, &env, |_| true, |_| true),
+                Step::Flying
+            );
             assert!(a.occupied(), "frame {i}: still in the ammo channel");
         }
-        assert_eq!(ammo_inc_time(&mut a, &env, |_| true, |_| true), Step::Closed);
+        assert_eq!(
+            ammo_inc_time(&mut a, &env, |_| true, |_| true),
+            Step::Closed
+        );
         assert!(!a.occupied());
     }
 
@@ -1817,7 +1941,10 @@ mod tests {
             y: 1000,
             z: 0,
             guy_mark: 3,
-            rules: ShooterRules { ammo_per_att: 5, ..Default::default() },
+            rules: ShooterRules {
+                ammo_per_att: 5,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let guys = [
@@ -1831,7 +1958,14 @@ mod tests {
         let mut out = Vec::new();
         fire_ammo_spawns(&shooter, &guys, &mut rng, &mut out);
         assert_eq!(out.len(), 3, "guy_mark rounds, not ammo_per_att");
-        assert_eq!(out[0], SpawnPoint { x: 10, y: 20, z: 5 + MUZZLE_Z_UNIT });
+        assert_eq!(
+            out[0],
+            SpawnPoint {
+                x: 10,
+                y: 20,
+                z: 5 + MUZZLE_Z_UNIT
+            }
+        );
         assert_eq!(rng.0, before, "the unit path is RNG-free");
     }
 
@@ -1843,7 +1977,12 @@ mod tests {
             x: 5000,
             y: 6000,
             z: 10,
-            rules: ShooterRules { ammo_per_att: 4, x_size: 2, y_size: 3, ..Default::default() },
+            rules: ShooterRules {
+                ammo_per_att: 4,
+                x_size: 2,
+                y_size: 3,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut rng = Rng(7);
@@ -1863,7 +2002,12 @@ mod tests {
     fn building_scatter_takes_exactly_two_draws_per_round() {
         let shooter = ObjView {
             is_unit: false,
-            rules: ShooterRules { ammo_per_att: 3, x_size: 2, y_size: 2, ..Default::default() },
+            rules: ShooterRules {
+                ammo_per_att: 3,
+                x_size: 2,
+                y_size: 2,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut a = Rng(1);
@@ -1883,50 +2027,134 @@ mod tests {
             is_unit: false,
             x: 1000,
             y: 1000,
-            rules: ShooterRules { x_size: 2, y_size: 1, ..Default::default() },
+            rules: ShooterRules {
+                x_size: 2,
+                y_size: 1,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let mut a = AmmoWalk { ox: 1, whom: 0, ex: 1000 + 2 * 0x60, ey: 1000, ..Default::default() };
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ex: 1000 + 2 * 0x60,
+            ey: 1000,
+            ..Default::default()
+        };
         assert!(hit_target(&mut a, Some(&build), true), "on the x edge");
-        let mut a = AmmoWalk { ox: 1, whom: 0, ex: 1000, ey: 1000 + 1 * 0x60 + 1, ..Default::default() };
-        assert!(!hit_target(&mut a, Some(&build), true), "one unit past the y edge");
-        assert_eq!((a.ox, a.whom), (-1, -1), "a miss forgets the target in place");
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ex: 1000,
+            ey: 1000 + 1 * 0x60 + 1,
+            ..Default::default()
+        };
+        assert!(
+            !hit_target(&mut a, Some(&build), true),
+            "one unit past the y edge"
+        );
+        assert_eq!(
+            (a.ox, a.whom),
+            (-1, -1),
+            "a miss forgets the target in place"
+        );
 
         let unit = ObjView {
             alive: true,
             is_unit: true,
             x: 0,
             y: 0,
-            rules: ShooterRules { target_size: 50, ..Default::default() },
+            rules: ShooterRules {
+                target_size: 50,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let mut a = AmmoWalk { ox: 1, whom: 0, ex: 50, ey: 0, accuracy: 90, ..Default::default() };
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ex: 50,
+            ey: 0,
+            accuracy: 90,
+            ..Default::default()
+        };
         assert!(hit_target(&mut a, Some(&unit), true));
-        let mut a = AmmoWalk { ox: 1, whom: 0, ex: 60, ey: 0, accuracy: 90, ..Default::default() };
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ex: 60,
+            ey: 0,
+            accuracy: 90,
+            ..Default::default()
+        };
         assert!(!hit_target(&mut a, Some(&unit), true));
         // accuracy > 100 halves the measured distance, i.e. doubles the effective radius
-        let mut a = AmmoWalk { ox: 1, whom: 0, ex: 60, ey: 0, accuracy: 101, ..Default::default() };
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ex: 60,
+            ey: 0,
+            accuracy: 101,
+            ..Default::default()
+        };
         assert!(hit_target(&mut a, Some(&unit), true));
     }
 
     #[test]
     fn a_dead_target_is_never_hit() {
-        let dead = ObjView { alive: false, is_unit: true, ..Default::default() };
-        let mut a = AmmoWalk { ox: 1, whom: 0, ..Default::default() };
+        let dead = ObjView {
+            alive: false,
+            is_unit: true,
+            ..Default::default()
+        };
+        let mut a = AmmoWalk {
+            ox: 1,
+            whom: 0,
+            ..Default::default()
+        };
         assert!(!hit_target(&mut a, Some(&dead), true));
     }
 
     #[test]
     fn splash_falls_off_linearly_from_the_bounding_box() {
-        let v = ObjView { x: 0, y: 0, rules: ShooterRules { x_size: 0, y_size: 0, ..Default::default() }, ..Default::default() };
+        let v = ObjView {
+            x: 0,
+            y: 0,
+            rules: ShooterRules {
+                x_size: 0,
+                y_size: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         // splash_area 2 tiles -> denominator 384
         assert_eq!(splash_scale(0, 0, &v, 2), Some(256));
         assert_eq!(splash_scale(192, 0, &v, 2), Some(256 - (192 * 256) / 384));
-        assert_eq!(splash_scale(384, 0, &v, 2), Some(0), "exactly at the edge still fires");
-        assert_eq!(splash_scale(385, 0, &v, 2), None, "past the edge is skipped, not clamped");
+        assert_eq!(
+            splash_scale(384, 0, &v, 2),
+            Some(0),
+            "exactly at the edge still fires"
+        );
+        // The guard is `js`, not `jle`: the quotient truncates, so the first distance that
+        // actually goes negative is 386, not 385. Verified against the divide, not assumed.
+        assert_eq!(splash_scale(385, 0, &v, 2), Some(0));
+        assert_eq!(
+            splash_scale(386, 0, &v, 2),
+            None,
+            "past the edge is skipped, not clamped"
+        );
 
         // a big target is measured from its box, so it takes full damage further out
-        let big = ObjView { x: 0, y: 0, rules: ShooterRules { x_size: 1, y_size: 1, ..Default::default() }, ..Default::default() };
+        let big = ObjView {
+            x: 0,
+            y: 0,
+            rules: ShooterRules {
+                x_size: 1,
+                y_size: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert_eq!(splash_scale(192, 0, &big, 2), Some(256));
     }
 
@@ -2027,7 +2255,10 @@ mod tests {
             is_unit: true,
             x: 3000,
             y: 3000,
-            rules: ShooterRules { target_size: 100, ..Default::default() },
+            rules: ShooterRules {
+                target_size: 100,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut a = Ammo::default();
@@ -2044,7 +2275,10 @@ mod tests {
         let mut rng = Rng(555);
         let before = rng.0;
         let imp = ammo_do_damage_single(&mut a, &env, Some(&target), true, &mut rng);
-        assert_eq!(rng.0, before, "a hit draws nothing -- the miss/hit RNG asymmetry");
+        assert_eq!(
+            rng.0, before,
+            "a hit draws nothing -- the miss/hit RNG asymmetry"
+        );
         assert_eq!(imp.calls.len(), 1);
         let c = imp.calls[0];
         assert_eq!(c.victim_o, 4);
@@ -2058,8 +2292,19 @@ mod tests {
 
     #[test]
     fn splash_marks_the_primary_target_as_non_secondary() {
-        let a = AmmoWalk { ex: 0, ey: 0, splash_area: 3, ox: 7, whom: 1, ..Default::default() };
-        let v = ObjView { x: 100, y: 0, ..Default::default() };
+        let a = AmmoWalk {
+            ex: 0,
+            ey: 0,
+            splash_area: 3,
+            ox: 7,
+            whom: 1,
+            ..Default::default()
+        };
+        let v = ObjView {
+            x: 100,
+            y: 0,
+            ..Default::default()
+        };
         let calls = ammo_do_damage_splash(&a, &[(1, 7, v), (2, 9, v)], Some((1, 7)));
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].secondary, 0);
@@ -2097,7 +2342,11 @@ mod tests {
             x: 1920,
             y: 0,
             z: 0,
-            rules: ShooterRules { target_size: 100, domain: DOMAIN_LAND, ..Default::default() },
+            rules: ShooterRules {
+                target_size: 100,
+                domain: DOMAIN_LAND,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let guys = [GuyPos { x: 0, y: 0, z: 0 }, GuyPos { x: 20, y: 0, z: 0 }];
@@ -2135,8 +2384,15 @@ mod tests {
         }
         assert_eq!(slots, vec![0, 1]);
         assert_eq!(pool.ammo_index, 2);
-        assert_ne!(pool.checksum(), idle, "live projectiles move the ammo channel");
-        assert!(pool.slots[0].w.flags & FLAG_OVERSHOOT != 0, "ground unit target -> overshoot");
+        assert_ne!(
+            pool.checksum(),
+            idle,
+            "live projectiles move the ammo channel"
+        );
+        assert!(
+            pool.slots[0].w.flags & FLAG_OVERSHOOT != 0,
+            "ground unit target -> overshoot"
+        );
 
         // Fly them out.
         let mut impacts = 0;
@@ -2166,7 +2422,11 @@ mod tests {
             }
         }
         assert_eq!(impacts, 2, "both rounds landed on the target");
-        assert_eq!(pool.checksum(), idle, "the channel returns to its idle value");
+        assert_eq!(
+            pool.checksum(),
+            idle,
+            "the channel returns to its idle value"
+        );
         assert_eq!(pool.ammo_index, 2, "ammo_index does NOT rewind");
     }
 }

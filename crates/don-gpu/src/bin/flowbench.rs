@@ -31,7 +31,11 @@ fn time<T>(f: impl FnOnce() -> T) -> (T, Duration) {
 
 /// Best of `reps` runs on a fresh clone each time. Best-of, not mean: we are after the
 /// machine's capability, and the noise on a laptop is one-sided.
-fn best(reps: usize, base: &FieldBatch, mut solve: impl FnMut(&mut FieldBatch)) -> (FieldBatch, Duration) {
+fn best(
+    reps: usize,
+    base: &FieldBatch,
+    mut solve: impl FnMut(&mut FieldBatch),
+) -> (FieldBatch, Duration) {
     let mut out = base.clone();
     let mut t = Duration::MAX;
     for _ in 0..reps {
@@ -55,7 +59,9 @@ struct Cfg {
 
 fn main() {
     let quick = std::env::args().any(|a| a == "--quick");
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     println!("don-gpu flowbench — batched integer flow-field relaxation");
     println!("host threads: {threads}");
 
@@ -125,8 +131,19 @@ fn section_e(gpu: &Option<Gpu>, threads: usize, quick: bool) {
         return;
     };
     println!(
-        "{:<10} {:>7} {:>8} {:>10} {:>10} {:>7} {:>12} {:>12} {:>9} {:>7}",
-        "grid", "fields", "case", "batch ms", "field ms", "gain", "rounds b/f", "fieldrounds", "conv av/mx", "dial Nt"
+        "{:<10} {:>7} {:>8} {:>10} {:>10} {:>7} {:>10} {:>7} {:>12} {:>12} {:>9} {:>7}",
+        "grid",
+        "fields",
+        "case",
+        "batch ms",
+        "field ms",
+        "gain",
+        "field@2 ms",
+        "gain@2",
+        "rounds b/f",
+        "fieldrounds",
+        "conv av/mx",
+        "dial Nt"
     );
     // (grid, fields, perturbation). `local` reproduces §4e's worst case: a small change
     // makes most fields converge almost at once while a few run long, which is exactly
@@ -167,12 +184,15 @@ fn section_e(gpu: &Option<Gpu>, threads: usize, quick: bool) {
                 cold.dist[i] = 0;
             }
         }
-        let (reference, t_dial) = best(2, &cold, |b| solve_batch_parallel(b, CpuKernel::Dial, 0, threads));
+        let (reference, t_dial) = best(2, &cold, |b| {
+            solve_batch_parallel(b, CpuKernel::Dial, 0, threads)
+        });
 
         let mut solver = g.solver(w, h, fields);
-        let mut run = |per_field: bool| {
+        let mut run = |per_field: bool, poll: u32| {
             let opts = SolveOptions {
                 per_field_convergence: per_field,
+                rounds_per_poll: poll,
                 ..SolveOptions::default()
             };
             let mut t = Duration::MAX;
@@ -188,20 +208,29 @@ fn section_e(gpu: &Option<Gpu>, threads: usize, quick: bool) {
                 }
                 t = t.min(st.compute);
             }
-            assert_eq!(out.dist, reference.dist, "{w}x{h} x{fields} per_field={per_field} missed the fixed point");
+            assert_eq!(
+                out.dist, reference.dist,
+                "{w}x{h} x{fields} per_field={per_field} missed the fixed point"
+            );
             (t, best_stats)
         };
-        let (t_batch, s_batch) = run(false);
-        let (t_field, s_field) = run(true);
+        let (t_batch, s_batch) = run(false, 8);
+        let (t_field, s_field) = run(true, 8);
+        // A field can only leave the dispatch at a poll boundary, so `rounds_per_poll`
+        // quantises how early it can drop out — the floor on the observable mean is the poll
+        // size itself. Polling 4x more often trades readback stalls for a tighter fit.
+        let (t_field2, _) = run(true, 2);
         let (av, mx) = s_field.convergence_mean_max();
         println!(
-            "{:<10} {:>7} {:>8} {:>10.1} {:>10.1} {:>6.2}x {:>12} {:>12} {:>9} {:>7.1}",
+            "{:<10} {:>7} {:>8} {:>10.1} {:>10.1} {:>6.2}x {:>10.1} {:>6.2}x {:>12} {:>12} {:>9} {:>7.1}",
             format!("{w}x{h}"),
             fields,
             if local { "local" } else { "wide" },
             ms(t_batch),
             ms(t_field),
             ms(t_batch) / ms(t_field),
+            ms(t_field2),
+            ms(t_batch) / ms(t_field2),
             format!("{}/{}", s_batch.rounds, s_field.rounds),
             format!(
                 "{:.2}x",
@@ -251,12 +280,24 @@ fn section_d(gpu: &Option<Gpu>, threads: usize, quick: bool) {
 fn section_d_one(gpu: &Option<Gpu>, threads: usize, quick: bool, local: bool) {
     println!(
         "{:<10} {:>7} {:>12} {:>12} {:>13} {:>11} {:>10} {:>10}",
-        "grid", "fields", "cold dial ms", "warm row ms", "sweeps av/max", "warm gpu ms", "gpu rounds", "gpu/cpu"
+        "grid",
+        "fields",
+        "cold dial ms",
+        "warm row ms",
+        "sweeps av/max",
+        "warm gpu ms",
+        "gpu rounds",
+        "gpu/cpu"
     );
     let cfgs: &[(u32, u32, u32)] = if quick {
         &[(64, 64, 256)]
     } else {
-        &[(64, 64, 256), (64, 64, 4096), (128, 128, 1024), (256, 256, 256)]
+        &[
+            (64, 64, 256),
+            (64, 64, 4096),
+            (128, 128, 1024),
+            (256, 256, 256),
+        ]
     };
     for &(w, h, fields) in cfgs {
         let base = FieldBatch::synth_terrain(w, h, fields, 0xC0FFEE);
@@ -285,7 +326,9 @@ fn section_d_one(gpu: &Option<Gpu>, threads: usize, quick: bool, local: bool) {
             }
         }
 
-        let (cold_ref, t_cold) = best(2, &cold, |b| solve_batch_parallel(b, CpuKernel::Dial, 0, threads));
+        let (cold_ref, t_cold) = best(2, &cold, |b| {
+            solve_batch_parallel(b, CpuKernel::Dial, 0, threads)
+        });
 
         let (warm_cpu, t_warm) = best(2, &perturbed, |b| {
             solve_batch_parallel(b, CpuKernel::JacobiRows, 1 << 20, threads);
@@ -314,7 +357,10 @@ fn section_d_one(gpu: &Option<Gpu>, threads: usize, quick: bool, local: bool) {
             smean /= fields as f64;
         }
         let sweeps = format!("{:.0}/{}", smean, smax);
-        assert_eq!(warm_cpu.dist, cold_ref.dist, "warm CPU restart missed the fixed point");
+        assert_eq!(
+            warm_cpu.dist, cold_ref.dist,
+            "warm CPU restart missed the fixed point"
+        );
 
         let (gms, grounds, ratio) = match gpu {
             Some(g) => {
@@ -332,7 +378,10 @@ fn section_d_one(gpu: &Option<Gpu>, threads: usize, quick: bool, local: bool) {
                         t = st.compute;
                     }
                 }
-                assert_eq!(bg.dist, cold_ref.dist, "warm GPU restart missed the fixed point");
+                assert_eq!(
+                    bg.dist, cold_ref.dist,
+                    "warm GPU restart missed the fixed point"
+                );
                 (ms(t), rounds, ms(t_warm) / ms(t))
             }
             None => (f64::NAN, 0, f64::NAN),
@@ -360,14 +409,38 @@ fn section_a(gpu: &Option<Gpu>, threads: usize, quick: bool) {
         "grid", "fields", "sweeps", "cpu-1t ms", "cpu-Nt ms", "cpu-row ms", "gpu ms", "speedup"
     );
     let cfgs: Vec<Cfg> = if quick {
-        vec![Cfg { w: 64, h: 64, fields: 24 }]
+        vec![Cfg {
+            w: 64,
+            h: 64,
+            fields: 24,
+        }]
     } else {
         vec![
-            Cfg { w: 64, h: 64, fields: 24 },
-            Cfg { w: 64, h: 64, fields: 96 },
-            Cfg { w: 128, h: 128, fields: 24 },
-            Cfg { w: 128, h: 128, fields: 96 },
-            Cfg { w: 256, h: 256, fields: 24 },
+            Cfg {
+                w: 64,
+                h: 64,
+                fields: 24,
+            },
+            Cfg {
+                w: 64,
+                h: 64,
+                fields: 96,
+            },
+            Cfg {
+                w: 128,
+                h: 128,
+                fields: 24,
+            },
+            Cfg {
+                w: 128,
+                h: 128,
+                fields: 96,
+            },
+            Cfg {
+                w: 256,
+                h: 256,
+                fields: 24,
+            },
         ]
     };
     for c in &cfgs {
@@ -378,8 +451,12 @@ fn section_a(gpu: &Option<Gpu>, threads: usize, quick: bool) {
         let onecost = one.cost.clone();
         let sweeps = don_gpu::cpu::solve_field_jacobi(c.w, c.h, &onecost, &mut one.dist, 1 << 20);
 
-        let (b1, t1) = best(REPS, &base, |b| solve_batch_serial(b, CpuKernel::Jacobi, 1 << 20));
-        let (bn, tn) = best(REPS, &base, |b| solve_batch_parallel(b, CpuKernel::Jacobi, 1 << 20, threads));
+        let (b1, t1) = best(REPS, &base, |b| {
+            solve_batch_serial(b, CpuKernel::Jacobi, 1 << 20)
+        });
+        let (bn, tn) = best(REPS, &base, |b| {
+            solve_batch_parallel(b, CpuKernel::Jacobi, 1 << 20, threads)
+        });
         let (br, tr) = best(REPS, &base, |b| {
             solve_batch_parallel(b, CpuKernel::JacobiRows, 1 << 20, threads)
         });
@@ -400,7 +477,11 @@ fn section_a(gpu: &Option<Gpu>, threads: usize, quick: bool) {
                     }
                     s.download(&mut bg);
                 }
-                assert_eq!(bg.dist, b1.dist, "GPU disagreed with CPU at {}x{}", c.w, c.h);
+                assert_eq!(
+                    bg.dist, b1.dist,
+                    "GPU disagreed with CPU at {}x{}",
+                    c.w, c.h
+                );
                 (ms(gt), ms(tn) / ms(gt))
             }
             None => (f64::NAN, f64::NAN),
@@ -425,9 +506,21 @@ fn section_b(gpu: &Option<Gpu>, threads: usize, quick: bool) {
     println!("== B. GPU relaxation vs CPU bucket-queue Dijkstra (the real baseline) ==");
     println!(
         "{:<10} {:>7} {:>9} {:>11} {:>11} {:>10} {:>10} {:>10} {:>9}",
-        "grid", "fields", "Mcells", "dial-1t ms", "dial-Nt ms", "gpu ms", "gpu+io ms", "gpu Mc/s", "speedup"
+        "grid",
+        "fields",
+        "Mcells",
+        "dial-1t ms",
+        "dial-Nt ms",
+        "gpu ms",
+        "gpu+io ms",
+        "gpu Mc/s",
+        "speedup"
     );
-    let grids: &[(u32, u32)] = if quick { &[(64, 64)] } else { &[(64, 64), (128, 128), (256, 256)] };
+    let grids: &[(u32, u32)] = if quick {
+        &[(64, 64)]
+    } else {
+        &[(64, 64), (128, 128), (256, 256)]
+    };
     let field_counts: &[u32] = if quick {
         &[16, 256]
     } else {
@@ -446,7 +539,9 @@ fn section_b(gpu: &Option<Gpu>, threads: usize, quick: bool) {
 
             let reps = if cells > (4 << 20) { 2 } else { REPS };
             let (b1, t1) = best(reps, &base, |b| solve_batch_serial(b, CpuKernel::Dial, 0));
-            let (bn, tn) = best(reps, &base, |b| solve_batch_parallel(b, CpuKernel::Dial, 0, threads));
+            let (bn, tn) = best(reps, &base, |b| {
+                solve_batch_parallel(b, CpuKernel::Dial, 0, threads)
+            });
             assert_eq!(b1.dist, bn.dist);
 
             let (gc, gio, speed) = match gpu {
@@ -466,7 +561,10 @@ fn section_b(gpu: &Option<Gpu>, threads: usize, quick: bool) {
                             gio = st.compute + up + down;
                         }
                     }
-                    assert_eq!(bg.dist, b1.dist, "GPU disagreed with Dial at {w}x{h} x{fields}");
+                    assert_eq!(
+                        bg.dist, b1.dist,
+                        "GPU disagreed with Dial at {w}x{h} x{fields}"
+                    );
                     (ms(gt), ms(gio), ms(tn) / ms(gt))
                 }
                 None => (f64::NAN, f64::NAN, f64::NAN),

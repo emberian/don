@@ -21,3 +21,7 @@ pollster = "0.4"
 [[bin]]
 name = "flowbench"
 path = "src/bin/flowbench.rs"
+
+[[bin]]
+name = "orderbench"
+path = "src/bin/orderbench.rs"

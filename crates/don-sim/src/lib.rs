@@ -37,26 +37,32 @@
 //! `docs/derivation/simd-batch.md` records the measurements behind those choices,
 //! including the ones that did not pay.
 
+pub mod balance;
 pub mod batch;
+pub mod container;
 pub mod generated;
 pub mod interleave;
 pub mod mechanics;
+pub mod objects;
+pub mod order;
+pub mod rng;
+pub mod schedule;
 pub mod simd;
+pub mod systems;
+pub mod trig;
 pub mod world;
 
 pub use batch::Batch;
 pub use interleave::LaneBatch;
 pub use mechanics::{
-    balance_index, damage, damage_traced, entrench_dir_level, flank_level, get_armor,
-    get_attack, hash_into_range, CombatRules, DamageInput, DamagePredicates, UnreachedTerms,
-    STEP_NAMES,
+    attrition_fires, attrition_interval_scale, attrition_period_frames, attrition_recompute_due,
+    clamp_cost_to_ramp_ceiling, commerce_cap, credit_resource, merge_attrition_period,
+    rate_after_game_option, resource_period, resource_tick, AttritionInput, AttritionPredicates,
+    CommerceCapGates, EconomyRules, ResourceTick, ResourceTickInput, RES_FOOD, RES_KNOWLEDGE,
+    RES_TIMBER, RES_WEALTH,
 };
 pub use mechanics::{
-    attrition_fires, attrition_interval_scale, attrition_period_frames,
-    attrition_recompute_due, clamp_cost_to_ramp_ceiling, commerce_cap, cost_ramp_ceiling,
-    credit_resource, merge_attrition_period, ramped_rate, rate_after_game_option,
-    resource_period, resource_tick, AttritionInput, AttritionPredicates, CommerceCapGates,
-    EconomyRules, ResourceTick, ResourceTickInput, RES_FOOD, RES_KNOWLEDGE, RES_TIMBER,
-    RES_WEALTH,
+    balance_index, damage, damage_traced, entrench_dir_level, flank_level, get_armor, get_attack,
+    hash_into_range, CombatRules, DamageInput, DamagePredicates, UnreachedTerms, STEP_NAMES,
 };
 pub use world::{Handle, World, MAP_SPAN, MAX_UNITS, TICK_HZ};

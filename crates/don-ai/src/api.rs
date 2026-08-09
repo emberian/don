@@ -171,23 +171,13 @@ pub trait ScriptWorld {
     /// `train_unit_with_cost(who, num, unit_type)` @ `0x009F42D0`.
     fn train_unit_with_cost(&mut self, who: i32, num: i32, unit_type: &str) -> i32;
     /// `train_unit_at_with_cost(who, num, unit_type, build_o)` @ `0x009F4460`.
-    fn train_unit_at_with_cost(
-        &mut self,
-        who: i32,
-        num: i32,
-        unit_type: &str,
-        build_o: i32,
-    ) -> i32;
+    fn train_unit_at_with_cost(&mut self, who: i32, num: i32, unit_type: &str, build_o: i32)
+        -> i32;
     /// `place_building_with_cost(who, build_type, city_name)` @ `0x009F54A0`.
     fn place_building_with_cost(&mut self, who: i32, build_type: &str, city_name: &str) -> i32;
     /// `place_orphan_building_with_cost(who, build_type, build_o)`
     /// @ `0x009F5520`.
-    fn place_orphan_building_with_cost(
-        &mut self,
-        who: i32,
-        build_type: &str,
-        build_o: i32,
-    ) -> i32;
+    fn place_orphan_building_with_cost(&mut self, who: i32, build_type: &str, build_o: i32) -> i32;
     /// `place_building_upgrade_with_cost(who, build_type, city_name)`
     /// @ `0x009F5680`.
     fn place_building_upgrade_with_cost(

@@ -190,9 +190,18 @@ impl SimBridge {
     /// Columns `don_sim::World` holds today, and the engine field each would
     /// have to land in for the `units` channel to mean anything.
     pub const CARRIED: &'static [(&'static str, &'static str)] = &[
-        ("pos_x", "Unit::orders_x.value @ +112 (placeholder units, not WCoord)"),
-        ("pos_y", "Unit::orders_y.value @ +116 (placeholder units, not WCoord)"),
-        ("owner", "Object::leader id (Object::walk_data @ 0x00647830)"),
+        (
+            "pos_x",
+            "Unit::orders_x.value @ +112 (placeholder units, not WCoord)",
+        ),
+        (
+            "pos_y",
+            "Unit::orders_y.value @ +116 (placeholder units, not WCoord)",
+        ),
+        (
+            "owner",
+            "Object::leader id (Object::walk_data @ 0x00647830)",
+        ),
     ];
 
     /// What the engine's `Unit` record needs that `don-sim` has no column for.
@@ -235,7 +244,11 @@ mod tests {
             .filter(|&i| s.element_class[i].is_none())
             .map(|i| crate::checksum::CHANNEL_NAMES[i])
             .collect();
-        assert_eq!(missing, vec!["scenario_data", "script_run_time"], "{missing:?}");
+        assert_eq!(
+            missing,
+            vec!["scenario_data", "script_run_time"],
+            "{missing:?}"
+        );
     }
 
     #[test]

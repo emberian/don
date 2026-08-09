@@ -169,7 +169,14 @@ pub struct CombatRules {
     pub entrenchment_modifier: i32,
     /// `+0x68` `RIVER_MODIFIER`. 8.8 fixed point.
     pub river_modifier: i32,
-    /// `+0x6C` `RECAPTURE_CITY_MODIFIER`. 8.8 fixed point.
+    /// `+0x6C` (decimal 108) `RECAPTURE_CITY_MODIFIER`. 8.8 fixed point. Shipped
+    /// `"2/1"` through `String::fraction(256)` → **512**, i.e. exactly double.
+    ///
+    /// Step 30 is the last thing `get_damage` does and it *replaces* the accumulated
+    /// damage with `d * 512 / 256`. It fires when the defender is a building whose
+    /// `[+8] & 0x20` is set (a city centre) and the city's race matches the attacker's
+    /// player — recapturing your own razed city hits twice as hard.
+    /// `ObjectData::get_damage` is its only reader in the whole corpus.
     pub recapture_city_modifier: i32,
     /// `+0x4C4` `RED_FORT_AIR_DEFENSE`. Integer percent, applied as `(100 - v)/100`.
     pub red_fort_air_defense: i32,
@@ -440,7 +447,12 @@ pub fn balance_index(attacker_type_id: i32, defender_type_id: i32) -> i32 {
 /// true, which the harness deliberately disables, plus four more virtual predicates.
 /// `upgrade_applies` is therefore an input, not a derivation.
 #[inline]
-pub fn get_attack(type_attack: i32, upgrade_applies: bool, military_level: i32, rules_0x8b8: i32) -> i32 {
+pub fn get_attack(
+    type_attack: i32,
+    upgrade_applies: bool,
+    military_level: i32,
+    rules_0x8b8: i32,
+) -> i32 {
     if upgrade_applies {
         type_attack.wrapping_add(military_level.wrapping_mul(rules_0x8b8).wrapping_mul(10))
     } else {
@@ -454,7 +466,12 @@ pub fn get_attack(type_attack: i32, upgrade_applies: bool, military_level: i32, 
 /// (`0x00647E6F: lea eax,[ecx+esi]`) — armor lives on the display scale, attack on the
 /// ×10 scale. Same fidelity split: base path Tier B, upgrade path UNVERIFIED.
 #[inline]
-pub fn get_armor(type_armor: i32, upgrade_applies: bool, military_level: i32, rules_0x8b8: i32) -> i32 {
+pub fn get_armor(
+    type_armor: i32,
+    upgrade_applies: bool,
+    military_level: i32,
+    rules_0x8b8: i32,
+) -> i32 {
     if upgrade_applies {
         type_armor.wrapping_add(military_level.wrapping_mul(rules_0x8b8))
     } else {
@@ -472,12 +489,7 @@ pub fn get_armor(type_armor: i32, upgrade_applies: bool, military_level: i32, ru
 ///
 /// Where retail raises `#DE`: `defender_splash_divisor == 0` on the splash path
 /// (`0x006448B9`), or `height_increment * 100 == 0` on the height path (`0x00644D78`).
-pub fn damage(
-    i: &DamageInput,
-    p: &DamagePredicates,
-    r: &CombatRules,
-    u: &UnreachedTerms,
-) -> i32 {
+pub fn damage(i: &DamageInput, p: &DamagePredicates, r: &CombatRules, u: &UnreachedTerms) -> i32 {
     damage_traced(i, p, r, u).0
 }
 
@@ -488,11 +500,36 @@ pub fn damage(
 /// has not tested it, and "0 mismatches" over a corpus that only ever ran the spine would
 /// be a green suite that secretly tests nothing.
 pub const STEP_NAMES: [&str; 30] = [
-    "0-maskfix", "2-armor133", "3-div3", "4a-mul3div4", "4b-div2", "5-mul4", "6-div2",
-    "7-div2", "8-redfort", "9a-mul2", "9b-armor+1", "10-add", "11-pct", "12-mul2",
-    "13-idiv", "14-splashpct", "15-mul3", "16-mul25", "17-river", "18-x1000", "19-mul4",
-    "20-flank", "23-overkill", "23b-div2", "24-rocky", "25-height", "26-entrench",
-    "28-floor1", "29-zero", "30-recapture",
+    "0-maskfix",
+    "2-armor133",
+    "3-div3",
+    "4a-mul3div4",
+    "4b-div2",
+    "5-mul4",
+    "6-div2",
+    "7-div2",
+    "8-redfort",
+    "9a-mul2",
+    "9b-armor+1",
+    "10-add",
+    "11-pct",
+    "12-mul2",
+    "13-idiv",
+    "14-splashpct",
+    "15-mul3",
+    "16-mul25",
+    "17-river",
+    "18-x1000",
+    "19-mul4",
+    "20-flank",
+    "23-overkill",
+    "23b-div2",
+    "24-rocky",
+    "25-height",
+    "26-entrench",
+    "28-floor1",
+    "29-zero",
+    "30-recapture",
 ];
 
 /// [`damage`] plus a bitmask of which guarded steps actually executed.
@@ -668,7 +705,7 @@ pub fn damage_traced(
     // 18 — 0x006449D7. Armor is zeroed and the result is forced to the ×1000 scale.
     if p.defender_vf_0x18 && i.defender_flags_0x68 & 1 != 0 {
         arm = 0; // 0x006449FD
-        // 0x00644A04 calls 0x006469F0 directly, not through the vtable.
+                 // 0x00644A04 calls 0x006469F0 directly, not through the vtable.
         d = d.max(i.attack).wrapping_mul(1000); // 0x00644A11
         t |= 1 << 19;
     }
@@ -754,10 +791,7 @@ pub fn damage_traced(
     }
 
     // 26 — entrenchment, 0x00644D7F
-    if p.defender_vf_0x18
-        && i.defender_flags_0x68 & 0x0200_0000 != 0
-        && !p.attacker_tech_0x83
-    {
+    if p.defender_vf_0x18 && i.defender_flags_0x68 & 0x0200_0000 != 0 && !p.attacker_tech_0x83 {
         let raw = (i.defender_facing_entrench as u32)
             .wrapping_sub(i.attack_dir as u32)
             .wrapping_sub(0x8000_0000);
@@ -1059,7 +1093,10 @@ pub fn resource_tick(i: &ResourceTickInput, r: &EconomyRules) -> ResourceTick {
 
     // 0x006CE4E7: `jns` — negative income is displayed and then abandoned.
     if income < 0 {
-        return ResourceTick { displayed: income, accumulated: None };
+        return ResourceTick {
+            displayed: income,
+            accumulated: None,
+        };
     }
 
     // 0x006CE512: clamp to the commerce cap. `jle` keeps the income when equal.
@@ -1073,7 +1110,10 @@ pub fn resource_tick(i: &ResourceTickInput, r: &EconomyRules) -> ResourceTick {
         if surplus > 0 {
             let interest = div100(r.dutch_interest.wrapping_mul(surplus)).wrapping_shl(4); // 0x006CE6C8..0x006CE6DC
             income = income.wrapping_add(interest); // 0x006CE6DF
-            let limit = r.dutch_interest_cap.wrapping_shl(4).wrapping_add(i.commerce_cap); // 0x006CE6FC
+            let limit = r
+                .dutch_interest_cap
+                .wrapping_shl(4)
+                .wrapping_add(i.commerce_cap); // 0x006CE6FC
             if income > limit {
                 income = limit; // 0x006CE703, cmovg
             }
@@ -1089,7 +1129,8 @@ pub fn resource_tick(i: &ResourceTickInput, r: &EconomyRules) -> ResourceTick {
 
     // 0x006CE72C: gather-rate bonus percent.
     if i.gather_bonus_pct != 0 {
-        income = div100(i.gather_bonus_pct.wrapping_add(100).wrapping_mul(income)); // 0x006CE73D
+        income = div100(i.gather_bonus_pct.wrapping_add(100).wrapping_mul(income));
+        // 0x006CE73D
     }
 
     // 0x006CE755: knowledge only, and only above difficulty 4.
@@ -1111,7 +1152,10 @@ pub fn resource_tick(i: &ResourceTickInput, r: &EconomyRules) -> ResourceTick {
         income = income.wrapping_mul(i.game_speed); // 0x006CE7A8
     }
 
-    ResourceTick { displayed, accumulated: Some(income) }
+    ResourceTick {
+        displayed,
+        accumulated: Some(income),
+    }
 }
 
 /// Credit a resource from this frame's income — `0x006CE7B9`..`0x006CE833`.
@@ -1182,7 +1226,10 @@ pub fn commerce_cap(
     if res == RES_KNOWLEDGE {
         return 999; // 0x006CE92C
     }
-    assert!(age < 8, "COMMERCE_CAP has 8 entries; age {age} would read past it");
+    assert!(
+        age < 8,
+        "COMMERCE_CAP has 8 entries; age {age} would read past it"
+    );
     let mut cap = r.commerce_cap[age]; // 0x006CE940
 
     if g.british {
@@ -1225,6 +1272,18 @@ pub fn commerce_cap(
 /// `+0x70` (`0x00650907` / `0x00650AA8`) and this crate has no `UnitType`. So this is the
 /// ramp arithmetic, not "train time" — do not wire it to a build queue and call it derived.
 /// `docs/derivation/economy.md` §4.2 flags the same gap.
+///
+/// # Superseded
+///
+/// The caveat above is **closed**: the enclosing function is `ObjectData::train_time`
+/// `0x006508C0`, `x` is the type's base job time, and the ceiling is 3x the
+/// `unit_rate_base`-scaled base. [`crate::systems::production::train_time_ramp`] carries
+/// that derivation with the surrounding train-time pipeline; this function computes the
+/// same integers with none of the context and is kept only so existing callers still
+/// build.
+#[deprecated(
+    note = "use crate::systems::production::train_time_ramp, which has the enclosing derivation"
+)]
 #[inline]
 pub fn ramped_rate(x: i32, count: u16, job_extra_time: i32, r: &EconomyRules) -> i32 {
     let base = div100(x.wrapping_mul(r.unit_rate_base)); // 0x00650AF6..0x00650B10
@@ -1258,7 +1317,14 @@ pub fn rate_after_game_option(v: i32, pct: i32) -> i32 {
 /// `UNIT_SCHOLAR_RAMP_MAX` (+0x394, 2000), `UNIT_WORKER_RAMP_MAX` (+0x398, 500),
 /// `UNIT_OTHER_CIVILIAN_RAMP_MAX` (+0x39C, 200), `UNIT_MILITARY_RAMP_MAX` (+0x3A0, 125),
 /// at `0x006656AF` / `0x0066569F` / `0x006653FF` / `0x0066568F`. **Which class a unit is
-/// in is not derived**, so the selection is the caller's.
+/// in is not derived** here.
+///
+/// # Superseded
+///
+/// The four-way class selection **is** now measured, in
+/// [`crate::systems::production`], along with `TypeData::get_cost`'s surrounding ramp.
+/// Use that; this is the bare multiply.
+#[deprecated(note = "use crate::systems::production, which carries the measured class selection")]
 #[inline]
 pub fn cost_ramp_ceiling(base_cost: i32, ramp_max_pct: i32) -> i32 {
     div100(ramp_max_pct.wrapping_mul(base_cost))
@@ -1460,7 +1526,11 @@ pub fn attrition_fires(frame: i32, phase: i16, period: i16) -> bool {
     if period == 0 {
         return false; // 0x006117CF
     }
-    idiv_rem_trapping(frame.wrapping_add(phase as i32), period as i32, "0x006117E9") == 0
+    idiv_rem_trapping(
+        frame.wrapping_add(phase as i32),
+        period as i32,
+        "0x006117E9",
+    ) == 0
 }
 
 /// Is the unit's attrition state recomputed this frame? — `0x006115EA`.
@@ -1486,6 +1556,7 @@ fn idiv_rem_trapping(num: i32, den: i32, site: &str) -> i32 {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // these tests exist to pin the superseded functions until callers move
 mod economy_tests {
     use super::*;
 
@@ -1535,7 +1606,12 @@ mod economy_tests {
     #[test]
     fn negative_income_returns_early() {
         let r = EconomyRules::shipped();
-        let i = ResourceTickInput { gross: 10, expense: 40, commerce_cap: 500, ..Default::default() };
+        let i = ResourceTickInput {
+            gross: 10,
+            expense: 40,
+            commerce_cap: 500,
+            ..Default::default()
+        };
         let t = resource_tick(&i, &r);
         assert_eq!(t.displayed, -30);
         assert_eq!(t.accumulated, None);
@@ -1546,15 +1622,25 @@ mod economy_tests {
     #[test]
     fn commerce_cap_clamps_first_and_the_global_ceiling_is_conditional() {
         let r = EconomyRules::shipped();
-        let base = ResourceTickInput { gross: 100_000, commerce_cap: 500, ..Default::default() };
+        let base = ResourceTickInput {
+            gross: 100_000,
+            commerce_cap: 500,
+            ..Default::default()
+        };
         assert_eq!(resource_tick(&base, &r).accumulated, Some(500));
 
         // A cap above 16,000 with no interest term: the ceiling never runs.
-        let no_interest = ResourceTickInput { commerce_cap: 20_000, ..base };
+        let no_interest = ResourceTickInput {
+            commerce_cap: 20_000,
+            ..base
+        };
         assert_eq!(resource_tick(&no_interest, &r).accumulated, Some(20_000));
 
         // Same input, interest path taken: now 0x006CE706 applies.
-        let interest = ResourceTickInput { interest_applies: true, ..no_interest };
+        let interest = ResourceTickInput {
+            interest_applies: true,
+            ..no_interest
+        };
         assert_eq!(resource_tick(&interest, &r).accumulated, Some(0x3E70));
     }
 
@@ -1579,7 +1665,10 @@ mod economy_tests {
     #[test]
     fn knowledge_is_special_cased() {
         let r = EconomyRules::shipped();
-        let g = CommerceCapGates { british: true, resource_civ: true };
+        let g = CommerceCapGates {
+            british: true,
+            resource_civ: true,
+        };
         assert_eq!(commerce_cap(0, RES_KNOWLEDGE, &r, &g, 500), 999);
         assert_eq!(commerce_cap(7, RES_KNOWLEDGE, &r, &g, 0), 999);
 
@@ -1591,12 +1680,21 @@ mod economy_tests {
             ..Default::default()
         };
         assert_eq!(resource_tick(&hard, &r).accumulated, Some(750));
-        let hardest = ResourceTickInput { difficulty: 7, ..hard };
+        let hardest = ResourceTickInput {
+            difficulty: 7,
+            ..hard
+        };
         assert_eq!(resource_tick(&hardest, &r).accumulated, Some(500));
         // Difficulty 4 and below is untouched, and the penalty is knowledge-only.
-        let easy = ResourceTickInput { difficulty: 4, ..hard };
+        let easy = ResourceTickInput {
+            difficulty: 4,
+            ..hard
+        };
         assert_eq!(resource_tick(&easy, &r).accumulated, Some(1_000));
-        let food = ResourceTickInput { res: RES_FOOD, ..hard };
+        let food = ResourceTickInput {
+            res: RES_FOOD,
+            ..hard
+        };
         assert_eq!(resource_tick(&food, &r).accumulated, Some(1_000));
     }
 
@@ -1607,9 +1705,15 @@ mod economy_tests {
         assert_eq!(commerce_cap(0, RES_FOOD, &r, &none, 0), 70);
         assert_eq!(commerce_cap(7, RES_FOOD, &r, &none, 0), 500);
         // British is a percent on top; the per-resource civ percent stacks after it.
-        let brit = CommerceCapGates { british: true, resource_civ: false };
+        let brit = CommerceCapGates {
+            british: true,
+            resource_civ: false,
+        };
         assert_eq!(commerce_cap(0, RES_FOOD, &r, &brit, 0), 87); // 70 * 125/100
-        let both = CommerceCapGates { british: true, resource_civ: true };
+        let both = CommerceCapGates {
+            british: true,
+            resource_civ: true,
+        };
         assert_eq!(commerce_cap(0, RES_WEALTH, &r, &both, 0), 115); // 87 * 133/100
         assert_eq!(commerce_cap(0, RES_WEALTH, &r, &both, 25), 140);
     }
@@ -1617,7 +1721,13 @@ mod economy_tests {
     #[test]
     #[should_panic(expected = "COMMERCE_CAP has 8 entries")]
     fn age_past_the_table_is_refused() {
-        commerce_cap(8, RES_FOOD, &EconomyRules::shipped(), &CommerceCapGates::default(), 0);
+        commerce_cap(
+            8,
+            RES_FOOD,
+            &EconomyRules::shipped(),
+            &CommerceCapGates::default(),
+            0,
+        );
     }
 
     /// The ramp saturates at 3x base, and a negative intermediate collapses to zero rather
@@ -1653,8 +1763,14 @@ mod economy_tests {
 
         // Shipped MILITIA_ATTRITION is 300, so the ability branch quarters the interval:
         // 256*100/400 = 64, and 48*64/256 = 12 frames.
-        let p = AttritionPredicates { has_ability_0x42: true, ..Default::default() };
-        let i = AttritionInput { attrition_level: 1, ..Default::default() };
+        let p = AttritionPredicates {
+            has_ability_0x42: true,
+            ..Default::default()
+        };
+        let i = AttritionInput {
+            attrition_level: 1,
+            ..Default::default()
+        };
         assert_eq!(attrition_interval_scale(&i, &p, &r), 64);
         assert_eq!(attrition_period_frames(r.attrition, 64), 12);
 
@@ -1663,7 +1779,10 @@ mod economy_tests {
         // 0x006CDD20 by repeated `f = f*100/(100-reduction)` steps whose base we did not
         // recover), so this pins the arithmetic, not the game's baseline.
         let p2 = AttritionPredicates::default();
-        let i2 = AttritionInput { owner_attrition_mult: 256.0, ..i };
+        let i2 = AttritionInput {
+            owner_attrition_mult: 256.0,
+            ..i
+        };
         assert_eq!(attrition_interval_scale(&i2, &p2, &r), 256);
     }
 
@@ -1672,12 +1791,21 @@ mod economy_tests {
     #[test]
     fn higher_attrition_level_shortens_the_period() {
         let r = EconomyRules::shipped();
-        let p = AttritionPredicates { has_ability_0x42: true, ..Default::default() };
+        let p = AttritionPredicates {
+            has_ability_0x42: true,
+            ..Default::default()
+        };
         let mut last = i32::MAX;
         for level in [1, 2, 4, 8] {
-            let i = AttritionInput { attrition_level: level, ..Default::default() };
+            let i = AttritionInput {
+                attrition_level: level,
+                ..Default::default()
+            };
             let period = attrition_period_frames(r.attrition, attrition_interval_scale(&i, &p, &r));
-            assert!(period < last, "level {level} gave period {period}, not shorter than {last}");
+            assert!(
+                period < last,
+                "level {level} gave period {period}, not shorter than {last}"
+            );
             last = period;
         }
         assert_eq!(last, 1); // level 8: 64/8 = 8 -> 48*8/256 = 1, the floor
@@ -1688,12 +1816,21 @@ mod economy_tests {
     #[test]
     fn attrition_master_switch_and_zero_level() {
         let r = EconomyRules::shipped();
-        let p = AttritionPredicates { has_ability_0x42: true, ..Default::default() };
-        let i = AttritionInput { attrition_level: 0, ..Default::default() };
+        let p = AttritionPredicates {
+            has_ability_0x42: true,
+            ..Default::default()
+        };
+        let i = AttritionInput {
+            attrition_level: 0,
+            ..Default::default()
+        };
         assert_eq!(attrition_interval_scale(&i, &p, &r), 0);
 
         let off = EconomyRules { attrition: 0, ..r };
-        let i2 = AttritionInput { attrition_level: 4, ..Default::default() };
+        let i2 = AttritionInput {
+            attrition_level: 4,
+            ..Default::default()
+        };
         assert_eq!(attrition_interval_scale(&i2, &p, &off), 0);
     }
 
@@ -1702,11 +1839,21 @@ mod economy_tests {
     #[test]
     fn siege_reduction_lengthens_the_interval_and_saturates_at_immunity() {
         let r = EconomyRules::shipped();
-        let p = AttritionPredicates { siege_class: true, has_ability_0x42: true, ..Default::default() };
-        let i = AttritionInput { attrition_level: 1, ..Default::default() };
+        let p = AttritionPredicates {
+            siege_class: true,
+            has_ability_0x42: true,
+            ..Default::default()
+        };
+        let i = AttritionInput {
+            attrition_level: 1,
+            ..Default::default()
+        };
         // 25600/(100-50) = 512, then the militia branch: 512*100/400.
         assert_eq!(attrition_interval_scale(&i, &p, &r), 128);
-        let immune = EconomyRules { siege_attrition: 100, ..r };
+        let immune = EconomyRules {
+            siege_attrition: 100,
+            ..r
+        };
         assert_eq!(attrition_interval_scale(&i, &p, &immune), 0);
     }
 
@@ -1812,7 +1959,10 @@ mod damage_tests {
             ..Default::default()
         };
         let p = DamagePredicates::default();
-        let r = CombatRules { height_increment: 1, ..Default::default() };
+        let r = CombatRules {
+            height_increment: 1,
+            ..Default::default()
+        };
         let u = UnreachedTerms::default();
         assert_eq!(damage(&i, &p, &r, &u), 1);
         i.splash_flag = 1;
@@ -1832,9 +1982,17 @@ mod damage_tests {
             defender_splash_divisor: 1,
             ..Default::default()
         };
-        let r = CombatRules { height_increment: 1, ..Default::default() };
+        let r = CombatRules {
+            height_increment: 1,
+            ..Default::default()
+        };
         assert_eq!(
-            damage(&i, &DamagePredicates::default(), &r, &UnreachedTerms::default()),
+            damage(
+                &i,
+                &DamagePredicates::default(),
+                &r,
+                &UnreachedTerms::default()
+            ),
             -50
         );
     }
@@ -1894,8 +2052,14 @@ mod damage_tests {
             defender_splash_divisor: 1,
             ..Default::default()
         };
-        let mut p = DamagePredicates { mask_fixup_authorised: true, ..Default::default() };
-        let r = CombatRules { height_increment: 1, ..Default::default() };
+        let mut p = DamagePredicates {
+            mask_fixup_authorised: true,
+            ..Default::default()
+        };
+        let r = CombatRules {
+            height_increment: 1,
+            ..Default::default()
+        };
         let u = UnreachedTerms::default();
         assert_eq!(damage(&i, &p, &r, &u), 100);
         p.mask_fixup_authorised = false;
@@ -1945,10 +2109,10 @@ mod damage_tests {
         };
         damage(&i, &p, &CombatRules::default(), &UnreachedTerms::default());
     }
-
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // these tests exist to pin the superseded functions until callers move
 mod tests {
     use super::*;
 
@@ -1979,7 +2143,10 @@ mod tests {
     fn result_may_fall_below_lo_because_idiv_truncates() {
         // Faithful to the binary: the remainder carries the dividend's sign.
         let r = hash_into_range(-1, -1, -5, 5);
-        assert!(r < -5, "expected sub-lo result from a negative dividend, got {r}");
+        assert!(
+            r < -5,
+            "expected sub-lo result from a negative dividend, got {r}"
+        );
     }
 
     #[test]

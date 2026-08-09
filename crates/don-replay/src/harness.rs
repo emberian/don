@@ -90,6 +90,11 @@ pub struct RunResult {
     pub crossplay_comparisons: usize,
     pub crossplay_identical: usize,
     pub crossplay_per_channel: [usize; NUM_CHANNELS],
+    /// The same control experiment joined on `stamp` instead of `group`, and
+    /// how many of its disagreements compare packages from different turns.
+    pub crossplay_stamp_comparisons: usize,
+    pub crossplay_stamp_identical: usize,
+    pub crossplay_stamp_wrong_turn: usize,
     pub channels: [ChannelResult; NUM_CHANNELS],
     /// Command counts by opcode over the whole recording.
     pub opcode_counts: BTreeMap<u8, usize>,
@@ -152,7 +157,11 @@ impl Default for NullSim {
 
 impl NullSim {
     pub fn new() -> NullSim {
-        NullSim { state: SimState::new(), world: don_sim::World::with_capacity(64, 1), turns: 0 }
+        NullSim {
+            state: SimState::new(),
+            world: don_sim::World::with_capacity(64, 1),
+            turns: 0,
+        }
     }
 }
 
@@ -197,6 +206,9 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         crossplay_comparisons: 0,
         crossplay_identical: 0,
         crossplay_per_channel: [0; NUM_CHANNELS],
+        crossplay_stamp_comparisons: 0,
+        crossplay_stamp_identical: 0,
+        crossplay_stamp_wrong_turn: 0,
         channels: [ChannelResult::default(); NUM_CHANNELS],
         opcode_counts: BTreeMap::new(),
         sim_commands: 0,
@@ -211,6 +223,10 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
     res.crossplay_comparisons = cc;
     res.crossplay_identical = ci;
     res.crossplay_per_channel = cper;
+    let (sc, si, _, dt, _) = rep.crossplay_by_stamp_diag();
+    res.crossplay_stamp_comparisons = sc;
+    res.crossplay_stamp_identical = si;
+    res.crossplay_stamp_wrong_turn = dt;
 
     // `rules` is static data; if it is constant across the recording, report it,
     // since it is the one channel with an exact published target.
@@ -304,7 +320,13 @@ fn compare<S: Simulation>(
         .turns
         .binary_search_by_key(&turn, |t| t.turn)
         .ok()
-        .map(|i| rep.turns[i].players.iter().filter_map(|p| p.checksums).collect())
+        .map(|i| {
+            rep.turns[i]
+                .players
+                .iter()
+                .filter_map(|p| p.checksums)
+                .collect()
+        })
         .unwrap_or_default();
     let mut contested = [false; NUM_CHANNELS];
     for tu in tuples.iter().skip(1) {
@@ -354,11 +376,17 @@ pub fn format_table(r: &RunResult) -> String {
         r.first_turn,
         r.last_turn,
         r.players,
-        r.frames_per_turn.map(|f| format!("{f:.2}")).unwrap_or_else(|| "?".into()),
+        r.frames_per_turn
+            .map(|f| format!("{f:.2}"))
+            .unwrap_or_else(|| "?".into()),
     ));
     s.push_str(&format!(
         "  packages {}/{} decoded   checksum packets {} (total-ok {}, adler-shaped {})\n",
-        r.packages_decoded, r.packages, r.checksum_packets, r.checksum_total_ok, r.checksum_shape_ok
+        r.packages_decoded,
+        r.packages,
+        r.checksum_packets,
+        r.checksum_total_ok,
+        r.checksum_shape_ok
     ));
     if r.crossplay_comparisons > 0 {
         s.push_str(&format!(
@@ -366,13 +394,17 @@ pub fn format_table(r: &RunResult) -> String {
             r.crossplay_identical, r.crossplay_comparisons
         ));
     }
-    s.push_str("  channel            survived  first-div      expected        got  compares  trivial\n");
+    s.push_str(
+        "  channel            survived  first-div      expected        got  compares  trivial\n",
+    );
     for (i, name) in CHANNEL_NAMES.iter().enumerate() {
         let c = &r.channels[i];
         s.push_str(&format!(
             "  {name:<16} {:9}  {:>9}  {:>10}  {:>9}  {:8}  {:7}\n",
             c.survived,
-            c.first_divergence_turn.map(|t| t.to_string()).unwrap_or_else(|| "-".into()),
+            c.first_divergence_turn
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "-".into()),
             format!("{:08x}", c.expected),
             format!("{:08x}", c.got),
             c.compares,

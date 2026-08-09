@@ -41,9 +41,16 @@ impl UnitAction {
     pub fn from_slice(v: &[i32]) -> UnitAction {
         let g_ = |i: usize| v.get(i).copied().unwrap_or(0).max(0) as u16;
         UnitAction {
-            verb: g_(0), target_x: g_(1), target_y: g_(2), target_entity: g_(3),
-            type_index: g_(4), queue_pos: g_(5), stance: g_(6), form: g_(7),
-            order_mods: g_(8), count: g_(9),
+            verb: g_(0),
+            target_x: g_(1),
+            target_y: g_(2),
+            target_entity: g_(3),
+            type_index: g_(4),
+            queue_pos: g_(5),
+            stance: g_(6),
+            form: g_(7),
+            order_mods: g_(8),
+            count: g_(9),
         }
     }
 }
@@ -62,7 +69,11 @@ impl PlayerAction {
     pub fn from_slice(v: &[i32]) -> PlayerAction {
         let g_ = |i: usize| v.get(i).copied().unwrap_or(0).max(0) as u16;
         PlayerAction {
-            verb: g_(0), target_player: g_(1), good: g_(2), amount: g_(3), treaty: g_(4),
+            verb: g_(0),
+            target_player: g_(1),
+            good: g_(2),
+            amount: g_(3),
+            treaty: g_(4),
         }
     }
 }
@@ -149,7 +160,11 @@ pub fn apply_unit(
             let Some(tr) = target_row else {
                 // No target selected (the head's only legal value when the world holds no
                 // hostile), or a masked-in target that has since died.
-                if a.target_entity == 0 { st.incoherent += 1 } else { st.stale += 1 }
+                if a.target_entity == 0 {
+                    st.incoherent += 1
+                } else {
+                    st.stale += 1
+                }
                 return;
             };
             if w.attack[row] <= 0 || tr == row {

@@ -57,7 +57,12 @@ impl MsgType {
     }
 
     pub fn to_wire(self) -> u8 {
-        self.id | if self.response { Self::RESPONSE_FLAG } else { 0 }
+        self.id
+            | if self.response {
+                Self::RESPONSE_FLAG
+            } else {
+                0
+            }
     }
 
     pub fn is_internal(b: u8) -> bool {
@@ -81,11 +86,36 @@ pub enum Dispatch {
 /// `NetDaemon::process` jump table at `0x00951280`, 31 entries, verbatim.
 /// Index is the masked type byte. **[measured]**
 pub const DISPATCH_TARGET: [u32; 31] = [
-    0x0095_0fc8, 0x0095_1201, 0x0095_1201, 0x0095_1201, 0x0095_1201, 0x0095_116a,
-    0x0095_1144, 0x0095_10e5, 0x0095_1201, 0x0095_1271, 0x0095_11b8, 0x0095_1271,
-    0x0095_11d9, 0x0095_111e, 0x0095_1131, 0x0095_0fdc, 0x0095_0fef, 0x0095_1007,
-    0x0095_101d, 0x0095_1033, 0x0095_1049, 0x0095_105b, 0x0095_106f, 0x0095_10ae,
-    0x0095_1086, 0x0095_109a, 0x0095_11a4, 0x0095_1201, 0x0095_1201, 0x0095_11ed,
+    0x0095_0fc8,
+    0x0095_1201,
+    0x0095_1201,
+    0x0095_1201,
+    0x0095_1201,
+    0x0095_116a,
+    0x0095_1144,
+    0x0095_10e5,
+    0x0095_1201,
+    0x0095_1271,
+    0x0095_11b8,
+    0x0095_1271,
+    0x0095_11d9,
+    0x0095_111e,
+    0x0095_1131,
+    0x0095_0fdc,
+    0x0095_0fef,
+    0x0095_1007,
+    0x0095_101d,
+    0x0095_1033,
+    0x0095_1049,
+    0x0095_105b,
+    0x0095_106f,
+    0x0095_10ae,
+    0x0095_1086,
+    0x0095_109a,
+    0x0095_11a4,
+    0x0095_1201,
+    0x0095_1201,
+    0x0095_11ed,
     0x0095_117e,
 ];
 
@@ -222,25 +252,69 @@ pub fn write_narrow(out: &mut Vec<u8>, s: &str, len: usize) {
 /// owned so a session can queue messages without pinning the receive buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetMsg<'a> {
-    Generic { buffer: [u8; 512] },
-    Chat { observer_to_all: u8, message: String },
-    Ping { cx: i32, cy: i32 },
-    CommandPackage { stamp: u32, play: i8, payload: &'a [u8] },
-    Pause { play: i32, pause_time: u32, requested_state: u8 },
-    Taunt { taunt: u8 },
-    SyncSignal { play: i32 },
-    DropStamp { play_from: i32, stamp: i32, play: i32 },
-    TimeSync { time_stamp_sent: u32, time_stamp_received: u32 },
-    DropVote { play: u8, vote: i8 },
-    DropDecision { vote: i8 },
-    DropFlag { pid: i32 },
-    GameModSyncRequest { desired: u8 },
-    GameModSyncResponse { required: u8 },
+    Generic {
+        buffer: [u8; 512],
+    },
+    Chat {
+        observer_to_all: u8,
+        message: String,
+    },
+    Ping {
+        cx: i32,
+        cy: i32,
+    },
+    CommandPackage {
+        stamp: u32,
+        play: i8,
+        payload: &'a [u8],
+    },
+    Pause {
+        play: i32,
+        pause_time: u32,
+        requested_state: u8,
+    },
+    Taunt {
+        taunt: u8,
+    },
+    SyncSignal {
+        play: i32,
+    },
+    DropStamp {
+        play_from: i32,
+        stamp: i32,
+        play: i32,
+    },
+    TimeSync {
+        time_stamp_sent: u32,
+        time_stamp_received: u32,
+    },
+    DropVote {
+        play: u8,
+        vote: i8,
+    },
+    DropDecision {
+        vote: i8,
+    },
+    DropFlag {
+        pid: i32,
+    },
+    GameModSyncRequest {
+        desired: u8,
+    },
+    GameModSyncResponse {
+        required: u8,
+    },
     PlayerStatusRequest,
-    PlayerStatusResponse { player_id: [u32; 8], time_since_last_pulse: [u32; 8] },
+    PlayerStatusResponse {
+        player_id: [u32; 8],
+        time_since_last_pulse: [u32; 8],
+    },
     /// Any id we do not model as a typed variant, kept verbatim so a session can
     /// still relay it (the file-sync family, `SPLINE`, `GAMESPYCHALLENGE`).
-    Raw { id: u8, body: &'a [u8] },
+    Raw {
+        id: u8,
+        body: &'a [u8],
+    },
 }
 
 /// A message plus its reply marker, as it sits on the wire.
@@ -254,7 +328,11 @@ pub struct Framed<'a> {
 pub enum MsgError {
     Empty,
     /// Buffer shorter than the message's fixed `sizeof`.
-    Short { id: u8, need: usize, have: usize },
+    Short {
+        id: u8,
+        need: usize,
+        have: usize,
+    },
     /// `data_size` was negative.
     NegativeSize(i16),
     /// Type byte was >= 128, i.e. an `InternalPacketType`, not a game message.
@@ -312,7 +390,11 @@ impl<'a> NetMsg<'a> {
         let ty = MsgType::from_wire(buf[0]);
         let need = |n: usize| -> Result<(), MsgError> {
             if buf.len() < n {
-                Err(MsgError::Short { id: ty.id, need: n, have: buf.len() })
+                Err(MsgError::Short {
+                    id: ty.id,
+                    need: n,
+                    have: buf.len(),
+                })
             } else {
                 Ok(())
             }
@@ -334,7 +416,10 @@ impl<'a> NetMsg<'a> {
             }
             x if x == T::Ping as u8 => {
                 need(9)?;
-                NetMsg::Ping { cx: i32le(buf, 1), cy: i32le(buf, 5) }
+                NetMsg::Ping {
+                    cx: i32le(buf, 1),
+                    cy: i32le(buf, 5),
+                }
             }
             x if x == T::CommandPackageData as u8 => {
                 need(9)?;
@@ -364,7 +449,9 @@ impl<'a> NetMsg<'a> {
             }
             x if x == T::SyncSignal as u8 => {
                 need(5)?;
-                NetMsg::SyncSignal { play: i32le(buf, 1) }
+                NetMsg::SyncSignal {
+                    play: i32le(buf, 1),
+                }
             }
             x if x == T::DropStamp as u8 => {
                 need(13)?;
@@ -383,7 +470,10 @@ impl<'a> NetMsg<'a> {
             }
             x if x == T::DropVote as u8 => {
                 need(3)?;
-                NetMsg::DropVote { play: buf[1], vote: buf[2] as i8 }
+                NetMsg::DropVote {
+                    play: buf[1],
+                    vote: buf[2] as i8,
+                }
             }
             x if x == T::DropDecision as u8 => {
                 need(2)?;
@@ -410,9 +500,15 @@ impl<'a> NetMsg<'a> {
                     a[i] = u32le(buf, 1 + i * 4);
                     b[i] = u32le(buf, 33 + i * 4);
                 }
-                NetMsg::PlayerStatusResponse { player_id: a, time_since_last_pulse: b }
+                NetMsg::PlayerStatusResponse {
+                    player_id: a,
+                    time_since_last_pulse: b,
+                }
             }
-            other => NetMsg::Raw { id: other, body: &buf[1..] },
+            other => NetMsg::Raw {
+                id: other,
+                body: &buf[1..],
+            },
         };
         Ok(Framed { ty, msg })
     }
@@ -424,10 +520,19 @@ impl<'a> NetMsg<'a> {
 
     /// Encode, optionally setting `NETMSG_RESPONSE_FLAG`.
     pub fn encode_framed(&self, response: bool, out: &mut Vec<u8>) {
-        out.push(MsgType { id: self.id(), response }.to_wire());
+        out.push(
+            MsgType {
+                id: self.id(),
+                response,
+            }
+            .to_wire(),
+        );
         match self {
             NetMsg::Generic { buffer } => out.extend_from_slice(buffer),
-            NetMsg::Chat { observer_to_all, message } => {
+            NetMsg::Chat {
+                observer_to_all,
+                message,
+            } => {
                 out.push(*observer_to_all);
                 write_wide(out, message, 256);
             }
@@ -435,25 +540,40 @@ impl<'a> NetMsg<'a> {
                 out.extend_from_slice(&cx.to_le_bytes());
                 out.extend_from_slice(&cy.to_le_bytes());
             }
-            NetMsg::CommandPackage { stamp, play, payload } => {
+            NetMsg::CommandPackage {
+                stamp,
+                play,
+                payload,
+            } => {
                 out.extend_from_slice(&stamp.to_le_bytes());
                 out.push(*play as u8);
                 out.extend_from_slice(&(payload.len() as i16).to_le_bytes());
                 out.extend_from_slice(payload);
             }
-            NetMsg::Pause { play, pause_time, requested_state } => {
+            NetMsg::Pause {
+                play,
+                pause_time,
+                requested_state,
+            } => {
                 out.extend_from_slice(&play.to_le_bytes());
                 out.extend_from_slice(&pause_time.to_le_bytes());
                 out.push(*requested_state);
             }
             NetMsg::Taunt { taunt } => out.push(*taunt),
             NetMsg::SyncSignal { play } => out.extend_from_slice(&play.to_le_bytes()),
-            NetMsg::DropStamp { play_from, stamp, play } => {
+            NetMsg::DropStamp {
+                play_from,
+                stamp,
+                play,
+            } => {
                 out.extend_from_slice(&play_from.to_le_bytes());
                 out.extend_from_slice(&stamp.to_le_bytes());
                 out.extend_from_slice(&play.to_le_bytes());
             }
-            NetMsg::TimeSync { time_stamp_sent, time_stamp_received } => {
+            NetMsg::TimeSync {
+                time_stamp_sent,
+                time_stamp_received,
+            } => {
                 out.extend_from_slice(&time_stamp_sent.to_le_bytes());
                 out.extend_from_slice(&time_stamp_received.to_le_bytes());
             }
@@ -466,7 +586,10 @@ impl<'a> NetMsg<'a> {
             NetMsg::GameModSyncRequest { desired } => out.push(*desired),
             NetMsg::GameModSyncResponse { required } => out.push(*required),
             NetMsg::PlayerStatusRequest => {}
-            NetMsg::PlayerStatusResponse { player_id, time_since_last_pulse } => {
+            NetMsg::PlayerStatusResponse {
+                player_id,
+                time_since_last_pulse,
+            } => {
                 for v in player_id {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
@@ -498,9 +621,13 @@ mod tests {
 
     #[test]
     fn dead_ids_are_exactly_the_seven_default_arms() {
-        let dead: Vec<u8> = (0..31u8).filter(|&i| dispatch(i) == Dispatch::Dead).collect();
+        let dead: Vec<u8> = (0..31u8)
+            .filter(|&i| dispatch(i) == Dispatch::Dead)
+            .collect();
         assert_eq!(dead, vec![1, 2, 3, 4, 8, 27, 28]);
-        let ignored: Vec<u8> = (0..31u8).filter(|&i| dispatch(i) == Dispatch::Ignored).collect();
+        let ignored: Vec<u8> = (0..31u8)
+            .filter(|&i| dispatch(i) == Dispatch::Ignored)
+            .collect();
         assert_eq!(ignored, vec![9, 11]);
         // Anything past the `cmp ecx, 0x1e` bound is unreachable.
         assert_eq!(dispatch(31), Dispatch::Dead);
@@ -511,13 +638,39 @@ mod tests {
     fn every_typed_variant_encodes_to_its_pdb_sizeof() {
         let cases: Vec<(NetMsg<'static>, u16)> = vec![
             (NetMsg::Generic { buffer: [7u8; 512] }, 513),
-            (NetMsg::Chat { observer_to_all: 1, message: "hej".into() }, 514),
+            (
+                NetMsg::Chat {
+                    observer_to_all: 1,
+                    message: "hej".into(),
+                },
+                514,
+            ),
             (NetMsg::Ping { cx: -3, cy: 9 }, 9),
-            (NetMsg::Pause { play: 2, pause_time: 5, requested_state: 1 }, 10),
+            (
+                NetMsg::Pause {
+                    play: 2,
+                    pause_time: 5,
+                    requested_state: 1,
+                },
+                10,
+            ),
             (NetMsg::Taunt { taunt: 3 }, 2),
             (NetMsg::SyncSignal { play: 4 }, 5),
-            (NetMsg::DropStamp { play_from: 1, stamp: 2, play: 3 }, 13),
-            (NetMsg::TimeSync { time_stamp_sent: 1, time_stamp_received: 2 }, 9),
+            (
+                NetMsg::DropStamp {
+                    play_from: 1,
+                    stamp: 2,
+                    play: 3,
+                },
+                13,
+            ),
+            (
+                NetMsg::TimeSync {
+                    time_stamp_sent: 1,
+                    time_stamp_received: 2,
+                },
+                9,
+            ),
             (NetMsg::DropVote { play: 1, vote: -1 }, 3),
             (NetMsg::DropDecision { vote: 1 }, 2),
             (NetMsg::DropFlag { pid: 77 }, 5),
@@ -551,7 +704,11 @@ mod tests {
     #[test]
     fn command_package_is_nine_bytes_plus_payload() {
         let payload = [1u8, 2, 3, 4, 5];
-        let m = NetMsg::CommandPackage { stamp: 0xdead_beef, play: 3, payload: &payload };
+        let m = NetMsg::CommandPackage {
+            stamp: 0xdead_beef,
+            play: 3,
+            payload: &payload,
+        };
         let mut b = Vec::new();
         m.encode(&mut b);
         assert_eq!(b.len(), 8 + payload.len());

@@ -174,7 +174,17 @@ pub const SHIPPED_ECONOMY_SLOTS: &[(usize, &str, i32)] = &[
     (632, "city_gather[5]", 0),
     (636, "gather_rate", 450),
     (640, "peasant_rate", 2560),
+    (644, "scholar_rate[0]", 5),
+    (648, "scholar_rate[1]", 7),
+    (652, "scholar_rate[2]", 10),
+    (656, "scholar_rate[3]", 15),
+    (660, "scholar_rate[4]", 20),
     (668, "oil_rate", 8960),
+    (1160, "forbidden_city_gather", 25),
+    (1164, "forbidden_city_base_gather", 50),
+    (1568, "roman_city_gather", 10),
+    (1864, "german_city_gather", 5),
+    (3232, "theceo_production_bonus", 50),
     (680, "fishermen_bonus[0]", 0),
     (684, "fishermen_bonus[1]", 50),
     (688, "fishermen_bonus[2]", 100),
@@ -334,7 +344,13 @@ impl EconRules {
     );
     rule!(
         /// `PEASANT_RATE` = `"10 resources"` at scale 256, so **2560 = 10.0 in 8.8**.
+        /// See [`worker_rate`].
         peasant_rate, 640
+    );
+    rule_arr!(
+        /// `SCHOLAR_RATE[5]` = `5, 7, 10, 15, 20`, indexed **`level - 1`**
+        /// (`0x006D5754`: `RULES[0x284 + (level-1)*4]`). See [`scholar_rate_for_level`].
+        scholar_rate, 644, 5
     );
     rule!(
         /// `OIL_RATE` = `"35 oil"` at scale 256, so **8960 = 35.0 in 8.8**.
@@ -403,6 +419,27 @@ impl EconRules {
         hanging_gardens_knowledge, 1096);
     rule!(/// `TIKAL_TIMBER` — +50% timber.
         tikal_timber, 1168);
+    rule!(
+        /// `FORBIDDEN_CITY_GATHER` = `"25% bonus"` — scales **every** slot of a city whose
+        /// head building is type `0x213`.
+        forbidden_city_gather, 1160
+    );
+    rule!(
+        /// `FORBIDDEN_CITY_BASE_GATHER` = `"50 resources"` — *replaces* `CITY_GATHER[i]`
+        /// for that city, per slot, rather than adding to it (`0x006D57xx`).
+        forbidden_city_base_gather, 1164
+    );
+    rule!(/// `ROMAN_CITY_GATHER` = 10 wealth per city.
+        roman_city_gather, 1568);
+    rule!(
+        /// `GERMAN_CITY_GATHER` = 5, applied to food, timber and (if available) metal.
+        german_city_gather, 1864
+    );
+    rule!(
+        /// `THECEO_PRODUCTION_BONUS` = `"50% better in one city"` — the campaign hero's
+        /// city bonus, applied to every slot of the one city he stands in.
+        theceo_production_bonus, 3232
+    );
     rule!(/// `PORCELAIN_RARE` — +200% on rares in own territory.
         porcelain_rare, 1200);
     rule!(/// `PORCELAIN_MARKET` — scales `MARKET_TAXES` in `CityData::get_taxes`.
@@ -654,7 +691,11 @@ impl LeaderEcon {
                 self.capped_flag[r],
                 obfuscation::CAPPED_FLAG,
             );
-            put(econ_offsets::GROSS + r * 4, self.gross[r], obfuscation::GROSS);
+            put(
+                econ_offsets::GROSS + r * 4,
+                self.gross[r],
+                obfuscation::GROSS,
+            );
             put(
                 econ_offsets::EXPENSE + r * 4,
                 self.expense[r],
@@ -870,7 +911,10 @@ pub fn calc_rare(
 /// The spatial search itself needs the world and object registry and is not ported here;
 /// this is the arithmetic it ends in, and the divisor is the caller's to supply.
 #[inline]
-pub fn share_among_gatherers(yield_: [i32; NUM_RESOURCES], competitors: i32) -> [i32; NUM_RESOURCES] {
+pub fn share_among_gatherers(
+    yield_: [i32; NUM_RESOURCES],
+    competitors: i32,
+) -> [i32; NUM_RESOURCES] {
     if competitors <= 0 {
         return yield_;
     }
@@ -879,6 +923,172 @@ pub fn share_among_gatherers(yield_: [i32; NUM_RESOURCES], competitors: i32) -> 
     for v in out.iter_mut() {
         *v /= d;
     }
+    out
+}
+
+// ---------------------------------------------------------------------------------------
+// LeaderData::calc_city_resources  0x006D5530  -- the per-city yield
+// ---------------------------------------------------------------------------------------
+
+/// The per-worker gather rate, `PEASANT_RATE` unscaled from 8.8 (`0x00639E40 +0x18D`:
+/// `(rate + (rate >> 31 & 0xFF)) >> 8`).
+///
+/// Shipped `PEASANT_RATE` is 2560, so **10 resources per `GATHER_RATE` frames per worker**
+/// — 10 per 30 game-seconds. Oil workers use `OIL_RATE` instead (8960 → 35), selected at
+/// `0x00639E40 +0x9E5`.
+#[inline]
+pub fn worker_rate(rules: &EconRules, oil: bool) -> i32 {
+    let raw = if oil {
+        rules.oil_rate()
+    } else {
+        rules.peasant_rate()
+    };
+    unscale_8_8(raw)
+}
+
+/// `SCHOLAR_RATE[level - 1]`, the university/scholar payout, unscaled the same way.
+///
+/// **The table is indexed `level - 1`, not `level`** (`0x006D5754`), which is the same
+/// off-by-one convention the sibling tech-cities lane found on the other gather-enhancer
+/// tables (`GRANARY_BONUS`, `LUMBERMILL_BONUS`, `SMELTER_BONUS`, `FISHERMEN_BONUS`). A
+/// port that indexes by `level` reads the next tier's number for every building in the
+/// game.
+///
+/// ⚠ **Unresolved, and stated rather than smoothed over.** The engine computes
+/// `(SCHOLAR_RATE[level-1] * 16 + bias) >> 8`, i.e. `value / 16`, whereas the peasant path
+/// is `value / 256` on a scale-256 constant. `SCHOLAR_RATE` is a **scale-1** field (shipped
+/// `"5"` → 5), so `5 / 16` truncates to **0**. Either the constant is intended to be read
+/// at a different scale, or the knowledge term is genuinely zero at level 1 in this build.
+/// We have not resolved which, so this function returns exactly what the instructions
+/// compute and the caller is warned. Do not "fix" it to 5 without an oracle run.
+#[inline]
+pub fn scholar_rate_for_level(rules: &EconRules, level: i32) -> i32 {
+    let idx = level.wrapping_sub(1).max(0) as usize;
+    unscale_8_8(rules.scholar_rate(idx).wrapping_mul(16))
+}
+
+/// Inputs to [`calc_city_resources`] for one city (or for the city-less census).
+#[derive(Clone, Debug, Default)]
+pub struct CityResourceInputs {
+    /// `city + 0x52`, a per-city wealth term added straight into slot 2 before anything
+    /// else (`0x006D5598`, sign-extended from a `short`). Only in city mode.
+    pub city_wealth_field: i32,
+    /// The summed six-slot result of `BuildData::calc_gather` (`0x0062D360`) over every
+    /// building the walk accepts: alive, its type `is_gather_enhancer`, **not** carrying
+    /// property `0x1A5` or `0x1A6`, and belonging to this city (`data + 0x72 == city`).
+    ///
+    /// The walk itself is a linked list through `build->data[0x74]` from the city's head
+    /// building at `city + 0x08`; in census mode it is instead a scan of two object bands
+    /// collecting everything with `data + 0x72 == -1`, capped at **99** entries
+    /// (`0x006D5630`: `if (n > 0x62) break`).
+    pub enhancer_income: [i32; NUM_RESOURCES],
+    /// The head building's type is `0x213` — the Forbidden City. Scales every slot by
+    /// `FORBIDDEN_CITY_GATHER` **and** replaces `CITY_GATHER[i]` with
+    /// `FORBIDDEN_CITY_BASE_GATHER`.
+    pub forbidden_city: bool,
+    /// The campaign hero with property `0x165` is standing in this city
+    /// (`ObjectsData::find_city_at` `0x0065B870` returned this city index).
+    pub ceo_present: bool,
+    /// `has_tribe_bonus(0x06)` — Romans.
+    pub roman: bool,
+    /// `has_tribe_bonus(0x0C)` — Germans.
+    pub german: bool,
+    /// `LeaderData::type_avail(RES_METAL, 1)` — gates the German metal share only.
+    pub metal_available: bool,
+    /// `CityData::get_taxes` `0x00737B50`; see [`city_taxes`].
+    pub taxes: i32,
+    /// `CityData::get_literacy` `0x00737C00` — the city's knowledge contribution.
+    pub literacy: i32,
+}
+
+/// `LeaderData::calc_city_resources` `0x006D5530` — one city's six-slot contribution.
+///
+/// **This is the function the tech-cities lane named as its open gap.** It has two modes,
+/// selected by the `city` argument, and they are materially different:
+///
+/// * **`Some(city)`** — a real city. Walks the city's building list, then adds the
+///   Forbidden City multiplier, the hero multiplier, `CITY_GATHER`, the Roman and German
+///   civ terms, `CityData::get_taxes` and `CityData::get_literacy`.
+/// * **`None`** — the *census* of buildings that belong to no city (`data + 0x72 == -1`).
+///   Adds only `VILLAGE_TAXES` and returns. Every step above is skipped, which is why
+///   **the census contributes no knowledge at all** — knowledge enters solely through
+///   `get_literacy`, which is city-mode only.
+///
+/// Every term lands in 1/16 units: the flat ones are `<< 4` at their site, the enhancer
+/// income already arrives shifted from `BuildData::calc_gather`.
+///
+/// One retail oddity, reported not smoothed: `CityData::get_level` is called and stored
+/// (`0x006D5570`) on the *city* path, but the only reader of that slot is the
+/// `VILLAGE_TAXES` term on the *census* path, where the value is the literal 1
+/// (`0x006D557B`). So the level is computed and discarded. Shipped `VILLAGE_TAXES` is 0,
+/// so nothing observable rides on it either way.
+pub fn calc_city_resources(
+    rules: &EconRules,
+    city: Option<&CityResourceInputs>,
+) -> [i32; NUM_RESOURCES] {
+    let mut out = [0i32; NUM_RESOURCES];
+
+    let Some(c) = city else {
+        // Census mode. `local_1b8` is the literal 1 here.
+        out[RES_WEALTH] = rules.village_taxes().wrapping_mul(16);
+        return out;
+    };
+
+    // 0x006D5598 -- the city's own wealth field, before anything else.
+    out[RES_WEALTH] = out[RES_WEALTH].wrapping_add(c.city_wealth_field);
+
+    // 0x006D57xx -- the accepted buildings' calc_gather sum.
+    for i in 0..NUM_RESOURCES {
+        out[i] = out[i].wrapping_add(c.enhancer_income[i]);
+    }
+
+    // 0x006D5820 -- Forbidden City, every slot.
+    if c.forbidden_city {
+        for i in 0..NUM_RESOURCES {
+            out[i] = pct(out[i], rules.forbidden_city_gather().wrapping_add(100));
+        }
+    }
+
+    // 0x006D58F0 -- the hero, every slot. Retail breaks after the first match.
+    if c.ceo_present {
+        for i in 0..NUM_RESOURCES {
+            out[i] = pct(out[i], rules.theceo_production_bonus().wrapping_add(100));
+        }
+    }
+
+    // 0x006D5960 -- CITY_GATHER, per slot, skipped when the rule is 0. The Forbidden City
+    // *replaces* the value rather than scaling it, and only when the override is non-zero.
+    for i in 0..NUM_RESOURCES {
+        if rules.city_gather(i) == 0 {
+            continue;
+        }
+        let v = if c.forbidden_city && rules.forbidden_city_base_gather() != 0 {
+            rules.forbidden_city_base_gather()
+        } else {
+            rules.city_gather(i)
+        };
+        out[i] = out[i].wrapping_add(v.wrapping_mul(16));
+    }
+
+    // 0x006D59B0 -- Romans.
+    if rules.roman_city_gather() != 0 && c.roman {
+        out[RES_WEALTH] = out[RES_WEALTH].wrapping_add(rules.roman_city_gather().wrapping_mul(16));
+    }
+
+    // 0x006D59D0 -- Germans. Metal is gated on `type_avail`; food and timber are not.
+    if rules.german_city_gather() != 0 && c.german {
+        let v = rules.german_city_gather().wrapping_mul(16);
+        out[RES_FOOD] = out[RES_FOOD].wrapping_add(v);
+        out[RES_TIMBER] = out[RES_TIMBER].wrapping_add(v);
+        if c.metal_available {
+            out[RES_METAL] = out[RES_METAL].wrapping_add(v);
+        }
+    }
+
+    // 0x006D5A20 / 0x006D5A35.
+    out[RES_WEALTH] = out[RES_WEALTH].wrapping_add(c.taxes.wrapping_mul(16));
+    out[RES_KNOWLEDGE] = out[RES_KNOWLEDGE].wrapping_add(c.literacy.wrapping_mul(16));
+
     out
 }
 
@@ -1076,13 +1286,22 @@ impl Default for GatherInputs {
 }
 
 /// What `calc_gather` produces besides the income itself.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GatherOutput {
     /// Gross income per resource, in **sixteenths of a resource per `GATHER_RATE` frames**.
     pub gross: [i32; NUM_RESOURCES],
     /// `leader + 0x6D8 + i*4`: how many nodes of rare `i` contributed this pass. Written
     /// by the rare loop at `0x006CF50C` and by `UnitData::calc_gather`'s `param_6` counter.
     pub rare_counts: [i32; NUM_RARES],
+}
+
+impl Default for GatherOutput {
+    fn default() -> Self {
+        GatherOutput {
+            gross: [0; NUM_RESOURCES],
+            rare_counts: [0; NUM_RARES],
+        }
+    }
 }
 
 /// `Leader::calc_gather` `0x006CEEE0` — compose one leader's gross income.
@@ -1103,8 +1322,8 @@ pub fn calc_gather(rules: &EconRules, inp: &GatherInputs) -> GatherOutput {
 
     // 2. 0x006CF0C0 -- Lakota food.
     if let Some(n) = inp.lakota_units {
-        out[RES_FOOD] = out[RES_FOOD]
-            .wrapping_add(n.wrapping_mul(rules.lakota_food()).wrapping_mul(16));
+        out[RES_FOOD] =
+            out[RES_FOOD].wrapping_add(n.wrapping_mul(rules.lakota_food()).wrapping_mul(16));
     }
 
     // 3. 0x006CF0E2 -- Americans. Slot order 0, 1, 4, 2 exactly as retail emits it; each
@@ -1178,11 +1397,7 @@ pub fn calc_gather(rules: &EconRules, inp: &GatherInputs) -> GatherOutput {
             t = pct(t, rules.ctw_missionaries_bonus().wrapping_add(100));
         }
         // 0x006CF53C: `(territory * t * 16) / total_land`.
-        let wealth = inp
-            .territory_tiles
-            .wrapping_mul(t)
-            .wrapping_mul(16)
-            / inp.total_land_tiles;
+        let wealth = inp.territory_tiles.wrapping_mul(t).wrapping_mul(16) / inp.total_land_tiles;
         out[RES_WEALTH] = out[RES_WEALTH].wrapping_add(wealth);
 
         // 0x006CF55E: Mongols. Note the literal 800, not `<< 4`, and the double divide.
@@ -1304,7 +1519,19 @@ pub struct DoGatherContext {
     /// The interest threshold, built at `0x006CE666`/`0x006CE684`/`0x006CE69A` from a
     /// game-config table (and, on one branch, a rule). Per resource. Not derived; supplied.
     pub interest_threshold: [i32; NUM_RESOURCES],
-    /// `LeaderData::get_gather_handicap` `0x006D66A0` — a percentage *added* to 100.
+    /// `LeaderData::get_gather_handicap` `0x006D66A0` — a percentage *added* to 100, and
+    /// **the AI difficulty cheat**: the difficulty lane measures it from −35 at Easiest to
+    /// +50 at Toughest, a 2.29x end-to-end income spread between the extremes on identical
+    /// towns [reported, sibling lane].
+    ///
+    /// Note the asymmetry the truncation creates. The step is
+    /// `income * (100 + h) / 100` with C truncation, so at negative `h` the leftover
+    /// fraction is always discarded and the *effective* penalty is strictly worse than
+    /// nominal, while at positive `h` the bonus is merely rounded down. Low difficulties
+    /// are therefore harsher than the number suggests, and the error is largest for small
+    /// incomes — i.e. early game. A separate **cost** handicap
+    /// (`LeaderData::get_handicap`) stacks on top at the extremes; it is not part of this
+    /// function and is not modelled here.
     pub gather_handicap: i32,
     /// `game + 0x2F`. Difficulty > 4 penalises **knowledge only**: `*3/4` at 5..6, `/2`
     /// above 6.
@@ -1412,7 +1639,10 @@ pub fn do_gather(
                 let with_interest = income.wrapping_add(
                     (rules.dutch_interest().wrapping_mul(surplus) / 100).wrapping_mul(16),
                 );
-                let limit = rules.dutch_interest_cap().wrapping_mul(16).wrapping_add(cap);
+                let limit = rules
+                    .dutch_interest_cap()
+                    .wrapping_mul(16)
+                    .wrapping_add(cap);
                 income = with_interest.min(limit);
             }
             if income >= HARD_INCOME_CEILING {
@@ -1582,8 +1812,11 @@ pub fn calc_market(rules: &EconRules, market: &mut MarketState, rng: &mut Random
         return;
     }
     let sign = if delta > 0 { 1 } else { delta >> 31 };
-    market.trend_step[res] =
-        (duration.wrapping_sub(1).wrapping_mul(sign).wrapping_add(delta)) / duration;
+    market.trend_step[res] = (duration
+        .wrapping_sub(1)
+        .wrapping_mul(sign)
+        .wrapping_add(delta))
+        / duration;
 }
 
 /// `GameDaemon::calc_markets` `0x00732180` — the market tick, called once per frame from
@@ -1732,9 +1965,8 @@ pub fn calc_market_prices(
         for _ in 0..n {
             buy = buy.wrapping_mul(100) / rules.ctw_market_bonus_buy().wrapping_add(100);
         }
-        sell = sell.wrapping_add(
-            (rules.ctw_market_bonus_sell().wrapping_mul(sell) / 100).wrapping_mul(n),
-        );
+        sell = sell
+            .wrapping_add((rules.ctw_market_bonus_sell().wrapping_mul(sell) / 100).wrapping_mul(n));
     }
 
     // 0x006DC393.
@@ -1877,7 +2109,12 @@ pub fn market_adler32(m: &MarketState) -> u32 {
 /// A descending chain of `has_preq` tests on tech ids `0x30E`, `0x30D`, `0x30C`, `0x30B`;
 /// the first hit wins, so pass the four results in that order.
 #[inline]
-pub fn taxation_level(has_preq_30e: bool, has_preq_30d: bool, has_preq_30c: bool, has_preq_30b: bool) -> usize {
+pub fn taxation_level(
+    has_preq_30e: bool,
+    has_preq_30d: bool,
+    has_preq_30c: bool,
+    has_preq_30b: bool,
+) -> usize {
     if has_preq_30e {
         4
     } else if has_preq_30d {
@@ -2051,6 +2288,18 @@ pub fn caravan_limit(
 /// `leader + 0x6EB8`, past that range, so it is reached through one of the eight
 /// `0x5C`-byte sub-walks at `leader + 0x692C` rather than by the flat run. We have not
 /// resolved which, so this is our own framing of the same bytes, not retail's.
+///
+/// Two things the full channel needs that this function does **not** supply, both of which
+/// would silently produce a matching-looking-but-wrong checksum if forgotten:
+///
+/// * **`LeaderData::anti_att` and `LeaderData::plunder_scale` are `f32` inside the walked
+///   region.** They are two of the very few floats in sim state (with `Unit::move_step`'s
+///   trig). Their bit patterns are hashed, so they must be reproduced to the bit, not to
+///   within an epsilon — and they must be stored as `f32`, not promoted to `f64`.
+/// * **`Array<T>` hashes its capacity and its growth hint, not just its live elements.**
+///   Any growable container inside walked state therefore needs the engine's own growth
+///   schedule; a Rust `Vec`, whose capacity doubles on a different schedule, diverges as
+///   soon as one push crosses a boundary — even when every element matches.
 pub fn leaders_channel(econs: &[LeaderEcon]) -> u32 {
     let mut a = 1u32;
     for e in econs {
@@ -2164,7 +2413,10 @@ mod tests {
     #[test]
     fn calc_gather_period_is_256_frames_staggered_by_leader() {
         // Clean path: 300-frame floor, then (frame + slot*8) % 256 == 0.
-        assert!(!calc_gather_due(255, 0, 0, false), "under the 300-frame floor");
+        assert!(
+            !calc_gather_due(255, 0, 0, false),
+            "under the 300-frame floor"
+        );
         assert!(calc_gather_due(512, 0, 0, false));
         assert!(!calc_gather_due(512, 1, 0, false), "slot 1 is offset by 8");
         assert!(calc_gather_due(504, 1, 0, false), "504 + 8 = 512");
@@ -2176,13 +2428,20 @@ mod tests {
         assert!(calc_gather_due(8, 0, 10_000, true));
         assert!(!calc_gather_due(9, 0, 0, true));
         assert!(calc_gather_due(7, 1, 0, true), "slot 1: 1 + 7 = 8");
-        assert!(!calc_gather_due(0, 0, 0, true), "frame 0 is excluded when dirty");
+        assert!(
+            !calc_gather_due(0, 0, 0, true),
+            "frame 0 is excluded when dirty"
+        );
     }
 
     #[test]
     fn the_two_paths_have_different_periods() {
-        let clean: Vec<i32> = (0..2048).filter(|&f| calc_gather_due(f, 0, -10_000, false)).collect();
-        let dirty: Vec<i32> = (0..2048).filter(|&f| calc_gather_due(f, 0, -10_000, true)).collect();
+        let clean: Vec<i32> = (0..2048)
+            .filter(|&f| calc_gather_due(f, 0, -10_000, false))
+            .collect();
+        let dirty: Vec<i32> = (0..2048)
+            .filter(|&f| calc_gather_due(f, 0, -10_000, true))
+            .collect();
         assert_eq!(clean.len(), 8, "2048 / 256");
         assert_eq!(dirty.len(), 255, "2048 / 8, minus frame 0");
     }
@@ -2278,7 +2537,10 @@ mod tests {
                 amount: [100, 0],
             };
             let y = calc_rare(&r, 10, &good, &ctx, false);
-            assert_eq!(y, [0; NUM_RESOURCES], "res_id {bad} must contribute nothing");
+            assert_eq!(
+                y, [0; NUM_RESOURCES],
+                "res_id {bad} must contribute nothing"
+            );
         }
     }
 
@@ -2293,6 +2555,184 @@ mod tests {
         // Three gatherers on a 100-yield node produce 99, not 100: the loss is real.
         let three: i32 = share_among_gatherers(y, 2)[0] * 3;
         assert_eq!(three, 99);
+    }
+
+    // -- per-city yield ----------------------------------------------------------------------
+
+    #[test]
+    fn a_plain_city_yields_city_gather_plus_taxes_and_literacy() {
+        let r = shipped();
+        let c = CityResourceInputs {
+            taxes: 10,
+            literacy: 3,
+            ..Default::default()
+        };
+        let out = calc_city_resources(&r, Some(&c));
+        assert_eq!(out[RES_FOOD], 10 * 16, "CITY_GATHER[food]");
+        assert_eq!(out[RES_TIMBER], 10 * 16, "CITY_GATHER[timber]");
+        assert_eq!(out[RES_WEALTH], 10 * 16, "taxes, shifted");
+        assert_eq!(out[RES_KNOWLEDGE], 3 * 16, "literacy, shifted");
+        assert_eq!(out[RES_METAL], 0, "CITY_GATHER[metal] ships as 0");
+        assert_eq!(out[RES_OIL], 0);
+    }
+
+    #[test]
+    fn the_census_contributes_no_knowledge_and_no_city_gather() {
+        // The `city < 0` path returns immediately after VILLAGE_TAXES: knowledge only ever
+        // enters through CityData::get_literacy, which is city-mode only.
+        let r = shipped();
+        let out = calc_city_resources(&r, None);
+        assert_eq!(out[RES_KNOWLEDGE], 0);
+        assert_eq!(out[RES_FOOD], 0, "CITY_GATHER is city-mode only");
+        assert_eq!(out[RES_WEALTH], 0, "VILLAGE_TAXES ships as 0");
+
+        let mut r2 = shipped();
+        r2.set(804, 7); // village_taxes
+        assert_eq!(calc_city_resources(&r2, None)[RES_WEALTH], 7 * 16);
+        assert_eq!(calc_city_resources(&r2, None)[RES_KNOWLEDGE], 0);
+    }
+
+    #[test]
+    fn the_forbidden_city_replaces_city_gather_rather_than_scaling_it() {
+        let r = shipped();
+        let plain = calc_city_resources(&r, Some(&CityResourceInputs::default()));
+        let fc = calc_city_resources(
+            &r,
+            Some(&CityResourceInputs {
+                forbidden_city: true,
+                ..Default::default()
+            }),
+        );
+        // CITY_GATHER[food] = 10 is replaced by FORBIDDEN_CITY_BASE_GATHER = 50.
+        assert_eq!(plain[RES_FOOD], 160);
+        assert_eq!(fc[RES_FOOD], 50 * 16);
+        // ...and slots whose CITY_GATHER is zero stay zero: the rule-is-zero guard comes
+        // first, so the override cannot introduce income where there was none.
+        assert_eq!(fc[RES_METAL], 0);
+    }
+
+    #[test]
+    fn the_forbidden_city_multiplier_hits_enhancer_income_not_city_gather() {
+        // The 25% scale is applied *before* CITY_GATHER is added, so it only ever touches
+        // the buildings' contribution. Ordering is the whole content of this test.
+        let r = shipped();
+        let mut c = CityResourceInputs {
+            forbidden_city: true,
+            ..Default::default()
+        };
+        c.enhancer_income[RES_METAL] = 400;
+        let out = calc_city_resources(&r, Some(&c));
+        assert_eq!(
+            out[RES_METAL], 500,
+            "400 * 125 / 100, no CITY_GATHER[metal]"
+        );
+    }
+
+    #[test]
+    fn the_hero_and_the_forbidden_city_compose_sequentially() {
+        let r = shipped();
+        let mut c = CityResourceInputs {
+            forbidden_city: true,
+            ceo_present: true,
+            ..Default::default()
+        };
+        c.enhancer_income[RES_METAL] = 400;
+        let out = calc_city_resources(&r, Some(&c));
+        // 400 -> 500 -> 750, with truncation between. Not 400 * 175 / 100 = 700.
+        assert_eq!(out[RES_METAL], 750);
+    }
+
+    #[test]
+    fn german_city_gather_gates_only_the_metal_share() {
+        let r = shipped();
+        let base = CityResourceInputs {
+            german: true,
+            metal_available: false,
+            ..Default::default()
+        };
+        let out = calc_city_resources(&r, Some(&base));
+        assert_eq!(out[RES_FOOD], 160 + 5 * 16);
+        assert_eq!(out[RES_TIMBER], 160 + 5 * 16);
+        assert_eq!(out[RES_METAL], 0, "gated on type_avail");
+
+        let out2 = calc_city_resources(
+            &r,
+            Some(&CityResourceInputs {
+                metal_available: true,
+                ..base
+            }),
+        );
+        assert_eq!(out2[RES_METAL], 5 * 16);
+    }
+
+    #[test]
+    fn roman_city_gather_is_wealth_only() {
+        let r = shipped();
+        let out = calc_city_resources(
+            &r,
+            Some(&CityResourceInputs {
+                roman: true,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(out[RES_WEALTH], 10 * 16);
+        assert_eq!(out[RES_FOOD], 160, "CITY_GATHER only");
+    }
+
+    #[test]
+    fn a_city_feeds_calc_gather_through_object_income() {
+        // The integration the tech-cities lane was missing: per-city yield summed into
+        // Leader::calc_gather's object_income.
+        let r = shipped();
+        let city = CityResourceInputs {
+            taxes: 10,
+            literacy: 4,
+            ..Default::default()
+        };
+        let mut inp = GatherInputs::default();
+        for _ in 0..3 {
+            let y = calc_city_resources(&r, Some(&city));
+            for i in 0..NUM_RESOURCES {
+                inp.object_income[i] += y[i];
+            }
+        }
+        let g = calc_gather(&r, &inp);
+        assert_eq!(g.gross[RES_FOOD], 3 * 160, "three cities of CITY_GATHER");
+        assert_eq!(g.gross[RES_KNOWLEDGE], 3 * 64);
+    }
+
+    // -- worker rates ---------------------------------------------------------------------
+
+    #[test]
+    fn worker_rate_unscales_the_8_8_constants() {
+        let r = shipped();
+        assert_eq!(worker_rate(&r, false), 10, "PEASANT_RATE 2560 / 256");
+        assert_eq!(worker_rate(&r, true), 35, "OIL_RATE 8960 / 256");
+    }
+
+    #[test]
+    fn scholar_rate_is_indexed_level_minus_one() {
+        let r = shipped();
+        // The table is 5, 7, 10, 15, 20 and the engine reads `[level - 1]`. Assert the
+        // indexing on the raw accessor, where it is unambiguous.
+        assert_eq!(r.scholar_rate(0), 5);
+        assert_eq!(r.scholar_rate(4), 20);
+        // Level 1 must select entry 0, not entry 1. If a port used `[level]` it would read
+        // 7 here -- so pin the *selection*, separately from the questionable /16 unscale.
+        let sel = |lvl: i32| r.scholar_rate((lvl - 1).max(0) as usize);
+        assert_eq!(sel(1), 5);
+        assert_eq!(sel(3), 10);
+        assert_eq!(sel(5), 20);
+    }
+
+    #[test]
+    fn scholar_rate_unscale_truncates_to_zero_and_we_do_not_paper_over_it() {
+        // Documented unresolved: the engine computes `value * 16 >> 8` on a scale-1
+        // constant, which truncates 5 to 0. This test exists so that a later "fix" has to
+        // be a deliberate change with evidence, not a silent one.
+        let r = shipped();
+        assert_eq!(scholar_rate_for_level(&r, 1), 0, "5 * 16 / 256");
+        assert_eq!(scholar_rate_for_level(&r, 5), 1, "20 * 16 / 256");
     }
 
     // -- resource bonuses -------------------------------------------------------------------
@@ -2370,7 +2810,10 @@ mod tests {
         assert_eq!(g.gross[RES_TIMBER], v);
         assert_eq!(g.gross[RES_METAL], v);
         assert_eq!(g.gross[RES_WEALTH], v);
-        assert_eq!(g.gross[RES_KNOWLEDGE], 0, "the XML text lists four slots, not six");
+        assert_eq!(
+            g.gross[RES_KNOWLEDGE], 0,
+            "the XML text lists four slots, not six"
+        );
         assert_eq!(g.gross[RES_OIL], 0);
     }
 
@@ -2548,7 +2991,10 @@ mod tests {
         inp.object_income[RES_OIL] = 1000;
         inp.type_avail[RES_OIL] = false;
         inp.has_preq[RES_OIL] = false; // second gate missing
-        inp.substitution[RES_OIL] = Substitution { target: 2, rate_8_8: 256 };
+        inp.substitution[RES_OIL] = Substitution {
+            target: 2,
+            rate_8_8: 256,
+        };
         assert_eq!(calc_gather(&r, &inp).gross[RES_OIL], 1000, "left alone");
     }
 
@@ -2589,7 +3035,10 @@ mod tests {
         };
         let caps = calc_resource_caps(&r, 0, &gates);
         let british_only = 70 * 125 / 100; // 87
-        assert_eq!(caps[RES_METAL], british_only, "slots 4 and 5 have no branch");
+        assert_eq!(
+            caps[RES_METAL], british_only,
+            "slots 4 and 5 have no branch"
+        );
         assert_eq!(caps[RES_OIL], british_only);
         assert_eq!(caps[RES_WEALTH], british_only * 133 / 100);
         assert_eq!(caps[RES_TIMBER], british_only * 110 / 100);
@@ -2615,7 +3064,10 @@ mod tests {
         for _ in 0..9 {
             credited += do_gather(&r, &mut econ, &ctx)[RES_FOOD].whole;
         }
-        assert_eq!(credited, 0, "nine frames of 720 is 6480, still short of 7200");
+        assert_eq!(
+            credited, 0,
+            "nine frames of 720 is 6480, still short of 7200"
+        );
         credited += do_gather(&r, &mut econ, &ctx)[RES_FOOD].whole;
         assert_eq!(credited, 1, "the tenth frame crosses");
         assert_eq!(econ.stockpile[RES_FOOD], 1);
@@ -2623,22 +3075,43 @@ mod tests {
     }
 
     #[test]
-    fn the_carry_loop_is_observable_frame_by_frame() {
-        // A remainder left from earlier frames changes which frame a payout lands on.
-        // Folding the carry into the division would move this by one frame.
+    fn the_carry_loop_conserves_every_sixteenth() {
+        // The property that matters: the accumulator loses nothing. Over N frames the
+        // stockpile plus the leftover accumulator must account for exactly N * income.
+        // Stated as an invariant rather than a hand-computed schedule, because a
+        // hand-computed expectation is how this project has been burned before.
+        let r = shipped();
+        let period = accumulator_period(&r);
+        for income in [1, 7199, 7200, 7201, 20_000] {
+            let mut econ = LeaderEcon::new();
+            econ.commerce_cap = [i32::MAX; NUM_RESOURCES];
+            econ.gross[RES_FOOD] = income;
+            let ctx = DoGatherContext::default();
+            for _ in 0..97 {
+                do_gather(&r, &mut econ, &ctx);
+            }
+            let accounted = econ.stockpile[RES_FOOD] * period + econ.accumulator[RES_FOOD];
+            assert_eq!(accounted, 97 * income, "income {income} lost a sixteenth");
+            assert!(econ.accumulator[RES_FOOD] < period);
+        }
+    }
+
+    #[test]
+    fn payouts_are_not_evenly_spaced_when_income_does_not_divide_the_period() {
+        // Folding the carry into the division would make the schedule regular. It is not:
+        // with income one short of the period, the first frame pays nothing and every
+        // later frame pays one, so the schedule is offset. That offset is observable and
+        // is why the loop is a loop.
         let r = shipped();
         let mut econ = LeaderEcon::new();
-        econ.commerce_cap = [1_000_000; NUM_RESOURCES];
-        econ.gross[RES_FOOD] = 7199; // one short every frame
+        econ.commerce_cap = [i32::MAX; NUM_RESOURCES];
+        econ.gross[RES_FOOD] = accumulator_period(&r) - 1;
         let ctx = DoGatherContext::default();
-        let mut landed = Vec::new();
-        for f in 0..3 {
-            if do_gather(&r, &mut econ, &ctx)[RES_FOOD].whole > 0 {
-                landed.push(f);
-            }
-        }
-        assert_eq!(landed, vec![0, 1], "frames 0 and 1 pay; frame 2 does not");
-        assert_eq!(econ.stockpile[RES_FOOD], 2);
+        let paid: Vec<i32> = (0..4)
+            .map(|_| do_gather(&r, &mut econ, &ctx)[RES_FOOD].whole)
+            .collect();
+        assert_eq!(paid[0], 0, "the first frame is short by one sixteenth");
+        assert!(paid[1..].iter().all(|&p| p == 1));
     }
 
     #[test]
@@ -2682,7 +3155,10 @@ mod tests {
         econ.gross[RES_FOOD] = 100_000;
 
         let plain = do_gather(&r, &mut econ, &DoGatherContext::default());
-        assert_eq!(plain[RES_FOOD].displayed, 100_000, "no ceiling without Dutch");
+        assert_eq!(
+            plain[RES_FOOD].displayed, 100_000,
+            "no ceiling without Dutch"
+        );
 
         let mut econ2 = LeaderEcon::new();
         econ2.commerce_cap = [1_000_000; NUM_RESOURCES];
@@ -2712,7 +3188,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(out[RES_KNOWLEDGE].displayed, 100_000, "no ceiling on knowledge");
+        assert_eq!(
+            out[RES_KNOWLEDGE].displayed, 100_000,
+            "no ceiling on knowledge"
+        );
     }
 
     #[test]
@@ -2787,7 +3266,10 @@ mod tests {
         let out = do_gather(&r, &mut econ, &ctx);
         assert_eq!(out[RES_OIL].whole, 0);
         assert_eq!(econ.stockpile[RES_OIL], 0);
-        assert_eq!(econ.displayed[RES_OIL], 0, "not even the display is written");
+        assert_eq!(
+            econ.displayed[RES_OIL], 0,
+            "not even the display is written"
+        );
         assert_eq!(econ.stockpile[RES_FOOD], 10);
     }
 
@@ -2822,14 +3304,32 @@ mod tests {
         let inp = GatherInputs::default();
 
         // Frame 3 is not a multiple of 8: not due, gross survives.
-        leader_gather(&r, &mut econ, 3, 0, &mut last, &mut dirty, &inp,
-                      &CapGates::default(), &DoGatherContext::default());
+        leader_gather(
+            &r,
+            &mut econ,
+            3,
+            0,
+            &mut last,
+            &mut dirty,
+            &inp,
+            &CapGates::default(),
+            &DoGatherContext::default(),
+        );
         assert_eq!(econ.gross[RES_FOOD], 12_345);
         assert!(dirty);
 
         // Frame 8 is due: gross is recomposed to the baseline (zero) and dirty clears.
-        leader_gather(&r, &mut econ, 8, 0, &mut last, &mut dirty, &inp,
-                      &CapGates::default(), &DoGatherContext::default());
+        leader_gather(
+            &r,
+            &mut econ,
+            8,
+            0,
+            &mut last,
+            &mut dirty,
+            &inp,
+            &CapGates::default(),
+            &DoGatherContext::default(),
+        );
         assert_eq!(econ.gross[RES_FOOD], 0);
         assert!(!dirty);
         assert_eq!(last, 8);
@@ -2892,8 +3392,8 @@ mod tests {
     #[test]
     fn the_trend_step_reaches_its_target_in_exactly_duration_cycles() {
         // This is what the round-away-from-zero divide buys.
-        let r = shipped();
-        for (delta, duration) in [(7, 8), (-7, 8), (1, 16), (-1, 16), (100, 9)] {
+        let _r = shipped();
+        for (delta, duration) in [(7i32, 8i32), (-7, 8), (1, 16), (-1, 16), (100, 9)] {
             let step = {
                 let sign = if delta > 0 { 1 } else { delta >> 31 };
                 ((duration - 1) * sign + delta) / duration
@@ -2949,7 +3449,7 @@ mod tests {
         };
         let mut rng = Random::new(4);
         calc_markets(&r, &mut m, &mut rng, 0); // cycle 0 -> everything
-        // Cycles 1..7 touch nothing: (cycle + res) & 7 == 0 needs cycle + res in {8, 16, ...}
+                                               // Cycles 1..7 touch nothing: (cycle + res) & 7 == 0 needs cycle + res in {8, 16, ...}
         let before = m;
         for f in 1..8 {
             calc_markets(&r, &mut m, &mut rng, f);
@@ -3055,11 +3555,20 @@ mod tests {
             ..Default::default()
         };
         let p = calc_market_prices(&r, &m, 0, &g);
-        assert_ne!(p.buy, 100, "RUSSIAN_COMMUNISM is 0, so the branch never fires");
+        assert_ne!(
+            p.buy, 100,
+            "RUSSIAN_COMMUNISM is 0, so the branch never fires"
+        );
 
         let mut r2 = shipped();
         r2.set(1880, 1);
-        assert_eq!(calc_market_prices(&r2, &m, 0, &g), MarketPrices { buy: 100, sell: 100 });
+        assert_eq!(
+            calc_market_prices(&r2, &m, 0, &g),
+            MarketPrices {
+                buy: 100,
+                sell: 100
+            }
+        );
     }
 
     #[test]
@@ -3075,7 +3584,14 @@ mod tests {
         let res = RES_TIMBER;
         let price = calc_market_prices(&r, &m, res, &MarketPriceGates::default()).buy;
         assert_eq!(
-            do_buy(&r, &mut m, &mut econ, &mut demand, res, &MarketPriceGates::default()),
+            do_buy(
+                &r,
+                &mut m,
+                &mut econ,
+                &mut demand,
+                res,
+                &MarketPriceGates::default()
+            ),
             TradeResult::Done
         );
         assert_eq!(econ.stockpile[RES_WEALTH], 1000 - price);
@@ -3095,11 +3611,25 @@ mod tests {
         let mut econ = LeaderEcon::new(); // no wealth, no stock
         let mut c = 0;
         assert_eq!(
-            do_buy(&r, &mut m, &mut econ, &mut c, RES_TIMBER, &MarketPriceGates::default()),
+            do_buy(
+                &r,
+                &mut m,
+                &mut econ,
+                &mut c,
+                RES_TIMBER,
+                &MarketPriceGates::default()
+            ),
             TradeResult::Refused
         );
         assert_eq!(
-            do_sell(&r, &mut m, &mut econ, &mut c, RES_TIMBER, &MarketPriceGates::default()),
+            do_sell(
+                &r,
+                &mut m,
+                &mut econ,
+                &mut c,
+                RES_TIMBER,
+                &MarketPriceGates::default()
+            ),
             TradeResult::Refused
         );
         assert_eq!(m, before);
@@ -3136,7 +3666,14 @@ mod tests {
         let mut econ = LeaderEcon::new();
         econ.stockpile[RES_TIMBER] = 100;
         let mut c = 0;
-        do_sell(&r, &mut m, &mut econ, &mut c, RES_TIMBER, &MarketPriceGates::default());
+        do_sell(
+            &r,
+            &mut m,
+            &mut econ,
+            &mut c,
+            RES_TIMBER,
+            &MarketPriceGates::default(),
+        );
         assert_eq!(m.base_price[RES_TIMBER], 0, "1 - 3 clamped to 0");
     }
 
@@ -3154,18 +3691,34 @@ mod tests {
     fn city_taxes_are_market_only_in_shipped_data() {
         let r = shipped();
         assert_eq!(
-            city_taxes(&r, &CityTaxInputs { num_buildings: 12, ..Default::default() }),
+            city_taxes(
+                &r,
+                &CityTaxInputs {
+                    num_buildings: 12,
+                    ..Default::default()
+                }
+            ),
             0,
             "VILLAGE_TAXES and BUILDING_TAXES both ship as 0"
         );
         assert_eq!(
-            city_taxes(&r, &CityTaxInputs { has_market: true, ..Default::default() }),
+            city_taxes(
+                &r,
+                &CityTaxInputs {
+                    has_market: true,
+                    ..Default::default()
+                }
+            ),
             10
         );
         assert_eq!(
             city_taxes(
                 &r,
-                &CityTaxInputs { has_market: true, porcelain: true, ..Default::default() }
+                &CityTaxInputs {
+                    has_market: true,
+                    porcelain: true,
+                    ..Default::default()
+                }
             ),
             40,
             "10 * 400 / 100"
@@ -3178,9 +3731,17 @@ mod tests {
         // age 0 -> 51%.
         assert_eq!(scale_tribute(&r, 0, 19), 19 * 51 / 100, "truncate under 20");
         assert_eq!(scale_tribute(&r, 0, 19), 9);
-        assert_eq!(scale_tribute(&r, 0, 20), (20 * 51 + 50) / 100, "nearest 20..99");
+        assert_eq!(
+            scale_tribute(&r, 0, 20),
+            (20 * 51 + 50) / 100,
+            "nearest 20..99"
+        );
         assert_eq!(scale_tribute(&r, 0, 20), 10);
-        assert_eq!(scale_tribute(&r, 0, 100), (100 * 51 + 99) / 100, "ceiling from 100");
+        assert_eq!(
+            scale_tribute(&r, 0, 100),
+            (100 * 51 + 99) / 100,
+            "ceiling from 100"
+        );
         assert_eq!(scale_tribute(&r, 0, 100), 51);
     }
 
@@ -3211,8 +3772,15 @@ mod tests {
     #[test]
     fn nubian_caravan_bonus_applies() {
         let r = shipped();
-        let g = CaravanGates { nubian: true, ..Default::default() };
-        assert_eq!(caravan_limit(&r, 3, &g, 0, None), 5, "3 + 1 + NUBIAN_CARAVAN_LIMIT");
+        let g = CaravanGates {
+            nubian: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            caravan_limit(&r, 3, &g, 0, None),
+            5,
+            "3 + 1 + NUBIAN_CARAVAN_LIMIT"
+        );
     }
 
     // -- checksum ---------------------------------------------------------------------------
@@ -3244,7 +3812,10 @@ mod tests {
         e.age = 5;
         let img = e.image();
         let read = |off: usize| u32::from_le_bytes(img[off..off + 4].try_into().unwrap());
-        assert_eq!(read(econ_offsets::STOCKPILE + 8) ^ obfuscation::STOCKPILE, 1234);
+        assert_eq!(
+            read(econ_offsets::STOCKPILE + 8) ^ obfuscation::STOCKPILE,
+            1234
+        );
         assert_eq!(read(econ_offsets::AGE) ^ obfuscation::AGE, 5);
         // A zero field is NOT zero in the image: this is the whole point.
         assert_eq!(read(econ_offsets::STOCKPILE), obfuscation::STOCKPILE);
@@ -3270,8 +3841,20 @@ mod tests {
 
     #[test]
     fn the_goods_channel_is_order_sensitive() {
-        let a = GoodNode { good_type: 6, x: 1, y: 2, remaining: 100, flags: 1 };
-        let b = GoodNode { good_type: 7, x: 3, y: 4, remaining: 50, flags: 0 };
+        let a = GoodNode {
+            good_type: 6,
+            x: 1,
+            y: 2,
+            remaining: 100,
+            flags: 1,
+        };
+        let b = GoodNode {
+            good_type: 7,
+            x: 3,
+            y: 4,
+            remaining: 50,
+            flags: 0,
+        };
         assert_ne!(goods_channel(&[a, b]), goods_channel(&[b, a]));
         assert_eq!(goods_channel(&[a, b]), goods_channel(&[a, b]));
     }
@@ -3308,15 +3891,27 @@ mod tests {
             );
         }
 
-        // Gross is capped at the age-2 commerce cap of 150, so 600 frames of 150/7200
-        // credits 12 whole units of each capped resource.
+        // The first payout-bearing frame is frame 8, not frame 0: `calc_gather` is on the
+        // dirty schedule (every 8 frames) and frame 0 is excluded, so gross is still zero
+        // for frames 0..7. That eight-frame lead-in is a real property of the scheduler
+        // and it is exactly the kind of thing a "600 * income / period" expectation gets
+        // wrong -- so assert the invariant against the number of income-bearing frames.
+        let earning_frames = 600 - 8;
         assert_eq!(econ.commerce_cap[RES_FOOD], 150);
         assert_eq!(econ.capped_flag[RES_FOOD], 1);
-        assert_eq!(econ.stockpile[RES_FOOD], 600 * 150 / 7200);
-        assert_eq!(econ.stockpile[RES_KNOWLEDGE], 600 * 900 / 7200, "under its 999 cap");
+        assert_eq!(econ.stockpile[RES_FOOD], earning_frames * 150 / 7200);
+        assert_eq!(
+            econ.stockpile[RES_KNOWLEDGE],
+            earning_frames * 900 / 7200,
+            "under its 999 cap"
+        );
         assert_eq!(econ.stockpile[RES_OIL], 0, "no oil income");
 
-        let fingerprint = (leaders_channel(&[econ]), market_adler32(&market), rng.state());
+        let fingerprint = (
+            leaders_channel(&[econ]),
+            market_adler32(&market),
+            rng.state(),
+        );
 
         // Re-run and demand the same bits.
         let mut econ2 = LeaderEcon::new();
@@ -3331,12 +3926,24 @@ mod tests {
         for frame in 0..600 {
             calc_markets(&r, &mut market2, &mut rng2, frame);
             leader_gather(
-                &r, &mut econ2, frame, 0, &mut last2, &mut dirty2, &inp, &caps, &ctx,
+                &r,
+                &mut econ2,
+                frame,
+                0,
+                &mut last2,
+                &mut dirty2,
+                &inp,
+                &caps,
+                &ctx,
             );
         }
         assert_eq!(
             fingerprint,
-            (leaders_channel(&[econ2]), market_adler32(&market2), rng2.state())
+            (
+                leaders_channel(&[econ2]),
+                market_adler32(&market2),
+                rng2.state()
+            )
         );
     }
 }

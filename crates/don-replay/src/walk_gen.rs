@@ -24,10 +24,19 @@ static OPS_0: &[WalkOp] = &[
 ];
 static OPS_1: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 312, end: 320 },
+    WalkOp::Bytes {
+        begin: 312,
+        end: 320,
+    },
     WalkOp::Sub { class: 235 },
-    WalkOp::Bytes { begin: 248, end: 280 },
-    WalkOp::Bytes { begin: 280, end: 312 },
+    WalkOp::Bytes {
+        begin: 248,
+        end: 280,
+    },
+    WalkOp::Bytes {
+        begin: 280,
+        end: 312,
+    },
     WalkOp::Sub { class: 247 },
 ];
 static OPS_2: &[WalkOp] = &[
@@ -36,22 +45,19 @@ static OPS_2: &[WalkOp] = &[
 ];
 static OPS_3: &[WalkOp] = &[
     WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 16 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 24 },
+    WalkOp::Scratch { bytes: 12 },
 ];
-static OPS_4: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
+static OPS_4: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 24 }];
 static OPS_5: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 4 },
     WalkOp::Sub { class: 231 },
     WalkOp::Sub { class: 231 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 24 },
 ];
 static OPS_6: &[WalkOp] = &[
     WalkOp::Tag,
@@ -65,7 +71,10 @@ static OPS_7: &[WalkOp] = &[
     WalkOp::Sub { class: 269 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Bytes { begin: 336, end: 341 },
+    WalkOp::Bytes {
+        begin: 336,
+        end: 341,
+    },
 ];
 static OPS_8: &[WalkOp] = &[
     WalkOp::Tag,
@@ -209,38 +218,42 @@ static OPS_26: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
 ];
-static OPS_27: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
+static OPS_27: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 16 }];
 static OPS_28: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 13 },
 ];
-static OPS_29: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_30: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_31: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
+static OPS_29: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 76 }];
+static OPS_30: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 10 }];
+static OPS_31: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_32: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 127, end: 128 },
-    WalkOp::Bytes { begin: 131, end: 132 },
+    WalkOp::Bytes {
+        begin: 127,
+        end: 128,
+    },
+    WalkOp::Bytes {
+        begin: 131,
+        end: 132,
+    },
     WalkOp::Sub { class: 274 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Bytes { begin: 112, end: 134 },
+    WalkOp::Bytes {
+        begin: 112,
+        end: 134,
+    },
     WalkOp::Sub { class: 33 },
-    WalkOp::Bytes { begin: 180, end: 182 },
+    WalkOp::Bytes {
+        begin: 180,
+        end: 182,
+    },
     WalkOp::Sub { class: 23 },
     WalkOp::Sub { class: 210 },
-    WalkOp::Bytes { begin: 108, end: 112 },
+    WalkOp::Bytes {
+        begin: 108,
+        end: 112,
+    },
 ];
 static OPS_33: &[WalkOp] = &[
     WalkOp::Tag,
@@ -249,12 +262,21 @@ static OPS_33: &[WalkOp] = &[
 ];
 static OPS_34: &[WalkOp] = &[
     WalkOp::Sub { class: 185 },
-    WalkOp::Bytes { begin: 692, end: 741 },
+    WalkOp::Bytes {
+        begin: 692,
+        end: 741,
+    },
 ];
 static OPS_35: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 652, end: 880 },
-    WalkOp::Bytes { begin: 180, end: 648 },
+    WalkOp::Global {
+        bytes: 228,
+        base: "*(void**)0x00c06200",
+    },
+    WalkOp::Global {
+        bytes: 468,
+        base: "*(void**)0x00c06200",
+    },
 ];
 static OPS_36: &[WalkOp] = &[
     WalkOp::Tag,
@@ -262,9 +284,7 @@ static OPS_36: &[WalkOp] = &[
     WalkOp::Bytes { begin: 32, end: 40 },
     WalkOp::Sub { class: 245 },
 ];
-static OPS_37: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 8 },
-];
+static OPS_37: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_38: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -281,8 +301,8 @@ static OPS_38: &[WalkOp] = &[
 ];
 static OPS_39: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 16 },
 ];
 static OPS_40: &[WalkOp] = &[
     WalkOp::Tag,
@@ -306,9 +326,7 @@ static OPS_41: &[WalkOp] = &[
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 12 },
 ];
-static OPS_42: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 4, end: 8 },
-];
+static OPS_42: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 8 }];
 static OPS_43: &[WalkOp] = &[
     WalkOp::Sub { class: 26 },
     WalkOp::Sub { class: 23 },
@@ -316,9 +334,15 @@ static OPS_43: &[WalkOp] = &[
 ];
 static OPS_44: &[WalkOp] = &[
     WalkOp::Sub { class: 200 },
-    WalkOp::Bytes { begin: 1496, end: 1504 },
+    WalkOp::Bytes {
+        begin: 1496,
+        end: 1504,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 1508, end: 1516 },
+    WalkOp::Bytes {
+        begin: 1508,
+        end: 1516,
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 201 },
@@ -343,7 +367,10 @@ static OPS_47: &[WalkOp] = &[
 ];
 static OPS_48: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 4, end: 392 },
+    WalkOp::Global {
+        bytes: 388,
+        base: "*(void**)0x00c0617c",
+    },
     WalkOp::Sub { class: 13 },
     WalkOp::Tag,
     WalkOp::Sub { class: 171 },
@@ -365,7 +392,10 @@ static OPS_48: &[WalkOp] = &[
     WalkOp::Sub { class: 234 },
     WalkOp::Sub { class: 56 },
     WalkOp::Sub { class: 20 },
-    WalkOp::Bytes { begin: 1500, end: 1508 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c0617c",
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 183 },
     WalkOp::Sub { class: 14 },
@@ -399,20 +429,26 @@ static OPS_49: &[WalkOp] = &[
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 1008, end: 1016 },
+    WalkOp::Bytes {
+        begin: 1008,
+        end: 1016,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 1024, end: 1032 },
+    WalkOp::Bytes {
+        begin: 1024,
+        end: 1032,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 1060, end: 1068 },
+    WalkOp::Bytes {
+        begin: 1060,
+        end: 1068,
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
 ];
-static OPS_50: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 171 },
-];
+static OPS_50: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 171 }];
 static OPS_51: &[WalkOp] = &[
     WalkOp::Bytes { begin: 0, end: 24 },
     WalkOp::Sub { class: 235 },
@@ -421,22 +457,20 @@ static OPS_51: &[WalkOp] = &[
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
 ];
-static OPS_52: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 24 },
-];
+static OPS_52: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 24 }];
 static OPS_53: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 68 },
-    WalkOp::Bytes { begin: 92, end: 104 },
+    WalkOp::Bytes {
+        begin: 92,
+        end: 104,
+    },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 172 },
 ];
-static OPS_54: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 173 },
-];
+static OPS_54: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 173 }];
 static OPS_55: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 36 },
     WalkOp::Bytes { begin: 36, end: 48 },
@@ -465,26 +499,42 @@ static OPS_57: &[WalkOp] = &[
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 372, end: 376 },
+    WalkOp::Bytes {
+        begin: 372,
+        end: 376,
+    },
     WalkOp::Sub { class: 209 },
 ];
 static OPS_58: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 664, end: 696 },
-    WalkOp::Bytes { begin: 696, end: 706 },
-    WalkOp::Bytes { begin: 708, end: 824 },
+    WalkOp::Global {
+        bytes: 32,
+        base: "*(void**)0x00c06210",
+    },
+    WalkOp::Global {
+        bytes: 10,
+        base: "*(void**)0x00c06210",
+    },
+    WalkOp::Global {
+        bytes: 116,
+        base: "*(void**)0x00c06210",
+    },
 ];
 static OPS_59: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 3392 },
-    WalkOp::Bytes { begin: 2052, end: 2056 },
+    WalkOp::Global {
+        bytes: 3392,
+        base: "*(void**)0x00c061f0",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061f0",
+    },
 ];
 static OPS_60: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 4 },
     WalkOp::Bytes { begin: 4, end: 75 },
 ];
-static OPS_61: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 92 },
-];
+static OPS_61: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 92 }];
 static OPS_62: &[WalkOp] = &[
     WalkOp::Bytes { begin: 0, end: 6 },
     WalkOp::Bytes { begin: 8, end: 10 },
@@ -518,128 +568,53 @@ static OPS_64: &[WalkOp] = &[
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
 ];
-static OPS_65: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_66: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Unresolved,
-];
-static OPS_67: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Unresolved,
-];
-static OPS_68: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_69: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_70: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_71: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_72: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_73: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_74: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_75: &[WalkOp] = &[
-    WalkOp::Virtual,
-    WalkOp::Tag,
-];
-static OPS_76: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_77: &[WalkOp] = &[
-    WalkOp::Scratch { bytes: 1 },
-];
-static OPS_78: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_79: &[WalkOp] = &[
-    WalkOp::Scratch { bytes: 1 },
-];
-static OPS_80: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_81: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_82: &[WalkOp] = &[
-    WalkOp::Scratch { bytes: 1 },
-];
-static OPS_83: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_84: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_85: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_86: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_87: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_88: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_89: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_90: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_91: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Tag,
-];
-static OPS_92: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_93: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 184 },
-];
+static OPS_65: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_66: &[WalkOp] = &[WalkOp::Tag, WalkOp::Unresolved];
+static OPS_67: &[WalkOp] = &[WalkOp::Tag, WalkOp::Unresolved];
+static OPS_68: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_69: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_70: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_71: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_72: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_73: &[WalkOp] = &[WalkOp::Tag];
+static OPS_74: &[WalkOp] = &[WalkOp::Tag];
+static OPS_75: &[WalkOp] = &[WalkOp::Virtual, WalkOp::Tag];
+static OPS_76: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_77: &[WalkOp] = &[WalkOp::Scratch { bytes: 1 }];
+static OPS_78: &[WalkOp] = &[WalkOp::Tag];
+static OPS_79: &[WalkOp] = &[WalkOp::Scratch { bytes: 1 }];
+static OPS_80: &[WalkOp] = &[WalkOp::Tag];
+static OPS_81: &[WalkOp] = &[WalkOp::Tag];
+static OPS_82: &[WalkOp] = &[WalkOp::Scratch { bytes: 1 }];
+static OPS_83: &[WalkOp] = &[WalkOp::Tag];
+static OPS_84: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_85: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_86: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_87: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_88: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_89: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_90: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_91: &[WalkOp] = &[WalkOp::Tag, WalkOp::Tag];
+static OPS_92: &[WalkOp] = &[WalkOp::Tag, WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_93: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 184 }];
 static OPS_94: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 3392 },
-    WalkOp::Bytes { begin: 2052, end: 2056 },
+    WalkOp::Global {
+        bytes: 3392,
+        base: "*(void**)0x00c061f0",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061f0",
+    },
 ];
-static OPS_95: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 176 },
-];
-static OPS_96: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 205 },
-];
-static OPS_97: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 177 },
-];
-static OPS_98: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 17 },
-];
-static OPS_99: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 40 },
-];
+static OPS_95: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 176 }];
+static OPS_96: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 205 }];
+static OPS_97: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 177 }];
+static OPS_98: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 17 }];
+static OPS_99: &[WalkOp] = &[WalkOp::Global {
+    bytes: 40,
+    base: "*(void**)0x00c061bc",
+}];
 static OPS_100: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
@@ -647,7 +622,10 @@ static OPS_100: &[WalkOp] = &[
     WalkOp::Sub { class: 15 },
 ];
 static OPS_101: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 24, end: 32 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c061b8",
+    },
     WalkOp::Sub { class: 179 },
     WalkOp::Sub { class: 26 },
 ];
@@ -670,34 +648,15 @@ static OPS_104: &[WalkOp] = &[
     WalkOp::Sub { class: 248 },
     WalkOp::Virtual,
 ];
-static OPS_105: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_106: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Tag,
-];
-static OPS_107: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_108: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_109: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_110: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_111: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_112: &[WalkOp] = &[
-    WalkOp::Tag,
-];
-static OPS_113: &[WalkOp] = &[
-    WalkOp::Tag,
-];
+static OPS_105: &[WalkOp] = &[WalkOp::Tag];
+static OPS_106: &[WalkOp] = &[WalkOp::Tag, WalkOp::Tag];
+static OPS_107: &[WalkOp] = &[WalkOp::Tag];
+static OPS_108: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_109: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_110: &[WalkOp] = &[WalkOp::Tag];
+static OPS_111: &[WalkOp] = &[WalkOp::Tag];
+static OPS_112: &[WalkOp] = &[WalkOp::Tag];
+static OPS_113: &[WalkOp] = &[WalkOp::Tag];
 static OPS_114: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Unresolved,
@@ -705,28 +664,26 @@ static OPS_114: &[WalkOp] = &[
     WalkOp::Sub { class: 15 },
 ];
 static OPS_115: &[WalkOp] = &[
+    WalkOp::Scratch { bytes: 10 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
 ];
 static OPS_116: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 40, end: 3728 },
+    WalkOp::Bytes {
+        begin: 40,
+        end: 3728,
+    },
 ];
 static OPS_117: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 76 },
+    WalkOp::Scratch { bytes: 8 },
 ];
-static OPS_118: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 176 },
-];
-static OPS_119: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 8 },
-];
+static OPS_118: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 176 }];
+static OPS_119: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_120: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -741,14 +698,24 @@ static OPS_120: &[WalkOp] = &[
 static OPS_121: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Sub { class: 123 },
-    WalkOp::Bytes { begin: 1360, end: 1764 },
-    WalkOp::Bytes { begin: 2068, end: 2076 },
+    WalkOp::Global {
+        bytes: 404,
+        base: "*(void**)0x00c061ec",
+    },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c061ec",
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 2116, end: 2120 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061ec",
+    },
 ];
-static OPS_122: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 40 },
-];
+static OPS_122: &[WalkOp] = &[WalkOp::Global {
+    bytes: 40,
+    base: "*(void**)0x00c061bc",
+}];
 static OPS_123: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Sub { class: 247 },
@@ -759,8 +726,14 @@ static OPS_123: &[WalkOp] = &[
     WalkOp::Bytes { begin: 24, end: 25 },
     WalkOp::Bytes { begin: 53, end: 54 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 104, end: 106 },
-    WalkOp::Bytes { begin: 56, end: 113 },
+    WalkOp::Bytes {
+        begin: 104,
+        end: 106,
+    },
+    WalkOp::Bytes {
+        begin: 56,
+        end: 113,
+    },
     WalkOp::Sub { class: 247 },
     WalkOp::Scratch { bytes: 8 },
     WalkOp::Sub { class: 247 },
@@ -776,17 +749,15 @@ static OPS_123: &[WalkOp] = &[
 ];
 static OPS_124: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 4 },
 ];
 static OPS_125: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 20 },
 ];
-static OPS_126: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 4, end: 13 },
-];
+static OPS_126: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 13 }];
 static OPS_127: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 32, end: 33 },
@@ -794,7 +765,10 @@ static OPS_127: &[WalkOp] = &[
 ];
 static OPS_128: &[WalkOp] = &[
     WalkOp::Sub { class: 185 },
-    WalkOp::Bytes { begin: 692, end: 760 },
+    WalkOp::Bytes {
+        begin: 692,
+        end: 760,
+    },
 ];
 static OPS_129: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 8 },
@@ -827,30 +801,27 @@ static OPS_131: &[WalkOp] = &[
 ];
 static OPS_132: &[WalkOp] = &[
     WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 13 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 20 },
+    WalkOp::Scratch { bytes: 12 },
 ];
 static OPS_133: &[WalkOp] = &[
     WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 76 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 20 },
+    WalkOp::Scratch { bytes: 4 },
 ];
-static OPS_134: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
+static OPS_134: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Scratch { bytes: 20 }];
 static OPS_135: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 4 },
     WalkOp::Sub { class: 231 },
     WalkOp::Sub { class: 231 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 20 },
 ];
 static OPS_136: &[WalkOp] = &[
     WalkOp::Sub { class: 16 },
@@ -860,19 +831,12 @@ static OPS_136: &[WalkOp] = &[
 ];
 static OPS_137: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 24 },
 ];
-static OPS_138: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 8, end: 163 },
-];
-static OPS_139: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 27 },
-];
-static OPS_140: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 205 },
-];
+static OPS_138: &[WalkOp] = &[WalkOp::Bytes { begin: 8, end: 163 }];
+static OPS_139: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 27 }];
+static OPS_140: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 205 }];
 static OPS_141: &[WalkOp] = &[
     WalkOp::Sub { class: 10 },
     WalkOp::Bytes { begin: 36, end: 42 },
@@ -892,12 +856,12 @@ static OPS_142: &[WalkOp] = &[
 static OPS_143: &[WalkOp] = &[
     WalkOp::Sub { class: 131 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 2512, end: 2524 },
+    WalkOp::Bytes {
+        begin: 2512,
+        end: 2524,
+    },
 ];
-static OPS_144: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 17 },
-];
+static OPS_144: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 17 }];
 static OPS_145: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 32, end: 33 },
@@ -918,27 +882,51 @@ static OPS_147: &[WalkOp] = &[
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
 ];
-static OPS_148: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 177 },
-];
+static OPS_148: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 177 }];
 static OPS_149: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 0, end: 8 },
-    WalkOp::Bytes { begin: 8, end: 26922 },
-    WalkOp::Bytes { begin: 26924, end: 27016 },
-    WalkOp::Bytes { begin: 28116, end: 28212 },
-    WalkOp::Bytes { begin: 27660, end: 27668 },
+    WalkOp::Bytes {
+        begin: 8,
+        end: 26922,
+    },
+    WalkOp::Bytes {
+        begin: 26924,
+        end: 27016,
+    },
+    WalkOp::Bytes {
+        begin: 28116,
+        end: 28212,
+    },
+    WalkOp::Bytes {
+        begin: 27660,
+        end: 27668,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 27776, end: 27784 },
+    WalkOp::Bytes {
+        begin: 27776,
+        end: 27784,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 27892, end: 27900 },
+    WalkOp::Bytes {
+        begin: 27892,
+        end: 27900,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 28008, end: 28016 },
+    WalkOp::Bytes {
+        begin: 28008,
+        end: 28016,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 28024, end: 28032 },
+    WalkOp::Bytes {
+        begin: 28024,
+        end: 28032,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 28040, end: 28048 },
+    WalkOp::Bytes {
+        begin: 28040,
+        end: 28048,
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 22 },
     WalkOp::Sub { class: 18 },
@@ -946,11 +934,20 @@ static OPS_149: &[WalkOp] = &[
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 28056, end: 28064 },
+    WalkOp::Bytes {
+        begin: 28056,
+        end: 28064,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 28076, end: 28084 },
+    WalkOp::Bytes {
+        begin: 28076,
+        end: 28084,
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 28096, end: 28104 },
+    WalkOp::Bytes {
+        begin: 28096,
+        end: 28104,
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 150 },
 ];
@@ -996,11 +993,26 @@ static OPS_151: &[WalkOp] = &[
 static OPS_152: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 0, end: 4 },
-    WalkOp::Bytes { begin: 4, end: 8 },
-    WalkOp::Bytes { begin: 8, end: 12 },
-    WalkOp::Bytes { begin: 12, end: 16 },
-    WalkOp::Bytes { begin: 16, end: 24 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061b4",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061b4",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061b4",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061b4",
+    },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c061b4",
+    },
     WalkOp::Unresolved,
 ];
 static OPS_153: &[WalkOp] = &[
@@ -1017,14 +1029,26 @@ static OPS_154: &[WalkOp] = &[
 ];
 static OPS_155: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Bytes { begin: 44, end: 48 },
-    WalkOp::Bytes { begin: 44, end: 48 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00ed5af8",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00ed5af8",
+    },
 ];
 static OPS_156: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Bytes { begin: 28, end: 32 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00ed6668",
+    },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 28, end: 32 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00ed6668",
+    },
     WalkOp::Sub { class: 247 },
 ];
 static OPS_157: &[WalkOp] = &[
@@ -1035,34 +1059,59 @@ static OPS_157: &[WalkOp] = &[
 ];
 static OPS_158: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
-    WalkOp::Bytes { begin: 12, end: 13 },
-    WalkOp::Bytes { begin: 8, end: 12 },
+    WalkOp::Global {
+        bytes: 1,
+        base: "*(void**)0x00ed61c8",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00ed61c8",
+    },
     WalkOp::Unresolved,
 ];
-static OPS_159: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 40 },
-];
+static OPS_159: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 40 }];
 static OPS_160: &[WalkOp] = &[
     WalkOp::Sub { class: 211 },
     WalkOp::Sub { class: 211 },
     WalkOp::Sub { class: 211 },
     WalkOp::Sub { class: 211 },
-    WalkOp::Bytes { begin: 1408, end: 1418 },
+    WalkOp::Global {
+        bytes: 10,
+        base: "*(void**)0x00c06208",
+    },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 1392, end: 1400 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06208",
+    },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 1324, end: 1332 },
-    WalkOp::Bytes { begin: 1332, end: 1342 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06208",
+    },
+    WalkOp::Global {
+        bytes: 10,
+        base: "*(void**)0x00c06208",
+    },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 1364, end: 1372 },
-    WalkOp::Bytes { begin: 1372, end: 1382 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06208",
+    },
+    WalkOp::Global {
+        bytes: 10,
+        base: "*(void**)0x00c06208",
+    },
 ];
 static OPS_161: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 4, end: 40 },
     WalkOp::Bytes { begin: 40, end: 41 },
-    WalkOp::Bytes { begin: 104, end: 114 },
+    WalkOp::Bytes {
+        begin: 104,
+        end: 114,
+    },
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 247 },
 ];
@@ -1269,25 +1318,44 @@ static OPS_184: &[WalkOp] = &[
 static OPS_185: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 484, end: 636 },
+    WalkOp::Bytes {
+        begin: 484,
+        end: 636,
+    },
     WalkOp::Sub { class: 238 },
     WalkOp::Sub { class: 238 },
 ];
 static OPS_186: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 500, end: 508 },
-    WalkOp::Bytes { begin: 340, end: 348 },
-    WalkOp::Bytes { begin: 348, end: 384 },
-    WalkOp::Bytes { begin: 388, end: 424 },
-    WalkOp::Bytes { begin: 428, end: 464 },
-    WalkOp::Bytes { begin: 468, end: 486 },
+    WalkOp::Bytes {
+        begin: 500,
+        end: 508,
+    },
+    WalkOp::Bytes {
+        begin: 340,
+        end: 348,
+    },
+    WalkOp::Bytes {
+        begin: 348,
+        end: 384,
+    },
+    WalkOp::Bytes {
+        begin: 388,
+        end: 424,
+    },
+    WalkOp::Bytes {
+        begin: 428,
+        end: 464,
+    },
+    WalkOp::Bytes {
+        begin: 468,
+        end: 486,
+    },
     WalkOp::Sub { class: 163 },
     WalkOp::Sub { class: 199 },
     WalkOp::Sub { class: 175 },
 ];
-static OPS_187: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 8 },
-];
+static OPS_187: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_188: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -1299,9 +1367,7 @@ static OPS_188: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Unresolved,
 ];
-static OPS_189: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 18 },
-];
+static OPS_189: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 18 }];
 static OPS_190: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Sub { class: 247 },
@@ -1316,8 +1382,14 @@ static OPS_191: &[WalkOp] = &[
 static OPS_192: &[WalkOp] = &[
     WalkOp::Sub { class: 19 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 32, end: 124 },
-    WalkOp::Bytes { begin: 124, end: 142 },
+    WalkOp::Global {
+        bytes: 92,
+        base: "*(void**)0x00c06204",
+    },
+    WalkOp::Global {
+        bytes: 18,
+        base: "*(void**)0x00c06204",
+    },
 ];
 static OPS_193: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1333,18 +1405,14 @@ static OPS_194: &[WalkOp] = &[
     WalkOp::Bytes { begin: 16, end: 34 },
     WalkOp::Unresolved,
 ];
-static OPS_195: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
+static OPS_195: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_196: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 4 },
     WalkOp::Sub { class: 231 },
     WalkOp::Sub { class: 231 },
 ];
-static OPS_197: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 96 },
-];
+static OPS_197: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 96 }];
 static OPS_198: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Bytes { begin: 48, end: 50 },
@@ -1502,7 +1570,10 @@ static OPS_213: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
 ];
 static OPS_214: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 24, end: 32 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c061b8",
+    },
     WalkOp::Sub { class: 179 },
     WalkOp::Sub { class: 26 },
 ];
@@ -1546,16 +1617,25 @@ static OPS_220: &[WalkOp] = &[
 ];
 static OPS_221: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 484, end: 492 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c0620c",
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 500, end: 508 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c0620c",
+    },
     WalkOp::Unresolved,
     WalkOp::Sub { class: 231 },
     WalkOp::Sub { class: 231 },
     WalkOp::Sub { class: 236 },
     WalkOp::Sub { class: 236 },
     WalkOp::Sub { class: 237 },
-    WalkOp::Bytes { begin: 772, end: 776 },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c0620c",
+    },
 ];
 static OPS_222: &[WalkOp] = &[
     WalkOp::Tag,
@@ -1568,7 +1648,10 @@ static OPS_222: &[WalkOp] = &[
     WalkOp::Sub { class: 183 },
     WalkOp::Sub { class: 183 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 192, end: 204 },
+    WalkOp::Bytes {
+        begin: 192,
+        end: 204,
+    },
 ];
 static OPS_223: &[WalkOp] = &[
     WalkOp::Tag,
@@ -1586,28 +1669,22 @@ static OPS_224: &[WalkOp] = &[
     WalkOp::Sub { class: 247 },
     WalkOp::Sub { class: 235 },
     WalkOp::Sub { class: 154 },
-    WalkOp::Bytes { begin: 212, end: 221 },
+    WalkOp::Bytes {
+        begin: 212,
+        end: 221,
+    },
 ];
-static OPS_225: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Bytes { begin: 16, end: 20 },
-];
-static OPS_226: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Bytes { begin: 16, end: 20 },
-];
-static OPS_227: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::SubUnknown { va: 0x009d84a0 },
-];
-static OPS_228: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-];
+static OPS_225: &[WalkOp] = &[WalkOp::Tag, WalkOp::Bytes { begin: 16, end: 20 }];
+static OPS_226: &[WalkOp] = &[WalkOp::Tag, WalkOp::Bytes { begin: 16, end: 20 }];
+static OPS_227: &[WalkOp] = &[WalkOp::Tag, WalkOp::SubUnknown { va: 0x009d84a0 }];
+static OPS_228: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 247 }];
 static OPS_229: &[WalkOp] = &[
     WalkOp::Sub { class: 131 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 2512, end: 2536 },
+    WalkOp::Bytes {
+        begin: 2512,
+        end: 2536,
+    },
 ];
 static OPS_230: &[WalkOp] = &[
     WalkOp::Tag,
@@ -1670,9 +1747,7 @@ static OPS_238: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
 ];
-static OPS_239: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 24 },
-];
+static OPS_239: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 24 }];
 static OPS_240: &[WalkOp] = &[
     WalkOp::Sub { class: 10 },
     WalkOp::Bytes { begin: 36, end: 42 },
@@ -1696,11 +1771,17 @@ static OPS_242: &[WalkOp] = &[
 static OPS_243: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 456, end: 504 },
+    WalkOp::Bytes {
+        begin: 456,
+        end: 504,
+    },
 ];
 static OPS_244: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 64, end: 100 },
+    WalkOp::Bytes {
+        begin: 64,
+        end: 100,
+    },
     WalkOp::Sub { class: 25 },
     WalkOp::Sub { class: 234 },
     WalkOp::Sub { class: 234 },
@@ -1708,17 +1789,14 @@ static OPS_244: &[WalkOp] = &[
     WalkOp::Sub { class: 25 },
     WalkOp::Sub { class: 25 },
 ];
-static OPS_245: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 4, end: 13 },
-    WalkOp::Unresolved,
-];
+static OPS_245: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 13 }, WalkOp::Unresolved];
 static OPS_246: &[WalkOp] = &[
     WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 13 },
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 24 },
+    WalkOp::Scratch { bytes: 8 },
 ];
 static OPS_247: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
@@ -1744,60 +1822,55 @@ static OPS_249: &[WalkOp] = &[
     WalkOp::Unresolved,
     WalkOp::Unresolved,
 ];
-static OPS_250: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 6 },
-];
-static OPS_251: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 8 },
-];
+static OPS_250: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 6 }];
+static OPS_251: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
 static OPS_252: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
     WalkOp::Sub { class: 247 },
-    WalkOp::Bytes { begin: 456, end: 483 },
+    WalkOp::Bytes {
+        begin: 456,
+        end: 483,
+    },
     WalkOp::Sub { class: 247 },
 ];
-static OPS_253: &[WalkOp] = &[
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
-];
-static OPS_254: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
-static OPS_255: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 4, end: 5 },
-];
-static OPS_256: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 247 },
-];
+static OPS_253: &[WalkOp] = &[WalkOp::Unresolved, WalkOp::Unresolved, WalkOp::Unresolved];
+static OPS_254: &[WalkOp] = &[WalkOp::Unresolved];
+static OPS_255: &[WalkOp] = &[WalkOp::Bytes { begin: 4, end: 5 }];
+static OPS_256: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 247 }];
 static OPS_257: &[WalkOp] = &[
     WalkOp::Unresolved,
-    WalkOp::Unresolved,
-    WalkOp::Unresolved,
+    WalkOp::Scratch { bytes: 10 },
+    WalkOp::Scratch { bytes: 18 },
 ];
 static OPS_258: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 84, end: 108 },
-    WalkOp::Bytes { begin: 112, end: 1520 },
+    WalkOp::Bytes {
+        begin: 84,
+        end: 108,
+    },
+    WalkOp::Bytes {
+        begin: 112,
+        end: 1520,
+    },
 ];
-static OPS_259: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 184 },
-];
+static OPS_259: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 184 }];
 static OPS_260: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 4, end: 12 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06180",
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 20, end: 361 },
+    WalkOp::Global {
+        bytes: 341,
+        base: "*(void**)0x00c06180",
+    },
 ];
 static OPS_261: &[WalkOp] = &[
     WalkOp::Bytes { begin: 4, end: 94 },
     WalkOp::Sub { class: 247 },
 ];
-static OPS_262: &[WalkOp] = &[
-    WalkOp::Unresolved,
-];
+static OPS_262: &[WalkOp] = &[WalkOp::Unresolved];
 static OPS_263: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 4 },
     WalkOp::Scratch { bytes: 4 },
@@ -1805,12 +1878,8 @@ static OPS_263: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
 ];
-static OPS_264: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 3 },
-];
-static OPS_265: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 3 },
-];
+static OPS_264: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 3 }];
+static OPS_265: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 3 }];
 static OPS_266: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -1819,9 +1888,7 @@ static OPS_266: &[WalkOp] = &[
     WalkOp::Scratch { bytes: 1 },
     WalkOp::Unresolved,
 ];
-static OPS_267: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 3 },
-];
+static OPS_267: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 3 }];
 static OPS_268: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -1834,32 +1901,57 @@ static OPS_269: &[WalkOp] = &[
     WalkOp::Sub { class: 167 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Bytes { begin: 72, end: 183 },
+    WalkOp::Bytes {
+        begin: 72,
+        end: 183,
+    },
     WalkOp::Sub { class: 245 },
     WalkOp::Sub { class: 193 },
     WalkOp::Sub { class: 204 },
 ];
 static OPS_270: &[WalkOp] = &[
     WalkOp::Sub { class: 185 },
-    WalkOp::Bytes { begin: 692, end: 716 },
-    WalkOp::Bytes { begin: 724, end: 732 },
-    WalkOp::Bytes { begin: 732, end: 736 },
-    WalkOp::Bytes { begin: 736, end: 1492 },
+    WalkOp::Bytes {
+        begin: 692,
+        end: 716,
+    },
+    WalkOp::Bytes {
+        begin: 724,
+        end: 732,
+    },
+    WalkOp::Bytes {
+        begin: 732,
+        end: 736,
+    },
+    WalkOp::Bytes {
+        begin: 736,
+        end: 1492,
+    },
 ];
-static OPS_271: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 8 },
-];
-static OPS_272: &[WalkOp] = &[
-    WalkOp::Tag,
-    WalkOp::Sub { class: 48 },
-];
+static OPS_271: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 8 }];
+static OPS_272: &[WalkOp] = &[WalkOp::Tag, WalkOp::Sub { class: 48 }];
 static OPS_273: &[WalkOp] = &[
     WalkOp::Sub { class: 123 },
-    WalkOp::Bytes { begin: 664, end: 696 },
-    WalkOp::Bytes { begin: 696, end: 706 },
-    WalkOp::Bytes { begin: 708, end: 824 },
-    WalkOp::Bytes { begin: 0, end: 12 },
-    WalkOp::Bytes { begin: 0, end: 12 },
+    WalkOp::Global {
+        bytes: 32,
+        base: "*(void**)0x00c06210",
+    },
+    WalkOp::Global {
+        bytes: 10,
+        base: "*(void**)0x00c06210",
+    },
+    WalkOp::Global {
+        bytes: 116,
+        base: "*(void**)0x00c06210",
+    },
+    WalkOp::Global {
+        bytes: 12,
+        base: "*(void**)0x00c06198",
+    },
+    WalkOp::Global {
+        bytes: 12,
+        base: "*(void**)0x00c06190",
+    },
     WalkOp::Sub { class: 121 },
     WalkOp::Tag,
     WalkOp::Sub { class: 184 },
@@ -1867,10 +1959,22 @@ static OPS_273: &[WalkOp] = &[
     WalkOp::Sub { class: 262 },
     WalkOp::Sub { class: 256 },
     WalkOp::Sub { class: 162 },
-    WalkOp::Bytes { begin: 0, end: 3392 },
-    WalkOp::Bytes { begin: 2052, end: 2056 },
-    WalkOp::Bytes { begin: 0, end: 4 },
-    WalkOp::Bytes { begin: 0, end: 4 },
+    WalkOp::Global {
+        bytes: 3392,
+        base: "*(void**)0x00c061f0",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061f0",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061c0",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c061c4",
+    },
     WalkOp::Sub { class: 8 },
     WalkOp::Sub { class: 40 },
     WalkOp::Tag,
@@ -1900,8 +2004,14 @@ static OPS_273: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Sub { class: 17 },
     WalkOp::Sub { class: 277 },
-    WalkOp::Bytes { begin: 0, end: 40 },
-    WalkOp::Bytes { begin: 0, end: 4 },
+    WalkOp::Global {
+        bytes: 40,
+        base: "*(void**)0x00c061bc",
+    },
+    WalkOp::Global {
+        bytes: 4,
+        base: "*(void**)0x00c06184",
+    },
     WalkOp::Sub { class: 130 },
     WalkOp::Sub { class: 221 },
     WalkOp::Tag,
@@ -1914,15 +2024,27 @@ static OPS_273: &[WalkOp] = &[
     WalkOp::Sub { class: 48 },
     WalkOp::Unresolved,
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 652, end: 880 },
-    WalkOp::Bytes { begin: 180, end: 648 },
+    WalkOp::Global {
+        bytes: 228,
+        base: "*(void**)0x00c06200",
+    },
+    WalkOp::Global {
+        bytes: 468,
+        base: "*(void**)0x00c06200",
+    },
     WalkOp::Tag,
     WalkOp::Sub { class: 21 },
     WalkOp::Sub { class: 21 },
     WalkOp::Sub { class: 19 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 32, end: 124 },
-    WalkOp::Bytes { begin: 124, end: 142 },
+    WalkOp::Global {
+        bytes: 92,
+        base: "*(void**)0x00c06204",
+    },
+    WalkOp::Global {
+        bytes: 18,
+        base: "*(void**)0x00c06204",
+    },
     WalkOp::Sub { class: 45 },
     WalkOp::Sub { class: 207 },
     WalkOp::Sub { class: 253 },
@@ -1930,7 +2052,10 @@ static OPS_273: &[WalkOp] = &[
     WalkOp::Sub { class: 253 },
     WalkOp::Sub { class: 44 },
     WalkOp::Sub { class: 64 },
-    WalkOp::Bytes { begin: 24, end: 32 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c061b8",
+    },
     WalkOp::Sub { class: 179 },
     WalkOp::Sub { class: 26 },
     WalkOp::Sub { class: 253 },
@@ -1941,20 +2066,27 @@ static OPS_273: &[WalkOp] = &[
     WalkOp::SubUnknown { va: 0x00997ad0 },
     WalkOp::SubUnknown { va: 0x009c41a0 },
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 4, end: 12 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06180",
+    },
     WalkOp::Unresolved,
-    WalkOp::Bytes { begin: 20, end: 361 },
+    WalkOp::Global {
+        bytes: 341,
+        base: "*(void**)0x00c06180",
+    },
     WalkOp::Sub { class: 121 },
 ];
 static OPS_274: &[WalkOp] = &[
     WalkOp::Sub { class: 167 },
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 1 },
-    WalkOp::Bytes { begin: 72, end: 102 },
+    WalkOp::Bytes {
+        begin: 72,
+        end: 102,
+    },
 ];
-static OPS_275: &[WalkOp] = &[
-    WalkOp::Bytes { begin: 0, end: 14 },
-];
+static OPS_275: &[WalkOp] = &[WalkOp::Bytes { begin: 0, end: 14 }];
 static OPS_276: &[WalkOp] = &[
     WalkOp::Tag,
     WalkOp::Scratch { bytes: 4 },
@@ -1968,14 +2100,20 @@ static OPS_276: &[WalkOp] = &[
 ];
 static OPS_277: &[WalkOp] = &[
     WalkOp::Tag,
-    WalkOp::Bytes { begin: 0, end: 8 },
+    WalkOp::Global {
+        bytes: 8,
+        base: "*(void**)0x00c06188",
+    },
     WalkOp::Sub { class: 233 },
     WalkOp::Sub { class: 233 },
     WalkOp::Sub { class: 233 },
     WalkOp::Sub { class: 233 },
     WalkOp::Sub { class: 233 },
     WalkOp::Sub { class: 233 },
-    WalkOp::Bytes { begin: 8, end: 128 },
+    WalkOp::Global {
+        bytes: 120,
+        base: "*(void**)0x00c06188",
+    },
     WalkOp::Unresolved,
     WalkOp::Unresolved,
     WalkOp::Unresolved,
@@ -1994,284 +2132,1952 @@ static OPS_277: &[WalkOp] = &[
 ];
 
 pub static SPECS: [WalkSpec; NUM_CLASSES] = [
-    WalkSpec { name: "Achieve", walk_data_va: 0x007af790, sizeof: 2148, walked_bytes: 0, ops: OPS_0 },
-    WalkSpec { name: "AchieveData", walk_data_va: 0x007af0b0, sizeof: 320, walked_bytes: 72, ops: OPS_1 },
-    WalkSpec { name: "AchieveEvent", walk_data_va: 0x007af630, sizeof: 28, walked_bytes: 8, ops: OPS_2 },
-    WalkSpec { name: "AirAttackGroundOrder", walk_data_va: 0x004875a0, sizeof: 72, walked_bytes: 52, ops: OPS_3 },
-    WalkSpec { name: "AirOrder", walk_data_va: 0x0047f2d0, sizeof: 40, walked_bytes: 24, ops: OPS_4 },
-    WalkSpec { name: "AirPatrolOrder", walk_data_va: 0x00483ed0, sizeof: 104, walked_bytes: 28, ops: OPS_5 },
-    WalkSpec { name: "AmmoData", walk_data_va: 0x0067ab50, sizeof: 108, walked_bytes: 100, ops: OPS_6 },
-    WalkSpec { name: "AnimalData", walk_data_va: 0x005d7ea0, sizeof: 352, walked_bytes: 5, ops: OPS_7 },
-    WalkSpec { name: "Armies", walk_data_va: 0x006f3700, sizeof: 232, walked_bytes: 0, ops: OPS_8 },
-    WalkSpec { name: "Army", walk_data_va: 0x006f9850, sizeof: 160, walked_bytes: 152, ops: OPS_9 },
-    WalkSpec { name: "Array<ActiveSpell>", walk_data_va: 0x0048a9e0, sizeof: 28, walked_bytes: 2, ops: OPS_10 },
-    WalkSpec { name: "Array<AmbienceStruct>", walk_data_va: 0x004aa9a0, sizeof: 28, walked_bytes: 2, ops: OPS_11 },
-    WalkSpec { name: "Array<CaravanLink>", walk_data_va: 0x00489040, sizeof: 28, walked_bytes: 2, ops: OPS_12 },
-    WalkSpec { name: "Array<Color>", walk_data_va: 0x004912e0, sizeof: 28, walked_bytes: 0, ops: OPS_13 },
-    WalkSpec { name: "Array<ConquestNewsItem>", walk_data_va: 0x004934c0, sizeof: 28, walked_bytes: 2, ops: OPS_14 },
-    WalkSpec { name: "Array<FarmStruct>", walk_data_va: 0x004a8db0, sizeof: 28, walked_bytes: 2, ops: OPS_15 },
-    WalkSpec { name: "Array<Group>", walk_data_va: 0x0047ea30, sizeof: 28, walked_bytes: 0, ops: OPS_16 },
-    WalkSpec { name: "Array<HotKeyGroup>", walk_data_va: 0x00480290, sizeof: 28, walked_bytes: 0, ops: OPS_17 },
-    WalkSpec { name: "Array<MakeObject>", walk_data_va: 0x0047d440, sizeof: 28, walked_bytes: 2, ops: OPS_18 },
-    WalkSpec { name: "Array<Option>", walk_data_va: 0x00480cc0, sizeof: 28, walked_bytes: 2, ops: OPS_19 },
-    WalkSpec { name: "Array<ReinforcementArmy>", walk_data_va: 0x004918a0, sizeof: 28, walked_bytes: 2, ops: OPS_20 },
-    WalkSpec { name: "Array<SelectGroup>", walk_data_va: 0x00480900, sizeof: 28, walked_bytes: 2, ops: OPS_21 },
-    WalkSpec { name: "Array<Site>", walk_data_va: 0x0047cee0, sizeof: 28, walked_bytes: 2, ops: OPS_22 },
-    WalkSpec { name: "Array<TCoordData>", walk_data_va: 0x00471c30, sizeof: 28, walked_bytes: 2, ops: OPS_23 },
-    WalkSpec { name: "Array<UVPair>", walk_data_va: 0x00499e90, sizeof: 28, walked_bytes: 2, ops: OPS_24 },
-    WalkSpec { name: "Array<Vector<float>>", walk_data_va: 0x004a46d0, sizeof: 0, walked_bytes: 2, ops: OPS_25 },
-    WalkSpec { name: "Array<WCoordData>", walk_data_va: 0x00478990, sizeof: 28, walked_bytes: 2, ops: OPS_26 },
-    WalkSpec { name: "AttackGroundOrder", walk_data_va: 0x00487a60, sizeof: 32, walked_bytes: 16, ops: OPS_27 },
-    WalkSpec { name: "AttackOrder", walk_data_va: 0x0047f260, sizeof: 48, walked_bytes: 23, ops: OPS_28 },
-    WalkSpec { name: "AttackToOrder", walk_data_va: 0x00482e70, sizeof: 92, walked_bytes: 76, ops: OPS_29 },
-    WalkSpec { name: "AwaitBoardOrder", walk_data_va: 0x0047f220, sizeof: 32, walked_bytes: 10, ops: OPS_30 },
-    WalkSpec { name: "Balance", walk_data_va: 0x00582cc0, sizeof: 486104, walked_bytes: 0, ops: OPS_31 },
-    WalkSpec { name: "BuildData", walk_data_va: 0x0062f270, sizeof: 220, walked_bytes: 28, ops: OPS_32 },
-    WalkSpec { name: "BuildQueue", walk_data_va: 0x006305f0, sizeof: 16, walked_bytes: 4, ops: OPS_33 },
-    WalkSpec { name: "BuildType", walk_data_va: 0x00631f50, sizeof: 844, walked_bytes: 49, ops: OPS_34 },
-    WalkSpec { name: "Camera", walk_data_va: 0x00844090, sizeof: 880, walked_bytes: 0, ops: OPS_35 },
-    WalkSpec { name: "Caravan", walk_data_va: 0x0073d2b0, sizeof: 80, walked_bytes: 22, ops: OPS_36 },
-    WalkSpec { name: "CaravanLink", walk_data_va: 0x007369c0, sizeof: 8, walked_bytes: 8, ops: OPS_37 },
-    WalkSpec { name: "Caravans", walk_data_va: 0x0073e3f0, sizeof: 224, walked_bytes: 0, ops: OPS_38 },
-    WalkSpec { name: "CastOrder", walk_data_va: 0x004860a0, sizeof: 48, walked_bytes: 26, ops: OPS_39 },
-    WalkSpec { name: "Cities", walk_data_va: 0x00735410, sizeof: 232, walked_bytes: 0, ops: OPS_40 },
-    WalkSpec { name: "City", walk_data_va: 0x00489220, sizeof: 192, walked_bytes: 110, ops: OPS_41 },
-    WalkSpec { name: "Cliff", walk_data_va: 0x008a4040, sizeof: 208, walked_bytes: 4, ops: OPS_42 },
-    WalkSpec { name: "CliffMiningData", walk_data_va: 0x008a6d70, sizeof: 72, walked_bytes: 16, ops: OPS_43 },
-    WalkSpec { name: "CliffsData", walk_data_va: 0x008a9480, sizeof: 1980, walked_bytes: 16, ops: OPS_44 },
-    WalkSpec { name: "CommandManager", walk_data_va: 0x00942d30, sizeof: 86632, walked_bytes: 0, ops: OPS_45 },
-    WalkSpec { name: "CommandPackage", walk_data_va: 0x0094b740, sizeof: 536, walked_bytes: 18, ops: OPS_46 },
-    WalkSpec { name: "ConquestColony", walk_data_va: 0x00789400, sizeof: 84, walked_bytes: 16, ops: OPS_47 },
-    WalkSpec { name: "ConquestGame", walk_data_va: 0x00798410, sizeof: 5308, walked_bytes: 0, ops: OPS_48 },
-    WalkSpec { name: "ConquestLeader", walk_data_va: 0x0079b6d0, sizeof: 1156, walked_bytes: 867, ops: OPS_49 },
-    WalkSpec { name: "ConquestLeaders", walk_data_va: 0x007a01b0, sizeof: 76, walked_bytes: 0, ops: OPS_50 },
-    WalkSpec { name: "ConquestLink", walk_data_va: 0x007a5860, sizeof: 164, walked_bytes: 24, ops: OPS_51 },
-    WalkSpec { name: "ConquestNewsItem", walk_data_va: 0x007a3ef0, sizeof: 24, walked_bytes: 24, ops: OPS_52 },
-    WalkSpec { name: "ConquestNode", walk_data_va: 0x007a5520, sizeof: 172, walked_bytes: 80, ops: OPS_53 },
-    WalkSpec { name: "ConquestNodes", walk_data_va: 0x007a6300, sizeof: 28, walked_bytes: 0, ops: OPS_54 },
-    WalkSpec { name: "ConquestPiece", walk_data_va: 0x007acad0, sizeof: 48, walked_bytes: 44, ops: OPS_55 },
-    WalkSpec { name: "ConquestPieces", walk_data_va: 0x007accb0, sizeof: 676, walked_bytes: 6, ops: OPS_56 },
-    WalkSpec { name: "ConquestStyle", walk_data_va: 0x007a9170, sizeof: 376, walked_bytes: 144, ops: OPS_57 },
-    WalkSpec { name: "Console", walk_data_va: 0x007cbc00, sizeof: 7432, walked_bytes: 0, ops: OPS_58 },
-    WalkSpec { name: "Constants", walk_data_va: 0x0057f910, sizeof: 3432, walked_bytes: 0, ops: OPS_59 },
-    WalkSpec { name: "DeathObjData", walk_data_va: 0x008d5520, sizeof: 76, walked_bytes: 75, ops: OPS_60 },
-    WalkSpec { name: "Diplomacy", walk_data_va: 0x006d8a80, sizeof: 92, walked_bytes: 92, ops: OPS_61 },
-    WalkSpec { name: "Dock", walk_data_va: 0x00740c40, sizeof: 20, walked_bytes: 10, ops: OPS_62 },
-    WalkSpec { name: "Docks", walk_data_va: 0x00741100, sizeof: 232, walked_bytes: 0, ops: OPS_63 },
-    WalkSpec { name: "Doober", walk_data_va: 0x00846ff0, sizeof: 484, walked_bytes: 0, ops: OPS_64 },
-    WalkSpec { name: "FUN_00442650", walk_data_va: 0x00442650, sizeof: 0, walked_bytes: 0, ops: OPS_65 },
-    WalkSpec { name: "FUN_00442870", walk_data_va: 0x00442870, sizeof: 0, walked_bytes: 0, ops: OPS_66 },
-    WalkSpec { name: "FUN_00443ea0", walk_data_va: 0x00443ea0, sizeof: 0, walked_bytes: 0, ops: OPS_67 },
-    WalkSpec { name: "FUN_004441a0", walk_data_va: 0x004441a0, sizeof: 0, walked_bytes: 0, ops: OPS_68 },
-    WalkSpec { name: "FUN_0046a1cd", walk_data_va: 0x0046a1cd, sizeof: 0, walked_bytes: 0, ops: OPS_69 },
-    WalkSpec { name: "FUN_004d6b50", walk_data_va: 0x004d6b50, sizeof: 0, walked_bytes: 0, ops: OPS_70 },
-    WalkSpec { name: "FUN_004e80bd", walk_data_va: 0x004e80bd, sizeof: 0, walked_bytes: 0, ops: OPS_71 },
-    WalkSpec { name: "FUN_004e822c", walk_data_va: 0x004e822c, sizeof: 0, walked_bytes: 0, ops: OPS_72 },
-    WalkSpec { name: "FUN_00513920", walk_data_va: 0x00513920, sizeof: 0, walked_bytes: 0, ops: OPS_73 },
-    WalkSpec { name: "FUN_00519f20", walk_data_va: 0x00519f20, sizeof: 0, walked_bytes: 0, ops: OPS_74 },
-    WalkSpec { name: "FUN_005ae9c0", walk_data_va: 0x005ae9c0, sizeof: 0, walked_bytes: 0, ops: OPS_75 },
-    WalkSpec { name: "FUN_005ca460", walk_data_va: 0x005ca460, sizeof: 0, walked_bytes: 0, ops: OPS_76 },
-    WalkSpec { name: "FUN_0060d040", walk_data_va: 0x0060d040, sizeof: 0, walked_bytes: 0, ops: OPS_77 },
-    WalkSpec { name: "FUN_00632340", walk_data_va: 0x00632340, sizeof: 0, walked_bytes: 0, ops: OPS_78 },
-    WalkSpec { name: "FUN_00647930", walk_data_va: 0x00647930, sizeof: 0, walked_bytes: 0, ops: OPS_79 },
-    WalkSpec { name: "FUN_00661160", walk_data_va: 0x00661160, sizeof: 0, walked_bytes: 0, ops: OPS_80 },
-    WalkSpec { name: "FUN_006615b0", walk_data_va: 0x006615b0, sizeof: 0, walked_bytes: 0, ops: OPS_81 },
-    WalkSpec { name: "FUN_006623a0", walk_data_va: 0x006623a0, sizeof: 0, walked_bytes: 0, ops: OPS_82 },
-    WalkSpec { name: "FUN_0066cba0", walk_data_va: 0x0066cba0, sizeof: 0, walked_bytes: 0, ops: OPS_83 },
-    WalkSpec { name: "FUN_00794600", walk_data_va: 0x00794600, sizeof: 0, walked_bytes: 0, ops: OPS_84 },
-    WalkSpec { name: "FUN_007a1820", walk_data_va: 0x007a1820, sizeof: 0, walked_bytes: 0, ops: OPS_85 },
-    WalkSpec { name: "FUN_007a1980", walk_data_va: 0x007a1980, sizeof: 0, walked_bytes: 0, ops: OPS_86 },
-    WalkSpec { name: "FUN_00866a20", walk_data_va: 0x00866a20, sizeof: 0, walked_bytes: 0, ops: OPS_87 },
-    WalkSpec { name: "FUN_00869890", walk_data_va: 0x00869890, sizeof: 0, walked_bytes: 0, ops: OPS_88 },
-    WalkSpec { name: "FUN_00912680", walk_data_va: 0x00912680, sizeof: 0, walked_bytes: 0, ops: OPS_89 },
-    WalkSpec { name: "FUN_00912fe0", walk_data_va: 0x00912fe0, sizeof: 0, walked_bytes: 0, ops: OPS_90 },
-    WalkSpec { name: "FUN_009195d0", walk_data_va: 0x009195d0, sizeof: 0, walked_bytes: 0, ops: OPS_91 },
-    WalkSpec { name: "FUN_00936bb0", walk_data_va: 0x00936bb0, sizeof: 0, walked_bytes: 0, ops: OPS_92 },
-    WalkSpec { name: "FUN_00936c70", walk_data_va: 0x00936c70, sizeof: 0, walked_bytes: 0, ops: OPS_93 },
-    WalkSpec { name: "FUN_00936cb0", walk_data_va: 0x00936cb0, sizeof: 0, walked_bytes: 0, ops: OPS_94 },
-    WalkSpec { name: "FUN_00936d00", walk_data_va: 0x00936d00, sizeof: 0, walked_bytes: 0, ops: OPS_95 },
-    WalkSpec { name: "FUN_00936d40", walk_data_va: 0x00936d40, sizeof: 0, walked_bytes: 0, ops: OPS_96 },
-    WalkSpec { name: "FUN_00936de0", walk_data_va: 0x00936de0, sizeof: 0, walked_bytes: 0, ops: OPS_97 },
-    WalkSpec { name: "FUN_00936e50", walk_data_va: 0x00936e50, sizeof: 0, walked_bytes: 0, ops: OPS_98 },
-    WalkSpec { name: "FUN_00936e80", walk_data_va: 0x00936e80, sizeof: 0, walked_bytes: 0, ops: OPS_99 },
-    WalkSpec { name: "FUN_00936ef0", walk_data_va: 0x00936ef0, sizeof: 0, walked_bytes: 0, ops: OPS_100 },
-    WalkSpec { name: "FUN_00936f70", walk_data_va: 0x00936f70, sizeof: 0, walked_bytes: 0, ops: OPS_101 },
-    WalkSpec { name: "FUN_00937600", walk_data_va: 0x00937600, sizeof: 0, walked_bytes: 0, ops: OPS_102 },
-    WalkSpec { name: "FUN_00937710", walk_data_va: 0x00937710, sizeof: 0, walked_bytes: 0, ops: OPS_103 },
-    WalkSpec { name: "FUN_00937790", walk_data_va: 0x00937790, sizeof: 0, walked_bytes: 0, ops: OPS_104 },
-    WalkSpec { name: "FUN_00959110", walk_data_va: 0x00959110, sizeof: 0, walked_bytes: 0, ops: OPS_105 },
-    WalkSpec { name: "FUN_00967930", walk_data_va: 0x00967930, sizeof: 0, walked_bytes: 0, ops: OPS_106 },
-    WalkSpec { name: "FUN_00976ed0", walk_data_va: 0x00976ed0, sizeof: 0, walked_bytes: 0, ops: OPS_107 },
-    WalkSpec { name: "FUN_00999c10", walk_data_va: 0x00999c10, sizeof: 0, walked_bytes: 0, ops: OPS_108 },
-    WalkSpec { name: "FUN_009e0250", walk_data_va: 0x009e0250, sizeof: 0, walked_bytes: 0, ops: OPS_109 },
-    WalkSpec { name: "FUN_009e8530", walk_data_va: 0x009e8530, sizeof: 0, walked_bytes: 0, ops: OPS_110 },
-    WalkSpec { name: "FUN_00a04640", walk_data_va: 0x00a04640, sizeof: 0, walked_bytes: 0, ops: OPS_111 },
-    WalkSpec { name: "FUN_00a248c0", walk_data_va: 0x00a248c0, sizeof: 0, walked_bytes: 0, ops: OPS_112 },
-    WalkSpec { name: "FUN_00a24ad0", walk_data_va: 0x00a24ad0, sizeof: 0, walked_bytes: 0, ops: OPS_113 },
-    WalkSpec { name: "Farms", walk_data_va: 0x008d9280, sizeof: 480, walked_bytes: 0, ops: OPS_114 },
-    WalkSpec { name: "FollowOrder", walk_data_va: 0x00486b50, sizeof: 44, walked_bytes: 20, ops: OPS_115 },
-    WalkSpec { name: "Form", walk_data_va: 0x0072df10, sizeof: 3736, walked_bytes: 3688, ops: OPS_116 },
-    WalkSpec { name: "FormOrder", walk_data_va: 0x00485cc0, sizeof: 100, walked_bytes: 84, ops: OPS_117 },
-    WalkSpec { name: "Forms", walk_data_va: 0x0072e970, sizeof: 24, walked_bytes: 0, ops: OPS_118 },
-    WalkSpec { name: "Fort", walk_data_va: 0x0073ebc0, sizeof: 16, walked_bytes: 8, ops: OPS_119 },
-    WalkSpec { name: "Forts", walk_data_va: 0x0073ef30, sizeof: 232, walked_bytes: 0, ops: OPS_120 },
-    WalkSpec { name: "Game", walk_data_va: 0x00589600, sizeof: 3184, walked_bytes: 0, ops: OPS_121 },
-    WalkSpec { name: "GameDaemon", walk_data_va: 0x007326e0, sizeof: 44, walked_bytes: 0, ops: OPS_122 },
-    WalkSpec { name: "GameInfo", walk_data_va: 0x005d6570, sizeof: 1348, walked_bytes: 83, ops: OPS_123 },
-    WalkSpec { name: "GarrisonOrder", walk_data_va: 0x00484690, sizeof: 36, walked_bytes: 14, ops: OPS_124 },
-    WalkSpec { name: "GatherOrder", walk_data_va: 0x00486e60, sizeof: 52, walked_bytes: 30, ops: OPS_125 },
-    WalkSpec { name: "GatherPoint", walk_data_va: 0x00470f30, sizeof: 16, walked_bytes: 9, ops: OPS_126 },
-    WalkSpec { name: "Good", walk_data_va: 0x0066e5d0, sizeof: 48, walked_bytes: 1, ops: OPS_127 },
-    WalkSpec { name: "GoodType", walk_data_va: 0x0066fab0, sizeof: 776, walked_bytes: 68, ops: OPS_128 },
-    WalkSpec { name: "GraphicEvent", walk_data_va: 0x00919780, sizeof: 36, walked_bytes: 23, ops: OPS_129 },
-    WalkSpec { name: "GraphicEvents", walk_data_va: 0x008e4d70, sizeof: 220, walked_bytes: 0, ops: OPS_130 },
-    WalkSpec { name: "Group", walk_data_va: 0x00708400, sizeof: 2516, walked_bytes: 72, ops: OPS_131 },
-    WalkSpec { name: "GroupAttackOrder", walk_data_va: 0x004850b0, sizeof: 84, walked_bytes: 55, ops: OPS_132 },
-    WalkSpec { name: "GroupMoveOrder", walk_data_va: 0x004855c0, sizeof: 120, walked_bytes: 100, ops: OPS_133 },
-    WalkSpec { name: "GroupOrder", walk_data_va: 0x00485580, sizeof: 36, walked_bytes: 20, ops: OPS_134 },
-    WalkSpec { name: "GroupPatrolOrder", walk_data_va: 0x00482c70, sizeof: 100, walked_bytes: 24, ops: OPS_135 },
-    WalkSpec { name: "Groups", walk_data_va: 0x00713e30, sizeof: 76, walked_bytes: 0, ops: OPS_136 },
-    WalkSpec { name: "GuardOrder", walk_data_va: 0x00486550, sizeof: 56, walked_bytes: 34, ops: OPS_137 },
-    WalkSpec { name: "GuyData", walk_data_va: 0x005e0210, sizeof: 188, walked_bytes: 155, ops: OPS_138 },
-    WalkSpec { name: "Herd", walk_data_va: 0x00741a40, sizeof: 36, walked_bytes: 27, ops: OPS_139 },
-    WalkSpec { name: "Herds", walk_data_va: 0x00741d50, sizeof: 36, walked_bytes: 0, ops: OPS_140 },
-    WalkSpec { name: "Hero", walk_data_va: 0x00739e20, sizeof: 48, walked_bytes: 6, ops: OPS_141 },
-    WalkSpec { name: "Heroes", walk_data_va: 0x0073a510, sizeof: 232, walked_bytes: 0, ops: OPS_142 },
-    WalkSpec { name: "HotKeyGroup", walk_data_va: 0x00714840, sizeof: 2556, walked_bytes: 12, ops: OPS_143 },
-    WalkSpec { name: "HotKeyGroups", walk_data_va: 0x007150b0, sizeof: 36, walked_bytes: 0, ops: OPS_144 },
-    WalkSpec { name: "Item", walk_data_va: 0x00677150, sizeof: 44, walked_bytes: 1, ops: OPS_145 },
-    WalkSpec { name: "LLNode<MessageWinEntry *, int>", walk_data_va: 0x00498210, sizeof: 0, walked_bytes: 4, ops: OPS_146 },
-    WalkSpec { name: "Land", walk_data_va: 0x0067e680, sizeof: 312, walked_bytes: 264, ops: OPS_147 },
-    WalkSpec { name: "Lands", walk_data_va: 0x0067e700, sizeof: 32, walked_bytes: 0, ops: OPS_148 },
-    WalkSpec { name: "LeaderData", walk_data_va: 0x006d6750, sizeof: 28388, walked_bytes: 27182, ops: OPS_149 },
-    WalkSpec { name: "LeaderDataEncrypt", walk_data_va: 0x006d9900, sizeof: 248, walked_bytes: 0, ops: OPS_150 },
-    WalkSpec { name: "LeaderOptionData", walk_data_va: 0x006f18b0, sizeof: 32, walked_bytes: 24, ops: OPS_151 },
-    WalkSpec { name: "LeaderOptions", walk_data_va: 0x006f19a0, sizeof: 320, walked_bytes: 0, ops: OPS_152 },
-    WalkSpec { name: "Leaders", walk_data_va: 0x006e38e0, sizeof: 283980, walked_bytes: 0, ops: OPS_153 },
-    WalkSpec { name: "LinkList<BreakInfo, unsigned short>", walk_data_va: 0x004cd230, sizeof: 0, walked_bytes: 0, ops: OPS_154 },
-    WalkSpec { name: "LinkList<ScenarioMessage, int>", walk_data_va: 0x004c7270, sizeof: 0, walked_bytes: 0, ops: OPS_155 },
-    WalkSpec { name: "LinkList<String, int>", walk_data_va: 0x004c8070, sizeof: 0, walked_bytes: 0, ops: OPS_156 },
-    WalkSpec { name: "LinkList<int, short>", walk_data_va: 0x00491a90, sizeof: 0, walked_bytes: 0, ops: OPS_157 },
-    WalkSpec { name: "LinkList<int, unsigned char>", walk_data_va: 0x004c75e0, sizeof: 0, walked_bytes: 0, ops: OPS_158 },
-    WalkSpec { name: "MakeObject", walk_data_va: 0x006d8ff0, sizeof: 40, walked_bytes: 40, ops: OPS_159 },
-    WalkSpec { name: "MessageWin", walk_data_va: 0x007e9d40, sizeof: 1556, walked_bytes: 0, ops: OPS_160 },
-    WalkSpec { name: "MessageWinEntry", walk_data_va: 0x007e9130, sizeof: 132, walked_bytes: 47, ops: OPS_161 },
-    WalkSpec { name: "Mountains", walk_data_va: 0x0089d320, sizeof: 604, walked_bytes: 0, ops: OPS_162 },
-    WalkSpec { name: "MultiPtrArray<Object>", walk_data_va: 0x0045d550, sizeof: 28, walked_bytes: 6, ops: OPS_163 },
-    WalkSpec { name: "NamedObjectArray<ScenarioGroup>", walk_data_va: 0x004c7db0, sizeof: 28, walked_bytes: 0, ops: OPS_164 },
-    WalkSpec { name: "NamedObjectArray<String>", walk_data_va: 0x00491ca0, sizeof: 28, walked_bytes: 2, ops: OPS_165 },
-    WalkSpec { name: "NamedSimpleArray<int>", walk_data_va: 0x00490960, sizeof: 28, walked_bytes: 2, ops: OPS_166 },
-    WalkSpec { name: "Object", walk_data_va: 0x00647830, sizeof: 80, walked_bytes: 34, ops: OPS_167 },
-    WalkSpec { name: "ObjectArray<AchieveEvent>", walk_data_va: 0x00495130, sizeof: 24, walked_bytes: 2, ops: OPS_168 },
-    WalkSpec { name: "ObjectArray<ConquestBonusCard>", walk_data_va: 0x00492d80, sizeof: 24, walked_bytes: 2, ops: OPS_169 },
-    WalkSpec { name: "ObjectArray<ConquestColony>", walk_data_va: 0x004914c0, sizeof: 24, walked_bytes: 2, ops: OPS_170 },
-    WalkSpec { name: "ObjectArray<ConquestLeader>", walk_data_va: 0x00493050, sizeof: 24, walked_bytes: 2, ops: OPS_171 },
-    WalkSpec { name: "ObjectArray<ConquestLink>", walk_data_va: 0x00493840, sizeof: 24, walked_bytes: 2, ops: OPS_172 },
-    WalkSpec { name: "ObjectArray<ConquestNode>", walk_data_va: 0x00493a40, sizeof: 24, walked_bytes: 2, ops: OPS_173 },
-    WalkSpec { name: "ObjectArray<ConquestStyle>", walk_data_va: 0x004923b0, sizeof: 24, walked_bytes: 2, ops: OPS_174 },
-    WalkSpec { name: "ObjectArray<DeathObj>", walk_data_va: 0x00474420, sizeof: 24, walked_bytes: 2, ops: OPS_175 },
-    WalkSpec { name: "ObjectArray<Form>", walk_data_va: 0x00481190, sizeof: 24, walked_bytes: 0, ops: OPS_176 },
-    WalkSpec { name: "ObjectArray<Land>", walk_data_va: 0x004786f0, sizeof: 24, walked_bytes: 0, ops: OPS_177 },
-    WalkSpec { name: "ObjectArray<ObjectArray<ConquestStyle>>", walk_data_va: 0x004916f0, sizeof: 0, walked_bytes: 2, ops: OPS_178 },
-    WalkSpec { name: "ObjectArray<Region>", walk_data_va: 0x00478ed0, sizeof: 24, walked_bytes: 2, ops: OPS_179 },
-    WalkSpec { name: "ObjectArray<ScenarioComponent>", walk_data_va: 0x004c7060, sizeof: 24, walked_bytes: 0, ops: OPS_180 },
-    WalkSpec { name: "ObjectArray<ScenarioRevealPoint>", walk_data_va: 0x004c78b0, sizeof: 24, walked_bytes: 2, ops: OPS_181 },
-    WalkSpec { name: "ObjectArray<SimpleArray<int>>", walk_data_va: 0x0049b770, sizeof: 0, walked_bytes: 2, ops: OPS_182 },
-    WalkSpec { name: "ObjectArray<String>", walk_data_va: 0x00490fb0, sizeof: 24, walked_bytes: 2, ops: OPS_183 },
-    WalkSpec { name: "ObjectArray<Tribe>", walk_data_va: 0x0047e230, sizeof: 24, walked_bytes: 2, ops: OPS_184 },
-    WalkSpec { name: "ObjectType", walk_data_va: 0x0065fba0, sizeof: 696, walked_bytes: 242, ops: OPS_185 },
-    WalkSpec { name: "Objects", walk_data_va: 0x006541e0, sizeof: 824, walked_bytes: 142, ops: OPS_186 },
-    WalkSpec { name: "OilWell", walk_data_va: 0x0073f650, sizeof: 16, walked_bytes: 8, ops: OPS_187 },
-    WalkSpec { name: "OilWells", walk_data_va: 0x0073f890, sizeof: 232, walked_bytes: 0, ops: OPS_188 },
-    WalkSpec { name: "Option", walk_data_va: 0x0072be20, sizeof: 20, walked_bytes: 18, ops: OPS_189 },
-    WalkSpec { name: "OptionData", walk_data_va: 0x0072bf70, sizeof: 68, walked_bytes: 0, ops: OPS_190 },
-    WalkSpec { name: "OptionInfo", walk_data_va: 0x0072c1e0, sizeof: 22508, walked_bytes: 0, ops: OPS_191 },
-    WalkSpec { name: "Options", walk_data_va: 0x0072c240, sizeof: 232, walked_bytes: 0, ops: OPS_192 },
-    WalkSpec { name: "OrderList", walk_data_va: 0x00730270, sizeof: 28, walked_bytes: 0, ops: OPS_193 },
-    WalkSpec { name: "PackageFifo", walk_data_va: 0x00952500, sizeof: 10736, walked_bytes: 34, ops: OPS_194 },
-    WalkSpec { name: "PathFinder", walk_data_va: 0x00689cb0, sizeof: 204, walked_bytes: 0, ops: OPS_195 },
-    WalkSpec { name: "PatrolOrder", walk_data_va: 0x00483e80, sizeof: 76, walked_bytes: 4, ops: OPS_196 },
-    WalkSpec { name: "Personality", walk_data_va: 0x006d8700, sizeof: 96, walked_bytes: 96, ops: OPS_197 },
-    WalkSpec { name: "Player", walk_data_va: 0x006ee2d0, sizeof: 140, walked_bytes: 57, ops: OPS_198 },
-    WalkSpec { name: "PtrArray<Ammo>", walk_data_va: 0x00473fe0, sizeof: 28, walked_bytes: 6, ops: OPS_199 },
-    WalkSpec { name: "PtrArray<Cliff>", walk_data_va: 0x004a7100, sizeof: 28, walked_bytes: 6, ops: OPS_200 },
-    WalkSpec { name: "PtrArray<CliffMiningData>", walk_data_va: 0x004a7440, sizeof: 28, walked_bytes: 6, ops: OPS_201 },
-    WalkSpec { name: "PtrArray<Good>", walk_data_va: 0x0045cce0, sizeof: 28, walked_bytes: 6, ops: OPS_202 },
-    WalkSpec { name: "PtrArray<GraphicEvent>", walk_data_va: 0x004aa490, sizeof: 28, walked_bytes: 6, ops: OPS_203 },
-    WalkSpec { name: "PtrArray<Guy>", walk_data_va: 0x0046df30, sizeof: 28, walked_bytes: 6, ops: OPS_204 },
-    WalkSpec { name: "PtrArray<Herd>", walk_data_va: 0x0048d610, sizeof: 28, walked_bytes: 0, ops: OPS_205 },
-    WalkSpec { name: "PtrArray<Item>", walk_data_va: 0x0045d020, sizeof: 28, walked_bytes: 0, ops: OPS_206 },
-    WalkSpec { name: "PtrArray<River>", walk_data_va: 0x004a2f80, sizeof: 28, walked_bytes: 6, ops: OPS_207 },
-    WalkSpec { name: "PtrArray<Script>", walk_data_va: 0x004cccd0, sizeof: 28, walked_bytes: 6, ops: OPS_208 },
-    WalkSpec { name: "PtrArray<StringListEntry>", walk_data_va: 0x004940d0, sizeof: 28, walked_bytes: 6, ops: OPS_209 },
-    WalkSpec { name: "PtrLinkListAbstract<GatherPoint, unsigned char>", walk_data_va: 0x004708a0, sizeof: 0, walked_bytes: 0, ops: OPS_210 },
-    WalkSpec { name: "PtrLinkListAbstract<MessageWinEntry, int>", walk_data_va: 0x00497cf0, sizeof: 0, walked_bytes: 0, ops: OPS_211 },
-    WalkSpec { name: "PtrLinkListAbstract<ScenarioObjective, int>", walk_data_va: 0x004c8420, sizeof: 0, walked_bytes: 0, ops: OPS_212 },
-    WalkSpec { name: "Region", walk_data_va: 0x00680e20, sizeof: 136, walked_bytes: 68, ops: OPS_213 },
-    WalkSpec { name: "Regions", walk_data_va: 0x00681240, sizeof: 60, walked_bytes: 0, ops: OPS_214 },
-    WalkSpec { name: "River", walk_data_va: 0x00883950, sizeof: 696, walked_bytes: 0, ops: OPS_215 },
-    WalkSpec { name: "ScenarioComponent", walk_data_va: 0x00997600, sizeof: 20, walked_bytes: 16, ops: OPS_216 },
-    WalkSpec { name: "ScenarioGroup", walk_data_va: 0x00997350, sizeof: 36, walked_bytes: 8, ops: OPS_217 },
-    WalkSpec { name: "ScenarioMessage", walk_data_va: 0x009978e0, sizeof: 36, walked_bytes: 10, ops: OPS_218 },
-    WalkSpec { name: "ScenarioObjective", walk_data_va: 0x00999640, sizeof: 84, walked_bytes: 18, ops: OPS_219 },
-    WalkSpec { name: "ScenarioRevealPoint", walk_data_va: 0x009977e0, sizeof: 16, walked_bytes: 12, ops: OPS_220 },
-    WalkSpec { name: "Scene", walk_data_va: 0x008c0f70, sizeof: 824, walked_bytes: 0, ops: OPS_221 },
-    WalkSpec { name: "Script", walk_data_va: 0x009c5f30, sizeof: 204, walked_bytes: 20, ops: OPS_222 },
-    WalkSpec { name: "ScriptArray", walk_data_va: 0x009d5bc0, sizeof: 48, walked_bytes: 0, ops: OPS_223 },
-    WalkSpec { name: "ScriptFile", walk_data_va: 0x009c63b0, sizeof: 224, walked_bytes: 9, ops: OPS_224 },
-    WalkSpec { name: "ScriptFloat", walk_data_va: 0x009d7000, sizeof: 20, walked_bytes: 4, ops: OPS_225 },
-    WalkSpec { name: "ScriptInt", walk_data_va: 0x009d7720, sizeof: 20, walked_bytes: 4, ops: OPS_226 },
-    WalkSpec { name: "ScriptObject", walk_data_va: 0x009d6500, sizeof: 44, walked_bytes: 0, ops: OPS_227 },
-    WalkSpec { name: "ScriptString", walk_data_va: 0x009d6ae0, sizeof: 36, walked_bytes: 0, ops: OPS_228 },
-    WalkSpec { name: "SelectGroup", walk_data_va: 0x007171b0, sizeof: 2544, walked_bytes: 24, ops: OPS_229 },
-    WalkSpec { name: "SelectGroups", walk_data_va: 0x00717230, sizeof: 60, walked_bytes: 0, ops: OPS_230 },
-    WalkSpec { name: "SimpleArray<Coord>", walk_data_va: 0x00483cc0, sizeof: 28, walked_bytes: 2, ops: OPS_231 },
-    WalkSpec { name: "SimpleArray<RectTemplate<short>>", walk_data_va: 0x0049a500, sizeof: 0, walked_bytes: 2, ops: OPS_232 },
-    WalkSpec { name: "SimpleArray<WCoord>", walk_data_va: 0x0047c660, sizeof: 28, walked_bytes: 2, ops: OPS_233 },
-    WalkSpec { name: "SimpleArray<float>", walk_data_va: 0x00490b10, sizeof: 28, walked_bytes: 2, ops: OPS_234 },
-    WalkSpec { name: "SimpleArray<int>", walk_data_va: 0x00473120, sizeof: 28, walked_bytes: 2, ops: OPS_235 },
-    WalkSpec { name: "SimpleArray<unsigned char>", walk_data_va: 0x0049a090, sizeof: 28, walked_bytes: 2, ops: OPS_236 },
-    WalkSpec { name: "SimpleArray<unsigned long>", walk_data_va: 0x004a7f80, sizeof: 28, walked_bytes: 2, ops: OPS_237 },
-    WalkSpec { name: "SimpleArray<unsigned short>", walk_data_va: 0x00476610, sizeof: 28, walked_bytes: 2, ops: OPS_238 },
-    WalkSpec { name: "Site", walk_data_va: 0x006d9300, sizeof: 24, walked_bytes: 24, ops: OPS_239 },
-    WalkSpec { name: "Special", walk_data_va: 0x00740030, sizeof: 48, walked_bytes: 6, ops: OPS_240 },
-    WalkSpec { name: "SpecialAnimOrder", walk_data_va: 0x004849a0, sizeof: 44, walked_bytes: 37, ops: OPS_241 },
-    WalkSpec { name: "Specials", walk_data_va: 0x007403b0, sizeof: 232, walked_bytes: 0, ops: OPS_242 },
-    WalkSpec { name: "SpellType", walk_data_va: 0x00675400, sizeof: 512, walked_bytes: 138, ops: OPS_243 },
-    WalkSpec { name: "SplineData", walk_data_va: 0x009132b0, sizeof: 268, walked_bytes: 36, ops: OPS_244 },
-    WalkSpec { name: "Stack<PathData>", walk_data_va: 0x0046d8b0, sizeof: 16, walked_bytes: 9, ops: OPS_245 },
-    WalkSpec { name: "StrafeOrder", walk_data_va: 0x0047f310, sizeof: 84, walked_bytes: 55, ops: OPS_246 },
-    WalkSpec { name: "String", walk_data_va: 0x00a1b2d0, sizeof: 20, walked_bytes: 0, ops: OPS_247 },
-    WalkSpec { name: "SubObject", walk_data_va: 0x006621d0, sizeof: 40, walked_bytes: 16, ops: OPS_248 },
-    WalkSpec { name: "Supplies", walk_data_va: 0x0073ae90, sizeof: 224, walked_bytes: 0, ops: OPS_249 },
-    WalkSpec { name: "Supply", walk_data_va: 0x0073b540, sizeof: 16, walked_bytes: 6, ops: OPS_250 },
-    WalkSpec { name: "TCoordData", walk_data_va: 0x00681c50, sizeof: 8, walked_bytes: 8, ops: OPS_251 },
-    WalkSpec { name: "TechType", walk_data_va: 0x0066d5c0, sizeof: 648, walked_bytes: 117, ops: OPS_252 },
-    WalkSpec { name: "Terrain", walk_data_va: 0x00852b00, sizeof: 27336, walked_bytes: 0, ops: OPS_253 },
-    WalkSpec { name: "TerrainList", walk_data_va: 0x0084b9e0, sizeof: 12, walked_bytes: 0, ops: OPS_254 },
-    WalkSpec { name: "ThinkOrder", walk_data_va: 0x0047f2b0, sizeof: 8, walked_bytes: 1, ops: OPS_255 },
-    WalkSpec { name: "TileSet", walk_data_va: 0x0087b290, sizeof: 40, walked_bytes: 0, ops: OPS_256 },
-    WalkSpec { name: "TradeOrder", walk_data_va: 0x00483260, sizeof: 52, walked_bytes: 28, ops: OPS_257 },
-    WalkSpec { name: "Tribe", walk_data_va: 0x006f1270, sizeof: 1520, walked_bytes: 1432, ops: OPS_258 },
-    WalkSpec { name: "Tribes", walk_data_va: 0x006efb20, sizeof: 28, walked_bytes: 0, ops: OPS_259 },
-    WalkSpec { name: "TurnControl", walk_data_va: 0x00956c50, sizeof: 376, walked_bytes: 0, ops: OPS_260 },
-    WalkSpec { name: "Type", walk_data_va: 0x00663190, sizeof: 460, walked_bytes: 90, ops: OPS_261 },
-    WalkSpec { name: "Types", walk_data_va: 0x00669780, sizeof: 100, walked_bytes: 0, ops: OPS_262 },
-    WalkSpec { name: "UnbuiltCities", walk_data_va: 0x00460dc0, sizeof: 224, walked_bytes: 0, ops: OPS_263 },
-    WalkSpec { name: "UnbuiltCity", walk_data_va: 0x0073b880, sizeof: 4, walked_bytes: 3, ops: OPS_264 },
-    WalkSpec { name: "UnbuiltFort", walk_data_va: 0x0073bb20, sizeof: 4, walked_bytes: 3, ops: OPS_265 },
-    WalkSpec { name: "UnbuiltForts", walk_data_va: 0x0073bcc0, sizeof: 224, walked_bytes: 0, ops: OPS_266 },
-    WalkSpec { name: "UnbuiltWonder", walk_data_va: 0x0073c1b0, sizeof: 4, walked_bytes: 3, ops: OPS_267 },
-    WalkSpec { name: "UnbuiltWonders", walk_data_va: 0x0073c290, sizeof: 224, walked_bytes: 0, ops: OPS_268 },
-    WalkSpec { name: "Unit", walk_data_va: 0x0060cf40, sizeof: 344, walked_bytes: 111, ops: OPS_269 },
-    WalkSpec { name: "UnitType", walk_data_va: 0x0061d190, sizeof: 1496, walked_bytes: 792, ops: OPS_270 },
-    WalkSpec { name: "WCoordData", walk_data_va: 0x00681b20, sizeof: 8, walked_bytes: 8, ops: OPS_271 },
-    WalkSpec { name: "WalkDataConquestGame", walk_data_va: 0x007a7660, sizeof: 4, walked_bytes: 0, ops: OPS_272 },
-    WalkSpec { name: "WalkDataGame", walk_data_va: 0x005a2360, sizeof: 4, walked_bytes: 0, ops: OPS_273 },
-    WalkSpec { name: "WallData", walk_data_va: 0x00642510, sizeof: 112, walked_bytes: 30, ops: OPS_274 },
-    WalkSpec { name: "Wonder", walk_data_va: 0x0073c780, sizeof: 24, walked_bytes: 14, ops: OPS_275 },
-    WalkSpec { name: "Wonders", walk_data_va: 0x0073ca40, sizeof: 232, walked_bytes: 0, ops: OPS_276 },
-    WalkSpec { name: "World", walk_data_va: 0x006b5cf0, sizeof: 372, walked_bytes: 0, ops: OPS_277 },
+    WalkSpec {
+        name: "Achieve",
+        walk_data_va: 0x007af790,
+        sizeof: 2148,
+        walked_bytes: 0,
+        ops: OPS_0,
+    },
+    WalkSpec {
+        name: "AchieveData",
+        walk_data_va: 0x007af0b0,
+        sizeof: 320,
+        walked_bytes: 72,
+        ops: OPS_1,
+    },
+    WalkSpec {
+        name: "AchieveEvent",
+        walk_data_va: 0x007af630,
+        sizeof: 28,
+        walked_bytes: 8,
+        ops: OPS_2,
+    },
+    WalkSpec {
+        name: "AirAttackGroundOrder",
+        walk_data_va: 0x004875a0,
+        sizeof: 72,
+        walked_bytes: 52,
+        ops: OPS_3,
+    },
+    WalkSpec {
+        name: "AirOrder",
+        walk_data_va: 0x0047f2d0,
+        sizeof: 40,
+        walked_bytes: 24,
+        ops: OPS_4,
+    },
+    WalkSpec {
+        name: "AirPatrolOrder",
+        walk_data_va: 0x00483ed0,
+        sizeof: 104,
+        walked_bytes: 28,
+        ops: OPS_5,
+    },
+    WalkSpec {
+        name: "AmmoData",
+        walk_data_va: 0x0067ab50,
+        sizeof: 108,
+        walked_bytes: 100,
+        ops: OPS_6,
+    },
+    WalkSpec {
+        name: "AnimalData",
+        walk_data_va: 0x005d7ea0,
+        sizeof: 352,
+        walked_bytes: 5,
+        ops: OPS_7,
+    },
+    WalkSpec {
+        name: "Armies",
+        walk_data_va: 0x006f3700,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_8,
+    },
+    WalkSpec {
+        name: "Army",
+        walk_data_va: 0x006f9850,
+        sizeof: 160,
+        walked_bytes: 152,
+        ops: OPS_9,
+    },
+    WalkSpec {
+        name: "Array<ActiveSpell>",
+        walk_data_va: 0x0048a9e0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_10,
+    },
+    WalkSpec {
+        name: "Array<AmbienceStruct>",
+        walk_data_va: 0x004aa9a0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_11,
+    },
+    WalkSpec {
+        name: "Array<CaravanLink>",
+        walk_data_va: 0x00489040,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_12,
+    },
+    WalkSpec {
+        name: "Array<Color>",
+        walk_data_va: 0x004912e0,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_13,
+    },
+    WalkSpec {
+        name: "Array<ConquestNewsItem>",
+        walk_data_va: 0x004934c0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_14,
+    },
+    WalkSpec {
+        name: "Array<FarmStruct>",
+        walk_data_va: 0x004a8db0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_15,
+    },
+    WalkSpec {
+        name: "Array<Group>",
+        walk_data_va: 0x0047ea30,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_16,
+    },
+    WalkSpec {
+        name: "Array<HotKeyGroup>",
+        walk_data_va: 0x00480290,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_17,
+    },
+    WalkSpec {
+        name: "Array<MakeObject>",
+        walk_data_va: 0x0047d440,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_18,
+    },
+    WalkSpec {
+        name: "Array<Option>",
+        walk_data_va: 0x00480cc0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_19,
+    },
+    WalkSpec {
+        name: "Array<ReinforcementArmy>",
+        walk_data_va: 0x004918a0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_20,
+    },
+    WalkSpec {
+        name: "Array<SelectGroup>",
+        walk_data_va: 0x00480900,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_21,
+    },
+    WalkSpec {
+        name: "Array<Site>",
+        walk_data_va: 0x0047cee0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_22,
+    },
+    WalkSpec {
+        name: "Array<TCoordData>",
+        walk_data_va: 0x00471c30,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_23,
+    },
+    WalkSpec {
+        name: "Array<UVPair>",
+        walk_data_va: 0x00499e90,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_24,
+    },
+    WalkSpec {
+        name: "Array<Vector<float>>",
+        walk_data_va: 0x004a46d0,
+        sizeof: 0,
+        walked_bytes: 2,
+        ops: OPS_25,
+    },
+    WalkSpec {
+        name: "Array<WCoordData>",
+        walk_data_va: 0x00478990,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_26,
+    },
+    WalkSpec {
+        name: "AttackGroundOrder",
+        walk_data_va: 0x00487a60,
+        sizeof: 32,
+        walked_bytes: 16,
+        ops: OPS_27,
+    },
+    WalkSpec {
+        name: "AttackOrder",
+        walk_data_va: 0x0047f260,
+        sizeof: 48,
+        walked_bytes: 23,
+        ops: OPS_28,
+    },
+    WalkSpec {
+        name: "AttackToOrder",
+        walk_data_va: 0x00482e70,
+        sizeof: 92,
+        walked_bytes: 76,
+        ops: OPS_29,
+    },
+    WalkSpec {
+        name: "AwaitBoardOrder",
+        walk_data_va: 0x0047f220,
+        sizeof: 32,
+        walked_bytes: 10,
+        ops: OPS_30,
+    },
+    WalkSpec {
+        name: "Balance",
+        walk_data_va: 0x00582cc0,
+        sizeof: 486104,
+        walked_bytes: 0,
+        ops: OPS_31,
+    },
+    WalkSpec {
+        name: "BuildData",
+        walk_data_va: 0x0062f270,
+        sizeof: 220,
+        walked_bytes: 28,
+        ops: OPS_32,
+    },
+    WalkSpec {
+        name: "BuildQueue",
+        walk_data_va: 0x006305f0,
+        sizeof: 16,
+        walked_bytes: 4,
+        ops: OPS_33,
+    },
+    WalkSpec {
+        name: "BuildType",
+        walk_data_va: 0x00631f50,
+        sizeof: 844,
+        walked_bytes: 49,
+        ops: OPS_34,
+    },
+    WalkSpec {
+        name: "Camera",
+        walk_data_va: 0x00844090,
+        sizeof: 880,
+        walked_bytes: 0,
+        ops: OPS_35,
+    },
+    WalkSpec {
+        name: "Caravan",
+        walk_data_va: 0x0073d2b0,
+        sizeof: 80,
+        walked_bytes: 22,
+        ops: OPS_36,
+    },
+    WalkSpec {
+        name: "CaravanLink",
+        walk_data_va: 0x007369c0,
+        sizeof: 8,
+        walked_bytes: 8,
+        ops: OPS_37,
+    },
+    WalkSpec {
+        name: "Caravans",
+        walk_data_va: 0x0073e3f0,
+        sizeof: 224,
+        walked_bytes: 0,
+        ops: OPS_38,
+    },
+    WalkSpec {
+        name: "CastOrder",
+        walk_data_va: 0x004860a0,
+        sizeof: 48,
+        walked_bytes: 26,
+        ops: OPS_39,
+    },
+    WalkSpec {
+        name: "Cities",
+        walk_data_va: 0x00735410,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_40,
+    },
+    WalkSpec {
+        name: "City",
+        walk_data_va: 0x00489220,
+        sizeof: 192,
+        walked_bytes: 110,
+        ops: OPS_41,
+    },
+    WalkSpec {
+        name: "Cliff",
+        walk_data_va: 0x008a4040,
+        sizeof: 208,
+        walked_bytes: 4,
+        ops: OPS_42,
+    },
+    WalkSpec {
+        name: "CliffMiningData",
+        walk_data_va: 0x008a6d70,
+        sizeof: 72,
+        walked_bytes: 16,
+        ops: OPS_43,
+    },
+    WalkSpec {
+        name: "CliffsData",
+        walk_data_va: 0x008a9480,
+        sizeof: 1980,
+        walked_bytes: 16,
+        ops: OPS_44,
+    },
+    WalkSpec {
+        name: "CommandManager",
+        walk_data_va: 0x00942d30,
+        sizeof: 86632,
+        walked_bytes: 0,
+        ops: OPS_45,
+    },
+    WalkSpec {
+        name: "CommandPackage",
+        walk_data_va: 0x0094b740,
+        sizeof: 536,
+        walked_bytes: 18,
+        ops: OPS_46,
+    },
+    WalkSpec {
+        name: "ConquestColony",
+        walk_data_va: 0x00789400,
+        sizeof: 84,
+        walked_bytes: 16,
+        ops: OPS_47,
+    },
+    WalkSpec {
+        name: "ConquestGame",
+        walk_data_va: 0x00798410,
+        sizeof: 5308,
+        walked_bytes: 0,
+        ops: OPS_48,
+    },
+    WalkSpec {
+        name: "ConquestLeader",
+        walk_data_va: 0x0079b6d0,
+        sizeof: 1156,
+        walked_bytes: 867,
+        ops: OPS_49,
+    },
+    WalkSpec {
+        name: "ConquestLeaders",
+        walk_data_va: 0x007a01b0,
+        sizeof: 76,
+        walked_bytes: 0,
+        ops: OPS_50,
+    },
+    WalkSpec {
+        name: "ConquestLink",
+        walk_data_va: 0x007a5860,
+        sizeof: 164,
+        walked_bytes: 24,
+        ops: OPS_51,
+    },
+    WalkSpec {
+        name: "ConquestNewsItem",
+        walk_data_va: 0x007a3ef0,
+        sizeof: 24,
+        walked_bytes: 24,
+        ops: OPS_52,
+    },
+    WalkSpec {
+        name: "ConquestNode",
+        walk_data_va: 0x007a5520,
+        sizeof: 172,
+        walked_bytes: 80,
+        ops: OPS_53,
+    },
+    WalkSpec {
+        name: "ConquestNodes",
+        walk_data_va: 0x007a6300,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_54,
+    },
+    WalkSpec {
+        name: "ConquestPiece",
+        walk_data_va: 0x007acad0,
+        sizeof: 48,
+        walked_bytes: 44,
+        ops: OPS_55,
+    },
+    WalkSpec {
+        name: "ConquestPieces",
+        walk_data_va: 0x007accb0,
+        sizeof: 676,
+        walked_bytes: 6,
+        ops: OPS_56,
+    },
+    WalkSpec {
+        name: "ConquestStyle",
+        walk_data_va: 0x007a9170,
+        sizeof: 376,
+        walked_bytes: 144,
+        ops: OPS_57,
+    },
+    WalkSpec {
+        name: "Console",
+        walk_data_va: 0x007cbc00,
+        sizeof: 7432,
+        walked_bytes: 0,
+        ops: OPS_58,
+    },
+    WalkSpec {
+        name: "Constants",
+        walk_data_va: 0x0057f910,
+        sizeof: 3432,
+        walked_bytes: 0,
+        ops: OPS_59,
+    },
+    WalkSpec {
+        name: "DeathObjData",
+        walk_data_va: 0x008d5520,
+        sizeof: 76,
+        walked_bytes: 75,
+        ops: OPS_60,
+    },
+    WalkSpec {
+        name: "Diplomacy",
+        walk_data_va: 0x006d8a80,
+        sizeof: 92,
+        walked_bytes: 92,
+        ops: OPS_61,
+    },
+    WalkSpec {
+        name: "Dock",
+        walk_data_va: 0x00740c40,
+        sizeof: 20,
+        walked_bytes: 10,
+        ops: OPS_62,
+    },
+    WalkSpec {
+        name: "Docks",
+        walk_data_va: 0x00741100,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_63,
+    },
+    WalkSpec {
+        name: "Doober",
+        walk_data_va: 0x00846ff0,
+        sizeof: 484,
+        walked_bytes: 0,
+        ops: OPS_64,
+    },
+    WalkSpec {
+        name: "FUN_00442650",
+        walk_data_va: 0x00442650,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_65,
+    },
+    WalkSpec {
+        name: "FUN_00442870",
+        walk_data_va: 0x00442870,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_66,
+    },
+    WalkSpec {
+        name: "FUN_00443ea0",
+        walk_data_va: 0x00443ea0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_67,
+    },
+    WalkSpec {
+        name: "FUN_004441a0",
+        walk_data_va: 0x004441a0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_68,
+    },
+    WalkSpec {
+        name: "FUN_0046a1cd",
+        walk_data_va: 0x0046a1cd,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_69,
+    },
+    WalkSpec {
+        name: "FUN_004d6b50",
+        walk_data_va: 0x004d6b50,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_70,
+    },
+    WalkSpec {
+        name: "FUN_004e80bd",
+        walk_data_va: 0x004e80bd,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_71,
+    },
+    WalkSpec {
+        name: "FUN_004e822c",
+        walk_data_va: 0x004e822c,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_72,
+    },
+    WalkSpec {
+        name: "FUN_00513920",
+        walk_data_va: 0x00513920,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_73,
+    },
+    WalkSpec {
+        name: "FUN_00519f20",
+        walk_data_va: 0x00519f20,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_74,
+    },
+    WalkSpec {
+        name: "FUN_005ae9c0",
+        walk_data_va: 0x005ae9c0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_75,
+    },
+    WalkSpec {
+        name: "FUN_005ca460",
+        walk_data_va: 0x005ca460,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_76,
+    },
+    WalkSpec {
+        name: "FUN_0060d040",
+        walk_data_va: 0x0060d040,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_77,
+    },
+    WalkSpec {
+        name: "FUN_00632340",
+        walk_data_va: 0x00632340,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_78,
+    },
+    WalkSpec {
+        name: "FUN_00647930",
+        walk_data_va: 0x00647930,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_79,
+    },
+    WalkSpec {
+        name: "FUN_00661160",
+        walk_data_va: 0x00661160,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_80,
+    },
+    WalkSpec {
+        name: "FUN_006615b0",
+        walk_data_va: 0x006615b0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_81,
+    },
+    WalkSpec {
+        name: "FUN_006623a0",
+        walk_data_va: 0x006623a0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_82,
+    },
+    WalkSpec {
+        name: "FUN_0066cba0",
+        walk_data_va: 0x0066cba0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_83,
+    },
+    WalkSpec {
+        name: "FUN_00794600",
+        walk_data_va: 0x00794600,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_84,
+    },
+    WalkSpec {
+        name: "FUN_007a1820",
+        walk_data_va: 0x007a1820,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_85,
+    },
+    WalkSpec {
+        name: "FUN_007a1980",
+        walk_data_va: 0x007a1980,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_86,
+    },
+    WalkSpec {
+        name: "FUN_00866a20",
+        walk_data_va: 0x00866a20,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_87,
+    },
+    WalkSpec {
+        name: "FUN_00869890",
+        walk_data_va: 0x00869890,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_88,
+    },
+    WalkSpec {
+        name: "FUN_00912680",
+        walk_data_va: 0x00912680,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_89,
+    },
+    WalkSpec {
+        name: "FUN_00912fe0",
+        walk_data_va: 0x00912fe0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_90,
+    },
+    WalkSpec {
+        name: "FUN_009195d0",
+        walk_data_va: 0x009195d0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_91,
+    },
+    WalkSpec {
+        name: "FUN_00936bb0",
+        walk_data_va: 0x00936bb0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_92,
+    },
+    WalkSpec {
+        name: "FUN_00936c70",
+        walk_data_va: 0x00936c70,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_93,
+    },
+    WalkSpec {
+        name: "FUN_00936cb0",
+        walk_data_va: 0x00936cb0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_94,
+    },
+    WalkSpec {
+        name: "FUN_00936d00",
+        walk_data_va: 0x00936d00,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_95,
+    },
+    WalkSpec {
+        name: "FUN_00936d40",
+        walk_data_va: 0x00936d40,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_96,
+    },
+    WalkSpec {
+        name: "FUN_00936de0",
+        walk_data_va: 0x00936de0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_97,
+    },
+    WalkSpec {
+        name: "FUN_00936e50",
+        walk_data_va: 0x00936e50,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_98,
+    },
+    WalkSpec {
+        name: "FUN_00936e80",
+        walk_data_va: 0x00936e80,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_99,
+    },
+    WalkSpec {
+        name: "FUN_00936ef0",
+        walk_data_va: 0x00936ef0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_100,
+    },
+    WalkSpec {
+        name: "FUN_00936f70",
+        walk_data_va: 0x00936f70,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_101,
+    },
+    WalkSpec {
+        name: "FUN_00937600",
+        walk_data_va: 0x00937600,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_102,
+    },
+    WalkSpec {
+        name: "FUN_00937710",
+        walk_data_va: 0x00937710,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_103,
+    },
+    WalkSpec {
+        name: "FUN_00937790",
+        walk_data_va: 0x00937790,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_104,
+    },
+    WalkSpec {
+        name: "FUN_00959110",
+        walk_data_va: 0x00959110,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_105,
+    },
+    WalkSpec {
+        name: "FUN_00967930",
+        walk_data_va: 0x00967930,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_106,
+    },
+    WalkSpec {
+        name: "FUN_00976ed0",
+        walk_data_va: 0x00976ed0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_107,
+    },
+    WalkSpec {
+        name: "FUN_00999c10",
+        walk_data_va: 0x00999c10,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_108,
+    },
+    WalkSpec {
+        name: "FUN_009e0250",
+        walk_data_va: 0x009e0250,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_109,
+    },
+    WalkSpec {
+        name: "FUN_009e8530",
+        walk_data_va: 0x009e8530,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_110,
+    },
+    WalkSpec {
+        name: "FUN_00a04640",
+        walk_data_va: 0x00a04640,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_111,
+    },
+    WalkSpec {
+        name: "FUN_00a248c0",
+        walk_data_va: 0x00a248c0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_112,
+    },
+    WalkSpec {
+        name: "FUN_00a24ad0",
+        walk_data_va: 0x00a24ad0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_113,
+    },
+    WalkSpec {
+        name: "Farms",
+        walk_data_va: 0x008d9280,
+        sizeof: 480,
+        walked_bytes: 0,
+        ops: OPS_114,
+    },
+    WalkSpec {
+        name: "FollowOrder",
+        walk_data_va: 0x00486b50,
+        sizeof: 44,
+        walked_bytes: 20,
+        ops: OPS_115,
+    },
+    WalkSpec {
+        name: "Form",
+        walk_data_va: 0x0072df10,
+        sizeof: 3736,
+        walked_bytes: 3688,
+        ops: OPS_116,
+    },
+    WalkSpec {
+        name: "FormOrder",
+        walk_data_va: 0x00485cc0,
+        sizeof: 100,
+        walked_bytes: 84,
+        ops: OPS_117,
+    },
+    WalkSpec {
+        name: "Forms",
+        walk_data_va: 0x0072e970,
+        sizeof: 24,
+        walked_bytes: 0,
+        ops: OPS_118,
+    },
+    WalkSpec {
+        name: "Fort",
+        walk_data_va: 0x0073ebc0,
+        sizeof: 16,
+        walked_bytes: 8,
+        ops: OPS_119,
+    },
+    WalkSpec {
+        name: "Forts",
+        walk_data_va: 0x0073ef30,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_120,
+    },
+    WalkSpec {
+        name: "Game",
+        walk_data_va: 0x00589600,
+        sizeof: 3184,
+        walked_bytes: 0,
+        ops: OPS_121,
+    },
+    WalkSpec {
+        name: "GameDaemon",
+        walk_data_va: 0x007326e0,
+        sizeof: 44,
+        walked_bytes: 0,
+        ops: OPS_122,
+    },
+    WalkSpec {
+        name: "GameInfo",
+        walk_data_va: 0x005d6570,
+        sizeof: 1348,
+        walked_bytes: 83,
+        ops: OPS_123,
+    },
+    WalkSpec {
+        name: "GarrisonOrder",
+        walk_data_va: 0x00484690,
+        sizeof: 36,
+        walked_bytes: 14,
+        ops: OPS_124,
+    },
+    WalkSpec {
+        name: "GatherOrder",
+        walk_data_va: 0x00486e60,
+        sizeof: 52,
+        walked_bytes: 30,
+        ops: OPS_125,
+    },
+    WalkSpec {
+        name: "GatherPoint",
+        walk_data_va: 0x00470f30,
+        sizeof: 16,
+        walked_bytes: 9,
+        ops: OPS_126,
+    },
+    WalkSpec {
+        name: "Good",
+        walk_data_va: 0x0066e5d0,
+        sizeof: 48,
+        walked_bytes: 1,
+        ops: OPS_127,
+    },
+    WalkSpec {
+        name: "GoodType",
+        walk_data_va: 0x0066fab0,
+        sizeof: 776,
+        walked_bytes: 68,
+        ops: OPS_128,
+    },
+    WalkSpec {
+        name: "GraphicEvent",
+        walk_data_va: 0x00919780,
+        sizeof: 36,
+        walked_bytes: 23,
+        ops: OPS_129,
+    },
+    WalkSpec {
+        name: "GraphicEvents",
+        walk_data_va: 0x008e4d70,
+        sizeof: 220,
+        walked_bytes: 0,
+        ops: OPS_130,
+    },
+    WalkSpec {
+        name: "Group",
+        walk_data_va: 0x00708400,
+        sizeof: 2516,
+        walked_bytes: 72,
+        ops: OPS_131,
+    },
+    WalkSpec {
+        name: "GroupAttackOrder",
+        walk_data_va: 0x004850b0,
+        sizeof: 84,
+        walked_bytes: 55,
+        ops: OPS_132,
+    },
+    WalkSpec {
+        name: "GroupMoveOrder",
+        walk_data_va: 0x004855c0,
+        sizeof: 120,
+        walked_bytes: 100,
+        ops: OPS_133,
+    },
+    WalkSpec {
+        name: "GroupOrder",
+        walk_data_va: 0x00485580,
+        sizeof: 36,
+        walked_bytes: 20,
+        ops: OPS_134,
+    },
+    WalkSpec {
+        name: "GroupPatrolOrder",
+        walk_data_va: 0x00482c70,
+        sizeof: 100,
+        walked_bytes: 24,
+        ops: OPS_135,
+    },
+    WalkSpec {
+        name: "Groups",
+        walk_data_va: 0x00713e30,
+        sizeof: 76,
+        walked_bytes: 0,
+        ops: OPS_136,
+    },
+    WalkSpec {
+        name: "GuardOrder",
+        walk_data_va: 0x00486550,
+        sizeof: 56,
+        walked_bytes: 34,
+        ops: OPS_137,
+    },
+    WalkSpec {
+        name: "GuyData",
+        walk_data_va: 0x005e0210,
+        sizeof: 188,
+        walked_bytes: 155,
+        ops: OPS_138,
+    },
+    WalkSpec {
+        name: "Herd",
+        walk_data_va: 0x00741a40,
+        sizeof: 36,
+        walked_bytes: 27,
+        ops: OPS_139,
+    },
+    WalkSpec {
+        name: "Herds",
+        walk_data_va: 0x00741d50,
+        sizeof: 36,
+        walked_bytes: 0,
+        ops: OPS_140,
+    },
+    WalkSpec {
+        name: "Hero",
+        walk_data_va: 0x00739e20,
+        sizeof: 48,
+        walked_bytes: 6,
+        ops: OPS_141,
+    },
+    WalkSpec {
+        name: "Heroes",
+        walk_data_va: 0x0073a510,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_142,
+    },
+    WalkSpec {
+        name: "HotKeyGroup",
+        walk_data_va: 0x00714840,
+        sizeof: 2556,
+        walked_bytes: 12,
+        ops: OPS_143,
+    },
+    WalkSpec {
+        name: "HotKeyGroups",
+        walk_data_va: 0x007150b0,
+        sizeof: 36,
+        walked_bytes: 0,
+        ops: OPS_144,
+    },
+    WalkSpec {
+        name: "Item",
+        walk_data_va: 0x00677150,
+        sizeof: 44,
+        walked_bytes: 1,
+        ops: OPS_145,
+    },
+    WalkSpec {
+        name: "LLNode<MessageWinEntry *, int>",
+        walk_data_va: 0x00498210,
+        sizeof: 0,
+        walked_bytes: 4,
+        ops: OPS_146,
+    },
+    WalkSpec {
+        name: "Land",
+        walk_data_va: 0x0067e680,
+        sizeof: 312,
+        walked_bytes: 264,
+        ops: OPS_147,
+    },
+    WalkSpec {
+        name: "Lands",
+        walk_data_va: 0x0067e700,
+        sizeof: 32,
+        walked_bytes: 0,
+        ops: OPS_148,
+    },
+    WalkSpec {
+        name: "LeaderData",
+        walk_data_va: 0x006d6750,
+        sizeof: 28388,
+        walked_bytes: 27182,
+        ops: OPS_149,
+    },
+    WalkSpec {
+        name: "LeaderDataEncrypt",
+        walk_data_va: 0x006d9900,
+        sizeof: 248,
+        walked_bytes: 0,
+        ops: OPS_150,
+    },
+    WalkSpec {
+        name: "LeaderOptionData",
+        walk_data_va: 0x006f18b0,
+        sizeof: 32,
+        walked_bytes: 24,
+        ops: OPS_151,
+    },
+    WalkSpec {
+        name: "LeaderOptions",
+        walk_data_va: 0x006f19a0,
+        sizeof: 320,
+        walked_bytes: 0,
+        ops: OPS_152,
+    },
+    WalkSpec {
+        name: "Leaders",
+        walk_data_va: 0x006e38e0,
+        sizeof: 283980,
+        walked_bytes: 0,
+        ops: OPS_153,
+    },
+    WalkSpec {
+        name: "LinkList<BreakInfo, unsigned short>",
+        walk_data_va: 0x004cd230,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_154,
+    },
+    WalkSpec {
+        name: "LinkList<ScenarioMessage, int>",
+        walk_data_va: 0x004c7270,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_155,
+    },
+    WalkSpec {
+        name: "LinkList<String, int>",
+        walk_data_va: 0x004c8070,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_156,
+    },
+    WalkSpec {
+        name: "LinkList<int, short>",
+        walk_data_va: 0x00491a90,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_157,
+    },
+    WalkSpec {
+        name: "LinkList<int, unsigned char>",
+        walk_data_va: 0x004c75e0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_158,
+    },
+    WalkSpec {
+        name: "MakeObject",
+        walk_data_va: 0x006d8ff0,
+        sizeof: 40,
+        walked_bytes: 40,
+        ops: OPS_159,
+    },
+    WalkSpec {
+        name: "MessageWin",
+        walk_data_va: 0x007e9d40,
+        sizeof: 1556,
+        walked_bytes: 0,
+        ops: OPS_160,
+    },
+    WalkSpec {
+        name: "MessageWinEntry",
+        walk_data_va: 0x007e9130,
+        sizeof: 132,
+        walked_bytes: 47,
+        ops: OPS_161,
+    },
+    WalkSpec {
+        name: "Mountains",
+        walk_data_va: 0x0089d320,
+        sizeof: 604,
+        walked_bytes: 0,
+        ops: OPS_162,
+    },
+    WalkSpec {
+        name: "MultiPtrArray<Object>",
+        walk_data_va: 0x0045d550,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_163,
+    },
+    WalkSpec {
+        name: "NamedObjectArray<ScenarioGroup>",
+        walk_data_va: 0x004c7db0,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_164,
+    },
+    WalkSpec {
+        name: "NamedObjectArray<String>",
+        walk_data_va: 0x00491ca0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_165,
+    },
+    WalkSpec {
+        name: "NamedSimpleArray<int>",
+        walk_data_va: 0x00490960,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_166,
+    },
+    WalkSpec {
+        name: "Object",
+        walk_data_va: 0x00647830,
+        sizeof: 80,
+        walked_bytes: 34,
+        ops: OPS_167,
+    },
+    WalkSpec {
+        name: "ObjectArray<AchieveEvent>",
+        walk_data_va: 0x00495130,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_168,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestBonusCard>",
+        walk_data_va: 0x00492d80,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_169,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestColony>",
+        walk_data_va: 0x004914c0,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_170,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestLeader>",
+        walk_data_va: 0x00493050,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_171,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestLink>",
+        walk_data_va: 0x00493840,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_172,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestNode>",
+        walk_data_va: 0x00493a40,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_173,
+    },
+    WalkSpec {
+        name: "ObjectArray<ConquestStyle>",
+        walk_data_va: 0x004923b0,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_174,
+    },
+    WalkSpec {
+        name: "ObjectArray<DeathObj>",
+        walk_data_va: 0x00474420,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_175,
+    },
+    WalkSpec {
+        name: "ObjectArray<Form>",
+        walk_data_va: 0x00481190,
+        sizeof: 24,
+        walked_bytes: 0,
+        ops: OPS_176,
+    },
+    WalkSpec {
+        name: "ObjectArray<Land>",
+        walk_data_va: 0x004786f0,
+        sizeof: 24,
+        walked_bytes: 0,
+        ops: OPS_177,
+    },
+    WalkSpec {
+        name: "ObjectArray<ObjectArray<ConquestStyle>>",
+        walk_data_va: 0x004916f0,
+        sizeof: 0,
+        walked_bytes: 2,
+        ops: OPS_178,
+    },
+    WalkSpec {
+        name: "ObjectArray<Region>",
+        walk_data_va: 0x00478ed0,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_179,
+    },
+    WalkSpec {
+        name: "ObjectArray<ScenarioComponent>",
+        walk_data_va: 0x004c7060,
+        sizeof: 24,
+        walked_bytes: 0,
+        ops: OPS_180,
+    },
+    WalkSpec {
+        name: "ObjectArray<ScenarioRevealPoint>",
+        walk_data_va: 0x004c78b0,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_181,
+    },
+    WalkSpec {
+        name: "ObjectArray<SimpleArray<int>>",
+        walk_data_va: 0x0049b770,
+        sizeof: 0,
+        walked_bytes: 2,
+        ops: OPS_182,
+    },
+    WalkSpec {
+        name: "ObjectArray<String>",
+        walk_data_va: 0x00490fb0,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_183,
+    },
+    WalkSpec {
+        name: "ObjectArray<Tribe>",
+        walk_data_va: 0x0047e230,
+        sizeof: 24,
+        walked_bytes: 2,
+        ops: OPS_184,
+    },
+    WalkSpec {
+        name: "ObjectType",
+        walk_data_va: 0x0065fba0,
+        sizeof: 696,
+        walked_bytes: 242,
+        ops: OPS_185,
+    },
+    WalkSpec {
+        name: "Objects",
+        walk_data_va: 0x006541e0,
+        sizeof: 824,
+        walked_bytes: 142,
+        ops: OPS_186,
+    },
+    WalkSpec {
+        name: "OilWell",
+        walk_data_va: 0x0073f650,
+        sizeof: 16,
+        walked_bytes: 8,
+        ops: OPS_187,
+    },
+    WalkSpec {
+        name: "OilWells",
+        walk_data_va: 0x0073f890,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_188,
+    },
+    WalkSpec {
+        name: "Option",
+        walk_data_va: 0x0072be20,
+        sizeof: 20,
+        walked_bytes: 18,
+        ops: OPS_189,
+    },
+    WalkSpec {
+        name: "OptionData",
+        walk_data_va: 0x0072bf70,
+        sizeof: 68,
+        walked_bytes: 0,
+        ops: OPS_190,
+    },
+    WalkSpec {
+        name: "OptionInfo",
+        walk_data_va: 0x0072c1e0,
+        sizeof: 22508,
+        walked_bytes: 0,
+        ops: OPS_191,
+    },
+    WalkSpec {
+        name: "Options",
+        walk_data_va: 0x0072c240,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_192,
+    },
+    WalkSpec {
+        name: "OrderList",
+        walk_data_va: 0x00730270,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_193,
+    },
+    WalkSpec {
+        name: "PackageFifo",
+        walk_data_va: 0x00952500,
+        sizeof: 10736,
+        walked_bytes: 34,
+        ops: OPS_194,
+    },
+    WalkSpec {
+        name: "PathFinder",
+        walk_data_va: 0x00689cb0,
+        sizeof: 204,
+        walked_bytes: 0,
+        ops: OPS_195,
+    },
+    WalkSpec {
+        name: "PatrolOrder",
+        walk_data_va: 0x00483e80,
+        sizeof: 76,
+        walked_bytes: 4,
+        ops: OPS_196,
+    },
+    WalkSpec {
+        name: "Personality",
+        walk_data_va: 0x006d8700,
+        sizeof: 96,
+        walked_bytes: 96,
+        ops: OPS_197,
+    },
+    WalkSpec {
+        name: "Player",
+        walk_data_va: 0x006ee2d0,
+        sizeof: 140,
+        walked_bytes: 57,
+        ops: OPS_198,
+    },
+    WalkSpec {
+        name: "PtrArray<Ammo>",
+        walk_data_va: 0x00473fe0,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_199,
+    },
+    WalkSpec {
+        name: "PtrArray<Cliff>",
+        walk_data_va: 0x004a7100,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_200,
+    },
+    WalkSpec {
+        name: "PtrArray<CliffMiningData>",
+        walk_data_va: 0x004a7440,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_201,
+    },
+    WalkSpec {
+        name: "PtrArray<Good>",
+        walk_data_va: 0x0045cce0,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_202,
+    },
+    WalkSpec {
+        name: "PtrArray<GraphicEvent>",
+        walk_data_va: 0x004aa490,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_203,
+    },
+    WalkSpec {
+        name: "PtrArray<Guy>",
+        walk_data_va: 0x0046df30,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_204,
+    },
+    WalkSpec {
+        name: "PtrArray<Herd>",
+        walk_data_va: 0x0048d610,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_205,
+    },
+    WalkSpec {
+        name: "PtrArray<Item>",
+        walk_data_va: 0x0045d020,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_206,
+    },
+    WalkSpec {
+        name: "PtrArray<River>",
+        walk_data_va: 0x004a2f80,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_207,
+    },
+    WalkSpec {
+        name: "PtrArray<Script>",
+        walk_data_va: 0x004cccd0,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_208,
+    },
+    WalkSpec {
+        name: "PtrArray<StringListEntry>",
+        walk_data_va: 0x004940d0,
+        sizeof: 28,
+        walked_bytes: 6,
+        ops: OPS_209,
+    },
+    WalkSpec {
+        name: "PtrLinkListAbstract<GatherPoint, unsigned char>",
+        walk_data_va: 0x004708a0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_210,
+    },
+    WalkSpec {
+        name: "PtrLinkListAbstract<MessageWinEntry, int>",
+        walk_data_va: 0x00497cf0,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_211,
+    },
+    WalkSpec {
+        name: "PtrLinkListAbstract<ScenarioObjective, int>",
+        walk_data_va: 0x004c8420,
+        sizeof: 0,
+        walked_bytes: 0,
+        ops: OPS_212,
+    },
+    WalkSpec {
+        name: "Region",
+        walk_data_va: 0x00680e20,
+        sizeof: 136,
+        walked_bytes: 68,
+        ops: OPS_213,
+    },
+    WalkSpec {
+        name: "Regions",
+        walk_data_va: 0x00681240,
+        sizeof: 60,
+        walked_bytes: 0,
+        ops: OPS_214,
+    },
+    WalkSpec {
+        name: "River",
+        walk_data_va: 0x00883950,
+        sizeof: 696,
+        walked_bytes: 0,
+        ops: OPS_215,
+    },
+    WalkSpec {
+        name: "ScenarioComponent",
+        walk_data_va: 0x00997600,
+        sizeof: 20,
+        walked_bytes: 16,
+        ops: OPS_216,
+    },
+    WalkSpec {
+        name: "ScenarioGroup",
+        walk_data_va: 0x00997350,
+        sizeof: 36,
+        walked_bytes: 8,
+        ops: OPS_217,
+    },
+    WalkSpec {
+        name: "ScenarioMessage",
+        walk_data_va: 0x009978e0,
+        sizeof: 36,
+        walked_bytes: 10,
+        ops: OPS_218,
+    },
+    WalkSpec {
+        name: "ScenarioObjective",
+        walk_data_va: 0x00999640,
+        sizeof: 84,
+        walked_bytes: 18,
+        ops: OPS_219,
+    },
+    WalkSpec {
+        name: "ScenarioRevealPoint",
+        walk_data_va: 0x009977e0,
+        sizeof: 16,
+        walked_bytes: 12,
+        ops: OPS_220,
+    },
+    WalkSpec {
+        name: "Scene",
+        walk_data_va: 0x008c0f70,
+        sizeof: 824,
+        walked_bytes: 0,
+        ops: OPS_221,
+    },
+    WalkSpec {
+        name: "Script",
+        walk_data_va: 0x009c5f30,
+        sizeof: 204,
+        walked_bytes: 20,
+        ops: OPS_222,
+    },
+    WalkSpec {
+        name: "ScriptArray",
+        walk_data_va: 0x009d5bc0,
+        sizeof: 48,
+        walked_bytes: 0,
+        ops: OPS_223,
+    },
+    WalkSpec {
+        name: "ScriptFile",
+        walk_data_va: 0x009c63b0,
+        sizeof: 224,
+        walked_bytes: 9,
+        ops: OPS_224,
+    },
+    WalkSpec {
+        name: "ScriptFloat",
+        walk_data_va: 0x009d7000,
+        sizeof: 20,
+        walked_bytes: 4,
+        ops: OPS_225,
+    },
+    WalkSpec {
+        name: "ScriptInt",
+        walk_data_va: 0x009d7720,
+        sizeof: 20,
+        walked_bytes: 4,
+        ops: OPS_226,
+    },
+    WalkSpec {
+        name: "ScriptObject",
+        walk_data_va: 0x009d6500,
+        sizeof: 44,
+        walked_bytes: 0,
+        ops: OPS_227,
+    },
+    WalkSpec {
+        name: "ScriptString",
+        walk_data_va: 0x009d6ae0,
+        sizeof: 36,
+        walked_bytes: 0,
+        ops: OPS_228,
+    },
+    WalkSpec {
+        name: "SelectGroup",
+        walk_data_va: 0x007171b0,
+        sizeof: 2544,
+        walked_bytes: 24,
+        ops: OPS_229,
+    },
+    WalkSpec {
+        name: "SelectGroups",
+        walk_data_va: 0x00717230,
+        sizeof: 60,
+        walked_bytes: 0,
+        ops: OPS_230,
+    },
+    WalkSpec {
+        name: "SimpleArray<Coord>",
+        walk_data_va: 0x00483cc0,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_231,
+    },
+    WalkSpec {
+        name: "SimpleArray<RectTemplate<short>>",
+        walk_data_va: 0x0049a500,
+        sizeof: 0,
+        walked_bytes: 2,
+        ops: OPS_232,
+    },
+    WalkSpec {
+        name: "SimpleArray<WCoord>",
+        walk_data_va: 0x0047c660,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_233,
+    },
+    WalkSpec {
+        name: "SimpleArray<float>",
+        walk_data_va: 0x00490b10,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_234,
+    },
+    WalkSpec {
+        name: "SimpleArray<int>",
+        walk_data_va: 0x00473120,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_235,
+    },
+    WalkSpec {
+        name: "SimpleArray<unsigned char>",
+        walk_data_va: 0x0049a090,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_236,
+    },
+    WalkSpec {
+        name: "SimpleArray<unsigned long>",
+        walk_data_va: 0x004a7f80,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_237,
+    },
+    WalkSpec {
+        name: "SimpleArray<unsigned short>",
+        walk_data_va: 0x00476610,
+        sizeof: 28,
+        walked_bytes: 2,
+        ops: OPS_238,
+    },
+    WalkSpec {
+        name: "Site",
+        walk_data_va: 0x006d9300,
+        sizeof: 24,
+        walked_bytes: 24,
+        ops: OPS_239,
+    },
+    WalkSpec {
+        name: "Special",
+        walk_data_va: 0x00740030,
+        sizeof: 48,
+        walked_bytes: 6,
+        ops: OPS_240,
+    },
+    WalkSpec {
+        name: "SpecialAnimOrder",
+        walk_data_va: 0x004849a0,
+        sizeof: 44,
+        walked_bytes: 37,
+        ops: OPS_241,
+    },
+    WalkSpec {
+        name: "Specials",
+        walk_data_va: 0x007403b0,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_242,
+    },
+    WalkSpec {
+        name: "SpellType",
+        walk_data_va: 0x00675400,
+        sizeof: 512,
+        walked_bytes: 138,
+        ops: OPS_243,
+    },
+    WalkSpec {
+        name: "SplineData",
+        walk_data_va: 0x009132b0,
+        sizeof: 268,
+        walked_bytes: 36,
+        ops: OPS_244,
+    },
+    WalkSpec {
+        name: "Stack<PathData>",
+        walk_data_va: 0x0046d8b0,
+        sizeof: 16,
+        walked_bytes: 9,
+        ops: OPS_245,
+    },
+    WalkSpec {
+        name: "StrafeOrder",
+        walk_data_va: 0x0047f310,
+        sizeof: 84,
+        walked_bytes: 55,
+        ops: OPS_246,
+    },
+    WalkSpec {
+        name: "String",
+        walk_data_va: 0x00a1b2d0,
+        sizeof: 20,
+        walked_bytes: 0,
+        ops: OPS_247,
+    },
+    WalkSpec {
+        name: "SubObject",
+        walk_data_va: 0x006621d0,
+        sizeof: 40,
+        walked_bytes: 16,
+        ops: OPS_248,
+    },
+    WalkSpec {
+        name: "Supplies",
+        walk_data_va: 0x0073ae90,
+        sizeof: 224,
+        walked_bytes: 0,
+        ops: OPS_249,
+    },
+    WalkSpec {
+        name: "Supply",
+        walk_data_va: 0x0073b540,
+        sizeof: 16,
+        walked_bytes: 6,
+        ops: OPS_250,
+    },
+    WalkSpec {
+        name: "TCoordData",
+        walk_data_va: 0x00681c50,
+        sizeof: 8,
+        walked_bytes: 8,
+        ops: OPS_251,
+    },
+    WalkSpec {
+        name: "TechType",
+        walk_data_va: 0x0066d5c0,
+        sizeof: 648,
+        walked_bytes: 117,
+        ops: OPS_252,
+    },
+    WalkSpec {
+        name: "Terrain",
+        walk_data_va: 0x00852b00,
+        sizeof: 27336,
+        walked_bytes: 0,
+        ops: OPS_253,
+    },
+    WalkSpec {
+        name: "TerrainList",
+        walk_data_va: 0x0084b9e0,
+        sizeof: 12,
+        walked_bytes: 0,
+        ops: OPS_254,
+    },
+    WalkSpec {
+        name: "ThinkOrder",
+        walk_data_va: 0x0047f2b0,
+        sizeof: 8,
+        walked_bytes: 1,
+        ops: OPS_255,
+    },
+    WalkSpec {
+        name: "TileSet",
+        walk_data_va: 0x0087b290,
+        sizeof: 40,
+        walked_bytes: 0,
+        ops: OPS_256,
+    },
+    WalkSpec {
+        name: "TradeOrder",
+        walk_data_va: 0x00483260,
+        sizeof: 52,
+        walked_bytes: 28,
+        ops: OPS_257,
+    },
+    WalkSpec {
+        name: "Tribe",
+        walk_data_va: 0x006f1270,
+        sizeof: 1520,
+        walked_bytes: 1432,
+        ops: OPS_258,
+    },
+    WalkSpec {
+        name: "Tribes",
+        walk_data_va: 0x006efb20,
+        sizeof: 28,
+        walked_bytes: 0,
+        ops: OPS_259,
+    },
+    WalkSpec {
+        name: "TurnControl",
+        walk_data_va: 0x00956c50,
+        sizeof: 376,
+        walked_bytes: 0,
+        ops: OPS_260,
+    },
+    WalkSpec {
+        name: "Type",
+        walk_data_va: 0x00663190,
+        sizeof: 460,
+        walked_bytes: 90,
+        ops: OPS_261,
+    },
+    WalkSpec {
+        name: "Types",
+        walk_data_va: 0x00669780,
+        sizeof: 100,
+        walked_bytes: 0,
+        ops: OPS_262,
+    },
+    WalkSpec {
+        name: "UnbuiltCities",
+        walk_data_va: 0x00460dc0,
+        sizeof: 224,
+        walked_bytes: 0,
+        ops: OPS_263,
+    },
+    WalkSpec {
+        name: "UnbuiltCity",
+        walk_data_va: 0x0073b880,
+        sizeof: 4,
+        walked_bytes: 3,
+        ops: OPS_264,
+    },
+    WalkSpec {
+        name: "UnbuiltFort",
+        walk_data_va: 0x0073bb20,
+        sizeof: 4,
+        walked_bytes: 3,
+        ops: OPS_265,
+    },
+    WalkSpec {
+        name: "UnbuiltForts",
+        walk_data_va: 0x0073bcc0,
+        sizeof: 224,
+        walked_bytes: 0,
+        ops: OPS_266,
+    },
+    WalkSpec {
+        name: "UnbuiltWonder",
+        walk_data_va: 0x0073c1b0,
+        sizeof: 4,
+        walked_bytes: 3,
+        ops: OPS_267,
+    },
+    WalkSpec {
+        name: "UnbuiltWonders",
+        walk_data_va: 0x0073c290,
+        sizeof: 224,
+        walked_bytes: 0,
+        ops: OPS_268,
+    },
+    WalkSpec {
+        name: "Unit",
+        walk_data_va: 0x0060cf40,
+        sizeof: 344,
+        walked_bytes: 111,
+        ops: OPS_269,
+    },
+    WalkSpec {
+        name: "UnitType",
+        walk_data_va: 0x0061d190,
+        sizeof: 1496,
+        walked_bytes: 792,
+        ops: OPS_270,
+    },
+    WalkSpec {
+        name: "WCoordData",
+        walk_data_va: 0x00681b20,
+        sizeof: 8,
+        walked_bytes: 8,
+        ops: OPS_271,
+    },
+    WalkSpec {
+        name: "WalkDataConquestGame",
+        walk_data_va: 0x007a7660,
+        sizeof: 4,
+        walked_bytes: 0,
+        ops: OPS_272,
+    },
+    WalkSpec {
+        name: "WalkDataGame",
+        walk_data_va: 0x005a2360,
+        sizeof: 4,
+        walked_bytes: 0,
+        ops: OPS_273,
+    },
+    WalkSpec {
+        name: "WallData",
+        walk_data_va: 0x00642510,
+        sizeof: 112,
+        walked_bytes: 30,
+        ops: OPS_274,
+    },
+    WalkSpec {
+        name: "Wonder",
+        walk_data_va: 0x0073c780,
+        sizeof: 24,
+        walked_bytes: 14,
+        ops: OPS_275,
+    },
+    WalkSpec {
+        name: "Wonders",
+        walk_data_va: 0x0073ca40,
+        sizeof: 232,
+        walked_bytes: 0,
+        ops: OPS_276,
+    },
+    WalkSpec {
+        name: "World",
+        walk_data_va: 0x006b5cf0,
+        sizeof: 372,
+        walked_bytes: 0,
+        ops: OPS_277,
+    },
 ];
 
 /// Class index by name, for the channel walkers. Linear search over 278

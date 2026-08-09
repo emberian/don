@@ -251,9 +251,9 @@ mod neon {
     unsafe fn quad(p: *mut i32, v: *const i32, vspan: int32x4_t, vzero: int32x4_t) {
         // SAFETY: caller guarantees four readable elements at each pointer.
         let x = vaddq_s32(unsafe { vld1q_s32(p) }, unsafe { vld1q_s32(v) }); // wrapping
-        // Exactly the scalar branches: the two conditions are mutually exclusive for
-        // span > 0, so adding one masked span and subtracting the other is the same as
-        // the if/else-if chain.
+                                                                             // Exactly the scalar branches: the two conditions are mutually exclusive for
+                                                                             // span > 0, so adding one masked span and subtracting the other is the same as
+                                                                             // the if/else-if chain.
         let lt = vreinterpretq_s32_u32(vcltq_s32(x, vzero)); // all-ones where x < 0
         let ge = vreinterpretq_s32_u32(vcgeq_s32(x, vspan)); // all-ones where x >= span
         let x = vaddq_s32(x, vandq_s32(vspan, lt));
@@ -405,7 +405,10 @@ mod tests {
     struct Lcg(u64);
     impl Lcg {
         fn next_u32(&mut self) -> u32 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (self.0 >> 32) as u32
         }
     }
@@ -416,7 +419,9 @@ mod tests {
         let mut rng = Lcg(0xF00D_BEEF);
         // Every length from 0..40 covers all tail shapes for 4- and 8-wide bodies.
         for len in 0..40usize {
-            let pos: Vec<i32> = (0..len).map(|_| (rng.next_u32() % span as u32) as i32).collect();
+            let pos: Vec<i32> = (0..len)
+                .map(|_| (rng.next_u32() % span as u32) as i32)
+                .collect();
             let vel: Vec<i32> = (0..len).map(|_| (rng.next_u32() as i8) as i32).collect();
             let mut a = pos.clone();
             let mut b = pos.clone();
@@ -512,7 +517,18 @@ mod tests {
 
     #[test]
     fn tick_down_agrees_on_extremes() {
-        let c: Vec<i16> = vec![i16::MIN, i16::MIN + 1, -2, -1, 0, 1, 2, i16::MAX - 1, i16::MAX, 0];
+        let c: Vec<i16> = vec![
+            i16::MIN,
+            i16::MIN + 1,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            i16::MAX - 1,
+            i16::MAX,
+            0,
+        ];
         let mut a = c.clone();
         let mut b = c.clone();
         let mut d = c.clone();

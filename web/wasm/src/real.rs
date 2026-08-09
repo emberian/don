@@ -43,8 +43,10 @@ use don_sim::{damage, get_armor, get_attack, DamageInput, DamagePredicates, Unre
 /// Subtiles per tile. `rules.xml` states 192 as the largest speed denominator, and
 /// `don_sim` uses the same granularity.
 pub const SUBTILE: i32 = 192;
-/// Map extent in tiles. A provisioning choice, not a derived map size.
-pub const MAP_TILES: i32 = 256;
+/// Map extent in tiles. A provisioning choice, not a derived map size: 128 tiles is about
+/// the size of a small skirmish map, and it is what makes a battle fill a world's cell in
+/// the cluster mosaic instead of sitting as a dot in the middle of an empty square.
+pub const MAP_TILES: i32 = 128;
 /// Map extent in subtiles.
 pub const MAP_SPAN: i32 = MAP_TILES * SUBTILE;
 /// Owner slots the frame scheduler rotates through — `Objects::process_all` uses
@@ -389,8 +391,15 @@ impl RealWorld {
         // with comparable technology and the fight lasts long enough to watch.
         let band = 32.min(roster.len());
         let lo = self.rand_below((roster.len() - band + 1) as u32) as usize;
-        let radius = MAP_SPAN / 3;
+        // Armies start about a third of the map apart. That is a staging decision, not a
+        // map fact: at the real `MOVES` values (a Citizen is 25 subtiles per frame, about
+        // 2 tiles a second at the 67 ms tick) starting them at opposite corners is minutes
+        // of walking before anything happens, which is not a spectator.
+        let radius = MAP_SPAN / 6;
         let centre = MAP_SPAN / 2;
+        // Spread the army over an area that grows with its size, so 2,048 units are not
+        // stacked in the same twelve tiles as 32.
+        let half = (3 + isqrt(per_owner as i64) as i32 * 2 / 3) * SUBTILE;
         for o in 0..self.owners {
             // Armies start on a circle around the map centre, facing inward.
             let ang = (o as i64 * 0x1_0000_0000i64) / self.owners.max(1) as i64;
@@ -403,8 +412,8 @@ impl RealWorld {
             }
             for i in 0..per_owner {
                 let kind = kinds[(i % 3) as usize];
-                let jx = self.rand_below(12 * SUBTILE as u32) as i32 - 6 * SUBTILE;
-                let jy = self.rand_below(12 * SUBTILE as u32) as i32 - 6 * SUBTILE;
+                let jx = self.rand_below(2 * half as u32) as i32 - half;
+                let jy = self.rand_below(2 * half as u32) as i32 - half;
                 if self.spawn(gd, kind, o, ox + jx, oy + jy).is_none() {
                     break;
                 }

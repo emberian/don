@@ -46,8 +46,7 @@ use std::path::Path;
 pub const NRES: usize = 6;
 
 /// Resource slot names in shipped order (see the module docs).
-pub const RES_NAMES: [&str; NRES] =
-    ["Food", "Timber", "Wealth", "Knowledge", "Metal", "Oil"];
+pub const RES_NAMES: [&str; NRES] = ["Food", "Timber", "Wealth", "Knowledge", "Metal", "Oil"];
 
 /// One `<BUILDING>`, `<UNIT>` or `<TECH>` record, reduced to the fields the
 /// production AI and the economy need.
@@ -155,7 +154,8 @@ pub fn parse_cost(text: &str, factor: i32) -> [i32; NRES] {
             .to_ascii_lowercase();
         let n: i32 = digits.parse().unwrap_or(0);
         // `1f support` — the resource letter is the first token only.
-        if let Some(slot) = res_slot(&letters).or_else(|| res_slot(&letters[..1.min(letters.len())]))
+        if let Some(slot) =
+            res_slot(&letters).or_else(|| res_slot(&letters[..1.min(letters.len())]))
         {
             out[slot] = out[slot].saturating_add(n.saturating_mul(factor));
         }
@@ -218,7 +218,11 @@ fn attr_of(xml: &str, elem: &str, attr: &str) -> Option<String> {
 /// `<ELEM value="450 frames"/>` → 450.
 fn rule_int(xml: &str, elem: &str) -> Option<i32> {
     let v = attr_of(xml, elem, "value")?;
-    let digits: String = v.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = v
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     digits.parse().ok()
 }
 
@@ -227,7 +231,11 @@ fn rule_entries<const N: usize>(xml: &str, elem: &str) -> Option<[i32; N]> {
     let mut out = [0i32; N];
     for (i, slot) in out.iter_mut().enumerate() {
         let v = attr_of(xml, elem, &format!("entry{i}"))?;
-        let digits: String = v.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = v
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         *slot = digits.parse().ok()?;
     }
     Some(out)
@@ -390,7 +398,14 @@ impl Rules {
         if buildings.is_empty() || units.is_empty() || techs.is_empty() {
             return Err("rules files parsed but produced no records".into());
         }
-        Ok(Rules { buildings, units, techs, constants, small_town_template, tech_order })
+        Ok(Rules {
+            buildings,
+            units,
+            techs,
+            constants,
+            small_town_template,
+            tech_order,
+        })
     }
 
     /// Cost of any named type, whichever table it lives in.
@@ -445,10 +460,13 @@ mod tests {
     #[test]
     fn shipped_rules_load_and_agree_with_the_binary_derived_constants() {
         let Some(r) = rules() else { return }; // ron-data is gitignored
-        // `EconomyRules::shipped()` in don-sim carries these out of the binary's
-        // own `Constants`; the XML must agree or one of them is wrong.
+                                               // `EconomyRules::shipped()` in don-sim carries these out of the binary's
+                                               // own `Constants`; the XML must agree or one of them is wrong.
         assert_eq!(r.constants.gather_rate, 450);
-        assert_eq!(r.constants.commerce_cap, [70, 100, 150, 200, 260, 320, 400, 500]);
+        assert_eq!(
+            r.constants.commerce_cap,
+            [70, 100, 150, 200, 260, 320, 400, 500]
+        );
         assert_eq!(r.constants.city_gather, [10, 10, 0, 0, 0, 0]);
         assert_eq!(r.constants.starting_goods, [200, 200, 100, 100, 100, 100]);
         assert_eq!(r.constants.peasant_rate, 10);
@@ -462,9 +480,20 @@ mod tests {
     fn the_types_the_economic_opening_names_all_exist() {
         let Some(r) = rules() else { return };
         for b in [
-            "Small City", "Large City", "Farm", "Woodcutter's Camp", "Mine", "Dock",
-            "Library", "Market", "Temple", "Barracks", "Lumber Mill", "Granary",
-            "Smelter", "University",
+            "Small City",
+            "Large City",
+            "Farm",
+            "Woodcutter's Camp",
+            "Mine",
+            "Dock",
+            "Library",
+            "Market",
+            "Temple",
+            "Barracks",
+            "Lumber Mill",
+            "Granary",
+            "Smelter",
+            "University",
         ] {
             assert!(r.buildings.contains_key(b), "missing building {b}");
         }
@@ -474,7 +503,12 @@ mod tests {
         for u in ["Citizen", "Scholar", "Merchant", "Caravan", "Fishermen"] {
             assert!(r.units.contains_key(u), "missing unit {u}");
         }
-        for t in ["City State", "The Art of War", "Written Word", "Classical Age"] {
+        for t in [
+            "City State",
+            "The Art of War",
+            "Written Word",
+            "Classical Age",
+        ] {
             assert!(r.techs.contains_key(t), "missing tech {t}");
         }
         // The shipped bug this lane reported: `Citizens` is not a type.

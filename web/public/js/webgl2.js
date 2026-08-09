@@ -244,6 +244,19 @@ export class WebGl2Backend {
     gl.bindVertexArray(null);
   }
 
+  /** Pixels of the current drawing buffer. `readPixels` is valid until the compositor
+   *  swaps, so the caller redraws immediately before asking. Rows come back bottom-up. */
+  async readback(drawAgain) {
+    const gl = this.#gl, w = this.#canvas.width, h = this.#canvas.height;
+    if (drawAgain) drawAgain();
+    const flip = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, flip);
+    const out = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) out.set(flip.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+    for (let i = 3; i < out.length; i += 4) out[i] = 255;
+    return { width: w, height: h, rgba: out };
+  }
+
   resize(w, h) { this.#canvas.width = w; this.#canvas.height = h; }
 
   /** `gl.finish()` is the only barrier WebGL2 offers. It stalls the CPU until the GPU

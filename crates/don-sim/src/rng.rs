@@ -140,7 +140,11 @@ mod tests {
         let mut r = Random::new(5);
         let before = r.state();
         assert_eq!(r.get(3, 3), 3);
-        assert_eq!(r.state(), before, "lo == hi must return before touching the state");
+        assert_eq!(
+            r.state(),
+            before,
+            "lo == hi must return before touching the state"
+        );
     }
 
     #[test]

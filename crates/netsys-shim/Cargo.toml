@@ -1,0 +1,22 @@
+[package]
+name = "netsys-shim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Drop-in replacement CrossplayNetLib.dll: implements the 65-slot NetSys vtable over a transport we control."
+
+# Windows i686 only — it must be loadable by riseofnations.exe, which is PE32
+# i386. Excluded from the root workspace (see ../../Cargo.toml); `cargo test` at
+# the repo root never touches it. Build with cargo-xwin, see README.md.
+
+[lib]
+name = "CrossplayNetLib"
+crate-type = ["cdylib"]
+
+[dependencies]
+don-net = { path = "../don-net" }
+
+[profile.release]
+opt-level = 2
+codegen-units = 1
+panic = "abort"

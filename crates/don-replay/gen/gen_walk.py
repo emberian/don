@@ -58,10 +58,18 @@ def main() -> None:
             k = o["kind"]
             if k == "bytes":
                 b, e = o.get("begin"), o.get("end")
-                if isinstance(b, int) and isinstance(e, int) and e >= b >= 0:
+                if o.get("base"):
+                    # A range on a GLOBAL object, not on `this`. The offsets are
+                    # resolved but they are meaningless against an object image,
+                    # so emitting them as this-relative would silently hash the
+                    # wrong bytes. Keep the length; refuse the range.
+                    n = int(o["bytes"]) if o.get("bytes") else 0
+                    w(f'    WalkOp::Global {{ bytes: {n}, base: "{o["base"]}" }},')
+                elif isinstance(b, int) and isinstance(e, int) and e >= b >= 0:
                     w(f"    WalkOp::Bytes {{ begin: {b}, end: {e} }},")
-                elif o.get("bytes") and not isinstance(b, int):
-                    # a resolved length with an unresolved base (a stack temporary)
+                elif o.get("bytes"):
+                    # A resolved length with an unresolved base: a stack
+                    # temporary, or a pointer the linear scan could not track.
                     w(f"    WalkOp::Scratch {{ bytes: {int(o['bytes'])} }},")
                 else:
                     w("    WalkOp::Unresolved,")

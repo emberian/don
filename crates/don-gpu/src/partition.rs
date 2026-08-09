@@ -215,7 +215,9 @@ mod tests {
 
     #[test]
     fn buckets_are_dense_stable_and_complete() {
-        let keys: Vec<u8> = (0..1000u32).map(|i| ((i * 7 + i / 13) % 28) as u8).collect();
+        let keys: Vec<u8> = (0..1000u32)
+            .map(|i| ((i * 7 + i / 13) % 28) as u8)
+            .collect();
         let mut p = Partition::new(28);
         p.build_from_keys(&keys);
         assert_eq!(p.len(), keys.len());
@@ -257,7 +259,10 @@ mod tests {
         for k in 0..28 {
             let b = p.bucket(k);
             let worlds: Vec<u32> = b.iter().map(|&s| s / PER).collect();
-            assert!(worlds.windows(2).all(|w| w[0] <= w[1]), "bucket {k} not world-sorted");
+            assert!(
+                worlds.windows(2).all(|w| w[0] <= w[1]),
+                "bucket {k} not world-sorted"
+            );
         }
     }
 

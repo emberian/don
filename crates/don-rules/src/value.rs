@@ -85,7 +85,10 @@ impl RuleValue {
         }
         // fractional part
         let mut saw_dot = false;
-        if i < bytes.len() && bytes[i] == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit()
+        if i < bytes.len()
+            && bytes[i] == b'.'
+            && i + 1 < bytes.len()
+            && bytes[i + 1].is_ascii_digit()
         {
             saw_dot = true;
             i += 1;
@@ -95,7 +98,12 @@ impl RuleValue {
         }
         if i == digits_start {
             // no numeric at all
-            return RuleValue { number: None, percent: false, unit: None, raw: raw.to_string() };
+            return RuleValue {
+                number: None,
+                percent: false,
+                unit: None,
+                raw: raw.to_string(),
+            };
         }
         let head = &s[..i];
 
@@ -139,9 +147,18 @@ impl RuleValue {
         while u < bytes.len() && (bytes[u].is_ascii_alphabetic() || bytes[u] == b'_') {
             u += 1;
         }
-        let unit = if u > unit_start { Some(s[unit_start..u].to_ascii_lowercase()) } else { None };
+        let unit = if u > unit_start {
+            Some(s[unit_start..u].to_ascii_lowercase())
+        } else {
+            None
+        };
 
-        RuleValue { number, percent, unit, raw: raw.to_string() }
+        RuleValue {
+            number,
+            percent,
+            unit,
+            raw: raw.to_string(),
+        }
     }
 }
 
@@ -263,22 +280,46 @@ mod engine_tokenizer {
     /// enshrined one hand-computed expectation that the binary disagreed with.
     #[test]
     fn matches_retail_on_captured_vectors() {
-        assert_eq!(as_scaled("1/16 tile (calibration for unit spacing in formations)", 192), 12);
-        assert_eq!(as_scaled("1/192 tile (granularity for unit movement speeds)", 192), 1);
-        assert_eq!(as_scaled("1/2 tile (calibration for target sizes)", 192), 96);
+        assert_eq!(
+            as_scaled(
+                "1/16 tile (calibration for unit spacing in formations)",
+                192
+            ),
+            12
+        );
+        assert_eq!(
+            as_scaled("1/192 tile (granularity for unit movement speeds)", 192),
+            1
+        );
+        assert_eq!(
+            as_scaled("1/2 tile (calibration for target sizes)", 192),
+            96
+        );
         assert_eq!(as_scaled("3/2 tile", 192), 288);
         assert_eq!(as_scaled("8 tile", 192), 1536);
-        assert_eq!(as_scaled("1/1 rate (master control for unit turn speed)", 256), 256);
+        assert_eq!(
+            as_scaled("1/1 rate (master control for unit turn speed)", 256),
+            256
+        );
         assert_eq!(as_scaled("2/3 (light infantry in rocks)", 256), 170);
-        assert_eq!(as_scaled("2/1 (units take more damage in rivers)", 256), 512);
+        assert_eq!(
+            as_scaled("2/1 (units take more damage in rivers)", 256),
+            512
+        );
         assert_eq!(as_scaled("1/3", 256), 85);
         assert_eq!(as_scaled("1/100 -percent per # tiles", 256), 2);
         assert_eq!(as_scaled("10 resources", 256), 2560);
         assert_eq!(as_scaled("35 oil", 256), 8960);
         assert_eq!(as_scaled("12/10", 256), 307);
         assert_eq!(as_scaled("80/100", 256), 204);
-        assert_eq!(as_scaled("6/5 base rate (See BR before adjusting)", 100), 120);
-        assert_eq!(as_scaled("3/4 progression (See BR before adjusting)", 100), 75);
+        assert_eq!(
+            as_scaled("6/5 base rate (See BR before adjusting)", 100),
+            120
+        );
+        assert_eq!(
+            as_scaled("3/4 progression (See BR before adjusting)", 100),
+            75
+        );
     }
 
     /// Every recovered slot of the shipped `rules.xml`, parsed at its field's scale, must
@@ -295,7 +336,11 @@ mod engine_tokenizer {
         assert_eq!(SLOTS.len(), 832, "the recovered corpus changed size");
         let mut scaled = 0;
         for s in SLOTS.iter() {
-            let got = if s.scale == 1 { as_int(s.xml_value) } else { as_scaled(s.xml_value, s.scale) };
+            let got = if s.scale == 1 {
+                as_int(s.xml_value)
+            } else {
+                as_scaled(s.xml_value, s.scale)
+            };
             assert_eq!(
                 got, s.stored,
                 "{}[{}] at offset {}: parsed {:?} at scale {} as {}, engine stores {}",
@@ -368,7 +413,13 @@ mod tests {
     #[test]
     fn rational_with_unit() {
         let v = RuleValue::parse("1/16 tile (calibration for unit spacing in formations)");
-        assert_eq!(v.number, Some(Number::Rational { numer: 1, denom: 16 }));
+        assert_eq!(
+            v.number,
+            Some(Number::Rational {
+                numer: 1,
+                denom: 16
+            })
+        );
         assert_eq!(v.unit.as_deref(), Some("tile"));
         assert!(!v.percent);
     }
@@ -443,7 +494,10 @@ mod tests {
             }
         }
 
-        assert!(total > 600, "expected the full corpus, saw only {total} values");
+        assert!(
+            total > 600,
+            "expected the full corpus, saw only {total} values"
+        );
         assert!(
             no_number.is_empty(),
             "{} of {total} shipped values yielded no numeric; first few: {:?}",

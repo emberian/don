@@ -44,7 +44,10 @@ pub enum InternalPacket {
     /// The host's authoritative roster; the netlib rebuilds its player array
     /// from it. Note the array is always eight entries on the wire regardless
     /// of `num_players`.
-    PlayerList { num_players: u8, unique_ids: [i32; MAX_PLAYERS] },
+    PlayerList {
+        num_players: u8,
+        unique_ids: [i32; MAX_PLAYERS],
+    },
     /// `DropRequest { u8 type; i32 unique_id; }` — 5 B.
     DropRequest { unique_id: i32 },
     /// `CancelDropRequest` — 5 B, same shape.
@@ -53,7 +56,11 @@ pub enum InternalPacket {
     Pulse,
     /// `AddPlayerRequest { u8 type; char player_name[64]; i32 unique_id;
     /// bool is_hosting; }` — 70 B. The join announcement.
-    AddPlayer { player_name: String, unique_id: i32, is_hosting: bool },
+    AddPlayer {
+        player_name: String,
+        unique_id: i32,
+        is_hosting: bool,
+    },
     /// `DestroyPlayerRequest` — 5 B.
     DestroyPlayer { unique_id: i32 },
     /// `MigrateHostRequest { u8 type; i32 new_host; }` — 5 B.
@@ -121,7 +128,11 @@ impl InternalPacket {
         let idx = (id - IPT_BASE) as usize;
         let need = *IPT_SIZE.get(idx).ok_or(InternalError::UnknownType(id))? as usize;
         if buf.len() < need {
-            return Err(InternalError::Short { id, need, have: buf.len() });
+            return Err(InternalError::Short {
+                id,
+                need,
+                have: buf.len(),
+            });
         }
         Ok(match id {
             IPT_PLAYERLIST => {
@@ -129,21 +140,32 @@ impl InternalPacket {
                 for (i, slot) in ids.iter_mut().enumerate() {
                     *slot = i32le(buf, 2 + i * 4);
                 }
-                InternalPacket::PlayerList { num_players: buf[1], unique_ids: ids }
+                InternalPacket::PlayerList {
+                    num_players: buf[1],
+                    unique_ids: ids,
+                }
             }
-            IPT_DROPREQUEST => InternalPacket::DropRequest { unique_id: i32le(buf, 1) },
-            IPT_CANCELDROPREQUEST => {
-                InternalPacket::CancelDropRequest { unique_id: i32le(buf, 1) }
-            }
+            IPT_DROPREQUEST => InternalPacket::DropRequest {
+                unique_id: i32le(buf, 1),
+            },
+            IPT_CANCELDROPREQUEST => InternalPacket::CancelDropRequest {
+                unique_id: i32le(buf, 1),
+            },
             IPT_PULSEPACKET => InternalPacket::Pulse,
             IPT_ADDPLAYER => InternalPacket::AddPlayer {
                 player_name: crate::msg::read_narrow(buf, 1, ADD_PLAYER_NAME_LEN),
                 unique_id: i32le(buf, 65),
                 is_hosting: buf[69] != 0,
             },
-            IPT_DESTROYPLAYER => InternalPacket::DestroyPlayer { unique_id: i32le(buf, 1) },
-            IPT_MIGRATEHOST => InternalPacket::MigrateHost { new_host: i32le(buf, 1) },
-            IPT_DSYNCMSG => InternalPacket::Dsync { frame: i32le(buf, 1) },
+            IPT_DESTROYPLAYER => InternalPacket::DestroyPlayer {
+                unique_id: i32le(buf, 1),
+            },
+            IPT_MIGRATEHOST => InternalPacket::MigrateHost {
+                new_host: i32le(buf, 1),
+            },
+            IPT_DSYNCMSG => InternalPacket::Dsync {
+                frame: i32le(buf, 1),
+            },
             IPT_READYFLAG => InternalPacket::ReadyFlag { ready: buf[1] != 0 },
             other => return Err(InternalError::UnknownType(other)),
         })
@@ -152,7 +174,10 @@ impl InternalPacket {
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.push(self.id());
         match self {
-            InternalPacket::PlayerList { num_players, unique_ids } => {
+            InternalPacket::PlayerList {
+                num_players,
+                unique_ids,
+            } => {
                 out.push(*num_players);
                 for v in unique_ids {
                     out.extend_from_slice(&v.to_le_bytes());
@@ -164,7 +189,11 @@ impl InternalPacket {
                 out.extend_from_slice(&unique_id.to_le_bytes())
             }
             InternalPacket::Pulse => {}
-            InternalPacket::AddPlayer { player_name, unique_id, is_hosting } => {
+            InternalPacket::AddPlayer {
+                player_name,
+                unique_id,
+                is_hosting,
+            } => {
                 crate::msg::write_narrow(out, player_name, ADD_PLAYER_NAME_LEN);
                 out.extend_from_slice(&unique_id.to_le_bytes());
                 out.push(u8::from(*is_hosting));
@@ -190,7 +219,10 @@ pub struct GenericSessionData {
 impl GenericSessionData {
     pub const WIRE_LEN: usize = 2;
     pub fn decode(b: &[u8]) -> Option<Self> {
-        (b.len() >= 2).then(|| GenericSessionData { ty: b[0], validity_number: b[1] })
+        (b.len() >= 2).then(|| GenericSessionData {
+            ty: b[0],
+            validity_number: b[1],
+        })
     }
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.push(self.ty);
@@ -205,7 +237,10 @@ mod tests {
     #[test]
     fn every_internal_packet_encodes_to_its_pdb_sizeof() {
         let cases = [
-            InternalPacket::PlayerList { num_players: 3, unique_ids: [1, 2, 3, 0, 0, 0, 0, 0] },
+            InternalPacket::PlayerList {
+                num_players: 3,
+                unique_ids: [1, 2, 3, 0, 0, 0, 0, 0],
+            },
             InternalPacket::DropRequest { unique_id: -5 },
             InternalPacket::CancelDropRequest { unique_id: 7 },
             InternalPacket::Pulse,
@@ -231,8 +266,14 @@ mod tests {
     fn the_pdb_sizeofs_are_what_pack_one_implies() {
         // pack(1) is what makes these numbers what they are: an i32 at +1.
         assert_eq!(IPT_SIZE[(IPT_DROPREQUEST - IPT_BASE) as usize], 1 + 4);
-        assert_eq!(IPT_SIZE[(IPT_PLAYERLIST - IPT_BASE) as usize], 1 + 1 + 4 * 8);
-        assert_eq!(IPT_SIZE[(IPT_ADDPLAYER - IPT_BASE) as usize], 1 + 64 + 4 + 1);
+        assert_eq!(
+            IPT_SIZE[(IPT_PLAYERLIST - IPT_BASE) as usize],
+            1 + 1 + 4 * 8
+        );
+        assert_eq!(
+            IPT_SIZE[(IPT_ADDPLAYER - IPT_BASE) as usize],
+            1 + 64 + 4 + 1
+        );
         assert_eq!(IPT_SIZE[(IPT_READYFLAG - IPT_BASE) as usize], 1 + 1);
     }
 

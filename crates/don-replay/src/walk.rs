@@ -34,6 +34,11 @@ pub enum WalkOp {
     Virtual,
     /// A resolved byte count over a stack temporary rather than a struct field.
     Scratch { bytes: u32 },
+    /// A resolved range on a **global** object rather than on `this`
+    /// (`Game::walk_data` walks `*(void**)0x00c061ec + 1360 .. + 1764`, for
+    /// example). The offsets are real but they do not index an object image, so
+    /// executing them would hash the wrong bytes with full confidence.
+    Global { bytes: u32, base: &'static str },
     /// The extractor could not resolve the operands (no dataflow join).
     Unresolved,
 }
@@ -59,6 +64,8 @@ pub struct WalkOutcome {
     pub ops_sub_unknown: u32,
     /// Ops skipped because the byte range ran past the object image.
     pub ops_out_of_range: u32,
+    /// Ops whose range is on a global object rather than on `this`.
+    pub ops_global: u32,
 }
 
 impl WalkOutcome {
@@ -67,6 +74,7 @@ impl WalkOutcome {
             && self.ops_virtual == 0
             && self.ops_sub_unknown == 0
             && self.ops_out_of_range == 0
+            && self.ops_global == 0
     }
     pub fn merge(&mut self, o: WalkOutcome) {
         self.bytes_walked += o.bytes_walked;
@@ -75,6 +83,7 @@ impl WalkOutcome {
         self.ops_virtual += o.ops_virtual;
         self.ops_sub_unknown += o.ops_sub_unknown;
         self.ops_out_of_range += o.ops_out_of_range;
+        self.ops_global += o.ops_global;
     }
 }
 
@@ -122,6 +131,7 @@ pub fn walk_class<W: DataWalk + ?Sized>(
                 let _ = bytes;
                 out.ops_unresolved += 1;
             }
+            WalkOp::Global { .. } => out.ops_global += 1,
             WalkOp::Unresolved => out.ops_unresolved += 1,
         }
     }
@@ -131,20 +141,39 @@ pub fn walk_class<W: DataWalk + ?Sized>(
 /// Coverage of the generated table, for the report. Counting the ops we can and
 /// cannot execute is the difference between "the walker is done" and "the
 /// walker runs".
-pub fn table_coverage() -> (usize, usize, usize, usize, usize) {
-    let (mut bytes, mut tag, mut sub, mut unres, mut other) = (0, 0, 0, 0, 0);
+pub fn table_coverage() -> TableCoverage {
+    let mut c = TableCoverage::default();
     for s in SPECS.iter() {
         for op in s.ops {
             match op {
-                WalkOp::Bytes { .. } => bytes += 1,
-                WalkOp::Tag => tag += 1,
-                WalkOp::Sub { .. } => sub += 1,
-                WalkOp::Unresolved | WalkOp::Scratch { .. } => unres += 1,
-                WalkOp::Virtual | WalkOp::SubUnknown { .. } => other += 1,
+                WalkOp::Bytes { .. } => c.bytes += 1,
+                WalkOp::Tag => c.tag += 1,
+                WalkOp::Sub { .. } => c.sub += 1,
+                WalkOp::Scratch { .. } => c.length_only += 1,
+                WalkOp::Global { .. } => c.global += 1,
+                WalkOp::Unresolved => c.unresolved += 1,
+                WalkOp::Virtual => c.virtual_dispatch += 1,
+                WalkOp::SubUnknown { .. } => c.sub_unknown += 1,
             }
         }
     }
-    (bytes, tag, sub, unres, other)
+    c
+}
+
+/// How much of the derived traversal this crate can actually execute.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TableCoverage {
+    /// `this`-relative byte ranges: executable against an object image.
+    pub bytes: usize,
+    pub tag: usize,
+    pub sub: usize,
+    /// Resolved length, unresolved base (stack temporary or untracked pointer).
+    pub length_only: usize,
+    /// Resolved range on a global object rather than on `this`.
+    pub global: usize,
+    pub unresolved: usize,
+    pub virtual_dispatch: usize,
+    pub sub_unknown: usize,
 }
 
 #[cfg(test)]
@@ -157,7 +186,11 @@ mod tests {
     fn the_generated_table_is_the_schema() {
         assert_eq!(SPECS.len(), crate::walk_gen::NUM_CLASSES);
         let total: usize = SPECS.iter().map(|s| s.ops.len()).sum();
-        assert_eq!(total, crate::walk_gen::ORDERED_OPS, "every ordered op is present");
+        assert_eq!(
+            total,
+            crate::walk_gen::ORDERED_OPS,
+            "every ordered op is present"
+        );
     }
 
     #[test]
@@ -169,7 +202,10 @@ mod tests {
         let img = vec![0u8; SPECS[ci].sizeof as usize];
         let mut cs = CheckSum::new();
         let out = walk_class(ci, &img, &mut cs, 8);
-        assert!(out.bytes_walked >= 111, "at least Unit's own 111 bytes: {out:?}");
+        assert!(
+            out.bytes_walked >= 111,
+            "at least Unit's own 111 bytes: {out:?}"
+        );
         // and the bytes we walked really are what the adler reflects
         assert_eq!(cs.bytes, out.bytes_walked);
     }

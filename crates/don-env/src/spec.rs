@@ -127,7 +127,11 @@ impl MaskLayout {
             offsets.push(at);
             at += s.div_ceil(8);
         }
-        MaskLayout { offsets, sizes: sizes.to_vec(), record_bytes: at }
+        MaskLayout {
+            offsets,
+            sizes: sizes.to_vec(),
+            record_bytes: at,
+        }
     }
     #[inline]
     pub fn head<'a>(&self, rec: &'a mut [u8], h: usize) -> &'a mut [u8] {
@@ -151,7 +155,11 @@ pub fn fill_bits(buf: &mut [u8], n: usize) {
     let full = n / 8;
     buf[..full].fill(0xFF);
     if full < buf.len() {
-        buf[full] = if n % 8 == 0 { 0 } else { (1u16 << (n % 8)) as u8 - 1 };
+        buf[full] = if n % 8 == 0 {
+            0
+        } else {
+            (1u16 << (n % 8)) as u8 - 1
+        };
         buf[full + 1..].fill(0);
     }
 }
@@ -167,18 +175,18 @@ pub fn fill_bits(buf: &mut [u8], n: usize) {
 /// `Objects::process_all` walks. Planes whose source is not modelled yet are listed in
 /// [`crate::env::VecEnv::provenance`] rather than quietly emitting zeros.
 pub const SPATIAL_PLANES: [&str; 12] = [
-    "own_units",      // count of the observing agent's entities in the tile
+    "own_units", // count of the observing agent's entities in the tile
     "ally_units",
     "enemy_units",
     "own_buildings",
     "enemy_buildings",
-    "hp_fraction",    // mean hits/max over entities in the tile
-    "cooldown",       // mean recharge counter, normalised
-    "resource_node",  // FLAG_RESOURCE / FLAG_GOODY
-    "blocking",       // FLAG_MOUNTAIN | FLAG_CLIFF | FLAG_ROCK | FLAG_NEAR_BLOCKING
-    "water",          // FLAG_COAST | FLAG_RIVER
-    "visible",        // in line of sight this frame
-    "explored",       // ever seen
+    "hp_fraction",   // mean hits/max over entities in the tile
+    "cooldown",      // mean recharge counter, normalised
+    "resource_node", // FLAG_RESOURCE / FLAG_GOODY
+    "blocking",      // FLAG_MOUNTAIN | FLAG_CLIFF | FLAG_ROCK | FLAG_NEAR_BLOCKING
+    "water",         // FLAG_COAST | FLAG_RIVER
+    "visible",       // in line of sight this frame
+    "explored",      // ever seen
 ];
 
 /// Per-entity feature columns, `f32`, shape `(max_entities, ENTITY_FEATURES.len())`.
@@ -188,19 +196,19 @@ pub const SPATIAL_PLANES: [&str; 12] = [
 /// `GuyData::{x,y,angle}`, `Unit::orders_x/orders_y` (see `schema/state-schema.json`).
 pub const ENTITY_FEATURES: [&str; 16] = [
     "alive",
-    "relation",     // 0 self, 1 ally, 2 enemy, 3 neutral
-    "x",            // tile, normalised to [0,1)
+    "relation", // 0 self, 1 ally, 2 enemy, 3 neutral
+    "x",        // tile, normalised to [0,1)
     "y",
-    "type_index",   // TypeIndex / NUM_TYPES
-    "category",     // TypeCap::category / 4
-    "myhits",       // Object::myhits, normalised by type HITS
+    "type_index", // TypeIndex / NUM_TYPES
+    "category",   // TypeCap::category / 4
+    "myhits",     // Object::myhits, normalised by type HITS
     "myarmor",
     "myspeed",
-    "recharging",   // Unit::recharging, normalised by type RECHARGE
-    "stance",       // Unit::stance
-    "form",         // Unit::form
-    "order",        // OrderIndex currently executing
-    "orders_x",     // Unit::orders_x, tile-normalised
+    "recharging", // Unit::recharging, normalised by type RECHARGE
+    "stance",     // Unit::stance
+    "form",       // Unit::form
+    "order",      // OrderIndex currently executing
+    "orders_x",   // Unit::orders_x, tile-normalised
     "orders_y",
     "controllable", // 1 if this agent may address it this step
 ];
@@ -208,9 +216,28 @@ pub const ENTITY_FEATURES: [&str; 16] = [
 /// Per-agent global vector. Every entry is a `LeaderData` field or a direct function of
 /// one; offsets are from `schema/state-schema.json`.
 pub const GLOBAL_FEATURES: [&str; 24] = [
-    "econ_food", "econ_timber", "econ_wealth", "econ_knowledge", "econ_metal", "econ_oil",
-    "base_rate_food", "base_rate_timber", "base_rate_wealth",
-    "base_rate_knowledge", "base_rate_metal", "base_rate_oil",
-    "pop", "pop_cap", "city_num", "units_built", "units_killed", "units_lost",
-    "score", "territory", "explored", "frame", "step_frac", "num_alive_players",
+    "econ_food",
+    "econ_timber",
+    "econ_wealth",
+    "econ_knowledge",
+    "econ_metal",
+    "econ_oil",
+    "base_rate_food",
+    "base_rate_timber",
+    "base_rate_wealth",
+    "base_rate_knowledge",
+    "base_rate_metal",
+    "base_rate_oil",
+    "pop",
+    "pop_cap",
+    "city_num",
+    "units_built",
+    "units_killed",
+    "units_lost",
+    "score",
+    "territory",
+    "explored",
+    "frame",
+    "step_frac",
+    "num_alive_players",
 ];

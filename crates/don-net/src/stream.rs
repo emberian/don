@@ -75,6 +75,9 @@ pub fn find_stream(buf: &[u8]) -> Option<StreamLocation> {
     if best.1 == usize::MAX {
         None
     } else {
-        Some(StreamLocation { start: best.1, records: best.0 as usize })
+        Some(StreamLocation {
+            start: best.1,
+            records: best.0 as usize,
+        })
     }
 }

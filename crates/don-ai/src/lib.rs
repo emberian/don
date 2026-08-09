@@ -42,6 +42,7 @@ pub mod api;
 pub mod economic;
 pub mod game;
 pub mod library;
+pub mod optimum;
 pub mod orders;
 pub mod probe;
 pub mod rules;
@@ -196,7 +197,11 @@ mod tests {
             .with("get_techs_per_age(2)", 9);
         let mut step2 = 6;
         economic(&mut w2, 2, &mut step2, 2, 5, &mut st);
-        assert_eq!(st.needed_techs, Some(4), "player 2 must inherit player 1's value");
+        assert_eq!(
+            st.needed_techs,
+            Some(4),
+            "player 2 must inherit player 1's value"
+        );
         assert_eq!(w2.count("get_techs_per_age"), 0);
     }
 }

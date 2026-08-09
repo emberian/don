@@ -88,14 +88,36 @@ impl GameConnectionData {
     /// The `unsigned char data[30]` view of the leading settings union.
     pub fn data(&self) -> [u8; 30] {
         [
-            self.team_style, self.map_style, self.map_size, self.players,
-            self.max_observers, self.game_speed, self.game_rules, self.difficulty,
-            self.starting_town, self.starting_resources, self.starting_resources2,
-            self.tech_cost, self.reveal_map, self.pop_limit, self.rush_rules,
-            self.cannon_times, self.starting_technology, self.starting_technology2,
-            self.ending_technology, self.elimination, self.victory, self.wonderwin,
-            self.score_goal, self.popwin, self.time_limit, self.chairs, self.econwin,
-            self.scenario_type, self.script_type, self.mods,
+            self.team_style,
+            self.map_style,
+            self.map_size,
+            self.players,
+            self.max_observers,
+            self.game_speed,
+            self.game_rules,
+            self.difficulty,
+            self.starting_town,
+            self.starting_resources,
+            self.starting_resources2,
+            self.tech_cost,
+            self.reveal_map,
+            self.pop_limit,
+            self.rush_rules,
+            self.cannon_times,
+            self.starting_technology,
+            self.starting_technology2,
+            self.ending_technology,
+            self.elimination,
+            self.victory,
+            self.wonderwin,
+            self.score_goal,
+            self.popwin,
+            self.time_limit,
+            self.chairs,
+            self.econwin,
+            self.scenario_type,
+            self.script_type,
+            self.mods,
         ]
     }
 
@@ -386,7 +408,13 @@ impl PlayerSlotPod {
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.elo.to_le_bytes());
         out.extend_from_slice(&[
-            self.slot_type, self.tribe, self.who, self.team, self.handicap, self.diff, self.ready,
+            self.slot_type,
+            self.tribe,
+            self.who,
+            self.team,
+            self.handicap,
+            self.diff,
+            self.ready,
         ]);
     }
 }
@@ -435,15 +463,23 @@ impl PlayerConnectionData {
             if b.len() < o + n * 2 {
                 return None;
             }
-            let units: Vec<u16> =
-                (0..n).map(|i| u16::from_le_bytes([b[o + i * 2], b[o + i * 2 + 1]])).collect();
+            let units: Vec<u16> = (0..n)
+                .map(|i| u16::from_le_bytes([b[o + i * 2], b[o + i * 2 + 1]]))
+                .collect();
             *id = String::from_utf16_lossy(&units);
             o += n * 2;
         }
         let pod = PlayerSlotPod::decode(&b[o..])?;
         o += PlayerSlotPod::WIRE_LEN;
         let [player_id, platform_player_id] = ids;
-        Some((PlayerConnectionData { player_id, platform_player_id, pod }, o))
+        Some((
+            PlayerConnectionData {
+                player_id,
+                platform_player_id,
+                pod,
+            },
+            o,
+        ))
     }
 }
 
@@ -476,7 +512,10 @@ mod tests {
     #[test]
     fn full_record_is_exactly_2031_bytes_with_the_pdb_offsets() {
         let f = GameConnectionDataFull {
-            data: GameConnectionData { seed: 7, ..Default::default() },
+            data: GameConnectionData {
+                seed: 7,
+                ..Default::default()
+            },
             scenario_or_script_name: "alpine".into(),
             save_name: "autosave".into(),
             desc: "a description".into(),
@@ -485,7 +524,10 @@ mod tests {
             mod_size: 1234,
             mod_checksum: 0xdead_beef,
             mod_workshop_id: 0x1122_3344_5566_7788,
-            scenario_data: ScenFilePreviewData { num_leaders: 6, ..Default::default() },
+            scenario_data: ScenFilePreviewData {
+                num_leaders: 6,
+                ..Default::default()
+            },
             scenario_size: 11,
             scenario_checksum: 22,
             scenario_num_files: 33,
@@ -497,11 +539,18 @@ mod tests {
         assert_eq!(b.len(), GameConnectionDataFull::WIRE_LEN);
         // spot-check that the strings landed on their PDB offsets
         use full_offsets as O;
-        assert_eq!(read_narrow(&b, O::SCENARIO_NAME, O::SCENARIO_NAME_LEN), "alpine");
+        assert_eq!(
+            read_narrow(&b, O::SCENARIO_NAME, O::SCENARIO_NAME_LEN),
+            "alpine"
+        );
         assert_eq!(read_wide(&b, O::SAVE_NAME, O::SAVE_NAME_UNITS), "autosave");
         assert_eq!(read_narrow(&b, O::MOD_NAME, O::MOD_NAME_LEN), "themod");
         assert_eq!(
-            u64::from_le_bytes(b[O::MOD_WORKSHOP_ID..O::MOD_WORKSHOP_ID + 8].try_into().unwrap()),
+            u64::from_le_bytes(
+                b[O::MOD_WORKSHOP_ID..O::MOD_WORKSHOP_ID + 8]
+                    .try_into()
+                    .unwrap()
+            ),
             0x1122_3344_5566_7788
         );
         assert_eq!(GameConnectionDataFull::decode(&b), Some(f));
@@ -546,7 +595,10 @@ mod tests {
                 ready: 1,
             },
         };
-        assert!(p.player_id.len() > 8, "must exceed the SSO limit to be a real test");
+        assert!(
+            p.player_id.len() > 8,
+            "must exceed the SSO limit to be a real test"
+        );
         let mut b = Vec::new();
         p.encode_portable(&mut b);
         let (got, n) = PlayerConnectionData::decode_portable(&b).unwrap();

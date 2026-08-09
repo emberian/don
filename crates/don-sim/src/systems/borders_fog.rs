@@ -41,14 +41,10 @@
 //!
 //! # Known gaps, stated up front
 //!
-//! * `city_level_territory_bonus` (Constants `+0x100`, 3 entries) has no captured value in
-//!   `docs/derivation/rules-constants.json`. [`TerritoryRules::city_level_territory_bonus`]
-//!   defaults to `[0; 3]` and **must be loaded from `ron-data/rules.xml`** before any
-//!   number out of this module means anything.
-//! * The Tikal multiplier is applied from Constants `+0x4A0`, which the constants table
-//!   names `tikal_temple_hp` (50); `tikal_temple_borders` (also 50) sits at `+0x498`. One of
-//!   the two derivations is off by 8 in that neighbourhood. Both are 50 so no number moves;
-//!   see the report.
+//! * `Object::update_seen`'s *incremental* path (the `ring_init` `0x00681920` tables) is
+//!   not ported — only the full restamp. See [`update_seen`].
+//! * The Tikal border multiplier is read from `TIKAL_TEMPLE_HP`, not `TIKAL_TEMPLE_BORDERS`
+//!   — `[measured]`, see [`TerritoryRules::tikal_temple_borders_pct`].
 //! * `Supplies::find_supply` `0x0073ABA0` is not ported — [`supply_state`] takes the
 //!   supplier set as an argument instead.
 //! * The out-of-supply reload multipliers are exposed as constants; the call site that
@@ -332,7 +328,8 @@ impl WDataPlane {
         rec[wdata_off::FLAGS..wdata_off::FLAGS + 2].copy_from_slice(&self.flags[i].to_le_bytes());
         rec[wdata_off::LAND] = self.land[i] as u8;
         rec[wdata_off::LAND_SUB] = self.land_sub[i];
-        rec[wdata_off::REGION..wdata_off::REGION + 2].copy_from_slice(&self.region[i].to_le_bytes());
+        rec[wdata_off::REGION..wdata_off::REGION + 2]
+            .copy_from_slice(&self.region[i].to_le_bytes());
         rec[wdata_off::REGION2..wdata_off::REGION2 + 2]
             .copy_from_slice(&self.region2[i].to_le_bytes());
         rec[wdata_off::DOWN..wdata_off::DOWN + 2].copy_from_slice(&self.down[i].to_le_bytes());
@@ -532,16 +529,14 @@ impl Fog {
     ///
     /// Note it has **no** leader short-circuits at all — `see_all` does not grant detection.
     pub fn is_detected(&self, fx: i32, fy: i32, player: i32) -> bool {
-        self.planes.seen3[self.grids.f_index(fx, fy)]
-            & self.leaders[player as usize].player_mask
+        self.planes.seen3[self.grids.f_index(fx, fy)] & self.leaders[player as usize].player_mask
             != 0
     }
 
     /// `WorldData::is_detected_by_enemy(FCoord, FCoord, int)` `0x006B50F0` — the same plane
     /// masked with the *complement* of the player's bit: "is anyone but me detecting here".
     pub fn is_detected_by_enemy(&self, fx: i32, fy: i32, player: i32) -> bool {
-        self.planes.seen3[self.grids.f_index(fx, fy)]
-            & !self.leaders[player as usize].player_mask
+        self.planes.seen3[self.grids.f_index(fx, fy)] & !self.leaders[player as usize].player_mask
             != 0
     }
 
@@ -720,7 +715,10 @@ pub fn update_seen(
 /// instruction stream actually loads from `GameAccess::constants` `[0x00C061F0]`.
 ///
 /// Values are the shipped `rules.xml` values as captured in
-/// `docs/derivation/rules-constants.json`. `city_level_territory_bonus` is the one hole.
+/// `docs/derivation/rules-constants.json`, cross-checked against `ron-data/rules.xml`,
+/// whose declaration order maps contiguously onto this offset block with no gaps —
+/// `FORT_UPGRADE_TERR 0xB8 .. TERRITORY_NUM 0x128` — which is a strong independent
+/// confirmation of the whole block.
 #[derive(Clone, Copy, Debug)]
 pub struct TerritoryRules {
     /// `+0x0B8`, 4 entries — fort border upgrade ladder. `{2, 4, 6, 9}`
@@ -732,7 +730,10 @@ pub struct TerritoryRules {
     pub civic_upgrade_terr: [i32; 8],
     /// `+0x0FC` — capital bonus. `6`
     pub capital_territory_bonus: i32,
-    /// `+0x100`, 3 entries — **NOT CAPTURED**, see the module docs.
+    /// `+0x100`, 3 entries — per-city-level border bonus, indexed by `level - 1`.
+    /// `ron-data/rules.xml` calls it `CITY_UPGRADE_TERR`: `{0, 3, 6}`. The loader name in
+    /// `docs/derivation/rules-constants.json` is `city_level_territory_bonus` and it has no
+    /// captured value there; the XML tag and the loader name simply differ.
     pub city_level_territory_bonus: [i32; 3],
     /// `+0x10C` — multiplier on a fort's summed bonuses. `4`
     pub fort_territory_multiplier: i32,
@@ -754,13 +755,21 @@ pub struct TerritoryRules {
     pub colosseum_territory_bonus: i32,
     /// `+0x478` — Colosseum, fort ladder. `0`
     pub colosseum_fort_borders: i32,
-    /// `+0x4A0` as loaded by the code; `docs/derivation/rules-constants.json` calls that
-    /// offset `tikal_temple_hp` and puts `tikal_temple_borders` at `+0x498`. Both are `50`.
+    /// The Tikal multiplier on the temple bonus, percent.
+    ///
+    /// **The engine reads `+0x4A0`, which is `TIKAL_TEMPLE_HP`** — `[measured]` at
+    /// `0x006B0DC9`, `mov ecx, [constants + 0x4A0]`. `TIKAL_TEMPLE_BORDERS` is `+0x498`
+    /// (XML declaration order: `TIKAL_TIMBER_COMMERCE 0x494`, `TIKAL_TEMPLE_BORDERS 0x498`,
+    /// `TIKAL_TEMPLE_RANGE 0x49C`, `TIKAL_TEMPLE_HP 0x4A0`). Both ship as `50`, so no
+    /// shipped number moves — but the wonder's border effect is driven by the *hit-point*
+    /// field, so a mod editing only `TIKAL_TEMPLE_BORDERS` changes nothing.
     pub tikal_temple_borders_pct: i32,
     /// `+0x53C` — Eiffel Tower. `6`
     pub eiffel_tower_territory_bonus: i32,
     /// `+0x604` — Roman tribe bonus, fort ladder. `3`
     pub roman_fort_borders: i32,
+    /// `+0x930` — the Gems rare resource. `2`
+    pub gems_territory_bonus: i32,
     /// `+0x760` — Russian tribe bonus, flat. `0`
     pub russian_borders: i32,
     /// `+0x764` — Russian tribe bonus, per age. `1`
@@ -777,7 +786,7 @@ impl Default for TerritoryRules {
             temple_upgrade_terr: [2, 4, 6, 9, 12],
             civic_upgrade_terr: [0, 1, 2, 4, 6, 8, 11, 14],
             capital_territory_bonus: 6,
-            city_level_territory_bonus: [0, 0, 0], // NOT CAPTURED
+            city_level_territory_bonus: [0, 3, 6], // rules.xml CITY_UPGRADE_TERR
             fort_territory_multiplier: 4,
             city_territory_multiplier: 4,
             territory_base: 24,
@@ -789,6 +798,7 @@ impl Default for TerritoryRules {
             colosseum_territory_bonus: 3,
             colosseum_fort_borders: 0,
             tikal_temple_borders_pct: 50,
+            gems_territory_bonus: 2,
             eiffel_tower_territory_bonus: 6,
             roman_fort_borders: 3,
             russian_borders: 0,
@@ -815,8 +825,13 @@ pub struct LeaderBorderInput {
     pub gov_level: i32,
     /// Current age (`LeaderData +0x6EB8 -> +0xDC ^ 0x62766`), used by the Russian bonus.
     pub age: i32,
-    /// Has a capital (`LeaderData +0x6DA6` or `+0x6DCE`, bit `0x80`).
-    pub has_capital: bool,
+    /// Holds the **Gems** rare resource in either rare slot — `LeaderData +0x6DA6` or
+    /// `+0x6DCE`, bit `0x80`. `[measured]` at `0x006B0F3F`; the constant it reaches for is
+    /// `+0x930` `GEMS_TERRITORY_BONUS`, whose `rules.xml` neighbours are `DIAMONDS_COMMERCE`
+    /// and `ALUMINUM_AIR_COST`, so this is unambiguously the rare-resource block.
+    /// `capital_territory_bonus` is **not** used here — it is a per-city term, applied in
+    /// [`claim_tile`].
+    pub rare_gems: bool,
     pub wonder_colosseum: bool,
     pub wonder_tikal: bool,
     pub wonder_eiffel: bool,
@@ -913,10 +928,10 @@ pub fn leader_border_params(
     p.civic_terr = c.civic_upgrade_terr[gov as usize];
     p.city_cap = limit_base + gov * limit_civic;
 
-    // --- capital / wonders / tribe ----------------------------------------
+    // --- rare resource / wonders / tribe ----------------------------------
     let halve = l.tribe_russian;
-    if l.has_capital {
-        let v = c.capital_territory_bonus;
+    if l.rare_gems {
+        let v = c.gems_territory_bonus;
         p.wonder_terr += if halve { v / 2 } else { v };
         p.city_cap += limit_civic;
     }
@@ -1130,7 +1145,8 @@ pub fn claim_tile(
                     if upgraded {
                         bonuses += 4;
                     }
-                    let s = border_score(d, bonuses + p.wonder_terr, c.fort_territory_multiplier, c);
+                    let s =
+                        border_score(d, bonuses + p.wonder_terr, c.fort_territory_multiplier, c);
 
                     if s > limit || s >= best_score {
                         if s < second_score {
@@ -1202,9 +1218,9 @@ pub fn check_borders(
     slots: &[Vec<BorderSource>; 8],
     inputs: &[LeaderBorderInput; 8],
     c: &TerritoryRules,
-    /// `World +0x38/0x3C/0x40` — the `player_territory_limit*` triple.
+    // `World +0x38/0x3C/0x40` — the `player_territory_limit*` triple.
     player_limits: (i32, i32, i32),
-    /// `World +0x44/0x48/0x4C` — the `colonized_territory_limit*` triple.
+    // `World +0x44/0x48/0x4C` — the `colonized_territory_limit*` triple.
     colonized_limits: (i32, i32, i32),
 ) -> i32 {
     let mut active = [false; 8];
@@ -1365,6 +1381,9 @@ pub struct AttritionInput {
     pub attacker_attrition: i32,
     /// `LeaderData +0x7F4` of the unit's owner — `anti_att`. **A float**, and one of the
     /// three documented floats inside walked state.
+    ///
+    /// It is **256-scaled**: [`calc_anti_attrition`] seeds it with `0x43800000` = `256.0f`,
+    /// so `256.0` means "no anti-attrition". `0.0` means total immunity.
     pub victim_anti_att: f32,
     /// The unit type answers the `+0x10C` virtual — the siege-reduction class.
     pub siege_class: bool,
@@ -1379,15 +1398,76 @@ pub struct AttritionInput {
     pub age_diff: i32,
 }
 
+/// The `anti_att` value meaning "no anti-attrition at all": the immediate
+/// `0x43800000` = `256.0f` that `Leader::calc_anti_attrition` `0x006CDCC0` starts from.
+pub const ANTI_ATT_BASE: f32 = 256.0;
+
+/// The unit's `anti_att`, `Leader::calc_anti_attrition` `0x006CDCC0`.
+///
+/// `[measured]` from the instruction stream. The base is the immediate `0x43800000` =
+/// **256.0f**, and each source of anti-attrition divides the *received* rate by
+/// `(100 - pct) / 100`. A `pct >= 100` anywhere zeroes the field outright, which makes the
+/// unit completely immune (`get_attrition` then returns 0 and no period is ever set) —
+/// that is how `liberty_attrition` (`Constants +0x524`, "100% reduction of attrition
+/// received", the Statue of Liberty) works.
+///
+/// * `upgrade_level`: `has_preq(0x300) -> 2`, else `(0x2FF) -> 1`, else `(0x2FE) -> 0`,
+///   else no upgrade. Indexes `Constants::attrition_upgrade` `+0x1C8` = `{25,50,75,100}`.
+/// * `wonder_liberty`: `has_wonder(0x219)`, `Constants +0x524`.
+/// * `tribe_mongol`: `has_tribe_bonus(0x11)`, `Constants::mongol_attrition +0x7F0` = 50.
+/// * `titanium`: rare-resource flag, `Constants::titanium_attrition +0x95C` = 50.
+pub fn calc_anti_attrition(
+    upgrade_level: Option<usize>,
+    wonder_liberty: bool,
+    tribe_mongol: bool,
+    titanium: bool,
+    disabled: bool,
+    attrition_upgrade: [i32; 4],
+    liberty_pct: i32,
+    mongol_pct: i32,
+    titanium_pct: i32,
+) -> f32 {
+    if disabled {
+        return 0.0;
+    }
+    let mut v = ANTI_ATT_BASE;
+    let apply = |pct: i32, v: &mut f32| -> bool {
+        if pct > 99 {
+            *v = 0.0;
+            return false;
+        }
+        *v = (*v * 100.0) / (100 - pct) as f32;
+        true
+    };
+    if let Some(lv) = upgrade_level {
+        if !apply(attrition_upgrade[lv], &mut v) {
+            return 0.0;
+        }
+    }
+    if wonder_liberty && !apply(liberty_pct, &mut v) {
+        return 0.0;
+    }
+    if tribe_mongol && !apply(mongol_pct, &mut v) {
+        return 0.0;
+    }
+    if titanium && !apply(titanium_pct, &mut v) {
+        return 0.0;
+    }
+    v
+}
+
 /// Port of `UnitData::get_attrition(int)` `0x00608FD0`.
 ///
 /// Returns a **period-ish scalar**, not a damage number: the caller multiplies it by
 /// `Constants::attrition` and shifts right 8 to get the frame period between attrition
 /// ticks, so a larger return means slower attrition.
 ///
-/// The one floating-point step is `(int)((float)scale * anti_att * 0.00390625f)` —
-/// `0.00390625 == 1/256`. Kept as `f32` deliberately: `anti_att` is float in the engine's
-/// own walked state, so rounding it away here would be a silent fidelity loss.
+/// The one floating-point step is `(int)((float)scale * anti_att * K)` with `K` the
+/// `binary32` at `0x00B69430` = `0x3B800000` = `1/256` `[measured]`, and the instruction
+/// stream is `cvtdq2ps / mulss [leader+0x7F4] / mulss [0xB69430] / cvttss2si`, i.e. exactly
+/// that association order. Since `anti_att` is itself 256-scaled, the two 256s cancel and a
+/// baseline unit gets `v = scale = 256`. Kept in `f32` deliberately: `anti_att` is float in
+/// the engine's own walked state, so rounding it away here would be a silent fidelity loss.
 pub fn get_attrition(inp: &AttritionInput, c: &AttritionRules) -> i32 {
     let mut att = inp.attacker_attrition;
     if att == 0 || c.attrition == 0 {
@@ -1676,8 +1756,16 @@ pub fn world_checksum(
     // section 4 — [+0x08, +0x80): 30 dwords, derived sizes first then WorldScalars.
     buf.clear();
     for v in [
-        g.size, g.fog_xs, g.fog_ys, g.fog_size, g.tile_xs, g.tile_ys, g.tile_size, g.reg_xs,
-        g.reg_ys, g.reg_size,
+        g.size,
+        g.fog_xs,
+        g.fog_ys,
+        g.fog_size,
+        g.tile_xs,
+        g.tile_ys,
+        g.tile_size,
+        g.reg_xs,
+        g.reg_ys,
+        g.reg_size,
     ] {
         buf.extend_from_slice(&v.to_le_bytes());
     }
@@ -1877,7 +1965,10 @@ mod tests {
         let (mut fog, mut w, _) = tiny_fog();
         let (fx, fy) = (10, 10);
         assert!(fog.set_seen(&mut w, fx, fy, 2, true), "first touch is new");
-        assert!(!fog.set_seen(&mut w, fx, fy, 2, true), "second touch is not");
+        assert!(
+            !fog.set_seen(&mut w, fx, fy, 2, true),
+            "second touch is not"
+        );
 
         let fi = fog.grids.f_index(fx, fy);
         let wi = fog.grids.w_index(fx >> 1, fy >> 1);
@@ -1965,6 +2056,26 @@ mod tests {
     }
 
     #[test]
+    fn circle_init_truncates_its_own_outermost_ring() {
+        // The engine's guard is `if (count > 0x3248) { fill radius[r..=64]; return; }`, and
+        // at r = 64 it fires part-way through the ring: 392 offsets qualify, 300 fit. So a
+        // maximum-radius LOS disc is *clipped* in the retail engine, and reproducing that
+        // clip is part of matching it.
+        let c = CircleTable::build();
+        assert_eq!(c.x.len(), CIRCLE_CAP + 1);
+        let mut natural = 0;
+        for oy in -64i32..=64 {
+            for ox in -64i32..=64 {
+                if hypot_approx(ox.unsigned_abs(), oy.unsigned_abs()) == 64 {
+                    natural += 1;
+                }
+            }
+        }
+        assert_eq!(natural, 392);
+        assert_eq!(c.radius[64] - c.radius[63], 300);
+    }
+
+    #[test]
     fn update_seen_clips_at_the_map_edge() {
         let (mut fog, mut w, circle) = tiny_fog();
         let obj = SeeingObject {
@@ -2012,7 +2123,7 @@ mod tests {
             temple_upgrade: [true, true, true],
             fort_upgrade: [true, true, true],
             gov_level: 7,
-            has_capital: true,
+            rare_gems: true,
             ..Default::default()
         };
         let p = leader_border_params(&l, &c, 44, 4, 4);
@@ -2021,7 +2132,7 @@ mod tests {
         assert_eq!(p.fort_level, 3);
         assert_eq!(p.fort_terr, 9);
         assert_eq!(p.civic_terr, 14);
-        assert_eq!(p.wonder_terr, 6); // capital
+        assert_eq!(p.wonder_terr, 2); // gems
         assert_eq!(p.city_cap, 44 + 7 * 4 + 4);
         assert_eq!(p.fort_cap, 3 * 4 + p.city_cap);
     }
@@ -2060,11 +2171,71 @@ mod tests {
         }
     }
 
+    /// The headline structural fact, pinned: for an **uncontested** source the outer edge
+    /// of the border is set by the hard `territory_limit_*` cap, never by the score gate.
+    /// The score function decides only *where two borders meet*.
+    #[test]
+    fn the_hard_cap_binds_not_the_score_gate() {
+        let c = TerritoryRules::default();
+        let limit = c.territory_base << 8;
+        let furthest_scoring = |b: i32, mult: i32| -> u32 {
+            (0..5000u32)
+                .filter(|&d| border_score(compress_distance(d), b, mult, &c) <= limit)
+                .next_back()
+                .unwrap()
+        };
+        for (name, l) in [
+            (
+                "baseline",
+                LeaderBorderInput {
+                    active: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "fully teched",
+                LeaderBorderInput {
+                    active: true,
+                    temple_upgrade: [true; 3],
+                    fort_upgrade: [true; 3],
+                    gov_level: 7,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let p = leader_border_params(&l, &c, 44, 4, 4);
+            let city_b = p.civic_terr + p.temple_terr + c.city_level_territory_bonus[2];
+            let city_cap = p.city_cap + 2 * 4 + p.temple_level * 4;
+            assert!(
+                furthest_scoring(city_b, c.city_territory_multiplier) > city_cap as u32,
+                "{name}: score gate should be looser than the cap"
+            );
+            let fort_b = p.fort_terr + p.civic_terr;
+            assert!(
+                furthest_scoring(fort_b, c.fort_territory_multiplier) > p.fort_cap as u32,
+                "{name}: fort score gate should be looser than the cap"
+            );
+        }
+
+        // and concretely: a lone plain city reaches exactly territory_limit_base tiles
+        let p = leader_border_params(
+            &LeaderBorderInput {
+                active: true,
+                ..Default::default()
+            },
+            &c,
+            44,
+            4,
+            4,
+        );
+        assert_eq!(p.city_cap, 44);
+    }
+
     #[test]
     fn compress_distance_only_bites_up_close() {
         assert_eq!(compress_distance(0), 0);
         assert_eq!(compress_distance(1), 0);
-        assert_eq!(compress_distance(4), 1);
+        assert_eq!(compress_distance(4), 0);
         assert_eq!(compress_distance(12), 5);
         assert_eq!(compress_distance(13), 13);
         assert_eq!(compress_distance(100), 100);
@@ -2201,7 +2372,9 @@ mod tests {
         let mut inputs = [LeaderBorderInput::default(); 8];
         inputs[0] = plain_leader();
 
-        let coords: Vec<(i32, i32)> = (0..g.ys).flat_map(|y| (0..g.xs).map(move |x| (x, y))).collect();
+        let coords: Vec<(i32, i32)> = (0..g.ys)
+            .flat_map(|y| (0..g.xs).map(move |x| (x, y)))
+            .collect();
         let mut regions = vec![RegionBorderState {
             flags: 4,
             size: coords.len() as i32,
@@ -2226,7 +2399,7 @@ mod tests {
             assert!(frames < 100, "budget loop did not terminate");
         }
         assert_eq!(frames, (g.size + 255) / 256);
-        assert!(w.who.iter().any(|&v| v == 0), "someone should own something");
+        assert!(w.who.contains(&0), "someone should own something");
     }
 
     #[test]
@@ -2245,7 +2418,10 @@ mod tests {
         }
         assert!(is_enemy_territory(&w, &g, &d, 3, 3, 0));
         assert!(!is_enemy_territory(&w, &g, &d, 3, 3, 1));
-        assert!(!is_enemy_territory(&w, &g, &d, 0, 0, 0), "unowned is neutral");
+        assert!(
+            !is_enemy_territory(&w, &g, &d, 0, 0, 0),
+            "unowned is neutral"
+        );
 
         // mutual alliance
         d.diplo[0][1] = 2;
@@ -2256,13 +2432,73 @@ mod tests {
     // --- attrition / supply ------------------------------------------------
 
     #[test]
+    fn anti_attrition_ladder_and_total_immunity() {
+        let c = AttritionRules::default();
+        let mk = |lv, liberty, mongol, titanium| {
+            calc_anti_attrition(
+                lv,
+                liberty,
+                mongol,
+                titanium,
+                false,
+                c.attrition_upgrade,
+                100, // liberty_attrition
+                50,  // mongol_attrition
+                50,  // titanium_attrition
+            )
+        };
+        assert_eq!(mk(None, false, false, false), ANTI_ATT_BASE);
+        // Forage 25% -> 256 * 100/75
+        assert!((mk(Some(0), false, false, false) - 256.0 * 100.0 / 75.0).abs() < 0.01);
+        // Supply 50% -> exactly double, i.e. half the attrition rate
+        assert_eq!(mk(Some(1), false, false, false), 512.0);
+        // Mongols and titanium each halve the rate again
+        assert_eq!(mk(None, false, true, false), 512.0);
+        assert_eq!(mk(None, false, true, true), 1024.0);
+        // Statue of Liberty is 100% -> zeroed, which get_attrition turns into "never"
+        assert_eq!(mk(None, true, false, false), 0.0);
+        let v = get_attrition(
+            &AttritionInput {
+                attacker_attrition: 8,
+                victim_anti_att: 0.0,
+                siege_class: false,
+                militia: false,
+                type_id: 0,
+                type_class: 0,
+                age_diff: -1,
+            },
+            &c,
+        );
+        assert_eq!(v, 0);
+        assert_eq!(attrition_period(v, &c), None);
+    }
+
+    #[test]
+    fn supply_upgrade_doubles_the_attrition_period() {
+        let c = AttritionRules::default();
+        let mk = |anti: f32| AttritionInput {
+            attacker_attrition: 4,
+            victim_anti_att: anti,
+            siege_class: false,
+            militia: false,
+            type_id: 0,
+            type_class: 0,
+            age_diff: -1,
+        };
+        let plain = attrition_period(get_attrition(&mk(ANTI_ATT_BASE), &c), &c).unwrap();
+        let supplied = attrition_period(get_attrition(&mk(512.0), &c), &c).unwrap();
+        assert_eq!(plain, 12);
+        assert_eq!(supplied, 24);
+    }
+
+    #[test]
     fn attrition_period_baseline_is_48_frames() {
         let c = AttritionRules::default();
         // anti_att 1.0, attacker attrition 1, plain unit -> get_attrition returns 256
         let v = get_attrition(
             &AttritionInput {
                 attacker_attrition: 1,
-                victim_anti_att: 1.0,
+                victim_anti_att: ANTI_ATT_BASE,
                 siege_class: false,
                 militia: false,
                 type_id: 0,
@@ -2280,7 +2516,7 @@ mod tests {
         let c = AttritionRules::default();
         let mk = |att: i32| AttritionInput {
             attacker_attrition: att,
-            victim_anti_att: 1.0,
+            victim_anti_att: ANTI_ATT_BASE,
             siege_class: false,
             militia: false,
             type_id: 0,
@@ -2298,7 +2534,7 @@ mod tests {
         let c = AttritionRules::default();
         let mk = |anti: f32| AttritionInput {
             attacker_attrition: 2,
-            victim_anti_att: anti,
+            victim_anti_att: anti * ANTI_ATT_BASE,
             siege_class: false,
             militia: false,
             type_id: 0,
@@ -2317,7 +2553,7 @@ mod tests {
         let v = get_attrition(
             &AttritionInput {
                 attacker_attrition: 0,
-                victim_anti_att: 1.0,
+                victim_anti_att: ANTI_ATT_BASE,
                 siege_class: false,
                 militia: false,
                 type_id: 0,
@@ -2335,7 +2571,7 @@ mod tests {
         let c = AttritionRules::default();
         let mk = |diff: i32| AttritionInput {
             attacker_attrition: 4,
-            victim_anti_att: 1.0,
+            victim_anti_att: ANTI_ATT_BASE,
             siege_class: false,
             militia: false,
             type_id: 0,
@@ -2353,7 +2589,7 @@ mod tests {
         let c = AttritionRules::default();
         let mk = |siege| AttritionInput {
             attacker_attrition: 1,
-            victim_anti_att: 1.0,
+            victim_anti_att: ANTI_ATT_BASE,
             siege_class: siege,
             militia: false,
             type_id: 0,
@@ -2370,7 +2606,7 @@ mod tests {
         let c = AttritionRules::default();
         let mk = |m| AttritionInput {
             attacker_attrition: 1,
-            victim_anti_att: 1.0,
+            victim_anti_att: ANTI_ATT_BASE,
             siege_class: false,
             militia: m,
             type_id: 0,
@@ -2461,7 +2697,10 @@ mod tests {
     #[test]
     fn out_of_supply_reload_multipliers() {
         let c = AttritionRules::default();
-        assert_eq!(out_of_supply_reload(100, c.siege_out_of_supply_reload_256), 150);
+        assert_eq!(
+            out_of_supply_reload(100, c.siege_out_of_supply_reload_256),
+            150
+        );
         assert_eq!(
             out_of_supply_reload(100, c.artillery_out_of_supply_reload_256),
             200

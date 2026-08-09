@@ -31,20 +31,29 @@ const DIR_BASERELOC: usize = 5;
 
 #[derive(Debug)]
 pub enum PeError {
-    Truncated { what: &'static str, need: usize, have: usize },
+    Truncated {
+        what: &'static str,
+        need: usize,
+        have: usize,
+    },
     BadDosSignature(u16),
     BadNtSignature(u32),
     UnsupportedMachine(u16),
     UnsupportedMagic(u16),
     NoRelocations,
-    BadRelocBlock { at: usize },
+    BadRelocBlock {
+        at: usize,
+    },
 }
 
 impl fmt::Display for PeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeError::Truncated { what, need, have } => {
-                write!(f, "truncated reading {what}: need {need} bytes, have {have}")
+                write!(
+                    f,
+                    "truncated reading {what}: need {need} bytes, have {have}"
+                )
             }
             PeError::BadDosSignature(v) => write!(f, "bad DOS signature {v:#06x}"),
             PeError::BadNtSignature(v) => write!(f, "bad NT signature {v:#010x}"),
@@ -99,13 +108,21 @@ pub struct PeImage {
 fn rd_u16(b: &[u8], off: usize, what: &'static str) -> Result<u16, PeError> {
     b.get(off..off + 2)
         .map(|s| u16::from_le_bytes([s[0], s[1]]))
-        .ok_or(PeError::Truncated { what, need: off + 2, have: b.len() })
+        .ok_or(PeError::Truncated {
+            what,
+            need: off + 2,
+            have: b.len(),
+        })
 }
 
 fn rd_u32(b: &[u8], off: usize, what: &'static str) -> Result<u32, PeError> {
     b.get(off..off + 4)
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or(PeError::Truncated { what, need: off + 4, have: b.len() })
+        .ok_or(PeError::Truncated {
+            what,
+            need: off + 4,
+            have: b.len(),
+        })
 }
 
 impl PeImage {
@@ -157,9 +174,11 @@ impl PeImage {
         let mut sections = Vec::with_capacity(num_sections);
         for i in 0..num_sections {
             let s = sec_table + i * 40;
-            let raw_name = bytes
-                .get(s..s + 8)
-                .ok_or(PeError::Truncated { what: "section name", need: s + 8, have: bytes.len() })?;
+            let raw_name = bytes.get(s..s + 8).ok_or(PeError::Truncated {
+                what: "section name",
+                need: s + 8,
+                have: bytes.len(),
+            })?;
             let name = String::from_utf8_lossy(raw_name)
                 .trim_end_matches('\0')
                 .to_string();
@@ -296,18 +315,27 @@ mod tests {
 
     /// The real binary. Absent from the repo (copyrighted); tests that need it skip.
     fn load() -> Option<Vec<u8>> {
-        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ron-bin/riseofnations.exe");
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../ron-bin/riseofnations.exe"
+        );
         std::fs::read(p).ok()
     }
 
     #[test]
     fn rejects_non_pe() {
-        assert!(matches!(PeImage::parse(b"not a pe at all"), Err(PeError::Truncated { .. }) | Err(PeError::BadDosSignature(_))));
+        assert!(matches!(
+            PeImage::parse(b"not a pe at all"),
+            Err(PeError::Truncated { .. }) | Err(PeError::BadDosSignature(_))
+        ));
     }
 
     #[test]
     fn parses_headers_matching_measured_ground_truth() {
-        let Some(b) = load() else { eprintln!("skipping: binary absent"); return };
+        let Some(b) = load() else {
+            eprintln!("skipping: binary absent");
+            return;
+        };
         let pe = PeImage::parse(&b).expect("parse");
         // Values independently measured with pefile; see docs/binary-ground-truth.md.
         assert_eq!(pe.machine, IMAGE_FILE_MACHINE_I386);
@@ -369,8 +397,13 @@ mod tests {
 
         // relocate() computes delta from the *preferred* base, so undo by hand: applying
         // the inverse delta requires pretending the current base is the target.
-        let inverse = PeImage { image_base: 0x2000_0000, ..pe.clone() };
-        inverse.relocate(&mut image, pe.image_base).expect("relocate back");
+        let inverse = PeImage {
+            image_base: 0x2000_0000,
+            ..pe.clone()
+        };
+        inverse
+            .relocate(&mut image, pe.image_base)
+            .expect("relocate back");
         assert_eq!(pristine, image, "relocation round-trip must be lossless");
     }
 }

@@ -19,16 +19,22 @@ use don_net::transport::TcpTransport;
 use std::time::{Duration, Instant};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(String::as_str).unwrap_or("");
     let id: i32 = arg(&args, "--id").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let turns: u32 = arg(&args, "--turns").and_then(|v| v.parse().ok()).unwrap_or(10);
-    let expect_peers: usize =
-        arg(&args, "--peers").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let turns: u32 = arg(&args, "--turns")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let expect_peers: usize = arg(&args, "--peers")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let name = arg(&args, "--name").unwrap_or_else(|| format!("peer{id}"));
 
     let (transport, role) = match mode {
@@ -68,10 +74,7 @@ fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     }
-    println!(
-        r#"{{"event":"roster","players":{}}}"#,
-        s.players().len()
-    );
+    println!(r#"{{"event":"roster","players":{}}}"#, s.players().len());
 
     // 2. readiness handshake
     s.send_ready_flag(true)?;
@@ -83,7 +86,10 @@ fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     }
-    println!(r#"{{"event":"all_ready","t_ms":{}}}"#, start.elapsed().as_millis());
+    println!(
+        r#"{{"event":"all_ready","t_ms":{}}}"#,
+        start.elapsed().as_millis()
+    );
 
     // 3. lockstep turn loop. The payload is a real CheckSumsCommand (opcode
     //    0x39, 65 bytes) so the bytes on the wire are a shape the engine's own

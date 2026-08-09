@@ -192,7 +192,10 @@ pub fn draw_from_pools_reference(keys: &[u32], want: &[i32], pool: &mut [i32], g
     assert_eq!(keys.len(), got.len());
     for i in 0..keys.len() {
         let k = keys[i] as usize;
-        debug_assert!(want[i] >= 0 && pool[k] >= 0, "draws and pools must be non-negative");
+        debug_assert!(
+            want[i] >= 0 && pool[k] >= 0,
+            "draws and pools must be non-negative"
+        );
         let take = want[i].min(pool[k]).max(0);
         pool[k] -= take;
         got[i] = take;
@@ -287,7 +290,13 @@ mod tests {
 
     #[test]
     fn segmented_reduce_matches_the_sequential_reference() {
-        for &(n, nkeys) in &[(0usize, 8usize), (1, 8), (7, 3), (1000, 257), (10_000, 4096)] {
+        for &(n, nkeys) in &[
+            (0usize, 8usize),
+            (1, 8),
+            (7, 3),
+            (1000, 257),
+            (10_000, 4096),
+        ] {
             let (keys, vals) = fixture(n, nkeys, 0xABCD ^ n as u64);
             let mut want = vec![0i32; nkeys];
             accumulate_i32_reference(&keys, &vals, &mut want);

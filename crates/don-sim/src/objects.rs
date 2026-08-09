@@ -247,9 +247,17 @@ impl ObjectRegistry {
     /// while walking it, and a borrow-checker-friendly iterator over `&self` would
     /// forbid exactly that. It also makes the order directly assertable in a test.
     pub fn traversal(&self, frame: i32) -> Vec<(usize, Band, u32, u32)> {
-        let mut out = Vec::with_capacity(
-            (0..OWNER_SLOTS).map(|s| self.slots[s].units.len()).sum::<usize>() + 16,
-        );
+        let mut out = Vec::new();
+        self.traversal_into(frame, &mut out);
+        out
+    }
+
+    /// [`ObjectRegistry::traversal`] into a caller-owned buffer.
+    ///
+    /// The tick runs this every frame, so allocating the order list each time is pure
+    /// overhead — at 256 units it was the single largest cost in `Objects::process_all`.
+    pub fn traversal_into(&self, frame: i32, out: &mut Vec<(usize, Band, u32, u32)>) {
+        out.clear();
         // Band 0: ten slots, rotating.
         for s in ObjectRegistry::rotation(frame) {
             if !self.active[s] {
@@ -271,7 +279,6 @@ impl ObjectRegistry {
                 out.push((s, Band::Wall, WALL_BAND_BASE + k as u32, row));
             }
         }
-        out
     }
 
     pub fn total_objects(&self) -> usize {
@@ -341,8 +348,14 @@ mod tests {
             r.insert(s, Band::Wall, 3);
         }
         let t = r.traversal(0);
-        let builds_for_8 = t.iter().filter(|e| e.0 >= BANDED_SLOTS && e.1 != Band::Unit).count();
-        assert_eq!(builds_for_8, 0, "slots 8 and 9 must not have their build/wall bands walked");
+        let builds_for_8 = t
+            .iter()
+            .filter(|e| e.0 >= BANDED_SLOTS && e.1 != Band::Unit)
+            .count();
+        assert_eq!(
+            builds_for_8, 0,
+            "slots 8 and 9 must not have their build/wall bands walked"
+        );
         let builds_total = t.iter().filter(|e| e.1 == Band::Build).count();
         assert_eq!(builds_total, BANDED_SLOTS);
         let units_total = t.iter().filter(|e| e.1 == Band::Unit).count();
@@ -357,7 +370,11 @@ mod tests {
         r.insert(0, Band::Unit, 12);
         assert_eq!(r.remove(0, Band::Unit, 0), Some((12, 0)));
         assert_eq!(r.band_len(0, Band::Unit), 2);
-        assert_eq!(r.remove(0, Band::Unit, 1), None, "removing the tail moves nothing");
+        assert_eq!(
+            r.remove(0, Band::Unit, 1),
+            None,
+            "removing the tail moves nothing"
+        );
         assert_eq!(r.remove(0, Band::Unit, 99), None);
     }
 }

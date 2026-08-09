@@ -40,11 +40,22 @@ pub const F_BUILDING: u16 = 1 << 14;
 pub const F_UNIT: u16 = 1 << 15;
 
 pub const FLAG_NAMES: [(&str, u16); 16] = [
-    ("MOVE", F_MOVE), ("ATTACK", F_ATTACK), ("CIVILIAN", F_CIVILIAN), ("SIEGE", F_SIEGE),
-    ("GARR_TOWN", F_GARR_TOWN), ("GARR_FORT", F_GARR_FORT), ("CASTER", F_CASTER),
-    ("AIR", F_AIR), ("SEA", F_SEA), ("TRANSPORT", F_TRANSPORT), ("STEALTH", F_STEALTH),
-    ("DETECT", F_DETECT), ("ANTIAIR", F_ANTIAIR), ("PRODUCER", F_PRODUCER),
-    ("BUILDING", F_BUILDING), ("UNIT", F_UNIT),
+    ("MOVE", F_MOVE),
+    ("ATTACK", F_ATTACK),
+    ("CIVILIAN", F_CIVILIAN),
+    ("SIEGE", F_SIEGE),
+    ("GARR_TOWN", F_GARR_TOWN),
+    ("GARR_FORT", F_GARR_FORT),
+    ("CASTER", F_CASTER),
+    ("AIR", F_AIR),
+    ("SEA", F_SEA),
+    ("TRANSPORT", F_TRANSPORT),
+    ("STEALTH", F_STEALTH),
+    ("DETECT", F_DETECT),
+    ("ANTIAIR", F_ANTIAIR),
+    ("PRODUCER", F_PRODUCER),
+    ("BUILDING", F_BUILDING),
+    ("UNIT", F_UNIT),
 ];
 
 /// One `TypeIndex`'s static capability record. Field names are the shipped XML column
@@ -103,7 +114,13 @@ impl TypeCaps {
         let bb = Self::bitset_bytes_for(NUM_TYPES);
         TypeCaps {
             caps: vec![
-                TypeCap { flags: u16::MAX, hits: 100, move_rate: 1, range_max: 1_000_000, ..Default::default() };
+                TypeCap {
+                    flags: u16::MAX,
+                    hits: 100,
+                    move_rate: 1,
+                    range_max: 1_000_000,
+                    ..Default::default()
+                };
                 NUM_TYPES
             ],
             produces: vec![0xFF; NUM_TYPES * bb],
@@ -181,7 +198,12 @@ impl TypeCaps {
                 produces[a * bb + p / 8] |= 1 << (p % 8);
             }
         }
-        Ok(TypeCaps { caps, produces, bitset_bytes: bb, permissive: false })
+        Ok(TypeCaps {
+            caps,
+            produces,
+            bitset_bytes: bb,
+            permissive: false,
+        })
     }
 
     #[inline]
@@ -214,8 +236,7 @@ pub fn default_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("DON_TYPECAPS") {
         return p.into();
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schema/live/env-typecaps.bin")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/env-typecaps.bin")
 }
 
 #[cfg(test)]
@@ -247,7 +268,10 @@ mod tests {
         // VILLAGE = 414, the first buildingrules entry ("Small City").
         let village = t.get(BUILD_TYPE_BASE as u16);
         assert!(village.has(F_BUILDING));
-        assert!(village.has(F_PRODUCER), "Small City trains Citizens (unit WHERE column)");
+        assert!(
+            village.has(F_PRODUCER),
+            "Small City trains Citizens (unit WHERE column)"
+        );
         let bits = village.flags;
         assert_eq!(bits & F_UNIT, 0, "a building must not carry the UNIT flag");
         // and the producer edge really names the peasant

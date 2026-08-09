@@ -85,6 +85,26 @@ pub struct ModelParams {
     /// Whether the difficulty income bonus (`LeaderData::get_gather_handicap`
     /// `0x006D66A0`) is applied. On by default because retail applies it.
     pub apply_difficulty_bonus: bool,
+    /// The accumulator-period shift, and the **one open calibration question**
+    /// in the whole economy.
+    ///
+    /// `don-sim`'s `resource_period` is `GATHER_RATE << 4` = 7200, read off
+    /// `0x006CE7B9` (`mov ecx,[rules+0x27C]; shl ecx,4`), and
+    /// `credit_resource` divides the per-frame income by it. That makes an
+    /// income of `I` worth `I/16` resources per `GATHER_RATE` (450 frames =
+    /// 30 s). But the same income is clamped against `COMMERCE_CAP`, which is
+    /// the raw `70` at age 0 — so a player pinned at the age-0 commerce cap
+    /// gathers **4.4 resources per 30 s, i.e. 8.75/min**, which is far slower
+    /// than the shipped game plays. Something converts between the two scales
+    /// and this lane did not find it. (`don-sim`'s own doc comment says the
+    /// producers of `gross` are not derived, so the discrepancy may be there
+    /// rather than in the shift.)
+    ///
+    /// `4` is the literal derived value and is the default. `0` — period =
+    /// `GATHER_RATE`, so income is "resources per 30 s" — makes the wall-clock
+    /// economy behave the way the shipped game does, and is what a usable RL
+    /// environment wants until the real answer lands. **Neither is verified.**
+    pub gather_period_shift: u32,
 }
 
 impl Default for ModelParams {
@@ -99,7 +119,12 @@ impl Default for ModelParams {
         gathers.insert("Woodcutter's Camp".to_string(), 1); // Timber
         gathers.insert("Mine".to_string(), 4); // Metal
         gathers.insert("University".to_string(), 3); // Knowledge
-        ModelParams { gather_max, gathers, apply_difficulty_bonus: true }
+        ModelParams {
+            gather_max,
+            gathers,
+            apply_difficulty_bonus: true,
+            gather_period_shift: 4,
+        }
     }
 }
 
@@ -191,7 +216,10 @@ impl Player {
             .count() as i32
     }
     fn city_count(&self, count_inactive: bool) -> i32 {
-        self.cities.iter().filter(|c| count_inactive || c.active).count() as i32
+        self.cities
+            .iter()
+            .filter(|c| count_inactive || c.active)
+            .count() as i32
     }
     fn building(&self, id: i32) -> Option<&Building> {
         self.buildings.iter().find(|b| b.id == id)
@@ -242,8 +270,10 @@ impl Game {
     /// A fresh match. `nations` names one player per entry; all are AI.
     pub fn new(rules: Rules, nations: &[&str], difficulty: Difficulty) -> Game {
         let params = ModelParams::default();
-        let econ =
-            EconomyRules { commerce_cap: rules.constants.commerce_cap, ..EconomyRules::shipped() };
+        let econ = EconomyRules {
+            commerce_cap: rules.constants.commerce_cap,
+            ..EconomyRules::shipped()
+        };
         let mut players = Vec::new();
         for (i, n) in nations.iter().enumerate() {
             players.push(Player {
@@ -307,7 +337,12 @@ impl Game {
         }
         let name = format!("{}-1", self.players[idx].nation);
         let id = self.next_id(idx);
-        self.players[idx].cities.push(City { id, name, active: true, frames_left: 0 });
+        self.players[idx].cities.push(City {
+            id,
+            name,
+            active: true,
+            frames_left: 0,
+        });
         self.players[idx].units.insert("Citizen".into(), 3);
         if size >= 2 {
             let template = self.rules.small_town_template.clone();
@@ -326,7 +361,12 @@ impl Game {
 
     fn spawn_building(&mut self, idx: usize, ty: &str, city: Option<usize>, active: bool) -> i32 {
         let id = self.next_id(idx);
-        let job = self.rules.buildings.get(ty).map(|b| b.job_time).unwrap_or(0);
+        let job = self
+            .rules
+            .buildings
+            .get(ty)
+            .map(|b| b.job_time)
+            .unwrap_or(0);
         let gm = *self.params.gather_max.get(ty).unwrap_or(&0);
         self.players[idx].buildings.push(Building {
             id,
@@ -343,7 +383,11 @@ impl Game {
 
     fn note(&mut self, who: i32, text: String) {
         if self.logging {
-            self.log.push(Event { frame: self.frame, who, text });
+            self.log.push(Event {
+                frame: self.frame,
+                who,
+                text,
+            });
         }
     }
 
@@ -407,7 +451,14 @@ impl Game {
         } else {
             0
         };
-        let period = resource_period(self.econ.gather_rate);
+        // `resource_period` is `GATHER_RATE << 4`; the shift is the knob.
+        let period = if self.params.gather_period_shift == 4 {
+            resource_period(self.econ.gather_rate)
+        } else {
+            self.econ
+                .gather_rate
+                .wrapping_shl(self.params.gather_period_shift)
+        };
         for res in 0..NRES {
             let cap = commerce_cap(age, res, &self.econ, &CommerceCapGates::default(), 0);
             let input = ResourceTickInput {
@@ -432,8 +483,7 @@ impl Game {
             if let Some(income) = out.accumulated {
                 let acc = &mut self.players[idx].acc[res];
                 let whole = credit_resource(income, period, acc);
-                self.players[idx].stock[res] =
-                    self.players[idx].stock[res].saturating_add(whole);
+                self.players[idx].stock[res] = self.players[idx].stock[res].saturating_add(whole);
             }
         }
     }
@@ -465,7 +515,12 @@ impl Game {
             pop += self.rules.units.get(ty).map(|u| u.pop).unwrap_or(1) * n;
         }
         for (_, j) in &p.queue {
-            pop += self.rules.units.get(&j.unit_type).map(|u| u.pop).unwrap_or(1);
+            pop += self
+                .rules
+                .units
+                .get(&j.unit_type)
+                .map(|u| u.pop)
+                .unwrap_or(1);
         }
         pop
     }
@@ -627,7 +682,11 @@ impl Game {
 
     fn submit_inner(&mut self, idx: usize, o: &Order) -> OrderResult {
         match o {
-            Order::PlaceBuilding { build_type, city_name, .. } => {
+            Order::PlaceBuilding {
+                build_type,
+                city_name,
+                ..
+            } => {
                 let Some(ci) = self.players[idx].city_index(city_name) else {
                     return OrderResult::Invalid;
                 };
@@ -635,16 +694,26 @@ impl Game {
             }
             // DEVIATION 1: with no map, an orphan placement is a placement whose
             // city is the anchor's city. The anchor only matters spatially.
-            Order::PlaceOrphanBuilding { build_type, near, .. } => {
+            Order::PlaceOrphanBuilding {
+                build_type, near, ..
+            } => {
                 let ci = self.players[idx].building(*near).and_then(|b| b.city);
                 self.place(idx, build_type, ci)
             }
-            Order::PlaceBuildingUpgrade { build_type, city_name, .. } => {
+            Order::PlaceBuildingUpgrade {
+                build_type,
+                city_name,
+                ..
+            } => {
                 let Some(ci) = self.players[idx].city_index(city_name) else {
                     return OrderResult::Invalid;
                 };
                 // An upgrade replaces its `FROM` predecessor in that city.
-                let from = self.rules.buildings.get(build_type).and_then(|b| b.from.clone());
+                let from = self
+                    .rules
+                    .buildings
+                    .get(build_type)
+                    .and_then(|b| b.from.clone());
                 let target = from.and_then(|f| {
                     self.players[idx]
                         .buildings
@@ -688,9 +757,12 @@ impl Game {
                 OrderResult::Ok(id)
             }
             Order::TrainUnit { num, unit_type, .. } => self.train(idx, *num, unit_type, None),
-            Order::TrainUnitAt { num, unit_type, build_o, .. } => {
-                self.train(idx, *num, unit_type, Some(*build_o))
-            }
+            Order::TrainUnitAt {
+                num,
+                unit_type,
+                build_o,
+                ..
+            } => self.train(idx, *num, unit_type, Some(*build_o)),
             Order::ResearchTech { tech, .. } => {
                 let Some(t) = self.rules.techs.get(tech).cloned() else {
                     return OrderResult::Invalid;
@@ -714,13 +786,19 @@ impl Game {
                     return OrderResult::Refused;
                 }
                 self.pay(idx, &t.costs);
-                self.players[idx].researching =
-                    Some(Research { tech: tech.clone(), frames_left: t.job_time.max(1) });
+                self.players[idx].researching = Some(Research {
+                    tech: tech.clone(),
+                    frames_left: t.job_time.max(1),
+                });
                 self.note(idx as i32 + 1, format!("research {tech}"));
                 OrderResult::Ok(1)
             }
             Order::DestroyBuilding { build_o, .. } => {
-                match self.players[idx].buildings.iter().position(|b| b.id == *build_o) {
+                match self.players[idx]
+                    .buildings
+                    .iter()
+                    .position(|b| b.id == *build_o)
+                {
                     Some(i) => {
                         let b = self.players[idx].buildings.remove(i);
                         self.players[idx].assigned -= b.workers;
@@ -739,7 +817,11 @@ impl Game {
                 if idle <= 0 {
                     return OrderResult::Refused;
                 }
-                match self.players[idx].buildings.iter_mut().find(|b| b.id == target) {
+                match self.players[idx]
+                    .buildings
+                    .iter_mut()
+                    .find(|b| b.id == target)
+                {
                     Some(b) if b.active && b.workers < b.gather_max => {
                         b.workers += 1;
                         self.players[idx].assigned += 1;
@@ -815,9 +897,13 @@ impl Game {
                 break;
             }
             self.pay(idx, &u.costs);
-            self.players[idx]
-                .queue
-                .push((city, TrainJob { unit_type: ty.to_string(), frames_left: u.job_time.max(1) }));
+            self.players[idx].queue.push((
+                city,
+                TrainJob {
+                    unit_type: ty.to_string(),
+                    frames_left: u.job_time.max(1),
+                },
+            ));
             made += 1;
         }
         if made == 0 {
@@ -903,7 +989,11 @@ impl ScriptWorld for PlayerView<'_> {
     fn num_type_with_queued(&self, who: i32, unit_type: &str) -> i32 {
         let i = guard!(self, who);
         let p = &self.game.players[i];
-        let cities = if unit_type.ends_with("City") { p.city_count(true) } else { 0 };
+        let cities = if unit_type.ends_with("City") {
+            p.city_count(true)
+        } else {
+            0
+        };
         p.unit_count(unit_type)
             + p.queued_count(unit_type)
             + p.building_count(unit_type, true)
@@ -941,7 +1031,9 @@ impl ScriptWorld for PlayerView<'_> {
             .iter()
             .filter(|t| {
                 let r = &self.game.rules.techs[*t];
-                r.age as usize == age && !t.ends_with(" Age") && r.where_.as_deref() == Some("Library")
+                r.age as usize == age
+                    && !t.ends_with(" Age")
+                    && r.where_.as_deref() == Some("Library")
             })
             .count() as i32
     }
@@ -952,7 +1044,10 @@ impl ScriptWorld for PlayerView<'_> {
     fn researching_tech(&self, who: i32, tech_type: &str) -> i32 {
         let i = guard!(self, who);
         i32::from(
-            self.game.players[i].researching.as_ref().map(|r| r.tech.as_str())
+            self.game.players[i]
+                .researching
+                .as_ref()
+                .map(|r| r.tech.as_str())
                 == Some(tech_type),
         )
     }
@@ -1002,12 +1097,12 @@ impl ScriptWorld for PlayerView<'_> {
     ) -> i32 {
         let i = guard!(self, who);
         let p = &self.game.players[i];
-        let Some(ci) = p.city_index(city_name) else { return -1 };
+        let Some(ci) = p.city_index(city_name) else {
+            return -1;
+        };
         p.buildings
             .iter()
-            .find(|b| {
-                b.ty == build_type && b.city == Some(ci) && (count_inactive != 0 || b.active)
-            })
+            .find(|b| b.ty == build_type && b.city == Some(ci) && (count_inactive != 0 || b.active))
             .map(|b| b.id)
             .unwrap_or(-1)
     }
@@ -1059,7 +1154,9 @@ impl ScriptWorld for PlayerView<'_> {
     ) -> i32 {
         let i = guard!(self, who);
         let p = &self.game.players[i];
-        let Some(ci) = p.city_index(city_name) else { return 0 };
+        let Some(ci) = p.city_index(city_name) else {
+            return 0;
+        };
         p.buildings
             .iter()
             .filter(|b| {
@@ -1082,7 +1179,10 @@ impl ScriptWorld for PlayerView<'_> {
     }
     fn num_workers_at_building(&self, who: i32, build_o: i32) -> i32 {
         let i = guard!(self, who);
-        self.game.players[i].building(build_o).map(|b| b.workers).unwrap_or(-1)
+        self.game.players[i]
+            .building(build_o)
+            .map(|b| b.workers)
+            .unwrap_or(-1)
     }
     fn max_workers_at_building(&self, who: i32, build_o: i32) -> i32 {
         let i = guard!(self, who);
@@ -1108,8 +1208,13 @@ impl ScriptWorld for PlayerView<'_> {
     fn num_type_queued(&self, who: i32, build_o: i32, unit_type: &str) -> i32 {
         let i = guard!(self, who);
         let p = &self.game.players[i];
-        let Some(ci) = p.cities.iter().position(|c| c.id == build_o) else { return -1 };
-        p.queue.iter().filter(|(c, j)| *c == ci && j.unit_type == unit_type).count() as i32
+        let Some(ci) = p.cities.iter().position(|c| c.id == build_o) else {
+            return -1;
+        };
+        p.queue
+            .iter()
+            .filter(|(c, j)| *c == ci && j.unit_type == unit_type)
+            .count() as i32
     }
     fn find_num_idle_unit(&self, who: i32, unit_type: &str) -> i32 {
         let i = guard!(self, who);
@@ -1133,7 +1238,9 @@ impl ScriptWorld for PlayerView<'_> {
     fn set_timer(&mut self, timer_id: &str, seconds: i32) -> i32 {
         let Some(i) = self.idx() else { return -1 };
         let expiry = self.game.frame + (seconds as i64) * FRAMES_PER_SECOND as i64;
-        self.game.players[i].timers.insert(timer_id.to_string(), expiry as i32);
+        self.game.players[i]
+            .timers
+            .insert(timer_id.to_string(), expiry as i32);
         1
     }
     fn stop_timer(&mut self, timer_id: &str) -> i32 {
@@ -1151,12 +1258,19 @@ impl ScriptWorld for PlayerView<'_> {
 
     fn research_tech_with_cost(&mut self, who: i32, tech: &str) -> i32 {
         self.game
-            .submit(Order::ResearchTech { who, tech: tech.to_string() })
+            .submit(Order::ResearchTech {
+                who,
+                tech: tech.to_string(),
+            })
             .as_i32()
     }
     fn train_unit_with_cost(&mut self, who: i32, num: i32, unit_type: &str) -> i32 {
         self.game
-            .submit(Order::TrainUnit { who, num, unit_type: unit_type.to_string() })
+            .submit(Order::TrainUnit {
+                who,
+                num,
+                unit_type: unit_type.to_string(),
+            })
             .as_i32()
     }
     fn train_unit_at_with_cost(
@@ -1184,12 +1298,7 @@ impl ScriptWorld for PlayerView<'_> {
             })
             .as_i32()
     }
-    fn place_orphan_building_with_cost(
-        &mut self,
-        who: i32,
-        build_type: &str,
-        build_o: i32,
-    ) -> i32 {
+    fn place_orphan_building_with_cost(&mut self, who: i32, build_type: &str, build_o: i32) -> i32 {
         self.game
             .submit(Order::PlaceOrphanBuilding {
                 who,
@@ -1216,11 +1325,17 @@ impl ScriptWorld for PlayerView<'_> {
         self.game.submit(Order::PlaceCity { who }).as_i32()
     }
     fn destroy_building(&mut self, who: i32, build_o: i32) -> i32 {
-        self.game.submit(Order::DestroyBuilding { who, build_o }).as_i32()
+        self.game
+            .submit(Order::DestroyBuilding { who, build_o })
+            .as_i32()
     }
     fn citizen_repair_order(&mut self, who: i32, unit_o: i32, build_o_target: i32) -> i32 {
         self.game
-            .submit(Order::CitizenRepair { who, unit_o, build_o_target })
+            .submit(Order::CitizenRepair {
+                who,
+                unit_o,
+                build_o_target,
+            })
             .as_i32()
     }
 
@@ -1236,7 +1351,9 @@ impl ScriptWorld for PlayerView<'_> {
         0
     }
     fn unit_move_order(&mut self, who: i32, unit_o: i32, x: i32, y: i32) -> i32 {
-        self.game.submit(Order::MoveUnit { who, unit_o, x, y }).as_i32()
+        self.game
+            .submit(Order::MoveUnit { who, unit_o, x, y })
+            .as_i32()
     }
 }
 
@@ -1287,7 +1404,11 @@ mod tests {
         assert_eq!(r, OrderResult::Refused);
         // An unknown type is invalid, which is what the shipped `"Citizens"`
         // typo hits.
-        let r = g.submit(Order::TrainUnit { who: 1, num: 1, unit_type: "Citizens".into() });
+        let r = g.submit(Order::TrainUnit {
+            who: 1,
+            num: 1,
+            unit_type: "Citizens".into(),
+        });
         assert_eq!(r, OrderResult::Invalid);
     }
 
@@ -1319,9 +1440,22 @@ mod tests {
     #[test]
     fn max_workers_reports_minus_one_for_a_non_gatherer() {
         let Some(mut g) = game(1) else { return };
-        let lib = g.players[0].buildings.iter().find(|b| b.ty == "Library").unwrap().id;
-        let farm = g.players[0].buildings.iter().find(|b| b.ty == "Farm").unwrap().id;
-        let v = PlayerView { game: &mut g, who: 1 };
+        let lib = g.players[0]
+            .buildings
+            .iter()
+            .find(|b| b.ty == "Library")
+            .unwrap()
+            .id;
+        let farm = g.players[0]
+            .buildings
+            .iter()
+            .find(|b| b.ty == "Farm")
+            .unwrap()
+            .id;
+        let v = PlayerView {
+            game: &mut g,
+            who: 1,
+        };
         assert_eq!(v.max_workers_at_building(1, lib), -1);
         assert_eq!(v.max_workers_at_building(1, farm), 1);
         assert_eq!(v.max_workers_at_building(9, farm), -1); // bad `who`
@@ -1331,7 +1465,9 @@ mod tests {
     fn difficulty_scales_income_exactly_as_the_bonus_table_says() {
         let mut totals = Vec::new();
         for d in [Difficulty::Easiest, Difficulty::Tough, Difficulty::Toughest] {
-            let Some(rules) = Rules::load(&default_data_dir()).ok() else { return };
+            let Some(rules) = Rules::load(&default_data_dir()).ok() else {
+                return;
+            };
             let mut g = Game::new(rules, &["Romans"], d);
             for _ in 0..4500 {
                 g.step();
@@ -1339,7 +1475,13 @@ mod tests {
             totals.push(g.players[0].stock[0]);
         }
         let [easiest, tough, toughest] = [totals[0], totals[1], totals[2]];
-        assert!(easiest < tough, "Easiest {easiest} should trail Tough {tough}");
-        assert!(toughest > tough, "Toughest {toughest} should beat Tough {tough}");
+        assert!(
+            easiest < tough,
+            "Easiest {easiest} should trail Tough {tough}"
+        );
+        assert!(
+            toughest > tough,
+            "Toughest {toughest} should beat Tough {tough}"
+        );
     }
 }

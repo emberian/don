@@ -15,8 +15,14 @@ use don_replay::report;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
-    // The binary lives at <root>/target/<profile>/don-replay, but it may also be
-    // invoked from anywhere, so prefer the compile-time manifest path.
+    // `DON_ROOT` wins, because the crate can be built out of tree (a shadow
+    // workspace is how this lane builds while a sibling lane has `don-net`
+    // mid-refactor) and the corpus lives in the repo, not next to the manifest.
+    if let Ok(p) = std::env::var("DON_ROOT") {
+        return PathBuf::from(p);
+    }
+    // Otherwise the binary lives at <root>/target/<profile>/don-replay, but it
+    // may be invoked from anywhere, so use the compile-time manifest path.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -63,7 +69,11 @@ fn parse() -> Result<Args, String> {
                     .ok_or("--latency wants an integer")?
             }
             "--limit" => {
-                a.limit = Some(it.next().and_then(|v| v.parse().ok()).ok_or("--limit wants an integer")?)
+                a.limit = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--limit wants an integer")?,
+                )
             }
             "--json" => a.json = Some(PathBuf::from(it.next().ok_or("--json wants a path")?)),
             "--quiet" => a.quiet = true,
@@ -140,7 +150,8 @@ fn validate(args: &Args) {
     }
 
     // ---- headline ----
-    let with_cs: Vec<&harness::RunResult> = runs.iter().filter(|r| r.checksum_packets > 0).collect();
+    let with_cs: Vec<&harness::RunResult> =
+        runs.iter().filter(|r| r.checksum_packets > 0).collect();
     println!("=== replay validation ===");
     println!(
         "files {} ({} carry checksums), turns {}, checksum packets {}",
@@ -163,7 +174,11 @@ fn validate(args: &Args) {
     for i in 0..NUM_CHANNELS {
         println!(
             "  {:<16} {:>5}  {:>9}  {:>9}  {:>9}   {:>9}",
-            CHANNEL_NAMES[i], t.best_survived[i], t.compares[i], t.matches[i], t.trivial[i],
+            CHANNEL_NAMES[i],
+            t.best_survived[i],
+            t.compares[i],
+            t.matches[i],
+            t.trivial[i],
             t.crossplay_per_channel[i]
         );
     }
@@ -171,7 +186,10 @@ fn validate(args: &Args) {
         .max_by_key(|&i| t.best_survived[i])
         .map(|i| (i, t.best_survived[i]))
         .unwrap();
-    println!("\nHEADLINE: {} turns survived on channel `{}`", bv, CHANNEL_NAMES[bi]);
+    println!(
+        "\nHEADLINE: {} turns survived on channel `{}`",
+        bv, CHANNEL_NAMES[bi]
+    );
 
     if let Some(p) = &args.json {
         let js = report::to_json(&runs, "crates/don-replay/src/bin/don-replay.rs validate");
@@ -277,14 +295,20 @@ fn crossplay(args: &Args) {
 }
 
 fn walkers() {
-    let (bytes, tag, sub, unres, other) = don_replay::walk::table_coverage();
+    let c = don_replay::walk::table_coverage();
     println!("generated DataWalk table (schema/state-schema.json)");
-    println!("  classes            {}", don_replay::SPECS.len());
-    println!("  byte-range ops     {bytes}");
-    println!("  tag ops            {tag}");
-    println!("  sub-object ops     {sub}");
-    println!("  unresolved ops     {unres}");
-    println!("  virtual / unknown  {other}");
+    println!(
+        "  classes                        {}",
+        don_replay::SPECS.len()
+    );
+    println!("  executable this-relative ranges {}", c.bytes);
+    println!("  tag ops                        {}", c.tag);
+    println!("  sub-object ops                 {}", c.sub);
+    println!("  resolved length, no base       {}", c.length_only);
+    println!("  ranges on a global object      {}", c.global);
+    println!("  fully unresolved               {}", c.unresolved);
+    println!("  virtual dispatch               {}", c.virtual_dispatch);
+    println!("  sub-object, class unknown      {}", c.sub_unknown);
     println!("\nchannel element walkers:");
     for i in 0..NUM_WALKED {
         let cls = don_replay::state::CHANNEL_ELEMENT_CLASS[i];

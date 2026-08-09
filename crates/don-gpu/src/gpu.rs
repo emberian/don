@@ -298,7 +298,9 @@ impl<'g> FlowSolver<'g> {
         let cells = (width as u64) * (height as u64) * (fields as u64);
         let bytes = cells * 4;
         let d = &gpu.device;
-        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+        let storage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
         let mk = |label: &str, usage| {
             d.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -314,7 +316,9 @@ impl<'g> FlowSolver<'g> {
         let flags = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flags"),
             size: flag_bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let flags_staging = d.create_buffer(&wgpu::BufferDescriptor {
@@ -363,12 +367,30 @@ impl<'g> FlowSolver<'g> {
                     label: Some("relax-bg"),
                     layout: &gpu.relax_layout,
                     entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: chunk_params[c].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: cost.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: dist[parity].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: dist[1 - parity].as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: flags.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: active.as_entire_binding() },
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: chunk_params[c].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: cost.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: dist[parity].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: dist[1 - parity].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: flags.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: active.as_entire_binding(),
+                        },
                     ],
                 }));
             }
@@ -401,15 +423,24 @@ impl<'g> FlowSolver<'g> {
 
     /// Upload the batch's cost and initial distance columns.
     pub fn upload(&mut self, b: &FieldBatch) -> Duration {
-        assert_eq!((b.width, b.height, b.fields), (self.width, self.height, self.fields));
+        assert_eq!(
+            (b.width, b.height, b.fields),
+            (self.width, self.height, self.fields)
+        );
         assert!(
             b.cost.iter().all(|&c| c == COST_BLOCKED || c <= MAX_COST),
             "entry costs must be <= MAX_COST or exactly COST_BLOCKED"
         );
         let t = Instant::now();
-        self.gpu.queue.write_buffer(&self.cost, 0, bytemuck::cast_slice(&b.cost));
-        self.gpu.queue.write_buffer(&self.dist[0], 0, bytemuck::cast_slice(&b.dist));
-        self.gpu.queue.write_buffer(&self.dist[1], 0, bytemuck::cast_slice(&b.dist));
+        self.gpu
+            .queue
+            .write_buffer(&self.cost, 0, bytemuck::cast_slice(&b.cost));
+        self.gpu
+            .queue
+            .write_buffer(&self.dist[0], 0, bytemuck::cast_slice(&b.dist));
+        self.gpu
+            .queue
+            .write_buffer(&self.dist[1], 0, bytemuck::cast_slice(&b.dist));
         self.parity = 0;
         self.reset_active();
         self.gpu.queue.submit([]);
@@ -483,7 +514,11 @@ impl<'g> FlowSolver<'g> {
         } else {
             opts.rounds_per_poll.max(1)
         };
-        let cap = if compact { opts.max_rounds.next_multiple_of(2) } else { opts.max_rounds };
+        let cap = if compact {
+            opts.max_rounds.next_multiple_of(2)
+        } else {
+            opts.max_rounds
+        };
         let t = Instant::now();
 
         while stats.rounds < cap && self.active_len > 0 {
@@ -492,7 +527,9 @@ impl<'g> FlowSolver<'g> {
             let mut enc = self
                 .gpu
                 .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("relax") });
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("relax"),
+                });
             enc.clear_buffer(&self.flags, 0, None);
             {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -553,7 +590,10 @@ impl<'g> FlowSolver<'g> {
                     stats.converged = true;
                     break;
                 }
-            } else if !self.flag_host[..self.fields as usize].iter().any(|&f| f != 0) {
+            } else if !self.flag_host[..self.fields as usize]
+                .iter()
+                .any(|&f| f != 0)
+            {
                 stats.converged = true;
                 break;
             }
@@ -589,7 +629,10 @@ impl<'g> FlowSolver<'g> {
     /// Copy the solved distance column back into the batch.
     pub fn download(&self, b: &mut FieldBatch) -> Duration {
         let t = Instant::now();
-        self.copy_into(&self.dist[self.parity], bytemuck::cast_slice_mut(&mut b.dist));
+        self.copy_into(
+            &self.dist[self.parity],
+            bytemuck::cast_slice_mut(&mut b.dist),
+        );
         t.elapsed()
     }
 
@@ -618,20 +661,37 @@ impl<'g> FlowSolver<'g> {
                 contents: bytemuck::bytes_of(&p),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("dir-bg"),
-            layout: &self.gpu.dir_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: pbuf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.cost.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: self.dist[self.parity].as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: self.dirs.as_entire_binding() },
-            ],
-        });
+        let bg = self
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("dir-bg"),
+                layout: &self.gpu.dir_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: pbuf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.cost.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.dist[self.parity].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.dirs.as_entire_binding(),
+                    },
+                ],
+            });
         let mut enc = self
             .gpu
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("dirs") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("dirs"),
+            });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("dirs"),
@@ -650,7 +710,9 @@ impl<'g> FlowSolver<'g> {
         let mut enc = self
             .gpu
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("readback"),
+            });
         enc.copy_buffer_to_buffer(src, 0, &self.readback, 0, bytes);
         self.gpu.queue.submit([enc.finish()]);
         let slice = self.readback.slice(..);

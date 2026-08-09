@@ -8,12 +8,7 @@ use don_net::transport::TcpTransport;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-fn run_peer(
-    mut s: Session<TcpTransport>,
-    slot: i8,
-    turns: u32,
-    tx: mpsc::Sender<(String, u64)>,
-) {
+fn run_peer(mut s: Session<TcpTransport>, slot: i8, turns: u32, tx: mpsc::Sender<(String, u64)>) {
     let start = Instant::now();
     let now = || start.elapsed().as_millis() as u64;
 
@@ -39,7 +34,10 @@ fn run_peer(
         while !s.turn_ready(stamp) {
             s.poll(now(), Duration::from_millis(5)).unwrap();
             s.drain_events();
-            assert!(start.elapsed() < Duration::from_secs(20), "turn {stamp} timeout");
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "turn {stamp} timeout"
+            );
         }
         for p in s.take_turn(stamp) {
             hash = hash.wrapping_mul(1_000_003).wrapping_add(p.stamp as u64);

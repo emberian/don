@@ -70,7 +70,11 @@ pub struct LoopTransport {
 
 impl LoopTransport {
     pub fn new(id: i32) -> Self {
-        LoopTransport { id, inbox: VecDeque::new(), outbox: Vec::new() }
+        LoopTransport {
+            id,
+            inbox: VecDeque::new(),
+            outbox: Vec::new(),
+        }
     }
 
     pub fn connect(&mut self, peer: i32) {
@@ -181,7 +185,13 @@ impl TcpTransport {
         };
         // Host id is not known until it replies; 0 is a placeholder that
         // `poll` overwrites from the host's own hello frame.
-        t.peers.push(Peer { id: 0, sock, rx: Vec::new(), identified: false, dead: false });
+        t.peers.push(Peer {
+            id: 0,
+            sock,
+            rx: Vec::new(),
+            identified: false,
+            dead: false,
+        });
         let hello = t.id.to_le_bytes().to_vec();
         write_frame(&mut t.peers[0].sock, &hello)?;
         Ok(t)
@@ -199,14 +209,21 @@ impl TcpTransport {
     }
 
     fn accept_pending(&mut self) -> io::Result<()> {
-        let Some(l) = &self.listener else { return Ok(()) };
+        let Some(l) = &self.listener else {
+            return Ok(());
+        };
         loop {
             match l.accept() {
                 Ok((sock, _)) => {
                     sock.set_nodelay(true)?;
                     sock.set_nonblocking(true)?;
-                    let mut p =
-                        Peer { id: 0, sock, rx: Vec::new(), identified: false, dead: false };
+                    let mut p = Peer {
+                        id: 0,
+                        sock,
+                        rx: Vec::new(),
+                        identified: false,
+                        dead: false,
+                    };
                     write_frame(&mut p.sock, &self.id.to_le_bytes())?;
                     self.peers.push(p);
                 }
@@ -323,7 +340,10 @@ impl Transport for TcpTransport {
                     if self.is_host {
                         relay.push((p.id, body.clone()));
                     }
-                    self.inbox.push_back(Datagram { from: p.id, bytes: body });
+                    self.inbox.push_back(Datagram {
+                        from: p.id,
+                        bytes: body,
+                    });
                 }
             }
             // Host relay: everything a client sends reaches every other client.
@@ -356,7 +376,11 @@ impl Transport for TcpTransport {
     }
 
     fn peers(&self) -> Vec<i32> {
-        self.peers.iter().filter(|p| p.identified && !p.dead).map(|p| p.id).collect()
+        self.peers
+            .iter()
+            .filter(|p| p.identified && !p.dead)
+            .map(|p| p.id)
+            .collect()
     }
 
     fn local_id(&self) -> i32 {
@@ -378,10 +402,28 @@ mod tests {
         a.send(Dest::All, &[4]).unwrap();
         b.send(Dest::One(1), &[9, 9]).unwrap();
         LoopTransport::pump(&mut a, &mut b);
-        assert_eq!(b.recv().unwrap(), Some(Datagram { from: 1, bytes: vec![1, 2, 3] }));
-        assert_eq!(b.recv().unwrap(), Some(Datagram { from: 1, bytes: vec![4] }));
+        assert_eq!(
+            b.recv().unwrap(),
+            Some(Datagram {
+                from: 1,
+                bytes: vec![1, 2, 3]
+            })
+        );
+        assert_eq!(
+            b.recv().unwrap(),
+            Some(Datagram {
+                from: 1,
+                bytes: vec![4]
+            })
+        );
         assert_eq!(b.recv().unwrap(), None);
-        assert_eq!(a.recv().unwrap(), Some(Datagram { from: 2, bytes: vec![9, 9] }));
+        assert_eq!(
+            a.recv().unwrap(),
+            Some(Datagram {
+                from: 2,
+                bytes: vec![9, 9]
+            })
+        );
     }
 
     #[test]
@@ -410,7 +452,13 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(got, Some(Datagram { from: 2, bytes: b"turn-0".to_vec() }));
+        assert_eq!(
+            got,
+            Some(Datagram {
+                from: 2,
+                bytes: b"turn-0".to_vec()
+            })
+        );
 
         host.send(Dest::One(2), b"turn-1").unwrap();
         let mut got = None;
@@ -421,6 +469,12 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(got, Some(Datagram { from: 1, bytes: b"turn-1".to_vec() }));
+        assert_eq!(
+            got,
+            Some(Datagram {
+                from: 1,
+                bytes: b"turn-1".to_vec()
+            })
+        );
     }
 }

@@ -29,17 +29,38 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Order {
     /// `place_building_with_cost(who, build_type, city_name)` @ `0x009F54A0`.
-    PlaceBuilding { who: i32, build_type: String, city_name: String },
+    PlaceBuilding {
+        who: i32,
+        build_type: String,
+        city_name: String,
+    },
     /// `place_orphan_building_with_cost(who, build_type, build_o)` @ `0x009F5520`.
-    PlaceOrphanBuilding { who: i32, build_type: String, near: i32 },
+    PlaceOrphanBuilding {
+        who: i32,
+        build_type: String,
+        near: i32,
+    },
     /// `place_building_upgrade_with_cost(who, build_type, city_name)` @ `0x009F5680`.
-    PlaceBuildingUpgrade { who: i32, build_type: String, city_name: String },
+    PlaceBuildingUpgrade {
+        who: i32,
+        build_type: String,
+        city_name: String,
+    },
     /// `place_city_with_cost(who)` @ `0x009F5860`.
     PlaceCity { who: i32 },
     /// `train_unit_with_cost(who, num, unit_type)` @ `0x009F42D0`.
-    TrainUnit { who: i32, num: i32, unit_type: String },
+    TrainUnit {
+        who: i32,
+        num: i32,
+        unit_type: String,
+    },
     /// `train_unit_at_with_cost(who, num, unit_type, build_o)` @ `0x009F4460`.
-    TrainUnitAt { who: i32, num: i32, unit_type: String, build_o: i32 },
+    TrainUnitAt {
+        who: i32,
+        num: i32,
+        unit_type: String,
+        build_o: i32,
+    },
     /// `research_tech_with_cost(who, tech)` @ `0x009EE700`.
     ResearchTech { who: i32, tech: String },
     /// `destroy_building(who, build_o)` @ `0x009F6FC0`.
@@ -47,9 +68,18 @@ pub enum Order {
     /// `unit_move_order(who, unit_o, x, y)`. In this model a citizen "moved to"
     /// a gatherer building is assigned to one of its worker slots, which is what
     /// the order accomplishes in retail once the unit arrives.
-    MoveUnit { who: i32, unit_o: i32, x: i32, y: i32 },
+    MoveUnit {
+        who: i32,
+        unit_o: i32,
+        x: i32,
+        y: i32,
+    },
     /// `citizen_repair_order(who, unit_o, build_o_target)` @ `0x009F85B0`.
-    CitizenRepair { who: i32, unit_o: i32, build_o_target: i32 },
+    CitizenRepair {
+        who: i32,
+        unit_o: i32,
+        build_o_target: i32,
+    },
 }
 
 impl Order {

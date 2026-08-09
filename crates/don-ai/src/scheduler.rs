@@ -59,7 +59,6 @@
 use crate::abi::{schedule, AiStage, ScriptResult};
 use crate::economic::{economic, EconomicStatics};
 use crate::game::{Game, PlayerView};
-use crate::library::LibraryStatics;
 
 /// How many times each compiled stage was entered, so a match report can say
 /// what the *script* did versus what the stubs did.
@@ -84,7 +83,26 @@ pub struct StageCounters {
 pub struct AiRuntime {
     /// `LeaderData::production_step` `+0x788`.
     pub production_step: i32,
-    /// `LeaderData::prod_script_run` `+0x78C`.
+    /// `LeaderData::prod_script_run` `+0x78C` — **a one-way latch**.
+    ///
+    /// `[measured]` A whole-binary scan of every reference to `+0x78C`, done
+    /// per-function over `schema/symbols.json` so no code is missed, finds
+    /// exactly four sites:
+    ///
+    /// | site | VA | instruction |
+    /// |---|---|---|
+    /// | `Leader::init` | `0x006E4966` | `mov [ebx+0x78C], ecx` |
+    /// | `Leader::init` | `0x006E4CC7` | `mov [ebx+0x78C], 1` |
+    /// | `Leader::production_ai` | `0x006C19B1` | `cmp [edi+0x78C], 0` |
+    /// | `Leader::production_ai` | `0x006C1A9F` | `mov [ebx+0x78C], 0` |
+    ///
+    /// plus one further *read* in `Leader::gain_tech` at `0x006DED9B`. It is
+    /// set to 1 once, at `Leader::init`, and cleared exactly once, when the
+    /// script returns `SCRIPT_DONE`. **Nothing re-arms it.** So the BHS
+    /// production script is a **one-shot opening**: the first `SCRIPT_DONE` —
+    /// whether the 36-step build order finished or its own 300-second hang
+    /// watchdog fired — retires the script for the rest of the match, and the
+    /// compiled stages carry the player from there.
     pub prod_script_run: i32,
     /// `LeaderData::script_step` `+0x790`. Initialised to 1: a live read of the
     /// running game found a human player's field at exactly 1 and an AI's at 35.
@@ -112,10 +130,9 @@ impl Default for AiRuntime {
 #[derive(Clone, Debug)]
 pub struct AiSet {
     pub runtimes: Vec<AiRuntime>,
-    /// `economic.bhs`'s statics, including the genuinely shared `needed_techs`.
+    /// `economic.bhs`'s statics, including the genuinely shared `needed_techs`
+    /// and, in `.lib`, `aibestbuildlibrary.bhs`'s own shared statics.
     pub economic_statics: EconomicStatics,
-    /// `aibestbuildlibrary.bhs`'s statics, likewise shared.
-    pub library_statics: LibraryStatics,
 }
 
 impl AiSet {
@@ -123,7 +140,6 @@ impl AiSet {
         AiSet {
             runtimes: vec![AiRuntime::default(); n],
             economic_statics: EconomicStatics::new(),
-            library_statics: LibraryStatics::default(),
         }
     }
 
@@ -131,7 +147,6 @@ impl AiSet {
     /// the shipped build order parks on step 10; see
     /// [`crate::library::city_placement`].
     pub fn with_trigger_model(mut self, on: bool) -> AiSet {
-        self.library_statics.model_triggers = on;
         self.economic_statics.lib.model_triggers = on;
         self
     }
@@ -361,12 +376,18 @@ mod tests {
         for (tick, who) in &starts {
             assert_eq!(who.len(), 1, "tick {tick} started {who:?} together");
         }
-        assert_eq!(starts.len(), 8, "each of 8 players should start exactly once");
+        assert_eq!(
+            starts.len(),
+            8,
+            "each of 8 players should start exactly once"
+        );
     }
 
     #[test]
     fn a_cycle_walks_the_stages_one_per_tick() {
-        let Some((mut g, mut a)) = match_of(1) else { return };
+        let Some((mut g, mut a)) = match_of(1) else {
+            return;
+        };
         // Force a cycle open at stage 2 so the script stage is out of the way.
         a.runtimes[0].production_step = 2;
         for _ in 0..12 {
@@ -383,7 +404,9 @@ mod tests {
 
     #[test]
     fn infinite_resources_skips_the_script_stage_entirely() {
-        let Some((mut g, mut a)) = match_of(1) else { return };
+        let Some((mut g, mut a)) = match_of(1) else {
+            return;
+        };
         g.starting_resources = 8; // "Infinite", rules.xml <CATEGORIES id="startingresources">
         for _ in 0..600 {
             a.tick(&mut g);
@@ -393,14 +416,104 @@ mod tests {
         assert!(a.runtimes[0].counters.found_cities > 0);
     }
 
+    /// `prod_script_run` is a one-way latch (see [`AiRuntime::prod_script_run`]):
+    /// once the script returns SCRIPT_DONE the stage is never entered again, for
+    /// the rest of the match. Nothing in the binary re-arms it.
+    #[test]
+    fn script_done_retires_the_script_permanently() {
+        let Some((mut g, mut a)) = match_of(1) else {
+            return;
+        };
+        a.runtimes[0].production_step = 1;
+        a.runtimes[0].prod_script_run = 0; // as if SCRIPT_DONE had fired
+        for _ in 0..2000 {
+            a.tick(&mut g);
+            g.step();
+        }
+        assert_eq!(a.runtimes[0].counters.script_runs, 0);
+        assert!(
+            a.runtimes[0].counters.create_buildings > 0,
+            "compiled stages still cycle"
+        );
+    }
+
+    /// Without the (unverified) `city_placement` trigger model the shipped
+    /// build order cannot get past step 10, and its own 300-second hang
+    /// watchdog then retires it. With the model it walks on. Both are recorded
+    /// because the gap between them is the size of one unresolved interpreter
+    /// feature.
+    #[test]
+    fn city_placement_is_the_gate_on_the_whole_opening() {
+        let Some(rules) = Rules::load(&default_data_dir()).ok() else {
+            return;
+        };
+        let mut reached = Vec::new();
+        for model in [false, true] {
+            let mut g = Game::new(rules.clone(), &["Romans"], Difficulty::Tough);
+            g.params.gather_period_shift = 0;
+            g.logging = false;
+            let mut a = AiSet::new(1).with_trigger_model(model);
+            for _ in 0..18_000 {
+                a.tick(&mut g);
+                g.step();
+            }
+            reached.push(a.runtimes[0].script_step);
+        }
+        assert_eq!(
+            reached[0], 10,
+            "without the model the opening parks on step 10"
+        );
+        assert!(reached[1] > 10, "with the model it advances past step 10");
+    }
+
+    /// Two identical matches must produce identical state. The AI has no RNG of
+    /// its own, so this is a check on the game model, not on a seed.
+    #[test]
+    fn a_match_is_deterministic() {
+        let Some(rules) = Rules::load(&default_data_dir()).ok() else {
+            return;
+        };
+        let mut out = Vec::new();
+        for _ in 0..2 {
+            let mut g = Game::new(rules.clone(), &["Romans", "Greeks"], Difficulty::Tough);
+            g.params.gather_period_shift = 0;
+            g.logging = false;
+            let mut a = AiSet::new(2).with_trigger_model(true);
+            for _ in 0..9_000 {
+                a.tick(&mut g);
+                g.step();
+            }
+            out.push(
+                g.players
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        (
+                            p.stock,
+                            p.buildings.len(),
+                            p.techs.len(),
+                            a.runtimes[i].script_step,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(out[0], out[1]);
+    }
+
     #[test]
     fn the_script_actually_runs_and_issues_orders_in_a_normal_game() {
-        let Some((mut g, mut a)) = match_of(1) else { return };
+        let Some((mut g, mut a)) = match_of(1) else {
+            return;
+        };
         for _ in 0..3000 {
             a.tick(&mut g);
             g.step();
         }
         assert!(a.runtimes[0].counters.script_runs > 0, "script never ran");
-        assert!(g.players[0].orders_ok > 0, "script issued no accepted order");
+        assert!(
+            g.players[0].orders_ok > 0,
+            "script issued no accepted order"
+        );
     }
 }

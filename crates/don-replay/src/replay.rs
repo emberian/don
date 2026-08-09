@@ -44,13 +44,20 @@ pub struct Turn {
 
 impl Turn {
     pub fn checksums_for(&self, play: i32) -> Option<Channels> {
-        self.players.iter().find(|p| p.play == play).and_then(|p| p.checksums)
+        self.players
+            .iter()
+            .find(|p| p.play == play)
+            .and_then(|p| p.checksums)
     }
     /// Any player's recorded tuple, lowest player index first. With no desync
     /// every reporting player has the same tuple; when they disagree the
     /// harness reports it separately rather than silently picking one.
     pub fn any_checksums(&self) -> Option<(i32, Channels)> {
-        let mut v: Vec<&PlayerTurn> = self.players.iter().filter(|p| p.checksums.is_some()).collect();
+        let mut v: Vec<&PlayerTurn> = self
+            .players
+            .iter()
+            .filter(|p| p.checksums.is_some())
+            .collect();
         v.sort_by_key(|p| p.play);
         v.first().map(|p| (p.play, p.checksums.unwrap()))
     }
@@ -154,7 +161,9 @@ fn version_string(payload: &[u8]) -> Option<String> {
 /// package. Mirrors the search `don-net`'s corpus test uses: only the low 16
 /// bits of the pad seed can change a draw and bits 8..15 are pinned by the XOR
 /// key, so 256 candidates remain per key.
-fn recover_obfuscation(recs: &[PackageRecord<'_>]) -> Option<(u16, Option<u32>, Vec<Vec<u8>>, usize)> {
+fn recover_obfuscation(
+    recs: &[PackageRecord<'_>],
+) -> Option<(u16, Option<u32>, Vec<Vec<u8>>, usize)> {
     const PROBE: usize = 48;
     let candidates = rank_xor_keys(recs.iter().map(|r| r.payload), 12);
     let mut best: Option<(usize, u16, Option<u32>, Vec<Vec<u8>>)> = None;
@@ -225,7 +234,9 @@ impl Replay {
             .map(|r| PackageHeader::WIRE_LEN + r.payload.len())
             .sum();
         if loc.start + consumed != payload.len() {
-            return Err(LoadError::FramingResidue(payload.len() - loc.start - consumed));
+            return Err(LoadError::FramingResidue(
+                payload.len() - loc.start - consumed,
+            ));
         }
 
         let (xor_key, pad_seed, plains, decoded) =
@@ -289,14 +300,20 @@ impl Replay {
                     }
                     pt.checksums = Some(ch);
                 }
-                pt.commands.push(OwnedCommand { opcode: c.opcode, bytes: c.bytes.to_vec() });
+                pt.commands.push(OwnedCommand {
+                    opcode: c.opcode,
+                    bytes: c.bytes.to_vec(),
+                });
             }
             if !rep.players.contains(&pt.play) {
                 rep.players.push(pt.play);
             }
             let g = r.header.group;
             let idx = *turn_index.entry(g).or_insert_with(|| {
-                by_turn.push(Turn { turn: g, players: Vec::new() });
+                by_turn.push(Turn {
+                    turn: g,
+                    players: Vec::new(),
+                });
                 by_turn.len() - 1
             });
             by_turn[idx].players.push(pt);
@@ -309,7 +326,10 @@ impl Replay {
 
     /// Turns that carry at least one recorded checksum tuple.
     pub fn checksummed_turns(&self) -> usize {
-        self.turns.iter().filter(|t| t.any_checksums().is_some()).count()
+        self.turns
+            .iter()
+            .filter(|t| t.any_checksums().is_some())
+            .count()
     }
 
     /// Median simulation frames per turn, measured from `stamp` deltas across
@@ -352,8 +372,7 @@ impl Replay {
         let mut identical = 0usize;
         let mut per = [0usize; NUM_CHANNELS];
         for t in &self.turns {
-            let tuples: Vec<Channels> =
-                t.players.iter().filter_map(|p| p.checksums).collect();
+            let tuples: Vec<Channels> = t.players.iter().filter_map(|p| p.checksums).collect();
             for i in 1..tuples.len() {
                 comparisons += 1;
                 if tuples[i] == tuples[0] {
@@ -391,16 +410,17 @@ impl Replay {
     /// This is the whole question. If a disagreement is between two packages
     /// with different `group` values, it is a join error, not a desync — the
     /// comparison never had ground truth in it.
-    pub fn crossplay_by_stamp_diag(
-        &self,
-    ) -> (usize, usize, [usize; NUM_CHANNELS], usize, usize) {
+    pub fn crossplay_by_stamp_diag(&self) -> (usize, usize, [usize; NUM_CHANNELS], usize, usize) {
         // (stamp) -> [(play, group, tuple)]
         let mut by_stamp: std::collections::BTreeMap<u32, Vec<(i32, i32, Channels)>> =
             Default::default();
         for t in &self.turns {
             for p in &t.players {
                 if let Some(c) = p.checksums {
-                    by_stamp.entry(p.stamp).or_default().push((p.play, t.turn, c));
+                    by_stamp
+                        .entry(p.stamp)
+                        .or_default()
+                        .push((p.play, t.turn, c));
                 }
             }
         }
@@ -429,14 +449,23 @@ impl Replay {
                 }
             }
         }
-        (comparisons, identical, per, disagree_diff_turn, mixed_buckets)
+        (
+            comparisons,
+            identical,
+            per,
+            disagree_diff_turn,
+            mixed_buckets,
+        )
     }
 }
 
 /// Every `.rcx` under `ron-data/replays/` and `ron-data/replays/multi/`, sorted.
 pub fn corpus(root: &Path) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    for dir in [root.join("ron-data/replays"), root.join("ron-data/replays/multi")] {
+    for dir in [
+        root.join("ron-data/replays"),
+        root.join("ron-data/replays/multi"),
+    ] {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
                 let p = e.path();

@@ -40,7 +40,11 @@ use crate::reduce::{
     accumulate_i32, accumulate_i32_parallel, accumulate_i32_reference, draw_from_pools,
     draw_from_pools_reference, ReduceScratch,
 };
-use crate::world::MAP_SPAN;
+
+/// PLACEHOLDER map extent in 1/192-tile units (`don_sim::MAP_SPAN`, duplicated rather than
+/// depended on so this crate stays free of a sim-core dependency while that lane moves).
+/// The real map sizes are underived; this only gives the placeholder integrator a wrap point.
+pub const MAP_SPAN: i32 = 256 * 192;
 
 /// Owner slots per world. `Objects::process_all` rotates owner-slot order every frame as
 /// `(frame + i) % 10` [measured, `docs/derivation/architecture.md`], so ten is the engine's
@@ -101,7 +105,10 @@ pub struct StepPlan {
 
 impl StepPlan {
     /// The definition of a tick: no partitioning, no reordering.
-    pub const REFERENCE: StepPlan = StepPlan { phase_a: PhaseA::Virtual, resolve: Resolve::Sequential };
+    pub const REFERENCE: StepPlan = StepPlan {
+        phase_a: PhaseA::Virtual,
+        resolve: Resolve::Sequential,
+    };
 }
 
 /// Mutable view of the columns a phase-A kernel may touch.
@@ -127,6 +134,21 @@ pub struct Cols<'a> {
     pub want: &'a mut [i32],
     /// Rows per world, so a slot can find its world.
     pub cap: u32,
+    /// Offsets that place the ids this view emits into the coordinate space its **resolve
+    /// step** will use. Entity state itself is position-independent (`target` is a row within
+    /// a world), so these are the only things that cross a slice boundary:
+    ///
+    /// - [`Arena::run_parallel`] resolves per slice, so a worker emits *slice-local* ids and
+    ///   both are `(0, its first world)`.
+    /// - [`PhaseA::PartitionedParallel`] resolves arena-wide afterwards, so a worker must
+    ///   emit *global* ids and both are its true offsets.
+    ///
+    /// Applying them inside the kernel rather than in a fix-up pass afterwards is deliberate:
+    /// the fix-up version was a bug that rebased every slot instead of the ones that wrote a
+    /// key that frame, so stale keys drifted out of range over successive frames.
+    pub slot_base: u32,
+    /// See [`Cols::slot_base`]. Used only by `pool_key`.
+    pub world_base: u32,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -164,10 +186,17 @@ fn k_strike(c: &mut Cols, s: u32, p: OrderParams) {
     let fire = (c.cooldown[i] <= 0) as i32;
     let mask = -fire;
     c.strike_damage[i] = (p.amount + c.owner[i] as i32) & mask;
-    // Select the target without a branch: fire -> the real target, else self (harmless,
-    // because the damage is zero).
-    c.strike_target[i] = (c.target[i] & (mask as u32)) | (s & (!mask as u32));
-    c.cooldown[i] = if fire != 0 { p.period } else { c.cooldown[i] - 1 };
+    // `target` is a row *within the entity's own world*, so the slot it names is built from
+    // this entity's own world index — no lookup, and correct in any view. Select it without a
+    // branch: fire -> the real target, else self (harmless, the damage is zero).
+    let tgt = c.slot_base + (s / c.cap) * c.cap + c.target[i];
+    let me = c.slot_base + s;
+    c.strike_target[i] = (tgt & (mask as u32)) | (me & (!mask as u32));
+    c.cooldown[i] = if fire != 0 {
+        p.period
+    } else {
+        c.cooldown[i] - 1
+    };
 }
 
 #[inline(always)]
@@ -175,8 +204,12 @@ fn k_draw(c: &mut Cols, s: u32, p: OrderParams) {
     let i = s as usize;
     let fire = (c.cooldown[i] <= 0) as i32;
     c.want[i] = p.amount & -fire;
-    c.pool_key[i] = (s / c.cap) * OWNERS as u32 + c.owner[i] as u32;
-    c.cooldown[i] = if fire != 0 { p.period } else { c.cooldown[i] - 1 };
+    c.pool_key[i] = (c.world_base + s / c.cap) * OWNERS as u32 + c.owner[i] as u32;
+    c.cooldown[i] = if fire != 0 {
+        p.period
+    } else {
+        c.cooldown[i] - 1
+    };
 }
 
 #[inline(always)]
@@ -214,10 +247,34 @@ type VFn = fn(&mut Cols, u32);
 /// The 28-entry jump table. Indexing it and calling through it is exactly the cost the
 /// partitioned path is trying to delete.
 static VTABLE: [VFn; ORDER_COUNT] = [
-    vslot::<0>, vslot::<1>, vslot::<2>, vslot::<3>, vslot::<4>, vslot::<5>, vslot::<6>,
-    vslot::<7>, vslot::<8>, vslot::<9>, vslot::<10>, vslot::<11>, vslot::<12>, vslot::<13>,
-    vslot::<14>, vslot::<15>, vslot::<16>, vslot::<17>, vslot::<18>, vslot::<19>, vslot::<20>,
-    vslot::<21>, vslot::<22>, vslot::<23>, vslot::<24>, vslot::<25>, vslot::<26>, vslot::<27>,
+    vslot::<0>,
+    vslot::<1>,
+    vslot::<2>,
+    vslot::<3>,
+    vslot::<4>,
+    vslot::<5>,
+    vslot::<6>,
+    vslot::<7>,
+    vslot::<8>,
+    vslot::<9>,
+    vslot::<10>,
+    vslot::<11>,
+    vslot::<12>,
+    vslot::<13>,
+    vslot::<14>,
+    vslot::<15>,
+    vslot::<16>,
+    vslot::<17>,
+    vslot::<18>,
+    vslot::<19>,
+    vslot::<20>,
+    vslot::<21>,
+    vslot::<22>,
+    vslot::<23>,
+    vslot::<24>,
+    vslot::<25>,
+    vslot::<26>,
+    vslot::<27>,
 ];
 
 /// A whole bucket of one archetype, as one call. `p` is a compile-time-ish constant from the
@@ -306,11 +363,11 @@ impl Arena {
             carried: vec![0; n],
             cooldown: vec![0; n],
             owner: vec![0; n],
-            target: (0..n as u32).collect(),
+            target: vec![0; n],
             seed: vec![1; n],
             order: vec![0; n],
             pool: vec![0; worlds as usize * OWNERS],
-            strike_target: (0..n as u32).collect(),
+            strike_target: vec![0; n],
             strike_damage: vec![0; n],
             pool_key: vec![0; n],
             want: vec![0; n],
@@ -344,9 +401,14 @@ impl Arena {
     pub fn populate(&mut self, per_world: u32, mix: Mix, seed: u64) {
         let per = per_world.min(self.cap);
         let mut s = (seed as u32) | 1;
+        // **Take the high bits.** An LCG with a power-of-two modulus has period 2^k in its
+        // low k bits, so `rnd() % 28` — which is `% 4` interleaved with `% 7` — reached only
+        // **14 of the 28** archetypes, and `rnd() % 16` produced a 16-long repeating cooldown
+        // pattern. The first run of this benchmark measured a "uniform" mix that was nothing
+        // of the sort. Shifting first costs nothing and makes the fixture mean what it says.
         let mut rnd = move || {
             s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            s
+            s >> 8
         };
         self.live_slots.clear();
         for w in 0..self.worlds {
@@ -364,13 +426,16 @@ impl Arena {
                 self.owner[slot] = (rnd() % OWNERS as u32) as u8;
                 self.seed[slot] = rnd() | 1;
                 // Targets stay inside the world: cross-world interaction would not be a
-                // simulation, it would be a bug.
-                self.target[slot] = w * self.cap + (rnd() % per.max(1));
+                // simulation, it would be a bug. Stored as a **row within the world**, which
+                // is what makes an entity's state position-independent and therefore sliceable.
+                self.target[slot] = rnd() % per.max(1);
                 self.order[slot] = pick_order(&mut rnd, mix);
                 self.live_slots.push(slot as u32);
             }
+            // Deliberately small: a pool that never runs dry never exercises the clamped
+            // segmented scan, which is the whole reason [`crate::reduce`] has one.
             for k in 0..OWNERS {
-                self.pool[w as usize * OWNERS + k] = 3_000 + (rnd() % 7_000) as i32;
+                self.pool[w as usize * OWNERS + k] = 20 + (rnd() % 400) as i32;
             }
         }
         self.strike_damage.fill(0);
@@ -389,12 +454,204 @@ impl Arena {
     /// Advance one frame under `plan`. Every plan must produce identical state; the tests
     /// assert it and [`Arena::digest`] is how.
     pub fn step(&mut self, plan: StepPlan) {
+        // See the same reset inside `run_parallel`: zero payloads, in-range ids.
         self.strike_damage.fill(0);
         self.want.fill(0);
+        self.strike_target.fill(0);
+        self.pool_key.fill(0);
         self.phase_a(plan.phase_a);
         self.resolve(plan.resolve);
         self.apply();
         self.frame += 1;
+    }
+
+    /// Advance every world by `frames`, spawning workers **once for the whole run**.
+    ///
+    /// This exists because [`Arena::step`] with `PhaseA::PartitionedParallel` was measured at
+    /// **0.03x** of single-threaded at 64 worlds — it pays a thread spawn+join per frame, and
+    /// `docs/derivation/simd-batch.md` already measured an empty 12-worker
+    /// `std::thread::scope` at 126.6 µs against a frame that costs microseconds. Amortising
+    /// the pool over the whole rollout is the fix, and it is the same trick
+    /// `don_sim::Batch::run_parallel` uses.
+    ///
+    /// Correctness rests on worlds being independent: targets are rows *within* a world and
+    /// pools are per world, so a worker owning a contiguous world range owns every byte it
+    /// writes. No locks, no atomics, and the result is identical to `frames` calls to
+    /// [`Arena::step`] at any thread count — `run_parallel_matches_stepping` asserts it.
+    ///
+    /// Each worker runs the **full** frame (phase A, resolve, apply) on its own slice, so
+    /// there is no per-frame barrier at all.
+    pub fn run_parallel(&mut self, frames: usize, threads: usize, plan: StepPlan) {
+        let worlds = self.worlds as usize;
+        if frames == 0 {
+            return;
+        }
+        if threads <= 1 || worlds < 2 {
+            for _ in 0..frames {
+                self.step(plan);
+            }
+            return;
+        }
+        let cap = self.cap as usize;
+        let capw = self.cap;
+        let per = worlds.div_ceil(threads);
+
+        let mut px: &mut [i32] = &mut self.pos_x;
+        let mut py: &mut [i32] = &mut self.pos_y;
+        let mut tx: &[i32] = &self.tgt_x;
+        let mut ty: &[i32] = &self.tgt_y;
+        let mut hp: &mut [i32] = &mut self.hits;
+        let mut ca: &mut [i32] = &mut self.carried;
+        let mut cd: &mut [i16] = &mut self.cooldown;
+        let mut ow: &[u8] = &self.owner;
+        let mut tg: &[u32] = &self.target;
+        let mut sd: &mut [u32] = &mut self.seed;
+        let mut od: &[u8] = &self.order;
+        let mut st: &mut [u32] = &mut self.strike_target;
+        let mut dm: &mut [i32] = &mut self.strike_damage;
+        let mut pk: &mut [u32] = &mut self.pool_key;
+        let mut wa: &mut [i32] = &mut self.want;
+        let mut go: &mut [i32] = &mut self.got;
+        let mut da: &mut [i32] = &mut self.damage;
+        let mut pl: &mut [i32] = &mut self.pool;
+        let live = &self.live;
+
+        std::thread::scope(|scope| {
+            let mut lo = 0usize;
+            while lo < worlds {
+                let hi = (lo + per).min(worlds);
+                let n = (hi - lo) * cap;
+                let np = (hi - lo) * OWNERS;
+                let (px0, r) = px.split_at_mut(n);
+                px = r;
+                let (py0, r) = py.split_at_mut(n);
+                py = r;
+                let (tx0, r) = tx.split_at(n);
+                tx = r;
+                let (ty0, r) = ty.split_at(n);
+                ty = r;
+                let (hp0, r) = hp.split_at_mut(n);
+                hp = r;
+                let (ca0, r) = ca.split_at_mut(n);
+                ca = r;
+                let (cd0, r) = cd.split_at_mut(n);
+                cd = r;
+                let (ow0, r) = ow.split_at(n);
+                ow = r;
+                let (tg0, r) = tg.split_at(n);
+                tg = r;
+                let (sd0, r) = sd.split_at_mut(n);
+                sd = r;
+                let (od0, r) = od.split_at(n);
+                od = r;
+                let (st0, r) = st.split_at_mut(n);
+                st = r;
+                let (dm0, r) = dm.split_at_mut(n);
+                dm = r;
+                let (pk0, r) = pk.split_at_mut(n);
+                pk = r;
+                let (wa0, r) = wa.split_at_mut(n);
+                wa = r;
+                let (go0, r) = go.split_at_mut(n);
+                go = r;
+                let (da0, r) = da.split_at_mut(n);
+                da = r;
+                let (pl0, r) = pl.split_at_mut(np);
+                pl = r;
+
+                scope.spawn(move || {
+                    let mut part = Partition::new(ORDER_COUNT);
+                    let mut scratch = ReduceScratch::new();
+                    let mut local_keys: Vec<u32> = vec![0; n];
+                    let mut items: Vec<u32> = Vec::with_capacity(n);
+                    for w in lo..hi {
+                        let wbase = (w - lo) * cap;
+                        for row in 0..live[w] as usize {
+                            items.push((wbase + row) as u32);
+                        }
+                    }
+                    let shift = (lo * OWNERS) as u32;
+                    for _ in 0..frames {
+                        // Reset the contribution columns to values that are valid *in this
+                        // view*: slot 0 and pool 0 of this slice. Both carry a zero payload,
+                        // so a non-emitting entity contributes nothing — but the id still has
+                        // to be in range, because the reduce indexes with it.
+                        dm0.fill(0);
+                        wa0.fill(0);
+                        st0.fill(0);
+                        pk0.fill(shift);
+                        {
+                            // Reborrow for the duration of phase A only, so the columns stay
+                            // usable for the resolve and apply steps below.
+                            let mut c = Cols {
+                                pos_x: &mut px0[..],
+                                pos_y: &mut py0[..],
+                                tgt_x: tx0,
+                                tgt_y: ty0,
+                                hits: &hp0[..],
+                                cooldown: &mut cd0[..],
+                                owner: ow0,
+                                target: tg0,
+                                seed: &mut sd0[..],
+                                strike_target: &mut st0[..],
+                                strike_damage: &mut dm0[..],
+                                pool_key: &mut pk0[..],
+                                want: &mut wa0[..],
+                                cap: capw,
+                                slot_base: 0,
+                                world_base: lo as u32,
+                            };
+                            match plan.phase_a {
+                                PhaseA::Virtual => {
+                                    for &s in &items {
+                                        VTABLE[od0[s as usize] as usize](&mut c, s);
+                                    }
+                                }
+                                PhaseA::Match => {
+                                    for &s in &items {
+                                        run_shape(
+                                            &mut c,
+                                            s,
+                                            ORDER_PARAMS[od0[s as usize] as usize],
+                                        );
+                                    }
+                                }
+                                _ => {
+                                    part.build(&items, |s| od0[s as usize]);
+                                    for k in 0..ORDER_COUNT {
+                                        run_bucket(&mut c, part.bucket(k), ORDER_PARAMS[k]);
+                                    }
+                                }
+                            }
+                        }
+                        da0.fill(0);
+                        go0.fill(0);
+                        // Pool ids are global, so rebase them into this slice's pool array.
+                        // Slot ids need no rebase: `target` is a row within a world, so the
+                        // kernels already emit view-relative slots.
+                        for (dst, &k) in local_keys.iter_mut().zip(pk0.iter()) {
+                            *dst = k - shift;
+                        }
+                        match plan.resolve {
+                            Resolve::Sequential => {
+                                accumulate_i32_reference(st0, dm0, da0);
+                                draw_from_pools_reference(&local_keys, wa0, pl0, go0);
+                            }
+                            _ => {
+                                accumulate_i32(st0, dm0, da0, &mut scratch);
+                                draw_from_pools(&local_keys, wa0, pl0, go0, &mut scratch);
+                            }
+                        }
+                        for i in 0..n {
+                            hp0[i] = (hp0[i] - da0[i]).max(0);
+                            ca0[i] = ca0[i].wrapping_add(go0[i]);
+                        }
+                    }
+                });
+                lo = hi;
+            }
+        });
+        self.frame += frames as u64;
     }
 
     fn cols(&mut self) -> Cols<'_> {
@@ -413,6 +670,8 @@ impl Arena {
             pool_key: &mut self.pool_key,
             want: &mut self.want,
             cap: self.cap,
+            slot_base: 0,
+            world_base: 0,
         }
     }
 
@@ -481,6 +740,8 @@ impl Arena {
                             pool_key: &mut self.pool_key,
                             want: &mut self.want,
                             cap: self.cap,
+                            slot_base: 0,
+                            world_base: 0,
                         };
                         for k in 0..ORDER_COUNT {
                             run_bucket(&mut c, part.bucket(k), ORDER_PARAMS[k]);
@@ -555,10 +816,9 @@ impl Arena {
                 wa = wa1;
                 let base = lo * cap;
                 scope.spawn(move || {
-                    // Slot ids inside the worker are shifted by `base`, so the kernels see a
-                    // local arena whose slot 0 is this range's first slot. `cap` is
-                    // unchanged, and `pool_key` needs the *global* world index, so it is
-                    // rebased after the fact.
+                    // The worker sees a local arena whose slot 0 is this range's first slot.
+                    // Columns are position-independent, so the worker just runs on its
+                    // slice; only `world_base` (for pool ids) crosses the boundary.
                     let mut local = Partition::new(ORDER_COUNT);
                     let mut items: Vec<u32> = Vec::with_capacity(n);
                     for w in lo..hi {
@@ -583,20 +843,11 @@ impl Arena {
                         pool_key: pk0,
                         want: wa0,
                         cap: capw,
+                        slot_base: base as u32,
+                        world_base: lo as u32,
                     };
                     for k in 0..ORDER_COUNT {
                         run_bucket(&mut c, local.bucket(k), ORDER_PARAMS[k]);
-                    }
-                    // Rebase the two columns that carry absolute slot ids.
-                    let shift = base as u32;
-                    let wshift = (lo as u32) * OWNERS as u32;
-                    for i in 0..n {
-                        if dm0[i] != 0 {
-                            st0[i] = target[base + i];
-                        } else {
-                            st0[i] = shift + i as u32;
-                        }
-                        pk0[i] += wshift;
                     }
                 });
                 lo = hi;
@@ -609,8 +860,17 @@ impl Arena {
         self.got.fill(0);
         match how {
             Resolve::Sequential => {
-                accumulate_i32_reference(&self.strike_target, &self.strike_damage, &mut self.damage);
-                draw_from_pools_reference(&self.pool_key, &self.want, &mut self.pool, &mut self.got);
+                accumulate_i32_reference(
+                    &self.strike_target,
+                    &self.strike_damage,
+                    &mut self.damage,
+                );
+                draw_from_pools_reference(
+                    &self.pool_key,
+                    &self.want,
+                    &mut self.pool,
+                    &mut self.got,
+                );
             }
             Resolve::Segmented => {
                 accumulate_i32(
@@ -714,22 +974,55 @@ mod tests {
 
     fn build(worlds: u32, cap: u32, per: u32, mix: Mix) -> Arena {
         let mut a = Arena::new(worlds, cap);
-        a.populate(per, mix, 0xD0N);
+        a.populate(per, mix, 0xD0_11);
         a
     }
 
     const PLANS: &[StepPlan] = &[
-        StepPlan { phase_a: PhaseA::Virtual, resolve: Resolve::Sequential },
-        StepPlan { phase_a: PhaseA::Match, resolve: Resolve::Sequential },
-        StepPlan { phase_a: PhaseA::Partitioned, resolve: Resolve::Sequential },
-        StepPlan { phase_a: PhaseA::PartitionedPerWorld, resolve: Resolve::Sequential },
-        StepPlan { phase_a: PhaseA::Partitioned, resolve: Resolve::Segmented },
-        StepPlan { phase_a: PhaseA::PartitionedPerWorld, resolve: Resolve::Segmented },
-        StepPlan { phase_a: PhaseA::PartitionedParallel(2), resolve: Resolve::Segmented },
-        StepPlan { phase_a: PhaseA::PartitionedParallel(3), resolve: Resolve::SegmentedParallel(3) },
-        StepPlan { phase_a: PhaseA::PartitionedParallel(8), resolve: Resolve::SegmentedParallel(8) },
-        StepPlan { phase_a: PhaseA::PartitionedParallel(16), resolve: Resolve::SegmentedParallel(16) },
-        StepPlan { phase_a: PhaseA::Virtual, resolve: Resolve::SegmentedParallel(4) },
+        StepPlan {
+            phase_a: PhaseA::Virtual,
+            resolve: Resolve::Sequential,
+        },
+        StepPlan {
+            phase_a: PhaseA::Match,
+            resolve: Resolve::Sequential,
+        },
+        StepPlan {
+            phase_a: PhaseA::Partitioned,
+            resolve: Resolve::Sequential,
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedPerWorld,
+            resolve: Resolve::Sequential,
+        },
+        StepPlan {
+            phase_a: PhaseA::Partitioned,
+            resolve: Resolve::Segmented,
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedPerWorld,
+            resolve: Resolve::Segmented,
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedParallel(2),
+            resolve: Resolve::Segmented,
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedParallel(3),
+            resolve: Resolve::SegmentedParallel(3),
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedParallel(8),
+            resolve: Resolve::SegmentedParallel(8),
+        },
+        StepPlan {
+            phase_a: PhaseA::PartitionedParallel(16),
+            resolve: Resolve::SegmentedParallel(16),
+        },
+        StepPlan {
+            phase_a: PhaseA::Virtual,
+            resolve: Resolve::SegmentedParallel(4),
+        },
     ];
 
     /// **The hard constraint.** Every execution strategy — indirect dispatch, bucketed,
@@ -759,6 +1052,51 @@ mod tests {
                     want,
                     "{plan:?} diverged at {worlds}w x {cap}cap x {per} ({mix:?})"
                 );
+            }
+        }
+    }
+
+    /// `run_parallel` spawns once for the whole rollout and lets each worker run complete
+    /// frames on its own world range — no per-frame barrier at all. That is only sound
+    /// because worlds are independent, so this is the test that says so at every thread
+    /// count, for every phase-A and resolve strategy.
+    #[test]
+    fn run_parallel_matches_stepping_at_every_thread_count() {
+        for &(worlds, cap, per, mix) in &[
+            (8u32, 32u32, 32u32, Mix::Uniform),
+            (13, 24, 11, Mix::Skewed),
+            (3, 16, 16, Mix::Single(Order::Gather)),
+        ] {
+            let mut reference = build(worlds, cap, per, mix);
+            for _ in 0..75 {
+                reference.step(StepPlan::REFERENCE);
+            }
+            let want = reference.digest();
+            for threads in [1usize, 2, 3, 5, 8, 16] {
+                for plan in [
+                    StepPlan::REFERENCE,
+                    StepPlan {
+                        phase_a: PhaseA::Match,
+                        resolve: Resolve::Sequential,
+                    },
+                    StepPlan {
+                        phase_a: PhaseA::Partitioned,
+                        resolve: Resolve::Sequential,
+                    },
+                    StepPlan {
+                        phase_a: PhaseA::Partitioned,
+                        resolve: Resolve::Segmented,
+                    },
+                ] {
+                    let mut a = build(worlds, cap, per, mix);
+                    a.run_parallel(75, threads, plan);
+                    assert_eq!(
+                        a.digest(),
+                        want,
+                        "run_parallel({threads}, {plan:?}) diverged at {worlds}w x {per} ({mix:?})"
+                    );
+                    assert_eq!(a.frame, reference.frame, "frame counter drifted");
+                }
             }
         }
     }
@@ -800,7 +1138,10 @@ mod tests {
             }
             multi_hit += counts.values().filter(|&&c| c > 1).count();
         }
-        assert!(multi_hit > 0, "no target was ever hit twice in a frame: no contention to resolve");
+        assert!(
+            multi_hit > 0,
+            "no target was ever hit twice in a frame: no contention to resolve"
+        );
         assert!(
             a.pool.iter().any(|&p| p == 0),
             "no pool ever ran dry: the exhaustible-draw path is untested"
@@ -835,7 +1176,7 @@ mod tests {
         // The same world simulated alone must reach the same state.
         for w in 0..6u32 {
             let mut one = Arena::new(1, 32);
-            one.populate(32, Mix::Uniform, 0xD0N);
+            one.populate(32, Mix::Uniform, 0xD0_11);
             // Copy world w's initial columns into the singleton, then run it.
             let mut src = build(6, 32, 32, Mix::Uniform);
             let base = (w * 32) as usize;
@@ -848,9 +1189,9 @@ mod tests {
             one.owner.copy_from_slice(&src.owner[base..base + 32]);
             one.seed.copy_from_slice(&src.seed[base..base + 32]);
             one.order.copy_from_slice(&src.order[base..base + 32]);
-            for i in 0..32 {
-                one.target[i] = src.target[base + i] - base as u32;
-            }
+            // `target` is a row within a world, so it copies across unchanged — which is
+            // exactly the position-independence this layout relies on.
+            one.target.copy_from_slice(&src.target[base..base + 32]);
             one.pool
                 .copy_from_slice(&src.pool[w as usize * OWNERS..(w as usize + 1) * OWNERS]);
             src.frame = 0;
@@ -862,7 +1203,11 @@ mod tests {
                 &all.hits[base..base + 32],
                 "world {w} diverged when simulated alone: worlds are not independent"
             );
-            assert_eq!(&one.pos_x[..], &all.pos_x[base..base + 32], "world {w} pos_x");
+            assert_eq!(
+                &one.pos_x[..],
+                &all.pos_x[base..base + 32],
+                "world {w} pos_x"
+            );
         }
     }
 }

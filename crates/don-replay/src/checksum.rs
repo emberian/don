@@ -94,7 +94,11 @@ pub struct CheckSum {
 
 impl Default for CheckSum {
     fn default() -> Self {
-        CheckSum { checksum: 1, bytes: 0, mask: u32::MAX }
+        CheckSum {
+            checksum: 1,
+            bytes: 0,
+            mask: u32::MAX,
+        }
     }
 }
 
@@ -103,7 +107,10 @@ impl CheckSum {
         Self::default()
     }
     pub fn with_mask(mask: u32) -> Self {
-        CheckSum { mask, ..Self::default() }
+        CheckSum {
+            mask,
+            ..Self::default()
+        }
     }
 }
 
@@ -220,7 +227,10 @@ impl Channel {
         CHANNEL_NAMES[self as usize]
     }
     pub fn from_name(s: &str) -> Option<Channel> {
-        CHANNEL_NAMES.iter().position(|n| *n == s).map(|i| CHANNELS[i])
+        CHANNEL_NAMES
+            .iter()
+            .position(|n| *n == s)
+            .map(|i| CHANNELS[i])
     }
     /// True for the channels whose value is a function of mutable simulation
     /// state. `rules` is loaded-once static data; the corpus shows it constant
@@ -254,7 +264,9 @@ impl Channels {
 
     /// `total` as `check_all` computes it: a wrapping sum of the fifteen.
     pub fn computed_total(&self) -> u32 {
-        self.0[..NUM_WALKED].iter().fold(0u32, |a, &b| a.wrapping_add(b))
+        self.0[..NUM_WALKED]
+            .iter()
+            .fold(0u32, |a, &b| a.wrapping_add(b))
     }
 
     /// The self-check that makes a `CheckSumsCommand` findable without framing:
@@ -329,7 +341,10 @@ mod tests {
         ch.set(Channel::All, ch.computed_total());
         assert!(ch.total_is_consistent());
         // and it really wraps
-        assert_eq!(ch.computed_total(), 0xF000_0000u32.wrapping_mul(15).wrapping_add(105));
+        assert_eq!(
+            ch.computed_total(),
+            0xF000_0000u32.wrapping_mul(15).wrapping_add(105)
+        );
     }
 
     #[test]

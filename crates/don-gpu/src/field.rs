@@ -82,7 +82,9 @@ impl FieldBatch {
 
     #[inline]
     pub fn index(&self, field: u32, x: u32, y: u32) -> usize {
-        (field as usize) * self.cells_per_field() + (y as usize) * (self.width as usize) + x as usize
+        (field as usize) * self.cells_per_field()
+            + (y as usize) * (self.width as usize)
+            + x as usize
     }
 
     /// Reset every distance to `INF`. Costs are untouched.

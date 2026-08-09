@@ -27,7 +27,10 @@ pub struct ProbeWorld {
 
 impl ProbeWorld {
     pub fn new() -> Self {
-        ProbeWorld { default_int: 0, ..Default::default() }
+        ProbeWorld {
+            default_int: 0,
+            ..Default::default()
+        }
     }
 
     pub fn with(mut self, call: &str, v: i32) -> Self {
@@ -57,7 +60,11 @@ impl ProbeWorld {
     }
 
     pub fn count(&self, prefix: &str) -> usize {
-        self.log.borrow().iter().filter(|c| c.starts_with(prefix)).count()
+        self.log
+            .borrow()
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .count()
     }
 }
 
@@ -141,7 +148,13 @@ impl ScriptWorld for ProbeWorld {
         build_type: &str,
         count_inactive: i32,
     ) -> i32 {
-        self.q(call!("find_build_at_city", who, city_name, build_type, count_inactive))
+        self.q(call!(
+            "find_build_at_city",
+            who,
+            city_name,
+            build_type,
+            count_inactive
+        ))
     }
     fn find_inactive_build(&self, who: i32, build_type: &str) -> i32 {
         self.q(call!("find_inactive_build", who, build_type))
@@ -159,7 +172,13 @@ impl ScriptWorld for ProbeWorld {
         build_type: &str,
         count_inactive: i32,
     ) -> i32 {
-        self.q(call!("num_city_buildings", who, city_name, build_type, count_inactive))
+        self.q(call!(
+            "num_city_buildings",
+            who,
+            city_name,
+            build_type,
+            count_inactive
+        ))
     }
     fn building_started(&self, who: i32, build_o: i32) -> i32 {
         self.q(call!("building_started", who, build_o))
@@ -204,18 +223,29 @@ impl ScriptWorld for ProbeWorld {
         unit_type: &str,
         build_o: i32,
     ) -> i32 {
-        self.q(call!("train_unit_at_with_cost", who, num, unit_type, build_o))
+        self.q(call!(
+            "train_unit_at_with_cost",
+            who,
+            num,
+            unit_type,
+            build_o
+        ))
     }
     fn place_building_with_cost(&mut self, who: i32, build_type: &str, city_name: &str) -> i32 {
-        self.q(call!("place_building_with_cost", who, build_type, city_name))
+        self.q(call!(
+            "place_building_with_cost",
+            who,
+            build_type,
+            city_name
+        ))
     }
-    fn place_orphan_building_with_cost(
-        &mut self,
-        who: i32,
-        build_type: &str,
-        build_o: i32,
-    ) -> i32 {
-        self.q(call!("place_orphan_building_with_cost", who, build_type, build_o))
+    fn place_orphan_building_with_cost(&mut self, who: i32, build_type: &str, build_o: i32) -> i32 {
+        self.q(call!(
+            "place_orphan_building_with_cost",
+            who,
+            build_type,
+            build_o
+        ))
     }
     fn place_building_upgrade_with_cost(
         &mut self,
@@ -223,7 +253,12 @@ impl ScriptWorld for ProbeWorld {
         build_type: &str,
         city_name: &str,
     ) -> i32 {
-        self.q(call!("place_building_upgrade_with_cost", who, build_type, city_name))
+        self.q(call!(
+            "place_building_upgrade_with_cost",
+            who,
+            build_type,
+            city_name
+        ))
     }
     fn place_city_with_cost(&mut self, who: i32) -> i32 {
         self.q(call!("place_city_with_cost", who))

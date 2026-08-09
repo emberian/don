@@ -127,25 +127,49 @@ impl VecEnv {
     /// can print it into its own log instead of a human remembering.
     pub fn provenance(&self) -> Vec<(String, String)> {
         let mut v = vec![
-            ("action_space".into(),
-             format!("{} unit verbs + {} player verbs, from the 82 CommandTypes opcodes \
-                      [measured, schema/command-wire.json]", g::N_UNIT_VERBS, g::N_PLAYER_VERBS)),
-            ("tick_ms".into(), format!("{} at Normal [measured, TurnControl::timings 0x00AFC4A4]", g::TICK_MS_NORMAL)),
-            ("owner_rotation".into(),
-             "(frame + i) % 10, as Objects::process_all [measured]".into()),
-            ("typecaps".into(), if self.caps_real {
-                "derived from ron-data/unitrules.xml + buildingrules.xml [measured]".into()
-            } else {
-                "ABSENT — masks are PERMISSIVE. Run crates/don-env/gen/gen_spec.py".to_string()
-            }),
-            ("balance_table".into(), if self.balance_real {
-                "schema/live/balance-real.bin, 493x493 int16 from combat_table+4 [measured]".into()
-            } else {
-                "ABSENT — damage uses a flat 100% balance term".to_string()
-            }),
-            ("damage".into(),
-             "don_sim::mechanics::damage (ObjectData::get_damage 0x00644130) with default \
-              predicates: spine only, guarded terms unreached".into()),
+            (
+                "action_space".into(),
+                format!(
+                    "{} unit verbs + {} player verbs, from the 82 CommandTypes opcodes \
+                      [measured, schema/command-wire.json]",
+                    g::N_UNIT_VERBS,
+                    g::N_PLAYER_VERBS
+                ),
+            ),
+            (
+                "tick_ms".into(),
+                format!(
+                    "{} at Normal [measured, TurnControl::timings 0x00AFC4A4]",
+                    g::TICK_MS_NORMAL
+                ),
+            ),
+            (
+                "owner_rotation".into(),
+                "(frame + i) % 10, as Objects::process_all [measured]".into(),
+            ),
+            (
+                "typecaps".into(),
+                if self.caps_real {
+                    "derived from ron-data/unitrules.xml + buildingrules.xml [measured]".into()
+                } else {
+                    "ABSENT — masks are PERMISSIVE. Run crates/don-env/gen/gen_spec.py".to_string()
+                },
+            ),
+            (
+                "balance_table".into(),
+                if self.balance_real {
+                    "schema/live/balance-real.bin, 493x493 int16 from combat_table+4 [measured]"
+                        .into()
+                } else {
+                    "ABSENT — damage uses a flat 100% balance term".to_string()
+                },
+            ),
+            (
+                "damage".into(),
+                "don_sim::mechanics::damage (ObjectData::get_damage 0x00644130) with default \
+              predicates: spine only, guarded terms unreached"
+                    .into(),
+            ),
         ];
         let scaffold = [
             "movement: straight-line integer approach, NOT Unit::move_step / PathFinder::astar_path",
@@ -188,7 +212,11 @@ impl VecEnv {
     pub fn reset_all(&mut self) {
         let (agents, start, seed) = (self.cfg.num_agents, self.cfg.start_units, self.cfg.seed);
         for (i, w) in self.worlds.iter_mut().enumerate() {
-            w.reset(agents, start, seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            w.reset(
+                agents,
+                start,
+                seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
         }
         self.dones.fill(0);
         self.truncs.fill(0);
@@ -262,7 +290,16 @@ impl VecEnv {
                 w: &mut w[0],
                 ua: &unit_actions[i * a * ua_stride..(i + 1) * a * ua_stride],
                 pa: &player_actions[i * a * pa_stride..(i + 1) * a * pa_stride],
-                sp, en, gl, um, pm, rw, tm, dn, tr, er,
+                sp,
+                en,
+                gl,
+                um,
+                pm,
+                rw,
+                tm,
+                dn,
+                tr,
+                er,
             });
         }
 
@@ -277,18 +314,25 @@ impl VecEnv {
                     let mut sel: Vec<usize> = Vec::with_capacity(cfg.max_entities);
                     let mut own: Vec<usize> = Vec::with_capacity(cfg.max_controlled);
                     for p in group.iter_mut() {
-                        step_one(p, cfg, spec, uml, pml, &mut mw, &mut sel, &mut own, &mut local);
+                        step_one(
+                            p, cfg, spec, uml, pml, &mut mw, &mut sel, &mut own, &mut local,
+                        );
                     }
                     stats.lock().expect("worker panicked").add(&local);
                 });
             }
         });
-        self.apply_stats.add(&stats.into_inner().expect("worker panicked"));
+        self.apply_stats
+            .add(&stats.into_inner().expect("worker panicked"));
         self.steps_taken += 1;
     }
 
     fn refresh_observations(&mut self) {
-        let zero_u = vec![0i32; self.worlds.len() * self.cfg.num_agents * self.cfg.max_controlled * g::N_UNIT_HEADS];
+        let zero_u =
+            vec![
+                0i32;
+                self.worlds.len() * self.cfg.num_agents * self.cfg.max_controlled * g::N_UNIT_HEADS
+            ];
         let zero_p = vec![0i32; self.worlds.len() * self.cfg.num_agents * g::N_PLAYER_HEADS];
         let before = self.steps_taken;
         let saved = std::mem::take(&mut self.apply_stats);
@@ -307,26 +351,50 @@ impl VecEnv {
 
     // ---- buffer accessors ------------------------------------------------------------
     /// `(n_envs, n_agents, N_PLANES, grid_h, grid_w)` f32.
-    pub fn spatial(&self) -> &[f32] { &self.spatial }
+    pub fn spatial(&self) -> &[f32] {
+        &self.spatial
+    }
     /// `(n_envs, n_agents, max_entities, N_ENTITY_FEATURES)` f32.
-    pub fn entities(&self) -> &[f32] { &self.entities }
+    pub fn entities(&self) -> &[f32] {
+        &self.entities
+    }
     /// `(n_envs, n_agents, N_GLOBAL_FEATURES)` f32.
-    pub fn globals(&self) -> &[f32] { &self.globals }
+    pub fn globals(&self) -> &[f32] {
+        &self.globals
+    }
     /// `(n_envs, n_agents, max_controlled, unit_mask_record_bytes)` u8, bit-packed LSB-first.
-    pub fn unit_masks(&self) -> &[u8] { &self.unit_masks }
+    pub fn unit_masks(&self) -> &[u8] {
+        &self.unit_masks
+    }
     /// `(n_envs, n_agents, player_mask_record_bytes)` u8, bit-packed LSB-first.
-    pub fn player_masks(&self) -> &[u8] { &self.player_masks }
+    pub fn player_masks(&self) -> &[u8] {
+        &self.player_masks
+    }
     /// `(n_envs, n_agents)` f32.
-    pub fn rewards(&self) -> &[f32] { &self.rewards }
+    pub fn rewards(&self) -> &[f32] {
+        &self.rewards
+    }
     /// `(n_envs, n_agents, N_TERMS)` f32.
-    pub fn reward_terms(&self) -> &[f32] { &self.terms }
+    pub fn reward_terms(&self) -> &[f32] {
+        &self.terms
+    }
     /// `(n_envs,)` u8.
-    pub fn dones(&self) -> &[u8] { &self.dones }
-    pub fn truncateds(&self) -> &[u8] { &self.truncs }
+    pub fn dones(&self) -> &[u8] {
+        &self.dones
+    }
+    pub fn truncateds(&self) -> &[u8] {
+        &self.truncs
+    }
     /// `(n_envs, n_agents, max_entities)` i32 — entity row per observation slot, -1 empty.
-    pub fn entity_rows(&self) -> &[i32] { &self.entity_rows }
-    pub fn sampled_unit_actions(&self) -> &[i32] { &self.sample_unit }
-    pub fn sampled_player_actions(&self) -> &[i32] { &self.sample_player }
+    pub fn entity_rows(&self) -> &[i32] {
+        &self.entity_rows
+    }
+    pub fn sampled_unit_actions(&self) -> &[i32] {
+        &self.sample_unit
+    }
+    pub fn sampled_player_actions(&self) -> &[i32] {
+        &self.sample_player
+    }
 
     /// Draw a uniform action from under the current masks, into the sampler buffers.
     ///
@@ -350,7 +418,9 @@ impl VecEnv {
         let chunk = n.div_ceil(threads.max(1)).max(1);
         let umasks = &self.unit_masks;
         let pmasks = &self.player_masks;
-        let mut u_out = self.sample_unit.chunks_mut(chunk * per_world_recs * g::N_UNIT_HEADS);
+        let mut u_out = self
+            .sample_unit
+            .chunks_mut(chunk * per_world_recs * g::N_UNIT_HEADS);
         let mut p_out = self.sample_player.chunks_mut(chunk * a * g::N_PLAYER_HEADS);
         std::thread::scope(|scope| {
             let mut w0 = 0usize;
@@ -385,7 +455,10 @@ impl VecEnv {
                 w0 = w1;
             }
         });
-        self.sample_rng = self.sample_rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.sample_rng = self
+            .sample_rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
     }
 }
 
@@ -498,8 +571,7 @@ fn step_one(
     p.dn[0] = u8::from(any_done);
     p.tr[0] = u8::from(truncated);
     if any_done || truncated {
-        let seed = (p.w.sim.frame as u64)
-            ^ (p.w.step_index as u64).wrapping_mul(0x9E37_79B9);
+        let seed = (p.w.sim.frame as u64) ^ (p.w.step_index as u64).wrapping_mul(0x9E37_79B9);
         p.w.reset(cfg.num_agents, cfg.start_units, seed | 1);
     }
 
@@ -513,12 +585,18 @@ fn step_one(
         controlled_rows(p.w, cfg, who, own);
         obs::write_spatial(p.w, cfg, who, &mut p.sp[k * plane..(k + 1) * plane]);
         obs::write_entities(
-            p.w, cfg, who, sel, own.len(),
+            p.w,
+            cfg,
+            who,
+            sel,
+            own.len(),
             &mut p.en[k * cfg.max_entities * obs::N_ENTITY_FEATURES
                 ..(k + 1) * cfg.max_entities * obs::N_ENTITY_FEATURES],
         );
         obs::write_global(
-            p.w, cfg, who,
+            p.w,
+            cfg,
+            who,
             &mut p.gl[k * obs::N_GLOBAL_FEATURES..(k + 1) * obs::N_GLOBAL_FEATURES],
         );
         let er = &mut p.er[k * cfg.max_entities..(k + 1) * cfg.max_entities];

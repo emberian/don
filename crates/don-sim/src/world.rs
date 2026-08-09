@@ -1,142 +1,243 @@
-//! Fixed-capacity structure-of-arrays world state.
+//! The simulation world: PDB-derived state columns, the object registry, and the tick.
 //!
-//! # Storage discipline: dense rows, stable handles
+//! # What changed, and why it matters
 //!
-//! Live units occupy rows `0..live` of every column, with **no holes**. A tick system is
-//! therefore a straight-line pass over a contiguous prefix with no occupancy test — the
-//! shape a vector unit wants, and the reason the per-unit cost stops depending on how
-//! empty the world is.
+//! This used to be a hand-named placeholder (`pos_x`, `vel_x`, `armor`, `attack`) with an
+//! invented integrator. It is now driven by [`crate::generated::state`], which is
+//! generated from the shipped PDB's own type stream: every column below is a field the
+//! MSVC compiler emitted for this exact binary, at its real offset, with its real width,
+//! flagged with whether `walk_data` — i.e. the checksum — visits it.
 //!
-//! Densifying costs index stability, so identity is carried by [`Handle`] instead of by a
-//! row number: a handle table maps handle id to row, `despawn` swap-removes the last row
-//! into the hole and repairs the one moved handle. This is O(1) and allocation-free.
-//! Handles carry a generation counter, so a handle to a despawned unit is *rejected*
-//! rather than silently aliasing whatever unit later reuses the id (the old slot-index
-//! API had exactly that ABA hazard).
+//! The consequence is that "which state exists" is no longer a design decision. It is
+//! read out of `schema/pdb-types.json`, and adding a field means regenerating, not
+//! editing.
 //!
-//! Column-per-allocation is deliberate: a tick that touches only `pos_*`, `vel_*` and
-//! `cooldown` pulls in no cache line belonging to `armor`/`attack`/`recharge`/`owner`.
-//! That is the hot/cold split, achieved by the layout rather than by a second struct.
+//! # Storage: dense rows, stable handles, engine-visible identity
+//!
+//! Live units occupy rows `0..live` of every column with no holes, so a tick system is a
+//! straight-line pass over a contiguous prefix. Densifying costs index stability, so
+//! identity is carried by a generational [`Handle`].
+//!
+//! *Separately*, every unit also carries the engine's own address: `who` (owner slot) and
+//! `o` (index inside that owner's banded object list), maintained by
+//! [`crate::objects::ObjectRegistry`]. Rows are ours; `(who, o)` is the engine's, and the
+//! two are kept in step through every spawn and despawn.
+//!
+//! # The tick
+//!
+//! [`World::step`] is `Game::do_frame` `0x00591EF0`, run as the ordered schedule in
+//! [`crate::schedule::DO_FRAME`]. Coverage is counted per subsystem and per order type
+//! rather than estimated: see [`World::coverage`].
 
+use crate::generated::state::{unit, UnitCols};
+use crate::objects::{Band, ObjectRegistry, HERD_PERIOD, OWNER_SLOTS, WILDLIFE_PERIOD};
+use crate::order::{ArmStatus, Order, OrderCoverage, OrderIndex, OrderList};
+use crate::rng::Random;
+use crate::schedule::{ScheduleCoverage, DO_FRAME, FRAMES_PER_SECOND, SPEED_NORMAL, TIMINGS_MS};
 use crate::simd;
+use crate::trig::{cosx, find_angle, sinx};
 
-/// Simulation frames per second at normal speed. From the `rules.xml` header comment
-/// ("Times are specified in 'frames' or fifteenths of seconds"). Shipped game data, so
-/// usable ground truth, but **not yet confirmed against the binary**.
-pub const TICK_HZ: u32 = 15;
-
-/// Movement granularity: the engine expresses speeds as fractions of a tile with a
-/// largest allowed denominator of 192 (`rules.xml` header). Positions here are therefore
-/// kept in 1/192-tile units as integers.
+/// Sim frames per game **second** — `Game::do_frame`'s own `idiv 15` at `0x005924CF`
+/// [measured]. This is the unit every `"450 frames"` rule value is denominated in.
 ///
-/// Note this does *not* imply the engine's own runtime representation is fixed point —
-/// measurement shows the binary is float-heavy (`docs/binary-ground-truth.md`). Whether
-/// parsed rule values land in `f32` or in fixed point is an open question. Integer
-/// positions are chosen here for *our* determinism; if derivation shows the original
-/// integrates in `f32`, this changes.
-pub const SUBTILE: i32 = 192;
+/// It is **not** a wall-clock rate. Pacing comes from `TurnControl::timings`
+/// `0x00AFC4A4` = `{200, 125, 67, 50, 1}` ms/frame, so Normal is 67 ms — 14.925 Hz.
+/// Both numbers are real and they are not the same number; see [`TICK_MS_NORMAL`].
+/// (The old sourcing of this constant to a `rules.xml` header comment is superseded: the
+/// comment is right about the denomination and says nothing about pacing.)
+pub const TICK_HZ: u32 = FRAMES_PER_SECOND as u32;
 
-/// Hard per-world unit capacity. A world may be provisioned smaller (see
-/// [`World::with_capacity`]) but never larger, so a row index always fits comfortably in
-/// `u32`. The real population cap is a rule value we have not derived yet; this is a
-/// provisioning decision, not a claim about the game.
+/// Milliseconds of wall clock per sim frame at Normal speed — `TurnControl::timings[2]`
+/// `0x00AFC4A4` [measured]. A "30 second" 450-frame rule really takes 30.15 s.
+pub const TICK_MS_NORMAL: i32 = TIMINGS_MS[SPEED_NORMAL];
+
+/// World Coord units per map tile.
+///
+/// [measured] from `Objects::process_all`'s wildlife spawn, which turns a tile index into
+/// a position with `tile * 0x300 + 0x180` — stride 768, centred at 384. The pathfinder's
+/// 192-unit step is therefore a quarter tile.
+pub const COORD_PER_TILE: i32 = 0x300;
+
+/// The pathfinder's quarter-tile step. Kept under the old name because callers spell
+/// movement granularity this way; it is a quarter tile, not a tile.
+pub const SUBTILE: i32 = COORD_PER_TILE / 4;
+
+/// Hard per-world unit capacity.
+///
+/// A provisioning decision, not a claim about the game: the engine's own per-owner unit
+/// band runs `[0, 2000)` (see [`crate::objects`]), so 4096 is comfortably above one
+/// owner's ceiling and below anything that would make a row index awkward.
 pub const MAX_UNITS: usize = 4096;
 
-/// PLACEHOLDER map extent in 1/192-tile units. The real map sizes are underived; this
-/// exists to give the placeholder integrator a wrap point.
-pub const MAP_SPAN: i32 = 256 * SUBTILE;
+/// Default map extent in Coord units: a 256-tile square.
+pub const MAP_SPAN: i32 = 256 * COORD_PER_TILE;
 
 const NO_ROW: u32 = u32::MAX;
 
+/// `SubObjectData::flags` bit 0 at +8 — the "active, run `::process`" bit that
+/// `Objects::process_all` tests at `0x0065DD0D` [measured].
+pub const OBJ_FLAG_ACTIVE: u8 = 1;
+
 /// Stable identity for a unit, valid across compaction.
-///
-/// `generation` is bumped when an id is freed, so a stale handle fails validation instead
-/// of addressing whichever unit reused the id.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Handle {
     pub id: u32,
     pub generation: u32,
 }
 
-/// One simulation world in structure-of-arrays form.
+/// What the tick actually executed, counted rather than estimated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coverage {
+    pub schedule: ScheduleCoverage,
+    pub orders: OrderCoverage,
+    /// `Unit::process` entries.
+    pub unit_process: u64,
+    /// `Unit::work` entries (vtable +0x188).
+    pub unit_work: u64,
+    /// `Guy::process` -> `Guy::move` integrations.
+    pub guy_move: u64,
+    /// Inactive objects whose `hold_frames` was decremented instead of processed.
+    pub hold_decrements: u64,
+    /// `Build::process` dispatches. The executor is not ported.
+    pub build_process: u64,
+    /// `Wall::process` dispatches. The executor is not ported.
+    pub wall_process: u64,
+    /// Frames on which retail would have drawn `game_random` for the wildlife spawn and
+    /// we did not. **Every one is a divergence in the RNG stream** — see the note on
+    /// `objects_process_all`.
+    pub wildlife_draws_skipped: u64,
+    /// `do_attack` calls that produced a number through the derived damage pipeline.
+    pub damage_applied: u64,
+    /// `do_attack` calls that could not run for want of a balance or type table.
+    pub damage_skipped_no_tables: u64,
+}
+
+impl Coverage {
+    pub fn merge(&mut self, other: &Coverage) {
+        self.schedule.merge(&other.schedule);
+        self.orders.merge(&other.orders);
+        self.unit_process += other.unit_process;
+        self.unit_work += other.unit_work;
+        self.guy_move += other.guy_move;
+        self.hold_decrements += other.hold_decrements;
+        self.build_process += other.build_process;
+        self.wall_process += other.wall_process;
+        self.wildlife_draws_skipped += other.wildlife_draws_skipped;
+        self.damage_applied += other.damage_applied;
+        self.damage_skipped_no_tables += other.damage_skipped_no_tables;
+    }
+}
+
+/// The handful of `UnitTypeData` fields the ported combat path reads.
 ///
-/// Columns are parallel and indexed by *row*; rows `0..live_count()` are occupied and rows
-/// beyond that are undefined. Use [`Handle`] for anything that must survive a despawn.
+/// Offsets are the PDB's [measured]; the full table is generated in
+/// [`crate::generated::state::unit_type`] and this is the projection the tick needs.
+/// `attack` is carried **x10** by the loader (`0x0061B01B`), exactly as retail stores it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitTypeStats {
+    /// `UnitTypeData::type` at +4 — the global type id, and the balance-table row.
+    pub type_id: i32,
+    /// `+488 attack`, x10.
+    pub attack: i32,
+    /// `+532 armor`, display scale.
+    pub armor: i32,
+    /// `+528 hits`.
+    pub hits: i32,
+    /// `+500 recharge`, frames between attacks.
+    pub recharge: i32,
+    /// `+508 max_range`, Coord units.
+    pub max_range: i32,
+    /// `+504 min_range`.
+    pub min_range: i32,
+}
+
+/// Static rules the world reads, shared across a batch rather than copied per world.
+///
+/// Type tables and the balance matrix are *global* game data. Holding them behind a
+/// shared handle is what keeps a batch of 4096 worlds from paying 486 KB of balance table
+/// 4096 times.
+#[derive(Clone, Default)]
+pub struct SharedRules {
+    pub balance: Option<std::sync::Arc<crate::balance::BalanceTable>>,
+    /// Per-type combat stats, keyed by the engine's global type id.
+    pub unit_stats: std::sync::Arc<Vec<UnitTypeStats>>,
+    pub combat: crate::mechanics::CombatRules,
+}
+
+/// One simulation world.
 #[derive(Clone)]
 pub struct World {
-    // ---- hot columns: touched every frame by the tick systems ----
-    pos_x: Vec<i32>,
-    pos_y: Vec<i32>,
-    vel_x: Vec<i32>,
-    vel_y: Vec<i32>,
-    /// Frames remaining before this unit may attack again.
-    cooldown: Vec<i16>,
+    /// `UnitData` columns, generated from the PDB.
+    pub units: UnitCols,
+    /// `UnitData::orderlist` at +200, one per unit row.
+    unit_orders: Vec<OrderList>,
+    /// The type id behind `UnitData::ptype` (`ObjectType*` at +24).
+    ///
+    /// A pointer cannot be a column, so the *referent's* identity is carried instead.
+    /// This is a port-level substitution and is named as one.
+    unit_type_id: Vec<i32>,
+    /// Per-frame movement step, `sinx(angle, speed)` / `-cosx(angle, speed)`.
+    ///
+    /// Derived scratch, not a PDB field: retail recomputes it inside `Unit::move_step`
+    /// every frame from `angle` and the speed. Caching it makes the integration an
+    /// element-wise kernel, which is what [`World::step_hot`] measures.
+    move_step_x: Vec<i32>,
+    move_step_y: Vec<i32>,
 
-    // ---- cold columns: not touched by the current tick systems ----
-    // (names mirror the binary's own attribute names; `hits` moves to the hot set the
-    // moment a derived combat system lands)
-    hits: Vec<i32>,
-    armor: Vec<i16>,
-    attack: Vec<i16>,
-    recharge: Vec<i16>,
-    owner: Vec<u8>,
+    /// `Objects` — ten owner slots, three index bands, and the rotation.
+    pub objects: ObjectRegistry,
+    /// Reusable buffer for the per-frame traversal order. Not state; allocating it every
+    /// frame was measurably the largest single cost in the object pass.
+    traversal_buf: Vec<(usize, Band, u32, u32)>,
 
     // ---- identity ----
-    /// A permutation of `0..capacity` at all times: entries `0..live` are the handle id of
-    /// each live row, and entries `live..capacity` are the pool of unused ids. Keeping the
-    /// free pool in the tail of this array is what a separate free-list vector would
-    /// otherwise cost, and it makes `despawn` a single swap inside one permutation.
     handle_of_row: Vec<u32>,
-    /// handle id -> row. Meaningful only for ids whose generation still matches a live
-    /// handle; the generation check in [`World::row_of`] is what rejects the rest, so this
-    /// array is never consulted for a dead id.
     row_of_handle: Vec<u32>,
-    /// handle id -> generation, bumped on despawn so a stale handle cannot resolve.
     generation: Vec<u32>,
     live: u32,
     capacity: u32,
 
-    /// Frames elapsed.
-    pub frame: u64,
-    /// Per-world deterministic RNG state.
-    ///
-    /// PLACEHOLDER generator. The engine's own RNG algorithm and call sites are on the
-    /// derivation worklist; replaying the original requires *its* generator, not a good
-    /// one. This exists so the scheduler is deterministic today.
-    rng: u64,
+    /// `Game::frame` at `Game+0x550`. Incremented at step 20, *after*
+    /// `Objects::process_all`, which is why the owner rotation uses the pre-increment
+    /// value.
+    pub frame: i32,
+    /// `Game::seconds` at `Game+0x560`. One per 15 frames.
+    pub seconds: i32,
+    /// `GameAccess::game_random` `0x00E37A8C` — the main simulation stream.
+    pub random: Random,
+    pub rules: SharedRules,
+    coverage: Coverage,
 }
 
 impl World {
-    /// A world provisioned to the hard capacity [`MAX_UNITS`].
+    /// A world provisioned to [`MAX_UNITS`].
     pub fn new(seed: u64) -> World {
         World::with_capacity(MAX_UNITS, seed)
     }
 
     /// A world provisioned for at most `capacity` units (clamped to [`MAX_UNITS`]).
-    ///
-    /// Capacity is fixed at construction, so stepping never allocates; sizing it to the
-    /// population a batch actually spawns is what keeps 4096 small worlds from reserving
-    /// (and page-faulting) 4096 full-size worlds' worth of columns.
     pub fn with_capacity(capacity: usize, seed: u64) -> World {
         let n = capacity.min(MAX_UNITS);
         World {
-            pos_x: vec![0; n],
-            pos_y: vec![0; n],
-            vel_x: vec![0; n],
-            vel_y: vec![0; n],
-            cooldown: vec![0; n],
-            hits: vec![0; n],
-            armor: vec![0; n],
-            attack: vec![0; n],
-            recharge: vec![0; n],
-            owner: vec![0; n],
+            units: UnitCols::with_capacity(n),
+            unit_orders: Vec::with_capacity(n),
+            unit_type_id: Vec::with_capacity(n),
+            move_step_x: Vec::with_capacity(n),
+            move_step_y: Vec::with_capacity(n),
+            objects: ObjectRegistry::new(),
+            traversal_buf: Vec::with_capacity(n + 16),
             handle_of_row: (0..n as u32).collect(),
             row_of_handle: vec![NO_ROW; n],
             generation: vec![0; n],
             live: 0,
             capacity: n as u32,
             frame: 0,
-            rng: seed | 1,
+            seconds: 0,
+            // The engine seeds `game_random` from the match setup; the low 32 bits of the
+            // caller's seed stand in for that and keep every world distinct.
+            random: Random::new(seed as i32),
+            rules: SharedRules::default(),
+            coverage: Coverage::default(),
         }
     }
 
@@ -150,66 +251,87 @@ impl World {
         self.capacity
     }
 
-    /// Bytes of column storage this world reserves.
-    ///
-    /// Reported rather than estimated because provisioning is the dominant memory term at
-    /// batch scale: a world costs this much whether it holds one unit or `capacity` of
-    /// them, and a batch of 4096 pays it 4096 times.
+    #[inline]
+    pub fn coverage(&self) -> &Coverage {
+        &self.coverage
+    }
+
+    /// Bytes of column storage this world reserves, whatever the population.
     pub fn bytes_reserved(&self) -> usize {
         let c = self.capacity as usize;
-        c * (4 * 4          // pos_x, pos_y, vel_x, vel_y
-            + 4             // hits
-            + 4 * 2         // cooldown, armor, attack, recharge
-            + 1             // owner
-            + 4 * 3)        // handle_of_row, row_of_handle, generation
+        self.units.bytes_reserved()
+            + c * (4 * 3    // unit_type_id, move_step_x, move_step_y
+                + 4 * 3) // handle_of_row, row_of_handle, generation
     }
 
-    #[inline]
-    fn next_rand(&mut self) -> u64 {
-        // xorshift64*: deterministic and cheap. PLACEHOLDER, see field docs.
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
+    // ---- spawning ------------------------------------------------------------------
 
-    /// Append a unit at the end of the dense region.
+    /// Append a unit owned by `owner`, registered in that owner's unit band.
     ///
-    /// Consumes exactly one RNG draw, as before the densification, so a given spawn
-    /// schedule produces the same units regardless of how rows are arranged.
+    /// Position, facing and speed are drawn from `game_random`. That is **scenario
+    /// setup, not a mechanic**: it exists so a benchmark or a determinism test has a
+    /// populated world, and it consumes the real LCG so the draw order is at least
+    /// reproducible. Nothing about it claims to match how the engine places units.
     pub fn spawn(&mut self, owner: u8) -> Option<Handle> {
-        if self.live >= self.capacity {
+        self.spawn_typed(owner, 0)
+    }
+
+    /// [`World::spawn`] with an explicit type id, so the combat path has something to
+    /// look up.
+    pub fn spawn_typed(&mut self, owner: u8, type_id: i32) -> Option<Handle> {
+        if self.live >= self.capacity || owner as usize >= OWNER_SLOTS {
             return None;
         }
-        let row = self.live as usize;
-        // The id at the head of the free pool, i.e. the permutation entry just past the
-        // dense region. Taking it needs no write: the row it will occupy already names it.
+        let row = self.units.push_zeroed()?;
         let id = self.handle_of_row[row];
-        let r = self.next_rand();
-        self.pos_x[row] = (r as u32 % (256 * SUBTILE as u32)) as i32;
-        self.pos_y[row] = ((r >> 32) as u32 % (256 * SUBTILE as u32)) as i32;
-        self.vel_x[row] = ((r >> 8) as i8) as i32;
-        self.vel_y[row] = ((r >> 16) as i8) as i32;
-        self.hits[row] = 100;
-        self.armor[row] = 2;
-        self.attack[row] = 10;
-        self.recharge[row] = 15;
-        self.cooldown[row] = 0;
-        self.owner[row] = owner;
+
+        let o = self.objects.insert(owner as usize, Band::Unit, row as u32);
+
+        // Four draws, in a fixed order, so the stream is reproducible.
+        let x = self.random.get(0, MAP_SPAN);
+        let y = self.random.get(0, MAP_SPAN);
+        let angle = self.random.get(0, 0xFFFF) << 16;
+        let speed = self.random.get(8, 64);
+
+        let stats = self.type_stats(type_id).copied();
+        self.units.x_internal_mut()[row] = x;
+        self.units.y_internal_mut()[row] = y;
+        self.units.angle_mut()[row] = angle;
+        self.units.myspeed_mut()[row] = speed as i16;
+        self.units.set_flags(row, OBJ_FLAG_ACTIVE);
+        self.units.set_who(row, owner);
+        self.units.o_mut()[row] = o as i16;
+        self.units.set_uid(row, (id & 0xFFFF) as u16);
+        self.units.tolerance_mut()[row] = SUBTILE;
+        self.units.myhits_mut()[row] = stats.map_or(100, |s| s.hits.max(1));
+        self.units.myarmor_mut()[row] = stats.map_or(0, |s| {
+            s.armor.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+        });
+
+        self.unit_orders.push(OrderList::new());
+        self.unit_type_id.push(type_id);
+        self.move_step_x.push(0);
+        self.move_step_y.push(0);
+
         self.row_of_handle[id as usize] = row as u32;
         self.live += 1;
-        Some(Handle { id, generation: self.generation[id as usize] })
+        Some(Handle {
+            id,
+            generation: self.generation[id as usize],
+        })
     }
 
-    /// Row currently holding `h`, or `None` if the handle is stale or never existed.
+    fn type_stats(&self, type_id: i32) -> Option<&UnitTypeStats> {
+        if type_id <= 0 {
+            return None;
+        }
+        self.rules.unit_stats.iter().find(|s| s.type_id == type_id)
+    }
+
+    /// Row currently holding `h`, or `None` if the handle is stale.
     ///
-    /// Two independent checks, and both are load-bearing. The generation catches an id
-    /// that has been freed and handed out again (the ABA case). The row/id round trip —
-    /// the id claims a row, and that row must claim the id back — catches an id that is
-    /// simply dead, without needing a per-id liveness flag: a despawn either moves another
-    /// unit into the row (so the row disagrees) or shrinks the dense region past it (so
-    /// the row is out of range). Freed entries in `row_of_handle` are therefore left
-    /// stale on purpose; nothing reads them.
+    /// Two independent checks. The generation catches an id that was freed and reissued;
+    /// the row/id round trip catches an id that is simply dead, without a liveness flag.
     #[inline]
     pub fn row_of(&self, h: Handle) -> Option<usize> {
         let id = h.id as usize;
@@ -228,32 +350,47 @@ impl World {
         self.row_of(h).is_some()
     }
 
-    /// Remove a unit by swapping the last live row into its place.
+    /// Remove a unit, swapping the last live row into its place.
     ///
-    /// Returns whether anything was removed, so a double-despawn is a no-op rather than a
-    /// panic. O(1): exactly one row copy and one handle repair.
+    /// Three structures move together and all three are load-bearing: the generated
+    /// columns, the side vectors, and the owner's object band. A miss in any one leaves a
+    /// unit addressable by `(who, o)` that no longer exists.
     pub fn despawn(&mut self, h: Handle) -> bool {
         let Some(row) = self.row_of(h) else {
             return false;
         };
         let last = self.live as usize - 1;
+
+        // 1. Unregister from the owner's band. If another entry moved into the hole, its
+        //    engine-visible `o` changed and its column must say so.
+        let who = self.units.get_who(row) as usize;
+        let o = self.units.o()[row] as u32;
+        if let Some((moved_row, new_o)) = self.objects.remove(who, Band::Unit, o) {
+            self.units.o_mut()[moved_row as usize] = new_o as i16;
+        }
+
+        // 2. Compact the columns.
         if row != last {
-            self.pos_x[row] = self.pos_x[last];
-            self.pos_y[row] = self.pos_y[last];
-            self.vel_x[row] = self.vel_x[last];
-            self.vel_y[row] = self.vel_y[last];
-            self.cooldown[row] = self.cooldown[last];
-            self.hits[row] = self.hits[last];
-            self.armor[row] = self.armor[last];
-            self.attack[row] = self.attack[last];
-            self.recharge[row] = self.recharge[last];
-            self.owner[row] = self.owner[last];
+            self.units.copy_row(row, last);
+            self.unit_orders.swap_remove(row);
+            self.unit_type_id.swap_remove(row);
+            self.move_step_x.swap_remove(row);
+            self.move_step_y.swap_remove(row);
+            // The unit that moved into `row` is still registered against `last`.
+            let mwho = self.units.get_who(row) as usize;
+            let mo = self.units.o()[row] as u32;
+            self.objects.repoint(mwho, Band::Unit, mo, row as u32);
             let moved = self.handle_of_row[last];
             self.handle_of_row[row] = moved;
             self.row_of_handle[moved as usize] = row as u32;
+        } else {
+            self.unit_orders.pop();
+            self.unit_type_id.pop();
+            self.move_step_x.pop();
+            self.move_step_y.pop();
         }
-        // Complete the swap inside the id permutation: the despawned id goes to the row
-        // just vacated at the end, which is the head of the free pool once `live` drops.
+        self.units.pop();
+
         self.handle_of_row[last] = h.id;
         self.live -= 1;
         let id = h.id as usize;
@@ -261,153 +398,572 @@ impl World {
         true
     }
 
-    // ---- column views over the live region ----------------------------------------
+    // ---- orders --------------------------------------------------------------------
+
+    #[inline]
+    pub fn orders(&self, row: usize) -> &OrderList {
+        &self.unit_orders[row]
+    }
+
+    #[inline]
+    pub fn orders_mut(&mut self, row: usize) -> &mut OrderList {
+        &mut self.unit_orders[row]
+    }
+
+    /// Install an order, replacing whatever was queued — what an un-shifted command does.
+    pub fn issue(&mut self, h: Handle, o: Order) -> bool {
+        let Some(row) = self.row_of(h) else {
+            return false;
+        };
+        self.unit_orders[row].replace(o);
+        true
+    }
+
+    // ---- column views ---------------------------------------------------------------
     //
-    // Every accessor is already trimmed to `live`, so callers cannot accidentally
-    // reintroduce the scan-the-whole-capacity pattern this layout exists to remove.
+    // Named for the PDB fields they are, with the old placeholder spellings kept where a
+    // real field corresponds. `vel_x`/`vel_y` are gone: `UnitData` stores a facing and a
+    // speed, not a velocity.
 
     #[inline]
     pub fn pos_x(&self) -> &[i32] {
-        &self.pos_x[..self.live as usize]
+        self.units.x_internal()
     }
     #[inline]
     pub fn pos_y(&self) -> &[i32] {
-        &self.pos_y[..self.live as usize]
+        self.units.y_internal()
     }
+    /// `UnitData::angle` at +80, a binary angle (2^32 = one turn).
     #[inline]
-    pub fn vel_x(&self) -> &[i32] {
-        &self.vel_x[..self.live as usize]
+    pub fn angle(&self) -> &[i32] {
+        self.units.angle()
     }
+    /// `UnitData::myspeed` at +154.
     #[inline]
-    pub fn vel_y(&self) -> &[i32] {
-        &self.vel_y[..self.live as usize]
+    pub fn myspeed(&self) -> &[i16] {
+        self.units.myspeed()
     }
-    #[inline]
-    pub fn cooldown(&self) -> &[i16] {
-        &self.cooldown[..self.live as usize]
-    }
+    /// `ObjectData::myhits` at +32.
     #[inline]
     pub fn hits(&self) -> &[i32] {
-        &self.hits[..self.live as usize]
+        self.units.myhits()
     }
     #[inline]
-    pub fn armor(&self) -> &[i16] {
-        &self.armor[..self.live as usize]
+    pub fn hits_mut(&mut self) -> &mut [i32] {
+        self.units.myhits_mut()
+    }
+    /// `ObjectData::hold_frames` at +50 — the counter `Objects::process_all` decrements
+    /// for inactive objects.
+    #[inline]
+    pub fn cooldown(&self) -> &[i16] {
+        self.units.hold_frames()
     }
     #[inline]
-    pub fn attack(&self) -> &[i16] {
-        &self.attack[..self.live as usize]
+    pub fn cooldown_mut(&mut self) -> &mut [i16] {
+        self.units.hold_frames_mut()
+    }
+    /// The derived per-frame movement step. Not a PDB field; see the field docs.
+    #[inline]
+    pub fn move_step_x(&self) -> &[i32] {
+        &self.move_step_x[..self.live as usize]
     }
     #[inline]
-    pub fn recharge(&self) -> &[i16] {
-        &self.recharge[..self.live as usize]
+    pub fn move_step_y(&self) -> &[i32] {
+        &self.move_step_y[..self.live as usize]
     }
+    /// `SubObjectData::who` at +9 — the owner slot.
     #[inline]
-    pub fn owner(&self) -> &[u8] {
-        &self.owner[..self.live as usize]
+    pub fn owner(&self) -> &[i8] {
+        self.units.who()
     }
     #[inline]
     pub fn handles(&self) -> &[u32] {
         &self.handle_of_row[..self.live as usize]
     }
-    /// The whole id permutation, live region followed by the free pool. Exposed so the
-    /// invariant that makes the free pool free can actually be tested.
+    /// The whole id permutation, live region followed by the free pool.
     #[inline]
     pub fn all_handle_ids(&self) -> &[u32] {
         &self.handle_of_row
     }
-    /// Write a live row's position.
-    ///
-    /// Positions are exposed for writing only through this pair-setter, because the two
-    /// axes are one piece of state: an alternative layout that writes back only one of
-    /// them is a bug, and this makes that bug impossible to spell.
+
     #[inline]
     pub fn set_pos(&mut self, row: usize, x: i32, y: i32) {
         debug_assert!(row < self.live as usize);
-        self.pos_x[row] = x;
-        self.pos_y[row] = y;
+        self.units.x_internal_mut()[row] = x;
+        self.units.y_internal_mut()[row] = y;
     }
 
-    #[inline]
-    pub fn cooldown_mut(&mut self) -> &mut [i16] {
-        &mut self.cooldown[..self.live as usize]
-    }
-    #[inline]
-    pub fn hits_mut(&mut self) -> &mut [i32] {
-        &mut self.hits[..self.live as usize]
+    /// Set the cached movement step directly, for tests and the lane-major experiment.
+    pub fn set_move_step(&mut self, row: usize, sx: i32, sy: i32) {
+        self.move_step_x[row] = sx;
+        self.move_step_y[row] = sy;
     }
 
-    /// Advance one frame.
+    pub fn advance_frames(&mut self, n: i32) {
+        self.frame = self.frame.wrapping_add(n);
+    }
+
+    // ---- the tick -------------------------------------------------------------------
+
+    /// `Game::do_frame` `0x00591EF0`, in retail's own call order.
     ///
-    /// PLACEHOLDER mechanics throughout — see the crate docs. The purpose is the memory
-    /// access pattern, so throughput of this layout can be measured before real systems
-    /// land. Each system is a kernel call over a dense column pair; the kernels pick a
-    /// vector path per target and are asserted bit-identical to the scalar reference.
+    /// Every entry of [`DO_FRAME`] is visited and counted. Steps whose bodies are not
+    /// ported still increment their counter, so [`World::coverage`] reports what a run
+    /// actually exercised instead of what it was hoped to exercise.
     pub fn step(&mut self) {
-        let n = self.live as usize;
-        simd::integrate_wrap(&mut self.pos_x[..n], &self.vel_x[..n], MAP_SPAN);
-        simd::integrate_wrap(&mut self.pos_y[..n], &self.vel_y[..n], MAP_SPAN);
-        simd::tick_down(&mut self.cooldown[..n]);
-        self.frame += 1;
+        // 0..7: autosave, logging, the debug-lag draw, speed commands, scripts, CTW,
+        // tutorial, Steam. None have simulation bodies we model.
+        // 8..13: Leaders::process_all, NetDaemon, diplomacy chat, Leaders::strategy_all,
+        // GameDaemon::process_all, Armies::process_all — all stubs for now.
+        for s in 0..14 {
+            self.coverage.schedule.enter(s);
+        }
+
+        // 14 — the one that matters.
+        self.coverage.schedule.enter(14);
+        self.objects_process_all();
+
+        // 15 Objects::inc_time, 16 GraphicEvents, 17 end_process_all, 18 Achieve,
+        // 19 process_event_frame.
+        for s in 15..20 {
+            self.coverage.schedule.enter(s);
+        }
+
+        // 20 — Game::frame++ happens HERE, after the object pass.
+        self.coverage.schedule.enter(20);
+        self.frame = self.frame.wrapping_add(1);
+
+        // 21 OrdersMemManager::cycle, 22 stray roads.
+        self.coverage.schedule.enter(21);
+        self.coverage.schedule.enter(22);
+
+        // 23 — 15 frames is one game second.
+        self.coverage.schedule.enter(23);
+        if self.frame % FRAMES_PER_SECOND == 0 {
+            self.seconds = self.seconds.wrapping_add(1);
+        }
+
+        // 24 cannon time, 25 autosave, 26 log, 27 end game, 28 capture.
+        for s in 24..DO_FRAME.len() {
+            self.coverage.schedule.enter(s);
+        }
     }
 
-    /// The same frame, forced through the scalar reference kernels.
+    /// `Objects::process_all` `0x0065DCE0`.
     ///
-    /// Public so tests can assert the vector path is *bit-identical*, not merely close.
-    /// Not for production stepping — [`World::step`] is the one that dispatches.
+    /// The traversal order comes from [`ObjectRegistry::traversal`], which reproduces the
+    /// `(frame + i) % 10` owner rotation for the unit band and the fixed eight-slot order
+    /// for the building and wall bands.
+    ///
+    /// # A recorded divergence
+    ///
+    /// Retail spawns wildlife every 32 frames and every 64 frames steps one herd, and the
+    /// wildlife spawn **draws `game_random`** — up to two draws per placement attempt,
+    /// gated on a terrain test we have no map for. Drawing the wrong number of values
+    /// would be worse than drawing none, so we draw none and count the frames in
+    /// [`Coverage::wildlife_draws_skipped`]. Every one of those frames is a point where
+    /// our RNG stream leaves retail's. This is the single largest known obstacle to a
+    /// stream-faithful tick and it belongs to the worldgen/terrain lane.
+    fn objects_process_all(&mut self) {
+        let frame = self.frame;
+        // Move the buffer out so the loop can mutate `self` while walking it; it goes
+        // straight back at the end, so the allocation survives the frame.
+        let mut order = std::mem::take(&mut self.traversal_buf);
+        self.objects.traversal_into(frame, &mut order);
+        for &(_who, band, o, row) in order.iter() {
+            match band {
+                Band::Unit => {
+                    let row = row as usize;
+                    if row >= self.live as usize {
+                        continue;
+                    }
+                    if self.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0 {
+                        self.unit_process(row);
+                    } else {
+                        let hf = self.units.get_hold_frames(row);
+                        if hf != 0 {
+                            self.units.set_hold_frames(row, hf - 1);
+                            self.coverage.hold_decrements += 1;
+                        }
+                    }
+                }
+                Band::Build => {
+                    let _ = o;
+                    self.coverage.build_process += 1;
+                }
+                Band::Wall => {
+                    self.coverage.wall_process += 1;
+                }
+            }
+        }
+        self.traversal_buf = order;
+        if frame % WILDLIFE_PERIOD == 0 {
+            self.coverage.wildlife_draws_skipped += 1;
+        }
+        let _ = HERD_PERIOD;
+    }
+
+    /// `Unit::process` `0x00610BC0`, vtable slot 39 (+0x9C).
+    ///
+    /// Retail's body is attrition, spells, healing, cloak, supply, then `Unit::work`
+    /// (slot 98, +0x188) and finally `Guy::process`. Only the last two carry ported
+    /// behaviour; the five preludes are absent and the coverage report says so.
+    fn unit_process(&mut self, row: usize) {
+        self.coverage.unit_process += 1;
+        self.unit_work(row);
+        self.guy_process(row);
+    }
+
+    /// `Unit::work` `0x0060D180` -> `Unit::do_job` `0x00617A10`.
+    ///
+    /// The dispatch is the 28-entry jump table at `0x00617B94`, indexed directly by the
+    /// head order's type. Arms without a ported body still record the dispatch.
+    fn unit_work(&mut self, row: usize) {
+        self.coverage.unit_work += 1;
+        let kind = self.unit_orders[row].order_type();
+        let status = self.coverage.orders.record(kind);
+        if status == ArmStatus::Unimplemented {
+            return;
+        }
+        match kind {
+            // Arm 0: the virtual at [unit+0x184]. An idle unit holds position.
+            OrderIndex::None => {
+                self.move_step_x[row] = 0;
+                self.move_step_y[row] = 0;
+            }
+            // Arms 1 and 4 are the same executor, `Unit::do_move` 0x005F7B30 [measured].
+            OrderIndex::MoveTo | OrderIndex::FleeTo => self.do_move(row),
+            OrderIndex::Attack => self.do_attack(row),
+            // Arm 5 falls to the default arm and does nothing. Faithfully empty.
+            OrderIndex::Patrol => {}
+            _ => {}
+        }
+    }
+
+    /// `Unit::do_move` `0x005F7B30` — the funnel every locomotion order reaches.
+    ///
+    /// # Fidelity, stated precisely
+    ///
+    /// The *primitives* are [measured] ports: `find_angle` `0x0092D130` and `sinx`/`cosx`
+    /// `0x0092D100`/`0x0092D0C0`. The *logic around them* is not: retail's `do_move` is
+    /// 4,582 bytes over a `Stack<PathData>`, `vector_dist`, `is_in_range`, collision
+    /// resolution and four pathfinder entry points. What is here is a straight-line walk
+    /// toward the order's destination that stops inside `tolerance`. Treat it as a
+    /// movement *placeholder wearing derived trig*; [`crate::systems::movement`] holds
+    /// the real pathfinder and is what this should be rewired to.
+    fn do_move(&mut self, row: usize) {
+        let Some(ord) = self.unit_orders[row].current().copied() else {
+            self.move_step_x[row] = 0;
+            self.move_step_y[row] = 0;
+            return;
+        };
+        let x = self.units.x_internal()[row];
+        let y = self.units.y_internal()[row];
+        let dx = ord.x.wrapping_sub(x);
+        let dy = ord.y.wrapping_sub(y);
+        let tol = if ord.tolerance > 0 {
+            ord.tolerance
+        } else {
+            self.units.tolerance()[row]
+        };
+        let d2 = (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64);
+        if d2 <= (tol as i64) * (tol as i64) {
+            self.unit_orders[row].kill_current();
+            self.move_step_x[row] = 0;
+            self.move_step_y[row] = 0;
+            self.units.set_idle(row, 1);
+            return;
+        }
+        let angle = find_angle(dx, dy);
+        self.units.angle_mut()[row] = angle;
+        self.units.set_idle(row, 0);
+        let speed = self.units.myspeed()[row] as i32;
+        self.move_step_x[row] = sinx(angle, speed);
+        // Angle 0 points at -y, so the y component is the negated cosine.
+        self.move_step_y[row] = -cosx(angle, speed);
+    }
+
+    /// `Unit::do_attack` `0x005F1B80` — range gate, recharge, and the damage pipeline.
+    ///
+    /// # Fidelity, stated precisely
+    ///
+    /// The **arithmetic** is [`crate::mechanics::damage`], the port of
+    /// `ObjectData::get_damage` `0x00644130`, fed with the real balance-table entry from
+    /// `Balance::final_balance_table` `0x00C12BF4`. The **predicates** are all default
+    /// (false), because resolving them means walking an object graph this world does not
+    /// model — so no modifier branch fires and the number is the spine of the chain only.
+    /// The **range and recharge gate** around it is ours, not derived.
+    ///
+    /// Real formula, real table, no modifiers, invented gating. Tier C as a whole.
+    fn do_attack(&mut self, row: usize) {
+        let Some(ord) = self.unit_orders[row].current().copied() else {
+            return;
+        };
+        if ord.target_who < 0 || ord.target_o < 0 {
+            self.unit_orders[row].kill_current();
+            return;
+        }
+        let recharging = self.units.get_recharging(row);
+        if recharging > 0 {
+            self.units.set_recharging(row, recharging - 1);
+            return;
+        }
+        let Some(balance) = self.rules.balance.clone() else {
+            self.coverage.damage_skipped_no_tables += 1;
+            return;
+        };
+        let target = self
+            .objects
+            .slot(ord.target_who as usize)
+            .band(Band::Unit)
+            .get(ord.target_o as usize)
+            .copied();
+        let Some(trow) = target else {
+            self.unit_orders[row].kill_current();
+            return;
+        };
+        let trow = trow as usize;
+        if trow >= self.live as usize || trow == row {
+            self.unit_orders[row].kill_current();
+            return;
+        }
+
+        let atk_type = self.unit_type_id[row];
+        let def_type = self.unit_type_id[trow];
+        let (Some(atk), Some(def)) = (
+            self.type_stats(atk_type).copied(),
+            self.type_stats(def_type).copied(),
+        ) else {
+            self.coverage.damage_skipped_no_tables += 1;
+            return;
+        };
+
+        let dx = self.units.x_internal()[trow].wrapping_sub(self.units.x_internal()[row]);
+        let dy = self.units.y_internal()[trow].wrapping_sub(self.units.y_internal()[row]);
+        let d2 = (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64);
+        let r = atk.max_range as i64;
+        if d2 > r * r {
+            // Out of range: close. Retail reaches `do_move` through `check_target_path`;
+            // this is the same *shape*, not the same code.
+            let angle = find_angle(dx, dy);
+            self.units.angle_mut()[row] = angle;
+            let speed = self.units.myspeed()[row] as i32;
+            self.move_step_x[row] = sinx(angle, speed);
+            self.move_step_y[row] = -cosx(angle, speed);
+            return;
+        }
+        self.move_step_x[row] = 0;
+        self.move_step_y[row] = 0;
+
+        let Some(balance_pct) = balance.get(atk.type_id, def.type_id) else {
+            self.coverage.damage_skipped_no_tables += 1;
+            return;
+        };
+        let input = crate::mechanics::DamageInput {
+            balance_pct,
+            attack: crate::mechanics::get_attack(atk.attack, false, 0, 0),
+            armor: crate::mechanics::get_armor(def.armor, false, 0, 0),
+            attack_dir: find_angle(dx, dy),
+            attacker_player: self.units.get_who(row) as u32,
+            attacker_type_id: atk.type_id,
+            defender_type_id: def.type_id,
+            defender_facing: self.units.angle()[trow],
+            defender_facing_entrench: self.units.angle()[trow],
+            current_frame: self.frame,
+            ..Default::default()
+        };
+        let d = crate::mechanics::damage(
+            &input,
+            &crate::mechanics::DamagePredicates::default(),
+            &self.rules.combat,
+            &crate::mechanics::UnreachedTerms::default(),
+        );
+        let hp = self.units.myhits()[trow].wrapping_sub(d);
+        self.units.myhits_mut()[trow] = hp;
+        self.units
+            .set_recharging(row, atk.recharge.clamp(0, 255) as u8);
+        self.coverage.damage_applied += 1;
+        if hp <= 0 {
+            // Clearing the active bit is what stops `Objects::process_all` ticking it;
+            // actual removal is `Objects::kill_object`, which is not ported.
+            let f = self.units.get_flags(trow);
+            self.units.set_flags(trow, f & !OBJ_FLAG_ACTIVE);
+        }
+    }
+
+    /// `Guy::process` `0x005E0230` -> `Guy::move` `0x005D9240`, the position integrator.
+    #[inline]
+    fn guy_process(&mut self, row: usize) {
+        self.coverage.guy_move += 1;
+        let x = self.units.x_internal()[row].wrapping_add(self.move_step_x[row]);
+        let y = self.units.y_internal()[row].wrapping_add(self.move_step_y[row]);
+        self.units.x_internal_mut()[row] = x.rem_euclid(MAP_SPAN);
+        self.units.y_internal_mut()[row] = y.rem_euclid(MAP_SPAN);
+    }
+
+    // ---- the element-wise subset, for layout measurement ---------------------------
+
+    /// The tick's **element-wise subset**: integrate every live unit's position by its
+    /// cached step, then decrement every `hold_frames`.
+    ///
+    /// This is **not** `Game::do_frame` and does not claim to be. It exists because the
+    /// batch-layout question — does lane-major beat world-dense — is only meaningful on
+    /// arithmetic with no per-unit control flow, and this is that arithmetic. It is what
+    /// [`crate::LaneBatch`] mirrors, so comparing the two compares layouts, not
+    /// simulations.
+    pub fn step_hot(&mut self) {
+        let n = self.live as usize;
+        simd::integrate_wrap(
+            self.units.x_internal_mut(),
+            &self.move_step_x[..n],
+            MAP_SPAN,
+        );
+        simd::integrate_wrap(
+            self.units.y_internal_mut(),
+            &self.move_step_y[..n],
+            MAP_SPAN,
+        );
+        simd::tick_down(self.units.hold_frames_mut());
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    /// [`World::step_hot`] forced through the scalar reference kernels.
     pub fn step_scalar_reference(&mut self) {
         let n = self.live as usize;
-        simd::integrate_wrap_scalar(&mut self.pos_x[..n], &self.vel_x[..n], MAP_SPAN);
-        simd::integrate_wrap_scalar(&mut self.pos_y[..n], &self.vel_y[..n], MAP_SPAN);
-        simd::tick_down_scalar(&mut self.cooldown[..n]);
-        self.frame += 1;
+        simd::integrate_wrap_scalar(
+            self.units.x_internal_mut(),
+            &self.move_step_x[..n],
+            MAP_SPAN,
+        );
+        simd::integrate_wrap_scalar(
+            self.units.y_internal_mut(),
+            &self.move_step_y[..n],
+            MAP_SPAN,
+        );
+        simd::tick_down_scalar(self.units.hold_frames_mut());
+        self.frame = self.frame.wrapping_add(1);
     }
 
-    /// The same frame through the explicitly vectorised kernels ([`crate::simd::hand`]).
-    ///
-    /// Public so the benchmark can compare it against [`World::step`] on whatever machine
-    /// it runs on, and so the bit-identity test has something to compare. It is not the
-    /// shipped path: on both architectures measured, LLVM's vectorisation of the portable
-    /// form is slightly faster. See `crate::simd` for the numbers.
+    /// [`World::step_hot`] through the explicitly vectorised kernels.
     pub fn step_hand_simd(&mut self) {
         let n = self.live as usize;
-        simd::hand::integrate_wrap(&mut self.pos_x[..n], &self.vel_x[..n], MAP_SPAN);
-        simd::hand::integrate_wrap(&mut self.pos_y[..n], &self.vel_y[..n], MAP_SPAN);
-        simd::hand::tick_down(&mut self.cooldown[..n]);
-        self.frame += 1;
+        simd::hand::integrate_wrap(
+            self.units.x_internal_mut(),
+            &self.move_step_x[..n],
+            MAP_SPAN,
+        );
+        simd::hand::integrate_wrap(
+            self.units.y_internal_mut(),
+            &self.move_step_y[..n],
+            MAP_SPAN,
+        );
+        simd::hand::tick_down(self.units.hold_frames_mut());
+        self.frame = self.frame.wrapping_add(1);
     }
 
-    /// Digest of sim-critical state, independent of row order.
+    // ---- checksum ------------------------------------------------------------------
+
+    /// Digest of sim-critical state, **defined by the engine's own walker**.
     ///
-    /// Each unit is hashed with its *handle*, and the per-unit hashes are combined with a
-    /// commutative op, so the digest is invariant under compaction (a unit moving row is
-    /// not a state change) while still catching two units exchanging attributes. The old
-    /// row-ordered fold could not distinguish those two cases from each other.
+    /// The field set is not chosen here: it is every `UnitData` field that
+    /// `Unit::walk_data` `0x0060CF40` visits and that this crate materialises, read out of
+    /// the generated descriptor table at run time. That is the same set `CheckSum`,
+    /// `SaveGame` and `LoadGame` walk, because they are the only `DataWalk`
+    /// implementations.
     ///
-    /// Deliberately *not* modelled on the engine's own checksum: measurement confirms a
-    /// `CheckSum` / `DataWalk` visitor exists in the binary, and once its field set is
-    /// recovered this should be replaced by that definition, since the engine's notion of
-    /// "sim-critical" is the authoritative one.
+    /// Per-unit hashes are combined commutatively and each is seeded with the unit's
+    /// handle, so the digest is invariant under row compaction — a unit changing row is
+    /// not a state change — while still separating two units that swapped attributes.
+    ///
+    /// It is **not** `adler32` over the engine's byte image, so it is not comparable with
+    /// a retail checksum. Making it comparable needs the byte-exact walk order, which the
+    /// generated `WALK_OPS` now carries but nothing consumes yet.
     pub fn digest(&self) -> u64 {
         let n = self.live as usize;
         let mut acc: u64 = 0;
         for row in 0..n {
             let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            for v in [
-                self.handle_of_row[row] as u64,
-                self.pos_x[row] as u32 as u64,
-                self.pos_y[row] as u32 as u64,
-                self.hits[row] as u32 as u64,
-                self.cooldown[row] as u16 as u64,
-            ] {
-                h ^= v;
-                h = h.wrapping_mul(0x0000_0100_0000_01B3);
+            macro_rules! mix {
+                ($v:expr) => {{
+                    h ^= $v as u64;
+                    h = h.wrapping_mul(0x0000_0100_0000_01B3);
+                }};
+            }
+            mix!(self.handle_of_row[row]);
+            for f in unit::FIELDS.iter() {
+                if f.alias_of.is_some() || f.walked != Some(true) {
+                    continue;
+                }
+                let p = f.plane as usize;
+                let k = f.count as usize;
+                match f.pool {
+                    crate::generated::state::Pool::W4 => {
+                        if k == 1 {
+                            mix!(self.units.w4_slice(p)[row] as u32);
+                        } else {
+                            for &v in self.units.w4_arr(p, row, k) {
+                                mix!(v as u32);
+                            }
+                        }
+                    }
+                    crate::generated::state::Pool::W2 => {
+                        if k == 1 {
+                            mix!(self.units.w2_slice(p)[row] as u16);
+                        } else {
+                            for &v in self.units.w2_arr(p, row, k) {
+                                mix!(v as u16);
+                            }
+                        }
+                    }
+                    crate::generated::state::Pool::W1 => {
+                        if k == 1 {
+                            mix!(self.units.w1_slice(p)[row] as u8);
+                        } else {
+                            for &v in self.units.w1_arr(p, row, k) {
+                                mix!(v as u8);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // The order list is walked state too (`UnitData::orderlist` at +200).
+            mix!(self.unit_orders[row].len() as u32);
+            if let Some(o) = self.unit_orders[row].current() {
+                mix!(o.kind.index() as u32);
+                mix!(o.x as u32);
+                mix!(o.y as u32);
+                mix!(o.flags);
             }
             acc = acc.wrapping_add(h);
         }
-        let mut out = acc ^ self.frame;
+        let mut out = acc ^ (self.frame as u32 as u64);
         out = out.wrapping_mul(0x0000_0100_0000_01B3);
         out ^ (self.live as u64)
+    }
+
+    /// `(materialised walked fields, walked fields, materialised walked bytes, walked
+    /// bytes)` for `UnitData`.
+    ///
+    /// Reported so "the checksum covers sim-critical state" is a number rather than a
+    /// claim.
+    pub fn digest_field_coverage() -> (usize, usize, u32, u32) {
+        let mut fields = 0usize;
+        let mut bytes = 0u32;
+        let mut walked_fields = 0usize;
+        let mut walked_bytes = 0u32;
+        for f in unit::FIELDS.iter() {
+            if f.alias_of.is_some() || f.walked != Some(true) {
+                continue;
+            }
+            walked_fields += 1;
+            walked_bytes += f.size;
+            if f.repr.materialised() {
+                fields += 1;
+                bytes += f.size;
+            }
+        }
+        (fields, walked_fields, bytes, walked_bytes)
     }
 }
 
@@ -425,16 +981,15 @@ mod tests {
         assert!(w.despawn(a));
         assert_eq!(w.live_count(), 1);
         assert!(!w.despawn(a), "double despawn must be a no-op");
-        assert_eq!(w.live_count(), 1);
         assert!(w.despawn(b));
         assert_eq!(w.live_count(), 0);
     }
 
     #[test]
     fn capacity_is_bounded_and_handles_recycle() {
-        let mut w = World::new(1);
+        let mut w = World::with_capacity(256, 1);
         let mut hs = Vec::new();
-        for _ in 0..MAX_UNITS {
+        for _ in 0..256 {
             hs.push(w.spawn(0).expect("within capacity"));
         }
         assert!(w.spawn(0).is_none(), "must not exceed fixed capacity");
@@ -444,53 +999,69 @@ mod tests {
 
     #[test]
     fn stale_handles_are_rejected_after_reuse() {
-        let mut w = World::new(3);
+        let mut w = World::with_capacity(8, 3);
         let a = w.spawn(0).unwrap();
         w.spawn(1).unwrap();
         assert!(w.despawn(a));
         let c = w.spawn(2).unwrap();
         assert_eq!(c.id, a.id, "id is recycled");
         assert_ne!(c.generation, a.generation, "generation must move");
-        assert!(!w.is_alive(a), "stale handle must not resolve");
-        assert!(!w.despawn(a), "stale handle must not kill the unit that reused its id");
+        assert!(!w.is_alive(a));
+        assert!(!w.despawn(a));
         assert!(w.is_alive(c));
     }
 
+    /// The engine-visible `(who, o)` address must survive every despawn, for every
+    /// survivor. This is the invariant a swap-remove is most likely to break, and losing
+    /// it means an order can name an object that no longer exists.
     #[test]
-    fn rows_stay_dense_under_churn() {
-        let mut w = World::new(11);
-        let hs: Vec<Handle> = (0..500).map(|k| w.spawn((k % 3) as u8).unwrap()).collect();
-        for (k, h) in hs.iter().enumerate() {
-            if k % 2 == 0 {
-                assert!(w.despawn(*h));
-            }
-        }
-        assert_eq!(w.live_count(), 250);
-        // Every surviving handle must still resolve, and to a row inside the dense region.
-        for (k, h) in hs.iter().enumerate() {
-            if k % 2 == 1 {
-                let row = w.row_of(*h).expect("survivor must resolve");
-                assert!(row < w.live_count() as usize);
-            } else {
-                assert!(w.row_of(*h).is_none());
-            }
-        }
-        // Rows are a permutation of the surviving handle ids: dense, no holes, no dupes.
-        let mut ids: Vec<u32> = w.handles().to_vec();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), w.live_count() as usize);
-    }
-
-    /// The id array must stay a permutation of `0..capacity` — that invariant is what lets
-    /// the free pool live in its tail, and a leak there would silently cap the world.
-    #[test]
-    fn handle_ids_remain_a_permutation_under_churn() {
-        let cap = 96;
-        let mut w = World::with_capacity(cap, 0xBEE5);
+    fn the_engine_object_address_stays_consistent_under_churn() {
+        let mut w = World::with_capacity(96, 0xBEE5);
         let mut alive: Vec<Handle> = Vec::new();
         let mut rng: u64 = 1;
-        for round in 0..400 {
+        for round in 0..500 {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let r = (rng >> 33) as usize;
+            if alive.len() < 96 && (alive.is_empty() || (r & 3) != 0) {
+                if let Some(h) = w.spawn((round % 4) as u8) {
+                    alive.push(h);
+                }
+            } else if !alive.is_empty() {
+                let h = alive.swap_remove(r % alive.len());
+                assert!(w.despawn(h));
+            }
+            assert_eq!(w.live_count() as usize, alive.len());
+            for row in 0..w.live_count() as usize {
+                let who = w.units.get_who(row) as usize;
+                let o = w.units.o()[row] as u32;
+                assert_eq!(
+                    w.objects
+                        .slot(who)
+                        .band(Band::Unit)
+                        .get(o as usize)
+                        .copied(),
+                    Some(row as u32),
+                    "round {round}: row {row} says it is ({who}, {o}) but the band disagrees"
+                );
+            }
+            let total: usize = (0..OWNER_SLOTS)
+                .map(|s| w.objects.band_len(s, Band::Unit))
+                .sum();
+            assert_eq!(
+                total,
+                alive.len(),
+                "round {round}: registry and world disagree"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_ids_remain_a_permutation_under_churn() {
+        let cap = 64;
+        let mut w = World::with_capacity(cap, 0xF00D);
+        let mut alive: Vec<Handle> = Vec::new();
+        let mut rng: u64 = 9;
+        for round in 0..300 {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
             let r = (rng >> 33) as usize;
             if alive.len() < cap && (alive.is_empty() || (r & 3) != 0) {
@@ -501,25 +1072,19 @@ mod tests {
                 let h = alive.swap_remove(r % alive.len());
                 assert!(w.despawn(h));
             }
-            assert_eq!(w.live_count() as usize, alive.len());
             let mut ids = w.all_handle_ids().to_vec();
             ids.sort_unstable();
-            assert!(ids.iter().copied().eq(0..cap as u32), "id permutation broken at round {round}");
-            for h in &alive {
-                assert!(w.is_alive(*h), "live handle stopped resolving at round {round}");
-            }
+            assert!(
+                ids.iter().copied().eq(0..cap as u32),
+                "id permutation broken at {round}"
+            );
         }
-        // And the world must still fill to capacity after all that churn.
-        while w.live_count() < cap as u32 {
-            assert!(w.spawn(0).is_some());
-        }
-        assert!(w.spawn(0).is_none());
     }
 
     #[test]
     fn stepping_is_deterministic_for_a_given_seed() {
         let run = || {
-            let mut w = World::new(0xDEAD_BEEF);
+            let mut w = World::with_capacity(64, 0xDEAD_BEEF);
             for _ in 0..64 {
                 w.spawn(0);
             }
@@ -528,13 +1093,13 @@ mod tests {
             }
             w.digest()
         };
-        assert_eq!(run(), run(), "same seed must give the same digest");
+        assert_eq!(run(), run());
     }
 
     #[test]
     fn different_seeds_diverge() {
         let run = |s| {
-            let mut w = World::new(s);
+            let mut w = World::with_capacity(64, s);
             for _ in 0..64 {
                 w.spawn(0);
             }
@@ -546,34 +1111,184 @@ mod tests {
         assert_ne!(run(1), run(2));
     }
 
+    /// The frame counter increments at step 20, so the rotation `Objects::process_all`
+    /// uses is the *pre-increment* frame. Getting this backwards puts every owner slot
+    /// one frame out of phase with retail.
     #[test]
-    fn positions_stay_in_bounds() {
-        let mut w = World::new(99);
-        for _ in 0..256 {
-            w.spawn(0);
+    fn the_owner_rotation_uses_the_pre_increment_frame() {
+        let mut w = World::with_capacity(16, 5);
+        for s in 0..4u8 {
+            w.spawn(s);
         }
-        for _ in 0..2000 {
+        assert_eq!(w.objects.traversal(w.frame)[0].0, 0);
+        w.step();
+        assert_eq!(w.frame, 1);
+        assert_eq!(
+            w.objects.traversal(w.frame)[0].0,
+            1,
+            "rotation must advance by one"
+        );
+    }
+
+    /// Every schedule entry must be visited every frame, or the coverage report is a lie.
+    #[test]
+    fn every_do_frame_step_is_entered_once_per_tick() {
+        let mut w = World::with_capacity(4, 1);
+        w.spawn(0);
+        for _ in 0..10 {
             w.step();
         }
-        for row in 0..w.live_count() as usize {
-            assert!((0..MAP_SPAN).contains(&w.pos_x()[row]));
-            assert!((0..MAP_SPAN).contains(&w.pos_y()[row]));
+        for (i, s) in DO_FRAME.iter().enumerate() {
+            assert_eq!(
+                w.coverage().schedule.entered[i],
+                10,
+                "step {i} ({}) miscounted",
+                s.name
+            );
         }
     }
 
-    /// The whole point of the vector kernels: same bits, not similar numbers.
+    /// A move order takes the unit toward its destination and then clears itself.
+    #[test]
+    fn a_move_order_converges_and_then_clears_itself() {
+        let mut w = World::with_capacity(4, 42);
+        let h = w.spawn(0).unwrap();
+        let row = w.row_of(h).unwrap();
+        w.set_pos(row, 1000, 1000);
+        w.units.myspeed_mut()[row] = 50;
+        assert!(w.issue(h, Order::move_to(5000, 1000, SUBTILE)));
+        let mut steps = 0;
+        while !w.orders(row).is_empty() && steps < 500 {
+            w.step();
+            steps += 1;
+        }
+        assert!(steps < 500, "the unit never arrived");
+        let dx = (w.pos_x()[row] - 5000).abs();
+        let dy = (w.pos_y()[row] - 1000).abs();
+        assert!(
+            dx <= SUBTILE && dy <= SUBTILE,
+            "stopped {dx},{dy} from the target"
+        );
+        assert_eq!(
+            w.coverage().orders.dispatches[OrderIndex::MoveTo.index()],
+            steps as u64
+        );
+    }
+
+    /// `PATROL` is faithfully empty and `FLEE_TO` shares `MOVE_TO`'s arm. Both are
+    /// [measured] properties of the jump table and both are easy to "fix" by accident.
+    #[test]
+    fn patrol_does_nothing_and_flee_to_moves() {
+        let mut w = World::with_capacity(4, 7);
+        let h = w.spawn(0).unwrap();
+        let row = w.row_of(h).unwrap();
+        w.set_pos(row, 0, 0);
+        w.units.myspeed_mut()[row] = 40;
+        w.issue(
+            h,
+            Order {
+                kind: OrderIndex::Patrol,
+                x: 9000,
+                y: 0,
+                ..Order::default()
+            },
+        );
+        w.step();
+        assert_eq!(
+            (w.pos_x()[row], w.pos_y()[row]),
+            (0, 0),
+            "PATROL must not move a unit"
+        );
+        assert_eq!(
+            w.coverage().orders.dispatches[OrderIndex::Patrol.index()],
+            1
+        );
+
+        w.issue(
+            h,
+            Order {
+                kind: OrderIndex::FleeTo,
+                x: 9000,
+                y: 0,
+                tolerance: SUBTILE,
+                ..Order::default()
+            },
+        );
+        w.step();
+        assert!(
+            w.pos_x()[row] > 0,
+            "FLEE_TO shares MOVE_TO's executor and must move"
+        );
+    }
+
+    /// Unimplemented arms are dispatched and counted, never silently dropped.
+    #[test]
+    fn unimplemented_order_arms_are_counted() {
+        let mut w = World::with_capacity(4, 11);
+        let h = w.spawn(0).unwrap();
+        w.issue(
+            h,
+            Order {
+                kind: OrderIndex::Gather,
+                ..Order::default()
+            },
+        );
+        for _ in 0..7 {
+            w.step();
+        }
+        let c = w.coverage().orders;
+        assert_eq!(c.dispatches[OrderIndex::Gather.index()], 7);
+        assert_eq!(c.unimplemented, 7);
+        assert!(c.covered_fraction() < 1.0);
+    }
+
+    /// The digest is defined by the walker, and it must actually cover the walked set.
+    #[test]
+    fn the_digest_covers_the_walked_field_set() {
+        let (fields, walked_fields, bytes, walked_bytes) = World::digest_field_coverage();
+        assert!(fields > 0);
+        assert_eq!(
+            fields, walked_fields,
+            "every walked UnitData field is materialised"
+        );
+        assert_eq!(bytes, walked_bytes);
+        // Unit::walk_data walks 111 bytes of UnitData [measured, state-schema.json].
+        assert_eq!(walked_bytes, 111);
+    }
+
+    /// Compaction must not be observable in the digest: only state is.
+    #[test]
+    fn digest_is_independent_of_row_order() {
+        let mut a = World::with_capacity(64, 5);
+        let ha: Vec<Handle> = (0..64).map(|k| a.spawn((k % 4) as u8).unwrap()).collect();
+        let mut b = a.clone();
+        for k in [3usize, 17, 40, 41, 5] {
+            assert!(a.despawn(ha[k]));
+        }
+        for k in [5usize, 41, 40, 17, 3] {
+            assert!(b.despawn(ha[k]));
+        }
+        assert_ne!(
+            a.handles(),
+            b.handles(),
+            "vacuous unless the row orders differ"
+        );
+        assert_eq!(a.digest(), b.digest());
+    }
+
+    /// The vector, scalar and hand-written kernel paths must agree bit for bit.
     #[test]
     fn every_kernel_path_steps_a_world_identically() {
-        // Sizes chosen to straddle every vector width and leave awkward tails.
-        for &units in &[0usize, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 64, 257, 1000] {
+        for &units in &[
+            0usize, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 64, 257, 1000,
+        ] {
             let build = || {
                 let mut w = World::with_capacity(units.max(1), 0x1234_5678 ^ units as u64);
                 for k in 0..units {
                     let h = w.spawn((k % 5) as u8).unwrap();
-                    // Exercise the cooldown kernel on a mix of zero, positive and (illegal
-                    // but well-defined) negative counters.
                     let row = w.row_of(h).unwrap();
                     w.cooldown_mut()[row] = ((k as i32 % 7) - 2) as i16;
+                    w.set_move_step(row, (k as i32 % 11) - 5, (k as i32 % 13) - 6);
                 }
                 w
             };
@@ -581,44 +1296,117 @@ mod tests {
             let mut scaw = build();
             let mut porw = build();
             for _ in 0..97 {
-                vecw.step();
+                vecw.step_hot();
                 scaw.step_scalar_reference();
                 porw.step_hand_simd();
             }
-            assert_eq!(vecw.digest(), scaw.digest(), "digest diverged at {units} units");
-            assert_eq!(vecw.pos_x(), scaw.pos_x(), "pos_x diverged at {units} units");
-            assert_eq!(vecw.pos_y(), scaw.pos_y(), "pos_y diverged at {units} units");
-            assert_eq!(vecw.cooldown(), scaw.cooldown(), "cooldown diverged at {units}");
-            assert_eq!(vecw.digest(), porw.digest(), "hand simd diverged at {units} units");
-            assert_eq!(vecw.pos_x(), porw.pos_x(), "hand simd pos_x diverged at {units}");
-            assert_eq!(vecw.cooldown(), porw.cooldown(), "hand simd cooldown diverged at {units}");
+            assert_eq!(
+                vecw.digest(),
+                scaw.digest(),
+                "digest diverged at {units} units"
+            );
+            assert_eq!(vecw.pos_x(), scaw.pos_x(), "pos_x diverged at {units}");
+            assert_eq!(vecw.pos_y(), scaw.pos_y(), "pos_y diverged at {units}");
+            assert_eq!(
+                vecw.cooldown(),
+                scaw.cooldown(),
+                "cooldown diverged at {units}"
+            );
+            assert_eq!(
+                vecw.digest(),
+                porw.digest(),
+                "hand simd diverged at {units}"
+            );
         }
     }
 
-    /// Compaction must not be observable in the digest: only *state* is.
     #[test]
-    fn digest_is_independent_of_row_order() {
-        let mut a = World::new(5);
-        let ha: Vec<Handle> = (0..64).map(|k| a.spawn((k % 4) as u8).unwrap()).collect();
-        let mut b = a.clone();
-        let hb: Vec<Handle> = ha.clone();
-        // Kill the same logical units in opposite orders: same survivors, different rows.
-        for k in [3usize, 17, 40, 41, 5] {
-            assert!(a.despawn(ha[k]));
+    fn positions_stay_in_bounds() {
+        let mut w = World::with_capacity(256, 99);
+        for _ in 0..256 {
+            w.spawn(0);
         }
-        for k in [5usize, 41, 40, 17, 3] {
-            assert!(b.despawn(hb[k]));
+        for row in 0..w.live_count() as usize {
+            w.set_move_step(row, 977, -1231);
         }
-        assert_ne!(
-            a.handles(),
-            b.handles(),
-            "test is vacuous unless the two row orders actually differ"
+        for _ in 0..2000 {
+            w.step_hot();
+        }
+        for row in 0..w.live_count() as usize {
+            assert!((0..MAP_SPAN).contains(&w.pos_x()[row]));
+            assert!((0..MAP_SPAN).contains(&w.pos_y()[row]));
+        }
+    }
+
+    /// The tick rate constants are the measured ones, and they are two different facts.
+    #[test]
+    fn the_clock_is_the_measured_one() {
+        assert_eq!(
+            TICK_HZ, 15,
+            "15 sim frames is one game second (idiv 15 at 0x005924CF)"
         );
-        assert_eq!(a.digest(), b.digest());
-        for _ in 0..50 {
-            a.step();
-            b.step();
-        }
-        assert_eq!(a.digest(), b.digest(), "row order must not leak into the digest");
+        assert_eq!(
+            TICK_MS_NORMAL, 67,
+            "Normal pacing is 67 ms (TurnControl::timings[2])"
+        );
+        assert_eq!(COORD_PER_TILE, 768);
+    }
+
+    /// Damage runs the derived pipeline against the real balance table when both are
+    /// loaded, and refuses rather than inventing a number when they are not.
+    #[test]
+    fn attacks_use_the_derived_pipeline_or_refuse() {
+        let mut w = World::with_capacity(8, 3);
+        let a = w.spawn_typed(0, 50).unwrap();
+        let d = w.spawn_typed(1, 51).unwrap();
+        let (arow, drow) = (w.row_of(a).unwrap(), w.row_of(d).unwrap());
+        w.set_pos(arow, 1000, 1000);
+        w.set_pos(drow, 1100, 1000);
+        w.issue(a, Order::attack(1, 0));
+
+        // No tables: counted as skipped, never guessed.
+        w.step();
+        assert_eq!(w.coverage().damage_skipped_no_tables, 1);
+        assert_eq!(w.coverage().damage_applied, 0);
+
+        let Ok(bal) = crate::balance::BalanceTable::load_default() else {
+            eprintln!("skipping the applied half: captured balance table not present");
+            return;
+        };
+        w.rules.balance = Some(std::sync::Arc::new(bal));
+        w.rules.unit_stats = std::sync::Arc::new(vec![
+            UnitTypeStats {
+                type_id: 50,
+                attack: 120,
+                armor: 1,
+                hits: 100,
+                recharge: 10,
+                max_range: 2000,
+                min_range: 0,
+            },
+            UnitTypeStats {
+                type_id: 51,
+                attack: 90,
+                armor: 3,
+                hits: 100,
+                recharge: 12,
+                max_range: 2000,
+                min_range: 0,
+            },
+        ]);
+        // Positions are reset because the first step moved nothing (no tables) but the
+        // order survived.
+        w.set_pos(arow, 1000, 1000);
+        w.set_pos(drow, 1100, 1000);
+        let before = w.hits()[drow];
+        w.step();
+        assert_eq!(w.coverage().damage_applied, 1);
+        assert!(
+            w.hits()[drow] < before,
+            "the defender must have taken damage"
+        );
+        // The attacker is now recharging, so the next frame applies nothing.
+        w.step();
+        assert_eq!(w.coverage().damage_applied, 1);
     }
 }

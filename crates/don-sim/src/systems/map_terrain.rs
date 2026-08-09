@@ -137,11 +137,36 @@ macro_rules! coord_kind {
 #[repr(transparent)]
 pub struct Coord(pub i32);
 
-coord_kind!(UCoord, 4, COORD_PER_UCELL, "Quarter-tile cell — the pathfinder's 8-connected movement grid (`find_upath`).");
-coord_kind!(TCoord, 6, COORD_PER_TILE, "Tile cell — the [`TData`] grid (`find_tpath`).");
-coord_kind!(FCoord, 7, COORD_PER_FCELL, "Fog cell — the `seen`/`seen2`/`seen3` byte planes.");
-coord_kind!(WCoord, 8, COORD_PER_WCELL, "World cell — the [`WData`] grid (`find_wpath`).");
-coord_kind!(RCoord, 9, COORD_PER_RCELL, "Region cell — the per-player `danger` maps.");
+coord_kind!(
+    UCoord,
+    4,
+    COORD_PER_UCELL,
+    "Quarter-tile cell — the pathfinder's 8-connected movement grid (`find_upath`)."
+);
+coord_kind!(
+    TCoord,
+    6,
+    COORD_PER_TILE,
+    "Tile cell — the [`TData`] grid (`find_tpath`)."
+);
+coord_kind!(
+    FCoord,
+    7,
+    COORD_PER_FCELL,
+    "Fog cell — the `seen`/`seen2`/`seen3` byte planes."
+);
+coord_kind!(
+    WCoord,
+    8,
+    COORD_PER_WCELL,
+    "World cell — the [`WData`] grid (`find_wpath`)."
+);
+coord_kind!(
+    RCoord,
+    9,
+    COORD_PER_RCELL,
+    "Region cell — the per-player `danger` maps."
+);
 
 impl WCoord {
     /// `WCoord::operator TCoord` `0x004613b0`: `t = w*4 + 2` — the *centre* tile, not the
@@ -181,6 +206,57 @@ impl TCoord {
 pub const NEIGHBOUR_DX: [i32; 8] = [-1, 0, 1, 1, 1, 0, -1, -1];
 /// See [`NEIGHBOUR_DX`].
 pub const NEIGHBOUR_DY: [i32; 8] = [-1, -1, -1, 0, 1, 1, 1, 0];
+
+/// The 4-connected (von Neumann) ring, in the engine's order: N, E, S, W.
+/// [measured: `int[4]` tables at `0x00add254` (dx) and `0x00add214` (dy), read by
+/// `WorldData::has_gather_access` `0x006b4e50`.]
+pub const NEIGHBOUR4_DX: [i32; 4] = [0, 1, 0, -1];
+/// See [`NEIGHBOUR4_DX`].
+pub const NEIGHBOUR4_DY: [i32; 4] = [-1, 0, 1, 0];
+
+/// The 16 tile offsets `WorldData::space_at_corner` probes, in the engine's own probe
+/// order. [measured: `int[16]` tables at `0x00adecf0` (dx) and `0x00aded30` (dy).]
+///
+/// Laid out on the 4x4 block they cover, the probe *indices* are:
+///
+/// ```text
+///          dx=0  dx=1  dx=2  dx=3
+///   dy=0 :   4     5     6     7
+///   dy=1 :  12     0     1    13
+///   dy=2 :  14     2     3    15
+///   dy=3 :   8     9    10    11
+/// ```
+///
+/// so indices **0–3 are the inner 2x2 core** — and the engine rejects outright
+/// (`return 0`) the moment any of those four is blocked, before even scoring the ring.
+pub const SPACE_PROBE_DX: [i32; 16] = [1, 2, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 3, 0, 3];
+/// See [`SPACE_PROBE_DX`].
+pub const SPACE_PROBE_DY: [i32; 16] = [1, 1, 2, 2, 0, 0, 0, 0, 3, 3, 3, 3, 1, 1, 2, 2];
+
+/// The four 5-cell "approach L" groups `space_at_corner` tests for a clear side.
+/// [measured: the 20 ints at `0x00adeca0`, walked in groups of 5 up to `0x00adecf0`.]
+/// In probe-index terms these are the bottom-right, bottom-left, top-left and top-right
+/// L-shaped approach corridors around the 2x2 core.
+pub const SPACE_APPROACH_GROUPS: [[usize; 5]; 4] = [
+    [9, 10, 11, 13, 15],
+    [12, 14, 8, 9, 10],
+    [14, 12, 4, 5, 6],
+    [5, 6, 7, 13, 15],
+];
+
+/// Grades returned by [`World::space_at_corner`] / [`World::check_building_wcoord`].
+/// Higher is more buildable; production's `BuildTypeData::blocked_location`
+/// (`0x006375b0`) consumes these.
+pub mod space {
+    /// The 2x2 core is blocked, out of bounds, or owned by someone else — unusable.
+    pub const CORE_BLOCKED: i32 = 0;
+    /// Usable, but no full approach corridor is clear.
+    pub const PARTIAL: i32 = 2;
+    /// At least one of the four 5-cell approach L's is entirely clear.
+    pub const APPROACH_CLEAR: i32 = 3;
+    /// All 16 probed tiles are clear.
+    pub const FULLY_CLEAR: i32 = 4;
+}
 
 // ---------------------------------------------------------------------------------------
 // 2. TData — 2 bytes per tile
@@ -302,7 +378,7 @@ pub mod land {
 /// The engine struct is 28 bytes; **21 of them are checksummed** —
 /// `World::walk_data` section 5 walks `[wdata + 28*i, +0x15)`, i.e. `flags` through
 /// `was_seen`, stopping before the 3 padding bytes and the `CollBlock*`.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WData {
     /// `+0x00` — see [`wflag`].
     pub flags: u16,
@@ -439,7 +515,12 @@ pub struct CollBlock {
 
 impl Default for CollBlock {
     fn default() -> Self {
-        CollBlock { bits: 0x300, size: 0x60, flags: 1, ptr: [0u8; 96] }
+        CollBlock {
+            bits: 0x300,
+            size: 0x60,
+            flags: 1,
+            ptr: [0u8; 96],
+        }
     }
 }
 
@@ -477,7 +558,12 @@ pub struct WalkedArray<T> {
 
 impl<T> WalkedArray<T> {
     pub fn new() -> Self {
-        WalkedArray { items: Vec::new(), capacity: 0, increment: 0, flags: 0 }
+        WalkedArray {
+            items: Vec::new(),
+            capacity: 0,
+            increment: 0,
+            flags: 0,
+        }
     }
     pub fn len(&self) -> usize {
         self.items.len()
@@ -631,7 +717,13 @@ impl World {
     /// `territory_limit_*` come from `Constants+0x118/0x11c/0x120`
     /// (`docs/derivation/rules-constants.json`: `44 / 4 / 4`), and the `colonized_*`
     /// triple is initialised from the *same three fields*, not from separate rules.
-    pub fn init(xs: i32, ys: i32, territory_base: i32, territory_civic: i32, territory_city: i32) -> World {
+    pub fn init(
+        xs: i32,
+        ys: i32,
+        territory_base: i32,
+        territory_civic: i32,
+        territory_city: i32,
+    ) -> World {
         let tile_xs = xs * 4;
         let tile_ys = ys * 4;
         let fog_xs = (tile_xs * 2) / 4;
@@ -803,7 +895,10 @@ impl World {
     /// `WorldData::is_valid(Coord,Coord)` `0x0043f360` — bounds are `tile_xs * 192`.
     #[inline]
     pub fn valid_coord(&self, cx: i32, cy: i32) -> bool {
-        cx >= 0 && cy >= 0 && cx < self.tile_xs * COORD_PER_TILE && cy < self.tile_ys * COORD_PER_TILE
+        cx >= 0
+            && cy >= 0
+            && cx < self.tile_xs * COORD_PER_TILE
+            && cy < self.tile_ys * COORD_PER_TILE
     }
     /// `WorldData::is_edge` `0x0047a970`.
     #[inline]
@@ -1030,6 +1125,127 @@ impl World {
             }
             base
         }
+    }
+
+    // -- placement predicates (consumed by the production lane) -------------------------------
+
+    /// `WorldData::space_at_corner(TCoord, TCoord, int who, int, int need_city)`
+    /// `0x006b27f0` — grade the 4x4 tile block anchored at `(tx, ty)` for building
+    /// placement. Returns one of the [`space`] constants.
+    ///
+    /// A probe position counts as blocked when **any** of these holds [measured]:
+    /// out of bounds; `need_city` is set and the tile lacks [`tflag::CITY`]; the tile is a
+    /// building ([`tflag::BLOCKER_BUILDING`]) or has [`tflag::STARTED`]; the owning cell's
+    /// `who` is `>= 0` and differs from `who`; or the tile has [`tflag::BLOCKED`].
+    ///
+    /// The early `return 0` for the inner 2x2 fires on the *first* blocked core probe, so
+    /// the ring is not even scored in that case.
+    pub fn space_at_corner(&self, tx: i32, ty: i32, who: i32, need_city: bool) -> i32 {
+        let mut slot = [0u8; 16];
+        let mut blocked_count = 0;
+        for i in 0..16usize {
+            let px = tx + SPACE_PROBE_DX[i];
+            let py = ty + SPACE_PROBE_DY[i];
+            let bad = if !self.valid_t(px, py) {
+                true
+            } else {
+                let m = self.tmask(px, py);
+                let owner = self.wdata(px >> 2, py >> 2).who as i32;
+                (m & tflag::CITY == 0 && need_city)
+                    || (m & tflag::BLOCKER_MASK) == tflag::BLOCKER_BUILDING
+                    || (m & tflag::STARTED) != 0
+                    || (owner >= 0 && owner != who)
+                    || (m & tflag::BLOCKED) != 0
+            };
+            if bad {
+                if i < 4 {
+                    return space::CORE_BLOCKED;
+                }
+                slot[i] = 1;
+                blocked_count += 1;
+            }
+        }
+        if blocked_count == 0 {
+            return space::FULLY_CLEAR;
+        }
+        if blocked_count < 8 {
+            for group in SPACE_APPROACH_GROUPS.iter() {
+                if group.iter().all(|&i| slot[i] == 0) {
+                    return space::APPROACH_CLEAR;
+                }
+            }
+        }
+        space::PARTIAL
+    }
+
+    /// `WorldData::check_building_wcoord` `0x006b26e0` — the W-cell gate in front of
+    /// [`World::space_at_corner`].
+    ///
+    /// Rejects immediately when the cell is owned by another player, is impassable
+    /// (`flags & 0x70`), or has **all sixteen** of its tiles blocked (`WData::blocked == 16`).
+    /// Otherwise it sweeps `dx in -rx..=rx`, `dy in -ry..=ry` over the cell's tiles,
+    /// skipping offsets whose Manhattan distance exceeds `max_dist` (except on the axes),
+    /// and returns the best grade found, short-circuiting on [`space::FULLY_CLEAR`].
+    pub fn check_building_wcoord(
+        &self,
+        wx: i32,
+        wy: i32,
+        who: i32,
+        rx: i32,
+        ry: i32,
+        max_dist: i32,
+        need_city: bool,
+    ) -> i32 {
+        let w = self.wdata(wx, wy);
+        let owner = w.who as i32;
+        if (owner >= 0 && owner != who) || w.flags & wflag::IMPASSABLE_MASK != 0 || w.blocked == 16
+        {
+            return space::CORE_BLOCKED;
+        }
+        let mut best = space::CORE_BLOCKED;
+        let mut dx = -rx;
+        while dx <= rx {
+            let mut dy = -ry;
+            while dy <= ry {
+                if dx == 0 || dy == 0 || dx.abs() + dy.abs() <= max_dist {
+                    let r = self.space_at_corner(wx * 4 + dx, wy * 4 + dy, who, need_city);
+                    if r > best {
+                        best = r;
+                    }
+                    if best == space::FULLY_CLEAR {
+                        return best;
+                    }
+                }
+                dy += 1;
+            }
+            dx += 1;
+        }
+        best
+    }
+
+    /// `WorldData::has_gather_access` `0x006b4e50`, `mode != 0` arm — can a gatherer reach
+    /// this tile? True when the tile is trees, a mountain or a cliff **and** at least one
+    /// of its four N/E/S/W neighbours is neither water nor blocked.
+    pub fn has_gather_access(&self, tx: i32, ty: i32) -> bool {
+        let m = self.tmask(tx, ty);
+        let harvestable = (m & tflag::SURFACE_MASK) == tflag::SURFACE_TREES
+            || (m & tflag::BLOCKER_MASK) == tflag::BLOCKER_MOUNTAIN
+            || (m & tflag::BLOCKER_MASK) == tflag::BLOCKER_CLIFF;
+        if !harvestable {
+            return false;
+        }
+        for i in 0..4 {
+            let nx = tx + NEIGHBOUR4_DX[i];
+            let ny = ty + NEIGHBOUR4_DY[i];
+            if !self.valid_t(nx, ny) {
+                continue;
+            }
+            let nm = self.tmask(nx, ny);
+            if (nm & tflag::SURFACE_MASK) != tflag::SURFACE_WATER && (nm & tflag::BLOCKED) == 0 {
+                return true;
+            }
+        }
+        false
     }
 
     // -- fog -------------------------------------------------------------------------------
@@ -1323,7 +1539,11 @@ impl World {
     }
     /// `World::set_behind` `0x006b4230`.
     pub fn set_behind(&mut self, tx: i32, ty: i32, on: bool, variant_b: bool) {
-        let bit = if variant_b { tflag::BEHIND_B } else { tflag::BEHIND_A };
+        let bit = if variant_b {
+            tflag::BEHIND_B
+        } else {
+            tflag::BEHIND_A
+        };
         self.set_tbit(tx, ty, bit, on)
     }
 
@@ -1575,7 +1795,11 @@ impl Default for Adler32 {
 
 impl Adler32 {
     pub fn new() -> Self {
-        Adler32 { s1: 1, s2: 0, bytes: 0 }
+        Adler32 {
+            s1: 1,
+            s2: 0,
+            bytes: 0,
+        }
     }
     pub fn finish(&self) -> u32 {
         (self.s2 << 16) | self.s1
@@ -1774,7 +1998,10 @@ mod tests {
         w.set_river_at(9, 8, true);
         assert!(w.wdata(2, 2).flags & wflag::HAS_RIVER != 0);
         w.set_river_at(8, 8, false);
-        assert!(w.wdata(2, 2).flags & wflag::HAS_RIVER != 0, "one river tile left");
+        assert!(
+            w.wdata(2, 2).flags & wflag::HAS_RIVER != 0,
+            "one river tile left"
+        );
         w.set_river_at(9, 8, false);
         assert!(w.wdata(2, 2).flags & wflag::HAS_RIVER == 0);
     }
@@ -1870,12 +2097,115 @@ mod tests {
         assert!(w.buildings_allowed(2, 2));
         assert!(w.is_flat(2, 2));
         w.wdata_mut(2, 2).flags |= wflag::ROCKS;
-        assert!(w.is_passable(2, 2), "rocks are passable (0x08 is outside 0x70)");
-        assert!(!w.buildings_allowed(2, 2), "but not buildable (0x08 is inside 0x78)");
+        assert!(
+            w.is_passable(2, 2),
+            "rocks are passable (0x08 is outside 0x70)"
+        );
+        assert!(
+            !w.buildings_allowed(2, 2),
+            "but not buildable (0x08 is inside 0x78)"
+        );
         assert!(!w.is_flat(2, 2));
         w.wdata_mut(2, 2).flags |= wflag::MOUNTAINS;
         assert!(!w.is_passable(2, 2));
-        assert_eq!(w.get_land(2, 2, 1), 5, "mountains outrank rocks in get_land");
+        assert_eq!(
+            w.get_land(2, 2, 1),
+            5,
+            "mountains outrank rocks in get_land"
+        );
+    }
+
+    /// The 16 `space_at_corner` probes tile a 4x4 block exactly, with 0-3 as the core.
+    #[test]
+    fn space_probes_tile_a_4x4_block() {
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..16 {
+            seen.insert((SPACE_PROBE_DX[i], SPACE_PROBE_DY[i]));
+        }
+        assert_eq!(seen.len(), 16);
+        for i in 0..4 {
+            assert!((1..=2).contains(&SPACE_PROBE_DX[i]), "core probe {i} dx");
+            assert!((1..=2).contains(&SPACE_PROBE_DY[i]), "core probe {i} dy");
+        }
+        // Every approach group is 5 distinct ring probes (never a core probe).
+        for g in SPACE_APPROACH_GROUPS.iter() {
+            let s: std::collections::HashSet<_> = g.iter().collect();
+            assert_eq!(s.len(), 5);
+            assert!(g.iter().all(|&i| i >= 4));
+        }
+    }
+
+    /// The placement grade the production lane consumes, over the whole range.
+    #[test]
+    fn space_at_corner_grades() {
+        let mut w = World::init_default_rules(8, 8);
+        // Empty world, well inside bounds: everything clear.
+        assert_eq!(w.space_at_corner(10, 10, 0, false), space::FULLY_CLEAR);
+
+        // Block one ring tile -> no longer fully clear, but an approach L survives.
+        let mut w2 = World::init_default_rules(8, 8);
+        w2.set_blocked_at(10 + SPACE_PROBE_DX[7], 10 + SPACE_PROBE_DY[7], true);
+        let g = w2.space_at_corner(10, 10, 0, false);
+        assert!(g == space::APPROACH_CLEAR || g == space::PARTIAL);
+        assert_ne!(g, space::FULLY_CLEAR);
+
+        // Block a core tile -> immediate reject regardless of the ring.
+        w.set_blocked_at(10 + SPACE_PROBE_DX[0], 10 + SPACE_PROBE_DY[0], true);
+        assert_eq!(w.space_at_corner(10, 10, 0, false), space::CORE_BLOCKED);
+
+        // Foreign territory rejects the same way.
+        let mut w3 = World::init_default_rules(8, 8);
+        w3.wdata_mut(2, 2).who = 3;
+        assert_eq!(w3.space_at_corner(10, 10, 0, false), space::CORE_BLOCKED);
+        assert_eq!(w3.space_at_corner(10, 10, 3, false), space::FULLY_CLEAR);
+
+        // Out of bounds counts as blocked: anchoring at the map edge rejects.
+        assert_eq!(w3.space_at_corner(31, 31, 3, false), space::CORE_BLOCKED);
+    }
+
+    /// `check_building_wcoord`'s three early rejects.
+    #[test]
+    fn check_building_wcoord_gates() {
+        let mut w = World::init_default_rules(8, 8);
+        assert_eq!(
+            w.check_building_wcoord(3, 3, 0, 1, 1, 2, false),
+            space::FULLY_CLEAR
+        );
+        w.wdata_mut(3, 3).flags |= wflag::MOUNTAINS;
+        assert_eq!(
+            w.check_building_wcoord(3, 3, 0, 1, 1, 2, false),
+            space::CORE_BLOCKED
+        );
+        w.wdata_mut(3, 3).flags &= !wflag::MOUNTAINS;
+        w.wdata_mut(3, 3).blocked = 16;
+        assert_eq!(
+            w.check_building_wcoord(3, 3, 0, 1, 1, 2, false),
+            space::CORE_BLOCKED
+        );
+        w.wdata_mut(3, 3).blocked = 0;
+        w.wdata_mut(3, 3).who = 5;
+        assert_eq!(
+            w.check_building_wcoord(3, 3, 0, 1, 1, 2, false),
+            space::CORE_BLOCKED
+        );
+    }
+
+    /// Gather access needs a harvestable tile and a dry, unblocked orthogonal neighbour.
+    #[test]
+    fn gather_access_needs_a_dry_neighbour() {
+        let mut w = World::init_default_rules(8, 8);
+        assert!(
+            !w.has_gather_access(10, 10),
+            "plain ground is not harvestable"
+        );
+        w.set_tree_at(10, 10, true);
+        assert!(w.has_gather_access(10, 10));
+        for i in 0..4 {
+            w.set_tocean(10 + NEIGHBOUR4_DX[i], 10 + NEIGHBOUR4_DY[i]);
+        }
+        assert!(!w.has_gather_access(10, 10), "ringed by water");
+        w.set_blocked_at(10 + NEIGHBOUR4_DX[0], 10 + NEIGHBOUR4_DY[0], true);
+        assert!(!w.has_gather_access(10, 10));
     }
 
     /// `is_ocean` is false on a WATERHALF cell even when `land` says water.

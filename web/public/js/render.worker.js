@@ -61,21 +61,24 @@ function grid() {
   return { cols, rows };
 }
 
+/** Tiles across a world, read from the simulation's own map span rather than assumed. */
+const worldTiles = () => Math.max(1, mapSpan / 192);
+
 function resolveView(g) {
   const cellPx = (cssW * dpr * cam.zoom) / g.cols;
   if (viewMode === 'units') return 'units';
   if (viewMode === 'aggregate') return 'aggregate';
-  // A world is 256 tiles across. Below ~18 device pixels a cell has under a fourteenth of a
-  // pixel per tile, so individual units cannot be told apart no matter how they are drawn —
-  // at that scale the aggregate view is not a fallback, it is the correct visualisation.
-  return cellPx < 18 ? 'aggregate' : 'units';
+  // Below about a seventh of a device pixel per tile, individual units cannot be told apart
+  // no matter how they are drawn — at that scale the aggregate view is not a fallback, it
+  // is the correct visualisation.
+  return cellPx < worldTiles() / 7 ? 'aggregate' : 'units';
 }
 
 function pointPx(g) {
   const cellPx = (cssW * dpr * cam.zoom) / g.cols;
-  // A world is 256 tiles across; make a unit roughly two tiles, clamped so it never
-  // disappears and never becomes a blob when zoomed in.
-  return Math.max(1, Math.min(20, (cellPx / 256) * 2)) * pointScale;
+  // Roughly one and a half tiles per unit, clamped so a unit never disappears and never
+  // becomes a blob when zoomed in.
+  return Math.max(1, Math.min(20, (cellPx / worldTiles()) * 1.5)) * pointScale;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -415,8 +418,12 @@ self.onmessage = async (e) => {
         canvas = m.canvas; dpr = m.dpr; cssW = m.cssW; cssH = m.cssH;
         backend = await makeBackend(m.prefer);
         backend.resize(Math.round(cssW * dpr), Math.round(cssH * dpr));
+        // Give the async shader compilation a moment to report, then pass any diagnostics
+        // up so a black canvas has a reason next to it rather than a mystery.
+        await new Promise((r) => setTimeout(r, 60));
         self.postMessage({ type: 'booted', backend: backend.constructor.name,
-          adapter: backend.adapterInfo, timestamps: backend.timestampSupported });
+          adapter: backend.adapterInfo, timestamps: backend.timestampSupported,
+          shaderMessages: backend.shaderMessages || [] });
         break;
       }
       case 'setup':
@@ -497,6 +504,23 @@ self.onmessage = async (e) => {
         // be compared against a native run of the same configuration.
         if (sim) sim.step(m.frames);
         self.postMessage({ type: 'stepped', frames: sim ? sim.frame : 0 });
+        break;
+      }
+      case 'snapshot': {
+        // Proof-of-pixels, and it took two tries to get an honest one. `Page.captureScreenshot`
+        // over CDP returns a transparent rectangle where a GPU-composited OffscreenCanvas
+        // is, and `canvas.convertToBlob()` after present returns a uniformly black image —
+        // both look exactly like "the renderer drew nothing". The only capture that reads
+        // the actual pixels is copying the canvas texture back off the GPU.
+        const { width, height, rgba, error } = await backend.readback(renderOnce);
+        let nz = 0;
+        for (let i = 0; i < rgba.length; i += 4) if (rgba[i] | rgba[i + 1] | rgba[i + 2]) nz++;
+        // PNG encoding through a 2D OffscreenCanvas, which is the only encoder a worker has.
+        const tmp = new OffscreenCanvas(width, height);
+        tmp.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+        const blob = await tmp.convertToBlob({ type: 'image/png' });
+        const buf = await blob.arrayBuffer();
+        self.postMessage({ type: 'snapshot', bytes: buf, width, height, nonZero: nz, error }, [buf]);
         break;
       }
       case 'digest':

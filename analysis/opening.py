@@ -223,7 +223,7 @@ class W:
 
     def clone(self) -> "W":
         return replace(self, stock=list(self.stock), leftover=list(self.leftover),
-                       on=list(self.on))
+                       on=list(self.on), epoch=list(self.epoch))
 
     # -- capacities -----------------------------------------------------
     # Counters below hold OWNED + QUEUED, which is what the engine charges cost
@@ -286,14 +286,13 @@ class W:
 
     def free_income16(self, r: int) -> int:
         """Income that costs no worker: cities, markets, universities, territory."""
-        v = BASIC_GATHER[r] * 16 + CITY_GATHER[r] * 16 * self.cities
+        v = BASIC_GATHER[r] * 16 + CITY_GATHER[r] * 16 * self.built("Small City")
         if r == WEALTH:
-            v += MARKET_TAXES * 16 * self.markets
-            v += self.a.caravan_wealth * 16 * 0
+            v += MARKET_TAXES * 16 * self.built("Market")
             gov = self.a.government
             v += self.a.territory * TERRITORY_TAXES[gov] * 16 // 100 if gov else 0
         if r == KNOWLEDGE:
-            v += UNIVERSITY_LITERACY * 16 * self.universities
+            v += UNIVERSITY_LITERACY * 16 * self.built("University")
         return v
 
     # -- income ---------------------------------------------------------
@@ -336,23 +335,52 @@ class W:
             self.leftover[r] = tot % PERIOD
         self.frame += frames
 
-    def advance(self, frames: int) -> None:
-        """Advance, releasing the build crew back to gathering when it finishes."""
-        target = self.frame + frames
-        while self.frame < target:
-            if self.builders and self.b_free < target:
-                step = max(0, self.b_free - self.frame)
-                self._tick(step)
-                self.builders = 0
-                self.reseat()
-            else:
-                self._tick(target - self.frame)
+    def _flush(self) -> None:
+        """Apply every queued item whose completion frame has arrived."""
+        landed = [p for p in self.pend if p[0] <= self.frame]
+        if not landed and not (self.builders and self.b_free <= self.frame):
+            return
+        for _, nm in landed:
+            if nm in T:
+                if nm.endswith(" Age"):
+                    self.age += 1
+                else:
+                    c = T[nm]["cat"]
+                    self.epoch[c] = self.epoch[c] + 1
+        self.pend = tuple(p for p in self.pend if p[0] > self.frame)
+        if self.builders and self.b_free <= self.frame:
+            self.builders = 0
+        self.reseat()
 
-    def frames_to_afford(self, cost: list[int], limit: int = 40000):
-        """Frames until `cost` is affordable, honouring the crew-release income step."""
+    def _next_event(self, target: int):
+        """Earliest frame in (frame, target) at which income changes."""
+        best = None
+        if self.builders and self.frame < self.b_free < target:
+            best = self.b_free
+        for done, _ in self.pend:
+            if self.frame < done < target and (best is None or done < best):
+                best = done
+        return best
+
+    def advance(self, frames: int) -> None:
+        """Advance, applying completions and releasing the build crew as they land."""
+        target = self.frame + max(0, frames)
+        self._flush()
+        while self.frame < target:
+            ev = self._next_event(target)
+            if ev is None:
+                self._tick(target - self.frame)
+                break
+            self._tick(ev - self.frame)
+            self._flush()
+        self._flush()
+
+    def frames_to_afford(self, cost: list[int], limit: int = 60000):
+        """Frames until `cost` is affordable, honouring every income step in between."""
         probe = self.clone()
         step = 0
-        for _ in range(4):
+        for _ in range(256):
+            probe._flush()
             need = [max(0, cost[r] - probe.stock[r]) for r in range(6)]
             if not any(need):
                 return step
@@ -362,20 +390,23 @@ class W:
                 if not need[r]:
                     continue
                 if inc[r] <= 0:
-                    return None
+                    worst = None
+                    break
                 f = -(-(need[r] * PERIOD - probe.leftover[r]) // inc[r])
                 worst = max(worst, max(0, f))
-            if probe.builders and probe.frame + worst > probe.b_free:
-                jump = max(1, probe.b_free - probe.frame)
+            ev = probe._next_event(probe.frame + (worst if worst is not None else limit) + 1)
+            if ev is not None:
+                jump = ev - probe.frame
                 probe.advance(jump)
                 step += jump
                 if step > limit:
                     return None
                 continue
+            if worst is None:
+                return None
             step += worst
             return step if step <= limit else None
         return None
-
 
 # ---------------------------------------------------------------------------
 # actions
@@ -431,6 +462,12 @@ def legal(w: W, name: str) -> bool:
     if name == "Farm":
         return w.farms < FARMS_PER_CITY * w.cities
     if name in BUILDINGS:
+        # a building's prerequisites are tech slot ids in the live type tables
+        for p in B[name]["preq"]:
+            if p and p > 0:
+                pn = [n for n, t in T.items() if t["slot"] == p]
+                if pn and not (pn[0] in w.techs and w.npend(pn[0]) == 0):
+                    return False
         return True
     if name in T:
         if name in w.techs:
@@ -466,25 +503,26 @@ def apply(w: W, name: str) -> W:
     setattr(s, server, done)
     if server == "b_free":
         # the crew stops gathering for the duration of the build
-        s.builders = min(s.a.max_builders, max(0, s.citizens - 1))
-        s.reseat()
+        s.builders = min(s.a.max_builders, max(0, s.built("Citizen") - 1))
     s.log = s.log + ((s.frame, done, name),)
-    return finish(s, name, done)
+    return queue(s, name, done)
 
 
-def finish(s: W, name: str, done: int) -> W:
-    """Apply the completion effect at `done` (the state records it as of `done`)."""
+def queue(s: W, name: str, done: int) -> W:
+    """Bump the owned+queued counter now; the physical effect lands at `done`.
+
+    The engine charges the cost ramp against owned + queued (TypeData::get_cost reads
+    num_queued at 0x00665966) and the AI reads num_type_with_queued, so the counter
+    moves at queue time.  Income, gather slots and tech levels only move when the
+    item completes, which is what `pend` tracks.
+    """
     if name == "Citizen":
         s.citizens += 1
     elif name in BUILDINGS:
         setattr(s, BUILDINGS[name][0], getattr(s, BUILDINGS[name][0]) + 1)
     else:
         s.techs = s.techs | {name}
-        cat = T[name]["cat"]
-        if name.endswith(" Age"):
-            s.age += 1
-        else:
-            s.epoch[cat] = s.epoch[cat] + 1
+    s.pend = s.pend + ((done, name),)
     s.reseat()
     return s
 
@@ -506,12 +544,19 @@ CHOICES = ["Citizen", "Farm", "Woodcutter's Camp", "Small City", "Market",
 
 def horizon(s: W) -> int:
     """When the last thing queued completes."""
-    return max(s.frame, s.t_free, s.b_free, s.l_free)
+    return max([s.frame, s.t_free, s.b_free, s.l_free] + [d for d, _ in s.pend])
+
+
+def settle(s: W) -> W:
+    """Run the clock to the horizon so every queued item has landed."""
+    t = s.clone()
+    t.advance(horizon(t) - t.frame)
+    return t
 
 
 def key(s: W) -> tuple:
     return (s.citizens, s.farms, s.woodcamps, s.cities, s.markets, s.mines,
-            s.universities, s.granaries, s.barracks, s.age, tuple(s.epoch),
+            s.universities, s.granaries, s.barracks, frozenset(s.techs),
             s.t_free // 40, s.b_free // 40, s.l_free // 40)
 
 
@@ -529,10 +574,11 @@ def search(start: W, target, beam: int = 900, depth: int = 40, choices=None):
                 t = apply(s, c)
                 if t is None:
                     continue
-                if target(t):
+                ts = settle(t)
+                if target(ts):
                     h = horizon(t)
                     if best is None or h < best[0]:
-                        best = (h, t)
+                        best = (h, ts)
                     continue
                 k = key(t)
                 if k not in nxt or horizon(nxt[k]) > horizon(t):
@@ -545,22 +591,108 @@ def search(start: W, target, beam: int = 900, depth: int = 40, choices=None):
     return best
 
 
+def dp_search(need: dict, extras: dict = None, keep: int = 6, a: Assume = A0,
+              start: W = None, extra_choices=()):
+    """Exact-ish search over the ORDERINGS of a known purchase multiset.
+
+    The blind beam in `search` wanders; here the set of things that must be bought is
+    fixed by the objective, so the only decision is the order and the timing.  The
+    lattice of "how many of each I have bought so far" is small (tens of thousands of
+    nodes), so we can hold a few Pareto-best states per node and get an answer that is
+    within a couple of frames of optimal rather than within half a minute.
+
+    `need`  : name -> how many MUST be bought
+    `extras`: name -> how many MAY additionally be bought (income investments)
+    """
+    extras = extras or {}
+    names = list(dict.fromkeys(list(need) + list(extras) + list(extra_choices)))
+    cap = {n: need.get(n, 0) + extras.get(n, 0) for n in names}
+    s0 = (start.clone() if start else W(a=a))
+    root = tuple(0 for _ in names)
+    nodes = {root: [s0]}
+    best = None
+    order = [root]
+    seen = {root}
+    qi = 0
+    while qi < len(order):
+        node = order[qi]; qi += 1
+        pool = nodes.get(node)
+        if not pool:
+            continue
+        if best is not None and min(horizon(x) for x in pool) >= best[0]:
+            continue
+        for i, nm in enumerate(names):
+            if node[i] >= cap[nm]:
+                continue
+            child = list(node); child[i] += 1; child = tuple(child)
+            got = []
+            for s in pool:
+                if not legal(s, nm):
+                    continue
+                t = apply(s, nm)
+                if t is not None:
+                    got.append(t)
+            if not got:
+                continue
+            done = all(child[j] >= need.get(n, 0) for j, n in enumerate(names))
+            if done:
+                for t in got:
+                    ts = settle(t)
+                    h = horizon(t)
+                    if best is None or h < best[0]:
+                        best = (h, ts)
+            cur = nodes.get(child, [])
+            cur = cur + got
+            cur.sort(key=lambda x: (horizon(x), -sum(x.stock[:2])))
+            trimmed, marks = [], set()
+            for x in cur:
+                m = (horizon(x) // 25, x.stock[0] // 40, x.stock[1] // 40)
+                if m in marks:
+                    continue
+                marks.add(m)
+                trimmed.append(x)
+                if len(trimmed) >= keep:
+                    break
+            nodes[child] = trimmed
+            if child not in seen:
+                seen.add(child)
+                order.append(child)
+    return best
+
+
+BOOM_NEED = {"Written Word": 1, "City State": 1, "Barter": 1, "Classical Age": 1,
+             "Small City": 1, "Citizen": 9, "Farm": 4, "Woodcutter's Camp": 1,
+             "Market": 1}
+BOOM_EXTRA = {"Citizen": 3, "Farm": 2, "Woodcutter's Camp": 1}
+
+
 def mmss(f: int) -> str:
     t = f / FPS
     return "%d:%02d" % (int(t) // 60, int(t) % 60)
 
 
-def run_order(order: list[str], a: Assume = A0, start: W = None):
-    """Execute a fixed order, greedily, and return the final state (or None)."""
+def run_order(order: list[str], a: Assume = A0, start: W = None, limit: int = 60000):
+    """Execute a fixed order with BLOCK_ON_THIS semantics.
+
+    economic.bhs returns BLOCK_ON_THIS from every boom case, so the script does not
+    move on until the step succeeds.  When an action is not yet legal (the tech that
+    unlocks it has not landed, the city limit has not risen) the script waits.
+    """
     s = start.clone() if start else W(a=a)
     for name in order:
-        if not legal(s, name):
-            continue
+        guard = 0
+        while not legal(s, name):
+            ev = s._next_event(s.frame + 100000)
+            step = (ev - s.frame) if ev else 60
+            s.advance(max(1, step))
+            guard += 1
+            if s.frame > limit or guard > 400:
+                return None, name
         t = apply(s, name)
         if t is None:
             return None, name
         s = t
-    return s, None
+    return settle(s), None
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +798,7 @@ def S_shipped():
     if s is None:
         print("  stalled at", fail)
         return None
-    h = horizon(s)
+    h = s.frame
     print("  target reached at frame %d = %s" % (h, mmss(h)))
     for st, dn, n in s.log:
         print("    %5d %5s  %-20s (done %s)" % (st, mmss(st), n, mmss(dn)))
@@ -688,36 +820,52 @@ def S_versus(beam=900):
 
 
 def S_ages():
-    print("== minimum time to each age, and what it costs to keep going ==")
-    print("  assumption: get_techs_per_age() = %d (a game option, not a rules constant)"
-          % A0.techs_per_age)
-    order = ["Classical Age"]
-    # naked age rush: build nothing, bank, research
+    print("== minimum time to each age ==")
+    print("  (a) the age advance ALONE is not an interesting objective.")
     s = W()
-    naked = []
-    for i, age in enumerate(["Classical Age", "Medieval Age"]):
-        t = apply(s, age)
-        if t is None:
-            naked.append((age, None))
-            break
-        naked.append((age, t.log[-1][1]))
-        s = t
+    t = apply(s, "Classical Age")
+    print("      Classical Age from a standing start, building nothing: %s"
+          % mmss(t.log[-1][1]))
+    print("      starting food %d, age cost %d, so the whole race is banking %d food"
+          % (STARTING_GOODS[FOOD], T["Classical Age"]["cost"][FOOD] * TECH_COST_FACTOR,
+             T["Classical Age"]["cost"][FOOD] * TECH_COST_FACTOR - STARTING_GOODS[FOOD]))
     print()
-    print("  (a) NAKED age rush -- build nothing, spend only on ages:")
-    for age, f in naked:
-        print("      %-16s %s" % (age, mmss(f) if f else "unreachable"))
-    print("      Ancient starting food is %d and the Classical Age costs %d, so the age" %
-          (STARTING_GOODS[FOOD], T["Classical Age"]["cost"][FOOD] * TECH_COST_FACTOR))
-      # note printed below
-    print("      lands almost immediately.  'Minimum time to the Classical Age' on its")
-    print("      own is a degenerate objective; the age is cheap, the economy is not.")
+    print("  (b) with the economy the shipped AI actually builds behind it:")
+    r = dp_search(BOOM_NEED, extras={"Citizen": 2, "Farm": 1}, keep=16)
+    print("      Classical Age + the full Ancient boom: %s (searched)" % mmss(r[0]))
     print()
-    print("  (b) with a real economy behind it (search, beam=600):")
-    for goal, name in [(lambda s: s.age >= 1 and s.citizens >= 10, "Classical + 10 citizens"),
-                       (lambda s: s.age >= 2, "Medieval Age"),
-                       (lambda s: s.age >= 2 and s.citizens >= 14, "Medieval + 14 citizens")]:
-        r = search(W(), goal, beam=600, depth=34)
-        print("      %-26s %s" % (name, mmss(r[0]) if r else "not reached"))
+    print("  (c) every age after the first is a KNOWLEDGE race, and knowledge has")
+    print("      exactly two sources in this game: %d per University per 30 s"
+          % UNIVERSITY_LITERACY)
+    print("      (CityData::get_literacy) and one gather slot per Scholar standing in")
+    print("      one (%d per 30 s at PEASANT_RATE -- Constants::scholar_rate is DEAD"
+          % (PEASANT_RATE // 256))
+    print("      CODE, zero read sites in .text).  The cap is %d per 30 s, hardcoded."
+          % KNOWLEDGE_CAP_RAW)
+    print()
+    ages = ["Medieval Age", "Gunpowder Age", "Enlightenment Age", "Industrial Age",
+            "Modern Age", "Information Age"]
+    print("      %-20s %7s %9s | %s" % ("age", "food", "knowledge",
+          "  ".join("%2d src" % n for n in (1, 2, 4, 8, 16))))
+    for name in ages:
+        c = [x * TECH_COST_FACTOR for x in T[name]["cost"]]
+        row = "      %-20s %7d %9d | " % (name, c[FOOD], c[KNOWLEDGE])
+        for n in (1, 2, 4, 8, 16):
+            rate = min(10 * n, KNOWLEDGE_CAP_RAW)
+            periods = c[KNOWLEDGE] / rate if rate else 0
+            row += "%6s " % mmss(int(periods * GATHER_RATE))
+        print(row)
+    print()
+    print("      Read the last column as a LOWER BOUND on time spent in the age: it is")
+    print("      the banking time alone, with the universities and scholars already")
+    print("      standing and free, and it ignores the age's food cost entirely.")
+    print("      Even so, the Information Age needs %d knowledge, which is 6h15m at one"
+          % ([x * TECH_COST_FACTOR for x in T["Information Age"]["cost"]][KNOWLEDGE]))
+    print("      University and 23 minutes at sixteen sources.  The knowledge cap of")
+    print("      %d per 30 s puts a hard floor of %s on that last age no matter what."
+          % (KNOWLEDGE_CAP_RAW,
+             mmss(int(([x * TECH_COST_FACTOR for x in T["Information Age"]["cost"]][KNOWLEDGE]
+                       / KNOWLEDGE_CAP_RAW) * GATHER_RATE))))
 
 
 def S_marginal():
@@ -774,7 +922,7 @@ def S_alloc(minutes=10):
                     order += ["Woodcutter's Camp"] * max(0, camps - A0.start_woodcamps)
                     order += ["Citizen"] * max(0, n - A0.start_citizens)
                     s, fail = run_order(order)
-                    if s is None or horizon(s) > end:
+                    if s is None or s.frame > end:
                         continue
                     s2 = s.clone()
                     s2.advance(end - s2.frame)
@@ -792,62 +940,63 @@ def S_alloc(minutes=10):
 
 def S_military():
     print("== opportunity cost of an early military building ==")
-    print("  A Barracks costs %s and needs The Art of War (%s)."
-          % (cost_of(B["Barracks"], 0, BUILD_COST_FACTOR, 0)[:2],
-             cost_of(T["The Art of War"], 0, TECH_COST_FACTOR, 0)[:1]))
+    aow = cost_of(T["The Art of War"], 0, TECH_COST_FACTOR, 0)
+    bar = cost_of(B["Barracks"], 0, BUILD_COST_FACTOR, 0)
+    print("  The Art of War costs %d food and %d frames of Library time."
+          % (aow[FOOD], T["The Art of War"]["job_time"]))
+    print("  A Barracks costs %d timber and %d frames of crew time."
+          % (bar[TIMBER], B["Barracks"]["job_time"]))
     print()
-    base = search(W(), boom_target, beam=600, depth=36)
-    if not base:
-        print("  no baseline")
-        return
-    print("  baseline boom            : %s" % mmss(base[0]))
-
-    def with_barracks(s):
-        return boom_target(s) and s.barracks >= 1
-
-    def with_aow(s):
-        return boom_target(s) and "The Art of War" in s.techs
-
-    for label, goal in [("+ The Art of War", with_aow),
-                        ("+ Art of War + Barracks", with_barracks)]:
-        r = search(W(), goal, beam=600, depth=40)
-        if r:
-            print("  %-24s : %s   (+%s)" % (label, mmss(r[0]), mmss(r[0] - base[0])))
-        else:
-            print("  %-24s : not reached" % label)
+    base = dp_search(BOOM_NEED, extras={"Citizen": 2, "Farm": 1}, keep=12)
+    print("  boom target, no military          %s" % mmss(base[0]))
+    n1 = dict(BOOM_NEED); n1["The Art of War"] = 1
+    r1 = dp_search(n1, extras={"Citizen": 2, "Farm": 1}, keep=12)
+    print("  + The Art of War                  %s   (+%d frames = +%.0f s)"
+          % (mmss(r1[0]), r1[0] - base[0], (r1[0] - base[0]) / FPS))
+    n2 = dict(n1); n2["Barracks"] = 1
+    r2 = dp_search(n2, extras={"Citizen": 2, "Farm": 1}, keep=12)
+    print("  + The Art of War + a Barracks     %s   (+%d frames = +%.0f s)"
+          % (mmss(r2[0]), r2[0] - base[0], (r2[0] - base[0]) / FPS))
     print()
-    print("  The Art of War buys POP_CAP 25 -> 50, which does not bind in the Ancient")
-    print("  age (the boom target is 14 citizens).  So its whole Ancient-age value is")
-    print("  military, and its cost is the delay above.")
+    print("  The Art of War raises POP_CAP from %d to %d.  The boom target is %d"
+          % (POP_CAP[0], POP_CAP[1], 14))
+    print("  citizens, so the population cap does not bind and the tech buys nothing")
+    print("  economic at all -- its entire Ancient-age value is military.  The delay")
+    print("  above is therefore the whole price of opening a military option.")
 
 
 def S_sensitivity():
-    print("== sensitivity, now that the clamp is measured ==")
-    base = search(W(), boom_target, beam=600, depth=36)
-    print("  BASE (beam 600)                          %s" % mmss(base[0]))
+    print("== sensitivity, now that the commerce clamp is MEASURED ==")
+    print("  The one assumption that dominated the previous study -- the clamp scale --")
+    print("  is gone: `shl eax, 4` at 0x006CEE78 settles it.  What is left is small.")
+    print()
+    base = dp_search(BOOM_NEED, extras={"Citizen": 2, "Farm": 1}, keep=12)
+    print("  BASE                                     %s" % mmss(base[0]))
     sweeps = [
         ("slots per Woodcutter's Camp = 3", Assume(slots_wood=3)),
         ("slots per Woodcutter's Camp = 4", Assume(slots_wood=4)),
         ("slots per Woodcutter's Camp = 6", Assume(slots_wood=6)),
         ("starting citizens = 3", Assume(start_citizens=3)),
         ("starting citizens = 8", Assume(start_citizens=8)),
-        ("max builders = 1", Assume(max_builders=1)),
-        ("max builders = 8", Assume(max_builders=8)),
-        ("building ramp ceiling 200%", Assume(building_ramp_pct=200)),
+        ("max builders on one site = 1", Assume(max_builders=1)),
+        ("max builders on one site = 8", Assume(max_builders=8)),
+        ("building cost-ramp ceiling 200%", Assume(building_ramp_pct=200)),
         ("walk 75 frames per build", Assume(walk_frames=75)),
-        ("no starting woodcamp", Assume(start_woodcamps=0)),
+        ("no starting Woodcutter's Camp", Assume(start_woodcamps=0)),
     ]
     for label, a in sweeps:
-        r = search(W(a=a), boom_target, beam=600, depth=36)
+        r = dp_search(BOOM_NEED, extras={"Citizen": 2, "Farm": 1}, keep=12,
+                      start=W(a=a))
         if r:
             d = r[0] - base[0]
             print("  %-40s %s  (%+d f = %+.0f s)" % (label, mmss(r[0]), d, d / FPS))
         else:
             print("  %-40s unreachable" % label)
     print()
-    for bw in (200, 400, 600, 900, 1400):
-        r = search(W(), boom_target, beam=bw, depth=36)
-        print("  beam %-5d -> %s" % (bw, mmss(r[0]) if r else "-"))
+    print("  the search's own noise floor, by Pareto width:")
+    for k in (4, 8, 12, 20):
+        r = dp_search(BOOM_NEED, extras={"Citizen": 2, "Farm": 1}, keep=k)
+        print("    keep %-3d -> %s (%d frames)" % (k, mmss(r[0]), r[0]))
 
 
 SECTIONS = {

@@ -10,10 +10,17 @@
 //! CodeView GUID matches `riseofnations.exe` exactly. See
 //! `docs/tracks/headless-client.md`.
 //!
-//! It is **not** a network client. It cannot join a game: the transport is
-//! PlayFab Party / PlayFab Lobby brokered through `CrossplayNetLib.dll`, and
-//! nothing here speaks it. Encoding a correct `NetMsg_CommandPackageData` is
-//! necessary but nowhere near sufficient.
+//! It is **also** a working headless peer. [`session::Session`] over
+//! [`transport::TcpTransport`] runs the roster, readiness and lockstep turn
+//! protocol between our own processes over the internet — see the
+//! `donnet-peer` binary and `tests/tcp_session.rs`.
+//!
+//! It still **cannot join a retail lobby**. That path is PlayFab Lobby for
+//! discovery plus PlayFab Party for data channels, and it is gated on a Steam
+//! auth ticket and the PlayFab title id, neither of which we hold. The exact
+//! blocking list is in `docs/tracks/headless-net.md` §5.2. Note also that game
+//! *setup* never crosses the wire as a `NetMsg` in this build — it is published
+//! as lobby attributes, whose recovered key schema is in [`lobby`].
 //!
 //! # Fidelity
 //!
@@ -113,9 +120,22 @@ pub enum InternalPacketType {
 /// The 16 `check_all` channels carried by `CheckSumsCommand` (opcode 0x39),
 /// in the engine's serialisation order.
 pub const CHECKSUM_CHANNELS: [&str; 16] = [
-    "units", "builds", "walls", "ammo", "deaths", "groups", "guys", "leaders",
-    "cities", "items", "goods", "world", "rules", "scenario_data",
-    "script_run_time", "all",
+    "units",
+    "builds",
+    "walls",
+    "ammo",
+    "deaths",
+    "groups",
+    "guys",
+    "leaders",
+    "cities",
+    "items",
+    "goods",
+    "world",
+    "rules",
+    "scenario_data",
+    "script_run_time",
+    "all",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +143,11 @@ pub enum Error {
     /// Opcode outside 0x00..=0x51.
     UnknownOpcode(u8),
     /// The command claims more bytes than the buffer holds.
-    Truncated { offset: usize, need: usize, have: usize },
+    Truncated {
+        offset: usize,
+        need: usize,
+        have: usize,
+    },
     /// A variable-length command declared an implausible element count.
     BadLength { offset: usize, len: i64 },
     /// The command list did not tile the payload exactly.
@@ -208,7 +232,11 @@ impl<'a> Command<'a> {
     pub fn wire_len(buf: &[u8]) -> Result<usize, Error> {
         let need = |n: usize| -> Result<(), Error> {
             if buf.len() < n {
-                Err(Error::Truncated { offset: 0, need: n, have: buf.len() })
+                Err(Error::Truncated {
+                    offset: 0,
+                    need: n,
+                    have: buf.len(),
+                })
             } else {
                 Ok(())
             }
@@ -231,7 +259,10 @@ impl<'a> Command<'a> {
                 // The send buffer upstream is 512 bytes; anything outside that
                 // cannot be a real chat message.
                 if !(0..=512).contains(&n) {
-                    return Err(Error::BadLength { offset: 0, len: n as i64 });
+                    return Err(Error::BadLength {
+                        offset: 0,
+                        len: n as i64,
+                    });
                 }
                 Ok(19 + 2 * n as usize)
             }
@@ -255,7 +286,11 @@ pub fn decode_commands<'a>(
     let mut i = 0usize;
     while i < payload.len() {
         let l = Command::wire_len(&payload[i..]).map_err(|e| match e {
-            Error::Truncated { need, have, .. } => Error::Truncated { offset: i, need, have },
+            Error::Truncated { need, have, .. } => Error::Truncated {
+                offset: i,
+                need,
+                have,
+            },
             Error::BadLength { len, .. } => Error::BadLength { offset: i, len },
             other => other,
         })?;
@@ -266,11 +301,17 @@ pub fn decode_commands<'a>(
                 have: payload.len() - i,
             });
         }
-        out.push(Command { opcode: payload[i], bytes: &payload[i..i + l] });
+        out.push(Command {
+            opcode: payload[i],
+            bytes: &payload[i..i + l],
+        });
         i += l + obf.next_pad();
     }
     if i != payload.len() {
-        return Err(Error::Residual { consumed: i, len: payload.len() });
+        return Err(Error::Residual {
+            consumed: i,
+            len: payload.len(),
+        });
     }
     Ok(out)
 }
@@ -436,7 +477,11 @@ impl<'a> NetCommandPackage<'a> {
         if buf.len() < end {
             return None;
         }
-        Some(NetCommandPackage { stamp, play, payload: &buf[Self::HEADER_LEN..end] })
+        Some(NetCommandPackage {
+            stamp,
+            play,
+            payload: &buf[Self::HEADER_LEN..end],
+        })
     }
 
     pub fn encode(&self, out: &mut Vec<u8>) {
@@ -478,7 +523,10 @@ impl CheckSums {
     }
 
     pub fn channel(&self, name: &str) -> Option<u32> {
-        CHECKSUM_CHANNELS.iter().position(|c| *c == name).map(|i| self.0[i])
+        CHECKSUM_CHANNELS
+            .iter()
+            .position(|c| *c == name)
+            .map(|i| self.0[i])
     }
 }
 
@@ -516,7 +564,10 @@ mod tests {
     #[test]
     fn variable_length_formulas() {
         // GroupCommand: 3 + 2*num
-        assert_eq!(Command::wire_len(&[0x00, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(), 11);
+        assert_eq!(
+            Command::wire_len(&[0x00, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(),
+            11
+        );
         assert_eq!(Command::wire_len(&[0x00, 0, 0]).unwrap(), 3);
         // SplineCommand: 6 + 8*len
         let mut s = vec![0x33, 1, 2, 3, 2, 0];

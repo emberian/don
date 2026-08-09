@@ -14,8 +14,10 @@
 use crate::generated as g;
 use crate::spec::{fill_bits, set_bit, EnvConfig, MaskLayout};
 use crate::state::EnvWorld;
-use crate::typecaps::{F_ATTACK, F_BUILDING, F_CASTER, F_CIVILIAN, F_GARR_FORT, F_GARR_TOWN,
-                      F_MOVE, F_PRODUCER, F_SIEGE, F_TRANSPORT};
+use crate::typecaps::{
+    F_ATTACK, F_BUILDING, F_CASTER, F_CIVILIAN, F_GARR_FORT, F_GARR_TOWN, F_MOVE, F_PRODUCER,
+    F_SIEGE, F_TRANSPORT,
+};
 
 /// Conjunctions a factored mask cannot express. Each is a real, quantified looseness in
 /// invariant 1, not a hand-wave.
@@ -229,7 +231,10 @@ impl MaskWriter {
 
             fill_bits(self.unit.head(r, g::UnitHead::QueuePos as usize), 3);
             fill_bits(self.unit.head(r, g::UnitHead::Stance as usize), 4);
-            fill_bits(self.unit.head(r, g::UnitHead::Form as usize), g::FORMS.len());
+            fill_bits(
+                self.unit.head(r, g::UnitHead::Form as usize),
+                g::FORMS.len(),
+            );
             fill_bits(self.unit.head(r, g::UnitHead::OrderMods as usize), 8);
             fill_bits(self.unit.head(r, g::UnitHead::Count as usize), 5);
         }
@@ -257,7 +262,11 @@ impl MaskWriter {
             allow(g::pv::LEADER_OPTIONS);
             allow(g::pv::BUY);
             allow(g::pv::SELL);
-            if w.players[who as usize].econ.iter().any(|&v| v >= crate::spec::AMOUNT_BUCKETS[0]) {
+            if w.players[who as usize]
+                .econ
+                .iter()
+                .any(|&v| v >= crate::spec::AMOUNT_BUCKETS[0])
+            {
                 allow(g::pv::TRIBUTE);
             }
         }
@@ -282,7 +291,12 @@ impl MaskWriter {
         }
         {
             let ah = self.player.head(r, g::PlayerHead::Amount as usize);
-            let max = w.players[who as usize].econ.iter().copied().max().unwrap_or(0);
+            let max = w.players[who as usize]
+                .econ
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
             let mut any = false;
             for (i, &b) in crate::spec::AMOUNT_BUCKETS.iter().enumerate() {
                 if b <= max {

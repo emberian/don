@@ -43,13 +43,22 @@ impl<'a> CommandView<'a> {
         CommandView { opcode, bytes }
     }
     pub fn struct_name(&self) -> &'static str {
-        COMMAND_STRUCT.get(self.opcode as usize).copied().unwrap_or("?")
+        COMMAND_STRUCT
+            .get(self.opcode as usize)
+            .copied()
+            .unwrap_or("?")
     }
     pub fn method(&self) -> &'static str {
-        COMMAND_METHOD.get(self.opcode as usize).copied().unwrap_or("?")
+        COMMAND_METHOD
+            .get(self.opcode as usize)
+            .copied()
+            .unwrap_or("?")
     }
     pub fn fields(&self) -> &'static [Field] {
-        COMMAND_FIELDS.get(self.opcode as usize).copied().unwrap_or(&[])
+        COMMAND_FIELDS
+            .get(self.opcode as usize)
+            .copied()
+            .unwrap_or(&[])
     }
 
     /// Read a field as `i64`, widening from its declared type. `None` if the
@@ -129,7 +138,11 @@ pub enum Order {
     /// `MoveToCommand` (0x07): `to_x`, `to_y`, plus angle/formation bytes.
     MoveTo { to_x: i32, to_y: i32, queued: i8 },
     /// `MoveNearCommand` (0x08): as `MoveTo` with a `tolerance`.
-    MoveNear { to_x: i32, to_y: i32, tolerance: i32 },
+    MoveNear {
+        to_x: i32,
+        to_y: i32,
+        tolerance: i32,
+    },
     /// `AttackCommand` (0x04): `ox` is the ordering object, `whom` the target.
     Attack { ox: i32, whom: i32, ignore: i32 },
     /// `AttackGroundCommand` (0x09).
@@ -144,29 +157,41 @@ pub enum Order {
 
 impl Order {
     pub fn decode(v: &CommandView<'_>) -> Order {
-        let raw = Order::Raw { opcode: v.opcode, len: v.bytes.len() as u16 };
+        let raw = Order::Raw {
+            opcode: v.opcode,
+            len: v.bytes.len() as u16,
+        };
         let g = |n: &str| v.get(n);
         match v.opcode {
             0x07 => match (g("to_x"), g("to_y"), g("queued")) {
-                (Some(x), Some(y), Some(q)) => {
-                    Order::MoveTo { to_x: x as i32, to_y: y as i32, queued: q as i8 }
-                }
+                (Some(x), Some(y), Some(q)) => Order::MoveTo {
+                    to_x: x as i32,
+                    to_y: y as i32,
+                    queued: q as i8,
+                },
                 _ => raw,
             },
             0x08 => match (g("to_x"), g("to_y"), g("tolerance")) {
-                (Some(x), Some(y), Some(t)) => {
-                    Order::MoveNear { to_x: x as i32, to_y: y as i32, tolerance: t as i32 }
-                }
+                (Some(x), Some(y), Some(t)) => Order::MoveNear {
+                    to_x: x as i32,
+                    to_y: y as i32,
+                    tolerance: t as i32,
+                },
                 _ => raw,
             },
             0x09 => match (g("to_x"), g("to_y")) {
-                (Some(x), Some(y)) => Order::AttackGround { to_x: x as i32, to_y: y as i32 },
+                (Some(x), Some(y)) => Order::AttackGround {
+                    to_x: x as i32,
+                    to_y: y as i32,
+                },
                 _ => raw,
             },
             0x04 => match (g("ox"), g("whom"), g("ignore")) {
-                (Some(o), Some(w), Some(i)) => {
-                    Order::Attack { ox: o as i32, whom: w as i32, ignore: i as i32 }
-                }
+                (Some(o), Some(w), Some(i)) => Order::Attack {
+                    ox: o as i32,
+                    whom: w as i32,
+                    ignore: i as i32,
+                },
                 _ => raw,
             },
             0x0c => Order::Halt,
@@ -210,12 +235,18 @@ mod tests {
         b[0] = 0x07;
         let names: Vec<&str> = COMMAND_FIELDS[0x07].iter().map(|f| f.name).collect();
         assert!(names.contains(&"to_x"), "MoveToCommand fields: {names:?}");
-        let fx = COMMAND_FIELDS[0x07].iter().find(|f| f.name == "to_x").unwrap();
+        let fx = COMMAND_FIELDS[0x07]
+            .iter()
+            .find(|f| f.name == "to_x")
+            .unwrap();
         let o = fx.off as usize;
         b[o..o + 4].copy_from_slice(&(-1234i32).to_le_bytes());
         let v = CommandView::new(0x07, &b);
         assert_eq!(v.get("to_x"), Some(-1234));
-        assert!(matches!(Order::decode(&v), Order::MoveTo { to_x: -1234, .. }));
+        assert!(matches!(
+            Order::decode(&v),
+            Order::MoveTo { to_x: -1234, .. }
+        ));
     }
 
     #[test]
@@ -223,7 +254,13 @@ mod tests {
         let b = [0x07u8, 1, 2];
         let v = CommandView::new(0x07, &b);
         assert_eq!(v.get("to_x"), None);
-        assert!(matches!(Order::decode(&v), Order::Raw { opcode: 0x07, len: 3 }));
+        assert!(matches!(
+            Order::decode(&v),
+            Order::Raw {
+                opcode: 0x07,
+                len: 3
+            }
+        ));
     }
 
     #[test]

@@ -48,20 +48,40 @@ mod tests {
     use crate::spec::get_bit;
 
     fn env(n: usize) -> VecEnv {
-        let cfg = EnvConfig { grid_w: 32, grid_h: 32, max_entities: 32, max_controlled: 16,
-                              num_agents: 2, start_units: 8, max_steps: 64, ..Default::default() };
+        let cfg = EnvConfig {
+            grid_w: 32,
+            grid_h: 32,
+            max_entities: 32,
+            max_controlled: 16,
+            num_agents: 2,
+            start_units: 8,
+            max_steps: 64,
+            ..Default::default()
+        };
         VecEnv::new(n, cfg, None, None, 1).unwrap()
     }
 
     #[test]
     fn every_opcode_is_classified_exactly_once() {
         let mut seen = [0u8; 82];
-        for v in g::UNIT_VERBS.iter() { seen[v.opcode as usize] += 1; }
-        for v in g::PLAYER_VERBS.iter() { seen[v.opcode as usize] += 1; }
-        for (op, _) in g::SELECTION_OPCODES { seen[op as usize] += 1; }
-        for (op, _) in g::UI_OPCODES { seen[op as usize] += 1; }
-        for (op, _) in g::ADMIN_OPCODES { seen[op as usize] += 1; }
-        for (op, _) in g::CHEAT_OPCODES { seen[op as usize] += 1; }
+        for v in g::UNIT_VERBS.iter() {
+            seen[v.opcode as usize] += 1;
+        }
+        for v in g::PLAYER_VERBS.iter() {
+            seen[v.opcode as usize] += 1;
+        }
+        for (op, _) in g::SELECTION_OPCODES {
+            seen[op as usize] += 1;
+        }
+        for (op, _) in g::UI_OPCODES {
+            seen[op as usize] += 1;
+        }
+        for (op, _) in g::ADMIN_OPCODES {
+            seen[op as usize] += 1;
+        }
+        for (op, _) in g::CHEAT_OPCODES {
+            seen[op as usize] += 1;
+        }
         for (op, c) in seen.iter().enumerate() {
             assert_eq!(*c, 1, "opcode {op} classified {c} times");
         }
@@ -96,7 +116,10 @@ mod tests {
                 for h in 0..g::N_PLAYER_HEADS {
                     let o = e.player_mask_layout.offsets[h];
                     let n = e.player_mask_layout.sizes[h].div_ceil(8);
-                    assert!(chunk[o..o + n].iter().any(|b| *b != 0), "player head {h} all-zero");
+                    assert!(
+                        chunk[o..o + n].iter().any(|b| *b != 0),
+                        "player head {h} all-zero"
+                    );
                 }
             }
         }
@@ -111,7 +134,10 @@ mod tests {
         let a = e.cfg.num_agents;
         let mut rng: u64 = 0xC0FFEE;
         let mut next = move || {
-            rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
         };
         for _ in 0..25 {
             let mut ua = vec![0i32; n * a * e.cfg.max_controlled * g::N_UNIT_HEADS];
@@ -122,8 +148,7 @@ mod tests {
                 for h in 0..g::N_UNIT_HEADS {
                     let o = e.unit_mask_layout.offsets[h];
                     let sz = e.unit_mask_layout.sizes[h];
-                    let legal: Vec<usize> =
-                        (0..sz).filter(|&b| get_bit(&m[o..], b)).collect();
+                    let legal: Vec<usize> = (0..sz).filter(|&b| get_bit(&m[o..], b)).collect();
                     assert!(!legal.is_empty());
                     ua[r * g::N_UNIT_HEADS + h] = legal[(next() as usize) % legal.len()] as i32;
                 }
@@ -142,24 +167,41 @@ mod tests {
         }
         let s = e.apply_stats;
         assert_eq!(
-            s.illegal, 0,
+            s.illegal,
+            0,
             "masked sampling produced {} illegal actions out of {} (noop {}, applied {}, \
              accepted-no-effect {})",
-            s.illegal, s.noop + s.applied + s.accepted_no_effect + s.illegal,
-            s.noop, s.applied, s.accepted_no_effect
+            s.illegal,
+            s.noop + s.applied + s.accepted_no_effect + s.illegal,
+            s.noop,
+            s.applied,
+            s.accepted_no_effect
         );
-        assert!(s.applied > 0, "test is vacuous unless something was applied");
+        assert!(
+            s.applied > 0,
+            "test is vacuous unless something was applied"
+        );
     }
 
     #[test]
     fn stepping_is_deterministic_across_thread_counts() {
         let digest = |threads: usize| {
-            let cfg = EnvConfig { grid_w: 32, grid_h: 32, max_entities: 32, max_controlled: 16,
-                                  num_agents: 2, start_units: 8, max_steps: 0, ..Default::default() };
+            let cfg = EnvConfig {
+                grid_w: 32,
+                grid_h: 32,
+                max_entities: 32,
+                max_controlled: 16,
+                num_agents: 2,
+                start_units: 8,
+                max_steps: 0,
+                ..Default::default()
+            };
             let mut e = VecEnv::new(6, cfg, None, None, threads).unwrap();
             let ua = vec![1i32; 6 * 2 * e.cfg.max_controlled * g::N_UNIT_HEADS];
             let pa = vec![0i32; 6 * 2 * g::N_PLAYER_HEADS];
-            for _ in 0..20 { e.step(&ua, &pa); }
+            for _ in 0..20 {
+                e.step(&ua, &pa);
+            }
             let mut h: u64 = 0xcbf2_9ce4_8422_2325;
             for w in &e.worlds {
                 h ^= w.sim.digest();
@@ -189,8 +231,14 @@ mod tests {
     fn observation_buffers_have_the_declared_shapes() {
         let e = env(3);
         let (n, a, c) = (3usize, e.cfg.num_agents, &e.cfg);
-        assert_eq!(e.spatial().len(), n * a * obs::N_PLANES * c.grid_h * c.grid_w);
-        assert_eq!(e.entities().len(), n * a * c.max_entities * obs::N_ENTITY_FEATURES);
+        assert_eq!(
+            e.spatial().len(),
+            n * a * obs::N_PLANES * c.grid_h * c.grid_w
+        );
+        assert_eq!(
+            e.entities().len(),
+            n * a * c.max_entities * obs::N_ENTITY_FEATURES
+        );
         assert_eq!(e.globals().len(), n * a * obs::N_GLOBAL_FEATURES);
         assert_eq!(e.rewards().len(), n * a);
         assert_eq!(e.reward_terms().len(), n * a * reward::N_TERMS);

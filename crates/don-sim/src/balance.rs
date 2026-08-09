@@ -41,9 +41,14 @@ pub struct BalanceTable {
 pub enum LoadError {
     Io(std::io::Error),
     /// The file was not exactly [`BYTES`] long.
-    WrongSize { got: usize },
+    WrongSize {
+        got: usize,
+    },
     /// Negative entries: almost certainly captured at the bias-folded base.
-    Negative { count: usize, first_index: usize },
+    Negative {
+        count: usize,
+        first_index: usize,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -51,7 +56,10 @@ impl std::fmt::Display for LoadError {
         match self {
             LoadError::Io(e) => write!(f, "{e}"),
             LoadError::WrongSize { got } => {
-                write!(f, "balance table must be {BYTES} bytes (493x493 i16), got {got}")
+                write!(
+                    f,
+                    "balance table must be {BYTES} bytes (493x493 i16), got {got}"
+                )
             }
             LoadError::Negative { count, first_index } => write!(
                 f,
@@ -68,8 +76,7 @@ impl std::error::Error for LoadError {}
 impl BalanceTable {
     /// Where the captured table lives, relative to the workspace.
     pub fn default_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../schema/live/balance-real.bin")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/live/balance-real.bin")
     }
 
     /// Load the captured table. Returns `Err` rather than a zero table if it is missing,
@@ -94,7 +101,10 @@ impl BalanceTable {
             .collect();
         if let Some(i) = data.iter().position(|&v| v < 0) {
             let count = data.iter().filter(|&&v| v < 0).count();
-            return Err(LoadError::Negative { count, first_index: i });
+            return Err(LoadError::Negative {
+                count,
+                first_index: i,
+            });
         }
         Ok(BalanceTable { data })
     }
@@ -155,7 +165,10 @@ mod tests {
         let mut raw = vec![0u8; BYTES];
         raw[0] = 0xFF;
         raw[1] = 0xFF; // -1
-        assert!(matches!(BalanceTable::from_bytes(&raw), Err(LoadError::Negative { .. })));
+        assert!(matches!(
+            BalanceTable::from_bytes(&raw),
+            Err(LoadError::Negative { .. })
+        ));
     }
 
     #[test]

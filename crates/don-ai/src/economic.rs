@@ -60,7 +60,10 @@ pub struct EconomicStatics {
 
 impl EconomicStatics {
     pub fn new() -> Self {
-        EconomicStatics { lib: LibraryStatics::default(), ..Default::default() }
+        EconomicStatics {
+            lib: LibraryStatics::default(),
+            ..Default::default()
+        }
     }
 }
 
@@ -105,7 +108,9 @@ pub fn economic<W: ScriptWorld>(
 
     let who_nation = w.find_nation(who);
     // static int needed_techs = get_techs_per_age(who);   (initialise once)
-    let needed_techs = *st.needed_techs.get_or_insert_with(|| w.get_techs_per_age(who));
+    let needed_techs = *st
+        .needed_techs
+        .get_or_insert_with(|| w.get_techs_per_age(who));
     // int player_age = age(who);  -- computed and then never used; the script
     // re-queries age(who) everywhere. Preserved as a call for call-order
     // fidelity.
@@ -118,7 +123,11 @@ pub fn economic<W: ScriptWorld>(
 
     // ---- ghetto array: load ------------------------------------------------
     let slot = who - 1;
-    let idx = if (0..8).contains(&slot) { Some(slot as usize) } else { None };
+    let idx = if (0..8).contains(&slot) {
+        Some(slot as usize)
+    } else {
+        None
+    };
     let (mut old_step, mut needed_citizens, mut timer_started, mut fishermen_total) = match idx {
         Some(i) => (
             st.prev_step[i],
@@ -847,10 +856,7 @@ pub fn economic<W: ScriptWorld>(
                     if want_more {
                         if city_placement(w, who, &mut st.lib) > 0 {
                             if sea_map > 0 {
-                                if bantu
-                                    && npow
-                                    && w.num_type_with_queued(who, "Small City") < 4
-                                {
+                                if bantu && npow && w.num_type_with_queued(who, "Small City") < 4 {
                                     *step = 30;
                                 } else {
                                     *step = 21;

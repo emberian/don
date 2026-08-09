@@ -331,7 +331,10 @@ mod tests {
     fn infinite_resources_constant_decodes_to_99999() {
         // The literal FUN_006CE450 stores when Game[0x2D] == 8 ("Infinite"
         // starting resources, index 8 of <CATEGORIES id="startingresources">).
-        assert_eq!(obfuscation::decode(0x104BE, obfuscation::RESOURCE_STOCKPILE), 99_999);
+        assert_eq!(
+            obfuscation::decode(0x104BE, obfuscation::RESOURCE_STOCKPILE),
+            99_999
+        );
     }
 
     #[test]

@@ -18,12 +18,26 @@ use crate::state::{EnvWorld, ScoreTerms};
 /// Terms 0..11 are the eleven `LeaderData` score fields, per-step *deltas*. Terms 11..17
 /// are deltas of the `LeaderData` outcome counters. The last three are terminal.
 pub const TERMS: [&str; 20] = [
-    "d_score_explored", "d_score_territory", "d_score_units", "d_score_units_2",
-    "d_score_buildings", "d_score_economy", "d_score_pop", "d_score_unit_upgrades",
-    "d_score_research", "d_score_wonders", "d_score_combat",
-    "d_units_built", "d_units_killed", "d_units_lost",
-    "d_buildings_built", "d_buildings_lost", "d_econ_total",
-    "win", "loss", "alive",
+    "d_score_explored",
+    "d_score_territory",
+    "d_score_units",
+    "d_score_units_2",
+    "d_score_buildings",
+    "d_score_economy",
+    "d_score_pop",
+    "d_score_unit_upgrades",
+    "d_score_research",
+    "d_score_wonders",
+    "d_score_combat",
+    "d_units_built",
+    "d_units_killed",
+    "d_units_lost",
+    "d_buildings_built",
+    "d_buildings_lost",
+    "d_econ_total",
+    "win",
+    "loss",
+    "alive",
 ];
 pub const N_TERMS: usize = TERMS.len();
 pub const IDX_WIN: usize = 17;
@@ -72,11 +86,17 @@ pub fn write_terms(w: &EnvWorld, who: u8, before: &RewardSnapshot, terms: &mut [
     terms[15] = (p.buildings_lost - before.buildings_lost) as f32;
     terms[16] = (p.econ.iter().sum::<i32>() - before.econ_total) as f32;
 
-    let alive: Vec<usize> = (0..g::NUM_PLAYERS).filter(|&i| w.players[i].alive).collect();
+    let alive: Vec<usize> = (0..g::NUM_PLAYERS)
+        .filter(|&i| w.players[i].alive)
+        .collect();
     let last_standing = alive.len() == 1 && alive[0] == who as usize;
     let just_died = before.alive && !p.alive;
     terms[IDX_WIN] = if last_standing { 1.0 } else { 0.0 };
-    terms[IDX_LOSS] = if just_died || (!p.alive && before.alive) { 1.0 } else { 0.0 };
+    terms[IDX_LOSS] = if just_died || (!p.alive && before.alive) {
+        1.0
+    } else {
+        0.0
+    };
     terms[IDX_ALIVE] = if p.alive { 1.0 } else { 0.0 };
     last_standing || !p.alive
 }

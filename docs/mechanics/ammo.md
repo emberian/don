@@ -1,0 +1,410 @@
+# Projectiles — the `ammo` checksum channel
+
+**Lane:** `mech:ammo`. **Channel served:** `ammo` (channel 4 of 15 in `CheckSums::check_all`,
+wire offset `+0x0D` in `CheckSumsCommand`). **Module:**
+`/Users/ember/dev/don/crates/don-sim/src/systems/ammo.rs`.
+
+Everything below is `[measured]` against `ron-bin/riseofnations.exe` (sha256 `30478a44…625079`)
+and `ron-bin/sbl/rise.pdb` unless it says `UNDERIVED`. No community documentation was consulted.
+
+---
+
+## 1. What now works, and how it was measured
+
+37 tests, all passing. Build and run without touching the shared crate:
+
+```sh
+rustc --edition 2021 --test -O -o /tmp/ammo_test \
+  /Users/ember/dev/don/crates/don-sim/src/systems/ammo.rs && /tmp/ammo_test
+# test result: ok. 37 passed; 0 failed
+```
+
+The module is self-contained (no `super::`, no deps), so it compiles standalone. It is **not**
+yet referenced from `lib.rs` — see §8.
+
+| capability | function | how it was derived | how it is checked |
+|---|---|---|---|
+| The `ammo` checksum channel | `AmmoPool::checksum` | `CheckSums::check_ammo` `0x009374E0` + `AmmoData::walk_data` `0x0067AB50`, walk order read from the decompile | layout asserted field-by-field against `schema/pdb-types.json`; channel asserted order-sensitive and ULP-sensitive |
+| Exact `AmmoData` memory layout | `AmmoWalk` (`#[repr(C)]`) | PDB TPI record, 27 fields, `sizeof` 108 | `assert_layout()` checks all 27 offsets at test time |
+| Pool allocation / slot identity | `AmmoPool::alloc_slot` | `Objects::add_ammo` `0x00658B10`, `Objects::init` `0x0065EA80` | first-free-slot reuse and past-200 growth |
+| `vector_dist` | `vector_dist` | full disassembly of `0x0046CFF0`, 105 bytes, zero FP | edge cases + the `>= 60000` overflow arm |
+| `Random::get(lo,hi)` | `Rng::in_range` | `0x00A39D70`, already Tier-B in `docs/derivation/rng.md` | half-open range; `lo == hi` does not advance |
+| adler-32 | `adler32` | `0x00A46830`, already Tier-B | four known vectors |
+| Spawn count + muzzle points | `fire_ammo_spawns` | `Object::fire_ammo` `0x0064C8B0` | unit path RNG-free; building path exactly 2 draws/round |
+| Range attenuation of accuracy | `accuracy` | `Ammo::init`, MSVC magic-divide by −192 decoded | per-tile loss and the floor of 5 |
+| Aim scatter radius | `miss_radius_formula` | `Ammo::init` `0x0067C5C5` | monotone in accuracy; the `>100` quarter |
+| Ballistic solve | `arc_total_time`, `arc_ballistics`, `z_at`, `xy_at` | `Ammo::init` `0x0067CF1A`ff | `z(T) == ez` to 0.05; arcs above both ends |
+| Flight integration + terrain clip | `ammo_inc_time` | `Ammo::inc_time` `0x0067D380` | impacts exactly at `total_time`; hillside clip rewrites `total_time` |
+| Hit tests | `hit_target`, `check_hit` | `0x00678F90`, `0x00678D90` | building rectangle vs unit radius; `accuracy > 100` doubling |
+| Impact + miss behaviour | `ammo_do_damage_single` | `Ammo::do_damage` `0x00678060` | hit costs 0 draws, miss costs exactly 2 |
+| Splash falloff | `splash_scale`, `splash_ring` | `0x006788E0`–`0x0067892D` | linear from the bounding box; negative skips |
+| `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
+
+**Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
+differentially tested against retail. Nothing here has been through the oracle. Do not promote
+any of it without `tools/oracle-regress.sh` cases; see §7.
+
+---
+
+## 2. Corrections to the brief
+
+**The pool is 200 slots, not 400.** `Objects::init` (`0x0065EA80`) does `malloc(800)` for the
+pointer table, sets `PtrArray::length = 200`, and constructs 200 × `malloc(0x7C)` (a 4-byte
+array cookie plus `sizeof(Ammo) == 120`). `increment` is `0xFFFF` = `-1` as `short`, i.e.
+"grow by the current size" when the pool is exhausted — it *is* growable, so 200 is the
+preallocation, not a hard cap.
+
+**Ammo is not driven by `Objects::process_all`.** `Ammo::process` (`0x0067D370`) is **one
+byte** — a bare `ret`, an empty body. All projectile motion, impact and damage happen in
+`Ammo::inc_time` (`0x0067D380`), reached from `Objects::inc_time` (`0x0065DB70`), which is
+**step 15** of `Game::do_frame` — *after* every unit and building has processed. This is a
+real ordering fact for the scheduler: a projectile spawned this frame is stepped in the same
+frame, and every projectile impact lands after all unit logic in that tick.
+
+```
+Game::do_frame
+  14  Objects::process_all  ->  Unit::process / Build::process  ->  Object::fire_ammo   (SPAWN)
+  15  Objects::inc_time     ->  Ammo::inc_time                                         (FLY + HIT + DAMAGE)
+```
+
+---
+
+## 3. The channel: what is hashed, and the float problem
+
+`CheckSums::check_ammo` iterates the pool in **slot order** `0..length` and calls the virtual
+walker **only for slots where `flags & 3 != 0`**. `AmmoData::walk_data` then walks:
+
+| # | bytes | engine range | contents |
+|--:|------:|---|---|
+| 1 | 1 | `[+0x04, +0x05)` | `flags` |
+| 2 | 99 | `[+0x05, +0x68)` | `rolling` … `start_roll_angle` — **gated again on `flags & 3`** |
+| 3 | 1 | stack byte | `ammo_path != nullptr` |
+| 4 | — | | `Spline::walk_data` if that byte is set |
+
+101 bytes per live projectile, adler-32 seeded to 1 at the top of the channel and carried
+across slots. Free slots contribute **zero bytes** — the guard is in `check_ammo`, before the
+virtual call — and the pool length is not itself hashed, so two runs differing only in trailing
+free slots agree on this channel.
+
+### The floats are inside the checksum
+
+`v1z` (`+0x54`), `dx` (`+0x58`), `bank_dx` (`+0x5C`), `bank_dy` (`+0x60`) sit **inside** the
+99-byte block. They are hashed bit-for-bit. This is the direct answer to the lane question
+"establish exactly which `AmmoData` ballistics fields are float and whether they are
+sim-critical":
+
+- **Which:** exactly those four, and no others. Every other walked field is an integer.
+- **Sim-critical:** yes, in the strongest available sense — a 1-ULP difference in any of them
+  is a checksum divergence and therefore a desync. The module has a test that flips one ULP of
+  `v1z` and asserts the channel moves.
+
+This makes `ammo` the one walked channel where f32 arithmetic must be reproduced *exactly*
+rather than closely. The good news is that the arithmetic is short and IEEE-clean:
+
+```
+T   = (float)total_time
+v1z = ((float)(ez - sz) - G*0.5*T*T) / T          ; G = f32::from_bits(0xC127CCCD)
+dx  = sqrtf((float)(ex-sx)^2 + (float)(ey-sy)^2) / T
+```
+
+`sqrtf` is IEEE-exact and safe (`README-LLM` §"Established ground truth"); the rest is
+multiply/divide in binary32. The hazard is **not** the algorithm — it is operand order and x87
+double-rounding. The port keeps the engine's operand order literally. This binary is SSE
+binary32, not x87, so a modern host reproduces it; the risk would be a build that lets an
+optimiser contract or reassociate these expressions.
+
+### Gravity has an odd provenance — do not "fix" it
+
+`GRAVITY` is `DAT_00CAB378`, written as the raw bit pattern `0xC127CCCD` (≈ `-10.4875`) by
+**`GraphicPieces::init` (`0x008FFCC0`)**. A *presentation* class initialises the constant the
+*simulation* ballistic solver depends on. A headless port must still perform this assignment.
+It is not read from `rules.xml`.
+
+---
+
+## 4. Spawn: two completely different shapes
+
+`Object::fire_ammo(int target_o, int target_who)` (`0x0064C8B0`). The gate is
+`(target_o >= 0 && target_who >= 0) || (is_unit && order ∈ {ATTACK_GROUND(23), AIR_ATTACK_GROUND(24)})`.
+
+**Unit shooter** — one projectile **per live guy** (`UnitData::guy_mark`, `+0xB5`), launched
+from that guy's exact position (`Guy + 0x0C/0x10/0x14`) plus `z + 100`. **Draws no RNG.**
+
+**Building shooter** — `ObjectType::ammo_per_att` (`+0x208`) projectiles, each from a uniformly
+random point over the footprint, at `obj.z + 250`:
+
+```
+w = objtype[+0x234] * 0x60          ; x_size, half-tile units
+if (w - 1 < 1) rx = 0 else { rx = Random::get(0,0xFFFF); rx %= w; }
+x = (obj.x ^ 0x63637) - w/2 + rx
+```
+
+**Exactly two `game_random` draws per projectile, x then y — and the draw is *skipped* when the
+extent is `<= 1`.** So a 1×1 building consumes no RNG and a 2×3 building consumes 2 per round.
+Stream position depends on building footprint size, which is the kind of detail that
+desynchronises silently.
+
+Object position fields are XOR-obfuscated with `0x63637` throughout; every read in the ammo
+path is `stored ^ 0x63637`.
+
+---
+
+## 5. Flight, hit, and miss
+
+### Accuracy attenuates per tile
+
+```
+tiles = dist / -192            ; MSVC magic multiply -0x2AAAAAAB, sar 5, sign fixup
+acc   = to_hit + tiles*attenuate
+if (acc < 5) acc = 5
+```
+
+`to_hit` is `ObjectType + 0x1EC`, `attenuate` is `+0x1F0`. So: **base accuracy minus one
+`attenuate` per full tile of range, floored at 5, never 0.** `dist` is
+`ObjectData::attack_dist` (`0x0064C880`) for a targeted shot and plain `vector_dist` for
+attack-ground.
+
+### Aim scatter
+
+```
+R = (constants[+0x38] * 100) / ((100 - acc)/5 + acc)      ; constants[+0x38] = target_radius = 96
+if (acc > 100) R /= 4
+ex += (R<=1 ? 0 : Random::get(0,0xFFFF) % R) - R/2
+ey += (R<=1 ? 0 : Random::get(0,0xFFFF) % R) - R/2
+```
+
+acc 100 → R 96; acc 50 → R 160; acc 5 → R 400; acc 200 → R 13. Branch overrides, in priority
+order: shooter `UnitType + 0x2B4 & 0x400000` → `R = 0`; a non-unit target or a target with
+`domain != 0` → `R = 192` flat; aircraft shooter (`obj_masks & 0x8000000`) → `R *= 2` or `0`.
+
+### `vector_dist` is an approximation, on purpose
+
+`0x0046CFF0`, 105 bytes, **zero floating point**:
+
+```
+hi = max(|dx|,|dy|), lo = min(|dx|,|dy|)
+if (hi == 0) return 0
+if (lo >= 60000) return (2*hi + lo) >> 1
+return hi + lo*lo / (2*hi)                 ; signed imul low-32, UNSIGNED divide
+```
+
+The first-order expansion of `sqrt(hi² + lo²)`. It over-estimates — `vector_dist(1000,1000)`
+returns 1500 where the true distance is 1414. Every range check, hit test and splash falloff in
+the game uses this, so "range 8" means 8 tiles of *this* metric. Reproducing `sqrt` here would
+be wrong.
+
+### `vector_dist` and the flight loop
+
+`Ammo::inc_time`, `TRAJ_ARC` path:
+
+```
+cur_time++
+if (o >= 0 && who >= 0 && !(shooter.flags & 1)) shooter.hold_frames++
+if (!(flags & FLYING)) { if (cur_time < 200) return; close(); return }
+if (cur_time >= total_time) goto arrival
+if (bank_dx != 0 || bank_dy != 0) { ex += (int)bank_dx; ey += (int)bank_dy; restrict(); recompute dx }
+t = cur_time; frac = t/total_time
+nx = (ex-sx)*frac + sx ; ny = (ey-sy)*frac + sy
+if (terrain_z(nx,ny) <= v1z*t + sz + G*0.5*t*t) return          ; still airborne
+ex = nx; ey = ny; ez = terrain_z; total_time = cur_time + 1      ; CLIP INTO THE HILLSIDE
+```
+
+`total_time` is **rewritten** by the terrain clip rather than an early exit being taken, so the
+`total_time` in the checksum is not the launch value once terrain intervenes. Note a
+consequence the tests pin down: because `arc_ballistics` solves `v1z` so the parabola passes
+through both endpoints under negative gravity, the arc is strictly *above* the chord — on flat
+ground below both ends **the clip branch is unreachable**. It exists for rising terrain.
+
+### Hit resolution
+
+`Ammo::hit_target` (`0x00678F90`) — is the recorded target still where I aimed?
+
+- building: **rectangle**, `|ex - t.x| <= x_size*0x60 && |ey - t.y| <= y_size*0x60`
+- unit: **radius**, `vector_dist <= UnitType::target_size (+0x300)`
+- `accuracy > 100` halves the measured distance, i.e. doubles the effective hit radius
+- on failure it **mutates the projectile in place**: `whom = ox = -1`
+
+That mutation matters for debugging a desync: a divergent hit test shows up on the `ammo`
+channel one frame *before* it shows up on `units`.
+
+`Ammo::check_hit` (`0x00678D90`) — did I land on anything at all? `find_unit` within `0x180`
+(two tiles), rejected unless the distance is within the candidate's own `target_size`; failing
+that, `find_building_at` on the impact tile. Tile index comes from a LUT at `DAT_00CAE5FC`
+indexed by `coord >> 6` — a division by 192 expressed as a table over 64-unit cells.
+
+### Miss behaviour, and the RNG asymmetry
+
+`Ammo::do_damage`, single-target path, when nothing is left to hit:
+
+```
+ix = ex + Random::get(0,0xFFFF) % 0x29 - 0x14        ; +/- 20
+iy = ey + Random::get(0,0xFFFF) % 0x29 - 0x14
+restrict(); puncture_ground()
+if (valid && !water) { flags = 1; cur_time = 0; return }     ; linger as a ground marker
+```
+
+**A hit draws nothing; a miss draws exactly twice.** Getting the hit test wrong therefore
+desynchronises `game_random` for every later consumer in the frame, not just the projectile —
+this is the single most dangerous divergence in the subsystem.
+
+`flags = 1` is an **assignment**, not an OR: it clears `FLYING | OVERSHOOT | MISSED | NO_DAMAGE`
+in one store while leaving the slot occupied. The spent marker then **stays in the ammo
+checksum for 200 more frames** before `Ammo::close` frees it. A replay harness that expects the
+ammo channel to return to idle the instant a shot lands will be wrong by 200 frames.
+
+The `FLAG_OVERSHOOT` path (set for ground-unit targets) lets a round that missed keep flying —
+extrapolating past the aim point, testing terrain each frame — until it lands or `cur_time`
+exceeds `3 × total_time`, at which point the slot is closed with no damage.
+
+---
+
+## 6. The damage handoff — this is the `AMMO_PER_ATT` answer
+
+`Ammo::do_damage` calls `Object::do_damage` (`0x0064A480`) with `this` = **the shooter**:
+
+```
+Object::do_damage(victim_o, victim_who, angle, num_guys, ammo_slot, scale256, secondary, 0)
+```
+
+recovered from the three call sites (`0x00678982`, `0x00678B0A`, `0x00678C6C`). `scale256` is
+`0x100` for a direct hit and the splash falloff otherwise; `secondary` is 1 when the victim is
+collateral; `ammo_slot` is the projectile's pool index, and **a negative value there means
+"melee, do not split"**.
+
+`Object::do_damage`'s head, `0x0064A49E`–`0x0064A7F1`:
+
+```asm
+cmp [ebp+0x1c], 0 ; jle <return>            ; scale <= 0 -> NOTHING HAPPENS AT ALL
+call ObjectData::get_damage(o, who, angle, secondary, 1, &out)
+
+; shooter is a Unit:
+imul eax, scale                             ; D *= scale
+cmp eax, 0x100 ; cmovle eax, 0x100          ; floor of 256 == one hit point
+cmp ammo_slot, 0 ; jl <skip>                ; melee skips the split
+idiv [shooter_objtype + 0x208]              ; / ammo_per_att
+idiv [shooter_unittype + 0x308]             ; / uber_size
+sar eax, 4 ; <keep low 4 bits> ; sar eax, 4 ; / 16 twice, remainder -> damage_frac
+
+; shooter is a Build:
+imul eax, scale ; idiv [objtype + 0x208]    ; no uber_size, NO floor of 256
+sar eax, 4 ; <frac> ; sar eax, 4
+```
+
+Read as one expression with `scale = 256`:
+
+| shooter | applied per projectile |
+|---|---|
+| unit | `max(D·scale, 256) / ammo_per_att / uber_size / 256` |
+| building | `D·scale / ammo_per_att / 256` |
+
+### Armor is applied *per projectile*, and that is the whole point
+
+Armor is **not** touched by any of the above. It is subtracted inside `ObjectData::get_damage`
+(`0x00644130`) at step 22 of 31, on the **raw, undivided, per-projectile** number — and each
+projectile makes its own `get_damage` call. So a 4-round volley subtracts armor four times and
+keeps a quarter of each result.
+
+Algebraically that is identical to `(D − armor)/4` — *until the conditional floor of 1 inside
+`get_damage` bites*, which is exactly when armor eats the round. At that point every projectile
+independently bottoms out, and the many-small-projectiles attacker collapses against a
+high-armor target far faster than a naive `(D − armor)/N` model predicts. This is the mechanism
+behind heavy armour shrugging off massed light fire, and it is a structural consequence of
+where the divide sits relative to the armor subtraction.
+
+### The `/16` twice is not `/256` in disguise
+
+The intermediate is truncated and its **low 4 bits are kept** as `ObjectData::damage_frac`
+(`+0x3B`, a `char`) — sub-hit-point damage accumulates across shots instead of vanishing. The
+port returns `SplitDamage { hits, frac16 }`; whoever owns `ObjectData` needs to accumulate the
+`frac16` term. Flagged for the `units` lane.
+
+### Squad casualties reduce damage mechanically
+
+A unit fires one projectile per **live guy** but divides by **`uber_size`** (the full squad
+size). A full squad delivers `D/ammo_per_att` in aggregate; a half-dead squad delivers half
+that. Attrition is expressed through the projectile *count*, not through a damage multiplier.
+
+### Splash
+
+```
+dx = max(0, |impact.x - victim.x| - victim.x_size*192)
+dy = max(0, |impact.y - victim.y| - victim.y_size*192)
+scale = 256 - (vector_dist(dx,dy) << 8) / (splash_area * 192)
+```
+
+Linear falloff measured from the victim's **bounding box**, not its centre, so large buildings
+take full splash much further out. A negative result skips the victim rather than clamping.
+Note the two extents genuinely differ: splash insets by `size*192` (a full tile per size unit),
+`hit_target` by `size*96`.
+
+One measured inconsistency worth recording rather than smoothing over: the two splash call
+sites disagree by one instruction. `0x00678937` is `js` (skip only when negative — a victim at
+exactly `scale == 0` still gets a call); `0x00678AC3` is `test ecx,ecx ; jle` (skips at zero
+too). Observable damage is identical because `Object::do_damage` itself returns on `scale <= 0`,
+but the *call count* differs, which matters to anything counting damage events. The port follows
+the `js` form.
+
+The ring walk itself uses precomputed tile-offset discs (`DAT_00ADC400` / `DAT_00ADCAF0`, count
+from `DAT_00ADD1E0[ring]`, `ring = min(10, splash_area/4 + 1)`). `splash_ring` is ported; the
+disc tables and the diplomacy/self filters are **not** — `ammo_do_damage_splash` takes the
+victim list as input.
+
+---
+
+## 7. Honest gaps
+
+Ordered by how much they would cost a replay harness.
+
+1. **Nothing here has been through the oracle.** Tier C across the board. The highest-value
+   oracle cases, in order: `vector_dist` (`0x0046CFF0` — trivially callable, pure integer, two
+   arguments, would go straight to Tier B), the accuracy magic-divide, `splash_scale`, and
+   `split_damage`. `vector_dist` alone is used by half the combat code and is a ~20-line
+   registry entry in `crates/oracle/src/registry.rs`.
+2. **`find_angle` (`0x0092D130`) is UNDERIVED.** 264 bytes. The impact angle feeds the flanking
+   term in `get_damage`, so this is a real hole in the damage pipeline, not just cosmetic. The
+   port passes the angle through from the caller.
+3. **The anti-air dud roll is not implemented.** `Ammo::init` rolls one or two
+   `Random::get(0,0xFFFF) % 100` against `ObjectType::fly_high` (`+0x250`) / `fly_low`
+   (`+0x254`) — first the target's, then the shooter's — and sets `FLAG_NO_DAMAGE` on failure.
+   The branch structure is intricate and I did not want to guess it. **This is an RNG consumer
+   on the spawn path**, so it must be closed before any lockstep replay validates: it changes
+   stream position for every shot at an air unit.
+4. **`TRAJ_SPLINE` is not modelled.** Aircraft crashes, nukes and cruise missiles go through
+   `Spline::calc_from_dir` (`0x00913960`) / `calc_nuke_spline` (`0x00913AD0`), unread. `Ammo`
+   with a spline hashes an extra `Spline::walk_data` block, so those projectiles will diverge
+   on the channel. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never
+   set by `init`, which is worth confirming independently.
+5. **The splash ring tile-offset tables** (`DAT_00ADC400`, `DAT_00ADCAF0`, `DAT_00ADD1E0`) are
+   not extracted, so victim *selection* for splash is the caller's problem; only the per-victim
+   arithmetic is ported.
+6. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
+   (`0x006541E0`) and therefore whether it is on any channel. It monotonically increases and
+   never rewinds, so if it *is* walked, save/load round-tripping must preserve it.
+7. `Ammo::init_crash` (`0x0067B800`) — the aircraft-crash constructor — is not ported.
+8. The exact `DataWalk` section-mask value `check_all` installs before the ammo channel is not
+   confirmed; `AmmoData::walk_data` reads the *direction* field (`+4`), not the mask (`+0xC`),
+   so it should not matter, but it is unverified.
+
+---
+
+## 8. Integration notes for the orchestrator
+
+- **`lib.rs` needs `pub mod systems;`** — I did not edit it, per the file-ownership rule.
+- **`crates/don-sim/src/systems/mod.rs` did not exist and I created it.** It is a shared file:
+  four other lanes had already dropped modules into `systems/` (`borders_fog.rs`,
+  `economy.rs`, `map_terrain.rs`, `movement.rs`), so `mod.rs` declares all five rather than
+  stranding them. **Only `ammo` is verified by this lane** — the other four import crate-root
+  items that do not exist yet (`crate::rng`, …) and cannot compile until the `lib.rs` owner
+  lands them. If the tree does not build, comment out the unfinished siblings, not `ammo`.
+- The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
+  world bounds, unit/building search, water test) rather than reaching into the SoA world, so
+  it will not collide with the `world.rs` rewrite. Whoever owns the world implements `AmmoEnv`.
+- Damage is **emitted, not applied**: `ammo_do_damage_single` / `ammo_do_damage_splash` return
+  `DamageCall` values matching `Object::do_damage`'s argument list exactly. This keeps the
+  `ammo`/`units`/`deaths` channel boundary clean.
+- For the `deaths` channel: projectile impacts resolve in `Objects::inc_time`, **after** every
+  `Unit::process`, so a unit killed by a projectile dies at the end of the tick, later than one
+  killed by melee. Death ordering within a tick is `Objects::process_all` deaths first, then
+  ammo deaths in **pool-slot order** — which is the allocation order from
+  `AmmoPool::alloc_slot`, i.e. lowest free slot first, not spawn order. Any death-ordering
+  model that assumes spawn order will diverge after the first slot is recycled.

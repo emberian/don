@@ -158,7 +158,18 @@ pub enum UnitHead {
     Count = 9,
 }
 pub const N_UNIT_HEADS: usize = 10;
-pub const UNIT_HEAD_NAMES: [&str; 10] = ["Verb", "TargetX", "TargetY", "TargetEntity", "Type", "QueuePos", "Stance", "Form", "OrderMods", "Count"];
+pub const UNIT_HEAD_NAMES: [&str; 10] = [
+    "Verb",
+    "TargetX",
+    "TargetY",
+    "TargetEntity",
+    "Type",
+    "QueuePos",
+    "Stance",
+    "Form",
+    "OrderMods",
+    "Count",
+];
 
 /// Parameter heads of the player action group, in array order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -190,61 +201,355 @@ pub struct VerbDef {
 /// 33 unit verbs. Index 0 of the Verb head is NOOP, so the
 /// head size is 33 + 1.
 pub const UNIT_VERBS: [VerbDef; 33] = [
-    VerbDef { name: "STANCE", opcode: 2, wire_size: 5, heads: 0x41, unsupplied: &[] },  // StanceCommand
-    VerbDef { name: "FORM", opcode: 3, wire_size: 13, heads: 0xa1, unsupplied: &[] },  // FormCommand
-    VerbDef { name: "ATTACK", opcode: 4, wire_size: 17, heads: 0x29, unsupplied: &["ignore"] },  // AttackCommand
-    VerbDef { name: "SIEGE_ATTACK", opcode: 5, wire_size: 13, heads: 0x29, unsupplied: &[] },  // SiegeAttackCommand
-    VerbDef { name: "SWARM_AROUND", opcode: 6, wire_size: 17, heads: 0x129, unsupplied: &[] },  // SwarmAroundCommand
-    VerbDef { name: "MOVE_TO", opcode: 7, wire_size: 22, heads: 0x1a7, unsupplied: &["set_angle", "angle", "width", "disembark"] },  // MoveToCommand
-    VerbDef { name: "MOVE_NEAR", opcode: 8, wire_size: 26, heads: 0x1a7, unsupplied: &["tolerance", "set_angle", "angle", "width", "disembark"] },  // MoveNearCommand
-    VerbDef { name: "ATTACK_GROUND", opcode: 9, wire_size: 10, heads: 0x27, unsupplied: &[] },  // AttackGroundCommand
-    VerbDef { name: "PATROL", opcode: 10, wire_size: 10, heads: 0x27, unsupplied: &[] },  // PatrolCommand
-    VerbDef { name: "LAUNCH_PATROL", opcode: 11, wire_size: 25, heads: 0x27, unsupplied: &["shift", "ctrl", "alt"] },  // LaunchPatrolCommand
-    VerbDef { name: "HALT", opcode: 12, wire_size: 1, heads: 0x1, unsupplied: &[] },  // HaltCommand
-    VerbDef { name: "TRANSPORT", opcode: 13, wire_size: 1, heads: 0x1, unsupplied: &[] },  // TransportCommand
-    VerbDef { name: "SET_TRANSPORT", opcode: 14, wire_size: 5, heads: 0x1, unsupplied: &["flag"] },  // SetTransportCommand
-    VerbDef { name: "BOARD_SHIP", opcode: 15, wire_size: 9, heads: 0x29, unsupplied: &[] },  // BoardShipCommand
-    VerbDef { name: "REPAIR", opcode: 16, wire_size: 13, heads: 0x29, unsupplied: &[] },  // RepairCommand
-    VerbDef { name: "TRADE", opcode: 17, wire_size: 21, heads: 0x29, unsupplied: &["oxx", "whose"] },  // TradeCommand
-    VerbDef { name: "CITY_GATHER", opcode: 18, wire_size: 9, heads: 0x21, unsupplied: &["t"] },  // CityGatherCommand
-    VerbDef { name: "GATHER", opcode: 19, wire_size: 9, heads: 0x29, unsupplied: &[] },  // GatherCommand
-    VerbDef { name: "GARRISON", opcode: 20, wire_size: 13, heads: 0x29, unsupplied: &[] },  // GarrisonCommand
-    VerbDef { name: "DISBAND", opcode: 21, wire_size: 5, heads: 0x1, unsupplied: &["all"] },  // DisbandCommand
-    VerbDef { name: "GATHER_POINT", opcode: 22, wire_size: 17, heads: 0x7, unsupplied: &["action", "add_to_end"] },  // GatherPointCommand
-    VerbDef { name: "SPELL", opcode: 23, wire_size: 21, heads: 0x1f, unsupplied: &[] },  // SpellCommand
-    VerbDef { name: "QUEUE_UP", opcode: 24, wire_size: 9, heads: 0x211, unsupplied: &[] },  // QueueUpCommand
-    VerbDef { name: "BUILD", opcode: 25, wire_size: 25, heads: 0x37, unsupplied: &[] },  // BuildCommand
-    VerbDef { name: "EJECTALL", opcode: 26, wire_size: 17, heads: 0x1, unsupplied: &["back_to_work", "eject_o", "eject_who"] },  // EjectAllCommand
-    VerbDef { name: "FLIGHT", opcode: 28, wire_size: 25, heads: 0x109, unsupplied: &["shift", "ctrl", "alt"] },  // FlightCommand
-    VerbDef { name: "STOP_SPELL", opcode: 29, wire_size: 1, heads: 0x1, unsupplied: &[] },  // StopSpellCommand
-    VerbDef { name: "FOLLOW", opcode: 30, wire_size: 13, heads: 0x29, unsupplied: &[] },  // FollowCommand
-    VerbDef { name: "GUARD", opcode: 31, wire_size: 13, heads: 0x29, unsupplied: &[] },  // GuardCommand
-    VerbDef { name: "RECALL", opcode: 35, wire_size: 1, heads: 0x1, unsupplied: &[] },  // RecallCommand
-    VerbDef { name: "SCRAMBLE", opcode: 36, wire_size: 1, heads: 0x1, unsupplied: &[] },  // ScrambleCommand
-    VerbDef { name: "UNQUEUE", opcode: 48, wire_size: 15, heads: 0x11, unsupplied: &["o", "uid"] },  // UnqueueCommand
-    VerbDef { name: "COME_OUT", opcode: 49, wire_size: 11, heads: 0x1, unsupplied: &["o", "uid"] },  // ComeOutCommand
+    VerbDef {
+        name: "STANCE",
+        opcode: 2,
+        wire_size: 5,
+        heads: 0x41,
+        unsupplied: &[],
+    }, // StanceCommand
+    VerbDef {
+        name: "FORM",
+        opcode: 3,
+        wire_size: 13,
+        heads: 0xa1,
+        unsupplied: &[],
+    }, // FormCommand
+    VerbDef {
+        name: "ATTACK",
+        opcode: 4,
+        wire_size: 17,
+        heads: 0x29,
+        unsupplied: &["ignore"],
+    }, // AttackCommand
+    VerbDef {
+        name: "SIEGE_ATTACK",
+        opcode: 5,
+        wire_size: 13,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // SiegeAttackCommand
+    VerbDef {
+        name: "SWARM_AROUND",
+        opcode: 6,
+        wire_size: 17,
+        heads: 0x129,
+        unsupplied: &[],
+    }, // SwarmAroundCommand
+    VerbDef {
+        name: "MOVE_TO",
+        opcode: 7,
+        wire_size: 22,
+        heads: 0x1a7,
+        unsupplied: &["set_angle", "angle", "width", "disembark"],
+    }, // MoveToCommand
+    VerbDef {
+        name: "MOVE_NEAR",
+        opcode: 8,
+        wire_size: 26,
+        heads: 0x1a7,
+        unsupplied: &["tolerance", "set_angle", "angle", "width", "disembark"],
+    }, // MoveNearCommand
+    VerbDef {
+        name: "ATTACK_GROUND",
+        opcode: 9,
+        wire_size: 10,
+        heads: 0x27,
+        unsupplied: &[],
+    }, // AttackGroundCommand
+    VerbDef {
+        name: "PATROL",
+        opcode: 10,
+        wire_size: 10,
+        heads: 0x27,
+        unsupplied: &[],
+    }, // PatrolCommand
+    VerbDef {
+        name: "LAUNCH_PATROL",
+        opcode: 11,
+        wire_size: 25,
+        heads: 0x27,
+        unsupplied: &["shift", "ctrl", "alt"],
+    }, // LaunchPatrolCommand
+    VerbDef {
+        name: "HALT",
+        opcode: 12,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // HaltCommand
+    VerbDef {
+        name: "TRANSPORT",
+        opcode: 13,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // TransportCommand
+    VerbDef {
+        name: "SET_TRANSPORT",
+        opcode: 14,
+        wire_size: 5,
+        heads: 0x1,
+        unsupplied: &["flag"],
+    }, // SetTransportCommand
+    VerbDef {
+        name: "BOARD_SHIP",
+        opcode: 15,
+        wire_size: 9,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // BoardShipCommand
+    VerbDef {
+        name: "REPAIR",
+        opcode: 16,
+        wire_size: 13,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // RepairCommand
+    VerbDef {
+        name: "TRADE",
+        opcode: 17,
+        wire_size: 21,
+        heads: 0x29,
+        unsupplied: &["oxx", "whose"],
+    }, // TradeCommand
+    VerbDef {
+        name: "CITY_GATHER",
+        opcode: 18,
+        wire_size: 9,
+        heads: 0x21,
+        unsupplied: &["t"],
+    }, // CityGatherCommand
+    VerbDef {
+        name: "GATHER",
+        opcode: 19,
+        wire_size: 9,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // GatherCommand
+    VerbDef {
+        name: "GARRISON",
+        opcode: 20,
+        wire_size: 13,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // GarrisonCommand
+    VerbDef {
+        name: "DISBAND",
+        opcode: 21,
+        wire_size: 5,
+        heads: 0x1,
+        unsupplied: &["all"],
+    }, // DisbandCommand
+    VerbDef {
+        name: "GATHER_POINT",
+        opcode: 22,
+        wire_size: 17,
+        heads: 0x7,
+        unsupplied: &["action", "add_to_end"],
+    }, // GatherPointCommand
+    VerbDef {
+        name: "SPELL",
+        opcode: 23,
+        wire_size: 21,
+        heads: 0x1f,
+        unsupplied: &[],
+    }, // SpellCommand
+    VerbDef {
+        name: "QUEUE_UP",
+        opcode: 24,
+        wire_size: 9,
+        heads: 0x211,
+        unsupplied: &[],
+    }, // QueueUpCommand
+    VerbDef {
+        name: "BUILD",
+        opcode: 25,
+        wire_size: 25,
+        heads: 0x37,
+        unsupplied: &[],
+    }, // BuildCommand
+    VerbDef {
+        name: "EJECTALL",
+        opcode: 26,
+        wire_size: 17,
+        heads: 0x1,
+        unsupplied: &["back_to_work", "eject_o", "eject_who"],
+    }, // EjectAllCommand
+    VerbDef {
+        name: "FLIGHT",
+        opcode: 28,
+        wire_size: 25,
+        heads: 0x109,
+        unsupplied: &["shift", "ctrl", "alt"],
+    }, // FlightCommand
+    VerbDef {
+        name: "STOP_SPELL",
+        opcode: 29,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // StopSpellCommand
+    VerbDef {
+        name: "FOLLOW",
+        opcode: 30,
+        wire_size: 13,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // FollowCommand
+    VerbDef {
+        name: "GUARD",
+        opcode: 31,
+        wire_size: 13,
+        heads: 0x29,
+        unsupplied: &[],
+    }, // GuardCommand
+    VerbDef {
+        name: "RECALL",
+        opcode: 35,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // RecallCommand
+    VerbDef {
+        name: "SCRAMBLE",
+        opcode: 36,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // ScrambleCommand
+    VerbDef {
+        name: "UNQUEUE",
+        opcode: 48,
+        wire_size: 15,
+        heads: 0x11,
+        unsupplied: &["o", "uid"],
+    }, // UnqueueCommand
+    VerbDef {
+        name: "COME_OUT",
+        opcode: 49,
+        wire_size: 11,
+        heads: 0x1,
+        unsupplied: &["o", "uid"],
+    }, // ComeOutCommand
 ];
 pub const N_UNIT_VERBS: usize = 33;
 
 /// 16 player verbs. Index 0 of the Verb head is NOOP, so the
 /// head size is 16 + 1.
 pub const PLAYER_VERBS: [VerbDef; 16] = [
-    VerbDef { name: "ALARM", opcode: 27, wire_size: 1, heads: 0x1, unsupplied: &[] },  // AlarmCommand
-    VerbDef { name: "UNITMASK", opcode: 32, wire_size: 9, heads: 0x1, unsupplied: &["unitmask", "set"] },  // UnitmaskCommand
-    VerbDef { name: "BUILDMASK", opcode: 33, wire_size: 9, heads: 0x1, unsupplied: &["buildmask", "set"] },  // BuildmaskCommand
-    VerbDef { name: "TREATY", opcode: 37, wire_size: 13, heads: 0x13, unsupplied: &[] },  // TreatyCommand
-    VerbDef { name: "DECLARE", opcode: 38, wire_size: 13, heads: 0x13, unsupplied: &[] },  // DeclareCommand
-    VerbDef { name: "CLEAR_TRIBUTES", opcode: 39, wire_size: 9, heads: 0x3, unsupplied: &[] },  // ClearTributesCommand
-    VerbDef { name: "CLEAR_ALL", opcode: 40, wire_size: 9, heads: 0x3, unsupplied: &[] },  // ClearAllCommand
-    VerbDef { name: "ACCEPT", opcode: 41, wire_size: 9, heads: 0x3, unsupplied: &[] },  // AcceptCommand
-    VerbDef { name: "REJECT", opcode: 42, wire_size: 9, heads: 0x3, unsupplied: &[] },  // RejectCommand
-    VerbDef { name: "TRIBUTE", opcode: 43, wire_size: 17, heads: 0xf, unsupplied: &[] },  // TributeCommand
-    VerbDef { name: "DEMAND_TRIBUTE", opcode: 44, wire_size: 17, heads: 0xf, unsupplied: &[] },  // DemandTributeCommand
-    VerbDef { name: "PROPOSE_ATTACK", opcode: 45, wire_size: 17, heads: 0x3, unsupplied: &["whose", "onoff"] },  // ProposeAttackCommand
-    VerbDef { name: "BUY", opcode: 46, wire_size: 13, heads: 0x7, unsupplied: &["flags"] },  // BuyCommand
-    VerbDef { name: "SELL", opcode: 47, wire_size: 13, heads: 0x7, unsupplied: &["flags"] },  // SellCommand
-    VerbDef { name: "RESIGN", opcode: 70, wire_size: 5, heads: 0x1, unsupplied: &["play"] },  // ResignCommand
-    VerbDef { name: "LEADER_OPTIONS", opcode: 73, wire_size: 33, heads: 0x1, unsupplied: &["leader_option"] },  // LeaderOptionsCommand
+    VerbDef {
+        name: "ALARM",
+        opcode: 27,
+        wire_size: 1,
+        heads: 0x1,
+        unsupplied: &[],
+    }, // AlarmCommand
+    VerbDef {
+        name: "UNITMASK",
+        opcode: 32,
+        wire_size: 9,
+        heads: 0x1,
+        unsupplied: &["unitmask", "set"],
+    }, // UnitmaskCommand
+    VerbDef {
+        name: "BUILDMASK",
+        opcode: 33,
+        wire_size: 9,
+        heads: 0x1,
+        unsupplied: &["buildmask", "set"],
+    }, // BuildmaskCommand
+    VerbDef {
+        name: "TREATY",
+        opcode: 37,
+        wire_size: 13,
+        heads: 0x13,
+        unsupplied: &[],
+    }, // TreatyCommand
+    VerbDef {
+        name: "DECLARE",
+        opcode: 38,
+        wire_size: 13,
+        heads: 0x13,
+        unsupplied: &[],
+    }, // DeclareCommand
+    VerbDef {
+        name: "CLEAR_TRIBUTES",
+        opcode: 39,
+        wire_size: 9,
+        heads: 0x3,
+        unsupplied: &[],
+    }, // ClearTributesCommand
+    VerbDef {
+        name: "CLEAR_ALL",
+        opcode: 40,
+        wire_size: 9,
+        heads: 0x3,
+        unsupplied: &[],
+    }, // ClearAllCommand
+    VerbDef {
+        name: "ACCEPT",
+        opcode: 41,
+        wire_size: 9,
+        heads: 0x3,
+        unsupplied: &[],
+    }, // AcceptCommand
+    VerbDef {
+        name: "REJECT",
+        opcode: 42,
+        wire_size: 9,
+        heads: 0x3,
+        unsupplied: &[],
+    }, // RejectCommand
+    VerbDef {
+        name: "TRIBUTE",
+        opcode: 43,
+        wire_size: 17,
+        heads: 0xf,
+        unsupplied: &[],
+    }, // TributeCommand
+    VerbDef {
+        name: "DEMAND_TRIBUTE",
+        opcode: 44,
+        wire_size: 17,
+        heads: 0xf,
+        unsupplied: &[],
+    }, // DemandTributeCommand
+    VerbDef {
+        name: "PROPOSE_ATTACK",
+        opcode: 45,
+        wire_size: 17,
+        heads: 0x3,
+        unsupplied: &["whose", "onoff"],
+    }, // ProposeAttackCommand
+    VerbDef {
+        name: "BUY",
+        opcode: 46,
+        wire_size: 13,
+        heads: 0x7,
+        unsupplied: &["flags"],
+    }, // BuyCommand
+    VerbDef {
+        name: "SELL",
+        opcode: 47,
+        wire_size: 13,
+        heads: 0x7,
+        unsupplied: &["flags"],
+    }, // SellCommand
+    VerbDef {
+        name: "RESIGN",
+        opcode: 70,
+        wire_size: 5,
+        heads: 0x1,
+        unsupplied: &["play"],
+    }, // ResignCommand
+    VerbDef {
+        name: "LEADER_OPTIONS",
+        opcode: 73,
+        wire_size: 33,
+        heads: 0x1,
+        unsupplied: &["leader_option"],
+    }, // LeaderOptionsCommand
 ];
 pub const N_PLAYER_VERBS: usize = 16;
 
@@ -306,9 +611,42 @@ pub mod pv {
 /// Opcodes classified SELECTION: not agent actions.
 pub const SELECTION_OPCODES: [(u8, &str); 2] = [(0, "GROUP"), (34, "HOTKEY")];
 /// Opcodes classified UI: not agent actions.
-pub const UI_OPCODES: [(u8, &str); 8] = [(50, "PING"), (51, "SPLINE"), (68, "CHAT"), (69, "CHAT_SET"), (72, "CAMERA"), (75, "RENAME_CITY"), (78, "CONSOLE_CMD"), (79, "PLAYER_SPEED")];
+pub const UI_OPCODES: [(u8, &str); 8] = [
+    (50, "PING"),
+    (51, "SPLINE"),
+    (68, "CHAT"),
+    (69, "CHAT_SET"),
+    (72, "CAMERA"),
+    (75, "RENAME_CITY"),
+    (78, "CONSOLE_CMD"),
+    (79, "PLAYER_SPEED"),
+];
 /// Opcodes classified ADMIN: not agent actions.
-pub const ADMIN_OPCODES: [(u8, &str); 14] = [(1, "BEGIN"), (52, "SPEED_SET"), (53, "SPEED_UP"), (54, "SPEED_DOWN"), (55, "MP_LOG"), (56, "CHECK_RANDOM"), (57, "CHECK_SUMS"), (58, "NEXT_CHECK_SUM"), (71, "QUIT"), (74, "TURN_DATA"), (76, "PAUSE"), (77, "CANNON_TIME"), (80, "UNGRACEFUL_PLAYER_DROP"), (81, "MARWAN")];
+pub const ADMIN_OPCODES: [(u8, &str); 14] = [
+    (1, "BEGIN"),
+    (52, "SPEED_SET"),
+    (53, "SPEED_UP"),
+    (54, "SPEED_DOWN"),
+    (55, "MP_LOG"),
+    (56, "CHECK_RANDOM"),
+    (57, "CHECK_SUMS"),
+    (58, "NEXT_CHECK_SUM"),
+    (71, "QUIT"),
+    (74, "TURN_DATA"),
+    (76, "PAUSE"),
+    (77, "CANNON_TIME"),
+    (80, "UNGRACEFUL_PLAYER_DROP"),
+    (81, "MARWAN"),
+];
 /// Opcodes classified CHEAT: not agent actions.
-pub const CHEAT_OPCODES: [(u8, &str); 9] = [(59, "CHEAT_VIEW_ALL"), (60, "CHEAT_GIVE_TECHS"), (61, "CHEAT_ZERO_TECHS"), (62, "CHEAT_AI_SPEED_INCREASE"), (63, "CHEAT_AI_SPEED_NORMAL"), (64, "CHEAT_AI_TOGGLE"), (65, "CHEAT_INCREASE_BUCKETS"), (66, "CHEAT_ZERO_BUCKETS"), (67, "CHEAT_INIT_UNIT")];
-
+pub const CHEAT_OPCODES: [(u8, &str); 9] = [
+    (59, "CHEAT_VIEW_ALL"),
+    (60, "CHEAT_GIVE_TECHS"),
+    (61, "CHEAT_ZERO_TECHS"),
+    (62, "CHEAT_AI_SPEED_INCREASE"),
+    (63, "CHEAT_AI_SPEED_NORMAL"),
+    (64, "CHEAT_AI_TOGGLE"),
+    (65, "CHEAT_INCREASE_BUCKETS"),
+    (66, "CHEAT_ZERO_BUCKETS"),
+    (67, "CHEAT_INIT_UNIT"),
+];

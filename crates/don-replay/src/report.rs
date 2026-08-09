@@ -167,7 +167,10 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         s.push_str(&format!("      \"file\": \"{}\",\n", esc(&r.file)));
         s.push_str(&format!(
             "      \"version\": {},\n",
-            r.version.as_ref().map(|v| format!("\"{}\"", esc(v))).unwrap_or_else(|| "null".into())
+            r.version
+                .as_ref()
+                .map(|v| format!("\"{}\"", esc(v)))
+                .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
             "      \"phase\": \"{}\", \"latency_turns\": {},\n",
@@ -181,7 +184,9 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         s.push_str(&format!(
             "      \"players\": {:?}, \"frames_per_turn\": {},\n",
             r.players,
-            r.frames_per_turn.map(|f| format!("{f:.3}")).unwrap_or_else(|| "null".into())
+            r.frames_per_turn
+                .map(|f| format!("{f:.3}"))
+                .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
             "      \"packages\": {}, \"packages_decoded\": {},\n",
@@ -193,7 +198,9 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
         ));
         s.push_str(&format!(
             "      \"rules_channel_constant\": {},\n",
-            r.rules_constant.map(|v| format!("\"0x{v:08x}\"")).unwrap_or_else(|| "null".into())
+            r.rules_constant
+                .map(|v| format!("\"0x{v:08x}\""))
+                .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
             "      \"crossplay\": {{ \"by_group\": {{ \"comparisons\": {}, \"identical\": {} }}, \"by_stamp\": {{ \"comparisons\": {}, \"identical\": {}, \"disagreements_comparing_different_turns\": {} }} }},\n",
@@ -224,7 +231,11 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             ));
         }
         s.push_str("      }\n");
-        s.push_str(if k + 1 == runs.len() { "    }\n" } else { "    },\n" });
+        s.push_str(if k + 1 == runs.len() {
+            "    }\n"
+        } else {
+            "    },\n"
+        });
     }
     s.push_str("  ]\n}\n");
     let _ = NUM_WALKED;

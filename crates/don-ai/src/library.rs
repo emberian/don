@@ -59,8 +59,11 @@ pub fn place_farm<W: ScriptWorld>(w: &mut W, who: i32) -> i32 {
     let my_second_city = w.find_city_with_num(who, 2);
     let my_third_city = w.find_city_with_num(who, 3);
 
-    let max_farms =
-        if who_nation == "Egyptians" && w.get_is_no_nation_powers() < 1 { 7 } else { 5 };
+    let max_farms = if who_nation == "Egyptians" && w.get_is_no_nation_powers() < 1 {
+        7
+    } else {
+        5
+    };
 
     let n = w.num_cities(who);
     if n == 1 {
@@ -190,7 +193,11 @@ pub fn place_mine<W: ScriptWorld>(w: &mut W, who: i32) -> i32 {
     if !bhs_true(w.have_tech(who, "Classical Age")) {
         return -1;
     }
-    let probe = if w.num_cities(who) == 3 { "Dock" } else { "Mine" };
+    let probe = if w.num_cities(who) == 3 {
+        "Dock"
+    } else {
+        "Mine"
+    };
     place_resource_building(w, who, "Mine", probe)
 }
 
@@ -275,12 +282,7 @@ pub fn place_woodcutter<W: ScriptWorld>(w: &mut W, who: i32, st: &mut LibrarySta
 /// `high_num` or no city needs anything.
 ///
 /// Returns 1 when the need is satisfied (and assigns idle citizens), else -1.
-pub fn train_unit_with_need<W: ScriptWorld>(
-    w: &mut W,
-    who: i32,
-    high_num: i32,
-    what: &str,
-) -> i32 {
+pub fn train_unit_with_need<W: ScriptWorld>(w: &mut W, who: i32, high_num: i32, what: &str) -> i32 {
     let my_capital = w.find_city_with_num(who, 1);
     let my_second_city = w.find_city_with_num(who, 2);
     let my_third_city = w.find_city_with_num(who, 3);
@@ -306,8 +308,7 @@ pub fn train_unit_with_need<W: ScriptWorld>(
         sum_metal += m1;
 
         if w.num_cities(who) > 1 {
-            needed_workers_2 =
-                city_need(w, who, &my_second_city, what, second_city_id, idle, 0);
+            needed_workers_2 = city_need(w, who, &my_second_city, what, second_city_id, idle, 0);
             let (w2, m2) = city_free_slots(w, who, &my_second_city);
             sum_wood += w2;
             sum_metal += m2;

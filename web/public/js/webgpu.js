@@ -111,6 +111,23 @@ fn vs_units(@builtin(vertex_index) vi : u32,
   return out;
 }
 
+@fragment
+fn fs_units(in : VS) -> @location(0) vec4f {
+  // Round sprites only when a sprite is big enough for the shape to be visible. The branch
+  // is uniform across the draw, so it costs nothing per fragment in practice.
+  if (u.panZoom.w > 2.5) {
+    let d = in.uv - vec2f(0.5);
+    let r = dot(d, d);
+    if (r > 0.25) { discard; }
+    // A cheap lambert-ish shade so a dense melee reads as many round things rather than one
+    // flat blob; it is the difference between a screenshot you can count units in and one
+    // you cannot.
+    let shade = 1.0 - r * 1.2;
+    return vec4f(in.rgb * shade, 1.0);
+  }
+  return vec4f(in.rgb, 1.0);
+}
+
 // ---- aggregate view: one quad per world, coloured by that world's statistics ----------
 struct AVS { @builtin(position) pos : vec4f, @location(0) uv : vec2f, @location(1) rgb : vec3f };
 
@@ -175,6 +192,7 @@ export class WebGpuBackend {
   #cells = 0; #worldsCap = 0;
   #canvas;
   #querySet = null; #queryBuf = null; #queryRead = null; #tsSupported = false;
+  #capTex = null; #capW = 0; #capH = 0; #target = null;
   #lastGpuNs = 0; #queryBusy = false;
 
   static async create(canvas) {
@@ -192,6 +210,12 @@ export class WebGpuBackend {
       // reject it. Requesting the adapter value can never fail.
       requiredLimits: { maxBufferSize: adapter.limits.maxBufferSize },
     });
+    // A WebGPU validation error is *not* an exception: the call returns, the frame draws
+    // nothing, and the only trace is this event. Without it, a mistake in a copy or a
+    // pipeline looks exactly like a renderer that produced black.
+    device.addEventListener('uncapturederror', (e) => {
+      console.error('[webgpu] ' + (e.error?.message || e.error));
+    });
     return new WebGpuBackend(device, canvas, wanted.length > 0, adapter);
   }
 
@@ -207,9 +231,28 @@ export class WebGpuBackend {
     this.limits = { maxBufferSize: device.limits.maxBufferSize };
     this.#ctx = canvas.getContext('webgpu');
     this.#format = navigator.gpu.getPreferredCanvasFormat();
-    this.#ctx.configure({ device, format: this.#format, alphaMode: 'opaque' });
+    // `COPY_SRC` on the canvas texture is what makes `readback()` possible. It costs
+    // nothing when unused and it is the only way to prove, from outside, that the renderer
+    // drew what it says it drew: a CDP `Page.captureScreenshot` of a GPU-composited
+    // OffscreenCanvas comes back transparent on this machine, and so does
+    // `canvas.convertToBlob()` after present.
+    this.#ctx.configure({
+      device, format: this.#format, alphaMode: 'opaque',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
 
     const module = device.createShaderModule({ code: SHADER });
+    // WGSL compilation failure is asynchronous and does not throw: `createRenderPipeline`
+    // happily returns an *invalid* pipeline object, every draw with it is silently dropped,
+    // and the canvas is black with no error anywhere. This surfaces the diagnostics so a
+    // shader typo cannot masquerade as a renderer that draws nothing.
+    this.shaderMessages = [];
+    module.getCompilationInfo?.().then((info) => {
+      for (const m of info.messages) {
+        if (m.type === 'error') this.shaderMessages.push(`${m.lineNum}:${m.linePos} ${m.message}`);
+      }
+      if (this.shaderMessages.length) console.error('[wgsl] ' + this.shaderMessages.join(' | '));
+    }).catch(() => {});
     // Two uniform slots, not one. A render pass cannot have a buffer rewritten between its
     // draws, so the plate pass and the unit pass need distinct bytes; two bind groups over
     // one buffer at 256-byte alignment is the cheapest way to have both.
@@ -230,14 +273,17 @@ export class WebGpuBackend {
     bufs[1].attributes[0].shaderLocation = 1;
     bufs[2].attributes[0].shaderLocation = 2;
 
+    device.pushErrorScope('validation');
     this.#unitPipe = device.createRenderPipeline({
-      layout: pl,
+      label: 'units', layout: pl,
       vertex: { module, entryPoint: 'vs_units', buffers: bufs },
       fragment: { module, entryPoint: 'fs_units', targets: [{ format: this.#format }] },
       primitive: { topology: 'triangle-strip' },
     });
+    device.popErrorScope().then((e) => { if (e) { this.shaderMessages.push('units pipeline: ' + e.message); console.error(e.message); } });
+    device.pushErrorScope('validation');
     this.#aggPipe = device.createRenderPipeline({
-      layout: pl,
+      label: 'aggregate', layout: pl,
       vertex: {
         module, entryPoint: 'vs_agg',
         // Eight u32 per world in one instance-stepped buffer, read as two vec4u. Adding
@@ -250,6 +296,8 @@ export class WebGpuBackend {
       fragment: { module, entryPoint: 'fs_agg', targets: [{ format: this.#format }] },
       primitive: { topology: 'triangle-strip' },
     });
+
+    device.popErrorScope().then((e) => { if (e) { this.shaderMessages.push('aggregate pipeline: ' + e.message); console.error(e.message); } });
 
     if (this.#tsSupported) {
       this.#querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
@@ -309,9 +357,12 @@ export class WebGpuBackend {
    *  rather than as one field of noise). */
   draw(mode, instances, clear = [0.035, 0.04, 0.055, 1]) {
     const enc = this.#device.createCommandEncoder();
+    // `#target` is set only by `readback`, which needs the same frame drawn into a texture
+    // it owns; every other call renders into the swapchain as usual.
+    const view = this.#target ?? this.#ctx.getCurrentTexture().createView();
     const desc = {
       colorAttachments: [{
-        view: this.#ctx.getCurrentTexture().createView(),
+        view,
         clearValue: { r: clear[0], g: clear[1], b: clear[2], a: clear[3] },
         loadOp: 'clear', storeOp: 'store',
       }],
@@ -347,6 +398,60 @@ export class WebGpuBackend {
     }
     this.#device.queue.submit([enc.finish()]);
     if (desc.timestampWrites) this.#readTimestamps();
+  }
+
+  /**
+   * The pixels this configuration draws, as `{ width, height, rgba }`.
+   *
+   * Renders the frame **again into a texture this backend owns**, then copies that back.
+   * Three capture routes were tried and only this one tells the truth: CDP
+   * `Page.captureScreenshot` returns a transparent rectangle where a GPU-composited
+   * OffscreenCanvas is; `canvas.convertToBlob()` after present returns uniform black; and
+   * copying from `getCurrentTexture()` after `submit` also returns uniform black, because
+   * the texture has already been handed to the compositor. Each of those looks exactly
+   * like "the renderer drew nothing", and one of them nearly got reported as a bug in the
+   * renderer when the renderer was fine (the WebGL2 `readPixels` path is what proved it).
+   *
+   * `bytesPerRow` must be a multiple of 256, so the copy is padded and unpadded here
+   * rather than assuming a tight stride — the classic way this returns a sheared image.
+   */
+  async readback(drawAgain) {
+    const w = this.#canvas.width, h = this.#canvas.height;
+    this.#device.pushErrorScope('validation');
+    if (!this.#capTex || this.#capW !== w || this.#capH !== h) {
+      this.#capTex?.destroy();
+      this.#capTex = this.#device.createTexture({
+        size: { width: w, height: h }, format: this.#format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+      this.#capW = w; this.#capH = h;
+    }
+    this.#target = this.#capTex.createView();
+    try { drawAgain(); } finally { this.#target = null; }
+    await this.#device.queue.onSubmittedWorkDone();
+
+    const bpr = Math.ceil(w * 4 / 256) * 256;
+    const buf = this.#device.createBuffer({ size: bpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.#device.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture: this.#capTex }, { buffer: buf, bytesPerRow: bpr }, { width: w, height: h });
+    this.#device.queue.submit([enc.finish()]);
+    await buf.mapAsync(GPUMapMode.READ);
+    const src = new Uint8Array(buf.getMappedRange());
+    const out = new Uint8ClampedArray(w * h * 4);
+    // The preferred canvas format on this platform is BGRA; ImageData wants RGBA.
+    const swap = this.#format.startsWith('bgra');
+    for (let y = 0; y < h; y++) {
+      const s0 = y * bpr, d0 = y * w * 4;
+      for (let x = 0; x < w * 4; x += 4) {
+        out[d0 + x + 0] = swap ? src[s0 + x + 2] : src[s0 + x + 0];
+        out[d0 + x + 1] = src[s0 + x + 1];
+        out[d0 + x + 2] = swap ? src[s0 + x + 0] : src[s0 + x + 2];
+        out[d0 + x + 3] = 255;
+      }
+    }
+    buf.unmap(); buf.destroy();
+    const err = await this.#device.popErrorScope();
+    return { width: w, height: h, rgba: out, error: err ? err.message : null };
   }
 
   #readTimestamps() {

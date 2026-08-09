@@ -75,11 +75,21 @@ impl PyVecEnv {
         balance_path: Option<String>,
     ) -> PyResult<Self> {
         let cfg = EnvConfig {
-            grid_w, grid_h, max_entities, max_controlled, num_agents, frames_per_step,
-            max_steps, start_units, fog, seed,
+            grid_w,
+            grid_h,
+            max_entities,
+            max_controlled,
+            num_agents,
+            frames_per_step,
+            max_steps,
+            start_units,
+            fog,
+            seed,
         };
         let threads = if threads == 0 {
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
         } else {
             threads
         };
@@ -98,11 +108,22 @@ impl PyVecEnv {
         self.inner.reset_all();
     }
 
+    /// Draw a uniform action from under the current masks into the sampler buffers, which
+    /// `buffers()` exposes as `sampled_unit_actions` / `sampled_player_actions`. The
+    /// buffers can be passed straight back to `step` with no copy.
+    fn sample_masked(&mut self) {
+        self.inner.sample_masked();
+    }
+
     /// Apply actions and advance. Both arrays are read in place.
     ///
     /// `unit_actions`: `(num_envs, num_agents, max_controlled, 10)` int32.
     /// `player_actions`: `(num_envs, num_agents, 5)` int32.
-    fn step(&mut self, unit_actions: &Bound<'_, PyAny>, player_actions: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn step(
+        &mut self,
+        unit_actions: &Bound<'_, PyAny>,
+        player_actions: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
         let c = &self.inner.cfg;
         let want_u = self.n * c.num_agents * c.max_controlled * g::N_UNIT_HEADS;
         let want_p = self.n * c.num_agents * g::N_PLAYER_HEADS;
@@ -117,26 +138,86 @@ impl PyVecEnv {
         let c = self.inner.cfg.clone();
         let (n, a) = (self.n, c.num_agents);
         let d = PyDict::new(py);
-        let mut put = |name: &str, ptr: usize, shape: Vec<usize>, dtype: &str| -> PyResult<()> {
+        let put = |name: &str, ptr: usize, shape: Vec<usize>, dtype: &str| -> PyResult<()> {
             d.set_item(name, (ptr, shape, dtype))
         };
-        put("spatial", self.inner.spatial().as_ptr() as usize,
-            vec![n, a, obs::N_PLANES, c.grid_h, c.grid_w], "float32")?;
-        put("entities", self.inner.entities().as_ptr() as usize,
-            vec![n, a, c.max_entities, obs::N_ENTITY_FEATURES], "float32")?;
-        put("globals", self.inner.globals().as_ptr() as usize,
-            vec![n, a, obs::N_GLOBAL_FEATURES], "float32")?;
-        put("unit_masks", self.inner.unit_masks().as_ptr() as usize,
-            vec![n, a, c.max_controlled, self.inner.unit_mask_layout.record_bytes], "uint8")?;
-        put("player_masks", self.inner.player_masks().as_ptr() as usize,
-            vec![n, a, self.inner.player_mask_layout.record_bytes], "uint8")?;
-        put("rewards", self.inner.rewards().as_ptr() as usize, vec![n, a], "float32")?;
-        put("reward_terms", self.inner.reward_terms().as_ptr() as usize,
-            vec![n, a, reward::N_TERMS], "float32")?;
-        put("dones", self.inner.dones().as_ptr() as usize, vec![n], "uint8")?;
-        put("truncateds", self.inner.truncateds().as_ptr() as usize, vec![n], "uint8")?;
-        put("entity_rows", self.inner.entity_rows().as_ptr() as usize,
-            vec![n, a, c.max_entities], "int32")?;
+        put(
+            "spatial",
+            self.inner.spatial().as_ptr() as usize,
+            vec![n, a, obs::N_PLANES, c.grid_h, c.grid_w],
+            "float32",
+        )?;
+        put(
+            "entities",
+            self.inner.entities().as_ptr() as usize,
+            vec![n, a, c.max_entities, obs::N_ENTITY_FEATURES],
+            "float32",
+        )?;
+        put(
+            "globals",
+            self.inner.globals().as_ptr() as usize,
+            vec![n, a, obs::N_GLOBAL_FEATURES],
+            "float32",
+        )?;
+        put(
+            "unit_masks",
+            self.inner.unit_masks().as_ptr() as usize,
+            vec![
+                n,
+                a,
+                c.max_controlled,
+                self.inner.unit_mask_layout.record_bytes,
+            ],
+            "uint8",
+        )?;
+        put(
+            "player_masks",
+            self.inner.player_masks().as_ptr() as usize,
+            vec![n, a, self.inner.player_mask_layout.record_bytes],
+            "uint8",
+        )?;
+        put(
+            "rewards",
+            self.inner.rewards().as_ptr() as usize,
+            vec![n, a],
+            "float32",
+        )?;
+        put(
+            "reward_terms",
+            self.inner.reward_terms().as_ptr() as usize,
+            vec![n, a, reward::N_TERMS],
+            "float32",
+        )?;
+        put(
+            "dones",
+            self.inner.dones().as_ptr() as usize,
+            vec![n],
+            "uint8",
+        )?;
+        put(
+            "truncateds",
+            self.inner.truncateds().as_ptr() as usize,
+            vec![n],
+            "uint8",
+        )?;
+        put(
+            "entity_rows",
+            self.inner.entity_rows().as_ptr() as usize,
+            vec![n, a, c.max_entities],
+            "int32",
+        )?;
+        put(
+            "sampled_unit_actions",
+            self.inner.sampled_unit_actions().as_ptr() as usize,
+            vec![n, a, c.max_controlled, g::N_UNIT_HEADS],
+            "int32",
+        )?;
+        put(
+            "sampled_player_actions",
+            self.inner.sampled_player_actions().as_ptr() as usize,
+            vec![n, a, g::N_PLAYER_HEADS],
+            "int32",
+        )?;
         Ok(d)
     }
 
@@ -155,12 +236,24 @@ impl PyVecEnv {
         d.set_item("tick_ms", g::TICK_MS_NORMAL)?;
         d.set_item("unit_head_names", g::UNIT_HEAD_NAMES.to_vec())?;
         d.set_item("unit_head_sizes", spec::unit_head_sizes(c).to_vec())?;
-        d.set_item("unit_mask_offsets", self.inner.unit_mask_layout.offsets.clone())?;
-        d.set_item("unit_mask_record_bytes", self.inner.unit_mask_layout.record_bytes)?;
+        d.set_item(
+            "unit_mask_offsets",
+            self.inner.unit_mask_layout.offsets.clone(),
+        )?;
+        d.set_item(
+            "unit_mask_record_bytes",
+            self.inner.unit_mask_layout.record_bytes,
+        )?;
         d.set_item("player_head_names", g::PLAYER_HEAD_NAMES.to_vec())?;
         d.set_item("player_head_sizes", spec::player_head_sizes(c).to_vec())?;
-        d.set_item("player_mask_offsets", self.inner.player_mask_layout.offsets.clone())?;
-        d.set_item("player_mask_record_bytes", self.inner.player_mask_layout.record_bytes)?;
+        d.set_item(
+            "player_mask_offsets",
+            self.inner.player_mask_layout.offsets.clone(),
+        )?;
+        d.set_item(
+            "player_mask_record_bytes",
+            self.inner.player_mask_layout.record_bytes,
+        )?;
         d.set_item("unit_verbs", verb_list(py, true)?)?;
         d.set_item("player_verbs", verb_list(py, false)?)?;
         d.set_item("spatial_planes", spec::SPATIAL_PLANES.to_vec())?;
@@ -173,7 +266,12 @@ impl PyVecEnv {
         d.set_item("amount_buckets", spec::AMOUNT_BUCKETS.to_vec())?;
         d.set_item("count_buckets", spec::COUNT_BUCKETS.to_vec())?;
         d.set_item("num_types", g::NUM_TYPES)?;
-        d.set_item("agent_ids", (0..c.num_agents).map(|i| format!("player_{i}")).collect::<Vec<_>>())?;
+        d.set_item(
+            "agent_ids",
+            (0..c.num_agents)
+                .map(|i| format!("player_{i}"))
+                .collect::<Vec<_>>(),
+        )?;
         Ok(d)
     }
 
@@ -247,11 +345,15 @@ impl PyVecEnv {
 
 fn verb_list<'py>(py: Python<'py>, unit: bool) -> PyResult<Bound<'py, PyList>> {
     let rows: Vec<(usize, &str, u8, u16, Vec<&str>)> = if unit {
-        g::UNIT_VERBS.iter().enumerate()
+        g::UNIT_VERBS
+            .iter()
+            .enumerate()
             .map(|(i, v)| (i + 1, v.name, v.opcode, v.wire_size, v.unsupplied.to_vec()))
             .collect()
     } else {
-        g::PLAYER_VERBS.iter().enumerate()
+        g::PLAYER_VERBS
+            .iter()
+            .enumerate()
             .map(|(i, v)| (i + 1, v.name, v.opcode, v.wire_size, v.unsupplied.to_vec()))
             .collect()
     };
@@ -262,6 +364,9 @@ fn verb_list<'py>(py: Python<'py>, unit: bool) -> PyResult<Bound<'py, PyList>> {
 #[pyo3(name = "_don_env")]
 fn don_env_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVecEnv>()?;
-    m.add("__doc__", "Native core of the Descent of Nations RL environment.")?;
+    m.add(
+        "__doc__",
+        "Native core of the Descent of Nations RL environment.",
+    )?;
     Ok(())
 }
