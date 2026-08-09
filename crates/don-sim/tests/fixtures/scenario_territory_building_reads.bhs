@@ -1,0 +1,10 @@
+int scenario territory_building_reads_tick()
+{
+    set_good(1, "Food", territory_owner(8, 8));
+    set_good(1, "Timber", territory_owner(-1, 8) + 1);
+    set_good(1, "Wealth", get_territory(1));
+    set_good(1, "Knowledge", get_territory(9) + 1);
+    set_good(1, "Metal", num_buildings(1));
+    set_good(1, "Oil", num_buildings(2) + 1);
+    return 1;
+}

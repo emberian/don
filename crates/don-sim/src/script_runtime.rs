@@ -685,6 +685,18 @@ impl ScenarioHost for Sim {
                 }
                 Ok(Value::Int(self.map.world.is_flat(x >> 2, y >> 2) as i32))
             }
+            // `territory_owner` `0x009e4f00`: tile bounds, containing WData cell,
+            // then the signed `who` byte plus one for the script player convention.
+            88 => {
+                let x = args[0].as_int();
+                let y = args[1].as_int();
+                if x < 0 || y < 0 || x >= self.map.world.tile_xs || y >= self.map.world.tile_ys {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(
+                    self.map.world.get_who(x >> 2, y >> 2).wrapping_add(1),
+                ))
+            }
             // `num_players` `0x009e5df0`: count `Leader::flags & 1` across all slots.
             142 => Ok(Value::Int(
                 self.step8
@@ -740,6 +752,18 @@ impl ScenarioHost for Sim {
                     return Ok(Value::Int(-1));
                 };
                 Ok(Value::Int(self.vic_leaders.slots[who].score))
+            }
+            // `get_territory` `0x009e8fe0`: both Leader flags, then the direct owned-tile
+            // count at +0x9d8 scaled by the World's authoritative land-size field.
+            250 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                let scaled = self.vic_leaders.slots[who].territory.wrapping_mul(100);
+                let percent = scaled
+                    .checked_div(self.map.world.land_size)
+                    .ok_or(HostError::Unimplemented)?;
+                Ok(Value::Int(percent))
             }
             // `is_defeated` `0x009e9070`: active slot, then bit 6 of the low flags byte.
             252 => {
@@ -797,6 +821,20 @@ impl ScenarioHost for Sim {
                     .get(who)
                     .ok_or(HostError::Unimplemented)?;
                 Ok(Value::Int(leader.last_unit_built))
+            }
+            // `num_buildings` `0x009e9bf0`: both Leader flags, then sum the exact 129
+            // unsigned-short counters at LeaderData +0x555e.
+            270 => {
+                let Some(who) = self.active_script_leader(args[0].as_int()) else {
+                    return Ok(Value::Int(-1));
+                };
+                Ok(Value::Int(
+                    self.vic_leaders.slots[who]
+                        .num_buildings
+                        .iter()
+                        .map(|&count| i32::from(count))
+                        .sum(),
+                ))
             }
             // `num_units` `0x009e9d60`: sum all 352 unsigned-short unit counters at
             // LeaderData +0x5762. The paired retail loop only unrolls that exact sum.

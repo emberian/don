@@ -664,6 +664,64 @@ fn retail_chunk_executes_the_same_live_player_and_map_readbacks() {
     );
 }
 
+fn configure_territory_building_read_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    sim.step8.leaders[1].flags = leaders::flag::IN_GAME;
+    sim.map.world.wdata_mut(2, 2).who = 1;
+    sim.map.world.land_size = 1_000;
+    sim.vic_leaders.slots[0].territory = 123;
+    sim.vic_leaders.slots[0].num_buildings[0] = 7;
+    sim.vic_leaders.slots[0].num_buildings[64] = 11;
+    sim.vic_leaders.slots[0].num_buildings[128] = 13;
+}
+
+#[test]
+fn ordinary_source_executes_territory_and_building_reads() {
+    let program = compile_source_fixture("scenario_territory_building_reads.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "territory_building_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8129, 8);
+    configure_territory_building_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [2, 0, 12, 0, 31, 0],
+        "WData owner, bounds sentinel, land percentage, all 129 counters, and active gate must execute"
+    );
+}
+
+#[test]
+fn retail_chunk_executes_the_same_territory_and_building_reads() {
+    let compiled = compile_source_fixture("scenario_territory_building_reads.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "territory_building_reads_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x812a, 12);
+    configure_territory_building_read_state(&mut sim);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [2, 0, 12, 0, 31, 0],
+        "loaded chunks must retain the same authoritative territory and building reads"
+    );
+}
+
 #[test]
 fn unsupported_scenario_builtin_stops_before_the_rest_of_the_tick() {
     let mut scripts = game_runtime(one_builtin_program("num_cities", &[Value::Int(1)]));
