@@ -5232,59 +5232,42 @@ Write-Output '{NETSYS_JSON_END}'
     return record
 
 
-def netsys_launch(timeout: float) -> dict:
-    require_retail_absent("NetSys launch")
-    manifest = read_netsys_manifest()
-    if manifest["state"] != "installed":
-        raise SystemExit("REFUSING launch without an installed experiment DLL")
-    target = guest_file_record(RETAIL_NETSYS_DLL)
-    launcher = guest_file_record(NETSYS_LAUNCHER)
-    trace_path, exit_path = netsys_mode_paths(manifest["mode"])
-    if (not target["present"] or target["sha256"] != manifest["shim"]["sha256"] or
-            not launcher["present"] or launcher["sha256"] != manifest["launcher_sha256"]):
-        raise SystemExit("REFUSING launch: target DLL or process-local launcher changed")
-    if guest_file_record(trace_path)["present"] or guest_file_record(exit_path)["present"]:
-        raise SystemExit("REFUSING launch because this mode already has trace/exit evidence")
+def netsys_launch_schtasks(manifest: dict, timeout: float) -> dict:
+    """Launch once through the guest's proven interactive scheduler CLI.
+
+    Do not combine this with a timed-out Schedule.Service COM attempt: that
+    guest operation can complete late and create an untracked second PID.
+    """
     delete_netsys_task()
-    script = f"""
+    identity_script = f"""
 $ErrorActionPreference = 'Stop'
 $user = (Get-CimInstance Win32_ComputerSystem).UserName
-if ([string]::IsNullOrWhiteSpace($user)) {{ throw 'no interactive Windows user' }}
 $sessions = @(Get-Process -Name explorer -ErrorAction Stop |
     Where-Object {{ $_.SessionId -gt 0 }} | Select-Object -ExpandProperty SessionId -Unique)
-if ($sessions.Count -ne 1) {{ throw 'interactive explorer session is missing or ambiguous' }}
-$service = New-Object -ComObject 'Schedule.Service'
-$service.Connect()
-$folder = $service.GetFolder('\\')
-$definition = $service.NewTask(0)
-$definition.RegistrationInfo.Description = 'Disposable credential-free DON NetSys launch'
-$definition.Settings.Enabled = $true
-$definition.Settings.AllowDemandStart = $true
-$definition.Settings.DisallowStartIfOnBatteries = $false
-$definition.Settings.StopIfGoingOnBatteries = $false
-$definition.Settings.ExecutionTimeLimit = 'PT0S'
-$definition.Principal.UserId = $user
-$definition.Principal.LogonType = 3
-$definition.Principal.RunLevel = 0
-$action = $definition.Actions.Create(0)
-$action.Path = "$env:SystemRoot\\System32\\cmd.exe"
-$action.Arguments = {ps_literal('/d /c call "' + NETSYS_LAUNCHER + '"')}
-$action.WorkingDirectory = {ps_literal(NETSYS_ROOT)}
-$task = $folder.RegisterTaskDefinition(
-    {ps_literal(NETSYS_TASK_NAME)}, $definition, 6, $user, $null, 3, $null)
-$null = $task.Run($null)
-$record = [pscustomobject]@{{ session_id = [int]$sessions[0]; task_started = $true }}
+if ([string]::IsNullOrWhiteSpace($user) -or $sessions.Count -ne 1) {{
+    throw 'interactive user/session is missing or ambiguous'
+}}
+$record = [pscustomobject]@{{ user = [string]$user; session_id = [int]$sessions[0] }}
 Write-Output '{NETSYS_JSON_BEGIN}'
 ConvertTo-Json -InputObject $record -Compress
 Write-Output '{NETSYS_JSON_END}'
 """
     try:
-        launched = extract_json_between(
-            guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+        identity = extract_json_between(
+            guest_ps_encoded(identity_script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
         )
-        if (not isinstance(launched, dict) or launched.get("task_started") is not True or
-                not isinstance(launched.get("session_id"), int)):
-            raise SystemExit("interactive launch task returned an invalid record")
+        if (not isinstance(identity, dict) or
+                not isinstance(identity.get("session_id"), int) or
+                not isinstance(identity.get("user"), str) or
+                not re.fullmatch(r"[A-Za-z0-9_.-]+\\[A-Za-z0-9_.-]+", identity["user"])):
+            raise SystemExit("interactive launch task returned an invalid identity")
+        task_command = (
+            f'schtasks.exe /create /tn "\\{NETSYS_TASK_NAME}" '
+            f'/tr "cmd.exe /d /c call {NETSYS_LAUNCHER}" /sc ONCE /st 23:59 '
+            f'/ru "{identity["user"]}" /it /f && '
+            f'schtasks.exe /run /tn "\\{NETSYS_TASK_NAME}"'
+        )
+        guest_cmd(task_command)
         deadline = time.monotonic() + timeout
         target_pid = None
         while time.monotonic() < deadline:
@@ -5298,7 +5281,7 @@ Write-Output '{NETSYS_JSON_END}'
         if target_pid is None:
             raise SystemExit("interactive launch did not produce a retail process")
         process = netsys_process_record(target_pid)
-        if process["session_id"] != launched["session_id"]:
+        if process["session_id"] != identity["session_id"]:
             raise SystemExit("retail launched outside the one interactive Explorer session")
         result = {
             "schema": NETSYS_SCHEMA,
@@ -5307,6 +5290,7 @@ Write-Output '{NETSYS_JSON_END}'
             "mode": manifest["mode"],
             "environment": manifest["environment"],
             "process": process,
+            "launch_transport": "schtasks",
             "host_activation": (
                 "not-applicable-load-only" if manifest["mode"] == "load-only" else
                 "staged-awaiting-retail-ui-or-explicit-invoke; launcher does not call ns_host"
@@ -5316,6 +5300,22 @@ Write-Output '{NETSYS_JSON_END}'
         return result
     finally:
         delete_netsys_task()
+
+
+def netsys_launch(timeout: float) -> dict:
+    require_retail_absent("NetSys launch")
+    manifest = read_netsys_manifest()
+    if manifest["state"] != "installed":
+        raise SystemExit("REFUSING launch without an installed experiment DLL")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    launcher = guest_file_record(NETSYS_LAUNCHER)
+    trace_path, exit_path = netsys_mode_paths(manifest["mode"])
+    if (not target["present"] or target["sha256"] != manifest["shim"]["sha256"] or
+            not launcher["present"] or launcher["sha256"] != manifest["launcher_sha256"]):
+        raise SystemExit("REFUSING launch: target DLL or process-local launcher changed")
+    if guest_file_record(trace_path)["present"] or guest_file_record(exit_path)["present"]:
+        raise SystemExit("REFUSING launch because this mode already has trace/exit evidence")
+    return netsys_launch_schtasks(manifest, timeout)
 
 
 def netsys_listener_records(target_pid: int) -> list[dict]:
@@ -5605,6 +5605,8 @@ Remove-Item -LiteralPath $replace_backup -Force
 NETSYS_LIVE_PHASES = frozenset({
     "generation-2-load-proof", "rollover-current-shim", "latest-load-proof",
     "configure-host-bridge", "launch-host-bridge", "awaiting-friend-game-ui",
+    "recover-rollover-current-shim", "recover-latest-load-proof",
+    "recover-configure-host-bridge", "recover-launch-host-bridge",
     "run-owned-peer", "capture-host-bridge", "cleanup", "complete", "cleaned",
 })
 
@@ -5675,7 +5677,10 @@ def validate_netsys_live_state(state: object) -> dict:
     if (state["schema"] != NETSYS_LIVE_SCHEMA or
             state["phase"] not in NETSYS_LIVE_PHASES or
             state["credential_material"] != "none" or
-            state["source_generation"] != 2 or state["target_generation"] != 3 or
+            state["source_generation"] != 2 or
+            not isinstance(state["target_generation"], int) or
+            isinstance(state["target_generation"], bool) or
+            not 3 <= state["target_generation"] <= 9999 or
             not isinstance(state["created_unix_ms"], int) or
             isinstance(state["created_unix_ms"], bool) or
             not isinstance(state["updated_unix_ms"], int) or
@@ -5915,9 +5920,11 @@ def netsys_live_load_proof(output: Path, timeout: float) -> dict:
     return artifact
 
 
-def netsys_friend_game_gate(target_pid: int, bind: str, expected_shim: dict) -> dict:
+def netsys_friend_game_gate(target_pid: int, bind: str, expected_shim: dict,
+                            expected_generation: int = 3) -> dict:
     manifest = read_netsys_manifest()
-    if (manifest["state"] != "installed" or manifest["generation"] != 3 or
+    if (manifest["state"] != "installed" or
+            manifest["generation"] != expected_generation or
             manifest["mode"] != "host-bridge" or
             manifest["shim"]["size"] != expected_shim["size"] or
             manifest["shim"]["sha256"] != expected_shim["sha256"]):
@@ -6287,6 +6294,92 @@ def verify_netsys_live_host_identities(state: dict, shim: Path, peer: Path) -> N
         raise SystemExit("REFUSING resumed live run after host artifact identity drift")
 
 
+def netsys_live_prepare_crash_recovery(
+    state: dict,
+    current_shim: dict,
+    current_peer: dict,
+) -> dict | None:
+    """Gate one generation rollover after the UI-bound host process crashed.
+
+    Ordinary artifact drift remains a hard refusal.  Recovery is authorized
+    only from the sole UI pause, with the exact old generation still installed,
+    no live retail process, and one trace/exit pair bound to the saved PID.  The
+    next-generation primitive archives that negative evidence before it clears
+    the current trace names.
+    """
+    if current_peer != state["owned_peer"]:
+        raise SystemExit("REFUSING resumed live run after owned-peer identity drift")
+    if current_shim == state["shim"]:
+        return None
+    host_pause = (
+        state["phase"] == "awaiting-friend-game-ui" and
+        isinstance(state.get("active_pid"), int)
+    )
+    load_proof_pause = (
+        state["phase"] == "recover-latest-load-proof" and
+        state.get("active_pid") is None
+    )
+    if (not (host_pause or load_proof_pause) or
+            state["target_generation"] >= 9999):
+        raise SystemExit("REFUSING resumed live run after host artifact identity drift")
+    pids, _ = process_pids()
+    if pids:
+        raise SystemExit(
+            "REFUSING host-crash recovery while any retail process is still present"
+        )
+    manifest = read_netsys_manifest()
+    old_shim = state["shim"]
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    expected_mode = "host-bridge" if host_pause else "load-only"
+    trace_path = NETSYS_BRIDGE_TRACE if host_pause else NETSYS_LOAD_TRACE
+    exit_path = NETSYS_BRIDGE_EXIT if host_pause else NETSYS_LOAD_EXIT
+    if (manifest["state"] != "installed" or
+            manifest["generation"] != state["target_generation"] or
+            manifest["mode"] != expected_mode or
+            manifest["shim"]["size"] != old_shim["size"] or
+            manifest["shim"]["sha256"] != old_shim["sha256"] or
+            target.get("size") != old_shim["size"] or
+            target.get("sha256") != old_shim["sha256"]):
+        raise SystemExit("REFUSING host-crash recovery after installed identity drift")
+    trace_record, trace_bytes = guest_live_file_evidence(
+        trace_path, 1024 * 1024
+    )
+    exit_record = guest_file_record(exit_path)
+    if not exit_record["present"]:
+        raise SystemExit("REFUSING host-crash recovery without an exact exit record")
+    try:
+        trace = parse_netsys_trace(
+            trace_bytes.decode("utf-8"), state["active_pid"] if host_pause else None
+        )
+        exit_value = parse_netsys_exit(guest_read_bytes(exit_path, 1024))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING malformed host-crash evidence: {exc}") from exc
+    details = [record["detail"] for record in trace["records"]]
+    trace_pids = {record["pid"] for record in trace["records"]}
+    if (trace["load_only"] != load_proof_pause or len(trace_pids) != 1 or
+            "call=export.OnHostUpdated" not in details or
+            exit_value["exit_code"] != -1073741819):
+        raise SystemExit("REFUSING host-crash recovery without the measured UI crash boundary")
+    old_generation = state["target_generation"]
+    return {
+        "schema": "don.retail-netsys-host-crash.v1",
+        "credential_material": "none",
+        "generation": old_generation,
+        "process": {
+            "pid": next(iter(trace_pids)),
+            "path": RETAIL_EXE,
+        },
+        "shim": copy.deepcopy(old_shim),
+        "trace": {key: trace_record[key] for key in ("path", "size", "sha256")},
+        "exit": {
+            **{key: exit_record[key] for key in ("path", "size", "sha256")},
+            **exit_value,
+        },
+        "last_call": details[-1],
+        "recovery_generation": old_generation + 1,
+    }
+
+
 def netsys_live_run(
     state_path: Path,
     shim: Path,
@@ -6317,7 +6410,19 @@ def netsys_live_run(
         raise SystemExit("REFUSING live-run cleanup without an existing state file")
     if state_existed:
         state = read_netsys_live_state(state_path)
-        verify_netsys_live_host_identities(state, shim, peer)
+        current_shim = host_netsys_identity(shim)
+        current_peer = host_owned_peer_identity(peer)
+        recovery = netsys_live_prepare_crash_recovery(
+            state, current_shim, current_peer
+        )
+        if recovery is not None:
+            generation = state["target_generation"]
+            state["checkpoints"][f"host_bridge_crash_generation_{generation}"] = recovery
+            state["shim"] = current_shim
+            state["target_generation"] = recovery["recovery_generation"]
+            state["active_pid"] = None
+            state["phase"] = "recover-rollover-current-shim"
+            write_netsys_live_state(state_path, state)
         requested = {
             "bind": bind,
             "peer_endpoint": peer_endpoint,
@@ -6432,11 +6537,70 @@ def netsys_live_run(
             state["phase"] = "awaiting-friend-game-ui"
             write_netsys_live_state(state_path, state)
             return netsys_live_pause(state_path, state)
+        elif phase == "recover-rollover-current-shim":
+            result = netsys_next_generation(Path(state["shim"]["path"]), 8765)
+            current = result["current"]
+            if (current["generation"] != state["target_generation"] or
+                    current["mode"] != "load-only" or
+                    current["shim"]["size"] != state["shim"]["size"] or
+                    current["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("host-crash rollover did not reach its exact next generation")
+            generation = state["target_generation"]
+            state["checkpoints"][f"recovery_rollover_generation_{generation}"] = result
+            state["phase"] = "recover-latest-load-proof"
+            write_netsys_live_state(state_path, state)
+        elif phase == "recover-latest-load-proof":
+            manifest = read_netsys_manifest()
+            if (manifest["generation"] != state["target_generation"] or
+                    manifest["mode"] != "load-only" or
+                    manifest["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("recovery load-only phase observed manifest drift")
+            generation = state["target_generation"]
+            recovery_output = state_path.with_name(
+                f"{state_path.stem}.generation-{generation}-load-only.json"
+            )
+            state["checkpoints"][f"recovery_load_proof_generation_{generation}"] = (
+                netsys_live_load_proof(recovery_output, timeout_secs)
+            )
+            state["phase"] = "recover-configure-host-bridge"
+            write_netsys_live_state(state_path, state)
+        elif phase == "recover-configure-host-bridge":
+            generation = state["target_generation"]
+            latest = state["checkpoints"].get(
+                f"recovery_load_proof_generation_{generation}", {}
+            )
+            proof = latest.get("proof", {}) if isinstance(latest, dict) else {}
+            termination = proof.get("termination") if isinstance(proof, dict) else None
+            result = netsys_configure_bridge_from_load_only(bind, termination)
+            current = result["current"]
+            if (current["generation"] != generation or
+                    current["mode"] != "host-bridge" or
+                    current["shim"]["sha256"] != state["shim"]["sha256"]):
+                raise SystemExit("recovery host-bridge configuration identity changed")
+            state["checkpoints"][f"recovery_configuration_generation_{generation}"] = result
+            state["phase"] = "recover-launch-host-bridge"
+            write_netsys_live_state(state_path, state)
+        elif phase == "recover-launch-host-bridge":
+            pids, _ = process_pids()
+            if pids:
+                raise SystemExit(
+                    f"recovery host-bridge launch observed unexpected PIDs: {pids}"
+                )
+            launched = netsys_launch(timeout_secs)
+            if launched["mode"] != "host-bridge":
+                raise SystemExit("recovery host-bridge launch returned another mode")
+            generation = state["target_generation"]
+            state["active_pid"] = launched["process"]["pid"]
+            state["checkpoints"][f"host_bridge_launch_generation_{generation}"] = launched
+            state["phase"] = "awaiting-friend-game-ui"
+            write_netsys_live_state(state_path, state)
+            return netsys_live_pause(state_path, state)
         elif phase == "awaiting-friend-game-ui":
             if not confirm_friend_game_ready:
                 return netsys_live_pause(state_path, state)
             state["checkpoints"]["friend_game_gate"] = netsys_friend_game_gate(
-                state["active_pid"], bind, state["shim"]
+                state["active_pid"], bind, state["shim"],
+                state["target_generation"]
             )
             state["phase"] = "run-owned-peer"
             write_netsys_live_state(state_path, state)

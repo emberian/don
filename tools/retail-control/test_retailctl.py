@@ -1162,6 +1162,119 @@ class RetailCtlTests(unittest.TestCase):
                     state, Path("shim"), Path("peer")
                 )
 
+    def test_netsys_live_crash_recovery_is_pid_generation_and_evidence_bound(self):
+        old = {"path": "old", "size": 100, "sha256": "a" * 64}
+        new = {"path": "new", "size": 101, "sha256": "b" * 64}
+        peer = {"path": "peer", "size": 200, "sha256": "c" * 64}
+        state = {
+            "phase": "awaiting-friend-game-ui",
+            "active_pid": 77,
+            "target_generation": 3,
+            "shim": old,
+            "owned_peer": peer,
+        }
+        manifest = netsys_manifest_fixture()
+        manifest.update({"generation": 3, "mode": "host-bridge", "shim": old})
+        trace = (
+            "seq=1 pid=77 call=factory.get_netsys_object_ptr\n"
+            "seq=2 pid=77 factory=ready abi=netsys-v65 role=Host "
+            "load_only=false local_addr=0.0.0.0:31337\n"
+            "seq=3 pid=77 call=export.OnHostUpdated\n"
+        ).encode()
+        with (
+            mock.patch.object(retailctl, "process_pids", return_value=([], "")),
+            mock.patch.object(retailctl, "read_netsys_manifest", return_value=manifest),
+            mock.patch.object(retailctl, "guest_file_record", side_effect=[
+                {"present": True, "size": old["size"], "sha256": old["sha256"]},
+                {"present": True, "path": retailctl.NETSYS_BRIDGE_EXIT,
+                 "size": 23, "sha256": "d" * 64},
+            ]),
+            mock.patch.object(retailctl, "guest_live_file_evidence", return_value=(
+                {"path": retailctl.NETSYS_BRIDGE_TRACE, "size": len(trace),
+                 "sha256": "e" * 64}, trace,
+            )),
+            mock.patch.object(retailctl, "guest_read_bytes",
+                              return_value=b"exit_code=-1073741819\r\n"),
+        ):
+            recovery = retailctl.netsys_live_prepare_crash_recovery(
+                state, new, peer
+            )
+        self.assertEqual(recovery["generation"], 3)
+        self.assertEqual(recovery["recovery_generation"], 4)
+        self.assertEqual(recovery["process"]["pid"], 77)
+        self.assertEqual(recovery["last_call"], "call=export.OnHostUpdated")
+
+    def test_netsys_live_recovery_can_roll_forward_a_crashed_load_proof(self):
+        old = {"path": "old", "size": 100, "sha256": "a" * 64}
+        new = {"path": "new", "size": 101, "sha256": "b" * 64}
+        peer = {"path": "peer", "size": 200, "sha256": "c" * 64}
+        state = {
+            "phase": "recover-latest-load-proof",
+            "active_pid": None,
+            "target_generation": 4,
+            "shim": old,
+            "owned_peer": peer,
+        }
+        manifest = netsys_manifest_fixture()
+        manifest.update({"generation": 4, "mode": "load-only", "shim": old})
+        trace = (
+            "seq=1 pid=88 call=factory.get_netsys_object_ptr\n"
+            "seq=2 pid=88 factory=ready abi=netsys-v65 role=Host "
+            "load_only=true local_addr=127.0.0.1:12345\n"
+            "seq=3 pid=88 call=export.OnHostUpdated\n"
+        ).encode()
+        with (
+            mock.patch.object(retailctl, "process_pids", return_value=([], "")),
+            mock.patch.object(retailctl, "read_netsys_manifest", return_value=manifest),
+            mock.patch.object(retailctl, "guest_file_record", side_effect=[
+                {"present": True, "size": old["size"], "sha256": old["sha256"]},
+                {"present": True, "path": retailctl.NETSYS_LOAD_EXIT,
+                 "size": 23, "sha256": "d" * 64},
+            ]),
+            mock.patch.object(retailctl, "guest_live_file_evidence", return_value=(
+                {"path": retailctl.NETSYS_LOAD_TRACE, "size": len(trace),
+                 "sha256": "e" * 64}, trace,
+            )),
+            mock.patch.object(retailctl, "guest_read_bytes",
+                              return_value=b"exit_code=-1073741819\r\n"),
+        ):
+            recovery = retailctl.netsys_live_prepare_crash_recovery(
+                state, new, peer
+            )
+        self.assertEqual(recovery["generation"], 4)
+        self.assertEqual(recovery["recovery_generation"], 5)
+        self.assertEqual(recovery["process"]["pid"], 88)
+
+    def test_netsys_launch_uses_one_synchronous_schtasks_transport(self):
+        manifest = netsys_manifest_fixture()
+        manifest["mode"] = "host-bridge"
+        calls = []
+        identity = (
+            retailctl.NETSYS_JSON_BEGIN + "\n" +
+            '{"user":"WIN11\\\\ember","session_id":1}' + "\n" +
+            retailctl.NETSYS_JSON_END
+        )
+        with (
+            mock.patch.object(retailctl, "delete_netsys_task",
+                              side_effect=lambda: calls.append("delete")),
+            mock.patch.object(retailctl, "guest_ps_encoded", return_value=identity),
+            mock.patch.object(retailctl, "guest_cmd",
+                              side_effect=lambda command: calls.append(command) or ""),
+            mock.patch.object(retailctl, "process_pids", return_value=([91], "")),
+            mock.patch.object(retailctl, "netsys_process_record", return_value={
+                "pid": 91, "path": retailctl.RETAIL_EXE, "session_id": 1,
+                "start_utc": "2026-08-09T00:00:00Z",
+            }),
+            mock.patch("builtins.print"),
+        ):
+            launched = retailctl.netsys_launch_schtasks(manifest, 1.0)
+        self.assertEqual(launched["launch_transport"], "schtasks")
+        self.assertEqual(launched["process"]["pid"], 91)
+        self.assertEqual(calls[0], "delete")
+        self.assertIn("schtasks.exe /create", calls[1])
+        self.assertIn("schtasks.exe /run", calls[1])
+        self.assertEqual(calls[2], "delete")
+
     def test_direct_live_bridge_configuration_requires_current_load_proof_only(self):
         manifest = netsys_manifest_fixture()
         manifest["generation"] = 3
