@@ -349,13 +349,15 @@ not mine.
   Companions still unread: `Unit::target_opportunity` `0x005FFFC0` (3,695 B),
   `Unit::find_melee_target` `0x005FF9C0`, `Unit::find_new_target` `0x005FF6A0`,
   `Object::check_target` `0x00649E00`.
-* **`Object::do_damage`'s middle third is not ported.** `0x0064AA60…0x0064BA00` is ~4 KB of
-  player-facing messaging (`MessageWin::add_message`, `IFaceMainBase::do_notice`,
-  `String::parse`) that I skipped as presentation — but it is interleaved with
-  `LeaderData::is_ally`, `Build::plunder` `0x00623660`, `Armies::emergency` `0x006F3250`,
-  `Build::check_capture` `0x006276A0`, `Object::eject_contents` and
-  `IStatsAndAchievements::IncrementStatForNation`. **Some of those are sim-critical.** I did
-  not separate them. Anyone chasing a `units` desync on building kills should start here.
+* **Most of `Object::do_damage`'s middle third is not ported.** The first complete
+  post-`take_damage` world transaction, `0x0064BA18…0x0064BBFA`, and the adjacent
+  survivor-only `Armies::emergency` gate through `0x0064BC17` now live in
+  `combat::damage_world`. The adapter preflights typed object/type/diplomacy facts, then applies
+  `buildings_razed`, the asymmetric `/10` combat-score mutation, optional `Build::plunder`, and
+  the two `u16` current-frame rate counters in address order. A lethal non-building returns before
+  those reads, matching retail. `0x0064AA60…0x0064BA17` remains presentation-entangled, while the
+  special-hit containment/ejection/capture/stat arms after `0x0064BC17` remain unported; those
+  need their own bounded transactions rather than an invented catch-all world adapter.
 * **`attack_dist` `0x006488F0` is ported for resolved ordinary objects** in
   `systems::held_target`. The `0x00CAE5FC` read is the same measured divide-three table used
   by the movement lane: `T[coord >> 4] * 0x30 + 0x18` snaps to a 48-unit-cell centre. Retail

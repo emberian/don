@@ -69,6 +69,10 @@
 
 #![allow(clippy::needless_range_loop)]
 
+/// Typed, fail-closed world mutations after `Object::take_damage` returns to
+/// `Object::do_damage`.
+pub mod damage_world;
+
 // ===========================================================================================
 // 1. The rules.xml combat block
 // ===========================================================================================
