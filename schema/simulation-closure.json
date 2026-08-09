@@ -221,7 +221,7 @@
         "retail_va": "0x006EC180",
         "source": "leaders.cpp:28958",
         "status": "stub",
-        "note": "loop over 8 leaders, stride 0x6EEC from 0x00E3A390",
+        "note": "deterministic eight-Leader body is live through exact receipts; JukeBox::set_next_mood and Achieve::add_event product tails remain unhosted",
         "complete": false
       },
       {
@@ -538,7 +538,7 @@
         "retail_va": "0x005E5880",
         "symbol": "Unit::do_spec_anim",
         "status": "unimplemented",
-        "note": "",
+        "note": "StateWired atomic dispatcher adapter; production Sim::do_frame still bypasses it",
         "complete": false
       },
       {

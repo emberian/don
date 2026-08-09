@@ -1,8 +1,9 @@
 //! Canonical mutable type ownership for the retail BHS type builtins.
 //!
 //! This module is exported through the narrow [`super::bhs_type_runtime`] adapter.  It freezes
-//! the state and mutation contracts for ScenarioFuncSet registrations 284, 286, 288..=291, and
-//! 815..=819 without creating a second availability facade.  [`TypeBuiltinState`] remains the
+//! the state and mutation contracts for ScenarioFuncSet registrations 284, 286, 288..=291,
+//! 529, 531..=535, 538, 814, and 815..=819 without creating a second availability facade.
+//! [`TypeBuiltinState`] remains the
 //! one owner; checksum channel 13 and full save/load ownership are explicit red boundaries.
 
 #![allow(dead_code)]
@@ -578,7 +579,7 @@ impl TypeBuiltinState {
         self.mutation_revision
     }
 
-    fn mark_mutated(&mut self) {
+    pub(super) fn mark_mutated(&mut self) {
         self.dirty = true;
         self.mutation_revision = self.mutation_revision.wrapping_add(1);
     }

@@ -34,6 +34,8 @@ pub mod attack_position;
 pub mod bhs_type_factory;
 /// Exact declaration gate, dispatch receipts, and persistence/checksum admission for that owner.
 pub mod bhs_type_runtime;
+/// Instruction-derived BHS type-stat transactions and their canonical owner commit boundary.
+pub mod bhs_type_stat_frontier;
 /// Canonical mutable `Types[806]` / Leader-mask owner for the recovered BHS type cohort.
 pub mod bhs_type_table;
 pub mod borders_fog;
@@ -112,6 +114,10 @@ pub mod items;
 /// channel jointly with `economy` and `victory_score`; it deliberately does **not**
 /// re-port `Leader::process_elimination`, which `victory_score` already owns.
 pub mod leaders;
+/// Exact eight-record `Game::do_frame` step-19 reconstruction. The canonical Leader owner
+/// adapts through this receipt-bearing executor so product reads and presentation tails stay
+/// explicit instead of being collapsed into successful headless calls.
+pub mod leaders_process_event_frame_step19;
 pub mod map_terrain;
 /// Exact `Mountains::randomize_mountains` three-list RNG/cursor transaction and
 /// the return-then-advance `get_range` primitive used by terrain placement.
@@ -135,6 +141,8 @@ pub mod order_dispatch;
 /// `Unit::do_air_patrol` / `Unit::do_patrol` state transitions. Kept separate from the
 /// dispatcher because air physics and group movement are explicit host boundaries.
 pub mod patrol;
+/// Canonical frame-zero PlayerSetup owner and atomic manual cohort/team activation.
+pub mod player_setup;
 /// Added by `build:sim-core` when wiring `systems` into `lib.rs`: both modules were
 /// present on disk with no `pub mod` line, which is exactly the silent stranding this
 /// file's header warns about.
@@ -153,6 +161,8 @@ pub mod roads;
 /// authoritative seed/frame/RNG, terrain, unit/object/order/path, and leader-economy state.
 /// It is explicitly not a partial `.svx` writer: unsupported live subsystems are refused.
 pub mod save_load;
+/// Exact retail setup-team lookup and runtime/static team predicate.
+pub mod setup_diplomacy;
 /// Source-exact SPECIAL_ANIM planner plus the typed atomic receipt consumed by the live order
 /// dispatcher. The production [`crate::tick::Sim`] frame bridge remains an explicit red seam.
 pub mod special_anim_executor;
@@ -164,6 +174,8 @@ pub mod target;
 /// Exact, host-fact-checked plans for targeted order executors recovered independently of
 /// the shared order dispatcher integration.
 pub mod targeted_order_plans;
+/// Deterministic non-ranked `Game::init_teams` mutation plan consumed by `player_setup`.
+pub mod team_setup_mutation;
 pub mod tech_cities;
 /// Exact Tech Race tail of `Leader::gain_tech`: end-age/all-epoch predicates,
 /// typed opponent progress notices, and synchronous handoff to the terminal victory

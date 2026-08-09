@@ -59,8 +59,8 @@ use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, collision_blocks_live, combat, defeat_cleanup, economy,
-    game_daemon_step12, groups_guys, leaders, movement, movement_driver, movement_live, production,
-    victory_score, walls, wonders,
+    game_daemon_step12, groups_guys, leaders, leaders_process_event_frame_step19, movement,
+    movement_driver, movement_live, production, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -105,7 +105,8 @@ pub enum Gap {
     ObjectsWildlifeSpawn,
     UnitIncTime,
     LeadersEndProcessAll,
-    LeaderProcessEventFrame,
+    LeaderEventJukeBoxTail,
+    LeaderEventAchievementTail,
     RoadsScanStray,
     WonderValueWorld,
 }
@@ -142,7 +143,8 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 14 Objects::process_all wildlife spawn (frame%32) - draws game_random an unknown number of times; drawing wrongly is worse than not drawing",
     "step 15 Unit::inc_time 0x00610B40 (vtable +0xA0) - uncited; only the Ammo half of Objects::inc_time runs",
     "step 17 Leaders::end_process_all 0x006ED070 - uncited",
-    "step 19 Leader::process_event_frame 0x006EC180 - uncited",
+    "step 19 JukeBox::set_next_mood 0x0097D5D0 - typed presentation tail emitted; no headless product host installed",
+    "step 19 Achieve::add_event 0x007AF660 - typed product tail emitted; no achievement host installed",
     "step 22 Roads::scan_and_kill_stray_roads - exact scanner executes; live road tiles without their renderer-owned RoadElementCandidate fail closed",
     "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
 ];
@@ -706,6 +708,9 @@ pub struct Sim {
     pub step8: leaders::Leaders,
     pub step8_env: leaders::Step8Env,
     pub step8_rules: leaders::Step8Rules,
+    /// Most recent receipt-complete step-19 pass. This is diagnostic/product-boundary
+    /// state, not part of the retail checksum walk.
+    pub last_event_frame_trace: leaders::EventFrameTrace,
     pub leaders: [LeaderSlot; NUM_LEADERS],
     pub market: economy::MarketState,
 
@@ -977,6 +982,7 @@ impl Sim {
             step8: leaders::Leaders::new(),
             step8_env: leaders::Step8Env::default(),
             step8_rules: leaders::Step8Rules::shipped(),
+            last_event_frame_trace: leaders::EventFrameTrace::default(),
             leaders: Default::default(),
             market: economy::MarketState::default(),
             scenario_data: crate::script_runtime::ScenarioDataState::default(),
@@ -2029,7 +2035,7 @@ impl Sim {
     fn leaders_process_event_frames(&mut self) -> (StepRun, u32) {
         let age_by_who = std::array::from_fn(|who| Some(self.step8.leaders[who].econ.age));
         let team_scores =
-            std::array::from_fn(|who| self.vic_leaders.get_team_score(&self.vic_match, who));
+            std::array::from_fn(|who| Some(self.vic_leaders.get_team_score(&self.vic_match, who)));
         let trace = leaders::process_event_frames(
             &mut self.step8,
             leaders::EventFrameInputs {
@@ -2038,7 +2044,19 @@ impl Sim {
                 team_scores,
             },
         );
+        for tail in &trace.exact.host_tails {
+            let gap = match tail.host_tail {
+                leaders_process_event_frame_step19::HostTail::JukeBoxSetNextMood { .. } => {
+                    Gap::LeaderEventJukeBoxTail
+                }
+                leaders_process_event_frame_step19::HostTail::AchieveAddEvent { .. } => {
+                    Gap::LeaderEventAchievementTail
+                }
+            };
+            self.cover.gaps[gap.index()] += 1;
+        }
         let work = trace.leaders_dispatched() as u32;
+        self.last_event_frame_trace = trace;
         if work == 0 {
             (StepRun::Vacuous, 0)
         } else {

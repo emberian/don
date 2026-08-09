@@ -52,6 +52,20 @@ impl TypeStatBuiltin {
         }
     }
 
+    pub const fn from_registration(registration: u32) -> Option<Self> {
+        match registration {
+            529 => Some(Self::SetMaxHealth),
+            531 => Some(Self::SetArmor),
+            532 => Some(Self::SetAttack),
+            533 => Some(Self::SetMaxRange),
+            534 => Some(Self::SetMinRange),
+            535 => Some(Self::SetUnitSpeed),
+            538 => Some(Self::SetUnitMaxCraft),
+            814 => Some(Self::SetLineOfSight),
+            _ => None,
+        }
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::SetMaxHealth => "set_object_type_max_health",
@@ -264,6 +278,70 @@ pub enum TypeStatFrontierError {
     NonAsciiRetailName,
     /// Construction/factory invariants should make this impossible for an admitted candidate.
     OwnerDomainMismatch { row: usize, field: TypeStatField },
+    /// A caller retained a plan across another owner write. Every row is checked before any
+    /// field is changed, so this error always leaves the canonical owner untouched.
+    StaleWrite {
+        row: usize,
+        field: TypeStatField,
+        expected_value: i32,
+        observed_value: i32,
+        expected_modified: i32,
+        observed_modified: i32,
+    },
+    /// Only plans emitted by [`plan_type_stat_mutation`] may cross the commit boundary.
+    MalformedPlan,
+}
+
+impl TypeBuiltinState {
+    /// Atomically commit one plan against the canonical owner.
+    ///
+    /// The complete write set is preflighted before the first store. A stale receipt can never
+    /// partially update a relation family, and one admitted handler advances the owner revision
+    /// exactly once even when its relation has no writable candidate rows (retail still runs the
+    /// Leader recalculation tail in that case).
+    pub fn apply_type_stat_plan(
+        &mut self,
+        plan: &TypeStatMutationPlan,
+    ) -> Result<(), TypeStatFrontierError> {
+        if plan.selected >= NUM_TYPES
+            || plan.writes.iter().any(|write| {
+                write.field != plan.builtin.field()
+                    || write.replacement_value != plan.stored_value
+                    || write.replacement_modified != 1
+                    || write.row >= NUM_TYPES
+            })
+        {
+            return Err(TypeStatFrontierError::MalformedPlan);
+        }
+
+        for write in &plan.writes {
+            let row = self.types.row(write.row);
+            let observed_value = read_field(row.body.clone(), write.row, write.field)?;
+            if observed_value != write.expected_value || row.modified != write.expected_modified {
+                return Err(TypeStatFrontierError::StaleWrite {
+                    row: write.row,
+                    field: write.field,
+                    expected_value: write.expected_value,
+                    observed_value,
+                    expected_modified: write.expected_modified,
+                    observed_modified: row.modified,
+                });
+            }
+        }
+
+        for write in &plan.writes {
+            let row = self.types.row_mut(write.row);
+            write_field(
+                &mut row.body,
+                write.row,
+                write.field,
+                write.replacement_value,
+            )?;
+            row.modified = write.replacement_modified;
+        }
+        self.mark_mutated();
+        Ok(())
+    }
 }
 
 /// Derive the instruction-equivalent writes without mutating the canonical owner.
@@ -395,6 +473,41 @@ fn read_field(
         (_, field) => return Err(TypeStatFrontierError::OwnerDomainMismatch { row, field }),
     };
     Ok(value)
+}
+
+fn write_field(
+    body: &mut TypeBody,
+    row: usize,
+    field: TypeStatField,
+    value: i32,
+) -> Result<(), TypeStatFrontierError> {
+    match (body, field) {
+        (TypeBody::Unit { object, .. } | TypeBody::Build { object, .. }, TypeStatField::Attack) => {
+            object.attack = value;
+        }
+        (
+            TypeBody::Unit { object, .. } | TypeBody::Build { object, .. },
+            TypeStatField::MinRange,
+        ) => object.min_range = value,
+        (
+            TypeBody::Unit { object, .. } | TypeBody::Build { object, .. },
+            TypeStatField::MaxRange,
+        ) => object.max_range = value,
+        (TypeBody::Unit { object, .. } | TypeBody::Build { object, .. }, TypeStatField::Hits) => {
+            object.hits = value;
+        }
+        (TypeBody::Unit { object, .. } | TypeBody::Build { object, .. }, TypeStatField::Armor) => {
+            object.armor = value;
+        }
+        (
+            TypeBody::Unit { object, .. } | TypeBody::Build { object, .. },
+            TypeStatField::LineOfSight,
+        ) => object.los = value,
+        (TypeBody::Unit { unit, .. }, TypeStatField::Moves) => unit.moves = value,
+        (TypeBody::Unit { unit, .. }, TypeStatField::Mana) => unit.mana = value,
+        (_, field) => return Err(TypeStatFrontierError::OwnerDomainMismatch { row, field }),
+    }
+    Ok(())
 }
 
 fn retail_string_eq(left: &str, right: &str) -> bool {

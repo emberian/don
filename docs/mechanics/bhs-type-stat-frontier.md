@@ -1,7 +1,9 @@
 # BHS type-stat mutation frontier
 
-Status: exact source-only transaction planning; canonical owner application, Leader cache
-execution, runtime dispatch, channel-13 projection, and save/load remain red.
+Status: exact transaction planning retained as the reversal proof. Canonical owner application,
+generated-declaration dispatch, opaque-session execution, and the immediate Leader cache tail now
+have a source-complete integration in `bhs-type-stat-integration.md`; independent integration
+builds remain pending. Channel-13 projection and save/load remain red.
 
 The isolated implementation is
 `crates/don-sim/src/systems/bhs_type_stat_frontier.rs`; its proof pack is
@@ -107,22 +109,21 @@ The clamp is `0x00A0055D..0x00A00571`, candidate range selection is
 ## Ownership and completion gates
 
 The frontier returns a plan containing the selected row, exact old/new field and `modified`
-values, ordered candidate indices, and ordered Leader recalculation slots.  Planning is pure;
-tests pin that `is_dirty` and the mutation revision remain unchanged.  Production integration
-must land atomically inside `TypeBuiltinState` so it can stale-check every expected value, apply
-every write, advance the owner receipt once, and then execute the recalculation tail.
+values, ordered candidate indices, and ordered Leader recalculation slots. Planning is pure;
+tests pin that `is_dirty` and the mutation revision remain unchanged. The integration lands that
+plan atomically inside `TypeBuiltinState`: it stale-checks the complete write set before the first
+store, applies every write, advances the owner receipt once, and then executes the recalculation
+tail through the joined session host.
 
 The following gates remain red:
 
-1. registration dispatch for 529, 531–535, 538, and 814 is not wired;
-2. `Leader::calc_wall_stats` and `Leader::calc_unit_stats` have not been connected to the
-   authoritative Leader caches;
-3. checksum channel 13 does not yet consume the canonical mutated type rows;
-4. DoNSave v6 does not serialize these rule mutations or their synchronized rules/mod
+1. checksum channel 13 does not yet consume the canonical mutated type rows;
+2. DoNSave v6 does not serialize these rule mutations or their synchronized rules/mod
    provenance;
-5. non-ASCII mod-name lookup remains typed failure until Windows `_wcsicmp` compatibility is
+3. non-ASCII mod-name lookup remains typed failure until Windows `_wcsicmp` compatibility is
    owned;
-6. no runtime or shipped-script coverage may be claimed from this source-only proof.
+4. the lexical 194-call census is reachability evidence, not a claim that all shipped scripts
+   have executed under the integrated runtime.
 
 All eight fields are direct type-rule checksum state in the retail Type/ObjectType/UnitType
 walks.  Leader recalculation produces derived caches after the writes; it is a required ordered
@@ -130,6 +131,9 @@ effect, not permission to hash new Leader bytes into channel 8.
 
 ## Validation order
 
-Root convergence formatted the two Rust files and validated all eight tests in persvati batch
-`gen7-five-pack-20260809T231109Z-3866-5144-5f896c0277b5`. Retail was not run. Only after that
-proof and the five ownership gates above may the 194 shipped calls move from reversed to handled.
+Root convergence formatted the original frontier files and validated all eight planning tests in
+persvati batch `gen7-five-pack-20260809T231109Z-3866-5144-5f896c0277b5`. This integration adds two
+atomic-commit tests plus the session/runtime proof pack; persvati batch
+`gen7-integration-batch-v2-20260809T233915Z-61775-9459-05c01f206acb` passed the complete 23-test
+BHS set. Retail was not run. The 194 shipped calls are runtime-handled but do not become dynamic
+corpus coverage without a shipped-script run.

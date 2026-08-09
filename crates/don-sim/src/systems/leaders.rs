@@ -115,6 +115,7 @@ use crate::systems::economy::{
     self, pct, CapGates, DoGatherContext, EconRules, GatherInputs, LeaderEcon, Payout,
     NUM_RESOURCES,
 };
+use crate::systems::leaders_process_event_frame_step19 as step19;
 
 // ===========================================================================================
 // The leaders array
@@ -1247,6 +1248,16 @@ pub struct UnitQuerySource {
     pub unit_masks2: u32,
 }
 
+/// Canonical mutable type fields substituted after the shipped structural query package is
+/// rebuilt. BHS owns only these two scalar overrides; lineage, masks, domain, and class gates
+/// continue to come from the same instruction-derived type row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UnitTypeStatOverride {
+    pub type_id: i32,
+    pub moves: i32,
+    pub armor: i32,
+}
+
 /// The scalar slice of shipped `UnitTypeData` needed by the two recovered Unit stat bodies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct UnitTypeStatRow {
@@ -2087,6 +2098,19 @@ pub fn calc_unit_stats(
     gates: &AttritionGates,
     objs: &mut OwnerObjects,
 ) -> StatPassCounts {
+    calc_unit_stats_with_type_overrides(leader, rules, gates, objs, &[])
+}
+
+/// `Leader::calc_unit_stats` with the canonical BHS-mutated `moves`/`armor` row projection.
+/// Structural unit facts still come from the exact shipped query package; only fields whose
+/// live `UnitTypeData` owner is mutable are substituted.
+pub fn calc_unit_stats_with_type_overrides(
+    leader: &mut Leader,
+    rules: &Step8Rules,
+    gates: &AttritionGates,
+    objs: &mut OwnerObjects,
+    type_overrides: &[UnitTypeStatOverride],
+) -> StatPassCounts {
     calc_attrition(leader, rules, gates);
     calc_anti_attrition(leader, rules, gates);
 
@@ -2110,7 +2134,14 @@ pub fn calc_unit_stats(
                 // generated on the previous dirty edge.
                 u.speed_inputs = None;
                 u.armor_inputs = None;
-                if let Some((speed, armor)) = derive_unit_query_packages(source, leader) {
+                if let Some((mut speed, mut armor)) = derive_unit_query_packages(source, leader) {
+                    if let Some(override_row) = type_overrides
+                        .iter()
+                        .find(|row| row.type_id == source.type_id)
+                    {
+                        speed.type_moves = override_row.moves;
+                        armor.type_armor = override_row.armor;
+                    }
                     u.speed_inputs = Some(speed);
                     u.armor_inputs = Some(armor);
                     u.unit_query_populations = u.unit_query_populations.wrapping_add(1);
@@ -2751,13 +2782,17 @@ pub mod combat_mood {
 pub struct EventFrameInputs {
     pub frame: i32,
     pub age_by_who: [Option<i32>; NUM_LEADER_SLOTS],
-    pub team_scores: [i32; NUM_LEADER_SLOTS],
+    /// Exact `LeaderData::get_team_score` answers keyed by Leader record. A missing answer
+    /// suppresses the dependent mood mutation and becomes a typed residual.
+    pub team_scores: [Option<i32>; NUM_LEADER_SLOTS],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EventFrameMissingFact {
     AgeForWho(i32),
     LocalLeaderSlot(i32),
+    OtherLeaderSlot { leader_index: usize, who: i32 },
+    TeamScoreForLeader(usize),
 }
 
 /// Measured execution of the complete step-19 dispatcher and deterministic body.
@@ -2770,6 +2805,9 @@ pub struct EventFrameTrace {
     pub mood_requests: Vec<CombatMoodRequest>,
     pub achievement_events: Vec<BattleAchievementEvent>,
     pub missing_facts: Vec<EventFrameMissingFact>,
+    /// Receipt-complete reconstruction trace. This retains the precise ordering between
+    /// deterministic Leader writes, product reads, unresolved host tails and residuals.
+    pub exact: step19::Step19Trace,
 }
 
 impl EventFrameTrace {
@@ -2782,144 +2820,6 @@ impl EventFrameTrace {
     }
 }
 
-#[inline]
-fn fold_event_rate(current: u16, average: u16) -> (u16, u16) {
-    // `imul reg,reg,100` followed by a 16-bit store: multiplication wraps before the
-    // zero test and average calculation.
-    let scaled = current.wrapping_mul(EVENT_RATE_SCALE);
-    let average = if scaled == 0 {
-        ((u32::from(average) * 7) >> 3) as u16
-    } else {
-        ((u32::from(scaled) + u32::from(average)) >> 1) as u16
-    };
-    (scaled, average)
-}
-
-fn update_event_rates(event: &mut EventFrameState) {
-    event.deaths_fifteen_seconds = event
-        .deaths_fifteen_seconds
-        .wrapping_add(event.deaths_current_frame);
-    event.damage_fifteen_seconds = event
-        .damage_fifteen_seconds
-        .wrapping_add(event.damage_current_frame);
-    event.kills_fifteen_seconds = event
-        .kills_fifteen_seconds
-        .wrapping_add(event.kills_current_frame);
-    event.hits_fifteen_seconds = event
-        .hits_fifteen_seconds
-        .wrapping_add(event.hits_current_frame);
-
-    (event.deaths_current_frame, event.average_death_rate) =
-        fold_event_rate(event.deaths_current_frame, event.average_death_rate);
-    (event.kills_current_frame, event.average_kill_rate) =
-        fold_event_rate(event.kills_current_frame, event.average_kill_rate);
-    (event.hits_current_frame, event.average_hit_rate) =
-        fold_event_rate(event.hits_current_frame, event.average_hit_rate);
-    (event.damage_current_frame, event.average_damage_rate) =
-        fold_event_rate(event.damage_current_frame, event.average_damage_rate);
-}
-
-fn local_combat_mood(
-    ls: &Leaders,
-    leader_index: usize,
-    team_scores: &[i32; NUM_LEADER_SLOTS],
-) -> Result<Option<(i32, bool)>, EventFrameMissingFact> {
-    let event = ls.leaders[leader_index].event_frame;
-    let combat_sum = u32::from(event.average_hit_rate) + u32::from(event.average_damage_rate);
-
-    if combat_sum < COMBAT_MOOD_ACTIVE_THRESHOLD {
-        if combat_sum >= COMBAT_MOOD_QUIET_THRESHOLD {
-            return Ok(None);
-        }
-        return Ok(Some((
-            combat_mood::QUIET,
-            event.average_hit_rate == 0 && event.average_damage_rate == 0,
-        )));
-    }
-
-    let local_who = ls.leaders[leader_index].slot;
-    let local = ls
-        .by_slot(local_who)
-        .ok_or(EventFrameMissingFact::LocalLeaderSlot(local_who))?;
-    let mut strongest_hostile_score = 0i32;
-    for other_index in 0..NUM_LEADER_SLOTS {
-        let other = &ls.leaders[other_index];
-        if other.flags & flag::IN_GAME == 0 || other.slot == local_who {
-            continue;
-        }
-        let hostile = other.diplo_toward(local_who) == 0 || local.diplo_toward(other.slot) == 0;
-        if !hostile
-            || (other.event_frame.average_hit_rate == 0
-                && other.event_frame.average_damage_rate == 0)
-        {
-            continue;
-        }
-        strongest_hostile_score = strongest_hostile_score.max(team_scores[other_index]);
-    }
-
-    let own_score = team_scores[leader_index];
-    let mut balance =
-        i32::from(event.average_hit_rate).wrapping_sub(i32::from(event.average_damage_rate));
-    let hostile_four_thirds = strongest_hostile_score.wrapping_mul(4) / 3;
-    if own_score >= hostile_four_thirds {
-        balance = balance.wrapping_add(COMBAT_SCORE_BIAS);
-    } else {
-        let hostile_three_quarters = strongest_hostile_score.wrapping_mul(3) / 4;
-        if own_score <= hostile_three_quarters {
-            balance = balance.wrapping_sub(COMBAT_SCORE_BIAS);
-        }
-    }
-
-    let mood = if balance < 0 {
-        combat_mood::LOSING
-    } else {
-        combat_mood::WINNING
-    };
-    let force = ls.event.current_music_mood == combat_mood::QUIET
-        && combat_sum >= COMBAT_MOOD_FORCE_THRESHOLD;
-    Ok(Some((mood, force)))
-}
-
-fn battle_achievement(
-    event: &mut EventFrameState,
-    leader_index: usize,
-    who: i32,
-    frame: i32,
-    age: i32,
-) -> Option<BattleAchievementEvent> {
-    let combined =
-        i32::from(event.average_death_rate).wrapping_add(i32::from(event.average_kill_rate));
-    let minimum = age.wrapping_add(1).wrapping_mul(BATTLE_RATE_PER_AGE);
-    if combined < minimum
-        || (event.frame_battle != 0
-            && frame.wrapping_sub(event.frame_battle) < BATTLE_EVENT_COOLDOWN)
-    {
-        return None;
-    }
-
-    let imbalance = age
-        .wrapping_mul(BATTLE_IMBALANCE_PER_AGE)
-        .wrapping_add(BATTLE_IMBALANCE_BASE);
-    let deaths = i32::from(event.average_death_rate);
-    let kills = i32::from(event.average_kill_rate);
-    let kind = if deaths >= kills.wrapping_add(imbalance) {
-        BattleAchievementKind::DeathsOverKills
-    } else if kills >= deaths.wrapping_add(imbalance) {
-        BattleAchievementKind::KillsOverDeaths
-    } else {
-        return None;
-    };
-
-    event.average_death_rate = BATTLE_RATE_SENTINEL;
-    event.average_kill_rate = BATTLE_RATE_SENTINEL;
-    event.frame_battle = frame;
-    Some(BattleAchievementEvent {
-        leader_index,
-        who,
-        kind,
-    })
-}
-
 /// **Step 19 of `Game::do_frame`.** The exact eight-Leader `flags & 1` dispatcher plus the
 /// complete 918-byte `Leader::process_event_frame` body.
 ///
@@ -2929,73 +2829,140 @@ fn battle_achievement(
 /// scan observes freshly folded hit/damage rates only for earlier Leader slots, exactly as
 /// the original loop does.
 pub fn process_event_frames(ls: &mut Leaders, input: EventFrameInputs) -> EventFrameTrace {
-    let mut trace = EventFrameTrace::default();
     ls.event.last_mood_requests.clear();
     ls.event.last_achievement_events.clear();
+    let mut exact_state = step19::Step19State {
+        leaders: std::array::from_fn(|leader_index| {
+            let leader = &ls.leaders[leader_index];
+            step19::LeaderSlot {
+                flags: leader.flags,
+                who: leader.slot,
+                diplos: leader.diplo,
+                event_queue: step19::EventQueueState {
+                    frame_battle: leader.event_frame.frame_battle,
+                    average_death_rate: leader.event_frame.average_death_rate,
+                    average_kill_rate: leader.event_frame.average_kill_rate,
+                    average_damage_rate: leader.event_frame.average_damage_rate,
+                    average_hit_rate: leader.event_frame.average_hit_rate,
+                    deaths_current_frame: leader.event_frame.deaths_current_frame,
+                    kills_current_frame: leader.event_frame.kills_current_frame,
+                    hits_current_frame: leader.event_frame.hits_current_frame,
+                    damage_current_frame: leader.event_frame.damage_current_frame,
+                    deaths_fifteen_seconds: leader.event_frame.deaths_fifteen_seconds,
+                    kills_fifteen_seconds: leader.event_frame.kills_fifteen_seconds,
+                    hits_fifteen_seconds: leader.event_frame.hits_fifteen_seconds,
+                    damage_fifteen_seconds: leader.event_frame.damage_fifteen_seconds,
+                },
+            }
+        }),
+        music: step19::MusicState {
+            current_mood: ls.event.current_music_mood,
+            next_mood: ls.event.next_music_mood,
+        },
+    };
+    let exact = step19::execute_step19(
+        &mut exact_state,
+        step19::ProductFacts {
+            frame: input.frame,
+            console_who: ls.end.local_who,
+            team_scores: input.team_scores,
+            encrypted_ages: input
+                .age_by_who
+                .map(|age| age.map(|age| (age as u32) ^ step19::AGES_XOR_KEY)),
+        },
+    );
 
+    // The exact executor owns only the recovered event block. Publish every deterministic
+    // mutation back into the canonical Leader records as one adapter transaction.
     for leader_index in 0..NUM_LEADER_SLOTS {
-        if ls.leaders[leader_index].flags & flag::IN_GAME == 0 {
-            continue;
-        }
-        trace.dispatched[leader_index] = true;
+        let queue = exact_state.leaders[leader_index].event_queue;
+        ls.leaders[leader_index].event_frame = EventFrameState {
+            frame_battle: queue.frame_battle,
+            average_death_rate: queue.average_death_rate,
+            average_kill_rate: queue.average_kill_rate,
+            average_damage_rate: queue.average_damage_rate,
+            average_hit_rate: queue.average_hit_rate,
+            deaths_current_frame: queue.deaths_current_frame,
+            kills_current_frame: queue.kills_current_frame,
+            hits_current_frame: queue.hits_current_frame,
+            damage_current_frame: queue.damage_current_frame,
+            deaths_fifteen_seconds: queue.deaths_fifteen_seconds,
+            kills_fifteen_seconds: queue.kills_fifteen_seconds,
+            hits_fifteen_seconds: queue.hits_fifteen_seconds,
+            damage_fifteen_seconds: queue.damage_fifteen_seconds,
+        };
+    }
+    ls.event.next_music_mood = exact_state.music.next_mood;
 
-        // `idiv 50; test edx` — non-due frames return before touching any Leader field.
-        if input.frame % EVENT_RATE_PERIOD != 0 {
-            continue;
-        }
-        trace.due[leader_index] = true;
-        update_event_rates(&mut ls.leaders[leader_index].event_frame);
-
-        let who = ls.leaders[leader_index].slot;
-        if who == ls.end.local_who {
-            match local_combat_mood(ls, leader_index, &input.team_scores) {
-                Ok(Some((mood, force))) => {
-                    ls.event.next_music_mood = mood;
-                    if ls.event.current_music_mood != mood {
-                        let request = CombatMoodRequest {
-                            leader_index,
-                            mood,
-                            force,
-                        };
-                        trace.mood_requests.push(request);
-                        ls.event.last_mood_requests.push(request);
-                    }
-                }
-                Ok(None) => {}
-                Err(missing) => trace.missing_facts.push(missing),
+    let mut trace = EventFrameTrace::default();
+    for visit in &exact.visits {
+        match visit.outcome {
+            step19::LeaderOutcome::NotVisited | step19::LeaderOutcome::InGameFlagClear => {}
+            step19::LeaderOutcome::FrameNotDue => {
+                trace.dispatched[visit.leader_index] = true;
+            }
+            step19::LeaderOutcome::Due { .. } => {
+                trace.dispatched[visit.leader_index] = true;
+                trace.due[visit.leader_index] = true;
             }
         }
-
-        let age = usize::try_from(who)
-            .ok()
-            .and_then(|who| input.age_by_who.get(who))
-            .copied()
-            .flatten();
-        if let Some(age) = age {
-            if let Some(event) = battle_achievement(
-                &mut ls.leaders[leader_index].event_frame,
-                leader_index,
-                who,
-                input.frame,
-                age,
-            ) {
+    }
+    for tail in &exact.host_tails {
+        match tail.host_tail {
+            step19::HostTail::JukeBoxSetNextMood {
+                requested_mood,
+                force,
+                ..
+            } => {
+                let request = CombatMoodRequest {
+                    leader_index: tail.leader_index,
+                    mood: requested_mood,
+                    force,
+                };
+                trace.mood_requests.push(request);
+                ls.event.last_mood_requests.push(request);
+            }
+            step19::HostTail::AchieveAddEvent { kind, who, .. } => {
+                let event = BattleAchievementEvent {
+                    leader_index: tail.leader_index,
+                    who,
+                    kind: match kind {
+                        step19::BattleEventKind::KillsOverDeaths => {
+                            BattleAchievementKind::KillsOverDeaths
+                        }
+                        step19::BattleEventKind::DeathsOverKills => {
+                            BattleAchievementKind::DeathsOverKills
+                        }
+                    },
+                };
                 trace.achievement_events.push(event);
                 ls.event.last_achievement_events.push(event);
             }
-        } else {
-            trace
-                .missing_facts
-                .push(EventFrameMissingFact::AgeForWho(who));
         }
-
-        // Two dword stores at 0x006EC501/0x006EC507 zero all four adjacent counters.
-        let event = &mut ls.leaders[leader_index].event_frame;
-        event.deaths_current_frame = 0;
-        event.kills_current_frame = 0;
-        event.hits_current_frame = 0;
-        event.damage_current_frame = 0;
     }
-
+    trace.missing_facts = exact
+        .residuals
+        .iter()
+        .map(|receipt| match receipt.residual {
+            step19::OpenResidual::LeaderWhoOutsideArray { who } => {
+                EventFrameMissingFact::LocalLeaderSlot(who)
+            }
+            step19::OpenResidual::OtherWhoOutsideArray {
+                other_leader_index,
+                who,
+            } => EventFrameMissingFact::OtherLeaderSlot {
+                leader_index: other_leader_index,
+                who,
+            },
+            step19::OpenResidual::TeamScoreUnavailable {
+                queried_leader_index,
+            } => EventFrameMissingFact::TeamScoreForLeader(queried_leader_index),
+            step19::OpenResidual::EncryptedAgeUnavailable { who_index } => {
+                EventFrameMissingFact::AgeForWho(who_index as i32)
+            }
+        })
+        .collect();
+    trace.exact = exact;
     trace
 }
 
@@ -3464,7 +3431,7 @@ mod tests {
         EventFrameInputs {
             frame,
             age_by_who: [Some(0); NUM_LEADER_SLOTS],
-            team_scores: [0; NUM_LEADER_SLOTS],
+            team_scores: [Some(0); NUM_LEADER_SLOTS],
         }
     }
 
@@ -3572,8 +3539,8 @@ mod tests {
         // Slot 0 runs first and sees slot 1's prior-frame combat state, as retail does.
         ls.leaders[1].event_frame.average_hit_rate = 1;
         let mut input = event_input(50);
-        input.team_scores[0] = 100;
-        input.team_scores[1] = 1_000;
+        input.team_scores[0] = Some(100);
+        input.team_scores[1] = Some(1_000);
 
         let trace = process_event_frames(&mut ls, input);
 
@@ -3661,7 +3628,7 @@ mod tests {
 
         assert_eq!(
             trace.missing_facts,
-            vec![EventFrameMissingFact::AgeForWho(9)]
+            vec![EventFrameMissingFact::LocalLeaderSlot(9)]
         );
         assert!(trace.achievement_events.is_empty());
         assert!(ls.event.last_achievement_events.is_empty());

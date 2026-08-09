@@ -1869,6 +1869,9 @@ fn read_core(data: &[u8]) -> Result<CoreState, SaveError> {
 }
 
 fn reject_unsupported(sim: &Sim) -> Result<(), SaveError> {
+    if sim.vic_leaders.setup_owner.applied().is_some() {
+        return Err(SaveError::Unsupported("player setup owner"));
+    }
     if !step8_state_is_pristine(sim) {
         return Err(SaveError::Unsupported("step-8 leader state/hosts"));
     }

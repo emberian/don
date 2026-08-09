@@ -24,7 +24,8 @@ use crate::systems::{
         TypeBuiltinBoundaryError, TypeBuiltinOutcome, TypeBuiltinReceipt, TypeBuiltinRuntime,
         TypeBuiltinRuntimeError,
     },
-    bhs_type_table::TypeBuiltinState,
+    bhs_type_stat_frontier::{LeaderStatRecalc, LeaderStatRecalcCall},
+    bhs_type_table::{TypeBody, TypeBuiltinState},
     economy, leaders, naval, order_dispatch, production, victory_score,
 };
 use crate::tick::Sim;
@@ -165,6 +166,9 @@ pub trait ScenarioHost {
     fn game_random_step(&mut self) -> Result<u32, HostError>;
     fn game_random_seed(&self) -> Result<u32, HostError>;
     fn set_game_random_seed(&mut self, seed: u32) -> Result<(), HostError>;
+    /// Apply the immediate cache tail of an admitted BHS type-stat mutation before control
+    /// returns to the running VM.
+    fn apply_type_stat_recalcs(&mut self, state: &TypeBuiltinState, calls: &[LeaderStatRecalcCall]);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -506,14 +510,25 @@ impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
                 _ => {
                     if let Some(types) = self.type_builtins.as_mut() {
                         match types.dispatch(decl, args) {
-                            Ok(Some(receipt)) => match receipt.outcome {
-                                TypeBuiltinOutcome::Returned(value) => {
-                                    return Ok(Value::Int(value));
+                            Ok(Some(receipt)) => {
+                                let value = match &receipt.outcome {
+                                    TypeBuiltinOutcome::Returned(value) => *value,
+                                    TypeBuiltinOutcome::OwnerFault(_)
+                                    | TypeBuiltinOutcome::TypeStatOwnerFault(_) => {
+                                        unreachable!("owner faults return Err from dispatch")
+                                    }
+                                };
+                                if !receipt.leader_recalcs.is_empty() {
+                                    self.scenario.apply_type_stat_recalcs(
+                                        types.state(),
+                                        &receipt.leader_recalcs,
+                                    );
+                                    if types.confirm_leader_recalcs(&receipt).is_err() {
+                                        return Err(HostError::Unimplemented);
+                                    }
                                 }
-                                TypeBuiltinOutcome::OwnerFault(_) => {
-                                    unreachable!("owner faults return Err from dispatch")
-                                }
-                            },
+                                return Ok(Value::Int(value));
+                            }
                             Ok(None) => {}
                             Err(TypeBuiltinRuntimeError::BadArguments { .. }) => {
                                 return Err(HostError::BadArgs(
@@ -1413,6 +1428,207 @@ impl Sim {
     }
 }
 
+impl Sim {
+    /// Refresh the exact owner-local stat views needed by the immediate BHS cache tail.
+    /// Step 4 precedes the normal step-8 refresh, so relying on that later boundary would make
+    /// a same-script cache reader observe stale state.
+    fn refresh_bhs_stat_views(&mut self, who: usize, state: &TypeBuiltinState) {
+        let slot = self.world.objects.slot(who);
+        let objects = &mut self.step8_env.leaders[who].objects;
+
+        let unit_rows = slot.band(Band::Unit);
+        objects
+            .units
+            .resize(unit_rows.len(), leaders::StatObject::default());
+        for (view, &row) in objects.units.iter_mut().zip(unit_rows) {
+            let row = row as usize;
+            view.active = self.world.units.get_flags(row) & 1 != 0;
+            view.captain = self.world.units.o_up()[row] < 0;
+            view.unit_query_source = Some(leaders::UnitQuerySource {
+                type_id: self.unit_type[row],
+                unit_masks2: self.world.units.unit_masks2()[row] as u32,
+            });
+            view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+            view.myhits = self.world.units.myhits()[row];
+            view.mylos = self.world.units.mylos()[row];
+            let down = self.world.units.o_down()[row];
+            view.o_down = (down >= 0).then_some(down as usize);
+            view.myspeed = self.world.units.myspeed()[row];
+            view.speed_written = false;
+            view.myarmor = self.world.units.myarmor()[row];
+            view.armor_written = false;
+            project_bhs_type_row(view, self.unit_type[row], state);
+        }
+
+        let build_rows = slot.band(Band::Build);
+        objects
+            .band_2000
+            .resize(build_rows.len(), leaders::StatObject::default());
+        for (view, &row) in objects.band_2000.iter_mut().zip(build_rows) {
+            let Some(build) = self.builds.get(row as usize) else {
+                view.active = false;
+                continue;
+            };
+            view.active = build.is_valid();
+            view.wall_active = build.is_active();
+            view.wall_started = build.flags & production::flag::STARTED != 0;
+            view.wall_city_flag = build.flags & production::flag::CAPTURED != 0;
+            view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+            view.myhits = build.myhits;
+            view.mylos = build.other[0x3c] as i8;
+            view.job_counter = build.job_counter;
+            view.constr_time = build.constr_time;
+            view.construct_hits = build.construct_hits;
+            view.damage = build.damage;
+            view.inside_down = i16::from_le_bytes([build.other[0x28], build.other[0x29]]);
+            view.wall_hits_written = false;
+            view.wall_los_written = false;
+            view.eject_contents_requested = false;
+            project_bhs_type_row(view, build.orig_type, state);
+        }
+
+        let wall_rows = slot.band(Band::Wall);
+        objects
+            .band_3000
+            .resize(wall_rows.len(), leaders::StatObject::default());
+        for (view, &row) in objects.band_3000.iter_mut().zip(wall_rows) {
+            let Some(wall) = self.walls.get(row as usize) else {
+                view.active = false;
+                continue;
+            };
+            view.active = wall.is_alive();
+            view.wall_active = wall.is_active();
+            view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
+            view.myhits = wall.myhits;
+            view.mylos = wall.mylos;
+            if let Some(type_id) = wall.ptype {
+                project_bhs_type_row(view, type_id, state);
+            }
+        }
+    }
+
+    fn commit_bhs_stat_views(&mut self, who: usize, wall_ran: bool, unit_ran: bool) {
+        let slot = self.world.objects.slot(who);
+        let objects = &self.step8_env.leaders[who].objects;
+        if unit_ran {
+            for (view, &row) in objects.units.iter().zip(slot.band(Band::Unit)) {
+                let row = row as usize;
+                if view.active && view.captain && view.hit_inputs.is_some() {
+                    self.world.units.myhits_mut()[row] = view.myhits;
+                }
+                if view.active && view.type_los.is_some() {
+                    self.world.units.mylos_mut()[row] = view.mylos;
+                }
+                if view.armor_written {
+                    self.world.units.myarmor_mut()[row] = view.myarmor;
+                }
+                if view.speed_written {
+                    self.world.units.myspeed_mut()[row] = view.myspeed;
+                }
+            }
+        }
+        if wall_ran {
+            for (view, &row) in objects.band_2000.iter().zip(slot.band(Band::Build)) {
+                if let Some(build) = self.builds.get_mut(row as usize) {
+                    if view.wall_hits_written {
+                        build.myhits = view.myhits;
+                        build.construct_hits = view.construct_hits;
+                    }
+                    if view.wall_los_written {
+                        build.other[0x3c] = view.mylos as u8;
+                    }
+                }
+            }
+            for (view, &row) in objects.band_3000.iter().zip(slot.band(Band::Wall)) {
+                if let Some(wall) = self.walls.get_mut(row as usize) {
+                    if view.active && view.hit_inputs.is_some() {
+                        wall.myhits = view.myhits;
+                    }
+                    if view.active && view.type_los.is_some() {
+                        wall.mylos = view.mylos;
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_bhs_type_stat_recalcs(
+        &mut self,
+        state: &TypeBuiltinState,
+        calls: &[LeaderStatRecalcCall],
+    ) {
+        let type_overrides: Vec<_> = state
+            .types
+            .rows()
+            .iter()
+            .filter_map(|row| match &row.body {
+                TypeBody::Unit { object, unit } => Some(leaders::UnitTypeStatOverride {
+                    type_id: row.index,
+                    moves: unit.moves,
+                    armor: object.armor,
+                }),
+                TypeBody::Other | TypeBody::Build { .. } => None,
+            })
+            .collect();
+
+        for call in calls {
+            let who = call.leader_slot;
+            self.refresh_bhs_stat_views(who, state);
+            let leader = &mut self.step8.leaders[who];
+            let env = &mut self.step8_env.leaders[who];
+            let mut wall_ran = false;
+            if call.kind == LeaderStatRecalc::WallThenUnit {
+                leaders::calc_wall_stats(leader, &self.step8_rules, &mut env.objects);
+                wall_ran = true;
+            }
+            leaders::calc_unit_stats_with_type_overrides(
+                leader,
+                &self.step8_rules,
+                &env.attrition,
+                &mut env.objects,
+                &type_overrides,
+            );
+            self.commit_bhs_stat_views(who, wall_ran, true);
+        }
+    }
+}
+
+fn project_bhs_type_row(view: &mut leaders::StatObject, type_id: i32, state: &TypeBuiltinState) {
+    let Ok(index) = usize::try_from(type_id) else {
+        return;
+    };
+    let Some(row) = state.types.rows().get(index) else {
+        return;
+    };
+    let object = match &row.body {
+        TypeBody::Unit { object, .. } | TypeBody::Build { object, .. } => object,
+        TypeBody::Other => return,
+    };
+    view.type_los = Some(object.los as i8);
+    if let Some(input) = view.hit_inputs.as_mut() {
+        input.base_hits = object.hits;
+        for (special, target) in [
+            (&mut input.type_42_hits, 0x42usize),
+            (&mut input.type_43_hits, 0x43usize),
+            (&mut input.type_44_hits, 0x44usize),
+        ] {
+            if let Some(TypeBody::Unit { object, .. } | TypeBody::Build { object, .. }) =
+                state.types.rows().get(target).map(|row| &row.body)
+            {
+                *special = object.hits;
+            }
+        }
+    }
+    if let Some(input) = view.speed_inputs.as_mut() {
+        if let TypeBody::Unit { unit, .. } = &row.body {
+            input.type_moves = unit.moves;
+        }
+    }
+    if let Some(input) = view.armor_inputs.as_mut() {
+        input.type_armor = object.armor;
+    }
+}
+
 impl ScenarioHost for Sim {
     fn script_frame(&self) -> i32 {
         self.world.frame
@@ -1975,6 +2191,14 @@ impl ScenarioHost for Sim {
     fn set_game_random_seed(&mut self, seed: u32) -> Result<(), HostError> {
         self.world.random.reseed(seed as i32);
         Ok(())
+    }
+
+    fn apply_type_stat_recalcs(
+        &mut self,
+        state: &TypeBuiltinState,
+        calls: &[LeaderStatRecalcCall],
+    ) {
+        self.apply_bhs_type_stat_recalcs(state, calls);
     }
 }
 

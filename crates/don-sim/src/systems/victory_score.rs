@@ -998,6 +998,9 @@ pub enum MatchEvent {
 pub struct Leaders {
     pub slots: Vec<LeaderState>,
     pub types: TypeTable,
+    /// Canonical external `Player[8]` setup image retained by the Sim after the one-shot
+    /// frame-zero team transaction.  It is deliberately outside `LeaderData::walk_data`.
+    pub setup_owner: super::player_setup::PlayerSetupOwner,
     /// Events emitted by the last `process_victory` / `check_victory` call.
     pub events: Vec<MatchEvent>,
     /// Owners whose concrete `Build` queues must receive retail's terminal
@@ -1022,6 +1025,7 @@ impl Leaders {
         Leaders {
             slots,
             types,
+            setup_owner: super::player_setup::PlayerSetupOwner::default(),
             events: Vec::new(),
             terminal_queue_cleanup: 0,
             defeat_unit_cleanup: 0,
@@ -1878,10 +1882,10 @@ impl Leaders {
         }
     }
 
-    /// `LeaderData::get_team` @ `0x006EC040`. Not modelled here beyond a hook — the
-    /// team assignment is owned by the setup/lobby lane. Defaults to `who`.
+    /// `LeaderData::get_team` @ `0x006EC040`, projected from the Sim-owned PlayerSetup
+    /// image after the atomic setup transaction. Unconfigured leaders default to `who`.
     pub fn team_of(&self, who: usize) -> i32 {
-        self.slots[who].who
+        self.setup_owner.team_of(who)
     }
 
     /// Emit the whole leader table in `CheckSums::check_all` channel-8 order.

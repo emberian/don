@@ -167,7 +167,7 @@ code actually does.
 | 16 | `GraphicEvents::process` | `0x008E50A0` | out of scope | |
 | 17 | **`Leaders::end_process_all`** | `0x006ED070` | **dispatcher and deterministic body executed** | full Player-warning cleanup and population-cap rate limiter; UI/audio emitted as an inspectable presentation event |
 | 18 | `Achieve::capture_data` | `0x007AF980` | out of scope | |
-| 19 | **`Leader::process_event_frame`** | `0x006EC180` | **dispatcher and deterministic body executed** | exact 50-frame rate smoothing, combat-mood selection and battle-event thresholds; JukeBox/Achieve calls emitted as typed presentation events |
+| 19 | **`Leader::process_event_frame`** | `0x006EC180` | **canonical dispatcher and deterministic body executed** | exact receipt-ordered rate/mood/battle mutations; JukeBox/Achieve remain typed, charged StateWired tails without product hosts |
 | 20 | **`Game::frame++`** | `0x005924BF` | **implemented** | after step 14 — rotation uses pre-increment frame |
 | 21 | `OrdersMemManager::cycle` | `0x00730E20` | out of scope | |
 | 22 | `Roads::scan_and_kill_stray_roads` | `0x008956A0` | **dispatcher and deterministic body executed** | exact cursor/budget, cache population, bad/straggled-road cleanup and candidate release; renderer candidate facts are explicit |

@@ -142,8 +142,10 @@ The isolated executor supplies receipts for every reached external boundary:
 - local folds, mood stores, battle sentinels/stamps, and final queue clears;
 - invalid `who`, absent scores, and absent encrypted age words as fail-closed residuals.
 
-This tranche is proof-only and makes no runtime-closure claim: integration delta is **zero**
-until the shared systems/tick owner adopts it. Root convergence formatted the isolated files and
+The shared systems/tick owner now adopts this executor through the canonical `Leaders` event
+block. Its deterministic integration delta is live, while the two product tails remain
+explicitly StateWired/red: `JukeBox::set_next_mood` and `Achieve::add_event` have receipts and
+coverage charges but no installed host. Root convergence formatted the isolated files and
 validated all 12 focused tests in both modes:
 
 - hbox debug: `tick-step19-20260809T225229Z-90306-2033-cb8b2b915d8e`;
@@ -154,3 +156,8 @@ Neither job ran retail. The reproducible focused command is:
 ```text
 cargo test -p don-sim --test leaders_process_event_frame_step19
 ```
+
+The later live scheduler convergence was validated together with the shared Leader/PlayerSetup
+owners: persvati job `gen7-integration-batch-v3-20260809T234324Z-74734-7021-05c01f206acb`
+passed all five real-step-19 tests. The schedule remains red only for the explicit JukeBox and
+achievement product tails.

@@ -348,3 +348,56 @@ fn field_offsets_match_the_pdb_layout() {
     assert_eq!(TypeStatField::Moves.retail_offset(), 0x2c0);
     assert_eq!(TypeStatField::Mana.retail_offset(), 0x2ec);
 }
+
+#[test]
+fn canonical_commit_is_atomic_and_rejects_a_stale_relation_receipt() {
+    let mut state = fixture();
+    let plan = admitted(
+        plan_type_stat_mutation(&state, TypeStatBuiltin::SetAttack, "Infantry", 99).unwrap(),
+    );
+
+    let TypeBody::Unit { object, .. } = &mut state.types.row_mut(51).body else {
+        panic!("fixture row 51 is a Unit");
+    };
+    object.attack = 777;
+
+    assert_eq!(
+        state.apply_type_stat_plan(&plan),
+        Err(TypeStatFrontierError::StaleWrite {
+            row: 51,
+            field: TypeStatField::Attack,
+            expected_value: 31,
+            observed_value: 777,
+            expected_modified: 0,
+            observed_modified: 0,
+        })
+    );
+    let TypeBody::Unit { object, .. } = &state.types.row(50).body else {
+        panic!("fixture row 50 is a Unit");
+    };
+    assert_eq!(
+        object.attack, 11,
+        "the earlier relation row was not partially written"
+    );
+    assert_eq!(state.mutation_revision(), 0);
+    assert!(!state.is_dirty());
+}
+
+#[test]
+fn canonical_commit_writes_the_whole_family_and_advances_once() {
+    let mut state = fixture();
+    let plan = admitted(
+        plan_type_stat_mutation(&state, TypeStatBuiltin::SetArmor, "Infantry", 88).unwrap(),
+    );
+    state.apply_type_stat_plan(&plan).unwrap();
+
+    for row in [50, 51, 401] {
+        let TypeBody::Unit { object, .. } = &state.types.row(row).body else {
+            panic!("fixture relation row is a Unit");
+        };
+        assert_eq!(object.armor, 88);
+        assert_eq!(state.types.row(row).modified, 1);
+    }
+    assert_eq!(state.mutation_revision(), 1);
+    assert!(state.is_dirty());
+}

@@ -31,6 +31,13 @@ pub enum BhsSessionSetupError {
     /// Retail step 4 was already entered, so installation would occur after the first script
     /// frame rather than during production setup.
     ScriptRuntimeAlreadyStarted,
+    /// The witnessed type owner and consumed simulation disagree about the retail Leader gate
+    /// bytes that select immediate stat-recalculation slots.
+    LeaderFlagsMismatch {
+        slot: usize,
+        type_owner: i32,
+        sim: u32,
+    },
 }
 
 impl fmt::Display for BhsSessionSetupError {
@@ -46,6 +53,14 @@ impl fmt::Display for BhsSessionSetupError {
             Self::ScriptRuntimeAlreadyStarted => {
                 write!(f, "BHS runtime has already entered a script frame")
             }
+            Self::LeaderFlagsMismatch {
+                slot,
+                type_owner,
+                sim,
+            } => write!(
+                f,
+                "BHS type owner Leader flags at slot {slot} are {type_owner:#x}, simulation has {sim:#x}"
+            ),
         }
     }
 }
@@ -103,6 +118,20 @@ impl BhsSession {
         let type_provenance = produced.provenance();
         let (state, retained_provenance) = produced.into_parts();
         debug_assert_eq!(type_provenance, retained_provenance);
+        for (slot, (type_leader, sim_leader)) in state
+            .leaders
+            .iter()
+            .zip(sim.step8.leaders.iter())
+            .enumerate()
+        {
+            if type_leader.leader_flags as u32 != sim_leader.flags {
+                return Err(BhsSessionSetupError::LeaderFlagsMismatch {
+                    slot,
+                    type_owner: type_leader.leader_flags,
+                    sim: sim_leader.flags,
+                });
+            }
+        }
         scripts
             .install_type_builtins(state)
             .map_err(|_| BhsSessionSetupError::PreinstalledTypeOwner)?;
