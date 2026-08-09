@@ -222,6 +222,42 @@ confirmed the scout at the requested destination while citizen orders remained `
 The hook then reported `state=parked`; the live/dry observations and trace are preserved under
 `schema/live/retail-player-*.json`.
 
+### Fog-safe economy ingress (v2)
+
+`don.retail-player.v2` adds only own-state fields needed for legal production decisions: the
+encrypted age and four epoch counters, the 101-byte owned-TypeIndex bitset, exact nonzero
+`Leader::num_queued` counts, and each owned building's logical `BuildQueue` with TypeIndex and
+elapsed value. A `GatherOrder` target is emitted only when its `{owner,o,uid}` resolves back to a
+matching active object in the same human owner's public table. Enemy and neutral lists are never
+consulted.
+
+All commands run in the existing pre-`TurnControl::do_frame` main-thread ingress and call shipped
+outer APIs. `GroupOut::issue_gather` emits packed opcode `0x13`; `GroupOut::issue_queue_up` emits
+`0x18`; `GroupOut::issue_build` emits `0x19`. Production is queried first with
+`BuildData::can_queue(TypeIndex)`. Explicit construction can query
+`GroupData::validate_build(x1,y1,x2,y2,type,queue)`, but the four Coord arguments remain opaque
+retail placement-gesture endpoints: the autonomous policy does not collapse them to a guessed
+single point.
+
+Generation `economy-v9` exercised three positive zero-frame transactions at frame 175, all while
+pause remained `[1,1]`:
+
+- a Citizen at City 2000 changed both `Leader::num_queued[50]` and the City queue from 1 to 2;
+- City State (TypeIndex 565) changed the Library 2005 queue from 0 to 1 after retail
+  `can_queue` returned 1;
+- Citizen 3 received opcode `0x13` and its canonical order still resolved to own Woodcutter Camp
+  2001/uid 1. Classical Age (544) returned 0 from the same Library legality query and was not
+  issued.
+
+Generation `economy-v10` adds `run-frames`, a supervised 1–30 frame boundary. It issues retail's
+explicit unpause only from a verified paused state and automatically issues pause at the exact
+requested `Game.frame` delta. The live proof advanced 175→177 and later in 30-frame blocks, with
+pause restored after every block. A Barracks attempt serialized the correct `0x19` payload, but
+no building materialized by frame 357 and the worker returned to its prior GatherOrder. That is
+recorded as a negative attempt, not a positive proof; guessed degenerate placement is disabled in
+the opening policy. See `schema/live/retail-player-protocol-v2.json` and the
+`schema/live/retail-economy-*-v1.json` fixtures.
+
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
 - module base `0x00D60000`, ASLR delta `0x00960000`;

@@ -1,0 +1,18 @@
+{
+  "schema": "don.retail-economy-legality-query.v1",
+  "protocol": "don.retail-player.v2",
+  "controller_generation": "economy-v9",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "frame": 175,
+  "paused": 1,
+  "query": {
+    "method": "BuildData::can_queue(TypeIndex)",
+    "producer_id": 2005,
+    "producer_type": "Library",
+    "type_index": 544,
+    "type_name": "Classical Age"
+  },
+  "retail_result": 0,
+  "issued": false,
+  "outcome": "fail-closed: the shipped Library legality predicate rejected Classical Age in this state"
+}

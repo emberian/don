@@ -1,0 +1,33 @@
+{
+  "schema": "don.retail-economy-build-attempt.v1",
+  "protocol": "don.retail-player.v2",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "issue_generation": "economy-v9",
+  "settlement_generation": "economy-v10",
+  "action": {
+    "worker_id": 3,
+    "type_index": 427,
+    "type_name": "Barracks",
+    "coordinates": [2400, 29088, 2400, 29088],
+    "queue": 2
+  },
+  "retail_validate_build_result": 1,
+  "retail_command_hex": "0000001960090000a071000060090000a0710000ab01000002000000",
+  "packed_opcode": "0x19",
+  "frame_boundary": {
+    "before": 175,
+    "after": 357,
+    "supervised_frames": 182
+  },
+  "pause_before_after": [1, 1],
+  "object_marks": {
+    "building_before": 2007,
+    "building_after": 2007
+  },
+  "terminal_worker_order": {
+    "kind": "GatherOrder",
+    "own_target_id": 2001
+  },
+  "positive_proof": false,
+  "outcome": "no Barracks materialized; the guessed degenerate placement gesture is excluded from autonomous policy"
+}

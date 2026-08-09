@@ -22,6 +22,13 @@ game:
   slot's exact own object bands, current unit orders, stockpile, commerce cap, and population.
 - `policy` is dry-run by default; `policy --apply` validates and executes a bounded deterministic
   Scout move, re-observes the result, restores pause, and STOP-parks the generation.
+- `economy-policy` observes exact own technology and production queues, calls retail's own
+  `BuildData::can_queue`, and dry-runs or applies one conservative queue action.
+- `economy-action` exposes one-own-object `queue`, `gather`, and exact four-coordinate `build`
+  ingress. Queue/gather require an observed state delta; build additionally requires a new own
+  building inside a supervised 180-frame cap or it fails closed.
+- `run-frames` is an internal supervised boundary: it starts only paused, advances exactly 1–30
+  retail simulation frames, re-pauses on the retail main thread, and verifies the terminal frame.
 
 Build and attach:
 
@@ -42,6 +49,8 @@ python3 tools/retail-control/retailctl.py rearm --generation player-v7
 python3 tools/retail-control/retailctl.py player-observe --generation player-v7
 python3 tools/retail-control/retailctl.py rearm --generation player-v7
 python3 tools/retail-control/retailctl.py policy --apply --generation player-v7
+python3 tools/retail-control/retailctl.py rearm --generation economy-v10
+python3 tools/retail-control/retailctl.py economy-policy --generation economy-v10
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

@@ -41,7 +41,14 @@
 #define RVA_ISSUE_ATTACK   (0x009415e0u - PREFERRED_BASE)
 #define RVA_ISSUE_MOVE     (0x00941720u - PREFERRED_BASE)
 #define RVA_ISSUE_HALT     (0x009418d0u - PREFERRED_BASE)
+#define RVA_GROUP_ISSUE_BUILD (0x00708c60u - PREFERRED_BASE)
+#define RVA_GROUP_ISSUE_QUEUE (0x00708c90u - PREFERRED_BASE)
+#define RVA_GROUP_ISSUE_GATHER (0x0070aa20u - PREFERRED_BASE)
+#define RVA_GROUP_VALIDATE_BUILD (0x00708620u - PREFERRED_BASE)
+#define RVA_BUILD_CAN_QUEUE (0x0062da00u - PREFERRED_BASE)
 #define RVA_MOVE_ORDER_VTABLE (0x00b4a12cu - PREFERRED_BASE)
+#define RVA_GATHER_ORDER_VTABLE (0x00b49c1cu - PREFERRED_BASE)
+#define RVA_BUILD_VTABLE (0x00b42174u - PREFERRED_BASE)
 
 #define OFF_GAME_FRAME 0x550u
 #define OFF_GAME_SECONDS 0x560u
@@ -72,6 +79,8 @@
 #define MAX_IDS 128
 #define MAX_GUYS 32
 #define MAX_PUBLIC_OBJECTS 256
+#define MAX_BUILD_QUEUE 16
+#define MAX_QUEUED_TYPES 128
 #define MAX_COMMAND_CAPTURE 160
 #define EVENT_CAP 256
 
@@ -88,7 +97,13 @@ enum Verb {
     V_ATTACK,
     V_TRACE_MOVE,
     V_OBSERVE_GUYS,
-    V_OBSERVE_PLAYER
+    V_OBSERVE_PLAYER,
+    V_GATHER,
+    V_QUEUE_UP,
+    V_BUILD,
+    V_VALIDATE_QUEUE,
+    V_VALIDATE_BUILD,
+    V_RUN_FRAMES
 };
 
 typedef struct {
@@ -109,6 +124,16 @@ typedef struct {
 } guy_sample_t;
 
 typedef struct {
+    int elapsed;
+    int type;
+} queue_sample_t;
+
+typedef struct {
+    int type;
+    unsigned count;
+} queued_type_sample_t;
+
+typedef struct {
     int id;
     unsigned pointer;
     unsigned category;          /* 1 unit, 2 building, 3 wall */
@@ -126,7 +151,15 @@ typedef struct {
     unsigned order_vtable;
     unsigned order_flags;
     unsigned order_metric;
+    int order_target_id;
+    unsigned order_target_uid;
+    int order_target_valid;
     int guy_length;
+    int queue_logical;
+    int queue_size;
+    int queue_count;
+    int queue_truncated;
+    queue_sample_t queue[MAX_BUILD_QUEUE];
 } public_object_t;
 
 typedef struct {
@@ -207,12 +240,15 @@ typedef struct {
     unsigned player_identity_flags;
     int player_tribe;
     int player_team;
-    int player_peasants;
-    int player_free_peasants;
-    int player_scouts;
     int player_resources[6];
-    int player_resource_caps[7];
+    int player_resource_caps[6];
     int player_over_cap[6];
+    int player_age;
+    int player_epochs[4];
+    unsigned char player_tech_bits[101];
+    int player_queued_type_count;
+    int player_queued_type_truncated;
+    queued_type_sample_t player_queued_types[MAX_QUEUED_TYPES];
     int player_slots;
     int player_unit_mark;
     int player_build_mark;
@@ -220,6 +256,7 @@ typedef struct {
     int player_object_count;
     int player_object_truncated;
     public_object_t player_objects[MAX_PUBLIC_OBJECTS];
+    int validation_result;
     unsigned note;
 } event_t;
 
@@ -312,15 +349,24 @@ static int rd16(unsigned addr, short *out) { return safe_read(addr, out, 2); }
 
 static unsigned object_ptr(unsigned who, int id, int *is_unit) {
     unsigned objects = 0, list = 0, object = 0, mark = 0;
+    int length = -1, capacity = -1;
+    unsigned char owner = 0;
+    short object_index = -1;
     if (is_unit) *is_unit = 0;
     if (who >= 10 || id < 0 || id > 32767) return 0;
     if (!rd32(g_base + RVA_OBJECTS_PTR, &objects) || !objects) return 0;
-    if (!rd32(objects + OFF_OBJECTS_LISTS + who * OBJECTS_ARRAY_STRIDE + OFF_ARRAY_LIST,
+    if (!safe_read(objects + OFF_OBJECTS_LISTS + who * OBJECTS_ARRAY_STRIDE + 4u,
+                   &length, 4) ||
+        !safe_read(objects + OFF_OBJECTS_LISTS + who * OBJECTS_ARRAY_STRIDE + 8u,
+                   &capacity, 4) || length < 0 || capacity < length || id >= length ||
+        !rd32(objects + OFF_OBJECTS_LISTS + who * OBJECTS_ARRAY_STRIDE + OFF_ARRAY_LIST,
               &list) || !list) return 0;
     if (!rd32(list + (unsigned)id * 4u, &object) || !object) return 0;
     {
         unsigned char flags = 0;
-        if (!safe_read(object + OFF_OBJ_FLAGS, &flags, 1) || !(flags & 1)) return 0;
+        if (!safe_read(object + OFF_OBJ_FLAGS, &flags, 1) || !(flags & 1) ||
+            !safe_read(object + 9u, &owner, 1) || owner != (unsigned char)who ||
+            !rd16(object + 0x0au, &object_index) || object_index != (short)id) return 0;
     }
     if (rd32(objects + OFF_UNIT_MARK + who * 4u, &mark) && (unsigned)id < mark) {
         if (is_unit) *is_unit = 1;
@@ -328,7 +374,7 @@ static unsigned object_ptr(unsigned who, int id, int *is_unit) {
     return object;
 }
 
-static void observe_public_order(unsigned unit, public_object_t *out) {
+static void observe_public_order(unsigned unit, unsigned who, public_object_t *out) {
     int length = -1;
     unsigned head = 0, node = 0, order = 0, vtable = 0;
     unsigned char b = 0;
@@ -341,6 +387,25 @@ static void observe_public_order(unsigned unit, public_object_t *out) {
     if (rd32(order, &vtable)) out->order_vtable = vtable;
     if (safe_read(order + 4u, &b, 1)) out->order_flags = b;
     if (safe_read(node + 0xcu, &b, 1)) out->order_metric = b;
+    if (vtable == g_base + RVA_GATHER_ORDER_VTABLE) {
+        /* GatherOrder's current pointer is its UnitOrder virtual base at +0x2c.
+           Its TargetOrder::whom/uid pair is safe to expose only after resolving
+           back through the same local owner's active object list. */
+        unsigned complete = order - 44u, target = 0;
+        int target_id = -1, target_who = -1, target_is_unit = 0;
+        unsigned short target_uid = 0, live_uid = 0;
+        if (safe_read(complete + 0x08u, &target_id, 4) &&
+            safe_read(complete + 0x0cu, &target_who, 4) &&
+            safe_read(complete + 0x10u, &target_uid, 2) && target_id >= 0 &&
+            target_who == (int)who &&
+            (target = object_ptr(who, target_id, &target_is_unit)) != 0 &&
+            !target_is_unit && safe_read(target + 0x30u, &live_uid, 2) &&
+            live_uid == target_uid) {
+            out->order_target_id = target_id;
+            out->order_target_uid = target_uid;
+            out->order_target_valid = 1;
+        }
+    }
 }
 
 static void observe_player_public(event_t *e) {
@@ -432,6 +497,41 @@ static void observe_player_public(event_t *e) {
         }
         e->player_over_cap[r] = (int)(v ^ 0x00008932u);
     }
+    {
+        unsigned v = 0;
+        if (!rd32(encrypted + 0xdcu, &v)) {
+            e->note = 14;
+            return;
+        }
+        e->player_age = (int)(v ^ 0x00062766u);
+        for (r = 0; r < 4; r++) {
+            if (!rd32(encrypted + 0xe8u + (unsigned)r * 4u, &v)) {
+                e->note = 14;
+                return;
+            }
+            e->player_epochs[r] = (int)(v ^ 0x00063187u);
+        }
+        if (!safe_read(leader + 0x6c18u, e->player_tech_bits,
+                       sizeof(e->player_tech_bits))) {
+            e->note = 14;
+            return;
+        }
+        for (r = 0; r < 806; r++) {
+            unsigned short queued = 0;
+            if (!safe_read(leader + 0x5a22u + (unsigned)r * 2u, &queued, 2)) {
+                e->note = 14;
+                return;
+            }
+            if (!queued) continue;
+            if (e->player_queued_type_count >= MAX_QUEUED_TYPES) {
+                e->player_queued_type_truncated = 1;
+                continue;
+            }
+            e->player_queued_types[e->player_queued_type_count].type = r;
+            e->player_queued_types[e->player_queued_type_count].count = queued;
+            e->player_queued_type_count++;
+        }
+    }
     if (!rd32(g_base + RVA_OBJECTS_PTR, &objects) || !objects) {
         e->note = 11;
         return;
@@ -490,7 +590,33 @@ static void observe_player_public(event_t *e) {
             if (out->category == 1u) {
                 rd32(p + OFF_UNIT_ANGLE, &out->angle);
                 safe_read(p + 0xe8u, &out->guy_length, 4);
-                observe_public_order(p, out);
+                observe_public_order(p, (unsigned)who, out);
+            } else if (out->category == 2u) {
+                unsigned char logical = 0;
+                unsigned queue_list = 0;
+                int q, queue_size = -1;
+                if (!safe_read(p + 0x82u, &logical, 1) ||
+                    !safe_read(p + 0x88u, &queue_size, 4) || queue_size < logical ||
+                    queue_size > 256 || (logical && !rd32(p + 0x8cu, &queue_list))) {
+                    e->note = 16;
+                    e->player_object_count = 0;
+                    return;
+                }
+                out->queue_logical = logical;
+                out->queue_size = queue_size;
+                out->queue_count = logical < MAX_BUILD_QUEUE ? logical : MAX_BUILD_QUEUE;
+                out->queue_truncated = logical > MAX_BUILD_QUEUE;
+                for (q = 0; q < out->queue_count; q++) {
+                    short type = -1;
+                    if (!safe_read(queue_list + (unsigned)q * 0x14u,
+                                   &out->queue[q].elapsed, 4) ||
+                        !safe_read(queue_list + (unsigned)q * 0x14u + 4u, &type, 2)) {
+                        e->note = 16;
+                        e->player_object_count = 0;
+                        return;
+                    }
+                    out->queue[q].type = type;
+                }
             }
         }
     }
@@ -661,6 +787,15 @@ typedef void (__attribute__((thiscall)) *fn_move)(void *self, const void *group,
                                                   int x, int y, int queued,
                                                   int set_angle, int angle, int orders,
                                                   int form, int width, int disembark);
+typedef void (__attribute__((thiscall)) *fn_gather)(void *self, int target, int queued);
+typedef void (__attribute__((thiscall)) *fn_queue)(void *self, int type, int count);
+typedef void (__attribute__((thiscall)) *fn_build)(void *self, int x1, int y1,
+                                                   int x2, int y2, int type, int queued);
+typedef int (__attribute__((thiscall)) *fn_validate_build)(const void *self,
+                                                           int x1, int y1,
+                                                           int x2, int y2,
+                                                           int type, int queued);
+typedef int (__attribute__((thiscall)) *fn_can_queue)(const void *self, int type);
 
 static void make_group(unsigned char group[GROUP_SIZE], const request_t *r) {
     int i;
@@ -698,6 +833,26 @@ static int dispatch(const request_t *r, event_t *e) {
         case V_OBSERVE_GUYS:
         case V_OBSERVE_PLAYER:
             return 1;
+        case V_VALIDATE_QUEUE: {
+            int is_unit = 0;
+            unsigned object = object_ptr((unsigned)r->arg[0], r->ids[0], &is_unit);
+            unsigned vtable = 0;
+            if (!object || is_unit || r->ids[0] < 2000 || r->ids[0] >= 3000 ||
+                !rd32(object, &vtable) || vtable != g_base + RVA_BUILD_VTABLE) {
+                e->note = 17;
+                e->validation_result = 0;
+            } else {
+                e->validation_result = ((fn_can_queue)(g_base + RVA_BUILD_CAN_QUEUE))(
+                    (const void *)object, r->arg[1]);
+            }
+            return 1;
+        }
+        case V_VALIDATE_BUILD:
+            make_group(group, r);
+            e->validation_result = ((fn_validate_build)(g_base + RVA_GROUP_VALIDATE_BUILD))(
+                group, r->arg[1], r->arg[2], r->arg[3], r->arg[4],
+                r->arg[5], r->arg[6]);
+            return 1;
         case V_PAUSE:
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, r->arg[0]);
             break;
@@ -728,6 +883,26 @@ static int dispatch(const request_t *r, event_t *e) {
             ((fn_attack)(g_base + RVA_ISSUE_ATTACK))(manager, group,
                 r->arg[1], r->arg[2], r->arg[3], r->arg[4]);
             break;
+        case V_GATHER:
+            make_group(group, r);
+            ((fn_gather)(g_base + RVA_GROUP_ISSUE_GATHER))(
+                group, r->arg[1], r->arg[2]);
+            break;
+        case V_QUEUE_UP:
+            make_group(group, r);
+            ((fn_queue)(g_base + RVA_GROUP_ISSUE_QUEUE))(
+                group, r->arg[1], r->arg[2]);
+            break;
+        case V_BUILD:
+            make_group(group, r);
+            ((fn_build)(g_base + RVA_GROUP_ISSUE_BUILD))(
+                group, r->arg[1], r->arg[2], r->arg[3], r->arg[4],
+                r->arg[5], r->arg[6]);
+            break;
+        case V_RUN_FRAMES:
+            /* The trace state owns the matching pause-on-boundary command. */
+            ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 0);
+            break;
         case V_TRACE_MOVE:
             make_group(group, r);
             ((fn_move)(g_base + RVA_ISSUE_MOVE))(manager, group,
@@ -749,7 +924,7 @@ static void trace_tick(void) {
     if (!g_trace.active) return;
     memset(&e, 0, sizeof(e));
     e.seq = g_trace.req.seq;
-    e.verb = V_TRACE_MOVE;
+    e.verb = g_trace.req.verb;
     snapshot(&e, &g_trace.req);
     if (e.frame == g_trace.last_frame) {
         if (g_trace.finishing && e.paused == 1) {
@@ -760,13 +935,17 @@ static void trace_tick(void) {
         return;
     }
     g_trace.last_frame = e.frame;
-    if (e.order_length > 0) g_trace.saw_order = 1;
+    if (g_trace.req.verb == V_TRACE_MOVE && e.order_length > 0)
+        g_trace.saw_order = 1;
     e.phase = 5; /* trace-sample */
 
     if (!g_trace.finishing &&
-        ((g_trace.saw_order && e.order_length == 0) ||
-         (unsigned)(e.frame - g_trace.start_frame) >= (unsigned)g_trace.req.arg[3])) {
-        g_trace.bounded = !(g_trace.saw_order && e.order_length == 0);
+        ((g_trace.req.verb == V_TRACE_MOVE && g_trace.saw_order && e.order_length == 0) ||
+         (unsigned)(e.frame - g_trace.start_frame) >=
+             (unsigned)(g_trace.req.verb == V_TRACE_MOVE ?
+                        g_trace.req.arg[3] : g_trace.req.arg[0]))) {
+        g_trace.bounded = g_trace.req.verb == V_TRACE_MOVE &&
+                          !(g_trace.saw_order && e.order_length == 0);
         e.package_before = package_length();
         ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 1);
         capture_append(&e);
@@ -835,13 +1014,16 @@ static void __cdecl on_turn_frame(void) {
     e.seq = r.seq;
     e.verb = r.verb;
     snapshot(&e, &r);
-    if (r.verb == V_TRACE_MOVE && (g_trace.active || e.paused != 1 || !e.first_object)) {
+    if ((r.verb == V_TRACE_MOVE || r.verb == V_RUN_FRAMES) &&
+        (g_trace.active || e.paused != 1 ||
+         (r.verb == V_TRACE_MOVE && !e.first_object))) {
         e.phase = 4;
         e.note = g_trace.active ? 3 : (e.paused != 1 ? 2 : 4);
         push_event(&e);
     } else if (dispatch(&r, &e)) {
         e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
-                   r.verb == V_OBSERVE_PLAYER) ? 0 : 1;
+                   r.verb == V_OBSERVE_PLAYER || r.verb == V_VALIDATE_QUEUE ||
+                   r.verb == V_VALIDATE_BUILD) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK) {
@@ -850,7 +1032,7 @@ static void __cdecl on_turn_frame(void) {
             g_verify.started = GetTickCount();
             g_verify.initial_order_length = e.order_length;
             g_verify.initial_order_vtable = e.current_order_vtable;
-        } else if (r.verb == V_TRACE_MOVE) {
+        } else if (r.verb == V_TRACE_MOVE || r.verb == V_RUN_FRAMES) {
             memset(&g_trace, 0, sizeof(g_trace));
             g_trace.active = 1;
             g_trace.req = r;
@@ -1032,8 +1214,14 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK ID...
  * seq attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED ID...
  * seq trace-move WHO ID X Y MAX_FRAMES
+ * seq run-frames FRAMES
  * seq observe-guys WHO ID
  * seq observe-player
+ * seq validate-queue WHO PRODUCER_ID TYPE
+ * seq validate-build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
+ * seq gather WHO TARGET_ID QUEUED ID...
+ * seq queue WHO TYPE COUNT PRODUCER_ID...
+ * seq build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
  */
 static int parse_request(char *line, request_t *r) {
     char *t[160];
@@ -1050,6 +1238,16 @@ static int parse_request(char *line, request_t *r) {
         r->arg[0] = parse_int(t[2], &ok);
         id = parse_int(t[3], &ok);
         if (id < 0 || id > 32767) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
+    }
+    else if (!strcmp(t[1], "validate-queue") && n == 5) {
+        int id;
+        r->verb = V_VALIDATE_QUEUE;
+        r->arg[0] = parse_int(t[2], &ok);
+        id = parse_int(t[3], &ok);
+        r->arg[1] = parse_int(t[4], &ok);
+        if (id < 2000 || id >= 3000 || r->arg[1] < 0 || r->arg[1] >= 806) ok = 0;
         r->num_ids = 1;
         r->ids[0] = (short)id;
     }
@@ -1076,6 +1274,28 @@ static int parse_request(char *line, request_t *r) {
         r->verb = V_ATTACK;
         for (i = 0; i < 5; i++) r->arg[i] = parse_int(t[2 + i], &ok);
         first = 7;
+    } else if (!strcmp(t[1], "gather") && n >= 6) {
+        r->verb = V_GATHER;
+        r->arg[0] = parse_int(t[2], &ok);
+        r->arg[1] = parse_int(t[3], &ok);
+        r->arg[2] = parse_int(t[4], &ok);
+        if (r->arg[1] < 0 || r->arg[1] > 32767 ||
+            r->arg[2] < 0 || r->arg[2] > 2) ok = 0;
+        first = 5;
+    } else if (!strcmp(t[1], "queue") && n >= 6) {
+        r->verb = V_QUEUE_UP;
+        r->arg[0] = parse_int(t[2], &ok);
+        r->arg[1] = parse_int(t[3], &ok);
+        r->arg[2] = parse_int(t[4], &ok);
+        if (r->arg[1] < 0 || r->arg[1] >= 806 ||
+            (r->arg[2] != -1 && r->arg[2] != 1)) ok = 0;
+        first = 5;
+    } else if ((!strcmp(t[1], "build") || !strcmp(t[1], "validate-build")) && n >= 10) {
+        r->verb = !strcmp(t[1], "build") ? V_BUILD : V_VALIDATE_BUILD;
+        for (i = 0; i < 7; i++) r->arg[i] = parse_int(t[2 + i], &ok);
+        if (r->arg[5] < 414 || r->arg[5] > 542 ||
+            r->arg[6] < 0 || r->arg[6] > 2) ok = 0;
+        first = 9;
     } else if (!strcmp(t[1], "trace-move") && n == 7) {
         int id;
         r->verb = V_TRACE_MOVE;
@@ -1087,10 +1307,16 @@ static int parse_request(char *line, request_t *r) {
         if (id < 0 || id > 32767 || r->arg[3] < 1 || r->arg[3] > 180) ok = 0;
         r->num_ids = 1;
         r->ids[0] = (short)id;
+    } else if (!strcmp(t[1], "run-frames") && n == 3) {
+        r->verb = V_RUN_FRAMES;
+        r->arg[0] = parse_int(t[2], &ok);
+        if (r->arg[0] < 1 || r->arg[0] > 30) ok = 0;
     } else return 0;
     if (!ok) return 0;
     if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
-         r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS) &&
+         r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS ||
+         r->verb == V_VALIDATE_QUEUE || r->verb == V_VALIDATE_BUILD ||
+         r->verb == V_GATHER || r->verb == V_QUEUE_UP || r->verb == V_BUILD) &&
         (r->arg[0] < 0 || r->arg[0] >= 10)) return 0;
     if (first) {
         r->num_ids = n - first;
@@ -1125,6 +1351,11 @@ static const char *verb_name(unsigned verb) {
         case V_ATTACK: return "attack"; case V_TRACE_MOVE: return "trace-move";
         case V_OBSERVE_GUYS: return "observe-guys";
         case V_OBSERVE_PLAYER: return "observe-player";
+        case V_GATHER: return "gather"; case V_QUEUE_UP: return "queue";
+        case V_BUILD: return "build";
+        case V_VALIDATE_QUEUE: return "validate-queue";
+        case V_VALIDATE_BUILD: return "validate-build";
+        case V_RUN_FRAMES: return "run-frames";
         default: return "unknown";
     }
 }
@@ -1139,7 +1370,7 @@ static const char *phase_name(unsigned phase) {
 }
 
 static void write_event(const event_t *e) {
-    char line[131072], hex[MAX_COMMAND_CAPTURE * 2 + 1];
+    char line[262144], hex[MAX_COMMAND_CAPTURE * 2 + 1], tech_hex[203];
     unsigned i;
     size_t used;
     HANDLE h;
@@ -1147,6 +1378,9 @@ static void write_event(const event_t *e) {
     for (i = 0; i < e->command_len && i < MAX_COMMAND_CAPTURE; i++)
         sprintf(hex + i * 2, "%02x", e->command[i]);
     hex[i * 2] = 0;
+    for (i = 0; i < sizeof(e->player_tech_bits); i++)
+        sprintf(tech_hex + i * 2, "%02x", e->player_tech_bits[i]);
+    tech_hex[sizeof(e->player_tech_bits) * 2] = 0;
     _snprintf(line, sizeof(line) - 1,
         "{\"seq\":%u,\"verb\":\"%s\",\"phase\":\"%s\","
         "\"tick\":%u,\"game\":\"0x%08x\",\"frame\":%u,\"seconds\":%u,"
@@ -1208,46 +1442,76 @@ static void write_event(const event_t *e) {
             "\"player_pop\":%d,\"player_pop_cap\":%d,"
             "\"player_leader_flags\":%u,\"player_identity_flags\":%u,"
             "\"player_tribe\":%d,\"player_team\":%d,"
-            "\"player_peasants\":%d,\"player_free_peasants\":%d,"
-            "\"player_scouts\":%d,"
             "\"player_resources\":[%d,%d,%d,%d,%d,%d],"
-            "\"player_resource_caps\":[%d,%d,%d,%d,%d,%d,%d],"
+            "\"player_resource_caps\":[%d,%d,%d,%d,%d,%d],"
             "\"player_over_cap\":[%d,%d,%d,%d,%d,%d],"
+            "\"player_age\":%d,\"player_epochs\":[%d,%d,%d,%d],"
+            "\"player_tech_bits_hex\":\"%s\","
+            "\"player_queued_type_count\":%d,"
+            "\"player_queued_type_truncated\":%d,"
             "\"player_slots\":%d,\"player_unit_mark\":%d,"
             "\"player_build_mark\":%d,\"player_wall_mark\":%d,"
             "\"player_object_count\":%d,\"player_object_truncated\":%d,"
-            "\"player_objects\":[",
+            "\"validation_result\":%d,\"player_queued_types\":[",
             e->local_player, e->world_tile_xs, e->world_tile_ys,
             e->player_pop, e->player_pop_cap, e->player_leader_flags,
             e->player_identity_flags, e->player_tribe, e->player_team,
-            e->player_peasants,
-            e->player_free_peasants, e->player_scouts,
             e->player_resources[0], e->player_resources[1], e->player_resources[2],
             e->player_resources[3], e->player_resources[4], e->player_resources[5],
             e->player_resource_caps[0], e->player_resource_caps[1],
             e->player_resource_caps[2], e->player_resource_caps[3],
             e->player_resource_caps[4], e->player_resource_caps[5],
-            e->player_resource_caps[6], e->player_over_cap[0],
-            e->player_over_cap[1], e->player_over_cap[2],
+            e->player_over_cap[0], e->player_over_cap[1], e->player_over_cap[2],
             e->player_over_cap[3], e->player_over_cap[4],
-            e->player_over_cap[5], e->player_slots, e->player_unit_mark,
+            e->player_over_cap[5], e->player_age, e->player_epochs[0],
+            e->player_epochs[1], e->player_epochs[2], e->player_epochs[3], tech_hex,
+            e->player_queued_type_count, e->player_queued_type_truncated,
+            e->player_slots, e->player_unit_mark,
             e->player_build_mark, e->player_wall_mark, e->player_object_count,
-            e->player_object_truncated);
+            e->player_object_truncated, e->validation_result);
+        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
+    }
+    for (i = 0; i < (unsigned)e->player_queued_type_count && i < MAX_QUEUED_TYPES; i++) {
+        const queued_type_sample_t *q = &e->player_queued_types[i];
+        int n = _snprintf(line + used, sizeof(line) - used,
+                          "%s{\"type\":%d,\"count\":%u}",
+                          i ? "," : "", q->type, q->count);
+        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+        used += (size_t)n;
+    }
+    {
+        int n = _snprintf(line + used, sizeof(line) - used, "],\"player_objects\":[");
         if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
     }
     for (i = 0; i < (unsigned)e->player_object_count && i < MAX_PUBLIC_OBJECTS; i++) {
         const public_object_t *o = &e->player_objects[i];
+        unsigned q;
         int n = _snprintf(line + used, sizeof(line) - used,
             "%s{\"id\":%d,\"pointer\":\"0x%08x\",\"category\":%u,"
             "\"flags\":%u,\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
             "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
             "\"class_vtable\":\"0x%08x\",\"angle\":%u,\"order_length\":%d,"
             "\"order_vtable\":\"0x%08x\",\"order_flags\":%u,"
-            "\"order_metric\":%u,\"guy_length\":%d}",
+            "\"order_metric\":%u,\"order_target_id\":%d,"
+            "\"order_target_uid\":%u,\"order_target_valid\":%d,"
+            "\"guy_length\":%d,\"queue_logical\":%d,\"queue_size\":%d,"
+            "\"queue_count\":%d,\"queue_truncated\":%d,\"queue\":[",
             i ? "," : "", o->id, o->pointer, o->category, o->flags, o->uid,
             o->type, o->type_valid, o->x, o->y, o->z, o->hits,
             o->class_vtable, o->angle, o->order_length, o->order_vtable,
-            o->order_flags, o->order_metric, o->guy_length);
+            o->order_flags, o->order_metric, o->order_target_id,
+            o->order_target_uid, o->order_target_valid, o->guy_length,
+            o->queue_logical, o->queue_size, o->queue_count, o->queue_truncated);
+        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+        used += (size_t)n;
+        for (q = 0; q < (unsigned)o->queue_count && q < MAX_BUILD_QUEUE; q++) {
+            n = _snprintf(line + used, sizeof(line) - used,
+                          "%s{\"elapsed\":%d,\"type\":%d}", q ? "," : "",
+                          o->queue[q].elapsed, o->queue[q].type);
+            if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+            used += (size_t)n;
+        }
+        n = _snprintf(line + used, sizeof(line) - used, "]}");
         if (n < 0 || (size_t)n >= sizeof(line) - used) break;
         used += (size_t)n;
     }

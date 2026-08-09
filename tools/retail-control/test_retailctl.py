@@ -38,6 +38,12 @@ class RetailCtlTests(unittest.TestCase):
             ["attack", "0", "1", "22", "0", "2", "12", "13"],
             ["trace-move", "0", "12", "100", "200", "120"],
             ["observe-guys", "0", "12"],
+            ["observe-player"], ["validate-queue", "0", "2000", "50"],
+            ["validate-build", "0", "1", "2", "3", "4", "427", "2", "3"],
+            ["gather", "0", "2001", "2", "3"],
+            ["queue", "0", "50", "1", "2000"],
+            ["build", "0", "1", "2", "3", "4", "427", "2", "3"],
+            ["run-frames", "30"],
         ]:
             retailctl.validate_words(words)
 
@@ -154,6 +160,52 @@ class RetailCtlTests(unittest.TestCase):
         escape["actions"][0]["target"]["x"] = observation["world"]["tile_xs"] * 192
         with self.assertRaises(RuntimeError):
             retailctl.validate_action_batch(escape, observation)
+
+    def test_v2_observation_is_fog_safe_and_exposes_exact_own_queues(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v2.json")
+            .read_text()
+        )
+        self.assertEqual(observation["protocol"], "don.retail-player.v2")
+        self.assertEqual(observation["paused"], 1)
+        self.assertIn("enemy and neutral object tables", observation["public_scope"]["excludes"])
+        self.assertTrue(all("pointer" not in obj for obj in observation["objects"]))
+        city = next(obj for obj in observation["objects"] if obj["object_id"] == 2000)
+        self.assertEqual(city["production_queue"]["logical_length"], 1)
+        self.assertEqual(city["production_queue"]["items"][0]["type_name"], "Citizen")
+        library = next(obj for obj in observation["objects"] if obj["object_id"] == 2005)
+        self.assertEqual(library["production_queue"]["items"][0]["type_name"], "City State")
+        gatherer = next(obj for obj in observation["objects"] if obj["object_id"] == 3)
+        self.assertEqual(gatherer["order"]["own_target"]["object_id"], 2001)
+
+    def test_live_economy_queue_research_and_gather_proofs_are_bounded(self):
+        root = Path(__file__).parents[2] / "schema/live"
+        queue = json.loads((root / "retail-economy-action-proof-v1.json").read_text())
+        self.assertEqual(bytes.fromhex(queue["retail_command_hex"])[3], 0x18)
+        self.assertEqual(queue["pause_before_after"], [1, 1])
+        self.assertEqual(queue["before"]["frame"], queue["after"]["frame"])
+        research = json.loads((root / "retail-economy-research-proof-v1.json").read_text())
+        self.assertEqual(research["action"]["type_name"], "City State")
+        self.assertEqual(research["pause_before_after"], [1, 1])
+        self.assertIn("18", research["retail_command_hex"])
+        gather = json.loads((root / "retail-economy-gather-proof-v1.json").read_text())
+        self.assertEqual(gather["pause_before_after"], [1, 1])
+        self.assertEqual(gather["after"]["objects"][3]["order"]["own_target"]["object_id"], 2001)
+
+    def test_build_attempt_is_not_misrepresented_as_positive_proof(self):
+        attempt = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-economy-build-attempt-v1.json")
+            .read_text()
+        )
+        self.assertFalse(attempt["positive_proof"])
+        self.assertEqual(attempt["pause_before_after"], [1, 1])
+        self.assertEqual(attempt["object_marks"]["building_before"],
+                         attempt["object_marks"]["building_after"])
+        protocol = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-protocol-v2.json")
+            .read_text()
+        )
+        self.assertIn("must not synthesize", protocol["actions"]["build"]["coordinates"])
 
 
 if __name__ == "__main__":

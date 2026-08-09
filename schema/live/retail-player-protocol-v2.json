@@ -1,0 +1,60 @@
+{
+  "schema": "don.retail-player-protocol.v2",
+  "protocol": "don.retail-player.v2",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "observation": {
+    "scope": "unique local human slot and its own active object bands only",
+    "technology": ["age", "military/civic/commerce/science epochs", "owned TypeIndex bitset"],
+    "production": ["Leader num_queued TypeIndex counts", "per-building logical queue", "queue TypeIndex and elapsed"],
+    "orders": "canonical front UnitOrder; GatherOrder target is resolved only when it is an own active object with matching uid",
+    "excluded": [
+      "enemy and neutral owner lists",
+      "fog-hidden positions or types",
+      "enemy target dereferences",
+      "unproven visibility flags",
+      "AI counters"
+    ]
+  },
+  "actions": {
+    "queue": {
+      "gate": "BuildData::can_queue(TypeIndex)",
+      "issue": "GroupOut::issue_queue_up",
+      "packed_opcode": "0x18",
+      "proof": "aggregate TypeIndex count and producer-local logical queue both change by exactly count"
+    },
+    "gather": {
+      "gate_and_issue": "GroupOut::issue_gather",
+      "packed_opcode": "0x13",
+      "proof": "canonical GatherOrder resolves to the requested own target and uid"
+    },
+    "build": {
+      "query": "GroupData::validate_build(x1,y1,x2,y2,type,queue)",
+      "issue": "GroupOut::issue_build",
+      "packed_opcode": "0x19",
+      "coordinates": "four raw Coord arguments preserved exactly; the host must not synthesize a degenerate rectangle",
+      "proof": "a new own building with the requested TypeIndex must materialize inside a supervised 180-frame cap"
+    },
+    "run_frames": {
+      "range": "1..30 per boundary",
+      "precondition": "retail paused",
+      "postcondition": "exact requested Game.frame delta and retail paused again"
+    }
+  },
+  "limits": {
+    "actions_per_transaction": 1,
+    "build_settlement_frames": 180,
+    "build_queue_items_per_observed_building": 16,
+    "owned_objects": 256,
+    "queued_type_entries": 128
+  },
+  "fail_closed": [
+    "wrong executable identity or hook bytes",
+    "ambiguous local human",
+    "torn object/order/queue metadata",
+    "unknown own runtime class, type, or current order",
+    "retail legality rejection",
+    "wrong serialized opcode",
+    "frame or pause boundary mismatch",
+    "unproved action effect"
+  ]
+}

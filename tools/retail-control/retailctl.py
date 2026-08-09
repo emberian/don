@@ -159,7 +159,8 @@ def validate_words(words: list[str]) -> None:
         raise SystemExit("a retail command is required")
     allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
                "move", "halt", "attack", "trace-move", "observe-guys",
-               "observe-player"}
+               "observe-player", "validate-queue", "validate-build", "gather",
+               "queue", "build", "run-frames"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
     for word in words:
@@ -262,15 +263,10 @@ def type_names() -> dict[int, str]:
     path = HERE.parents[1] / "schema/live/type-names.txt"
     for line in path.read_text().splitlines():
         fields = line.split("\t")
-        if (len(fields) >= 4 and fields[0] in {"UnitType", "BuildType", "ObjectType"}
+        if (len(fields) >= 4 and fields[0] in {"UnitType", "BuildType", "TechType", "ObjectType"}
                 and fields[2].isdigit() and fields[3] and int(fields[2]) not in names):
             names[int(fields[2])] = fields[3]
     return names
-
-
-def vtable_names() -> dict[int, str]:
-    raw = json.loads((HERE.parents[1] / "schema/vtables.json").read_text())
-    return {int(address, 16): name for address, name in raw.items()}
 
 
 PUBLIC_OBJECT_VTABLES = {
@@ -367,11 +363,42 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
                     "metric": item["order_metric"],
                 },
             })
+            if item["order_target_valid"]:
+                public_object["order"]["own_target"] = {
+                    "object_id": item["order_target_id"],
+                    "uid": item["order_target_uid"],
+                }
+        elif category == "build":
+            public_object["production_queue"] = {
+                "logical_length": item["queue_logical"],
+                "storage_length": item["queue_size"],
+                "truncated": bool(item["queue_truncated"]),
+                "items": [
+                    {
+                        "type_index": queue_item["type"],
+                        "type_name": names.get(queue_item["type"],
+                                               f"TypeIndex({queue_item['type']})"),
+                        "elapsed": queue_item["elapsed"],
+                    }
+                    for queue_item in item["queue"]
+                ],
+            }
         objects.append(public_object)
     resources = ["food", "timber", "wealth", "knowledge", "metal", "oil"]
+    tech_bits = bytes.fromhex(event["player_tech_bits_hex"])
+    owned_techs = [type_index for type_index in range(806)
+                   if tech_bits[type_index >> 3] & (1 << (type_index & 7))]
+    queued_types = [
+        {
+            "type_index": item["type"],
+            "type_name": names.get(item["type"], f"TypeIndex({item['type']})"),
+            "count": item["count"],
+        }
+        for item in event["player_queued_types"]
+    ]
     return {
-        "schema": "don.retail-player-observation.v1",
-        "protocol": "don.retail-player.v1",
+        "schema": "don.retail-player-observation.v2",
+        "protocol": "don.retail-player.v2",
         "retail_executable_sha256": EXPECTED_SHA256,
         "controller_generation": generation,
         "public_scope": {
@@ -407,6 +434,13 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
             "capped_state_i32": event["player_over_cap"],
         },
         "population": {"current": event["player_pop"], "cap": event["player_pop_cap"]},
+        "technology": {
+            "age": event["player_age"],
+            "epochs": dict(zip(["military", "civic", "commerce", "science"],
+                               event["player_epochs"])),
+            "owned_type_indices": owned_techs,
+        },
+        "queued_types": queued_types,
         "object_slots": event["player_slots"],
         "object_marks": {
             "unit": event["player_unit_mark"],
@@ -426,6 +460,8 @@ def player_observation(root: str, generation: str) -> dict:
         raise RuntimeError(f"retail player observation failed closed (note={event['note']})")
     if event.get("player_object_truncated"):
         raise RuntimeError("retail player observation exceeded MAX_PUBLIC_OBJECTS")
+    if event.get("player_queued_type_truncated"):
+        raise RuntimeError("retail queued-type observation exceeded MAX_QUEUED_TYPES")
     if event.get("paused") != 1:
         raise RuntimeError("REFUSING player observation unless the supervised match is paused")
     observation = normalize_player_observation(event, generation, executable_base(root))
@@ -435,6 +471,12 @@ def player_observation(root: str, generation: str) -> dict:
     if any(obj["order"]["length"] < 0 or not obj["order"]["index_valid"]
            for obj in observation["objects"] if obj["category"] == "unit"):
         raise RuntimeError("retail player observation contains an unresolved own-unit order")
+    if any(obj["order"]["kind"] == "GatherOrder" and "own_target" not in obj["order"]
+           for obj in observation["objects"] if obj["category"] == "unit"):
+        raise RuntimeError("retail player observation contains an unresolved own GatherOrder target")
+    if any(obj["production_queue"]["truncated"]
+           for obj in observation["objects"] if obj["category"] == "build"):
+        raise RuntimeError("retail player observation contains a truncated production queue")
     return observation
 
 
@@ -495,6 +537,327 @@ def validate_action_batch(batch: dict, observation: dict) -> None:
             raise RuntimeError("v1 move target lies outside observed public world bounds")
         if not (1 <= action.get("max_frames", 0) <= 180):
             raise RuntimeError("v1 move exceeds the bounded trace frame limit")
+
+
+OPENING_RESEARCH_TYPES = [565, 558, 572, 544, 551]
+
+
+def exact_validation(root: str, words: list[str]) -> dict:
+    events = send(words, 8.0, root)
+    event = next((item for item in events if item.get("phase") == "observed"), None)
+    if not event or event.get("paused") != 1:
+        raise RuntimeError("retail legality query did not run in the paused main-thread callback")
+    return event
+
+
+def queue_validation(root: str, owner: int, producer_id: int, type_index: int) -> dict:
+    return exact_validation(root, ["validate-queue", str(owner), str(producer_id),
+                                   str(type_index)])
+
+
+def build_validation(root: str, owner: int, worker_id: int, x: int, y: int,
+                     x2: int, y2: int, type_index: int) -> dict:
+    return exact_validation(root, ["validate-build", str(owner), str(x), str(y),
+                                   str(x2), str(y2), str(type_index), "2",
+                                   str(worker_id)])
+
+
+def conservative_opening_policy(observation: dict, root: str) -> dict:
+    owner = observation["player"]["owner"]
+    by_type: dict[int, list[dict]] = {}
+    for obj in observation["objects"]:
+        if obj["type_valid"]:
+            by_type.setdefault(obj["type_index"], []).append(obj)
+    queued = {item["type_index"]: item["count"] for item in observation["queued_types"]}
+    validations: list[dict] = []
+
+    cities = sorted(
+        [obj for type_index in (414, 415, 416) for obj in by_type.get(type_index, [])],
+        key=lambda obj: obj["object_id"],
+    )
+    if (observation["population"]["current"] + queued.get(50, 0) < 12 and cities):
+        producer = cities[0]
+        result = queue_validation(root, owner, producer["object_id"], 50)
+        validations.append({"verb": "validate-queue", "producer_id": producer["object_id"],
+                            "type_index": 50, "retail_result": result["validation_result"]})
+        if result["validation_result"]:
+            return {
+                "schema": "don.retail-economy-action-plan.v1",
+                "protocol": observation["protocol"],
+                "policy": "deterministic-conservative-opening.v1",
+                "observation_frame": observation["frame"],
+                "validations": validations,
+                "reason": "population below 12 and retail BuildData::can_queue accepts Citizen",
+                "action": {"verb": "queue", "owner": owner,
+                           "producer_id": producer["object_id"], "type_index": 50,
+                           "type_name": "Citizen", "count": 1},
+            }
+
+    libraries = sorted(by_type.get(435, []), key=lambda obj: obj["object_id"])
+    owned_techs = set(observation["technology"]["owned_type_indices"])
+    if libraries:
+        for type_index in OPENING_RESEARCH_TYPES:
+            if type_index in owned_techs or queued.get(type_index, 0):
+                continue
+            producer = libraries[0]
+            result = queue_validation(root, owner, producer["object_id"], type_index)
+            validations.append({"verb": "validate-queue", "producer_id": producer["object_id"],
+                                "type_index": type_index,
+                                "retail_result": result["validation_result"]})
+            if result["validation_result"]:
+                return {
+                    "schema": "don.retail-economy-action-plan.v1",
+                    "protocol": observation["protocol"],
+                    "policy": "deterministic-conservative-opening.v1",
+                    "observation_frame": observation["frame"],
+                    "validations": validations,
+                    "reason": "first fixed-priority missing tech accepted by retail can_queue",
+                    "action": {"verb": "queue", "owner": owner,
+                               "producer_id": producer["object_id"],
+                               "type_index": type_index,
+                               "type_name": type_names().get(type_index,
+                                                              f"TypeIndex({type_index})"),
+                               "count": 1},
+                }
+
+    return {
+        "schema": "don.retail-economy-action-plan.v1",
+        "protocol": observation["protocol"],
+        "policy": "deterministic-conservative-opening.v1",
+        "observation_frame": observation["frame"],
+        "validations": validations,
+        "reason": ("no conservative queue action passed the shipped retail legality gates; "
+                   "automatic build placement is fail-closed until the exact four-coordinate "
+                   "retail placement gesture has a positive live oracle"),
+        "action": None,
+    }
+
+
+def validate_economy_action(action: dict, observation: dict, root: str) -> dict:
+    owner = observation["player"]["owner"]
+    owned = {obj["object_id"]: obj for obj in observation["objects"]}
+    if action.get("owner") != owner:
+        raise RuntimeError("economy action owner differs from observed human slot")
+    if action["verb"] == "queue":
+        producer = owned.get(action.get("producer_id"))
+        if not producer or producer["category"] != "build" or action.get("count") not in {-1, 1}:
+            raise RuntimeError("queue action requires one observed own producer and count +/-1")
+        return queue_validation(root, owner, producer["object_id"], action["type_index"])
+    if action["verb"] == "gather":
+        worker = owned.get(action.get("worker_id"))
+        target = owned.get(action.get("target_id"))
+        if (not worker or worker["category"] != "unit" or worker["type_index"] not in {50, 51}
+                or not target or target["category"] != "build"):
+            raise RuntimeError("gather action requires an observed own citizen and own building")
+        return {"validation_result": 1, "validation": "retail GroupOut::issue_gather gate"}
+    if action["verb"] == "build":
+        workers = action.get("worker_ids", [])
+        if len(workers) != 1 or workers[0] not in owned or owned[workers[0]]["type_index"] not in {50, 51}:
+            raise RuntimeError("build action requires exactly one observed own citizen")
+        return build_validation(root, owner, workers[0], action["x1"], action["y1"],
+                                action["x2"], action["y2"], action["type_index"])
+    raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
+
+
+def economy_action_words(action: dict) -> list[str]:
+    if action["verb"] == "queue":
+        return ["queue", str(action["owner"]), str(action["type_index"]),
+                str(action["count"]), str(action["producer_id"])]
+    if action["verb"] == "gather":
+        return ["gather", str(action["owner"]), str(action["target_id"]), "2",
+                str(action["worker_id"])]
+    if action["verb"] == "build":
+        return ["build", str(action["owner"]), str(action["x1"]), str(action["y1"]),
+                str(action["x2"]), str(action["y2"]), str(action["type_index"]),
+                str(action.get("queue", 2)), *[str(i) for i in action["worker_ids"]]]
+    raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
+
+
+def prove_economy_action(root: str, generation: str, action: dict, output: Path) -> dict:
+    before = player_observation(root, generation)
+    validation = validate_economy_action(action, before, root)
+    if not validation.get("validation_result"):
+        raise RuntimeError("shipped retail legality predicate rejected economy action")
+    command_events = send(economy_action_words(action), 8.0, root)
+    queued_event = next((event for event in command_events if event.get("phase") == "queued"), None)
+    if not queued_event or not queued_event.get("command_hex"):
+        raise RuntimeError("retail did not serialize the economy command")
+    command_bytes = bytes.fromhex(queued_event["command_hex"])
+    expected_opcode = {"gather": 0x13, "queue": 0x18, "build": 0x19}[action["verb"]]
+    packed_length = {"gather": 9, "queue": 9, "build": 25}[action["verb"]]
+    # Retail's group prefix is variable-length (a building id crosses a compressed
+    # id band).  The issue methods append these fixed-size packed commands to it.
+    opcode_offset = len(command_bytes) - packed_length
+    if opcode_offset < 0 or command_bytes[opcode_offset] != expected_opcode:
+        raise RuntimeError(
+            f"retail serialized opcode "
+            f"{command_bytes[opcode_offset] if opcode_offset >= 0 else None!r}; "
+            f"expected 0x{expected_opcode:02x} before the fixed-size payload"
+        )
+    settlements: list[dict] = []
+    if action["verb"] == "build":
+        before_ids = {(obj["object_id"], obj["id"]["uid"]) for obj in before["objects"]}
+        after = before
+        for _ in range(6):
+            settlements.append(advance_frames(root, 30))
+            after = player_observation(root, generation)
+            if any(obj["type_index"] == action["type_index"] and
+                   (obj["object_id"], obj["id"]["uid"]) not in before_ids
+                   for obj in after["objects"] if obj["category"] == "build"):
+                break
+    else:
+        after = player_observation(root, generation)
+    if before["paused"] != 1 or after["paused"] != 1:
+        raise RuntimeError("economy transaction did not restore its paused boundary")
+    if action["verb"] == "build":
+        if after["frame"] - before["frame"] != sum(item["requested"] for item in settlements):
+            raise RuntimeError("bounded build settlement crossed an unaccounted frame boundary")
+    elif before["frame"] != after["frame"]:
+        raise RuntimeError("economy transaction escaped its paused zero-sim-frame boundary")
+    if action["verb"] == "queue":
+        def queued_count(obs: dict) -> int:
+            return next((item["count"] for item in obs["queued_types"]
+                         if item["type_index"] == action["type_index"]), 0)
+        if queued_count(after) - queued_count(before) != action["count"]:
+            raise RuntimeError("retail aggregate queued type did not change by requested count")
+        before_build = next(obj for obj in before["objects"]
+                            if obj["object_id"] == action["producer_id"])
+        after_build = next(obj for obj in after["objects"]
+                           if obj["object_id"] == action["producer_id"])
+        if (after_build["production_queue"]["logical_length"] -
+                before_build["production_queue"]["logical_length"] != action["count"]):
+            raise RuntimeError("retail producer queue did not change by requested count")
+    elif action["verb"] == "gather":
+        worker = next(obj for obj in after["objects"] if obj["object_id"] == action["worker_id"])
+        if (worker["order"]["kind"] != "GatherOrder" or
+                worker["order"].get("own_target", {}).get("object_id") != action["target_id"]):
+            raise RuntimeError("retail did not apply the GatherOrder to the own target")
+    elif action["verb"] == "build":
+        if not any(obj["type_index"] == action["type_index"] and
+                   (obj["object_id"], obj["id"]["uid"]) not in before_ids
+                   for obj in after["objects"] if obj["category"] == "build"):
+            raise RuntimeError("retail did not materialize the requested building")
+    artifact = {
+        "schema": "don.retail-economy-action-proof.v1",
+        "protocol": before["protocol"],
+        "controller_generation": generation,
+        "mode": "apply",
+        "action": action,
+        "retail_validation": validation,
+        "retail_command_hex": queued_event["command_hex"],
+        "frame_boundary": {"before": before["frame"], "after": after["frame"]},
+        "pause_before_after": [before["paused"], after["paused"]],
+        "bounded_settlement": settlements,
+        "before": before,
+        "after": after,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2) + "\n")
+    return artifact
+
+
+def advance_frames(root: str, frames: int, timeout: float = 10.0) -> dict:
+    if not 1 <= frames <= 30:
+        raise RuntimeError("run-frames boundary must be between 1 and 30")
+    seq = next_seq()
+    words = ["run-frames", str(frames)]
+    validate_words(words)
+    line = " ".join([str(seq), *words])
+    guest_cmd(
+        f'(echo {line})>"{root}\\request.tmp" && '
+        f'move /y "{root}\\request.tmp" "{root}\\request.txt" >nul'
+    )
+    events: list[dict] = []
+    seen: set[tuple] = set()
+    terminal: dict | None = None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        raw_events = guest_cmd(
+            f'if exist "{root}\\events.ndjson" type "{root}\\events.ndjson"',
+            check=False,
+        )
+        for raw in raw_events.splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if event.get("seq") != seq:
+                continue
+            key = (event.get("phase"), event.get("frame"), event.get("command_hex"))
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(event)
+            if event.get("phase") == "rejected":
+                raise RuntimeError(f"retail rejected run-frames (note={event.get('note')})")
+            if event.get("phase") in {"trace-complete", "trace-bounded"}:
+                terminal = event
+        if terminal:
+            break
+        time.sleep(0.05)
+    queued = next((event for event in events if event.get("phase") == "queued"), None)
+    if not queued or not terminal:
+        raise RuntimeError("run-frames did not reach its supervised terminal boundary")
+    if (terminal.get("paused") != 1 or terminal["frame"] - queued["frame"] != frames or
+            terminal.get("phase") != "trace-complete"):
+        raise RuntimeError("run-frames stopped outside its exact frame/pause boundary")
+    return {
+        "verb": "run-frames",
+        "requested": frames,
+        "frame_before": queued["frame"],
+        "frame_after": terminal["frame"],
+        "pause_after": terminal["paused"],
+        "unpause_command_hex": queued["command_hex"],
+    }
+
+
+def economy_policy_run(root: str, generation: str, output: Path, apply: bool) -> None:
+    failure: BaseException | None = None
+    try:
+        observation = player_observation(root, generation)
+        plan = conservative_opening_policy(observation, root)
+        artifact: dict = {
+            "schema": "don.retail-economy-policy-run.v1",
+            "protocol": observation["protocol"],
+            "mode": "apply" if apply else "dry-run",
+            "observation": observation,
+            "plan": plan,
+            "proof": None,
+        }
+        if apply and plan["action"]:
+            artifact["proof"] = prove_economy_action(root, generation, plan["action"],
+                                                      output.with_name("retail-economy-action-proof-v1.json"))
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(artifact, indent=2) + "\n")
+        print(json.dumps(plan, indent=2))
+        print(f"wrote economy policy run to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+def economy_action_command(root: str, generation: str, action: dict, output: Path) -> None:
+    failure: BaseException | None = None
+    try:
+        prove_economy_action(root, generation, action, output)
+        print(f"wrote bounded economy proof to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
 
 
 def trajectory(owner: int, unit_id: int, x: int, y: int, max_frames: int,
@@ -739,7 +1102,7 @@ def main() -> None:
     add_generation(t)
     po = sub.add_parser("player-observe")
     po.add_argument("--output", type=Path,
-                    default=HERE.parents[1] / "schema/live/retail-player-observation-v1.json")
+                    default=HERE.parents[1] / "schema/live/retail-player-observation-v2.json")
     add_generation(po)
     pol = sub.add_parser("policy")
     pol.add_argument("--apply", action="store_true")
@@ -748,6 +1111,26 @@ def main() -> None:
     pol.add_argument("--trace-output", type=Path,
                      default=HERE.parents[1] / "schema/live/retail-player-scout-trace-v1.json")
     add_generation(pol)
+    ep = sub.add_parser("economy-policy")
+    ep.add_argument("--apply", action="store_true")
+    ep.add_argument("--output", type=Path,
+                    default=HERE.parents[1] / "schema/live/retail-economy-policy-run-v1.json")
+    add_generation(ep)
+    ea = sub.add_parser("economy-action")
+    ea.add_argument("verb", choices=["queue", "gather", "build"])
+    ea.add_argument("--owner", type=int, default=0)
+    ea.add_argument("--producer-id", type=int)
+    ea.add_argument("--worker-id", type=int)
+    ea.add_argument("--target-id", type=int)
+    ea.add_argument("--type-index", type=int)
+    ea.add_argument("--count", type=int, default=1)
+    ea.add_argument("--x1", type=int)
+    ea.add_argument("--y1", type=int)
+    ea.add_argument("--x2", type=int)
+    ea.add_argument("--y2", type=int)
+    ea.add_argument("--output", type=Path,
+                    default=HERE.parents[1] / "schema/live/retail-economy-action-proof-v1.json")
+    add_generation(ea)
     stop_parser = sub.add_parser("stop")
     add_generation(stop_parser)
     rearm_parser = sub.add_parser("rearm")
@@ -770,6 +1153,30 @@ def main() -> None:
     elif a.action == "policy":
         policy_run(generation_root(a.generation), a.generation, a.output.resolve(),
                    a.trace_output.resolve(), a.apply)
+    elif a.action == "economy-policy":
+        economy_policy_run(generation_root(a.generation), a.generation, a.output.resolve(),
+                           a.apply)
+    elif a.action == "economy-action":
+        if a.verb == "queue":
+            if a.producer_id is None or a.type_index is None:
+                ap.error("economy-action queue requires --producer-id and --type-index")
+            action = {"verb": "queue", "owner": a.owner, "producer_id": a.producer_id,
+                      "type_index": a.type_index, "type_name": type_names().get(a.type_index),
+                      "count": a.count}
+        elif a.verb == "gather":
+            if a.worker_id is None or a.target_id is None:
+                ap.error("economy-action gather requires --worker-id and --target-id")
+            action = {"verb": "gather", "owner": a.owner, "worker_id": a.worker_id,
+                      "target_id": a.target_id}
+        else:
+            if (a.worker_id is None or a.type_index is None or None in
+                    {a.x1, a.y1, a.x2, a.y2}):
+                ap.error("economy-action build requires worker/type/x1/y1/x2/y2")
+            action = {"verb": "build", "owner": a.owner, "worker_ids": [a.worker_id],
+                      "type_index": a.type_index, "type_name": type_names().get(a.type_index),
+                      "x1": a.x1, "y1": a.y1, "x2": a.x2, "y2": a.y2, "queue": 2}
+        economy_action_command(generation_root(a.generation), a.generation, action,
+                               a.output.resolve())
     elif a.action == "stop": stop(generation_root(a.generation))
     elif a.action == "rearm": rearm(generation_root(a.generation))
 
