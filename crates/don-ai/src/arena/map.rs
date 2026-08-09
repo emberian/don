@@ -13,11 +13,23 @@
 //! positions sit on the orbit of one point under that rotation, so with 2 or 4 players
 //! every player's neighbourhood is the *same* neighbourhood, rotated. A test asserts it.
 //! An unfair map would make every head-to-head number in this lane meaningless.
+//! Consequently its forest and mountain circle stamps are not presented as retail
+//! `LandData`, `MountainRangeData`, or `CliffMiningData`. [`Map::generate`] marks those
+//! gathering sources unavailable. A map ingester which actually has the installed rules
+//! bytes and generated object arrays can retain them transactionally through
+//! [`Map::retain_gather_terrain_sources`].
 //!
 //! There is **no water and no naval layer**. `economic.bhs` branches on
 //! `get_mapstyle()`; the arena reports a land style so those branches take the land path.
 
 use std::path::Path;
+
+#[path = "map_gather.rs"]
+mod map_gather;
+pub use map_gather::{
+    GatherTerrainRetentionError, GatherTerrainSourceState, GatherTerrainUnavailable,
+    RetainedGatherTerrainSources,
+};
 
 /// One tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +128,9 @@ pub struct Map {
     /// One start tile per player, in player order.
     pub starts: Vec<(i32, i32)>,
     pub spatial: Spatial,
+    /// Retail gathering data is a separate source plane. The Arena generator cannot
+    /// derive it from its final Terrain bitmap.
+    gather_terrain: GatherTerrainSourceState,
 }
 
 /// Tuning for [`Map::generate`]. Every field changes the *shape* of a fair map, never
@@ -204,6 +219,9 @@ impl Map {
             tiles: vec![Terrain::Grass; (p.size * p.size) as usize],
             starts: Vec::new(),
             spatial,
+            gather_terrain: GatherTerrainSourceState::Unavailable(
+                GatherTerrainUnavailable::NonRetailGenerator,
+            ),
         };
         let mut rng = Lcg(p.seed);
 
