@@ -165,7 +165,7 @@ code actually does.
 | 14 | **`Objects::process_all`** | `0x0065DCE0` | **implemented** | rotation `(frame+i)%10`, `crate::objects` |
 | 15 | `Objects::inc_time` | `0x0065DB70` | module exists, runtime call unverified | `ammo.rs` lives here |
 | 16 | `GraphicEvents::process` | `0x008E50A0` | out of scope | |
-| 17 | `Leaders::end_process_all` | `0x006ED070` | **absent** | |
+| 17 | **`Leaders::end_process_all`** | `0x006ED070` | **dispatcher and deterministic body executed** | full Player-warning cleanup and population-cap rate limiter; UI/audio emitted as an inspectable presentation event |
 | 18 | `Achieve::capture_data` | `0x007AF980` | out of scope | |
 | 19 | `Leader::process_event_frame` | `0x006EC180` | **absent** | 8 leaders, stride `0x6EEC` |
 | 20 | **`Game::frame++`** | `0x005924BF` | **implemented** | after step 14 — rotation uses pre-increment frame |

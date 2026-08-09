@@ -1070,8 +1070,11 @@ impl Sim {
 
         // 16 — the FX event queue.
         t.steps[16] = StepRun::OutOfScope;
-        // 17, 18, 19.
-        t.steps[17] = StepRun::Unimplemented(Gap::LeadersEndProcessAll);
+        // 17 — Leaders::end_process_all.
+        let (r, w) = self.leaders_end_process_all();
+        t.steps[17] = r;
+        t.work[17] = w;
+        // 18, 19.
         t.steps[18] = StepRun::OutOfScope;
         t.steps[19] = StepRun::Unimplemented(Gap::LeaderProcessEventFrame);
 
@@ -1454,6 +1457,21 @@ impl Sim {
         }
 
         let work = trace.calls.len() as u32;
+        if work == 0 {
+            (StepRun::Vacuous, 0)
+        } else {
+            (StepRun::Executed, work)
+        }
+    }
+
+    // -- step 17 ----------------------------------------------------------------------
+
+    /// `Leaders::end_process_all` `0x006ED070` — warning-flag cleanup plus the
+    /// rate-limited local population-cap feedback boundary.
+    fn leaders_end_process_all(&mut self) -> (StepRun, u32) {
+        self.step8.sync_end_players_from_leaders();
+        let trace = leaders::end_process_all(&mut self.step8, self.world.frame);
+        let work = trace.leaders_processed() as u32;
         if work == 0 {
             (StepRun::Vacuous, 0)
         } else {

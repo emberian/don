@@ -1,5 +1,6 @@
-//! Leader-owned tick dispatchers: step 8 `Leaders::process_all` `0x006ED2A0` and step 11
-//! `Leaders::strategy_all` `0x006ED430`.
+//! Leader-owned tick dispatchers: step 8 `Leaders::process_all` `0x006ED2A0`, step 11
+//! `Leaders::strategy_all` `0x006ED430`, and step 17 `Leaders::end_process_all`
+//! `0x006ED070`.
 //!
 //! # What this file is
 //!
@@ -13,7 +14,7 @@
 //!  +- [8] Leaders::process_all      0x006ED2A0   <- [`process_all`], this file
 //!      for slot in 0..8, flags & 2:
 //!        flags &= ~0x40000                       ; the hostile-contact bit, recomputed
-//!        leader[0x7E8] = 0 ; leader[0x9F4] = 0    ; two per-frame counters
+//!        leader.pop_issues = 0 ; leader[0x9F4] = 0 ; production failures + counter
 //!        for other in 0..8, flags & 1:            ; the diplomacy scan
 //!            ...                                  ; -> [`Leaders::scan_hostiles`]
 //!        Leader::gather             0x006CE280   -> [`leader_gather`]
@@ -37,11 +38,15 @@
 //!        Leader::diplomacy          0x006BC950   ; AI body remains explicit
 //!      if Game semaphore bit 9:
 //!        Game::check_victory        0x005926B0   ; existing victory-score port
+//!  +- [17] Leaders::end_process_all 0x006ED070   <- [`end_process_all`], this file
+//!      for slot in 0..8, flags & 2:
+//!        if pop_issues == 0: clear matching Player warning flags
+//!        else if local player: rate-limit and emit population-cap feedback
 //! ```
 //!
 //! Everything above is [measured] from a capstone disassembly of `0x006ED2A0`,
 //! `0x006CE280`, `0x006CF7C0`, `0x006CF970`, `0x006CDEA0`, `0x006CDCC0`, `0x006B8A20`,
-//! `0x006ED430` and `0x006BC860` against `ron-bin/riseofnations.exe` (sha256
+//! `0x006ED430`, `0x006BC860`, and `0x006ED070` against `ron-bin/riseofnations.exe` (sha256
 //! `30478a44…625079`), cross-read against `re/decomp-all/`. **Tier C**: structure and
 //! constants are read from the binary, nothing here has been executed against retail, and
 //! no claim may be promoted without an oracle run.
@@ -185,6 +190,11 @@ pub mod offsets {
     pub const TIMER2_FROZEN: usize = 0x44C;
     /// `0x006CDFDC` — the attrition this leader inflicts.
     pub const ATTRITION: usize = 0x7F0;
+    /// `0x006ED213` — current population cap, compared with the selected match limit.
+    pub const POP_CAP: usize = 0x7E4;
+    /// `0x006ED0AA` — per-frame failed population-production count. Step 8 clears it;
+    /// object processing can raise it before step 17 reads it.
+    pub const POP_ISSUES: usize = 0x7E8;
     /// `0x006CDCCE` — **f32**, the anti-attrition scale, 256.0 = none.
     pub const ANTI_ATTRITION: usize = 0x7F4;
     /// `0x006BC8B6` / `0x006BC8CB` / `0x006BC91B` — the number of explored region
@@ -194,8 +204,6 @@ pub mod offsets {
     pub const ATTRITION_OFF: usize = 0x7F8;
     /// `0x006CDCC7` — non-zero forces anti-attrition to 0.0.
     pub const ANTI_ATTRITION_OFF: usize = 0x7FC;
-    /// `0x006ED2CA` — zeroed for every processed leader, every frame.
-    pub const FRAME_COUNTER_A: usize = 0x7E8;
     /// `0x006ED2D4` — likewise.
     pub const FRAME_COUNTER_B: usize = 0x9F4;
     /// `0x006CDF6E` — the CTW gate byte `calc_attrition` tests.
@@ -626,8 +634,10 @@ pub struct Leader {
     pub timers: [GraceTimer; 3],
     /// `+0x41C`.
     pub retake_scale: i32,
-    /// `+0x7E8`.
-    pub frame_counter_a: i32,
+    /// `+0x7E4`.
+    pub pop_cap: i32,
+    /// `+0x7E8`, named `pop_issues` by the PDB.
+    pub pop_issues: i32,
     /// `+0x9F4`.
     pub frame_counter_b: i32,
     /// `+0x7F0`.
@@ -694,10 +704,70 @@ impl Leader {
 /// (`0x006CDCCE`, a `mov` of the bit pattern, not a load).
 pub const NO_ANTI_ATTRITION: f32 = 256.0;
 
+/// `GameInfo::Player::flags & 1` — the player record participates in the step-17 scan.
+pub const PLAYER_VALID: u16 = 0x0001;
+/// `GameInfo::Player::flags & 0x800` — population-production warning is currently set.
+pub const PLAYER_POP_CAP_WARNING: u16 = 0x0800;
+/// Retail tests `frame - pop_cap_frame > 0x1c1`, so the first due elapsed value is 450.
+pub const POP_CAP_WARNING_MIN_ELAPSED: i32 = 450;
+/// Category passed to `SoundGlobal::play` when the feedback is emitted.
+pub const POP_CAP_WARNING_SOUND: i32 = 0x5B;
+/// Offset into retail's localized text table copied before `MessageWin::add_feedback`.
+pub const POP_CAP_WARNING_TEXT_OFFSET: u32 = 0xC878;
+/// The six `pop_limits` category rows shipped in `rules.xml`, in category order.
+pub const SHIPPED_POP_LIMITS: [i32; 6] = [50, 75, 100, 125, 150, 200];
+
+/// The three `GameInfo::Player` fields read or written by step 17.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct EndPlayer {
+    /// `GameInfo::Player +0x30`, whose low bit gates the warning-clear scan.
+    pub flags: u16,
+    /// `GameInfo::Player +0x33`, compared with `Leader +0x08` after zero-extension.
+    pub who: u8,
+    /// `GameInfo::Player +0x2c`, the frame of the prior population-cap feedback.
+    pub pop_cap_frame: i32,
+}
+
+/// External `GameInfo` / `Console` state consumed by [`end_process_all`].
+///
+/// It lives beside the leaders because retail step 17 mutates the player warning bits and
+/// feedback stamp. `last_feedback` is the headless presentation boundary: retail
+/// constructs one localized string, calls `MessageWin::add_feedback`, then plays sound
+/// category `0x5b`; the simulation records that request without importing UI or audio.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndProcessState {
+    pub players: [EndPlayer; NUM_LEADER_SLOTS],
+    /// `Console +0x298`; `-1` means the host has not supplied a local player identity.
+    pub local_who: i32,
+    /// `Console +0x2a0`; an index into `players`.
+    pub local_play: i32,
+    /// `GameInfo +0x25`; an index into the shipped population-limit category.
+    /// `u8::MAX` means the host has not supplied the match option.
+    pub pop_limit_index: u8,
+    /// Presentation requests emitted by the most recent dispatcher call only.
+    pub last_feedback: Vec<PopulationCapFeedback>,
+}
+
+impl Default for EndProcessState {
+    fn default() -> Self {
+        EndProcessState {
+            players: std::array::from_fn(|i| EndPlayer {
+                who: i as u8,
+                ..EndPlayer::default()
+            }),
+            local_who: -1,
+            local_play: -1,
+            pop_limit_index: u8::MAX,
+            last_feedback: Vec::new(),
+        }
+    }
+}
+
 /// The eight `Leader` slots the loop walks.
 #[derive(Clone, Debug)]
 pub struct Leaders {
     pub leaders: [Leader; NUM_LEADER_SLOTS],
+    pub end: EndProcessState,
 }
 
 impl Default for Leaders {
@@ -713,6 +783,24 @@ impl Leaders {
     pub fn new() -> Leaders {
         Leaders {
             leaders: std::array::from_fn(|i| Leader::new(i as i32)),
+            end: EndProcessState::default(),
+        }
+    }
+
+    /// Populate the `GameInfo::Player` identity/valid fields the lightweight simulation
+    /// already knows, without disturbing warning bits or timestamps owned by step 17.
+    ///
+    /// Retail owns `LeaderData` and `GameInfo::Player` separately. The port therefore
+    /// performs this synchronization at the dispatcher boundary: it copies the decoded
+    /// `who`, toggles only `flags & 1`, and preserves every other Player flag.
+    pub fn sync_end_players_from_leaders(&mut self) {
+        for i in 0..NUM_LEADER_SLOTS {
+            self.end.players[i].who = self.leaders[i].slot as u8;
+            if self.leaders[i].flags & flag::IN_GAME != 0 {
+                self.end.players[i].flags |= PLAYER_VALID;
+            } else {
+                self.end.players[i].flags &= !PLAYER_VALID;
+            }
         }
     }
 
@@ -2130,7 +2218,7 @@ pub fn process_all(
 
         // 0x006ED2B9 / 0x006ED2CA / 0x006ED2D4.
         ls.leaders[i].flags &= !flag::HOSTILE_SEEN;
-        ls.leaders[i].frame_counter_a = 0;
+        ls.leaders[i].pop_issues = 0;
         ls.leaders[i].frame_counter_b = 0;
 
         // 0x006ED2E0..0x006ED321 — the diplomacy scan, read-only over the whole array.
@@ -2395,6 +2483,152 @@ pub fn strategy_all(ls: &mut Leaders, input: StrategyInputs<'_>) -> StrategyTrac
     if input.check_victory_mode {
         trace.calls.push(StrategyCall::CheckVictory);
     }
+    trace
+}
+
+// ===========================================================================================
+// Leaders::end_process_all 0x006ED070
+// ===========================================================================================
+
+/// One `GameInfo::Player::flags &= 0xf7ff` write from the zero-issues branch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PopulationWarningClear {
+    pub leader_index: usize,
+    pub leader_who: i32,
+    pub player_index: usize,
+}
+
+/// One write to `GameInfo::Player::pop_cap_frame` from the rate-limit branch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PopulationCapStamp {
+    pub leader_index: usize,
+    pub player_index: usize,
+    pub frame: i32,
+}
+
+/// The presentation boundary reached after a due, below-limit population-production
+/// failure. Retail adds localized feedback then plays [`POP_CAP_WARNING_SOUND`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PopulationCapFeedback {
+    pub leader_index: usize,
+    pub leader_who: i32,
+    pub player_index: usize,
+    pub text_offset: u32,
+    pub sound_category: i32,
+}
+
+/// Host facts that the retail engine guarantees but a lightweight simulation may omit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EndProcessMissingFact {
+    LocalPlayerIndex(i32),
+    PopulationLimitIndex(u8),
+}
+
+/// Measured execution of step 17. The dispatcher and every checksum-relevant write run;
+/// UI/audio are emitted as inspectable [`PopulationCapFeedback`] events.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndProcessTrace {
+    pub processed: [bool; NUM_LEADER_SLOTS],
+    pub warning_clears: Vec<PopulationWarningClear>,
+    pub stamp_writes: Vec<PopulationCapStamp>,
+    pub feedback: Vec<PopulationCapFeedback>,
+    pub missing_facts: Vec<EndProcessMissingFact>,
+}
+
+impl EndProcessTrace {
+    pub fn leaders_processed(&self) -> usize {
+        self.processed.iter().filter(|ran| **ran).count()
+    }
+}
+
+/// **Step 17 of `Game::do_frame`.** `Leaders::end_process_all` `0x006ED070`, the full
+/// 549-byte dispatcher and its inlined per-leader body.
+///
+/// Processed leaders with no production failures scan all eight Player records and clear
+/// warning bit `0x800` on valid records whose byte `who` matches `Leader +0x08`. A failed
+/// local leader instead rate-limits feedback: signed wrapping `frame - pop_cap_frame` must
+/// be greater than `0x1c1`. Retail stamps the frame *before* checking the selected cap, so
+/// this implementation does too, including when the leader has already reached that cap.
+pub fn end_process_all(ls: &mut Leaders, frame: i32) -> EndProcessTrace {
+    let mut trace = EndProcessTrace::default();
+    ls.end.last_feedback.clear();
+
+    for leader_index in 0..NUM_LEADER_SLOTS {
+        let leader = &ls.leaders[leader_index];
+        if leader.flags & flag::PROCESS == 0 {
+            continue;
+        }
+        trace.processed[leader_index] = true;
+
+        let leader_who = leader.slot;
+        let pop_issues = leader.pop_issues;
+        let pop_cap = leader.pop_cap;
+
+        if pop_issues == 0 {
+            for player_index in 0..NUM_LEADER_SLOTS {
+                let player = &mut ls.end.players[player_index];
+                if player.flags & PLAYER_VALID != 0 && i32::from(player.who) == leader_who {
+                    player.flags &= !PLAYER_POP_CAP_WARNING;
+                    trace.warning_clears.push(PopulationWarningClear {
+                        leader_index,
+                        leader_who,
+                        player_index,
+                    });
+                }
+            }
+            continue;
+        }
+
+        if leader_who != ls.end.local_who {
+            continue;
+        }
+        let Ok(player_index) = usize::try_from(ls.end.local_play) else {
+            trace
+                .missing_facts
+                .push(EndProcessMissingFact::LocalPlayerIndex(ls.end.local_play));
+            continue;
+        };
+        let Some(player) = ls.end.players.get_mut(player_index) else {
+            trace
+                .missing_facts
+                .push(EndProcessMissingFact::LocalPlayerIndex(ls.end.local_play));
+            continue;
+        };
+        if frame.wrapping_sub(player.pop_cap_frame) < POP_CAP_WARNING_MIN_ELAPSED {
+            continue;
+        }
+
+        // 0x006ED1F0 — this store precedes the population-limit table read/compare.
+        player.pop_cap_frame = frame;
+        trace.stamp_writes.push(PopulationCapStamp {
+            leader_index,
+            player_index,
+            frame,
+        });
+
+        let Some(&pop_limit) = SHIPPED_POP_LIMITS.get(usize::from(ls.end.pop_limit_index)) else {
+            trace
+                .missing_facts
+                .push(EndProcessMissingFact::PopulationLimitIndex(
+                    ls.end.pop_limit_index,
+                ));
+            continue;
+        };
+        if pop_cap >= pop_limit {
+            continue;
+        }
+
+        let event = PopulationCapFeedback {
+            leader_index,
+            leader_who,
+            player_index,
+            text_offset: POP_CAP_WARNING_TEXT_OFFSET,
+            sound_category: POP_CAP_WARNING_SOUND,
+        };
+        trace.feedback.push(event);
+        ls.end.last_feedback.push(event);
+    }
+
     trace
 }
 
@@ -2675,6 +2909,190 @@ mod tests {
         assert_eq!(trace.calls, vec![StrategyCall::CheckVictory]);
     }
 
+    /// The host adapter mirrors only facts already present in Leader state. Warning bits,
+    /// timestamps, and unrelated Player flags remain owned by the end-process state.
+    #[test]
+    fn end_process_player_sync_preserves_warning_state_and_refreshes_identity() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].slot = 7;
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.end.players[0].flags = PLAYER_POP_CAP_WARNING | 0x4000;
+        ls.end.players[0].pop_cap_frame = 123;
+        ls.end.players[1].flags = PLAYER_VALID | PLAYER_POP_CAP_WARNING;
+
+        ls.sync_end_players_from_leaders();
+
+        assert_eq!(ls.end.players[0].who, 7);
+        assert_eq!(
+            ls.end.players[0].flags,
+            PLAYER_VALID | PLAYER_POP_CAP_WARNING | 0x4000
+        );
+        assert_eq!(ls.end.players[0].pop_cap_frame, 123);
+        assert_eq!(
+            ls.end.players[1].flags, PLAYER_POP_CAP_WARNING,
+            "an inactive leader clears only Player::VALID"
+        );
+    }
+
+    /// `0x006ED080` gates on PROCESS, then the zero-issues path scans every Player and
+    /// clears `0x800` only when both the valid bit and byte-sized `who` match.
+    #[test]
+    fn end_process_zero_issues_clears_only_valid_matching_players() {
+        let mut ls = Leaders::new();
+        ls.leaders[0].flags = flag::IN_GAME;
+        ls.leaders[0].slot = 5;
+        ls.leaders[2].flags = flag::PROCESS;
+        ls.leaders[2].slot = 5;
+        ls.end.players[1] = EndPlayer {
+            flags: PLAYER_VALID | PLAYER_POP_CAP_WARNING | 0x4000,
+            who: 5,
+            pop_cap_frame: 0,
+        };
+        ls.end.players[3] = EndPlayer {
+            flags: PLAYER_POP_CAP_WARNING,
+            who: 5,
+            pop_cap_frame: 0,
+        };
+        ls.end.players[4] = EndPlayer {
+            flags: PLAYER_VALID | PLAYER_POP_CAP_WARNING,
+            who: 6,
+            pop_cap_frame: 0,
+        };
+
+        let trace = end_process_all(&mut ls, 77);
+
+        assert_eq!(trace.leaders_processed(), 1);
+        assert!(!trace.processed[0], "IN_GAME alone is not the outer gate");
+        assert_eq!(
+            trace.warning_clears,
+            vec![PopulationWarningClear {
+                leader_index: 2,
+                leader_who: 5,
+                player_index: 1,
+            }]
+        );
+        assert_eq!(ls.end.players[1].flags, PLAYER_VALID | 0x4000);
+        assert_eq!(ls.end.players[3].flags, PLAYER_POP_CAP_WARNING);
+        assert_eq!(
+            ls.end.players[4].flags,
+            PLAYER_VALID | PLAYER_POP_CAP_WARNING
+        );
+    }
+
+    /// The signed elapsed comparison is strictly `> 0x1c1`: 449 is early and 450 is due.
+    /// A due, below-limit local failure stamps first and emits the exact sound category.
+    #[test]
+    fn end_process_feedback_boundary_is_exactly_450_frames() {
+        let mut ls = Leaders::new();
+        ls.leaders[3].flags = flag::PROCESS;
+        ls.leaders[3].slot = 3;
+        ls.leaders[3].pop_issues = 1;
+        ls.leaders[3].pop_cap = 99;
+        ls.end.local_who = 3;
+        ls.end.local_play = 2;
+        ls.end.pop_limit_index = 2; // 100
+
+        let early = end_process_all(&mut ls, 449);
+        assert!(early.stamp_writes.is_empty());
+        assert!(early.feedback.is_empty());
+        assert_eq!(ls.end.players[2].pop_cap_frame, 0);
+
+        let due = end_process_all(&mut ls, 450);
+        assert_eq!(
+            due.stamp_writes,
+            vec![PopulationCapStamp {
+                leader_index: 3,
+                player_index: 2,
+                frame: 450,
+            }]
+        );
+        let event = PopulationCapFeedback {
+            leader_index: 3,
+            leader_who: 3,
+            player_index: 2,
+            text_offset: 0xC878,
+            sound_category: 0x5B,
+        };
+        assert_eq!(due.feedback, vec![event]);
+        assert_eq!(ls.end.last_feedback, vec![event]);
+        assert_eq!(ls.end.players[2].pop_cap_frame, 450);
+    }
+
+    /// The frame write precedes the cap compare, so a leader already at the selected cap
+    /// still consumes the notification interval without producing presentation work.
+    #[test]
+    fn end_process_at_cap_stamps_without_emitting_feedback() {
+        let mut ls = Leaders::new();
+        ls.leaders[1].flags = flag::PROCESS;
+        ls.leaders[1].slot = 6;
+        ls.leaders[1].pop_issues = 4;
+        ls.leaders[1].pop_cap = 150;
+        ls.end.local_who = 6;
+        ls.end.local_play = 6;
+        ls.end.pop_limit_index = 4; // 150
+
+        let trace = end_process_all(&mut ls, 450);
+        assert_eq!(trace.stamp_writes.len(), 1);
+        assert!(trace.feedback.is_empty());
+        assert_eq!(ls.end.players[6].pop_cap_frame, 450);
+    }
+
+    /// Invalid host-only indices stay explicit. Replacing them with current facts causes a
+    /// fresh event; a subsequent non-due call clears `last_feedback` rather than replaying it.
+    #[test]
+    fn end_process_missing_facts_fail_closed_and_feedback_never_replays() {
+        let mut ls = Leaders::new();
+        ls.leaders[4].flags = flag::PROCESS;
+        ls.leaders[4].slot = 4;
+        ls.leaders[4].pop_issues = 1;
+        ls.leaders[4].pop_cap = 10;
+        ls.end.local_who = 4;
+        ls.end.local_play = 9;
+
+        let missing_player = end_process_all(&mut ls, 450);
+        assert_eq!(
+            missing_player.missing_facts,
+            vec![EndProcessMissingFact::LocalPlayerIndex(9)]
+        );
+        assert!(missing_player.stamp_writes.is_empty());
+
+        ls.end.local_play = 4;
+        ls.end.pop_limit_index = 99;
+        let missing_limit = end_process_all(&mut ls, 450);
+        assert_eq!(
+            missing_limit.missing_facts,
+            vec![EndProcessMissingFact::PopulationLimitIndex(99)]
+        );
+        assert_eq!(missing_limit.stamp_writes.len(), 1);
+        assert!(missing_limit.feedback.is_empty());
+
+        ls.end.pop_limit_index = 0;
+        let fresh = end_process_all(&mut ls, 900);
+        assert_eq!(fresh.feedback.len(), 1);
+        assert_eq!(ls.end.last_feedback.len(), 1);
+
+        let not_due = end_process_all(&mut ls, 901);
+        assert!(not_due.feedback.is_empty());
+        assert!(ls.end.last_feedback.is_empty(), "no stale event may replay");
+    }
+
+    /// A production failure belonging to another player cannot stamp local state or be
+    /// mistaken for a missing local-player adapter.
+    #[test]
+    fn end_process_nonlocal_failure_is_silent() {
+        let mut ls = Leaders::new();
+        ls.leaders[5].flags = flag::PROCESS;
+        ls.leaders[5].slot = 5;
+        ls.leaders[5].pop_issues = 1;
+        ls.end.local_who = 2;
+        ls.end.local_play = -1;
+
+        let trace = end_process_all(&mut ls, 10_000);
+        assert!(trace.stamp_writes.is_empty());
+        assert!(trace.feedback.is_empty());
+        assert!(trace.missing_facts.is_empty());
+    }
+
     /// The outer gate is bit 1. A leader with only bit 0 is scanned by everyone else's
     /// diplomacy loop and never runs its own economy.
     #[test]
@@ -2740,18 +3158,19 @@ mod tests {
         assert_eq!(d.leaders.leaders[0].flags & flag::HOSTILE_SEEN, 0);
     }
 
-    /// The two per-frame counters are zeroed for every processed leader.
+    /// Step 8 resets the PDB-named production-failure count and the counter at `+0x9F4`
+    /// for every processed leader, which is what makes step 17 a same-frame post-pass.
     #[test]
-    fn the_two_frame_counters_are_zeroed_every_frame() {
+    fn pop_issues_and_the_9f4_counter_are_zeroed_every_frame() {
         let mut d = Step8Driver::new();
         d.leaders.leaders[0].activate();
-        d.leaders.leaders[0].frame_counter_a = 77;
+        d.leaders.leaders[0].pop_issues = 77;
         d.leaders.leaders[0].frame_counter_b = -3;
-        d.leaders.leaders[1].frame_counter_a = 77; // not processed
+        d.leaders.leaders[1].pop_issues = 77; // not processed
         d.frame();
-        assert_eq!(d.leaders.leaders[0].frame_counter_a, 0);
+        assert_eq!(d.leaders.leaders[0].pop_issues, 0);
         assert_eq!(d.leaders.leaders[0].frame_counter_b, 0);
-        assert_eq!(d.leaders.leaders[1].frame_counter_a, 77);
+        assert_eq!(d.leaders.leaders[1].pop_issues, 77);
     }
 
     /// `PENDING` is cleared at the tail, and only for processed leaders.
