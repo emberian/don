@@ -75,6 +75,94 @@ five original call bytes and flushes the emulator instruction cache through both
 parked; this avoids unloading code while another thread could still have a return address
 inside it. Deleting `STOP` rechecks the prologue and reinstalls the detour.
 
+### Live upgrades do not overwrite mapped DLLs
+
+Windows keeps the DLL image section mapped after `STOP`; loading the same path again returns the
+existing module and does not run a fresh `DllMain`, while replacing its backing file is not a
+portable upgrade mechanism. The controller therefore treats a generation as immutable:
+
+- each generation has a unique DLL basename and directory, such as
+  `don-retail-control-v2/retail_control-v2.dll`;
+- the DLL derives `request.txt`, `events.ndjson`, `ready.txt`, and `STOP` from its own module
+  directory, so parked generations cannot consume a newer generation's control files;
+- the x86 Toolhelp probe detects an already-mapped basename before download and refuses a
+  same-generation deployment;
+- `upgrade --from-generation OLD --generation NEW` parks `OLD` first, leaving retail's exact
+  five bytes restored, then loads `NEW`. A failed new load leaves the old generation parked and
+  retail unpatched.
+
+This path was exercised in place on PID `12324`, without restarting the match. Parked v1 remained
+mapped at `0x6AFC0000`; generation v2 loaded from its unique path at `0x6AF60000`, armed the same
+validated runtime call site `0x00EF1686`, returned a main-thread observation at frame `157`, and
+parked again. A later same-generation deployment of trajectory-v3 was refused from the x86 module
+map at `0x6AF00000` before injection. Both the old and new STOP markers remained independent.
+
+### Bounded retail trajectory recorder
+
+`trajectory WHO ID X Y` is intentionally a compound supervised operation. It requires retail to
+start paused, resolves the selected unit through retail's owner/object tables, asks the shipped
+`issue_move_to` for the exact plain move, and only appends `pause 0` if retail actually serialized
+the move. It then records one sample whenever `Game::frame +0x550` changes. On order retirement or
+the caller's frame cap it appends retail's `pause 1`, observes the pause bit, writes JSON, restores
+the pause once more from the host fail-safe, and writes `STOP` to restore the hook bytes.
+
+The detour wraps `TurnControl::do_frame`, which is earlier than `Game::do_frame` in `Game::loop`.
+Consequently, a changed frame observed on the next loop is a coherent between-simulation-ticks
+state; the recorder does not mislabel the post-TurnControl callback itself as post-simulation.
+Repeated callbacks at an unchanged frame are discarded. Retail game time advances at exactly 15
+simulation frames per `Game::seconds`; `TurnControl` speed changes wall-clock pacing only.
+
+The frame schema uses only PDB/decompilation-backed fields:
+
+- object `x/y` are decoded from `UnitData +0x10/+0x14` with XOR `0x00063637`;
+- current heading is the modulo-u32 binary angle at `UnitData +0x50`; `dest_angle +0x58` is the
+  queued action's final heading, not current facing;
+- the canonical current order is `orderlist.head->prev->data`, not the stale `Unit +0xCC` cache;
+- a `MoveOrder` current pointer is its interior `UnitOrder` virtual base, so the recorder subtracts
+  the measured `0x54` before reading the PDB fields at complete-object offsets `+0x04..+0x4E`;
+- order vtables are normalized back to preferred VAs, making artifacts ASLR-independent. The
+  `facing +0x28` member is preserved as a formation reversal/sentinel field, not called an angle.
+
+The live artifact [`schema/live/retail-move-trajectory-v1.json`](../../schema/live/retail-move-trajectory-v1.json)
+records owner-0 unit 0 moving exactly one tile, `(2904,31896)` to `(3096,31896)`, in six frames:
+`2938, 2972, 3006, 3040, 3074, 3096` on X. Frames 158–162 carry the normalized `MoveOrder` vtable
+`0x00B4A12C`; frame 163 has canonical order length zero and exact target position. The terminal
+record proves pause `1` at the same frame, and trajectory-v3 then reported `state=parked`. Its exact
+retail command bytes are preserved in the artifact. The checksum field is explicitly unavailable:
+this was a solo run (`network=0`), and retail intentionally emits no checksum packet in that mode.
+
+### Multi-body unit observation
+
+`observe-guys WHO ID` is a read-only main-thread snapshot of a unit's physical bodies. It reads
+the inline PDB `PtrArray<Guy>` at `UnitData +0xE4`: length `+0xE8`, capacity `+0xEC`, and list
+`+0xF4`. It refuses malformed length/capacity invariants, follows at most 32 entries, and marks a
+larger array truncated. Each tuple preserves `GuyData` type `+0x08`, raw coordinates
+`+0x0C/+0x10/+0x14`, angle `+0x18`, desired position/angle `+0x5C/+0x60/+0x64`, last position
+`+0x68/+0x6C`, signed offsets `+0x92/+0x94`, and `guy_num +0xA2`. Guy coordinates are raw;
+unlike the owning `UnitData` anchor, they are not XOR-encoded.
+
+Generation guys-v4 exercised this on the still-paused PID `12324`, frame `163`. Owner-0 unit 0
+was type 69 at decoded anchor `(3096,31896)`, heading `0x40000000`, with a two-entry array:
+
+| body | live pointer | current `(x,y,z)` | desired `(x,y)` | previous `(x,y)` | offset | number |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 | `0x0F2E1C84` | `(3096,31896,558)` | `(3096,31896)` | `(3074,31896)` | `(0,0)` | 0 |
+| 1 | `0x0F2E0084` | `(3048,31800,556)` | `(3048,31800)` | `(3026,31800)` | `(0,0)` | 1 |
+
+Both bodies had type 69 and current/desired angle `0x40000000`. This is direct retail evidence
+that a settled multi-body unit materializes formation displacement in each Guy's coordinates
+(body 1 is anchor `(-48,-96)`), rather than in the two `off_*` members for this state. No ctor,
+`set_type`, spawn path, or simulation write was invoked. guys-v4 was then STOP/parked.
+
+guys-v5 added the owning unit's `unit_masks +0x68`, `form +0xAA`, PDB `guy_mark +0xB5`,
+and `UnitTypeData::guy_spacing +0x224`. Two further type-62 units both had masks `0x80000`,
+form 0, guy spacing 144, and identical three-body relative positions `(0,0),(-192,-56),(0,0)`
+despite different world anchors. The type-69 unit had masks 8, form 0, the same spacing 144, but
+the distinct two-body lattice `(0,0),(-48,-96)`. Therefore the scalar type spacing is not a
+complete formation rule. Also, `guy_mark` was 1 on both three-body arrays while a live body had
+`guy_num=2`: `+0xB5` must not be renamed or used as a live-body count. The authoritative count is
+the `PtrArray` length at `+0xE8`. v5 was parked without a simulation write.
+
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
 - module base `0x00D60000`, ASLR delta `0x00960000`;

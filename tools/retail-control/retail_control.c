@@ -16,13 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ROOT "C:\\Users\\Public\\don-retail-control"
-#define REQUEST_PATH ROOT "\\request.txt"
-#define EVENTS_PATH  ROOT "\\events.ndjson"
-#define READY_PATH   ROOT "\\ready.txt"
-#define STOP_PATH    ROOT "\\STOP"
-#define LOG_PATH     ROOT "\\retail-control.log"
-
 /* Supported image identity, independently present in donscan::live. */
 #define EXPECTED_MACHINE   0x014cu
 #define EXPECTED_ENTRY_RVA 0x0015d699u
@@ -46,6 +39,7 @@
 #define RVA_ISSUE_ATTACK   (0x009415e0u - PREFERRED_BASE)
 #define RVA_ISSUE_MOVE     (0x00941720u - PREFERRED_BASE)
 #define RVA_ISSUE_HALT     (0x009418d0u - PREFERRED_BASE)
+#define RVA_MOVE_ORDER_VTABLE (0x00b4a12cu - PREFERRED_BASE)
 
 #define OFF_GAME_FRAME 0x550u
 #define OFF_GAME_SECONDS 0x560u
@@ -58,6 +52,12 @@
 #define OFF_OBJ_FLAGS 0x08u
 #define OFF_UNIT_CURRENT_ORDER 0xccu
 #define OFF_UNIT_ORDER_LENGTH 0xd8u
+#define OFF_UNIT_ANGLE 0x50u
+#define OFF_UNIT_DEST_ANGLE 0x58u
+#define OFF_UNIT_ORDERS_X 0x70u
+#define OFF_UNIT_ORDERS_Y 0x74u
+#define OBJECT_COORD_XOR 0x00063637u
+#define MOVE_ORDER_VBASE_OFFSET 84u
 
 #define PACKAGE_LENGTH 0x10u
 #define PACKAGE_BYTES  0x12u
@@ -68,6 +68,7 @@
 #define GROUP_SIZE     0x9d0u
 
 #define MAX_IDS 128
+#define MAX_GUYS 32
 #define MAX_COMMAND_CAPTURE 160
 #define EVENT_CAP 256
 
@@ -81,8 +82,27 @@ enum Verb {
     V_CHECKSUM,
     V_MOVE,
     V_HALT,
-    V_ATTACK
+    V_ATTACK,
+    V_TRACE_MOVE,
+    V_OBSERVE_GUYS
 };
+
+typedef struct {
+    unsigned pointer;
+    int type;
+    int x;
+    int y;
+    int z;
+    unsigned angle;
+    int des_x;
+    int des_y;
+    unsigned des_angle;
+    int last_x;
+    int last_y;
+    short off_x;
+    short off_y;
+    unsigned guy_num;
+} guy_sample_t;
 
 typedef struct {
     unsigned seq;
@@ -95,7 +115,7 @@ typedef struct {
 typedef struct {
     unsigned seq;
     unsigned verb;
-    unsigned phase;             /* 0 observed, 1 queued, 2 applied, 3 timeout, 4 rejected */
+    unsigned phase;             /* observed/queued/applied/timeout/rejected/trace-* */
     unsigned win_tick;
     unsigned game;
     unsigned frame;
@@ -111,6 +131,48 @@ typedef struct {
     int order_length;
     unsigned current_order;
     unsigned current_order_vtable;
+    unsigned order_flags;
+    unsigned order_metric;
+    int unit_x;
+    int unit_y;
+    unsigned unit_x_stored;
+    unsigned unit_y_stored;
+    unsigned unit_type_pointer;
+    int unit_type;
+    unsigned unit_masks;
+    unsigned unit_form;
+    unsigned unit_guy_mark;
+    int unit_type_guy_spacing;
+    unsigned unit_angle;
+    unsigned unit_dest_angle;
+    int unit_orders_x;
+    int unit_orders_y;
+    int move_valid;
+    int move_x;
+    int move_y;
+    int move_angle;
+    int move_dest;
+    int move_tolerance;
+    int move_pause;
+    int move_retry;
+    int move_attempts;
+    int move_timer;
+    int move_facing;
+    int move_dest_x;
+    int move_dest_y;
+    int move_last_x;
+    int move_last_y;
+    int move_coll_x;
+    int move_coll_y;
+    int move_orig_x;
+    int move_orig_y;
+    short move_off_x;
+    short move_off_y;
+    int guy_length;
+    int guy_capacity;
+    int guy_count;
+    int guy_truncated;
+    guy_sample_t guys[MAX_GUYS];
     unsigned note;
 } event_t;
 
@@ -122,12 +184,29 @@ typedef struct {
     unsigned initial_order_vtable;
 } verify_t;
 
+typedef struct {
+    int active;
+    int finishing;
+    int bounded;
+    int saw_order;
+    request_t req;
+    unsigned start_frame;
+    unsigned last_frame;
+} trace_t;
+
 static unsigned g_base;
 static HANDLE g_self_process;
+static char g_root[MAX_PATH];
+static char g_request_path[MAX_PATH];
+static char g_events_path[MAX_PATH];
+static char g_ready_path[MAX_PATH];
+static char g_stop_path[MAX_PATH];
+static char g_log_path[MAX_PATH];
 static volatile LONG g_pending;
 static volatile LONG g_stopping;
 static request_t g_request;
 static verify_t g_verify;
+static trace_t g_trace;
 
 static event_t g_events[EVENT_CAP];
 static volatile LONG g_event_head;
@@ -138,10 +217,35 @@ static BYTE g_hook_orig[5];
 static BYTE *g_trampoline;
 static int g_hook_installed;
 
+static int join_path(char out[MAX_PATH], const char *root, const char *leaf) {
+    int n = _snprintf(out, MAX_PATH, "%s\\%s", root, leaf);
+    if (n < 0 || n >= MAX_PATH) { out[0] = 0; return 0; }
+    return 1;
+}
+
+/*
+ * Every mapped generation derives its control directory from its own DLL path.
+ * This deliberately avoids a shared STOP/request namespace and permits a new,
+ * uniquely named DLL to attach while an older generation remains parked.
+ */
+static int init_paths(HINSTANCE module) {
+    DWORD n = GetModuleFileNameA(module, g_root, MAX_PATH);
+    char *slash;
+    if (!n || n >= MAX_PATH) return 0;
+    slash = strrchr(g_root, '\\');
+    if (!slash || slash == g_root) return 0;
+    *slash = 0;
+    return join_path(g_request_path, g_root, "request.txt") &&
+           join_path(g_events_path, g_root, "events.ndjson") &&
+           join_path(g_ready_path, g_root, "ready.txt") &&
+           join_path(g_stop_path, g_root, "STOP") &&
+           join_path(g_log_path, g_root, "retail-control.log");
+}
+
 static void log_line(const char *line) {
     HANDLE h;
     DWORD n;
-    h = CreateFileA(LOG_PATH, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    h = CreateFileA(g_log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
         WriteFile(h, line, (DWORD)strlen(line), &n, NULL);
@@ -179,21 +283,110 @@ static unsigned object_ptr(unsigned who, int id, int *is_unit) {
 
 static void observe_unit(event_t *e, const request_t *r) {
     int is_unit = 0;
-    unsigned p = 0, order = 0, vtable = 0;
+    unsigned p = 0, head = 0, node = 0, order = 0, vtable = 0, raw = 0;
     int length = -1;
     e->first_object = 0;
     e->order_length = -1;
     e->current_order = 0;
     e->current_order_vtable = 0;
+    e->guy_length = -1;
+    e->guy_capacity = -1;
     if (!r || r->num_ids <= 0) return;
     p = object_ptr((unsigned)r->arg[0], r->ids[0], &is_unit);
     e->first_object = p;
     if (!p || !is_unit) return;
+    if (rd32(p + 0x10u, &raw)) {
+        e->unit_x_stored = raw;
+        e->unit_x = (int)(raw ^ OBJECT_COORD_XOR);
+    }
+    if (rd32(p + 0x14u, &raw)) {
+        e->unit_y_stored = raw;
+        e->unit_y = (int)(raw ^ OBJECT_COORD_XOR);
+    }
+    if (rd32(p + 0x18u, &e->unit_type_pointer) && e->unit_type_pointer)
+        safe_read(e->unit_type_pointer + 4u, &e->unit_type, 4);
+    if (e->unit_type_pointer)
+        safe_read(e->unit_type_pointer + 0x224u, &e->unit_type_guy_spacing, 4);
+    rd32(p + 0x68u, &e->unit_masks);
+    {
+        unsigned char b = 0;
+        if (safe_read(p + 0xaau, &b, 1)) e->unit_form = b;
+        if (safe_read(p + 0xb5u, &b, 1)) e->unit_guy_mark = b;
+    }
+    rd32(p + OFF_UNIT_ANGLE, &e->unit_angle);
+    rd32(p + OFF_UNIT_DEST_ANGLE, &e->unit_dest_angle);
+    safe_read(p + OFF_UNIT_ORDERS_X, &e->unit_orders_x, 4);
+    safe_read(p + OFF_UNIT_ORDERS_Y, &e->unit_orders_y, 4);
     if (safe_read(p + OFF_UNIT_ORDER_LENGTH, &length, 4)) e->order_length = length;
-    if (rd32(p + OFF_UNIT_CURRENT_ORDER, &order)) {
+    /* The +0xcc cache is stale after retirement. Resolve the canonical front
+       from head->prev->data, as UnitData::get_order does. */
+    if (length > 0 && rd32(p + 0xdcu, &head) && head &&
+        rd32(head + 4u, &node) && node && rd32(node + 8u, &order) && order) {
+        unsigned char b = 0;
         e->current_order = order;
-        if (order) rd32(order, &vtable);
-        e->current_order_vtable = vtable;
+        if (rd32(order, &vtable)) e->current_order_vtable = vtable;
+        if (safe_read(order + 4u, &b, 1)) e->order_flags = b;
+        if (safe_read(node + 0xcu, &b, 1)) e->order_metric = b;
+    }
+    if (vtable == g_base + RVA_MOVE_ORDER_VTABLE && order >= MOVE_ORDER_VBASE_OFFSET) {
+        unsigned complete = order - MOVE_ORDER_VBASE_OFFSET;
+        e->move_valid = 1;
+        safe_read(complete + 0x04u, &e->move_x, 4);
+        safe_read(complete + 0x08u, &e->move_y, 4);
+        safe_read(complete + 0x0cu, &e->move_angle, 4);
+        safe_read(complete + 0x10u, &e->move_dest, 4);
+        safe_read(complete + 0x14u, &e->move_tolerance, 4);
+        safe_read(complete + 0x18u, &e->move_pause, 4);
+        safe_read(complete + 0x1cu, &e->move_retry, 4);
+        safe_read(complete + 0x20u, &e->move_attempts, 4);
+        safe_read(complete + 0x24u, &e->move_timer, 4);
+        safe_read(complete + 0x28u, &e->move_facing, 4);
+        safe_read(complete + 0x2cu, &e->move_dest_x, 4);
+        safe_read(complete + 0x30u, &e->move_dest_y, 4);
+        safe_read(complete + 0x34u, &e->move_last_x, 4);
+        safe_read(complete + 0x38u, &e->move_last_y, 4);
+        safe_read(complete + 0x3cu, &e->move_coll_x, 4);
+        safe_read(complete + 0x40u, &e->move_coll_y, 4);
+        safe_read(complete + 0x44u, &e->move_orig_x, 4);
+        safe_read(complete + 0x48u, &e->move_orig_y, 4);
+        safe_read(complete + 0x4cu, &e->move_off_x, 2);
+        safe_read(complete + 0x4eu, &e->move_off_y, 2);
+    }
+    if (r->verb == V_OBSERVE_GUYS) {
+        int length = -1, capacity = -1, count, i;
+        unsigned list = 0;
+        safe_read(p + 0xe8u, &length, 4);
+        safe_read(p + 0xecu, &capacity, 4);
+        e->guy_length = length;
+        e->guy_capacity = capacity;
+        if (length < 0 || length > 4096 || capacity < length || capacity > 4096 ||
+            (length && !rd32(p + 0xf4u, &list))) {
+            e->note = 5; /* malformed PtrArray<Guy>; publish metadata but don't follow it */
+            return;
+        }
+        count = length < MAX_GUYS ? length : MAX_GUYS;
+        e->guy_count = count;
+        e->guy_truncated = length > MAX_GUYS;
+        for (i = 0; i < count; i++) {
+            guy_sample_t *g = &e->guys[i];
+            unsigned ptr = 0;
+            unsigned char num = 0;
+            if (!rd32(list + (unsigned)i * 4u, &ptr) || !ptr) continue;
+            g->pointer = ptr;
+            safe_read(ptr + 0x08u, &g->type, 4);
+            safe_read(ptr + 0x0cu, &g->x, 4);
+            safe_read(ptr + 0x10u, &g->y, 4);
+            safe_read(ptr + 0x14u, &g->z, 4);
+            safe_read(ptr + 0x18u, &g->angle, 4);
+            safe_read(ptr + 0x5cu, &g->des_x, 4);
+            safe_read(ptr + 0x60u, &g->des_y, 4);
+            safe_read(ptr + 0x64u, &g->des_angle, 4);
+            safe_read(ptr + 0x68u, &g->last_x, 4);
+            safe_read(ptr + 0x6cu, &g->last_y, 4);
+            safe_read(ptr + 0x92u, &g->off_x, 2);
+            safe_read(ptr + 0x94u, &g->off_y, 2);
+            if (safe_read(ptr + 0xa2u, &num, 1)) g->guy_num = num;
+        }
     }
 }
 
@@ -267,6 +460,7 @@ static int dispatch(const request_t *r, event_t *e) {
     e->package_before = package_length();
     switch (r->verb) {
         case V_OBSERVE:
+        case V_OBSERVE_GUYS:
             return 1;
         case V_PAUSE:
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, r->arg[0]);
@@ -298,11 +492,60 @@ static int dispatch(const request_t *r, event_t *e) {
             ((fn_attack)(g_base + RVA_ISSUE_ATTACK))(manager, group,
                 r->arg[1], r->arg[2], r->arg[3], r->arg[4]);
             break;
+        case V_TRACE_MOVE:
+            make_group(group, r);
+            ((fn_move)(g_base + RVA_ISSUE_MOVE))(manager, group,
+                r->arg[1], r->arg[2], 2, 0, 0, 1, -1, -1, 0);
+            /* Never unpause unless retail actually accepted and serialized move. */
+            if (package_length() <= e->package_before) return 0;
+            ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 0);
+            break;
         default:
             return 0;
     }
     capture_append(e);
     return r->verb == V_OBSERVE || e->package_after > e->package_before;
+}
+
+static void trace_tick(void) {
+    event_t e, terminal;
+    void *manager = (void *)(g_base + RVA_COMMAND_MANAGER);
+    if (!g_trace.active) return;
+    memset(&e, 0, sizeof(e));
+    e.seq = g_trace.req.seq;
+    e.verb = V_TRACE_MOVE;
+    snapshot(&e, &g_trace.req);
+    if (e.frame == g_trace.last_frame) {
+        if (g_trace.finishing && e.paused == 1) {
+            e.phase = g_trace.bounded ? 7 : 6;
+            push_event(&e);
+            g_trace.active = 0;
+        }
+        return;
+    }
+    g_trace.last_frame = e.frame;
+    if (e.order_length > 0) g_trace.saw_order = 1;
+    e.phase = 5; /* trace-sample */
+
+    if (!g_trace.finishing &&
+        ((g_trace.saw_order && e.order_length == 0) ||
+         (unsigned)(e.frame - g_trace.start_frame) >= (unsigned)g_trace.req.arg[3])) {
+        g_trace.bounded = !(g_trace.saw_order && e.order_length == 0);
+        e.package_before = package_length();
+        ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 1);
+        capture_append(&e);
+        g_trace.finishing = 1;
+    }
+    push_event(&e);
+
+    if (g_trace.finishing && e.paused == 1) {
+        terminal = e;
+        terminal.phase = g_trace.bounded ? 7 : 6; /* trace-bounded/trace-complete */
+        terminal.command_len = 0;
+        terminal.command[0] = 0;
+        push_event(&terminal);
+        g_trace.active = 0;
+    }
 }
 
 static int verify_applied(event_t *e, const verify_t *v) {
@@ -330,6 +573,8 @@ static void __cdecl on_turn_frame(void) {
     LONG verb;
     if (g_stopping) return;
 
+    trace_tick();
+
     if (g_verify.active) {
         memset(&e, 0, sizeof(e));
         e.seq = g_verify.req.seq;
@@ -354,8 +599,12 @@ static void __cdecl on_turn_frame(void) {
     e.seq = r.seq;
     e.verb = r.verb;
     snapshot(&e, &r);
-    if (dispatch(&r, &e)) {
-        e.phase = r.verb == V_OBSERVE ? 0 : 1;
+    if (r.verb == V_TRACE_MOVE && (g_trace.active || e.paused != 1 || !e.first_object)) {
+        e.phase = 4;
+        e.note = g_trace.active ? 3 : (e.paused != 1 ? 2 : 4);
+        push_event(&e);
+    } else if (dispatch(&r, &e)) {
+        e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK) {
@@ -364,6 +613,12 @@ static void __cdecl on_turn_frame(void) {
             g_verify.started = GetTickCount();
             g_verify.initial_order_length = e.order_length;
             g_verify.initial_order_vtable = e.current_order_vtable;
+        } else if (r.verb == V_TRACE_MOVE) {
+            memset(&g_trace, 0, sizeof(g_trace));
+            g_trace.active = 1;
+            g_trace.req = r;
+            g_trace.start_frame = e.frame;
+            g_trace.last_frame = e.frame;
         }
     } else {
         e.phase = 4;
@@ -539,6 +794,8 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq halt WHO ID...
  * seq move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK ID...
  * seq attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED ID...
+ * seq trace-move WHO ID X Y MAX_FRAMES
+ * seq observe-guys WHO ID
  */
 static int parse_request(char *line, request_t *r) {
     char *t[160];
@@ -548,6 +805,15 @@ static int parse_request(char *line, request_t *r) {
     r->seq = parse_uint(t[0], &ok);
     if (!ok || !r->seq) return 0;
     if (!strcmp(t[1], "observe") && n == 2) r->verb = V_OBSERVE;
+    else if (!strcmp(t[1], "observe-guys") && n == 4) {
+        int id;
+        r->verb = V_OBSERVE_GUYS;
+        r->arg[0] = parse_int(t[2], &ok);
+        id = parse_int(t[3], &ok);
+        if (id < 0 || id > 32767) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
+    }
     else if (!strcmp(t[1], "pause") && n == 3) {
         r->verb = V_PAUSE; r->arg[0] = parse_int(t[2], &ok);
         if (r->arg[0] != 0 && r->arg[0] != 1) ok = 0;
@@ -571,9 +837,21 @@ static int parse_request(char *line, request_t *r) {
         r->verb = V_ATTACK;
         for (i = 0; i < 5; i++) r->arg[i] = parse_int(t[2 + i], &ok);
         first = 7;
+    } else if (!strcmp(t[1], "trace-move") && n == 7) {
+        int id;
+        r->verb = V_TRACE_MOVE;
+        r->arg[0] = parse_int(t[2], &ok);
+        id = parse_int(t[3], &ok);
+        r->arg[1] = parse_int(t[4], &ok);
+        r->arg[2] = parse_int(t[5], &ok);
+        r->arg[3] = parse_int(t[6], &ok);
+        if (id < 0 || id > 32767 || r->arg[3] < 1 || r->arg[3] > 180) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
     } else return 0;
     if (!ok) return 0;
-    if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK) &&
+    if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
+         r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS) &&
         (r->arg[0] < 0 || r->arg[0] >= 10)) return 0;
     if (first) {
         r->num_ids = n - first;
@@ -590,7 +868,7 @@ static int parse_request(char *line, request_t *r) {
 static int read_request(char *buf, unsigned cap) {
     HANDLE h;
     DWORD got = 0;
-    h = CreateFileA(REQUEST_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    h = CreateFileA(g_request_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
     if (!ReadFile(h, buf, cap - 1, &got, NULL)) got = 0;
@@ -605,20 +883,25 @@ static const char *verb_name(unsigned verb) {
         case V_SPEED_SET: return "speed"; case V_SPEED_UP: return "speed-up";
         case V_SPEED_DOWN: return "speed-down"; case V_CHECKSUM: return "checksum";
         case V_MOVE: return "move"; case V_HALT: return "halt";
-        case V_ATTACK: return "attack"; default: return "unknown";
+        case V_ATTACK: return "attack"; case V_TRACE_MOVE: return "trace-move";
+        case V_OBSERVE_GUYS: return "observe-guys";
+        default: return "unknown";
     }
 }
 
 static const char *phase_name(unsigned phase) {
     switch (phase) {
         case 0: return "observed"; case 1: return "queued"; case 2: return "applied";
-        case 3: return "timeout"; case 4: return "rejected"; default: return "unknown";
+        case 3: return "timeout"; case 4: return "rejected";
+        case 5: return "trace-sample"; case 6: return "trace-complete";
+        case 7: return "trace-bounded"; default: return "unknown";
     }
 }
 
 static void write_event(const event_t *e) {
-    char line[1800], hex[MAX_COMMAND_CAPTURE * 2 + 1];
+    char line[16384], hex[MAX_COMMAND_CAPTURE * 2 + 1];
     unsigned i;
+    size_t used;
     HANDLE h;
     DWORD wrote;
     for (i = 0; i < e->command_len && i < MAX_COMMAND_CAPTURE; i++)
@@ -631,13 +914,57 @@ static void write_event(const event_t *e) {
         "\"package_after\":%d,\"command_hex\":\"%s\","
         "\"first_object\":\"0x%08x\",\"order_length\":%d,"
         "\"current_order\":\"0x%08x\",\"order_vtable\":\"0x%08x\","
-        "\"note\":%u}\r\n",
+        "\"order_flags\":%u,\"order_metric\":%u,"
+        "\"unit_x\":%d,\"unit_y\":%d,"
+        "\"unit_x_stored\":\"0x%08x\",\"unit_y_stored\":\"0x%08x\","
+        "\"unit_type_pointer\":\"0x%08x\",\"unit_type\":%d,"
+        "\"unit_masks\":%u,\"unit_form\":%u,\"unit_guy_mark\":%u,"
+        "\"unit_type_guy_spacing\":%d,\"unit_angle\":%u,"
+        "\"unit_dest_angle\":%u,\"unit_orders_x\":%d,\"unit_orders_y\":%d,"
+        "\"move_valid\":%d,\"move_x\":%d,\"move_y\":%d,"
+        "\"move_angle\":%d,\"move_dest\":%d,\"move_tolerance\":%d,"
+        "\"move_pause\":%d,\"move_retry\":%d,\"move_attempts\":%d,"
+        "\"move_timer\":%d,\"move_facing\":%d,"
+        "\"move_dest_x\":%d,\"move_dest_y\":%d,"
+        "\"move_last_x\":%d,\"move_last_y\":%d,"
+        "\"move_coll_x\":%d,\"move_coll_y\":%d,"
+        "\"move_orig_x\":%d,\"move_orig_y\":%d,"
+        "\"move_off_x\":%d,\"move_off_y\":%d,"
+        "\"note\":%u,\"guy_length\":%d,\"guy_capacity\":%d,"
+        "\"guy_count\":%d,\"guy_truncated\":%d,\"guys\":[",
         e->seq, verb_name(e->verb), phase_name(e->phase), e->win_tick, e->game,
         e->frame, e->seconds, e->paused, e->speed, e->network, e->package_before,
         e->package_after, hex, e->first_object, e->order_length,
-        e->current_order, e->current_order_vtable, e->note);
+        e->current_order, e->current_order_vtable, e->order_flags, e->order_metric,
+        e->unit_x, e->unit_y, e->unit_x_stored, e->unit_y_stored,
+        e->unit_type_pointer, e->unit_type, e->unit_masks, e->unit_form,
+        e->unit_guy_mark, e->unit_type_guy_spacing, e->unit_angle, e->unit_dest_angle,
+        e->unit_orders_x, e->unit_orders_y,
+        e->move_valid, e->move_x, e->move_y, e->move_angle, e->move_dest,
+        e->move_tolerance, e->move_pause, e->move_retry, e->move_attempts,
+        e->move_timer, e->move_facing, e->move_dest_x, e->move_dest_y,
+        e->move_last_x, e->move_last_y, e->move_coll_x, e->move_coll_y,
+        e->move_orig_x, e->move_orig_y, e->move_off_x, e->move_off_y, e->note,
+        e->guy_length, e->guy_capacity, e->guy_count, e->guy_truncated);
     line[sizeof(line) - 1] = 0;
-    h = CreateFileA(EVENTS_PATH, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    used = strlen(line);
+    for (i = 0; i < (unsigned)e->guy_count && i < MAX_GUYS; i++) {
+        const guy_sample_t *g = &e->guys[i];
+        int n = _snprintf(line + used, sizeof(line) - used,
+            "%s{\"index\":%u,\"pointer\":\"0x%08x\",\"type\":%d,"
+            "\"x\":%d,\"y\":%d,\"z\":%d,\"angle\":%u,"
+            "\"des_x\":%d,\"des_y\":%d,\"des_angle\":%u,"
+            "\"last_x\":%d,\"last_y\":%d,\"off_x\":%d,\"off_y\":%d,"
+            "\"guy_num\":%u}",
+            i ? "," : "", i, g->pointer, g->type, g->x, g->y, g->z, g->angle,
+            g->des_x, g->des_y, g->des_angle, g->last_x, g->last_y,
+            g->off_x, g->off_y, g->guy_num);
+        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+        used += (size_t)n;
+    }
+    _snprintf(line + used, sizeof(line) - used, "]}\r\n");
+    line[sizeof(line) - 1] = 0;
+    h = CreateFileA(g_events_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
         WriteFile(h, line, (DWORD)strlen(line), &wrote, NULL);
@@ -656,14 +983,15 @@ static void drain_events(void) {
 }
 
 static void write_ready(const char *state) {
-    char buf[256];
+    char buf[768];
     HANDLE h;
     DWORD wrote;
-    _snprintf(buf, sizeof(buf), "state=%s\r\npid=%lu\r\nbase=0x%08x\r\n"
+    _snprintf(buf, sizeof(buf), "state=%s\r\npid=%lu\r\nroot=%s\r\nbase=0x%08x\r\n"
               "turn_call_site=0x%08x\r\nturn_do_frame=0x%08x\r\n", state,
-              GetCurrentProcessId(), g_base, g_base + RVA_TURN_CALL_SITE,
+              GetCurrentProcessId(), g_root,
+              g_base, g_base + RVA_TURN_CALL_SITE,
               g_base + RVA_TURN_DO_FRAME);
-    h = CreateFileA(READY_PATH, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    h = CreateFileA(g_ready_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
         WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
@@ -675,7 +1003,7 @@ static DWORD WINAPI worker(LPVOID unused) {
     char line[4096];
     unsigned last_seq = 0;
     (void)unused;
-    CreateDirectoryA(ROOT, NULL);
+    CreateDirectoryA(g_root, NULL);
     if (!image_supported()) {
         log_line("REFUSED: PE identity mismatch");
         write_ready("refused-image");
@@ -689,10 +1017,10 @@ static DWORD WINAPI worker(LPVOID unused) {
     for (;;) {
         request_t r;
         drain_events();
-        if (GetFileAttributesA(STOP_PATH) != INVALID_FILE_ATTRIBUTES) {
+        if (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
             remove_hook();
             write_ready("parked");
-            while (GetFileAttributesA(STOP_PATH) != INVALID_FILE_ATTRIBUTES) {
+            while (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
                 drain_events(); Sleep(100);
             }
             InterlockedExchange(&g_stopping, 0);
@@ -715,6 +1043,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         HANDLE thread;
         DisableThreadLibraryCalls(module);
+        if (!init_paths(module)) return TRUE;
         g_base = (unsigned)(ULONG_PTR)GetModuleHandleA(NULL);
         g_self_process = GetCurrentProcess();
         g_hook_addr = (BYTE *)(g_base + RVA_TURN_CALL_SITE);
