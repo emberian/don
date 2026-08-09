@@ -99,6 +99,18 @@ load-only boundary, configures the setup bridge, and launches retail. Every muta
 by an atomically persisted state checkpoint bound to the shim, owned-peer executable, guest DLL,
 manifest generation, launcher, PID, trace, and output hashes.
 
+The load-only proof captures the exact mapped module after the initialized-pointer frontier, then
+stops that PID and validates its teardown trace. It accepts both retail teardown paths: an
+initialized session may call `ns_close` before `ns_cleanup_system`, while the measured
+early-refusal exit (`8008`) calls cleanup directly without opening a session. In either case the
+factory, callback, profiler, init, retained-pointer, cleanup, trace-PID, module, DLL-hash, and exit
+boundaries remain exact and chronological.
+
+If load-only retail exposes no main window and therefore cannot run its teardown callback, the
+orchestrator may use its already hash- and PID-bound forced-stop fallback. That proof is accepted
+only with the captured process identity, the initialized trace for that same PID, and the launcher's
+exact `exit_code=-1` record; an arbitrary crash or unrelated exit cannot satisfy this exception.
+
 Build the current shim and owned peer first, then run:
 
 ```sh

@@ -4055,7 +4055,7 @@ def parse_netsys_trace(raw: str, expected_pid: int | None = None) -> dict:
     }
 
 
-def validate_netsys_load_only_frontier(trace: dict) -> None:
+def validate_netsys_load_only_initialized_frontier(trace: dict) -> None:
     if not trace.get("load_only") or trace.get("factory_ready") is None:
         raise ValueError("trace does not prove a load-only factory boundary")
     details = [record.get("detail") for record in trace.get("records", [])]
@@ -4066,8 +4066,6 @@ def validate_netsys_load_only_frontier(trace: dict) -> None:
         "call=vtable.ns_set_profiler",
         "call=vtable.ns_init",
         "init=stored messenger=true crossplay_service=true object_size=0x3d4",
-        "call=vtable.ns_close",
-        "call=vtable.ns_cleanup_system",
     ]
     positions = []
     for detail in required:
@@ -4077,6 +4075,38 @@ def validate_netsys_load_only_frontier(trace: dict) -> None:
         positions.append(matches[0])
     if positions != sorted(positions):
         raise ValueError("load-only loader frontier is not chronological")
+
+
+def validate_netsys_load_only_frontier(trace: dict) -> None:
+    validate_netsys_load_only_initialized_frontier(trace)
+    details = [record.get("detail") for record in trace.get("records", [])]
+    init_position = details.index(
+        "init=stored messenger=true crossplay_service=true object_size=0x3d4"
+    )
+    cleanup_matches = [
+        index for index, value in enumerate(details)
+        if value == "call=vtable.ns_cleanup_system"
+    ]
+    if len(cleanup_matches) != 1:
+        raise ValueError(
+            "load-only trace lacks one exact 'call=vtable.ns_cleanup_system' boundary"
+        )
+    cleanup_position = cleanup_matches[0]
+    if cleanup_position <= init_position:
+        raise ValueError("load-only cleanup boundary is not chronological")
+    # Retail's load-only refusal exits through its loader cleanup path without
+    # necessarily opening a NetSys session.  In that path the game calls
+    # cleanup_system but does not call close first (observed exit 8008).  A
+    # close call is therefore optional; when present it must still be unique
+    # and occur after init and before cleanup.
+    close_matches = [
+        index for index, value in enumerate(details)
+        if value == "call=vtable.ns_close"
+    ]
+    if len(close_matches) > 1:
+        raise ValueError("load-only trace has multiple ns_close boundaries")
+    if close_matches and not init_position < close_matches[0] < cleanup_position:
+        raise ValueError("load-only ns_close boundary is not chronological")
 
 
 def validate_netsys_bridge_off_frontier(trace: dict) -> None:
@@ -4278,6 +4308,25 @@ Write-Output '{NETSYS_JSON_END}'
     return record["present"]
 
 
+def guest_leaf_present(path: str) -> bool:
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$record = [pscustomobject]@{{
+    present = [bool](Test-Path -LiteralPath {ps_literal(path)} -PathType Leaf)
+}}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    record = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+    )
+    if not isinstance(record, dict) or set(record) != {"present"} or not isinstance(
+            record.get("present"), bool):
+        raise ValueError(f"guest returned an ambiguous file-presence record for {path}")
+    return record["present"]
+
+
 def guest_read_bytes(path: str, maximum: int) -> bytes:
     if maximum <= 0 or maximum > 4 * 1024 * 1024:
         raise ValueError("guest read bound is invalid")
@@ -4303,6 +4352,30 @@ Write-Output '{NETSYS_JSON_END}'
     if len(data) > maximum:
         raise ValueError("guest byte response exceeds its declared bound")
     return data
+
+
+def guest_live_file_evidence(path: str, maximum: int) -> tuple[dict, bytes]:
+    """Copy an append-open guest file, then hash/read the immutable snapshot."""
+    if maximum <= 0 or maximum > 4 * 1024 * 1024 or any(
+            char in path for char in '\"\r\n'):
+        raise ValueError("guest live-file evidence path or bound is invalid")
+    snapshot = f"{path}.don-host-{os.getpid()}.snapshot"
+    guest_cmd(f'del /q "{snapshot}" 2>nul & exit /b 0', check=False)
+    try:
+        guest_cmd(f'copy /b /y "{path}" "{snapshot}" >nul')
+        record = guest_file_record(snapshot)
+        data = guest_read_bytes(snapshot, maximum)
+        digest = hashlib.sha256(data).hexdigest()
+        if (not record["present"] or record["size"] != len(data) or
+                record["sha256"] != digest):
+            raise SystemExit("guest live-file snapshot identity changed while reading")
+        return {
+            "path": path,
+            "size": record["size"],
+            "sha256": record["sha256"],
+        }, data
+    finally:
+        guest_cmd(f'del /q "{snapshot}" 2>nul & exit /b 0', check=False)
 
 
 def guest_write_bytes(path: str, data: bytes) -> None:
@@ -4830,13 +4903,19 @@ def netsys_next_generation(shim: Path, port: int) -> dict:
 
         target_temp = RETAIL_NETSYS_DLL + ".don-next-generation"
         if rollover_state == "pre-swap":
+            target_previous = target_temp + ".previous"
             script = f"""
 $ErrorActionPreference = 'Stop'
 if (Test-Path -LiteralPath {ps_literal(target_temp)}) {{
     Remove-Item -LiteralPath {ps_literal(target_temp)} -Force
 }}
+if (Test-Path -LiteralPath {ps_literal(target_previous)}) {{
+    Remove-Item -LiteralPath {ps_literal(target_previous)} -Force
+}}
 [IO.File]::Copy({ps_literal(NETSYS_NEXT)}, {ps_literal(target_temp)}, $false)
-[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
+[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)},
+    {ps_literal(target_previous)})
+Remove-Item -LiteralPath {ps_literal(target_previous)} -Force
 """
             guest_ps_encoded(script)
             rollover_state = classify_netsys_rollover_files(
@@ -4849,10 +4928,14 @@ if (Test-Path -LiteralPath {ps_literal(target_temp)}) {{
                 raise SystemExit("rollover first swap did not reach its exact recovery state")
 
         if rollover_state == "post-first-swap":
+            staged_previous = NETSYS_NEXT + ".previous"
             guest_ps_encoded(
                 "$ErrorActionPreference = 'Stop'\n"
+                f"if (Test-Path -LiteralPath {ps_literal(staged_previous)}) {{ "
+                f"Remove-Item -LiteralPath {ps_literal(staged_previous)} -Force }}\n"
                 f"[IO.File]::Replace({ps_literal(NETSYS_NEXT)}, "
-                f"{ps_literal(NETSYS_STAGED)}, $null)"
+                f"{ps_literal(NETSYS_STAGED)}, {ps_literal(staged_previous)})\n"
+                f"Remove-Item -LiteralPath {ps_literal(staged_previous)} -Force"
             )
             rollover_state = classify_netsys_rollover_files(
                 manifest,
@@ -5005,7 +5088,10 @@ def netsys_configure_bridge() -> dict:
     return manifest
 
 
-def validated_netsys_load_only_proof(manifest: dict) -> dict:
+def validated_netsys_load_only_proof(
+    manifest: dict,
+    termination: dict | None = None,
+) -> dict:
     """Return one exact, flushed load-only frontier bound to the installed shim."""
     validate_netsys_manifest(manifest)
     if (manifest["state"] != "installed" or manifest["mode"] != "load-only" or
@@ -5023,15 +5109,44 @@ def validated_netsys_load_only_proof(manifest: dict) -> dict:
         trace = parse_netsys_trace(
             guest_read_bytes(NETSYS_LOAD_TRACE, 1024 * 1024).decode("utf-8")
         )
-        validate_netsys_load_only_frontier(trace)
         exit_value = parse_netsys_exit(guest_read_bytes(NETSYS_LOAD_EXIT, 1024))
     except (UnicodeDecodeError, ValueError) as exc:
         raise SystemExit(f"REFUSING malformed load-only proof: {exc}") from exc
-    if exit_value["exit_code"] not in NETSYS_NORMAL_EXIT_CODES:
+    forced_initialized = False
+    try:
+        validate_netsys_load_only_frontier(trace)
+    except ValueError as exc:
+        if (not isinstance(termination, dict) or set(termination) !=
+                {"process", "close_requested", "forced"} or
+                termination.get("forced") is not True or
+                not isinstance(termination.get("close_requested"), bool) or
+                not isinstance(termination.get("process"), dict)):
+            raise SystemExit(f"REFUSING malformed load-only proof: {exc}") from exc
+        try:
+            validate_netsys_load_only_initialized_frontier(trace)
+        except ValueError as initialized_exc:
+            raise SystemExit(
+                f"REFUSING malformed forced load-only proof: {initialized_exc}"
+            ) from initialized_exc
+        process = termination["process"]
+        if (set(process) != {"pid", "path", "session_id", "start_utc"} or
+                process.get("pid") != trace["records"][0]["pid"] or
+                not isinstance(process.get("session_id"), int) or
+                process["session_id"] <= 0 or
+                not isinstance(process.get("start_utc"), str) or
+                normalize_windows_path(process.get("path", "")) !=
+                normalize_windows_path(RETAIL_EXE)):
+            raise SystemExit("REFUSING forced load-only proof after process identity drift")
+        forced_initialized = True
+    allowed_exit = (
+        exit_value["exit_code"] in NETSYS_NORMAL_EXIT_CODES or
+        (forced_initialized and exit_value["exit_code"] == -1)
+    )
+    if not allowed_exit:
         raise SystemExit(
             f"REFUSING load-only proof after exit code {exit_value['exit_code']}"
         )
-    return {
+    proof = {
         "generation": manifest["generation"],
         "shim": copy.deepcopy(manifest["shim"]),
         "trace": {key: trace_record[key] for key in ("path", "size", "sha256")},
@@ -5041,9 +5156,15 @@ def validated_netsys_load_only_proof(manifest: dict) -> dict:
         },
         "factory_ready": trace["factory_ready"],
     }
+    if termination is not None:
+        proof["termination"] = copy.deepcopy(termination)
+    return proof
 
 
-def netsys_configure_bridge_from_load_only(bind: str) -> dict:
+def netsys_configure_bridge_from_load_only(
+    bind: str,
+    termination: dict | None = None,
+) -> dict:
     """Narrow live-run seam: one current-generation load proof, then bridge mode.
 
     This does not invoke ns_host or click retail UI.  The separate live-run gate
@@ -5052,7 +5173,7 @@ def netsys_configure_bridge_from_load_only(bind: str) -> dict:
     """
     require_retail_absent("NetSys setup-bridge configuration")
     manifest = read_netsys_manifest()
-    proof = validated_netsys_load_only_proof(manifest)
+    proof = validated_netsys_load_only_proof(manifest, termination)
     if guest_file_record(NETSYS_BRIDGE_TRACE)["present"]:
         raise SystemExit("REFUSING to append to an existing setup-bridge trace")
     environment = netsys_environment("host-bridge", bind)
@@ -5324,11 +5445,11 @@ def netsys_capture(output: Path, generation: str | None, timeout: float) -> dict
     if loaded_file["sha256"] != manifest["shim"]["sha256"]:
         raise SystemExit("REFUSING capture: mapped module file does not match the manifest")
     trace_path, exit_path = netsys_mode_paths(manifest["mode"])
-    trace_file = guest_file_record(trace_path)
-    if not trace_file["present"]:
+    if not guest_leaf_present(trace_path):
         raise SystemExit("REFUSING capture without the explicit flushed mode trace")
     try:
-        trace_raw = guest_read_bytes(trace_path, 1024 * 1024).decode("utf-8")
+        trace_file, trace_bytes = guest_live_file_evidence(trace_path, 1024 * 1024)
+        trace_raw = trace_bytes.decode("utf-8")
         trace = parse_netsys_trace(trace_raw, target_pid)
     except (UnicodeDecodeError, ValueError) as exc:
         raise SystemExit(f"REFUSING malformed NetSys trace: {exc}") from exc
@@ -5338,7 +5459,10 @@ def netsys_capture(output: Path, generation: str | None, timeout: float) -> dict
         raise SystemExit("REFUSING trace whose load-only state contradicts the manifest")
     if manifest["mode"] == "load-only":
         try:
-            validate_netsys_load_only_frontier(trace)
+            # Capture is intentionally taken while the exact module is still
+            # mapped.  The complete proof validates cleanup after the scoped
+            # retail stop below.
+            validate_netsys_load_only_initialized_frontier(trace)
         except ValueError as exc:
             raise SystemExit(f"REFUSING incomplete load-only trace: {exc}") from exc
     elif manifest["mode"] == "host-bridge":
@@ -5696,7 +5820,10 @@ def netsys_live_load_proof(output: Path, timeout: float) -> dict:
             artifact = json.loads(output.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SystemExit(f"REFUSING malformed existing load-proof artifact: {exc}") from exc
-        current = validated_netsys_load_only_proof(manifest)
+        stored_termination = None
+        if isinstance(artifact, dict) and isinstance(artifact.get("proof"), dict):
+            stored_termination = artifact["proof"].get("termination")
+        current = validated_netsys_load_only_proof(manifest, stored_termination)
         if (not isinstance(artifact, dict) or
                 artifact.get("schema") != "don.retail-netsys-load-proof.v1" or
                 artifact.get("credential_material") != "none" or
@@ -5707,15 +5834,15 @@ def netsys_live_load_proof(output: Path, timeout: float) -> dict:
             raise SystemExit("REFUSING stale or identity-mismatched load-proof artifact")
         artifact["artifact"] = local_file_identity(output, 4 * 1024 * 1024)
         return artifact
-    trace = guest_file_record(NETSYS_LOAD_TRACE)
+    trace_present = guest_leaf_present(NETSYS_LOAD_TRACE)
     exit_record = guest_file_record(NETSYS_LOAD_EXIT)
     capture = None
-    if trace["present"] and exit_record["present"]:
+    if trace_present and exit_record["present"]:
         proof = validated_netsys_load_only_proof(manifest)
     else:
         if exit_record["present"]:
             raise SystemExit("REFUSING load-only exit record without its trace")
-        if trace["present"]:
+        if trace_present:
             pids, _ = process_pids()
             if len(pids) != 1:
                 raise SystemExit(
@@ -5730,14 +5857,16 @@ def netsys_live_load_proof(output: Path, timeout: float) -> dict:
         deadline = time.monotonic() + timeout
         parsed = None
         while time.monotonic() < deadline:
-            trace = guest_file_record(NETSYS_LOAD_TRACE)
-            if trace["present"]:
+            if guest_leaf_present(NETSYS_LOAD_TRACE):
                 try:
+                    _, trace_bytes = guest_live_file_evidence(
+                        NETSYS_LOAD_TRACE, 1024 * 1024
+                    )
                     parsed = parse_netsys_trace(
-                        guest_read_bytes(NETSYS_LOAD_TRACE, 1024 * 1024).decode("utf-8"),
+                        trace_bytes.decode("utf-8"),
                         target_pid,
                     )
-                    validate_netsys_load_only_frontier(parsed)
+                    validate_netsys_load_only_initialized_frontier(parsed)
                     break
                 except (UnicodeDecodeError, ValueError):
                     pass
@@ -5765,11 +5894,15 @@ def netsys_live_load_proof(output: Path, timeout: float) -> dict:
         }
         if process["pid"] != target_pid:
             raise SystemExit("load-only process identity changed during capture")
-        netsys_stop_retail(target_pid, manifest["shim"]["sha256"], timeout)
+        termination = netsys_stop_retail(
+            target_pid, manifest["shim"]["sha256"], timeout
+        )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not guest_file_record(NETSYS_LOAD_EXIT)["present"]:
             time.sleep(0.1)
-        proof = validated_netsys_load_only_proof(read_netsys_manifest())
+        proof = validated_netsys_load_only_proof(
+            read_netsys_manifest(), termination
+        )
     artifact = {
         "schema": "don.retail-netsys-load-proof.v1",
         "credential_material": "none",
@@ -5804,12 +5937,14 @@ def netsys_friend_game_gate(target_pid: int, bind: str, expected_shim: dict) -> 
     mapped = matches[0]
     if normalize_windows_path(mapped["path"]) != normalize_windows_path(RETAIL_NETSYS_DLL):
         raise SystemExit("REFUSING Friend Game gate for an unexpected mapped DLL path")
-    trace_record = guest_file_record(NETSYS_BRIDGE_TRACE)
-    if not trace_record["present"]:
+    if not guest_leaf_present(NETSYS_BRIDGE_TRACE):
         raise SystemExit("REFUSING Friend Game gate before host-bridge trace exists")
     try:
+        trace_record, trace_bytes = guest_live_file_evidence(
+            NETSYS_BRIDGE_TRACE, 1024 * 1024
+        )
         trace = parse_netsys_trace(
-            guest_read_bytes(NETSYS_BRIDGE_TRACE, 1024 * 1024).decode("utf-8"),
+            trace_bytes.decode("utf-8"),
             target_pid,
         )
         validate_netsys_bridge_off_frontier(trace)
@@ -6263,7 +6398,10 @@ def netsys_live_run(
                 result = {"operation": "configure-host-bridge-resumed",
                           "current": manifest}
             else:
-                result = netsys_configure_bridge_from_load_only(bind)
+                latest = state["checkpoints"].get("latest_load_proof", {})
+                proof = latest.get("proof", {}) if isinstance(latest, dict) else {}
+                termination = proof.get("termination") if isinstance(proof, dict) else None
+                result = netsys_configure_bridge_from_load_only(bind, termination)
             if (result["current"]["generation"] != 3 or
                     result["current"]["mode"] != "host-bridge" or
                     result["current"]["shim"]["sha256"] != state["shim"]["sha256"]):

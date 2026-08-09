@@ -919,6 +919,31 @@ class RetailCtlTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing or ambiguous"):
                 retailctl.guest_directory_present(retailctl.NETSYS_ARCHIVE_ROOT)
 
+    def test_live_guest_file_evidence_hashes_an_immutable_copy(self):
+        data = b"seq=1 pid=77 call=factory.get_netsys_object_ptr\n"
+        digest = __import__("hashlib").sha256(data).hexdigest()
+        commands = []
+        with (
+            mock.patch.object(retailctl, "guest_cmd",
+                              side_effect=lambda command, **_kwargs: commands.append(command)),
+            mock.patch.object(retailctl, "guest_file_record", return_value={
+                "present": True, "path": "snapshot", "size": len(data),
+                "sha256": digest,
+            }),
+            mock.patch.object(retailctl, "guest_read_bytes", return_value=data),
+        ):
+            record, copied = retailctl.guest_live_file_evidence(
+                retailctl.NETSYS_LOAD_TRACE, 1024
+            )
+        self.assertEqual(copied, data)
+        self.assertEqual(record, {
+            "path": retailctl.NETSYS_LOAD_TRACE,
+            "size": len(data),
+            "sha256": digest,
+        })
+        self.assertIn("copy /b /y", commands[1])
+        self.assertTrue(commands[-1].startswith("del /q"))
+
     def test_netsys_preintent_retry_reuses_only_exact_current_parity_next(self):
         manifest = netsys_manifest_fixture()
         host = {"size": 198_656, "sha256": "c" * 64}
@@ -945,6 +970,14 @@ class RetailCtlTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "unknown or different orphaned"):
             retailctl.reuse_preintent_netsys_next(next_record, host, in_flight)
 
+    def test_netsys_rollover_never_passes_a_null_replace_backup(self):
+        source = Path(retailctl.__file__).read_text()
+        rollover = source[source.index("def netsys_next_generation"):
+                          source.index("def netsys_configure_host")]
+        self.assertNotIn(", $null)", rollover)
+        self.assertIn("target_previous", rollover)
+        self.assertIn("staged_previous", rollover)
+
     def test_netsys_trace_is_contiguous_pid_bound_and_credential_free(self):
         trace = (
             "seq=1 pid=77 call=factory.get_netsys_object_ptr\n"
@@ -961,7 +994,33 @@ class RetailCtlTests(unittest.TestCase):
         parsed = retailctl.parse_netsys_trace(trace, 77)
         self.assertTrue(parsed["load_only"])
         self.assertEqual(len(parsed["records"]), 8)
+        retailctl.validate_netsys_load_only_initialized_frontier(parsed)
         retailctl.validate_netsys_load_only_frontier(parsed)
+        initialized_only = "\n".join(trace.splitlines()[:6]) + "\n"
+        retailctl.validate_netsys_load_only_initialized_frontier(
+            retailctl.parse_netsys_trace(initialized_only, 77)
+        )
+        with self.assertRaisesRegex(ValueError, "cleanup_system"):
+            retailctl.validate_netsys_load_only_frontier(
+                retailctl.parse_netsys_trace(initialized_only, 77)
+            )
+        cleanup_only = trace.replace(
+            "seq=7 pid=77 call=vtable.ns_close\n"
+            "seq=8 pid=77 call=vtable.ns_cleanup_system\n",
+            "seq=7 pid=77 call=vtable.ns_cleanup_system\n",
+        )
+        retailctl.validate_netsys_load_only_frontier(
+            retailctl.parse_netsys_trace(cleanup_only, 77)
+        )
+        duplicate_close = trace.replace(
+            "seq=8 pid=77 call=vtable.ns_cleanup_system\n",
+            "seq=8 pid=77 call=vtable.ns_close\n"
+            "seq=9 pid=77 call=vtable.ns_cleanup_system\n",
+        )
+        with self.assertRaisesRegex(ValueError, "multiple ns_close"):
+            retailctl.validate_netsys_load_only_frontier(
+                retailctl.parse_netsys_trace(duplicate_close, 77)
+            )
         self.assertEqual(retailctl.parse_netsys_exit(b"exit_code=0\r\n"), {"exit_code": 0})
         self.assertIn(8008, retailctl.NETSYS_NORMAL_EXIT_CODES)
         with self.assertRaisesRegex(ValueError, "malformed"):
@@ -1007,7 +1066,7 @@ class RetailCtlTests(unittest.TestCase):
             })
             return {"operation": "next-generation", "current": copy.deepcopy(manifest)}
 
-        def configure(bind):
+        def configure(bind, _termination=None):
             calls.append(f"configure:{bind}")
             manifest.update({
                 "mode": "host-bridge",
@@ -1135,6 +1194,57 @@ class RetailCtlTests(unittest.TestCase):
         self.assertEqual(written[-1], result["current"])
         self.assertEqual(launchers[0][0], retailctl.NETSYS_LAUNCHER)
         self.assertIn(b'DON_NET_SETUP_BRIDGE=1', launchers[0][1])
+
+    def test_forced_load_proof_requires_exact_pid_and_exit(self):
+        manifest = netsys_manifest_fixture()
+        trace = (
+            "seq=1 pid=77 call=factory.get_netsys_object_ptr\n"
+            "seq=2 pid=77 factory=ready abi=netsys-v65 role=Host "
+            "load_only=true local_addr=127.0.0.1:49152\n"
+            "seq=3 pid=77 call=vtable.ns_error_set_callback\n"
+            "seq=4 pid=77 call=vtable.ns_set_profiler\n"
+            "seq=5 pid=77 call=vtable.ns_init\n"
+            "seq=6 pid=77 init=stored messenger=true crossplay_service=true "
+            "object_size=0x3d4\n"
+        ).encode()
+        termination = {
+            "process": {
+                "pid": 77, "path": retailctl.RETAIL_EXE,
+                "session_id": 1, "start_utc": "2026-08-09T00:00:00Z",
+            },
+            "close_requested": False,
+            "forced": True,
+        }
+        records = {
+            retailctl.RETAIL_NETSYS_DLL: {
+                "present": True, "path": retailctl.RETAIL_NETSYS_DLL,
+                "size": manifest["shim"]["size"],
+                "sha256": manifest["shim"]["sha256"],
+            },
+            retailctl.NETSYS_LOAD_TRACE: {
+                "present": True, "path": retailctl.NETSYS_LOAD_TRACE,
+                "size": len(trace), "sha256": "c" * 64,
+            },
+            retailctl.NETSYS_LOAD_EXIT: {
+                "present": True, "path": retailctl.NETSYS_LOAD_EXIT,
+                "size": 13, "sha256": "d" * 64,
+            },
+        }
+        with (
+            mock.patch.object(retailctl, "guest_file_record",
+                              side_effect=lambda path: records[path]),
+            mock.patch.object(retailctl, "guest_read_bytes",
+                              side_effect=lambda path, _bound:
+                              trace if path == retailctl.NETSYS_LOAD_TRACE else b"exit_code=-1\n"),
+        ):
+            proof = retailctl.validated_netsys_load_only_proof(
+                manifest, termination
+            )
+            self.assertEqual(proof["termination"], termination)
+            wrong = copy.deepcopy(termination)
+            wrong["process"]["pid"] = 78
+            with self.assertRaisesRegex(SystemExit, "process identity drift"):
+                retailctl.validated_netsys_load_only_proof(manifest, wrong)
 
     def test_encoded_guest_powershell_preserves_quotes_without_shell_reparsing(self):
         completed = mock.Mock(stdout="ok\r\n")
