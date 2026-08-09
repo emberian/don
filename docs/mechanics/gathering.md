@@ -62,21 +62,105 @@ result and never infers one.
 
 Capacity refresh and attachment are separate. The caller stores the evaluator result with
 `GatherSite::set_authoritative_capacity`; `attach_worker` reads that persistent value, as
-retail does. Terrain changes must refresh it before the next attachment decision.
+retail does. The building-center terrain update byte drives two independent operations:
+bit `0x20` calls `Build::verify_gather_tiles`, while bit `0x10` calls
+`Build::find_gather_tiles`. Verification can therefore remove cells without recomputing
+`gather_max`; the find path reserves/disorders the list, computes capacity, and stores `AL`.
 
 ## Terrain claims and non-depletion
 
-`Build::find_gather_tiles` `0x00623350` obtains an ordered `MiningList`, marks every base
-fine cell with TData bit `0x1000`, and appends deterministic weighted duplicates. The
-duplicates affect selection weight, not physical capacity. `verify_gather_tiles` clears the
-bit when an entry loses territorial validity. `WorldData::is_gathered_from` and
-`World::set_gathered_at` expose that exact reservation bit; it is checksummed as part of the
-world TData plane.
+`Build::find_gather_tiles` `0x00623350` incrementally appends newly eligible cells to the
+ordered `MiningList`; it does not clear and rebuild it. Existing coordinates retain TData
+bit `0x1000`, so the authoritative terrain evaluator rejects them as already reserved.
+After discovery, the function sets `0x1000` on the entire list.
+
+The next step is easily mistranscribed. Retail does **not** append weighted duplicates.
+When `old_len < new_len`, it performs exactly `4 * new_len` move-to-back operations:
+
+```text
+index = Random::get(0, 0xffff) % new_len   // no draw at all when new_len == 1
+coord = list[index]
+remove_first_by_value(coord)
+append(coord)
+```
+
+Length remains constant. Lists longer than one consume exactly `4N` draws from the main
+simulation RNG; one-cell lists execute four rotations with zero draws; an unchanged list
+does neither. This is not Fisher-Yates, but its order is checksum-visible and later affects
+strict tie-breaking and the `index >> 2` term in worker selection.
+
+`verify_gather_tiles` clears `0x1000` when an entry loses territorial validity and removes
+that coordinate first-match without shrinking capacity. It does not test whether the
+resource terrain itself changed, reset `mtn`/`cliff`, or update `gather_max`.
+`WorldData::is_gathered_from` and `World::set_gathered_at` expose the reservation bit; it is
+checksummed as part of the world TData plane.
 
 There is no remaining-yield pool for normal building gathering. `Unit::do_non_flat_gather`
 rotates a selected coordinate to the back of the list; it does not debit it. `World::gather_at`
 is a pure six-slot terrain-value reader. Rare/merchant Good-object targeting is a separate,
 still-open spatial lane; no invented `GoodNode::remaining` field is retained.
+
+`Build::close`, not the misleadingly named `Build::clear_gather`, owns terrain teardown.
+For a non-flat gather building it clears `0x1000` on every listed cell, marks the center
+update record with `0x20`, writes `mtn=cliff=-1`, and sets list length to zero. Allocation
+and capacity survive; `gather_max` is not zeroed. `clear_gather` instead deletes the trained
+unit `GatherPointList` at `+0xB8` and never touches `MiningList +0x98`.
+
+## Persistent non-flat choreography
+
+`GatherOrder`'s checksum-visible suffix is the exact twenty-byte sequence
+`tx, ty, build_type, wait, goto_build, non_flat_gather, dist_mod, been_there`. In
+`Unit::do_non_flat_gather` `0x005F0170`, `goto_build` is the phase latch:
+
+- every call writes `UnitData::group +0x80 = -1`;
+- when `been_there != 0`, the first call against a target whose build mask lacks `0x800`
+  increments `BuildData::recharging` and sets that latch;
+- `goto_build == 0` clears unit-mask bits `0x78000000`; if `been_there` was zero, it sets
+  it and marks the leader economy dirty;
+- a missing/inaccessible tile causes selection from the ordered `MiningList`; candidates
+  must pass resource bit `0x4000` and `has_gather_access`;
+- candidate score is
+  `max(vector_dist(candidate, building-center), 3) * dist_mod + (index >> 2)`, with strict
+  lower-than replacement, then the selected value is moved to the list tail;
+- selection consumes one main-RNG draw and sets `wait = draw % 200 + 400`, then writes
+  `goto_build=0`. Property `0x1A2` sets unit mask `0x10000000`; without it retail sets
+  `0x40000000` and replaces the wait with `1,000,000`;
+- a failed nearby-spot search writes `tx=ty=wait=-1`, writes `goto_build=1`, decrements
+  nonzero `dist_mod`, and removes a held doober for worker-gated units. It does not rewrite
+  `been_there`.
+
+The two observed wait loops draw only when decrement reaches exactly zero and
+`Build::all_gathering` is false. Animation `0x19` reschedules to `draw % 100 + 300`; the
+within-`0x140` tile loop uses `draw % 50 + 100`. A true `all_gathering` result sets
+`wait=-1` without a draw.
+
+Gather retirement marks the leader economy dirty and resolves the target. Unlike outer
+order execution, this epilogue does not compare `GatherOrder::uid`: it detaches when the
+target is still live and raw `(whom,ox)`/owner identity matches. A guarded live-game arm can
+substitute the unit's `inside_down` object identity before detaching. It then clears
+`0x78000000`, removes the held doober for types `0x32..=0x35`, and only afterward removes
+the order. A vanished target cannot be detached immediately; clearing the order makes the
+chain entry stale and `Build::check_gatherers` prunes it later.
+
+## Checksum-critical representation
+
+`MiningList`'s constructor uses length/capacity zero, increment `-1`, flags zero, and
+`mtn=cliff=-1`. Its first append grows capacity to four, then capacity doubles. Under the
+building `must_walk` gate, `BuildData::walk_data` includes `gather_max` in `[+0x70,+0x86)`,
+then later emits:
+
+```text
+mtn:i8, cliff:i8
+length:i32
+if length != 0:
+    capacity:i32
+    increment:i16
+    flags & ~0x40:u8
+    ordered TCoordData[length]     // tx:i32, ty:i32
+```
+
+The pointer, current index, and unused allocation are excluded. Consequently random
+disordering, worker move-to-back, and capacity-growth history are all lockstep-visible.
 
 ## Rates, caps, and credit
 
@@ -95,15 +179,19 @@ resource slot independently by `competitors + 1` with C truncation.
 ## Shared adapter contract
 
 Consumers such as the arena keep `GatherSite` keyed by `(owner, build_o)` and
-`GatherWorker` keyed by `(owner, unit_o)`. The stable sequence is:
+`GatherWorker` keyed by `(owner, unit_o)`, plus a `GatherMiningList` whose engine capacity
+header survives clear/remove operations. The stable sequence is:
 
-1. evaluate retail terrain/type capacity externally;
-2. call `site.set_authoritative_capacity(result)`;
+1. append only cells returned by the authoritative retail terrain evaluator;
+2. call `finish_gather_tile_refresh_with_capacity`, passing the pre-discovery length, main
+   simulation RNG, and exact `max_gatherers` result;
 3. validate the generational `GatherAssignment` target;
-4. call `attach_worker`, `check_gatherers`, or `detach_worker`;
-5. count `Active` workers and pass a fully evaluated per-worker six-slot result to
+4. call `attach_worker`, `check_gatherers`, `detach_worker`, or `retire_gather_order`;
+5. advance non-flat persistent phases through `begin_non_flat_gather_tick`,
+   `prepare_non_flat_tile`, the wait primitive, and explicit host path/animation callbacks;
+6. count `Active` workers and pass a fully evaluated per-worker six-slot result to
    `site_gross`;
-6. feed the gross through `credit_gather_frame`.
+7. feed the gross through `credit_gather_frame`.
 
 Unsupported terrain/resource evaluation stays explicit at this seam. Supplying a guessed
 capacity or a synthetic depletion counter would create plausible but retail-incompatible

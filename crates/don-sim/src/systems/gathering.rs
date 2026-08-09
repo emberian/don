@@ -22,10 +22,13 @@
 //! Structure and transitions are read from the named retail functions and the matching PDB.
 //! They are Tier C: they have not been run differentially against retail.
 
+use crate::container::{EngineArray, INCREMENT_DOUBLE};
 use crate::mechanics::{credit_resource, resource_period};
+use crate::rng::Random;
 
 use super::economy::{self, EconRules, NUM_RESOURCES};
 use super::map_terrain::World;
+use super::movement::vector_dist;
 
 /// Retail's null owner-local object link.
 pub const NO_OBJECT: i16 = -1;
@@ -36,10 +39,257 @@ pub const MAX_KNOWLEDGE_GATHERERS: i32 = 7;
 
 /// One fine-cell coordinate returned by the authoritative gathering-terrain search.
 /// `BuildData::gather_from` stores these pairs; this type does not decide which cells qualify.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GatherTile {
     pub tx: i32,
     pub ty: i32,
+}
+
+/// `BuildData::gather_from` (`+0x98`), retaining the engine array header that participates
+/// in `BuildData::walk_data`.
+///
+/// `MiningList::MiningList` (`0x00472260`) constructs the array with `size = 0` and
+/// `increment = -1`; it does not use `SimpleArray`'s five-element initial allocation.
+/// The two signed tail bytes are walked before the array body even though they follow it
+/// in memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatherMiningList {
+    tiles: EngineArray<GatherTile>,
+    pub mtn: i8,
+    pub cliff: i8,
+}
+
+impl Default for GatherMiningList {
+    fn default() -> Self {
+        Self {
+            tiles: EngineArray::with_size(0, INCREMENT_DOUBLE),
+            mtn: -1,
+            cliff: -1,
+        }
+    }
+}
+
+impl GatherMiningList {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.tiles.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.tiles.is_empty()
+    }
+
+    #[inline]
+    pub fn tiles(&self) -> &[GatherTile] {
+        self.tiles.as_slice()
+    }
+
+    /// `(length, capacity, increment, flags)` as the retail array stores it.
+    #[inline]
+    pub fn array_header(&self) -> (i32, i32, i16, u8) {
+        self.tiles.checksum_header()
+    }
+
+    /// Append one coordinate produced by the authoritative terrain evaluator.
+    #[inline]
+    pub fn add(&mut self, tile: GatherTile) -> usize {
+        self.tiles.add(tile)
+    }
+
+    /// Remove the first matching coordinate, as `Array<TCoordData>::remove`
+    /// (`0x0046D4F0`) does. Capacity never shrinks.
+    pub fn remove_first(&mut self, tile: GatherTile) -> bool {
+        let Some(i) = self
+            .tiles
+            .as_slice()
+            .iter()
+            .position(|candidate| *candidate == tile)
+        else {
+            return false;
+        };
+        self.tiles.remove(i);
+        true
+    }
+
+    /// Retail's selection and shuffle primitive: remove the first equal coordinate and
+    /// append the value to the tail.
+    pub fn move_to_back(&mut self, tile: GatherTile) -> bool {
+        if !self.remove_first(tile) {
+            return false;
+        }
+        self.tiles.add(tile);
+        true
+    }
+
+    /// The exact bytes emitted for the `MiningList` portion of `BuildData::walk_data`:
+    /// `mtn`, `cliff`, then `Array<TCoordData>::walk_data`.
+    pub fn walked_image(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(15 + self.len() * 8);
+        out.push(self.mtn as u8);
+        out.push(self.cliff as u8);
+        let (length, size, increment, flags) = self.tiles.checksum_header();
+        out.extend_from_slice(&length.to_le_bytes());
+        if length != 0 {
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&increment.to_le_bytes());
+            out.push(flags & !0x40);
+            for tile in self.tiles() {
+                out.extend_from_slice(&tile.tx.to_le_bytes());
+                out.extend_from_slice(&tile.ty.to_le_bytes());
+            }
+        }
+        out
+    }
+}
+
+/// Result of the post-discovery half of `Build::find_gather_tiles` (`0x00623350`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GatherRefresh {
+    pub reserved_tiles: usize,
+    pub move_to_back_steps: usize,
+    pub rng_draws: usize,
+}
+
+/// Fail-closed errors at the authoritative terrain seam. Retail assumes these invariants
+/// and would index raw memory; the Rust adapter refuses before mutating world or RNG state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatherRefreshError {
+    PreviousLengthBeyondCurrent,
+    LengthOverflow,
+    InvalidTile(GatherTile),
+}
+
+/// Finish `Build::find_gather_tiles` after `BuildTypeData::find_gather_tcoords` has appended
+/// authoritative cells to `list`.
+///
+/// A long-standing transcription trap is frozen here: retail does **not** add four weighted
+/// duplicates per cell. When discovery grew the list, it performs `4 * new_len` iterations
+/// of random-index, remove-first-by-value, append-to-tail. Length remains constant. A
+/// one-element list takes the four move-to-back steps without drawing RNG at all.
+pub fn finish_gather_tile_refresh(
+    world: &mut World,
+    list: &mut GatherMiningList,
+    previous_len: usize,
+    rng: &mut Random,
+) -> Result<GatherRefresh, GatherRefreshError> {
+    if previous_len > list.len() {
+        return Err(GatherRefreshError::PreviousLengthBeyondCurrent);
+    }
+    if list.len() > i32::MAX as usize {
+        return Err(GatherRefreshError::LengthOverflow);
+    }
+    if let Some(tile) = list
+        .tiles()
+        .iter()
+        .copied()
+        .find(|tile| !world.valid_t(tile.tx, tile.ty))
+    {
+        return Err(GatherRefreshError::InvalidTile(tile));
+    }
+
+    for tile in list.tiles() {
+        world.set_gathered_at(tile.tx, tile.ty, true);
+    }
+
+    let mut result = GatherRefresh {
+        reserved_tiles: list.len(),
+        ..GatherRefresh::default()
+    };
+    if previous_len < list.len() {
+        let len = list.len();
+        result.move_to_back_steps = len
+            .checked_mul(4)
+            .ok_or(GatherRefreshError::LengthOverflow)?;
+        for _ in 0..result.move_to_back_steps {
+            let index = if len <= 1 {
+                0
+            } else {
+                result.rng_draws += 1;
+                (rng.get(0, 0xffff) % len as i32) as usize
+            };
+            let tile = list.tiles()[index];
+            let moved = list.move_to_back(tile);
+            debug_assert!(moved, "a value read from the list must still be removable");
+        }
+    }
+    Ok(result)
+}
+
+/// The complete post-discovery mutation order, including the final `gather_max` store.
+/// `authoritative_capacity` must be the result of the real `BuildTypeData::max_gatherers`
+/// evaluation; this function intentionally provides no building/terrain fallback table.
+pub fn finish_gather_tile_refresh_with_capacity(
+    world: &mut World,
+    list: &mut GatherMiningList,
+    previous_len: usize,
+    rng: &mut Random,
+    site: &mut GatherSite,
+    authoritative_capacity: i32,
+) -> Result<GatherRefresh, GatherRefreshError> {
+    let result = finish_gather_tile_refresh(world, list, previous_len, rng)?;
+    site.set_authoritative_capacity(authoritative_capacity);
+    Ok(result)
+}
+
+/// `Build::verify_gather_tiles` (`0x00623570`). The caller supplies the exact
+/// territory/diplomacy predicate; failed coordinates lose TData reservation bit `0x1000`
+/// and are removed first-match, without shrinking the array capacity.
+pub fn verify_gather_tiles<F>(
+    world: &mut World,
+    list: &mut GatherMiningList,
+    mut territory_valid: F,
+) -> Result<usize, GatherRefreshError>
+where
+    F: FnMut(GatherTile) -> bool,
+{
+    if let Some(tile) = list
+        .tiles()
+        .iter()
+        .copied()
+        .find(|tile| !world.valid_t(tile.tx, tile.ty))
+    {
+        return Err(GatherRefreshError::InvalidTile(tile));
+    }
+    let mut removed = 0;
+    let mut i = 0;
+    while i < list.len() {
+        let tile = list.tiles()[i];
+        if territory_valid(tile) {
+            i += 1;
+        } else {
+            world.set_gathered_at(tile.tx, tile.ty, false);
+            let did_remove = list.remove_first(tile);
+            debug_assert!(did_remove);
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// The gathering portion of `Build::close` (`0x00628980`): release every reserved cell,
+/// reset the two `MiningList` tail bytes, and set length to zero while retaining capacity.
+/// The caller must separately mark the building-center terrain update record with `0x20`.
+pub fn close_gather_tiles(
+    world: &mut World,
+    list: &mut GatherMiningList,
+) -> Result<usize, GatherRefreshError> {
+    if let Some(tile) = list
+        .tiles()
+        .iter()
+        .copied()
+        .find(|tile| !world.valid_t(tile.tx, tile.ty))
+    {
+        return Err(GatherRefreshError::InvalidTile(tile));
+    }
+    let released = list.len();
+    for tile in list.tiles() {
+        world.set_gathered_at(tile.tx, tile.ty, false);
+    }
+    list.mtn = -1;
+    list.cliff = -1;
+    list.tiles.clear();
+    Ok(released)
 }
 
 /// Read the retail `WorldData::is_gathered_from` reservation bit (`0x1000`).
@@ -118,6 +368,14 @@ pub struct GatherWorker {
     /// `UnitData::good_obj` (`+0x94`), the nearby good selected by
     /// `UnitData::calc_gather`; `-1` when no good is selected.
     pub good_obj: i16,
+    /// `UnitData::group` (`+0x80`). `do_non_flat_gather` detaches the unit from its group
+    /// at the start of every tick.
+    pub group: i16,
+    /// `UnitData::unit_masks` (`+0x68`). Four high gather-action bits are cleared on
+    /// non-flat reset and retirement.
+    pub unit_masks: u32,
+    /// `UnitData::doober` (`+0x86`), a held visual object for worker types `0x32..=0x35`.
+    pub hold_doober: i16,
 }
 
 impl GatherWorker {
@@ -130,6 +388,9 @@ impl GatherWorker {
             assignment: None,
             gather_down: NO_OBJECT,
             good_obj: NO_OBJECT,
+            group: NO_OBJECT,
+            unit_masks: 0,
+            hold_doober: NO_OBJECT,
         }
     }
 
@@ -167,6 +428,11 @@ pub struct GatherSite {
     pub gather_max: i8,
     /// `BuildData::gather_down` (`+0x70`).
     pub gather_down: i16,
+    /// `WallData::mylos` / `BuildData::build_masks` (`+0x60`). Bit `0x800` latches the
+    /// first arrived non-flat gatherer.
+    pub build_masks: u16,
+    /// `BuildData::recharging` (`+0x7A`), incremented once when that latch is first set.
+    pub recharging: i16,
 }
 
 impl GatherSite {
@@ -177,6 +443,8 @@ impl GatherSite {
             uid: 0,
             gather_max: 0,
             gather_down: NO_OBJECT,
+            build_masks: 0,
+            recharging: 0,
         }
     }
 
@@ -367,6 +635,317 @@ pub fn detach_worker(
         current = next;
     }
     Ok(false)
+}
+
+/// High action bits owned by gathering animation/path state. `do_non_flat_gather` clears
+/// these when `goto_build == 0`; `kill_current_order` clears the same mask on retirement.
+pub const GATHER_ACTION_MASKS: u32 = 0x7800_0000;
+
+/// The checksum-visible twenty-byte suffix of a live `GatherOrder`, with retail field
+/// widths and offsets preserved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonFlatGatherState {
+    pub tx: i32,
+    pub ty: i32,
+    pub build_type: i32,
+    pub wait: i32,
+    pub goto_build: u8,
+    pub non_flat_gather: u8,
+    pub dist_mod: u8,
+    pub been_there: u8,
+}
+
+impl NonFlatGatherState {
+    #[inline]
+    pub fn tile(&self) -> GatherTile {
+        GatherTile {
+            tx: self.tx,
+            ty: self.ty,
+        }
+    }
+}
+
+/// Persistent effects produced at the entry of `Unit::do_non_flat_gather`
+/// (`0x005F0170..0x005F0272`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NonFlatBegin {
+    pub leader_economy_dirty: bool,
+    pub latched_site_recharge: bool,
+}
+
+fn store_been_there(worker: &mut GatherWorker, state: &mut NonFlatGatherState, value: bool) {
+    state.been_there = u8::from(value);
+    if let Some(assignment) = worker.assignment.as_mut() {
+        assignment.been_there = value;
+    }
+}
+
+/// Execute the exact persistent mutations at the top of every non-flat gathering tick.
+/// World lookup, animation, and pathfinding remain host operations and are not guessed.
+pub fn begin_non_flat_gather_tick(
+    site: &mut GatherSite,
+    worker: &mut GatherWorker,
+    state: &mut NonFlatGatherState,
+) -> NonFlatBegin {
+    let mut result = NonFlatBegin::default();
+    if state.been_there != 0 && site.build_masks & 0x800 == 0 {
+        site.recharging = site.recharging.wrapping_add(1);
+        site.build_masks |= 0x800;
+        result.latched_site_recharge = true;
+    }
+    worker.group = NO_OBJECT;
+    if state.goto_build == 0 {
+        worker.unit_masks &= !GATHER_ACTION_MASKS;
+        if state.been_there == 0 {
+            store_been_there(worker, state, true);
+            result.leader_economy_dirty = true;
+        }
+    }
+    result
+}
+
+/// Why the non-flat tile preparation returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NonFlatTileResult {
+    /// This primitive was called outside retail's `goto_build != 0 && wait < 0` arm.
+    WrongPhase,
+    /// The order's existing coordinate still passed `WorldData::has_gather_access`.
+    Existing(GatherTile),
+    /// A candidate was selected and moved to the list tail.
+    Selected(GatherTile),
+    /// No list entry passed the resource/access predicate; retail consumes no RNG here.
+    NoCandidate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonFlatTilePreparation {
+    pub result: NonFlatTileResult,
+    pub leader_economy_dirty: bool,
+    pub removed_hold_doober: Option<i16>,
+}
+
+/// Prepare the terrain coordinate used by the `wait < 0` arm of
+/// `Unit::do_non_flat_gather` (`0x005F027F..0x005F0725`).
+///
+/// `candidate_eligible` stands for the exact conjunction of in-bounds, TData bit `0x4000`,
+/// and `WorldData::has_gather_access(tile, owner, 1, 0)`. `site_origin` is the target
+/// building coordinate after retail's coordinate-table conversion. `dist_mod_limit` is
+/// the rules value at `Constants+0x9CC`; passing it explicitly avoids inventing a terrain
+/// table.
+pub fn prepare_non_flat_tile<SetDefaultAnim, RemoveDoober, Existing, Candidate>(
+    list: &mut GatherMiningList,
+    worker: &mut GatherWorker,
+    state: &mut NonFlatGatherState,
+    site_origin: GatherTile,
+    dist_mod_limit: i32,
+    target_has_property_1a2: bool,
+    rng: &mut Random,
+    set_default_animation: SetDefaultAnim,
+    mut remove_hold_doober: RemoveDoober,
+    mut existing_access: Existing,
+    mut candidate_eligible: Candidate,
+) -> NonFlatTilePreparation
+where
+    SetDefaultAnim: FnOnce(),
+    RemoveDoober: FnMut(i16),
+    Existing: FnMut(GatherTile) -> bool,
+    Candidate: FnMut(GatherTile) -> bool,
+{
+    if state.goto_build == 0 || state.wait >= 0 {
+        return NonFlatTilePreparation {
+            result: NonFlatTileResult::WrongPhase,
+            leader_economy_dirty: false,
+            removed_hold_doober: None,
+        };
+    }
+    let leader_economy_dirty = state.been_there == 0;
+    if leader_economy_dirty {
+        store_been_there(worker, state, true);
+    }
+    set_default_animation();
+
+    let existing = state.tile();
+    let mut removed_hold_doober = None;
+    let result = if existing.tx >= 0 && existing.ty >= 0 && existing_access(existing) {
+        NonFlatTileResult::Existing(existing)
+    } else {
+        if is_building_gatherer_type(worker.type_index) && worker.hold_doober >= 0 {
+            let doober = worker.hold_doober;
+            remove_hold_doober(doober);
+            worker.hold_doober = NO_OBJECT;
+            removed_hold_doober = Some(doober);
+        }
+        let effective_dist_mod =
+            if list.mtn >= 0 && (list.len() as i32) < dist_mod_limit && state.dist_mod > 3 {
+                3
+            } else {
+                state.dist_mod
+            };
+        let mut best_score = 0x0098_967f;
+        let mut best_tile = None;
+        for (index, tile) in list.tiles().iter().copied().enumerate() {
+            if !candidate_eligible(tile) {
+                continue;
+            }
+            let distance = vector_dist(
+                tile.tx.wrapping_sub(site_origin.tx),
+                tile.ty.wrapping_sub(site_origin.ty),
+            )
+            .max(3);
+            let score = distance
+                .wrapping_mul(i32::from(effective_dist_mod))
+                .wrapping_add((index >> 2) as i32);
+            if score < best_score {
+                best_score = score;
+                best_tile = Some(tile);
+            }
+        }
+        let Some(tile) = best_tile else {
+            return NonFlatTilePreparation {
+                result: NonFlatTileResult::NoCandidate,
+                leader_economy_dirty,
+                removed_hold_doober,
+            };
+        };
+        let moved = list.move_to_back(tile);
+        debug_assert!(moved);
+        state.tx = tile.tx;
+        state.ty = tile.ty;
+        NonFlatTileResult::Selected(tile)
+    };
+
+    let draw = rng.get(0, 0xffff);
+    state.wait = draw % 200 + 400;
+    state.goto_build = 0;
+    if target_has_property_1a2 {
+        worker.unit_masks |= 0x1000_0000;
+    } else {
+        worker.unit_masks |= 0x4000_0000;
+        state.wait = 1_000_000;
+    }
+    NonFlatTilePreparation {
+        result,
+        leader_economy_dirty,
+        removed_hold_doober,
+    }
+}
+
+/// Timer arm selected by the worker's current gathering animation/location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NonFlatWaitBand {
+    /// Animation `0x19`: reschedule to `random % 100 + 300`.
+    Animation19,
+    /// Within `0x140` of the selected tile: reschedule to `random % 50 + 100`.
+    NearTile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NonFlatWaitResult {
+    Waiting,
+    AllGathering,
+    Rescheduled,
+}
+
+/// Decrement and service one of the two exact non-flat wait loops. RNG is consumed only
+/// when the decrement reaches exactly zero and `Build::all_gathering` returns false.
+pub fn tick_non_flat_wait<AllGathering>(
+    state: &mut NonFlatGatherState,
+    band: NonFlatWaitBand,
+    rng: &mut Random,
+    all_gathering: AllGathering,
+) -> NonFlatWaitResult
+where
+    AllGathering: FnOnce() -> bool,
+{
+    state.wait = state.wait.wrapping_sub(1);
+    if state.wait != 0 {
+        return NonFlatWaitResult::Waiting;
+    }
+    if all_gathering() {
+        state.wait = -1;
+        return NonFlatWaitResult::AllGathering;
+    }
+    let draw = rng.get(0, 0xffff);
+    state.wait = match band {
+        NonFlatWaitBand::Animation19 => draw % 100 + 300,
+        NonFlatWaitBand::NearTile => draw % 50 + 100,
+    };
+    NonFlatWaitResult::Rescheduled
+}
+
+/// Persistent reset shared by the failed `find_nearby_spot` and degenerate-point arms.
+/// Returns the held doober id the host must remove, if retail would remove one.
+pub fn reset_non_flat_destination(
+    worker: &mut GatherWorker,
+    state: &mut NonFlatGatherState,
+    worker_type_gate: bool,
+) -> Option<i16> {
+    state.tx = -1;
+    state.ty = -1;
+    state.wait = -1;
+    state.goto_build = 1;
+    if state.dist_mod != 0 {
+        state.dist_mod -= 1;
+    }
+    if !worker_type_gate || worker.hold_doober < 0 {
+        return None;
+    }
+    let removed = worker.hold_doober;
+    worker.hold_doober = NO_OBJECT;
+    Some(removed)
+}
+
+/// Gather-specific side effects performed before `kill_current_order` removes the order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GatherRetirement {
+    pub leader_economy_dirty: bool,
+    pub detached: bool,
+    pub removed_hold_doober: Option<i16>,
+    pub cleaned_worker: Option<(u8, i16)>,
+}
+
+/// `kill_current_order`'s `GATHER` epilogue (`0x005E2D69..0x005E2ED4`). A live,
+/// still-live target with matching raw `(whom, ox)` is detached immediately; this epilogue
+/// does not compare `GatherOrder::uid`. A vanished target leaves the stale intrusive link
+/// for `check_gatherers` to prune. `substituted_inside_worker` represents retail's guarded
+/// `inside_down` identity substitution; callers pass `None` outside that live-game/type
+/// gate. The order assignment is then cleared, action bits reset, and worker doobers retired.
+pub fn retire_gather_order(
+    site: Option<&mut GatherSite>,
+    workers: &mut [GatherWorker],
+    worker_owner: u8,
+    unit_o: i16,
+    substituted_inside_worker: Option<(u8, i16)>,
+) -> Result<GatherRetirement, &'static str> {
+    let Some(order_pos) = worker_pos(workers, worker_owner, unit_o) else {
+        return Err("retired gatherer is missing");
+    };
+    let assignment = workers[order_pos].assignment;
+    let (clean_owner, clean_o) = substituted_inside_worker.unwrap_or((worker_owner, unit_o));
+    let Some(clean_pos) = worker_pos(workers, clean_owner, clean_o) else {
+        return Err("resolved gather worker is missing");
+    };
+    let mut result = GatherRetirement {
+        leader_economy_dirty: true,
+        cleaned_worker: Some((clean_owner, clean_o)),
+        ..GatherRetirement::default()
+    };
+    if let (Some(site), Some(assignment)) = (site, assignment) {
+        if assignment.target_owner == i32::from(site.owner)
+            && assignment.target_build == i32::from(site.build_o)
+        {
+            result.detached = detach_worker(site, workers, clean_o)?;
+        }
+    }
+    workers[clean_pos].unit_masks &= !GATHER_ACTION_MASKS;
+    if is_building_gatherer_type(workers[clean_pos].type_index)
+        && workers[clean_pos].hold_doober >= 0
+    {
+        result.removed_hold_doober = Some(workers[clean_pos].hold_doober);
+        workers[clean_pos].hold_doober = NO_OBJECT;
+    }
+    workers[order_pos].assignment = None;
+    Ok(result)
 }
 
 /// Gross-income units contributed by one ordinary building worker before terrain/player
@@ -682,5 +1261,295 @@ mod tests {
             ..current
         }
         .targets_live_site(&site));
+    }
+
+    #[test]
+    fn mining_list_keeps_retails_zero_capacity_header_and_walk_order() {
+        let mut list = GatherMiningList::default();
+        assert_eq!(list.array_header(), (0, 0, -1, 0));
+        assert_eq!(list.walked_image(), [0xff, 0xff, 0, 0, 0, 0]);
+
+        list.mtn = 2;
+        list.cliff = 3;
+        list.add(GatherTile { tx: 1, ty: 2 });
+        assert_eq!(list.array_header(), (1, 4, -1, 0));
+        assert_eq!(
+            list.walked_image(),
+            [
+                2, 3, // MiningList tail is walked first
+                1, 0, 0, 0, // length
+                4, 0, 0, 0, // capacity after first grow from zero
+                0xff, 0xff, // increment
+                0,    // flags with bit 0x40 cleared
+                1, 0, 0, 0, 2, 0, 0, 0,
+            ]
+        );
+    }
+
+    #[test]
+    fn find_gather_tiles_mixes_without_adding_duplicates() {
+        let mut world = World::init_default_rules(4, 4);
+        let a = GatherTile { tx: 1, ty: 1 };
+        let b = GatherTile { tx: 2, ty: 1 };
+        let c = GatherTile { tx: 3, ty: 1 };
+        let mut list = GatherMiningList::default();
+        list.add(a);
+        list.add(b);
+        list.add(c);
+        let mut rng = Random::new(1);
+        let mut site = GatherSite::new(0, 5);
+
+        assert_eq!(
+            finish_gather_tile_refresh_with_capacity(
+                &mut world, &mut list, 0, &mut rng, &mut site, 7,
+            ),
+            Ok(GatherRefresh {
+                reserved_tiles: 3,
+                move_to_back_steps: 12,
+                rng_draws: 12,
+            })
+        );
+        assert_eq!(list.tiles(), &[a, c, b]);
+        assert_eq!(list.len(), 3, "the four-N loop never changes length");
+        assert_eq!(site.max_gatherers(), 7);
+        assert_eq!(rng.state() as u32, 0x6c20_f30d);
+        assert_eq!(gather_tile_reserved(&world, a), Some(true));
+        assert_eq!(gather_tile_reserved(&world, b), Some(true));
+        assert_eq!(gather_tile_reserved(&world, c), Some(true));
+    }
+
+    #[test]
+    fn one_tile_refresh_performs_four_rotations_and_zero_draws() {
+        let mut world = World::init_default_rules(2, 2);
+        let tile = GatherTile { tx: 1, ty: 1 };
+        let mut list = GatherMiningList::default();
+        list.add(tile);
+        let mut rng = Random::new(0x1234_5678);
+        let before = rng.state();
+        let result = finish_gather_tile_refresh(&mut world, &mut list, 0, &mut rng).unwrap();
+        assert_eq!(result.move_to_back_steps, 4);
+        assert_eq!(result.rng_draws, 0);
+        assert_eq!(rng.state(), before);
+        assert_eq!(list.tiles(), &[tile]);
+    }
+
+    #[test]
+    fn verify_and_close_release_reservations_without_shrinking_capacity() {
+        let mut world = World::init_default_rules(3, 3);
+        let keep = GatherTile { tx: 1, ty: 1 };
+        let drop = GatherTile { tx: 2, ty: 1 };
+        let mut list = GatherMiningList::default();
+        list.add(keep);
+        list.add(drop);
+        list.add(drop);
+        list.mtn = 4;
+        list.cliff = 5;
+        let mut rng = Random::new(1);
+        let previous_len = list.len();
+        finish_gather_tile_refresh(&mut world, &mut list, previous_len, &mut rng).unwrap();
+
+        assert_eq!(
+            verify_gather_tiles(&mut world, &mut list, |t| t != drop),
+            Ok(2)
+        );
+        assert_eq!(list.tiles(), &[keep]);
+        assert_eq!(gather_tile_reserved(&world, drop), Some(false));
+        assert_eq!(gather_tile_reserved(&world, keep), Some(true));
+        assert_eq!(close_gather_tiles(&mut world, &mut list), Ok(1));
+        assert_eq!(list.array_header(), (0, 4, -1, 0));
+        assert_eq!((list.mtn, list.cliff), (-1, -1));
+        assert_eq!(gather_tile_reserved(&world, keep), Some(false));
+    }
+
+    fn non_flat_state() -> NonFlatGatherState {
+        NonFlatGatherState {
+            tx: -1,
+            ty: -1,
+            build_type: -1,
+            wait: -1,
+            goto_build: 1,
+            non_flat_gather: 1,
+            dist_mod: 8,
+            been_there: 1,
+        }
+    }
+
+    #[test]
+    fn non_flat_selection_uses_score_rotates_and_consumes_one_timer_draw() {
+        let near = GatherTile { tx: 3, ty: 0 };
+        let far = GatherTile { tx: 10, ty: 0 };
+        let mut list = GatherMiningList::default();
+        list.mtn = 0;
+        list.add(near);
+        list.add(far);
+        let mut worker = GatherWorker::new(0, 2, 0x32);
+        worker.assignment = Some(GatherAssignment {
+            target_owner: 0,
+            target_build: 4,
+            target_uid: 0,
+            been_there: true,
+            inside_target: None,
+        });
+        let mut state = non_flat_state();
+        state.been_there = 0;
+        worker.assignment.as_mut().unwrap().been_there = false;
+        let mut rng = Random::new(1);
+
+        assert_eq!(
+            prepare_non_flat_tile(
+                &mut list,
+                &mut worker,
+                &mut state,
+                GatherTile { tx: 0, ty: 0 },
+                100,
+                true,
+                &mut rng,
+                || {},
+                |_| {},
+                |_| false,
+                |_| true,
+            ),
+            NonFlatTilePreparation {
+                result: NonFlatTileResult::Selected(near),
+                leader_economy_dirty: true,
+                removed_hold_doober: None,
+            }
+        );
+        assert_eq!(list.tiles(), &[far, near]);
+        assert_eq!(state.tile(), near);
+        assert_eq!(state.wait, 491);
+        assert_eq!(state.goto_build, 0);
+        assert_eq!(state.been_there, 1);
+        assert_eq!(worker.assignment.unwrap().been_there, true);
+        assert_eq!(worker.unit_masks, 0x1000_0000);
+        assert_eq!(rng.state() as u32, 0x3c88_596c);
+    }
+
+    #[test]
+    fn non_flat_no_candidate_consumes_no_rng_and_non_1a2_uses_long_wait() {
+        let mut list = GatherMiningList::default();
+        list.add(GatherTile { tx: 2, ty: 2 });
+        let mut worker = GatherWorker::new(0, 2, 0x32);
+        worker.hold_doober = 7;
+        let mut state = non_flat_state();
+        let mut rng = Random::new(9);
+        let before = rng.state();
+        assert_eq!(
+            prepare_non_flat_tile(
+                &mut list,
+                &mut worker,
+                &mut state,
+                GatherTile::default(),
+                5,
+                false,
+                &mut rng,
+                || {},
+                |_| {},
+                |_| false,
+                |_| false,
+            ),
+            NonFlatTilePreparation {
+                result: NonFlatTileResult::NoCandidate,
+                leader_economy_dirty: false,
+                removed_hold_doober: Some(7),
+            }
+        );
+        assert_eq!(rng.state(), before);
+        assert_eq!(state.wait, -1);
+        assert_eq!(worker.hold_doober, NO_OBJECT);
+
+        state.tx = 2;
+        state.ty = 2;
+        assert_eq!(
+            prepare_non_flat_tile(
+                &mut list,
+                &mut worker,
+                &mut state,
+                GatherTile::default(),
+                5,
+                false,
+                &mut rng,
+                || {},
+                |_| {},
+                |_| true,
+                |_| false,
+            ),
+            NonFlatTilePreparation {
+                result: NonFlatTileResult::Existing(GatherTile { tx: 2, ty: 2 }),
+                leader_economy_dirty: false,
+                removed_hold_doober: None,
+            }
+        );
+        assert_eq!(state.wait, 1_000_000);
+        assert_eq!(state.goto_build, 0);
+        assert_eq!(worker.unit_masks, 0x4000_0000);
+    }
+
+    #[test]
+    fn non_flat_entry_reset_wait_and_retirement_preserve_exact_mutation_order() {
+        let mut site = GatherSite::new(1, 7);
+        site.uid = 99;
+        site.set_authoritative_capacity(1);
+        site.recharging = 4;
+        let mut worker = assigned(1, 3, 7, true);
+        worker.assignment.as_mut().unwrap().target_uid = 99;
+        worker.unit_masks = u32::MAX;
+        worker.hold_doober = 12;
+        worker.good_obj = 6;
+        worker.group = 4;
+        let mut state = non_flat_state();
+        state.goto_build = 0;
+
+        assert_eq!(
+            begin_non_flat_gather_tick(&mut site, &mut worker, &mut state),
+            NonFlatBegin {
+                leader_economy_dirty: false,
+                latched_site_recharge: true,
+            }
+        );
+        assert_eq!(site.recharging, 5);
+        assert_eq!(site.build_masks & 0x800, 0x800);
+        assert_eq!(worker.group, NO_OBJECT);
+        assert_eq!(worker.good_obj, 6, "the +0x80 write is group, not good_obj");
+        assert_eq!(worker.unit_masks, u32::MAX & !GATHER_ACTION_MASKS);
+
+        state.wait = 1;
+        let mut rng = Random::new(1);
+        assert_eq!(
+            tick_non_flat_wait(&mut state, NonFlatWaitBand::Animation19, &mut rng, || false),
+            NonFlatWaitResult::Rescheduled
+        );
+        assert_eq!(state.wait, 391);
+        assert_eq!(
+            reset_non_flat_destination(&mut worker, &mut state, true),
+            Some(12)
+        );
+        assert_eq!(
+            (state.tx, state.ty, state.wait, state.dist_mod),
+            (-1, -1, -1, 7)
+        );
+        assert_eq!(state.goto_build, 1);
+
+        let mut workers = [worker];
+        assert_eq!(
+            attach_worker(&mut site, &mut workers, 3),
+            AttachResult::Attached
+        );
+        workers[0].unit_masks = u32::MAX;
+        workers[0].hold_doober = 21;
+        assert_eq!(
+            retire_gather_order(Some(&mut site), &mut workers, 1, 3, None),
+            Ok(GatherRetirement {
+                leader_economy_dirty: true,
+                detached: true,
+                removed_hold_doober: Some(21),
+                cleaned_worker: Some((1, 3)),
+            })
+        );
+        assert_eq!(site.gather_down, NO_OBJECT);
+        assert_eq!(workers[0].gather_down, NO_OBJECT);
+        assert_eq!(workers[0].assignment, None);
+        assert_eq!(workers[0].unit_masks, u32::MAX & !GATHER_ACTION_MASKS);
+        assert_eq!(workers[0].hold_doober, NO_OBJECT);
     }
 }
