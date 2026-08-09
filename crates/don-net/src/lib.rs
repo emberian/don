@@ -30,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod evidence;
 pub mod internal;
 pub mod lobby;
 pub mod lockstep;
@@ -42,6 +43,11 @@ pub mod setup;
 pub mod stream;
 pub mod transport;
 
+pub use evidence::{
+    EpochMember, EvidenceError, PersistedLockstepTranscript, ReplayAction, ReplayedLockstep,
+    LOCKSTEP_EVIDENCE_MAGIC, LOCKSTEP_EVIDENCE_VERSION, MAX_LOCKSTEP_ACTIONS,
+    MAX_LOCKSTEP_EVIDENCE_BYTES, MAX_LOCKSTEP_OUTCOME_BYTES,
+};
 pub use internal::{InternalError, InternalPacket};
 pub use lockstep::{
     ChecksumDifference, EpochCause, LockstepError, LockstepEvidence, LockstepRunner,

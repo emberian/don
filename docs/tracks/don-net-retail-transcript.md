@@ -88,3 +88,46 @@ cargo test --manifest-path crates/don-net/Cargo.toml --test retail_transcript
 Timeout is evidence, not an invented retail drop vote. The caller must supply an authoritative
 membership change before the runner removes a missing slot. Likewise, checksum differences prove
 package disagreement but do not claim that a simulation state has been independently reproduced.
+
+## Persisted binary evidence
+
+`PersistedLockstepTranscript` is the bounded, versioned persistence boundary for the same runner.
+Its v1 little-endian header is:
+
+| Offset | Bytes | Field |
+| ---: | ---: | --- |
+| `0x00` | 8 | magic `DONLSTP\0` |
+| `0x08` | 2 | version `1` |
+| `0x0A` | 2 | flags, required zero |
+| `0x0C` | 4 | action count |
+| `0x10` | 4 | canonical outcome JSON byte count |
+| `0x14` | 8 | outcome JSON FNV-1a-64 |
+| `0x1C` | 4 | package transform/game key |
+| `0x20` | 8 | turn deadline duration in milliseconds |
+
+The header is followed by `u8 type + u32 payload_bytes + payload` action records and then the exact
+canonical outcome JSON. Record types are initial setup, membership epoch, package, deadline
+observation, and commit. Initial/epoch records carry their monotonic caller time and exact sorted
+member list; each member is a slot `i8` plus its nonzero `unique_id i32`, so a reconnect can prove
+that a newly active slot belongs to the same owned identity. Epoch records also carry
+drop/reconnect/roster-change cause. Package records carry time, stamp, slot, `u16` payload length,
+and every original payload byte. Deadline and commit records carry their caller time. Thus the
+persisted source contains both the executable evidence inputs and the expected lockstep outcomes
+rather than trusting a conclusion-only log.
+
+The reader refuses unknown versions, flags, records or epoch causes; malformed lengths; trailing
+bytes; non-monotonic time; repeated/missing initial setup; packages over the retail 512-byte
+capacity; non-UTF-8 outcomes; and any stored hash mismatch. It is bounded to 8 MiB total, 65,536
+actions, and 4 MiB of outcome JSON. Decode then replays every action through `LockstepRunner` and
+requires the regenerated JSON, transcript hash, next stamp, epoch transitions, timeout evidence,
+and channel-level desyncs to match exactly. Re-encoding a decoded transcript must reproduce every
+input byte.
+
+The adversarial binary lifecycle is pinned to `725cfd99ebe60b0c`. The real TCP package/epoch binary
+for stamps 23–26 is pinned to `26d94d663d140bba`, while its re-executed canonical outcome remains
+`438bc8d31e903ea7`.
+
+```sh
+cargo test --manifest-path crates/don-net/Cargo.toml evidence::tests
+cargo test --manifest-path crates/don-net/Cargo.toml --test retail_transcript
+```

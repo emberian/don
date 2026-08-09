@@ -474,7 +474,7 @@ fn normalize_participants(
     Ok(participants)
 }
 
-fn fnv1a64(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
