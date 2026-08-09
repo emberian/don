@@ -27,6 +27,8 @@ game:
 - `economy-action` exposes one-own-object `queue`, `gather`, and exact four-coordinate `build`
   ingress. Queue/gather require an observed state delta; build additionally requires a new own
   building inside a supervised 180-frame cap or it fails closed.
+- `placement-query` asks shipped `GroupData::validate_build` about at most 289 exact UCoord-lattice
+  sites around one observed own Citizen, returning only retail's canonical `(x,y,-1,-1)` click.
 - `run-frames` is an internal supervised boundary: it starts only paused, advances exactly 1–30
   retail simulation frames, re-pauses on the retail main thread, and verifies the terminal frame.
 - `marshal-policy` adapts the source-ordered supported subsequence of Arena `Marshal::act` to v2.
@@ -56,6 +58,9 @@ python3 tools/retail-control/retailctl.py rearm --generation economy-v10
 python3 tools/retail-control/retailctl.py economy-policy --generation economy-v10
 python3 tools/retail-control/retailctl.py rearm --generation economy-v10
 python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v10
+python3 tools/retail-control/retailctl.py rearm --generation economy-v11
+python3 tools/retail-control/retailctl.py placement-query --generation economy-v11 \
+  --worker-id 8 --type-index 417
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

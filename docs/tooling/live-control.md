@@ -235,9 +235,9 @@ All commands run in the existing pre-`TurnControl::do_frame` main-thread ingress
 outer APIs. `GroupOut::issue_gather` emits packed opcode `0x13`; `GroupOut::issue_queue_up` emits
 `0x18`; `GroupOut::issue_build` emits `0x19`. Production is queried first with
 `BuildData::can_queue(TypeIndex)`. Explicit construction can query
-`GroupData::validate_build(x1,y1,x2,y2,type,queue)`, but the four Coord arguments remain opaque
-retail placement-gesture endpoints: the autonomous policy does not collapse them to a guessed
-single point.
+`GroupData::validate_build(x1,y1,x2,y2,type,queue)`. Through generation `economy-v10`, the four
+Coord arguments remained opaque retail placement-gesture endpoints, so the autonomous policy did
+not collapse them to a guessed single point. `economy-v11` resolves this below.
 
 Generation `economy-v9` exercised three positive zero-frame transactions at frame 175, all while
 pause remained `[1,1]`:

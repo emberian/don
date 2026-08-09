@@ -729,8 +729,7 @@ def conservative_opening_policy(observation: dict, root: str) -> dict:
         "observation_frame": observation["frame"],
         "validations": validations,
         "reason": ("no conservative queue action passed the shipped retail legality gates; "
-                   "automatic build placement is fail-closed until the exact four-coordinate "
-                   "retail placement gesture has a positive live oracle"),
+                   "this queue-only opening policy does not invent a building demand"),
         "action": None,
     }
 
