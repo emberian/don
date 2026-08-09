@@ -442,6 +442,10 @@ still useful but the combination is not.
    as an input. Same for the three nearby-building queries.
 4. **The out-of-supply reload call site was not found.** Constants measured, application
    point unknown.
+   `don_ai::arena::retail_systems` exposes the recovered attrition/supply arithmetic behind
+   a `SupplyFacts` input with no default, so an arena host must resolve all four proximity
+   queries explicitly. That adapter does not close either missing world query or this call
+   site, and the playable supply/attrition gates remain blocked.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.

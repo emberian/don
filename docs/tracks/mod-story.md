@@ -22,6 +22,8 @@ guest. Nothing here comes from community documentation. Nothing here is *verifie
      --workshop 'Display Name=/installed/ugc/1234' --dropdown 'Display Name' \
      --order 'Display Name,Local Rebalance' data/rules.xml mapstyles/greatlakes.xml
    cargo run -p don-content --bin don-content -- overlay '/path/to/don-overlay.xml'
+   cargo run -p don-content --bin don-content -- manifest '/path/to/one/mod'
+   cargo run -p don-content --bin don-content -- reload-check '/path/to/mods' --mode improved
    cargo run -p don-content --bin don-content -- rules
    ```
 
@@ -40,15 +42,14 @@ guest. Nothing here comes from community documentation. Nothing here is *verifie
    elements/attributes, duplicate targets, unknown fields and bad indices, sends textual
    values through the recovered per-field tokenizer, composes against the shipped block, and
    prints a per-write audit. It is explicitly an improved-mode artifact and cannot claim
-   fidelity. Runtime registration of the composed block remains open, so compatibility calls
-   it `parsed`, never `consumed`.
+   fidelity. A reload is fully prepared off-side and then registered by one generation-checked
+   immutable snapshot swap; retained worlds keep their old snapshot.
 
 4. **Answer Ember's compatibility question without pretending that path resolution is
    execution.** For any mod, `don-content` reports `N of M files consumed`, names the missing
    subsystem for every inert file, and has a strict `check` command that exits unsuccessfully
-   unless every declared file has an end-to-end consumer. Today even `data/rules.xml` is
-   rejected: the shipped `Rules` block is modeled, but an external XML-to-`Rules` loader is
-   not wired yet.
+   unless every declared file has an end-to-end consumer. `data/rules.xml`, `info.xml`, and
+   `don-overlay.xml` now clear that gate; arbitrary type/tech/building XML still does not.
 
 5. **Stop trusting one thing that was never true.** Cross-checking the binary's protection
    list against the shipped `mapstyles\` directory found two shipped defects (below). Both are
@@ -319,10 +320,17 @@ The decompiled branches establish these results:
 * `FILES complete="0"` returns `0x20`; a missing value uses the getter's `-1` default;
 * missing metadata strings/integers use empty/`-1` defaults rather than rejecting.
 
-`don_content::info` implements that structural preflight with a real XML parser. It never
-calls the generator: the exact per-file checksum function is still unknown, so scan/check
-reports “retail would generate FILES” and activation stays blocked instead of rewriting the
-author's package with an approximation.
+`don_content::info` implements that structural preflight with a real XML parser, while
+`don_content::manifest` reproduces the generator's entry set and checksum boundary without
+rewriting the author's package. `generate_file_list` recursively enumerates `*.*`, excludes
+`.`/`..`/`info.xml` by lowercased basename, records path/size/directory, and wrapping-sums
+32-bit sizes. `compute_checksum` independently finds every XML file and wrapping-sums
+`File::get_checksum`: seed-zero Adler-32 over four-byte reads, including a retained prior-word
+tail on the last short read. A one-to-three-byte XML file has uninitialised first-tail bytes in
+retail, so the safe implementation blocks rather than inventing padding. `_wfindfirst` order
+is not portable; DoN serialises the exact entry set in a documented canonical case-folded path
+order and does not claim retail enumeration order. Retail computes the stored checksum before
+saving the new `FILES` node, so a post-save checksum is not falsely compared to that value.
 
 ### 1.9 Multiplayer: the engine already treats mods as sim-critical
 
@@ -397,6 +405,23 @@ is only as good as `don-rules`' coverage — which is the 717-name `Constants::i
 means the same treatment (a name→offset binding table) for `UnitType::init` `0x0061AB50` and
 friends. That is the obvious next lane and it is not done.
 
+### 2.4 Transactional runtime registration
+
+`RuleRegistry::prepare` performs every fallible operation before touching active state: it
+checks activation blockers and manifests, resolves and parses the winning whole
+`data\rules.xml`, composes overlays in evidenced priority order, and records every competing
+writer and winner. The parser uses the extractor's field/slot corpus and the exact recovered
+transform for each value. It rejects unknown/mistyped/missing values; the shipped file's eight
+unbound legacy tags, surplus `KOREAN_CITIZENS.entry8`, and five byte-identical CTW duplicates
+are explicit named diagnostics rather than wildcard exceptions.
+
+`RuleRegistry::commit` accepts only a candidate prepared against the active generation and
+then replaces one `Arc<RuntimeSnapshot>`. A stale candidate is rejected, a failed prepare
+leaves the old pointer untouched, and a simulation world may retain its generation for the
+whole match. This is the new-world registration boundary; the existing `don-sim` bootstrap
+does not yet retain the snapshot, and DoN does not claim to hot-mutate a running world like
+retail's global `closeExistingData`/`initExistingData` sequence.
+
 ---
 
 ## 3. Can a retail mod load into our engine unmodified?
@@ -416,13 +441,13 @@ reports it as a number. Current classification:
 
 | what the mod ships | verdict | why |
 |---|---|---|
-| `data\rules.xml` | resolved-only, **rejected** | `don-rules` models the shipped Constants block, but no external XML-to-`Rules` loader is wired |
+| `data\rules.xml` | **consumed** | strict extractor-backed whole-file loader, recovered per-field transforms, immutable transactional registry |
 | other `data\*.xml` | resolved-only, **rejected** | unit/type/tech/building XML binders and consumers are not implemented |
 | `replays\*.rcx` | **consumed** | `don-replay` decodes `.rcx` |
 | `data\*.bhs`, `ai\scripts\*.bhs` | **parsed** | `don-bhs` / `don-bhs-cc` front end exists; `RunTimeEnv::run_script` `0x0043D0E0` is not driven by our tick |
 | `mapstyles\*.xml` | resolved-only, **rejected** | neither the XML parser nor map-generation consumer is wired |
-| `info.xml` | parsed, **rejected until runtime wiring** | measured `INFO`/`FILE`/`FILES` gates and metadata are checked; checksum generation and ruleset reload remain unported |
-| `don-overlay.xml` | parsed, **rejected until runtime wiring** | versioned independent-edition schema composes against the shipped Rules block with a full audit |
+| `info.xml` | **consumed** | measured gates plus reproducible manifest/checksum identity participate in activation |
+| `don-overlay.xml` | **consumed** | checked schema composes with conflict/audit records into the prepared runtime snapshot |
 | `tribes\*.{4,7,9,…}` | resolved-only | needs the `StringTable` at `[0x00C06378]` |
 | `scenario\*` | resolved-only | `ScenarioData::walk_data` `0x00997AD0` has no runtime producer |
 | `*.txt` at root, `.dtd`, `.sps`, `.xsd`, `.bho` | resolved-only | unread, schema-only, or a precompiled form we compile from source instead |
@@ -442,9 +467,8 @@ reports it as a number. Current classification:
    and — because `script_run_time` is checksum channel 15 — any *validation* of a scripted game.
 2. **The `StringTable`.** Everything with a numeric extension, plus the mod's own display names.
    Cheap, and it unlocks tribe/localisation mods, which are a large share of the Workshop.
-3. **External XML loading plus `unitrules.xml` / `techrules.xml` / `buildingrules.xml` binding
-   tables.** We do not currently parse those files, and even `rules.xml` lacks a file-to-block
-   loader. Without both parser and bindings, a mod's changes resolve and then land nowhere.
+3. **`unitrules.xml` / `techrules.xml` / `buildingrules.xml` binding tables.** Whole-file
+   `rules.xml` is wired; the other data families still resolve and then land nowhere.
 4. **Steam UGC subscription**, only if we want to *download* mods rather than read a folder.
    Not on the critical path.
 
@@ -558,9 +582,15 @@ Recorded so they are visible rather than discovered.
   tree or a synthetic tree. Asking Ember to subscribe to two or three popular Workshop mods
   would turn §3's table from a classification into a measurement, and is the single highest-value
   next step for this lane.
-* **`GameMod::compute_checksum`'s per-file checksum function was not identified**, so our
-  `content_digest` is a placeholder, not retail's value. Matching it exactly is only necessary
-  if we want to appear on a retail lobby.
+* **Retail `_wfindfirst` traversal order is not portable.** The entry membership, exclusions,
+  sizes, and wrapping XML checksum are recovered; canonical DoN manifest order is deliberately
+  reproducible but is not labelled retail enumeration order.
+* **Retail's stored pre-save `FILES.checksum` has no sound direct post-save equality test.**
+  Current identity uses the exact checksum of the current XML tree and separately checks the
+  stored entry membership/metadata. It does not silently bless a guessed checksum comparison.
+* **Running-world integration remains a boundary, not a hidden partial reload.** The immutable
+  snapshot can be retained by a new world, but `don-sim` bootstrap has not yet been wired to do
+  so and existing worlds are never mutated in place.
 
 ---
 
@@ -571,15 +601,17 @@ Recorded so they are visible rather than discovered.
 | `crates/don-content/src/vfs.rs` | retail discovery, classification, precedence; `ContentStack::resolve` |
 | `crates/don-content/src/scan.rs` | directory → `ModPackage`, honouring per-category recursion |
 | `crates/don-content/src/status.rs` | `mod-status.txt` reader/writer in retail's fixed-width format |
-| `crates/don-content/src/info.rs` | measured dropdown metadata/gate parser; no approximate manifest writer |
+| `crates/don-content/src/info.rs` | measured dropdown metadata/gate parser |
+| `crates/don-content/src/manifest.rs` | recovered manifest entry/checksum semantics plus canonical reproducible serialisation |
 | `crates/don-content/src/workflow.rs` | local + explicit Workshop discovery, order provenance, activation, collision/explain trace |
 | `crates/don-content/src/overlay.rs` | the five-layer stack, validation, fidelity lock, audit |
 | `crates/don-content/src/overlay_file.rs` | versioned `don-overlay.xml` parser and composition preflight |
+| `crates/don-content/src/runtime.rs` | strict whole-file Rules loader and transactional immutable registry |
 | `crates/don-content/src/extend.rs` | `TypeSpace`, `BalanceOverlay`, `HookPoint` |
 | `crates/don-content/src/compat.rs` | per-file support table and report |
 | `crates/don-content/src/generated.rs` | tables captured from the binary — do not edit |
 | `crates/don-content/gen/gen_tables.py` | the generator; re-run it, do not hand-edit |
-| `crates/don-content/src/bin/don-content.rs` | `scan` / `check` / `explain` / `overlay` / `rules` |
+| `crates/don-content/src/bin/don-content.rs` | `scan` / `check` / `explain` / `manifest` / `reload-check` / `overlay` / `rules` |
 | `crates/don-content/tests/{shipped_layout,workflow_fixtures}.rs` | shipped/live cross-checks plus committed synthetic activation trees |
 
 Regenerate the tables:
