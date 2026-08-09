@@ -61,6 +61,13 @@ pub struct ProcessEntry32W {
     pub szExeFile: [u16; 260],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FileTime {
+    pub low: u32,
+    pub high: u32,
+}
+
 impl Default for ProcessEntry32W {
     fn default() -> Self {
         // SAFETY: all fields are plain integers / integer arrays.
@@ -90,6 +97,19 @@ extern "system" {
     pub fn Process32FirstW(hSnapshot: HANDLE, lppe: *mut ProcessEntry32W) -> i32;
     pub fn Process32NextW(hSnapshot: HANDLE, lppe: *mut ProcessEntry32W) -> i32;
     pub fn IsWow64Process(hProcess: HANDLE, Wow64Process: *mut i32) -> i32;
+    pub fn GetProcessTimes(
+        hProcess: HANDLE,
+        lpCreationTime: *mut FileTime,
+        lpExitTime: *mut FileTime,
+        lpKernelTime: *mut FileTime,
+        lpUserTime: *mut FileTime,
+    ) -> i32;
+    pub fn QueryFullProcessImageNameW(
+        hProcess: HANDLE,
+        dwFlags: u32,
+        lpExeName: *mut u16,
+        lpdwSize: *mut u32,
+    ) -> i32;
 }
 
 pub fn protect_is_readable(protect: u32) -> bool {
@@ -207,6 +227,108 @@ impl Proc {
             got
         }
     }
+
+    /// Windows creation time in 100 ns ticks since 1601. Together with PID this
+    /// distinguishes process reuse across game restarts.
+    pub fn creation_time_100ns(&self) -> Option<u64> {
+        let mut creation = FileTime::default();
+        let mut exit = FileTime::default();
+        let mut kernel = FileTime::default();
+        let mut user = FileTime::default();
+        let ok = unsafe {
+            GetProcessTimes(
+                self.handle,
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        (ok != 0).then_some(((creation.high as u64) << 32) | creation.low as u64)
+    }
+
+    pub fn image_path(&self) -> Option<String> {
+        let mut path = vec![0u16; 32_768];
+        let mut len = path.len() as u32;
+        let ok = unsafe { QueryFullProcessImageNameW(self.handle, 0, path.as_mut_ptr(), &mut len) };
+        if ok == 0 || len == 0 || len as usize > path.len() {
+            None
+        } else {
+            Some(String::from_utf16_lossy(&path[..len as usize]))
+        }
+    }
+}
+
+impl crate::live::Mem for Proc {
+    fn read(&self, addr: u64, buf: &mut [u8]) -> usize {
+        Proc::read(self, addr, buf)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleInfo {
+    pub base: u64,
+    pub machine: u16,
+    pub entry_rva: u32,
+    pub size_of_image: u32,
+}
+
+fn read_u16(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
+}
+
+fn read_u32(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+
+fn module_header(p: &Proc, base: u64) -> Option<ModuleInfo> {
+    let mut hdr = vec![0u8; 0x1000];
+    let n = p.read(base, &mut hdr);
+    if n < 0x200 || hdr.get(0..2) != Some(b"MZ") {
+        return None;
+    }
+    let pe = read_u32(&hdr, 0x3c) as usize;
+    let opt = pe.checked_add(0x18)?;
+    if opt.checked_add(0x3c)? > n || hdr.get(pe..pe + 4) != Some(b"PE\0\0") {
+        return None;
+    }
+    Some(ModuleInfo {
+        base,
+        machine: read_u16(&hdr, pe + 4),
+        entry_rva: read_u32(&hdr, opt + 0x10),
+        size_of_image: read_u32(&hdr, opt + 0x38),
+    })
+}
+
+/// Find the supported retail image by PE fields the loader does not rewrite.
+pub fn find_game_image(p: &Proc) -> Option<ModuleInfo> {
+    let mut addr = 0u64;
+    let mut seen_allocation = None;
+    while let Some(mbi) = p.query(addr) {
+        if mbi.region_size == 0 {
+            break;
+        }
+        if mbi.typ == MEM_IMAGE
+            && mbi.state == MEM_COMMIT
+            && Some(mbi.allocation_base) != seen_allocation
+        {
+            seen_allocation = Some(mbi.allocation_base);
+            if let Some(module) = module_header(p, mbi.allocation_base) {
+                if module.machine == 0x14c
+                    && module.entry_rva == crate::live::SOURCE_ENTRY_RVA
+                    && module.size_of_image == crate::live::SOURCE_IMAGE_SIZE
+                {
+                    return Some(module);
+                }
+            }
+        }
+        let next = mbi.base_address.saturating_add(mbi.region_size);
+        if next <= addr || next >= 0x7fff_fffe_0000 {
+            break;
+        }
+        addr = next;
+    }
+    None
 }
 
 impl Drop for Proc {

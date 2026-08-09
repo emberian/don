@@ -16,6 +16,10 @@ description = "Native Windows heap scanner: types a live riseofnations.exe heap 
 name = "donscan"
 path = "src/main.rs"
 
+[[bin]]
+name = "donfeed"
+path = "src/bin/donfeed.rs"
+
 [profile.release]
 opt-level = 3
 lto = true

@@ -11,9 +11,7 @@
 //! where real objects live. Downstream validation (does the object's fields make sense)
 //! is a separate job. Tier: C — behavioural observation of the live process.
 
-mod win;
-
-use donscan::vtables;
+use donscan::{vtables, win};
 
 use std::time::Instant;
 use vtables::{VtMap, NONE};

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "source": {
+    "session_id": "solo-2026-08-08",
+    "sequence": 42,
+    "captured_at_ms": 1786221000000,
+    "reader_version": "rontoy-reader-dev",
+    "process_id": 4120,
+    "process_started_100ns": "133994400000000000",
+    "module_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "module_size": 12345678,
+    "image_entry_rva": 1431193,
+    "image_size": 12271616
+  },
+  "capture": {
+    "frame_start": 630,
+    "frame_end": 630,
+    "complete": true,
+    "advice_allowed": true,
+    "duration_us": 250,
+    "read_count": 12,
+    "bytes_read": 256
+  },
+  "game": {
+    "frame": 630,
+    "player_id": 1,
+    "mode": "single_player",
+    "human_count": 1,
+    "human_selection_basis": "unique_active_in_play_console_flags",
+    "age": 2,
+    "paused": false,
+    "match_name": "Solo practice"
+  },
+  "economy": {
+    "resources": {
+      "food": {"stock": 180, "income_per_min": 62},
+      "timber": {"stock": 75, "income_per_min": 38},
+      "wealth": {"stock": 30, "income_per_min": 22},
+      "knowledge": {"stock": 18, "income_per_min": 14}
+    },
+    "population": {"used": 30, "cap": 32},
+    "rate_sample": {
+      "basis": "engine_direct_gather_cache",
+      "gather_stamp_raw": 625,
+      "age_frames": 5,
+      "confidence": "direct"
+    },
+    "production": {"queue_depth": 2, "active_sites": 1, "queue_basis": "direct_build_queue"}
+  },
+  "goals": [
+    {
+      "id": "next-age",
+      "label": "Next age",
+      "priority": 100,
+      "cost": {"food": 500, "knowledge": 200}
+    }
+  ],
+  "notes": "Example values only; not retail-derived constants."
+}

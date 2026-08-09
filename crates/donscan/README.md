@@ -1,6 +1,9 @@
 # donscan
 
-A native Windows binary that types the live `riseofnations.exe` heap by vtable pointer.
+Native, read-only Windows probes for `riseofnations.exe`:
+
+- `donscan` types the heap by vtable pointer for occasional diagnostics.
+- `donfeed` emits a coherent, least-data economy observation stream for RoNtoy.
 
 Every C++ object begins with its vtable pointer. `schema/vtables.json` maps 1,777 RTTI
 vtable VAs to class names. Scanning committed memory for those addresses, rebased by the
@@ -16,7 +19,7 @@ Full derivation, measured results and caveats: `docs/tooling/native-scanner.md`.
 ```sh
 cd /Users/ember/dev/don/crates/donscan
 cargo xwin build --release --target aarch64-pc-windows-msvc
-# -> target/aarch64-pc-windows-msvc/release/donscan.exe   (PE32+ Aarch64 console)
+# -> target/aarch64-pc-windows-msvc/release/{donscan,donfeed}.exe
 ```
 
 `cargo-xwin` downloads the MSVC import libraries into
@@ -25,11 +28,48 @@ mingw, no VM toolchain needed. Windows on ARM runs the aarch64 binary natively a
 still read the emulated 32-bit x86 game process — `ReadProcessMemory` /`VirtualQueryEx`
 are architecture-agnostic.
 
-Platform-independent parts are testable on the Mac:
+Platform-independent parsing, coherence, bounds, identity, and encoding are testable
+on the Mac:
 
 ```sh
-cargo test -p donscan --lib     # exercises the embedded vtable map + lookup table
+cargo test --lib                # live parser fixtures + embedded vtable lookup table
 ```
+
+## RoNtoy economy feed
+
+`donfeed` defaults to one sample per second and NDJSON on stdout:
+
+```text
+donfeed --pid 5236 --base d60000 --once
+donfeed --pid 5236 --hz 2 --out C:\Users\Public\don\observations.ndjson
+```
+
+It always identifies the supported game image by PE machine, entry RVA, and image size;
+`--base` is only an assertion and cannot bypass that check. At attachment it also records
+the process creation time and SHA-256/size of the target executable on disk, and refuses
+the process unless that digest exactly matches the supported retail build. `--hz` is hard-
+capped at 15; 1–2 Hz is the intended advice cadence.
+
+Each observation is `rontoy.observation` schema version 1.0. Resource arrays explicitly
+declare retail order: food, timber, wealth, knowledge, metal, oil. The capture reads eight
+leader flag dwords, then exactly one uniquely selected active console/human `LeaderData`
+and its 248-byte encrypted economy block. It does not read World, Objects, the heap, or
+opponents' encrypted economy. Missing/ambiguous human selection and unreadable fields are
+reported as an unavailable health observation, never zero-filled as facts.
+`fixtures/rontoy-observation-v1.ndjson` is a redacted synthetic golden for host adapters;
+`cargo run --example make_fixture` verifies it against the real encoder before printing.
+
+The observation labels `single_player` versus `multiplayer` from the guarded
+`Game::semaphore` network-command-stream bit used by the engine's multiplayer packet
+scrambling and checksum paths. Pause state comes from the exact bit returned by the
+engine's 13-byte `ScenarioFuncSet::is_paused` implementation; it remains `null` only if
+`GameAccess::turn_control` or that bit is unreadable.
+
+The game frame/pointer, mode evidence, TurnControl/pause evidence, selected leader
+identity/flags, and encrypted-data pointer are read before and after the observation. A
+torn capture is retried at most three times. The target is never suspended: both binaries
+open it with query/read rights only and import no process-write, remote-thread, or suspend
+API.
 
 ## Use
 
