@@ -2064,6 +2064,107 @@ impl CollUnits for UnitTable {
     }
 }
 
+/// Relocate an already-linked unit anchor as the spatial half of
+/// `Unit::set_new_location` `0x005F8D20`.
+///
+/// Retail compares the old and new `WCoord` cells.  When they differ it calls
+/// `Object::remove_from_world` `0x00647970` **before** writing `ObjectData::x/y`, then
+/// `Object::add_to_world` `0x0064D8C0` **after** the write.  The object is consequently
+/// removed from its old cell without disturbing the relative order of its neighbours and
+/// inserted at the head of the new cell.  A move inside one `WData` cell only writes the
+/// coordinates and leaves the intrusive-list order untouched.
+///
+/// This intentionally does not call [`place`]: ordinary movement must neither append a new
+/// table row nor stamp another initial set of guy footprints.  Per-guy bitmap relocation is
+/// the separate `Guy::set_new_location` phase.
+///
+/// Returns `false` without changing anything if `(who, o)` is absent or a valid old cell's
+/// chain does not contain it.  The latter is a broken-world invariant in retail (its removal
+/// path asserts on linked-list loops), but a recoverable answer is more useful to hosts.
+pub fn relocate_unit_anchor(
+    w: &mut World,
+    table: &mut UnitTable,
+    who: i32,
+    o: i32,
+    x: i32,
+    y: i32,
+) -> bool {
+    let Some(row_i) = table.find(who, o) else {
+        return false;
+    };
+    let old = (
+        crate::systems::movement::wcell_of(table.rows[row_i].x),
+        crate::systems::movement::wcell_of(table.rows[row_i].y),
+    );
+    let new = (
+        crate::systems::movement::wcell_of(x),
+        crate::systems::movement::wcell_of(y),
+    );
+
+    if old == new {
+        table.rows[row_i].x = x;
+        table.rows[row_i].y = y;
+        return true;
+    }
+
+    // Resolve the old splice before mutating anything.  `None` means the actor is the
+    // WData head; `Some(i)` is its predecessor in the intrusive `down` chain.
+    let predecessor = if w.valid_w(old.0, old.1) {
+        let head = w.wdata(old.0, old.1);
+        if head.down as i32 == o && head.down_who as i32 == who {
+            Some(None)
+        } else {
+            let mut cur = (head.down_who as i32, head.down as i32);
+            let mut found = None;
+            let mut hops = 0usize;
+            while cur.1 >= 0 && hops <= table.rows.len() {
+                let Some(i) = table.find(cur.0, cur.1) else {
+                    break;
+                };
+                let next = (table.rows[i].down_who as i32, table.rows[i].down as i32);
+                if next == (who, o) {
+                    found = Some(i);
+                    break;
+                }
+                cur = next;
+                hops += 1;
+            }
+            found.map(Some)
+        }
+    } else {
+        // Off-map sentinels are not linked into WData.
+        Some(None)
+    };
+    let Some(predecessor) = predecessor else {
+        return false;
+    };
+
+    let actor_next = (table.rows[row_i].down, table.rows[row_i].down_who);
+    if w.valid_w(old.0, old.1) {
+        if let Some(pred_i) = predecessor {
+            table.rows[pred_i].down = actor_next.0;
+            table.rows[pred_i].down_who = actor_next.1;
+        } else {
+            w.set_down(old.0, old.1, actor_next.0, actor_next.1);
+        }
+    }
+
+    // Object::remove_from_world clears the packed down/down_who dword to -1 before the
+    // encrypted coordinate words are replaced.
+    table.rows[row_i].down = -1;
+    table.rows[row_i].down_who = -1;
+    table.rows[row_i].x = x;
+    table.rows[row_i].y = y;
+
+    if w.valid_w(new.0, new.1) {
+        let head = w.wdata(new.0, new.1);
+        table.rows[row_i].down = head.down;
+        table.rows[row_i].down_who = head.down_who;
+        w.set_down(new.0, new.1, o as i16, who as i16);
+    }
+    true
+}
+
 /// Place a unit in the world: stamp its footprint and link it into its `WData` cell's `down`
 /// list, exactly as `Guy::set_new_location` + `Object::set_down` do.
 ///
@@ -2277,6 +2378,90 @@ mod tests {
             "the gap is not filled by a unit-wide square"
         );
         assert_eq!(units.guys.len(), 2);
+    }
+
+    #[test]
+    fn relocate_anchor_splices_old_chain_and_pushes_new_head() {
+        let mut w = world(3, 2);
+        let mut units = UnitTable::default();
+        // All three start in WData (0,0), newest first: 3 -> 2 -> 1.
+        for o in 1..=3 {
+            place(&mut w, &mut units, row(0, o, 2 + o, 4, 0), []);
+        }
+        assert_eq!((w.wdata(0, 0).down, w.wdata(0, 0).down_who), (3, 0));
+        assert_eq!(
+            (
+                units.row(0, 3).unwrap().down,
+                units.row(0, 3).unwrap().down_who
+            ),
+            (2, 0)
+        );
+        assert_eq!(
+            (
+                units.row(0, 2).unwrap().down,
+                units.row(0, 2).unwrap().down_who
+            ),
+            (1, 0)
+        );
+
+        // Move the middle node into WData (1,0).  The untouched old neighbours retain
+        // their order, while the moved actor becomes the new-cell head.
+        let nx = crate::systems::map_terrain::COORD_PER_WCELL + 24;
+        assert!(relocate_unit_anchor(&mut w, &mut units, 0, 2, nx, 24));
+        assert_eq!((w.wdata(0, 0).down, w.wdata(0, 0).down_who), (3, 0));
+        assert_eq!(
+            (
+                units.row(0, 3).unwrap().down,
+                units.row(0, 3).unwrap().down_who
+            ),
+            (1, 0)
+        );
+        assert_eq!(
+            (
+                units.row(0, 1).unwrap().down,
+                units.row(0, 1).unwrap().down_who
+            ),
+            (-1, 0)
+        );
+        assert_eq!((w.wdata(1, 0).down, w.wdata(1, 0).down_who), (2, 0));
+        assert_eq!(
+            (
+                units.row(0, 2).unwrap().down,
+                units.row(0, 2).unwrap().down_who
+            ),
+            (-1, 0)
+        );
+        assert_eq!(
+            (units.row(0, 2).unwrap().x, units.row(0, 2).unwrap().y),
+            (nx, 24)
+        );
+    }
+
+    #[test]
+    fn relocate_anchor_inside_one_wcell_preserves_blocker_precedence() {
+        let mut w = world(2, 2);
+        let mut units = UnitTable::default();
+        place(&mut w, &mut units, row(0, 1, 3, 3, 0), []);
+        place(&mut w, &mut units, row(1, 7, 4, 4, 0), []);
+        let head_before = (w.wdata(0, 0).down, w.wdata(0, 0).down_who);
+        let next_before = (
+            units.row(1, 7).unwrap().down,
+            units.row(1, 7).unwrap().down_who,
+        );
+
+        assert!(relocate_unit_anchor(&mut w, &mut units, 0, 1, 700, 600));
+        assert_eq!((w.wdata(0, 0).down, w.wdata(0, 0).down_who), head_before);
+        assert_eq!(
+            (
+                units.row(1, 7).unwrap().down,
+                units.row(1, 7).unwrap().down_who
+            ),
+            next_before
+        );
+        assert_eq!(
+            (units.row(0, 1).unwrap().x, units.row(0, 1).unwrap().y),
+            (700, 600)
+        );
     }
 
     #[test]
