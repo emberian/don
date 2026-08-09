@@ -1,0 +1,14 @@
+[package]
+name = "don-owned-peer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fail-closed two-peer acceptance harness for derived Rise of Nations multiplayer shapes"
+
+[dependencies]
+don-net = { path = "../../crates/don-net" }
+
+# Keep this acceptance tool isolated from the repository workspace. It owns no
+# shared crate metadata and can be run directly with --manifest-path.
+[workspace]
+
