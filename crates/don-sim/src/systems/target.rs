@@ -543,6 +543,9 @@ pub struct CompareTargetInput {
     // ---- attacker ----
     /// `this->vf[0x18]()` — the attacker is a unit.
     pub a_is_unit: bool,
+    /// The attacker's own `(o, who)`, read from `ObjectData +0x0A/+0x09`. The target's
+    /// CastSpell activity payload is compared against it at `0x0064ECDE..0x0064ECF0`.
+    pub a_ref: ObjRef,
     /// `this->vf[0x20]()` — the attacker is a building (a tower/fort firing on its own).
     pub a_is_building: bool,
     /// `UnitData +0xB1 stance == 3` after the `has_stance_type` devirtualisation at
@@ -579,6 +582,19 @@ pub struct CompareTargetInput {
     /// `target->vf[0x20]()` — the target is a building. **The whole first valuation block
     /// is gated on this**, which is why buildings and units score on different scales.
     pub t_is_building: bool,
+    /// The spellcaster discriminator at `0x0064EC6E..0x0064EC95`: for a unit this is
+    /// `UnitTypeData +0x2B8 unit_flags2 & 2`; for a building it is
+    /// `BuildTypeData::is_spellcaster` `0x00639840`.
+    pub t_is_spellcaster: bool,
+    /// The target's `UnitData::get_action` `0x00608450` currently returns activity
+    /// [`crate::order::OrderIndex::CastSpell`] (`0xE`). Only read for a spellcaster.
+    pub t_action_is_cast_spell: bool,
+    /// The `(o, who)` pair returned by the target CastSpell activity's virtual `+0xF4`.
+    /// Retail compares this with the **attacker's** identity at `0x0064ECDE..0x0064ECF0`.
+    pub t_action_target: Option<ObjRef>,
+    /// `target->is(0x3A)`, consulted when the spellcaster target is not casting. It adds
+    /// 6,000,000 before the common score compression (`0x0064ECF8..0x0064ED27`).
+    pub t_is_tech_0x3a: bool,
     /// `target->vf[0x2C]()` — a wonder. Divides the base by 25 at `0x0064E70A`.
     pub t_is_wonder: bool,
     /// `target->vf[0x148](0x80000000)`, only evaluated for buildings (`0x0064E60D`).
@@ -669,11 +685,10 @@ pub struct CompareTargetInput {
 ///             (v+99)/100, knee at 100000, floor 15, then 1 / 2 overrides
 /// ```
 ///
-/// Steps 3, 5 and 7 are transcribed branch for branch. Retail's step 7 also reaches
-/// `UnitData::get_action` and `BuildTypeData::is_spellcaster` for the spell-target bonus
-/// (`+6000000` / `+10000000` at `0x0064ECF0`); those two additions are **not** implemented
-/// here because they need the order system, and they are flagged by
-/// [`COMPARE_TARGET_UNREACHED`].
+/// Steps 3, 5 and 7 are transcribed branch for branch. The spell-target arm in step 7 is
+/// supplied as pre-resolved target activity fields, just like the other virtual reads: a
+/// non-casting tech `0x3A` spellcaster gets `+6,000,000`; any spellcaster presently casting
+/// gets `×20`, plus `+10,000,000` when that CastSpell activity names the attacker.
 pub fn compare_target(i: &CompareTargetInput) -> i32 {
     // 1 + 2: the base, from the type's own value.  0x0064E6E4 / 0x0064E70A
     let mut base = i.t_type_value.wrapping_shl(2);
@@ -793,6 +808,20 @@ pub fn compare_target(i: &CompareTargetInput) -> i32 {
         if i.t_type_mask_0x10000 {
             v = v.wrapping_mul(20); // 0x0064EC44
         }
+        // 0x0064EC6E..0x0064ED27. The action belongs to the target: disassembly loads the
+        // target from `objects[param_2][param_1]` into ECX immediately before both
+        // UnitData::get_action calls. EDI still holds the attacker, whose +0xA/+0x9
+        // identity is compared with the CastSpell payload at 0x0064ECDE.
+        if i.t_is_spellcaster {
+            if i.t_action_is_cast_spell {
+                v = v.wrapping_mul(20);
+                if i.t_action_target == Some(i.a_ref) {
+                    v = v.wrapping_add(10_000_000);
+                }
+            } else if i.t_is_tech_0x3a {
+                v = v.wrapping_add(6_000_000);
+            }
+        }
         if i.t_stealth_undetected {
             v = sar2_round_toward_zero(v); // 0x0064EFF0 sibling at 0x0064EE0A
         } else if i.a_stance_is_3 {
@@ -868,16 +897,6 @@ pub fn compare_target(i: &CompareTargetInput) -> i32 {
 fn sar2_round_toward_zero(v: i32) -> i32 {
     (v.wrapping_add((v >> 31) & 3)) >> 2
 }
-
-/// What `compare_target` here does **not** reproduce, stated so it cannot be mistaken for
-/// completeness.
-pub const COMPARE_TARGET_UNREACHED: &str = concat!(
-    "Object::compare_target 0x0064E5C0: the spell-target bonuses at 0x0064ECF0 ",
-    "(+6000000 when UnitData::get_action is not activity 0xE and the target is tech 0x3A; ",
-    "+10000000 when the current action already names this object) are not implemented — ",
-    "they read UnitData::get_action 0x00608450 and BuildTypeData::is_spellcaster 0x00639840, ",
-    "which need the order system. Everything else in the function is transcribed."
-);
 
 // ===========================================================================================
 // 5. `Object::find_nearby_target` `0x00648DA0` — the spiral search
@@ -1441,6 +1460,7 @@ pub fn find_auto_target<A: AutoTargetAdapter>(
         compare.check_path = facts.check_path;
         compare.mode = query.compare_mode;
         compare.a_is_unit = true;
+        compare.a_ref = searcher;
         compare.a_stance_is_3 = query.stance == 3;
         compare.a_unit_mask_0x40000 = query.unit_masks & 0x40000 != 0;
         compare.a_has_objmask_high = query.has_objmask_high;
@@ -2050,6 +2070,44 @@ mod tests {
         // different scales, and it is why the floor test above uses the building path.
         let i = base_cmp();
         assert_eq!(compare_target(&i), (100 * 4 + 100_000 + 99) / 100);
+    }
+
+    #[test]
+    fn idle_tech_0x3a_spellcaster_gets_the_retail_six_million_bonus() {
+        let plain = base_cmp();
+        let mut spellcaster = plain;
+        spellcaster.t_is_spellcaster = true;
+        spellcaster.t_is_tech_0x3a = true;
+
+        assert_eq!(compare_target(&plain), 1_004);
+        assert_eq!(compare_target(&spellcaster), 61_004);
+    }
+
+    #[test]
+    fn casting_spellcaster_multiplies_and_prioritises_the_attacker_it_targets() {
+        let attacker = ObjRef::new(12, 3);
+        let mut casting = base_cmp();
+        casting.a_ref = attacker;
+        casting.t_is_spellcaster = true;
+        casting.t_action_is_cast_spell = true;
+        casting.t_action_target = Some(ObjRef::new(99, 3));
+
+        // 400 * 20 + the ordinary unit-tail 100,000, then /100.
+        assert_eq!(compare_target(&casting), 1_080);
+
+        casting.t_action_target = Some(attacker);
+        // The +10,000,000 pushes the compressed result through the 100,000 knee.
+        assert_eq!(compare_target(&casting), 100_216);
+    }
+
+    #[test]
+    fn spell_fields_do_nothing_without_the_retail_spellcaster_discriminator() {
+        let mut i = base_cmp();
+        let plain = compare_target(&i);
+        i.t_is_tech_0x3a = true;
+        i.t_action_is_cast_spell = true;
+        i.t_action_target = Some(i.a_ref);
+        assert_eq!(compare_target(&i), plain);
     }
 
     #[test]
