@@ -65,9 +65,8 @@
 //!   `calc_nuke_spline` → `calc_spline` → `generate_bspline` → `build_normals`, the six nested
 //!   array walks, the slot-aligned pool sidecar/recycler, and indexed flight step are implemented
 //!   below. Live nuke and initial cruise launch are installed through the pool, and the dynamic
-//!   target-envelope/retarget transaction is pool-owned; its remaining boundary is the live
-//!   target lookup/common-loop adapter. Aircraft wrecks actually use `TRAJ_ARC`; their
-//!   [`ammo_init_crash`] constructor is implemented below.
+//!   target-envelope/retarget transaction is pool-owned and driven by step 15. Aircraft wrecks
+//!   actually use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -2735,7 +2734,8 @@ pub fn ammo_inc_time<E: AmmoEnv>(
 
         if a.w.traj != TRAJ_ARC {
             // Spline flight is driven by the slot sidecar; live owners call
-            // ammo_step_cruise_spline after this common increment boundary.
+            // AmmoPool::step_cruise_targeted_slot after this common increment boundary
+            // and re-enter here on SnappedForImmediateLoop.
             return Step::Flying;
         }
 

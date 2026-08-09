@@ -2274,8 +2274,7 @@ impl Sim {
                 if !self.ammo.slots[slot].occupied() {
                     continue;
                 }
-                let mut step = {
-                    let a = &mut self.ammo.slots[slot];
+                let advance_common = |a: &mut ammo::Ammo| {
                     // `hit_target` takes `&mut AmmoWalk` while `ammo_inc_time`'s hook is
                     // `Fn(&AmmoWalk)`, so the test runs on a copy: the boolean is right and
                     // the mutation it makes on failure (forgetting the target) is deferred
@@ -2287,15 +2286,23 @@ impl Sim {
                     };
                     ammo::ammo_inc_time(a, &view, probe, |w| ammo::check_hit(w, &view))
                 };
+                let mut step = advance_common(&mut self.ammo.slots[slot]);
                 if step == ammo::Step::Flying && self.ammo.slots[slot].has_spline {
                     let w = self.ammo.slots[slot].w;
-                    let target_live = ammo::AmmoEnv::object(&view, w.whom, w.ox)
-                        .is_some_and(|target| target.alive);
-                    if target_live && self.ammo.step_spline_slot(slot).is_err() {
-                        // A non-null retail pointer can never lack its object. Fail closed
-                        // instead of advancing a fabricated/empty path.
-                        self.ammo.close_slot(slot);
-                        step = ammo::Step::Closed;
+                    let target = ammo::AmmoEnv::object(&view, w.whom, w.ox);
+                    match self.ammo.step_cruise_targeted_slot(slot, target.as_ref()) {
+                        Ok(ammo::CruiseTargetStep::SnappedForImmediateLoop { .. }) => {
+                            // Retail jumps back to the common increment at 0x0067D392 in
+                            // this same call; reuse the ordinary arrival/overshoot path.
+                            step = advance_common(&mut self.ammo.slots[slot]);
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            // A non-null retail pointer can never lack its object. Fail closed
+                            // instead of advancing a fabricated/empty path.
+                            self.ammo.close_slot(slot);
+                            step = ammo::Step::Closed;
+                        }
                     }
                 }
                 self.cover.ammo_steps += 1;

@@ -21,7 +21,7 @@ cargo test -p don-sim --test ammo_splash_transaction
 cargo test -p don-sim --test ammo_spline_transaction
 # test result: ok. 14 passed; 0 failed
 cargo test -p don-sim --test ammo_live_spline_sim
-# test result: ok. 5 passed; 0 failed
+# test result: ok. 7 passed; 0 failed
 ```
 
 The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
@@ -492,9 +492,11 @@ The recycler retains all six nested-array capacities: an invalid reconstruction 
 same cleared allocation, while a later successful construction pops and reuses it. The selector
 gives graphic-piece table flag 8 priority, then tests the shooter's `obj_masks & 0x08000000` nuke
 bit, otherwise choosing the ordinary arc. `Sim::launch_ammo` installs fixed or terrain-aware
-nuke paths through a live `NukeSplineEnv` adapter, step 15 samples the indexed vertex after the
-ordinary time increment, close returns the path to the recycler before the slot is reused, and
-the live ammo channel walks each non-null sidecar immediately after its owning `AmmoData`.
+nuke paths through a live `NukeSplineEnv` adapter. Step 15 performs the live target lookup after
+the ordinary time increment, dispatches the exact target-aware sidecar transaction, and re-enters
+the common increment/arrival path in the same frame after a proximity snap. Close returns the
+path to the recycler before the slot is reused, and the live ammo channel walks each non-null
+sidecar immediately after its owning `AmmoData`.
 
 The live graphic-piece cruise arm now derives all four `calc_from_dir` vectors in the shipped
 order. Start and end are the initialized ammo coordinates; the optional control begins as the
@@ -521,6 +523,9 @@ sample becomes the start, the next raw vertex is mirrored as
 `(next - start) * 2 + start`, the live target becomes the end, the optional control is zero,
 minimum segment length is `200 * unit_move_speed`, then `total_time` takes the new vertex count
 and `cur_time` resets to zero. Other checks leave both ammo endpoint and sidecar unchanged.
+The live step-15 adapter honors that action immediately; focused Sim tests pin an outside-envelope
+no-write frame, a fourth-frame rebuild, and a snap that reaches arrival and recycles the sidecar
+in the same `do_frame` call.
 
 ---
 
@@ -537,12 +542,11 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **The exact dynamic cruise transaction still needs its live step-15 adapter.** Initial
-   selection/orientation, pool ownership, construction, target-envelope snap, four-frame
-   rebuild, release, and checksum walking are executable. `objects_inc_time` still calls the
-   older geometry-only `step_spline_slot`; it must supply the live `ObjView`, dispatch
-   `step_cruise_targeted_slot`, and honor `SnappedForImmediateLoop` by re-entering the common
-   `Ammo::inc_time` bookkeeping in the same call. Aircraft crashes are unrelated:
+3. **The lightweight Sim still synthesizes lead-Guy vertical/orientation facts.** Dynamic spline
+   target lookup now runs live, but `AmmoView` supplies `guy0_z = 0`, and `fire_ammo` supplies
+   lead pitch zero, because the general unit store does not materialize retail Guy bodies.
+   Exact non-zero aircraft pose replay therefore needs the same Guy-source promotion already
+   used by the aircraft-crash adapter. Aircraft crashes themselves are unrelated:
    `Ammo::init_crash` writes an ordinary arc and is executable. `Ammo::init` only ever writes
    `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`.
 4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved

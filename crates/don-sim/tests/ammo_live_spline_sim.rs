@@ -156,14 +156,18 @@ fn live_graphic_cruise_gate_has_priority_and_installs_its_derived_path() {
 }
 
 #[test]
-fn step15_samples_then_recycles_the_pool_owned_path_on_close() {
+fn step15_checks_the_envelope_without_rewriting_the_endpoint_then_recycles() {
     let mut sim = Sim::new(17, 16);
     sim.activate(1);
     sim.spawn_unit(1, 0, 3_500, 3_000, 10)
         .expect("live spline target");
     let (order, shooter, target) = launch_fixture(true);
     let slot = sim.launch_ammo(&order, &shooter, Some(&target), 4_000, 90);
-    let expected = sim.ammo.spline(slot).unwrap().spline_verts[1];
+    let endpoint = (
+        sim.ammo.slots[slot].w.ex,
+        sim.ammo.slots[slot].w.ey,
+        sim.ammo.slots[slot].w.ez,
+    );
 
     sim.do_frame();
     assert_eq!(sim.ammo.slots[slot].w.cur_time, 1);
@@ -173,13 +177,92 @@ fn step15_samples_then_recycles_the_pool_owned_path_on_close() {
             sim.ammo.slots[slot].w.ey,
             sim.ammo.slots[slot].w.ez
         ),
-        (expected.x as i32, expected.y as i32, expected.z as i32)
+        endpoint,
+        "an outside-envelope non-fourth frame only reads the sample"
     );
     assert!(sim.ammo.spline(slot).is_some());
 
     sim.ammo.slots[slot].w.flags = don_sim::systems::ammo::FLAG_ALIVE;
     sim.ammo.slots[slot].w.cur_time = 199;
     sim.do_frame();
+    assert!(!sim.ammo.slots[slot].occupied());
+    assert!(sim.ammo.spline(slot).is_none());
+    assert_eq!(sim.ammo.recycled_spline_count(), 1);
+}
+
+#[test]
+fn live_step15_rebuilds_on_the_fourth_frame_toward_the_current_unit_position() {
+    let mut sim = Sim::new(19, 16);
+    sim.activate(1);
+    sim.spawn_unit(1, 0, 3_500, 3_000, 10)
+        .expect("live spline target");
+    let (order, shooter, target) = launch_fixture(true);
+    let slot = sim.launch_ammo(&order, &shooter, Some(&target), 4_000, 90);
+
+    for expected_time in 1..=3 {
+        sim.do_frame();
+        assert_eq!(sim.ammo.slots[slot].w.cur_time, expected_time);
+    }
+    let old_path = sim.ammo.spline(slot).unwrap().clone();
+    let raw = old_path.spline_verts[4];
+    let next = old_path.spline_verts[5];
+    let start = SplineVec3::new(
+        raw.x as i32 as f32,
+        raw.y as i32 as f32,
+        raw.z as i32 as f32,
+    );
+    let mirrored = SplineVec3::new(
+        (next.x - start.x) * 2.0 + start.x,
+        (next.y - start.y) * 2.0 + start.y,
+        (next.z - start.z) * 2.0 + start.z,
+    );
+
+    sim.do_frame();
+    assert_eq!(sim.ammo.slots[slot].w.cur_time, 0);
+    assert_eq!(
+        (
+            sim.ammo.slots[slot].w.ex,
+            sim.ammo.slots[slot].w.ey,
+            sim.ammo.slots[slot].w.ez,
+        ),
+        (3_500, 3_000, 0)
+    );
+    let rebuilt = sim.ammo.spline(slot).expect("live rebuilt sidecar");
+    assert_eq!(rebuilt.control_verts.as_slice()[0], start);
+    assert_eq!(rebuilt.control_verts.as_slice()[1], mirrored);
+    assert_eq!(
+        rebuilt.control_verts.as_slice()[2],
+        SplineVec3::new(3_500.0, 3_000.0, 0.0)
+    );
+    assert_eq!(rebuilt.degree, 2);
+    assert_eq!(
+        sim.ammo.slots[slot].w.total_time as usize,
+        rebuilt.spline_verts.len()
+    );
+}
+
+#[test]
+fn live_step15_snap_reenters_common_arrival_and_recycles_in_the_same_frame() {
+    let mut sim = Sim::new(23, 16);
+    sim.activate(1);
+    sim.spawn_unit(1, 0, 3_500, 3_000, 10)
+        .expect("live spline target");
+    sim.shooter_rules.push((
+        0,
+        ShooterRules {
+            target_size: 50,
+            ..Default::default()
+        },
+    ));
+    let (order, shooter, target) = launch_fixture(true);
+    let slot = sim.launch_ammo(&order, &shooter, Some(&target), 4_000, 90);
+    sim.ammo.spline_slots[slot].as_mut().unwrap().spline_verts[1] =
+        SplineVec3::new(3_500.0, 3_000.0, 0.0);
+
+    sim.do_frame();
+
+    assert_eq!(sim.ammo.slots[slot].w.cur_time, 2);
+    assert_eq!(sim.ammo.slots[slot].w.total_time, 0);
     assert!(!sim.ammo.slots[slot].occupied());
     assert!(sim.ammo.spline(slot).is_none());
     assert_eq!(sim.ammo.recycled_spline_count(), 1);
