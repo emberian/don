@@ -906,6 +906,15 @@ fn json_dynamic_bits(base: u32) -> String {
     format!("[{}]", values.join(","))
 }
 
+/// Checksum-visible header bytes shared by retail's non-empty Array walkers.
+/// Layout is the PDB Array<T> base: capacity +8, grow +12, flags +14.
+fn json_array_walk_shape(base: u32) -> String {
+    let capacity = unsafe { std::ptr::read_unaligned((base + 8) as *const i32) };
+    let grow = unsafe { std::ptr::read_unaligned((base + 12) as *const u16) };
+    let flags = unsafe { *((base + 14) as *const u8) };
+    format!("{{\"capacity\":{capacity},\"grow\":{grow},\"flags\":{flags}}}")
+}
+
 fn json_string_array(base: u32) -> String {
     let (count, data) = bounded_array(base, 20);
     let values: Vec<String> = (0..count)
@@ -923,20 +932,40 @@ fn json_script_value(value: u32) -> String {
         return "null".to_string();
     }
     let tag = unsafe { std::ptr::read_unaligned((value + 4) as *const u32) };
+    let scope = unsafe { std::ptr::read_unaligned((value + 8) as *const u16) };
+    let ref_count = unsafe { std::ptr::read_unaligned((value + 12) as *const u16) };
     match tag {
         0x0005_7bad => {
             let v = unsafe { std::ptr::read_unaligned((value + 16) as *const i32) };
-            format!("{{\"type\":\"int\",\"tag\":{tag},\"value\":{v}}}")
+            format!(
+                concat!(
+                    "{{\"type\":\"int\",\"tag\":{},\"value\":{},",
+                    "\"walk\":{{\"scope\":{},\"ref_count\":{}}}}}"
+                ),
+                tag, v, scope, ref_count
+            )
         }
         0x0012_f35f => {
             let bits = unsafe { std::ptr::read_unaligned((value + 16) as *const u32) };
-            format!("{{\"type\":\"real\",\"tag\":{tag},\"bits\":{bits}}}")
+            format!(
+                concat!(
+                    "{{\"type\":\"real\",\"tag\":{},\"bits\":{},",
+                    "\"walk\":{{\"scope\":{},\"ref_count\":{}}}}}"
+                ),
+                tag, bits, scope, ref_count
+            )
         }
         0x0016_8174 => {
             let text = string_text(&read_string((value + 16) as *const u8));
             format!(
-                "{{\"type\":\"string\",\"tag\":{tag},\"value\":{}}}",
-                json_string(&text)
+                concat!(
+                    "{{\"type\":\"string\",\"tag\":{},\"value\":{},",
+                    "\"walk\":{{\"scope\":{},\"ref_count\":{}}}}}"
+                ),
+                tag,
+                json_string(&text),
+                scope,
+                ref_count,
             )
         }
         _ => format!("{{\"type\":\"unsupported\",\"tag\":{tag}}}"),
@@ -1028,7 +1057,10 @@ fn dump_script_files(m: &Mapped, fixture: &str, compile_return: i32, json_path: 
                         "\"script_type\":{},\"params\":{},\"refs\":{},",
                         "\"statics\":{},\"trigger_count\":{},",
                         "\"trigger_bits\":{},\"trigger_names\":{},",
-                        "\"var_names\":{},\"static_var_names\":{}}}"
+                        "\"var_names\":{},\"static_var_names\":{},",
+                        "\"walk\":{{\"params\":{},\"refs\":{},",
+                        "\"trigger_names\":{},\"var_names\":{},",
+                        "\"static_var_names\":{}}}}}"
                     ),
                     json_string(&string_text(&sname)),
                     off,
@@ -1042,14 +1074,28 @@ fn dump_script_files(m: &Mapped, fixture: &str, compile_return: i32, json_path: 
                     json_string_array(sc + 0x64),
                     json_string_array(sc + 0x7c),
                     json_string_array(sc + 0x94),
+                    json_array_walk_shape(sc + 0x04),
+                    json_array_walk_shape(sc + 0x20),
+                    json_array_walk_shape(sc + 0x64),
+                    json_array_walk_shape(sc + 0x7c),
+                    json_array_walk_shape(sc + 0x94),
                 ));
             }
         }
         json_files.push(format!(
-            "{{\"source_file\":{},\"code_hex\":{},\"const_pool\":{const_pool},\"scripts\":[{}]}}",
+            concat!(
+                "{{\"source_file\":{},\"code_hex\":{},\"const_pool\":{},",
+                "\"scripts\":[{}],\"linked_files\":{},",
+                "\"walk\":{{\"code\":{},\"scripts\":{},\"linked_files\":{}}}}}"
+            ),
             json_string(&string_text(&name)),
             json_string(&code_hex),
-            json_scripts.join(",")
+            const_pool,
+            json_scripts.join(","),
+            json_u32_array(sf + 0xb8),
+            json_array_walk_shape(sf),
+            json_array_walk_shape(sf + 0x1c),
+            json_array_walk_shape(sf + 0xb8),
         ));
     }
     if let Some(path) = json_path {

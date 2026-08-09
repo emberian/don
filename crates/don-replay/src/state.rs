@@ -9,7 +9,10 @@
 //! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
 //! from the authoritative `.rcx` initial setup. Everything else the fifteen
 //! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
-//! items, goods, scenario, and script — has no producer in `don-sim` at all.
+//! items, goods, and scenario — has no producer in `don-sim` at all. Script state has
+//! an explicit optional producer from `don-sim::script_runtime::ScriptRuntime`; it
+//! installs channel 15 only when the compiled program carries a complete retail walk
+//! sidecar, and otherwise fails closed.
 //! Static rules are the one replay-specific exception: an admitted recording
 //! can install its complete checksum-visible SaveGame projection, while an
 //! independently constructed `don-sim` world still has no rules producer.
@@ -310,7 +313,7 @@ impl SimBridge {
         "Item / Good flat lists (items, goods)",
         "Constants + 806 Types + 24 Tribes (rules, target 0x12ba3104)",
         "ScenarioData (scenario_data) — no derived walker either",
-        "RunTimeEnv / BHS (script_run_time) — no derived walker either",
+        "RunTimeEnv / BHS (script_run_time) — runtime exists; retail container/value walk metadata is not yet produced for shipped programs",
     ];
 
     /// Populate a `SimState` from a `don-sim` world.
@@ -418,11 +421,40 @@ impl SimBridge {
     pub fn populate_replay_rules(rules: &crate::initial::InitialRules, state: &mut SimState) {
         state.set_direct_channel(Channel::Rules, rules.checksum, rules.walked_bytes, 0);
     }
+
+    /// Install channel 15 from the authoritative BHS runtime's persistent program state.
+    ///
+    /// `RunTimeEnv::close` removes transient interpreter frames before walking; DON's VM
+    /// likewise constructs each frame locally, so [`ScriptRuntime::program`] is exactly
+    /// the reachable persistent boundary: compiled files, statics, and trigger bits.
+    /// Container headers and `ScriptType` ownership fields erased by Rust are required
+    /// through `Program::walk_meta`; missing or stale metadata returns an error and leaves
+    /// the existing channel untouched.
+    pub fn populate_script_runtime(
+        runtime: &don_sim::script_runtime::ScriptRuntime,
+        state: &mut SimState,
+    ) -> Result<
+        crate::script_channel::ScriptChannelChecksum,
+        crate::script_channel::ScriptChannelError,
+    > {
+        let checksum = crate::script_channel::checksum_program(runtime.program())?;
+        state.set_direct_channel(
+            Channel::ScriptRunTime,
+            checksum.checksum,
+            checksum.bytes_walked,
+            0,
+        );
+        Ok(checksum)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_bhs::program::{
+        ArrayWalkMeta, Program, ProgramWalkMeta, Script, ScriptFile, ScriptFileWalkMeta,
+        ScriptWalkMeta,
+    };
 
     /// Exactly the two channels documented as unresolved may be unresolved. If
     /// a third goes missing, the schema regressed; if one is recovered, this
@@ -448,6 +480,67 @@ mod tests {
         assert_eq!(ch, Channels::empty_state());
         assert!(ch.total_is_consistent());
         assert!(outs.iter().all(|o| o.bytes_walked == 0));
+    }
+
+    #[test]
+    fn authoritative_script_runtime_installs_a_non_vacuous_channel_fifteen() {
+        let program = Program::single(ScriptFile {
+            scripts: vec![Script {
+                name: "tick".into(),
+                return_type: 0x0008_4048,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .with_walk_meta(ProgramWalkMeta {
+            files: vec![ScriptFileWalkMeta {
+                scripts: ArrayWalkMeta {
+                    capacity: 1,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                script_meta: vec![ScriptWalkMeta::default()],
+                ..Default::default()
+            }],
+        });
+        let runtime = don_sim::script_runtime::ScriptRuntime::new(program, None, None).unwrap();
+        let mut state = SimState::new();
+        let script = SimBridge::populate_script_runtime(&runtime, &mut state).unwrap();
+        let report = crate::check_all::CheckAll::of_state(&state);
+
+        assert!(script.bytes_walked > 4, "a named Script body was walked");
+        assert_eq!(
+            state.channel_element_count(Channel::ScriptRunTime as usize),
+            1
+        );
+        assert_eq!(report.returns(), script.checksum);
+        assert_eq!(
+            report.per[Channel::ScriptRunTime as usize].bytes,
+            script.bytes_walked
+        );
+        assert!(report.per[Channel::ScriptRunTime as usize].complete());
+    }
+
+    #[test]
+    fn missing_script_walk_metadata_leaves_channel_fifteen_uninstalled() {
+        let runtime = don_sim::script_runtime::ScriptRuntime::new(
+            Program::single(ScriptFile::default()),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut state = SimState::new();
+        assert_eq!(
+            SimBridge::populate_script_runtime(&runtime, &mut state),
+            Err(crate::script_channel::ScriptChannelError::MissingProgramWalkMetadata)
+        );
+        let report = crate::check_all::CheckAll::of_state(&state);
+        assert_eq!(report.returns(), 1);
+        assert_eq!(report.per[Channel::ScriptRunTime as usize].bytes, 0);
+        assert_eq!(
+            state.channel_element_count(Channel::ScriptRunTime as usize),
+            0
+        );
     }
 
     #[test]

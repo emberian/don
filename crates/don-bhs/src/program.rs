@@ -51,6 +51,79 @@
 
 use crate::value::Value;
 
+/// The three checksum-visible fields of a non-empty retail Array container.
+///
+/// These are deliberately not reconstructed from Rust `Vec::capacity()`: retail's
+/// allocator growth and its `grow`/`flags` bytes are part of channel 15.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArrayWalkMeta {
+    pub capacity: i32,
+    pub grow: u16,
+    pub flags: u8,
+}
+
+/// Checksum metadata parallel to one non-null [`Value`].
+///
+/// `data_type`, scalar payload, and the object/array distinction remain authoritative
+/// in the live value. The sidecar retains only fields Rust ownership intentionally
+/// erased plus recursive pointer-slot metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueWalkMeta {
+    pub scope: u16,
+    pub ref_count: u16,
+    pub nested: ValueWalkNested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueWalkNested {
+    Scalar,
+    Object {
+        values: Vec<Option<ValueWalkMeta>>,
+    },
+    Array {
+        blank_base: Option<Box<ValueWalkMeta>>,
+        values: Vec<Option<ValueWalkMeta>>,
+    },
+}
+
+impl ValueWalkMeta {
+    pub const fn scalar(scope: u16, ref_count: u16) -> Self {
+        Self {
+            scope,
+            ref_count,
+            nested: ValueWalkNested::Scalar,
+        }
+    }
+}
+
+/// Retail-only container/value fields parallel to one [`Script`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptWalkMeta {
+    pub statics: Vec<Option<ValueWalkMeta>>,
+    pub params: ArrayWalkMeta,
+    pub refs: ArrayWalkMeta,
+    pub trigger_names: ArrayWalkMeta,
+    pub var_names: ArrayWalkMeta,
+    pub static_var_names: ArrayWalkMeta,
+}
+
+/// Retail-only checksum state parallel to one [`ScriptFile`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptFileWalkMeta {
+    pub code: ArrayWalkMeta,
+    pub scripts: ArrayWalkMeta,
+    pub script_meta: Vec<ScriptWalkMeta>,
+    pub const_pool: Vec<Option<ValueWalkMeta>>,
+    pub linked_files: ArrayWalkMeta,
+    pub linked_file_indices: Vec<i32>,
+}
+
+/// Complete sidecar required to project a live [`Program`] onto channel 15.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProgramWalkMeta {
+    pub files: Vec<ScriptFileWalkMeta>,
+}
+
 /// One compiled script function.
 #[derive(Debug, Clone, Default)]
 pub struct Script {
@@ -187,10 +260,32 @@ impl ScriptFile {
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub files: Vec<ScriptFile>,
+    walk_meta: Option<ProgramWalkMeta>,
 }
 
 impl Program {
     pub fn single(file: ScriptFile) -> Program {
-        Program { files: vec![file] }
+        Program {
+            files: vec![file],
+            walk_meta: None,
+        }
+    }
+
+    /// Attach an independently recovered retail checksum sidecar.
+    ///
+    /// The replay adapter validates every parallel length and dynamic shape before
+    /// walking. Attaching metadata is therefore not enough to make an incompatible
+    /// program hashable; stale or partial sidecars fail closed.
+    pub fn with_walk_meta(mut self, walk_meta: ProgramWalkMeta) -> Program {
+        self.walk_meta = Some(walk_meta);
+        self
+    }
+
+    pub fn set_walk_meta(&mut self, walk_meta: ProgramWalkMeta) {
+        self.walk_meta = Some(walk_meta);
+    }
+
+    pub fn walk_meta(&self) -> Option<&ProgramWalkMeta> {
+        self.walk_meta.as_ref()
     }
 }

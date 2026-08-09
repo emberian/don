@@ -18,17 +18,21 @@
 //! bytes is therefore a type/error boundary rather than a zero-filled fallback.
 //!
 //! The traversal is instruction-derived but has not been differentially exercised against
-//! retail for generated inputs: it is below Tier B. See `docs/mechanics/script-channel.md`.
-//! The file is intentionally standalone until a complete runtime-state adapter exists:
-//!
-//! ```text
-//! rustc --edition 2021 --test crates/don-replay/src/script_channel.rs -o /tmp/script-channel-test
-//! /tmp/script-channel-test
-//! ```
+//! retail for generated inputs: it is below Tier B. [`checksum_program`] is the live
+//! `don-bhs::Program` adapter, and [`crate::state::SimBridge::populate_script_runtime`]
+//! installs its result as channel 15. Both reject missing retail-only metadata; the
+//! compiler/chunk-loader producer for full shipped programs remains open.
 
 #![forbid(unsafe_code)]
 
 use std::fmt;
+
+use don_bhs::program::{
+    ArrayWalkMeta as ProgramArrayWalkMeta, Program as BhsProgram, Script as BhsScript,
+    ScriptFile as BhsScriptFile, ScriptFileWalkMeta as BhsScriptFileWalkMeta,
+    ScriptWalkMeta as BhsScriptWalkMeta, ValueWalkMeta, ValueWalkNested,
+};
+use don_bhs::value::Value;
 
 /// Metadata hashed by retail's non-empty `SimpleArray`, `ObjectArray`, and `PtrArray`
 /// walkers. `flags` is stored unmasked; the walk emits `flags & 0xbf` exactly as retail.
@@ -77,14 +81,15 @@ pub struct DynamicBitMask<'a> {
 
 /// Fields common to every non-null `ScriptType` value.
 ///
-/// `scope` is the low 16 bits read at `ScriptType+0x08`. Retail ORs bit `0x80` into
-/// the walked copy when virtual `is_ref()` returns true. It then emits `ref_count` from
-/// `ScriptType+0x0c` before calling the most-derived `walk_data` vtable slot.
+/// `scope` is the low 16 bits read at `ScriptType+0x08`. Retail calls vtable slot
+/// `+0x24` (`is_array`) and ORs bit `0x80` into the walked copy when it returns true.
+/// It then emits `ref_count` from `ScriptType+0x0c` before calling the most-derived
+/// `walk_data` vtable slot. [measured, 0x009d7f2d..0x009d7f7d]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScriptValueBase {
     pub data_type: i32,
     pub scope: u16,
-    pub is_ref: bool,
+    pub is_array: bool,
     pub ref_count: u16,
 }
 
@@ -168,6 +173,23 @@ pub struct ScriptChannelChecksum {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptChannelError {
+    MissingProgramWalkMetadata,
+    ProjectionLengthMismatch {
+        what: &'static str,
+        live: usize,
+        metadata: usize,
+    },
+    MissingValueWalkMetadata {
+        what: &'static str,
+    },
+    UnexpectedValueWalkMetadata {
+        what: &'static str,
+    },
+    ValueShapeMismatch {
+        what: &'static str,
+        live: &'static str,
+        metadata: &'static str,
+    },
     CountDoesNotFitI32 {
         what: &'static str,
         actual: usize,
@@ -360,7 +382,7 @@ fn walk_script_values<S: WalkSink>(
 
 fn walk_script_value_base<S: WalkSink>(sink: &mut S, base: ScriptValueBase) {
     walk_i32(sink, base.data_type);
-    let walked_scope = if base.is_ref {
+    let walked_scope = if base.is_array {
         base.scope | 0x0080
     } else {
         base.scope
@@ -510,9 +532,362 @@ pub fn checksum_script_runtime(
     })
 }
 
+fn array_shape(meta: ProgramArrayWalkMeta) -> ArrayShape {
+    ArrayShape {
+        capacity: meta.capacity,
+        grow: meta.grow,
+        flags: meta.flags,
+    }
+}
+
+fn require_parallel_len(
+    what: &'static str,
+    live: usize,
+    metadata: usize,
+) -> Result<(), ScriptChannelError> {
+    if live == metadata {
+        Ok(())
+    } else {
+        Err(ScriptChannelError::ProjectionLengthMismatch {
+            what,
+            live,
+            metadata,
+        })
+    }
+}
+
+fn walk_rust_string<S: WalkSink>(sink: &mut S, value: &str) -> Result<(), ScriptChannelError> {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    walk_string(sink, WalkString { utf16: &units })
+}
+
+fn walk_rust_string_array<S: WalkSink>(
+    sink: &mut S,
+    what: &'static str,
+    shape: ProgramArrayWalkMeta,
+    values: &[String],
+) -> Result<(), ScriptChannelError> {
+    let count = checked_count(what, values.len())?;
+    walk_i32(sink, count);
+    if count != 0 {
+        validate_shape(what, array_shape(shape), values.len())?;
+        walk_array_header(sink, array_shape(shape));
+        for value in values {
+            walk_rust_string(sink, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn nested_name(nested: &ValueWalkNested) -> &'static str {
+    match nested {
+        ValueWalkNested::Scalar => "scalar",
+        ValueWalkNested::Object { .. } => "object",
+        ValueWalkNested::Array { .. } => "array",
+    }
+}
+
+fn walk_bhs_value<S: WalkSink>(
+    sink: &mut S,
+    what: &'static str,
+    value: Option<&Value>,
+    meta: Option<&ValueWalkMeta>,
+) -> Result<(), ScriptChannelError> {
+    let value = match value {
+        None | Some(Value::Null) => {
+            if meta.is_some() {
+                return Err(ScriptChannelError::UnexpectedValueWalkMetadata { what });
+            }
+            walk_i32(sink, 0);
+            return Ok(());
+        }
+        Some(value) => value,
+    };
+    let meta = meta.ok_or(ScriptChannelError::MissingValueWalkMetadata { what })?;
+    let data_type = value.data_type();
+    let scalar_base = |data_type: u32| ScriptValueBase {
+        data_type: data_type as i32,
+        scope: meta.scope,
+        is_array: false,
+        ref_count: meta.ref_count,
+    };
+
+    match value {
+        Value::Int(payload) => {
+            if !matches!(meta.nested, ValueWalkNested::Scalar) {
+                return Err(ScriptChannelError::ValueShapeMismatch {
+                    what,
+                    live: "int",
+                    metadata: nested_name(&meta.nested),
+                });
+            }
+            walk_script_value_base(sink, scalar_base(data_type));
+            walk_i32(sink, *payload);
+        }
+        Value::Real(payload) => {
+            if !matches!(meta.nested, ValueWalkNested::Scalar) {
+                return Err(ScriptChannelError::ValueShapeMismatch {
+                    what,
+                    live: "real",
+                    metadata: nested_name(&meta.nested),
+                });
+            }
+            walk_script_value_base(sink, scalar_base(data_type));
+            sink.walk(&payload.to_bits().to_le_bytes());
+        }
+        Value::Str(payload) => {
+            if !matches!(meta.nested, ValueWalkNested::Scalar) {
+                return Err(ScriptChannelError::ValueShapeMismatch {
+                    what,
+                    live: "string",
+                    metadata: nested_name(&meta.nested),
+                });
+            }
+            walk_script_value_base(sink, scalar_base(data_type));
+            walk_rust_string(sink, payload)?;
+        }
+        Value::Obj(value) => {
+            let value = value.borrow();
+            let base = ScriptValueBase {
+                data_type: value.data_type as i32,
+                scope: meta.scope,
+                is_array: value.is_array,
+                ref_count: meta.ref_count,
+            };
+            walk_script_value_base(sink, base);
+            if value.is_array {
+                let (blank_meta, value_meta) = match &meta.nested {
+                    ValueWalkNested::Array { blank_base, values } => {
+                        (blank_base.as_deref(), values)
+                    }
+                    nested => {
+                        return Err(ScriptChannelError::ValueShapeMismatch {
+                            what,
+                            live: "array",
+                            metadata: nested_name(nested),
+                        });
+                    }
+                };
+                let blank =
+                    value
+                        .blank_base
+                        .as_deref()
+                        .ok_or(ScriptChannelError::ValueShapeMismatch {
+                            what,
+                            live: "array-without-blank-base",
+                            metadata: "array",
+                        })?;
+                walk_bhs_value(sink, "ScriptArray.blank_base", Some(blank), blank_meta)?;
+                require_parallel_len("ScriptArray.values", value.values.len(), value_meta.len())?;
+                walk_i32(
+                    sink,
+                    checked_count("ScriptArray.values", value.values.len())?,
+                );
+                for (slot, slot_meta) in value.values.iter().zip(value_meta) {
+                    let slot = slot.borrow();
+                    walk_bhs_value(
+                        sink,
+                        "ScriptArray.values[]",
+                        Some(&slot),
+                        slot_meta.as_ref(),
+                    )?;
+                }
+            } else {
+                let value_meta = match &meta.nested {
+                    ValueWalkNested::Object { values } => values,
+                    nested => {
+                        return Err(ScriptChannelError::ValueShapeMismatch {
+                            what,
+                            live: "object",
+                            metadata: nested_name(nested),
+                        });
+                    }
+                };
+                require_parallel_len("ScriptObject.values", value.values.len(), value_meta.len())?;
+                walk_i32(
+                    sink,
+                    checked_count("ScriptObject.values", value.values.len())?,
+                );
+                for (slot, slot_meta) in value.values.iter().zip(value_meta) {
+                    let slot = slot.borrow();
+                    walk_bhs_value(
+                        sink,
+                        "ScriptObject.values[]",
+                        Some(&slot),
+                        slot_meta.as_ref(),
+                    )?;
+                }
+            }
+        }
+        Value::Null => unreachable!("null returned above"),
+    }
+    Ok(())
+}
+
+fn walk_bhs_values<'a, S: WalkSink>(
+    sink: &mut S,
+    what: &'static str,
+    values: impl IntoIterator<Item = Option<&'a Value>>,
+    len: usize,
+    metadata: &[Option<ValueWalkMeta>],
+) -> Result<(), ScriptChannelError> {
+    require_parallel_len(what, len, metadata.len())?;
+    walk_i32(sink, checked_count(what, len)?);
+    for (value, meta) in values.into_iter().zip(metadata) {
+        walk_bhs_value(sink, what, value, meta.as_ref())?;
+    }
+    Ok(())
+}
+
+fn walk_bhs_script<S: WalkSink>(
+    sink: &mut S,
+    script: &BhsScript,
+    meta: &BhsScriptWalkMeta,
+) -> Result<(), ScriptChannelError> {
+    walk_bhs_values(
+        sink,
+        "Script.static_vars",
+        script.statics.iter().map(Option::as_ref),
+        script.statics.len(),
+        &meta.statics,
+    )?;
+    walk_dynamic_bit_mask(
+        sink,
+        DynamicBitMask {
+            bits: script.trigger_count,
+            size: checked_count("Script.trigger_bits", script.trigger_bits.len())?,
+            bytes: &script.trigger_bits,
+        },
+    )?;
+
+    let params: Vec<i32> = script.params.iter().map(|&value| value as i32).collect();
+    walk_simple_i32(
+        sink,
+        "Script.params",
+        SimpleI32Array {
+            shape: array_shape(meta.params),
+            elements: &params,
+        },
+    )?;
+    walk_simple_u8(
+        sink,
+        "Script.refs",
+        SimpleU8Array {
+            shape: array_shape(meta.refs),
+            elements: &script.refs,
+        },
+    )?;
+    walk_rust_string_array(
+        sink,
+        "Script.trigger_names",
+        meta.trigger_names,
+        &script.trigger_names,
+    )?;
+    walk_rust_string_array(sink, "Script.var_names", meta.var_names, &script.var_names)?;
+    walk_rust_string_array(
+        sink,
+        "Script.static_var_names",
+        meta.static_var_names,
+        &script.static_var_names,
+    )?;
+    walk_rust_string(sink, &script.name)?;
+    walk_i32(sink, script.entry as i32);
+    walk_i32(sink, script.return_type as i32);
+    walk_i32(sink, script.script_type as i32);
+    Ok(())
+}
+
+fn walk_bhs_file<S: WalkSink>(
+    sink: &mut S,
+    file: &BhsScriptFile,
+    meta: &BhsScriptFileWalkMeta,
+) -> Result<(), ScriptChannelError> {
+    walk_simple_u8(
+        sink,
+        "ScriptFile.code",
+        SimpleU8Array {
+            shape: array_shape(meta.code),
+            elements: &file.code,
+        },
+    )?;
+
+    require_parallel_len(
+        "ScriptFile.scripts",
+        file.scripts.len(),
+        meta.script_meta.len(),
+    )?;
+    let count = checked_count("ScriptFile.scripts", file.scripts.len())?;
+    walk_i32(sink, count);
+    if count != 0 {
+        validate_shape(
+            "ScriptFile.scripts",
+            array_shape(meta.scripts),
+            file.scripts.len(),
+        )?;
+        walk_array_header(sink, array_shape(meta.scripts));
+        for _ in &file.scripts {
+            sink.walk(&[1]);
+        }
+        walk_i32(sink, meta.scripts.capacity);
+        walk_u16(sink, meta.scripts.grow);
+        for (script, script_meta) in file.scripts.iter().zip(&meta.script_meta) {
+            walk_bhs_script(sink, script, script_meta)?;
+        }
+    }
+
+    walk_bhs_values(
+        sink,
+        "ScriptFile.const_pool",
+        file.const_pool.iter().map(Some),
+        file.const_pool.len(),
+        &meta.const_pool,
+    )?;
+    walk_simple_i32(
+        sink,
+        "ScriptFile.linked_files",
+        SimpleI32Array {
+            shape: array_shape(meta.linked_files),
+            elements: &meta.linked_file_indices,
+        },
+    )?;
+    require_parallel_len(
+        "ScriptFile.linked_files",
+        file.linked_file_names.len(),
+        meta.linked_file_indices.len(),
+    )?;
+    Ok(())
+}
+
+/// Project the authoritative `don-bhs` program state onto retail checksum channel 15.
+///
+/// Logical payloads come from the live VM-owned [`BhsProgram`]. Container headers and
+/// `ScriptType` ownership fields come from its independently recovered sidecar. Any
+/// missing or stale parallel state is rejected before a checksum can be installed.
+pub fn checksum_program(program: &BhsProgram) -> Result<ScriptChannelChecksum, ScriptChannelError> {
+    let meta = program
+        .walk_meta()
+        .ok_or(ScriptChannelError::MissingProgramWalkMetadata)?;
+    require_parallel_len("Program.files", program.files.len(), meta.files.len())?;
+
+    let mut adler = Adler32::new();
+    walk_i32(
+        &mut adler,
+        checked_count("ScriptFile::script_files", program.files.len())?,
+    );
+    for (file, file_meta) in program.files.iter().zip(&meta.files) {
+        walk_bhs_file(&mut adler, file, file_meta)?;
+    }
+    Ok(ScriptChannelChecksum {
+        checksum: adler.value(),
+        bytes_walked: adler.bytes,
+        script_files: program.files.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_bhs::program::{ProgramWalkMeta, ScriptFileWalkMeta, ScriptWalkMeta};
 
     #[derive(Default)]
     struct Bytes(Vec<u8>);
@@ -588,7 +963,7 @@ mod tests {
             base: ScriptValueBase {
                 data_type: 2,
                 scope: 0x0102,
-                is_ref: true,
+                is_array: true,
                 ref_count: 0x3344,
             },
             value: 0x5566_7788,
@@ -769,7 +1144,7 @@ mod tests {
             base: ScriptValueBase {
                 data_type: 3,
                 scope: 0,
-                is_ref: false,
+                is_array: false,
                 ref_count: 1,
             },
             bits: 0x7fc0_0001,
@@ -778,7 +1153,7 @@ mod tests {
             base: ScriptValueBase {
                 data_type: 3,
                 scope: 0,
-                is_ref: false,
+                is_array: false,
                 ref_count: 1,
             },
             bits: 0x7fc0_0002,
@@ -790,5 +1165,179 @@ mod tests {
         assert_ne!(bytes_a.0, bytes_b.0);
         assert_eq!(&bytes_a.0[8..], &[1, 0, 0xc0, 0x7f]);
         assert_eq!(&bytes_b.0[8..], &[2, 0, 0xc0, 0x7f]);
+    }
+
+    fn captured_empty_main_program() -> BhsProgram {
+        // `Compiler::compile` capture from the supported shipped image
+        // sha256 30478a44...25079. The logical bytes already live in the compiler
+        // differential; this adds the checksum-visible Array headers measured from
+        // that same in-memory ScriptFile.
+        let code = vec![0x47, 0, 0, 0, 0, 0x28, 0xad, 0x7b, 0x05, 0, 0x3e];
+        BhsProgram::single(BhsScriptFile {
+            code,
+            scripts: vec![BhsScript {
+                name: "empty_main".into(),
+                return_type: 0x0005_7bad,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .with_walk_meta(ProgramWalkMeta {
+            files: vec![ScriptFileWalkMeta {
+                code: ProgramArrayWalkMeta {
+                    capacity: 11,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                scripts: ProgramArrayWalkMeta {
+                    capacity: 1,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                script_meta: vec![ScriptWalkMeta {
+                    params: ProgramArrayWalkMeta {
+                        grow: u16::MAX,
+                        ..Default::default()
+                    },
+                    refs: ProgramArrayWalkMeta {
+                        grow: u16::MAX,
+                        ..Default::default()
+                    },
+                    trigger_names: ProgramArrayWalkMeta {
+                        grow: u16::MAX,
+                        ..Default::default()
+                    },
+                    var_names: ProgramArrayWalkMeta {
+                        grow: u16::MAX,
+                        ..Default::default()
+                    },
+                    static_var_names: ProgramArrayWalkMeta {
+                        grow: u16::MAX,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                linked_files: ProgramArrayWalkMeta {
+                    grow: u16::MAX,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+        })
+    }
+
+    #[test]
+    fn captured_program_projection_matches_the_structural_walker() {
+        let program = captured_empty_main_program();
+        let got = checksum_program(&program).unwrap();
+
+        let script = Script {
+            static_vars: &[],
+            trigger_bits: DynamicBitMask {
+                bits: 0,
+                size: 0,
+                bytes: &[],
+            },
+            params: empty_i32(),
+            refs: empty_u8(),
+            trigger_names: empty_strings(),
+            var_names: empty_strings(),
+            static_var_names: empty_strings(),
+            name: WalkString {
+                utf16: &[
+                    b'e' as u16,
+                    b'm' as u16,
+                    b'p' as u16,
+                    b't' as u16,
+                    b'y' as u16,
+                    b'_' as u16,
+                    b'm' as u16,
+                    b'a' as u16,
+                    b'i' as u16,
+                    b'n' as u16,
+                ],
+            },
+            offset: 0,
+            return_type: 0x0005_7bad,
+            script_type: 0,
+        };
+        let scripts = [Some(script)];
+        let files = [ScriptFile {
+            code: SimpleU8Array {
+                shape: ArrayShape {
+                    capacity: 11,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                elements: &program.files[0].code,
+            },
+            scripts: ScriptPtrArray {
+                shape: ArrayShape {
+                    capacity: 1,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                elements: &scripts,
+            },
+            const_pool: &[],
+            linked_files: empty_i32(),
+        }];
+        let expected = checksum_script_runtime(&ScriptRuntime {
+            script_files: &files,
+        })
+        .unwrap();
+        assert_eq!(got, expected);
+        assert_eq!(got.bytes_walked, 120, "non-vacuous compiled image");
+    }
+
+    #[test]
+    fn live_static_payload_mutation_moves_the_program_channel() {
+        let mut program = BhsProgram::single(BhsScriptFile {
+            scripts: vec![BhsScript {
+                name: "tick".into(),
+                statics: vec![Some(Value::Int(1))],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .with_walk_meta(ProgramWalkMeta {
+            files: vec![ScriptFileWalkMeta {
+                scripts: ProgramArrayWalkMeta {
+                    capacity: 1,
+                    grow: u16::MAX,
+                    flags: 0,
+                },
+                script_meta: vec![ScriptWalkMeta {
+                    statics: vec![Some(ValueWalkMeta::scalar(3, 1))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        });
+        let before = checksum_program(&program).unwrap();
+        program.files[0].scripts[0].statics[0] = Some(Value::Int(2));
+        let after = checksum_program(&program).unwrap();
+        assert_ne!(before.checksum, after.checksum);
+        assert_eq!(before.bytes_walked, after.bytes_walked);
+    }
+
+    #[test]
+    fn program_projection_rejects_missing_and_stale_sidecars() {
+        let bare = BhsProgram::single(BhsScriptFile::default());
+        assert_eq!(
+            checksum_program(&bare),
+            Err(ScriptChannelError::MissingProgramWalkMetadata)
+        );
+
+        let mut stale = captured_empty_main_program();
+        stale.files[0].scripts.push(BhsScript::default());
+        assert_eq!(
+            checksum_program(&stale),
+            Err(ScriptChannelError::ProjectionLengthMismatch {
+                what: "ScriptFile.scripts",
+                live: 2,
+                metadata: 1,
+            })
+        );
     }
 }

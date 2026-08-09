@@ -9,6 +9,7 @@ description = "Replay-driven validation harness: feed a real .rcx command stream
 # `cargo test` here must never depend on the crates.io registry. Decompression
 # shells out to the system `gzip`, exactly as don-net's corpus tests do.
 [dependencies]
+don-bhs = { path = "../don-bhs" }
 don-net = { path = "../don-net" }
 don-sim = { path = "../don-sim" }
 
