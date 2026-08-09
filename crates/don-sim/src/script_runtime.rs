@@ -6,10 +6,11 @@
 //! objects, and the frame increment. This module supplies that exact producer boundary
 //! over [`don_bhs::Vm`].
 //!
-//! The 31 recovered utility builtins execute here. Their RNG operations share
-//! [`crate::rng::Random`] with the rest of the simulation. The 842 ScenarioFuncSet
-//! entries are deliberately not stubbed: reaching one returns [`ScriptRunError`] and
-//! the tick stops before any later subsystem runs.
+//! Supported utility builtins execute here, and their RNG operations share the main
+//! simulation stream. Scenario calls require a [`ScenarioHost`]; the exact timer,
+//! clock, map, age, and resource cohort recovered below performs real persistent work.
+//! Every other ScenarioFuncSet entry remains fail-closed, so an incomplete host cannot
+//! silently turn a script-bearing tick green.
 
 use std::fmt;
 
@@ -17,7 +18,8 @@ use don_bhs::{
     call_util, BuiltinDecl, Host, HostError, HostResult, Program, RuntimeError, Value, Vm, VmError,
 };
 
-use crate::rng::Random;
+use crate::systems::{economy, leaders};
+use crate::tick::Sim;
 
 /// Which of the two measured `Game::do_frame` script slots is running.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,12 +121,114 @@ pub struct ScriptOutput {
     pub newline: bool,
 }
 
+/// The mandatory simulation surface for a step-4 script run.
+///
+/// Retail routes utility RNG calls and every `ScenarioFuncSet` handler through the live
+/// `Game`/`World` singletons. Keeping those operations on one required host prevents a
+/// caller from executing bytecode against a detached clock or private random stream.
+pub trait ScenarioHost {
+    fn script_frame(&self) -> i32;
+    fn game_seconds(&self) -> i32;
+    fn map_size(&self) -> i32;
+    fn call_scenario(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult;
+    fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError>;
+    fn game_random_step(&mut self) -> Result<u32, HostError>;
+    fn game_random_seed(&self) -> Result<u32, HostError>;
+    fn set_game_random_seed(&mut self, seed: u32) -> Result<(), HostError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScriptTimer {
+    name: String,
+    expires_at: i32,
+}
+
+/// `ScenarioData::timers`, a `ScriptTimers : LinkList<String,int>` with at most 100
+/// entries. `ordered_insert` sorts by the expiry value and inserts before equal values.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ScriptTimers {
+    entries: Vec<ScriptTimer>,
+}
+
+impl ScriptTimers {
+    fn position(&self, name: &str) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|timer| timer.name.eq_ignore_ascii_case(name))
+    }
+
+    /// `ScenarioFuncSet::set_timer` `0x009e4bc0` ->
+    /// `ScriptTimers::add_timer` `0x00a049e0`.
+    fn set(&mut self, name: &str, duration: i32, now: i32) -> Result<i32, HostError> {
+        if !name.is_ascii() {
+            // Retail uses locale-sensitive `_wcsicmp`. The shipped reachable timer IDs
+            // are ASCII; do not invent a Unicode case-fold for the unresolved domain.
+            return Err(HostError::Unimplemented);
+        }
+        if duration <= 0 || name.is_empty() {
+            return Ok(-1);
+        }
+        // The count gate precedes the seek/remove sequence in the shipped function, so
+        // even replacement fails when the list already contains 100 timers.
+        if self.entries.len() >= 100 {
+            return Ok(-1);
+        }
+        if let Some(index) = self.position(name) {
+            self.entries.remove(index);
+        }
+        let expires_at = now.wrapping_add(duration);
+        let insert_at = self
+            .entries
+            .iter()
+            .position(|timer| timer.expires_at >= expires_at)
+            .unwrap_or(self.entries.len());
+        self.entries.insert(
+            insert_at,
+            ScriptTimer {
+                name: name.to_string(),
+                expires_at,
+            },
+        );
+        Ok(1)
+    }
+
+    /// `ScriptTimers::remove_timer` `0x00a04b20`.
+    fn stop(&mut self, name: &str) -> Result<i32, HostError> {
+        if !name.is_ascii() {
+            return Err(HostError::Unimplemented);
+        }
+        let Some(index) = self.position(name) else {
+            return Ok(-1);
+        };
+        self.entries.remove(index);
+        Ok(1)
+    }
+
+    /// `ScriptTimers::check` `0x00a04b80`. An expired timer is removed before the
+    /// function returns 1; a live timer remains and returns 0; absence returns -1.
+    fn expired(&mut self, name: &str, now: i32) -> Result<i32, HostError> {
+        if !name.is_ascii() {
+            return Err(HostError::Unimplemented);
+        }
+        let Some(index) = self.position(name) else {
+            return Ok(-1);
+        };
+        if self.entries[index].expires_at <= now {
+            self.entries.remove(index);
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+}
+
 /// Persistent compiled code plus its cross-frame statics and trigger bits.
 pub struct ScriptRuntime {
     program: Program,
     game: Option<ScriptBinding>,
     general_powers: Option<ScriptBinding>,
     output: Vec<ScriptOutput>,
+    timers: ScriptTimers,
     calls: u64,
     bytecodes: u64,
 }
@@ -146,6 +250,7 @@ impl ScriptRuntime {
             game,
             general_powers,
             output: Vec::new(),
+            timers: ScriptTimers::default(),
             calls: 0,
             bytecodes: 0,
         })
@@ -168,14 +273,14 @@ impl ScriptRuntime {
     }
 
     /// Execute the two `Game::do_frame` call sites in recovered order.
-    pub(crate) fn run_frame(
+    pub(crate) fn run_frame<H: ScenarioHost>(
         &mut self,
-        frame: i32,
-        random: &mut Random,
+        host: &mut H,
     ) -> Result<ScriptFrameRun, ScriptRunError> {
+        let frame = host.script_frame();
         let mut work = ScriptFrameRun::default();
         if let Some(binding) = self.game.clone() {
-            let bytecodes = self.run_one(ScriptSlot::Game, &binding, random)?;
+            let bytecodes = self.run_one(ScriptSlot::Game, &binding, host)?;
             work.calls += 1;
             work.bytecodes += bytecodes;
             self.calls += 1;
@@ -183,7 +288,7 @@ impl ScriptRuntime {
         }
         if frame > 0 {
             if let Some(binding) = self.general_powers.clone() {
-                let bytecodes = self.run_one(ScriptSlot::GeneralPowers, &binding, random)?;
+                let bytecodes = self.run_one(ScriptSlot::GeneralPowers, &binding, host)?;
                 work.calls += 1;
                 work.bytecodes += bytecodes;
                 self.calls += 1;
@@ -193,14 +298,15 @@ impl ScriptRuntime {
         Ok(work)
     }
 
-    fn run_one(
+    fn run_one<H: ScenarioHost>(
         &mut self,
         slot: ScriptSlot,
         binding: &ScriptBinding,
-        random: &mut Random,
+        scenario: &mut H,
     ) -> Result<u64, ScriptRunError> {
         let mut host = SimScriptHost {
-            random,
+            scenario,
+            timers: &mut self.timers,
             output: &mut self.output,
         };
         let mut vm = Vm::new(&mut self.program, &mut host);
@@ -252,34 +358,62 @@ fn validate_binding(program: &Program, binding: &ScriptBinding) -> Result<(), Sc
     Ok(())
 }
 
-struct SimScriptHost<'a> {
-    random: &'a mut Random,
+struct SimScriptHost<'a, H> {
+    scenario: &'a mut H,
+    timers: &'a mut ScriptTimers,
     output: &'a mut Vec<ScriptOutput>,
 }
 
-impl Host for SimScriptHost<'_> {
+fn string_arg(args: &[Value], index: usize) -> Result<&str, HostError> {
+    match args.get(index) {
+        Some(Value::Str(value)) => Ok(value.as_str()),
+        _ => Err(HostError::BadArgs(
+            "scenario string argument has wrong type",
+        )),
+    }
+}
+
+impl<H: ScenarioHost> Host for SimScriptHost<'_, H> {
     fn call(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match call_util(self, decl, args) {
             Some(result) => result,
-            None => Err(HostError::Unimplemented),
+            None => match decl.index {
+                // `ScenarioFuncSet::{set,stop}_timer/timer_expired`, indices 77..79.
+                77 => Ok(Value::Int(self.timers.set(
+                    string_arg(args, 0)?,
+                    args[1].as_int(),
+                    self.scenario.game_seconds(),
+                )?)),
+                78 => Ok(Value::Int(self.timers.stop(string_arg(args, 0)?)?)),
+                79 => Ok(Value::Int(
+                    self.timers
+                        .expired(string_arg(args, 0)?, self.scenario.game_seconds())?,
+                )),
+                // `get_map_size` `0x009e4cb0`: `WorldData::xs << 2`.
+                80 => Ok(Value::Int(self.scenario.map_size())),
+                // `time_later_than` `0x009ee120`: Game::seconds / 60 >= argument.
+                351 => Ok(Value::Int(
+                    (self.scenario.game_seconds() / 60 >= args[0].as_int()) as i32,
+                )),
+                _ => self.scenario.call_scenario(decl, args),
+            },
         }
     }
 
     fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError> {
-        Ok(self.random.get(lo, hi))
+        self.scenario.game_random(lo, hi)
     }
 
     fn game_random_step(&mut self) -> Result<u32, HostError> {
-        Ok(self.random.advance() as u32)
+        self.scenario.game_random_step()
     }
 
     fn game_random_seed(&self) -> Result<u32, HostError> {
-        Ok(self.random.state() as u32)
+        self.scenario.game_random_seed()
     }
 
     fn set_game_random_seed(&mut self, seed: u32) -> Result<(), HostError> {
-        self.random.reseed(seed as i32);
-        Ok(())
+        self.scenario.set_game_random_seed(seed)
     }
 
     fn script_print(&mut self, value: &str, newline: bool) -> Result<(), HostError> {
@@ -292,4 +426,199 @@ impl Host for SimScriptHost<'_> {
 
     // `rand_seed(-1)` reads wall-clock state in retail. A deterministic headless sim
     // has no grounded substitute, so the Host default deliberately fails closed.
+}
+
+fn resource_index(name: &str) -> Result<Option<usize>, HostError> {
+    // Type indices 0..5 are fixed by the PDB enum and the first six shipped
+    // `resourcerules.xml` entries. `String::operator==` `0x00a1f140` compares names
+    // case-insensitively, hence the ASCII-insensitive spelling match here.
+    if !name.is_ascii() {
+        return Err(HostError::Unimplemented);
+    }
+    const NAMES: [&str; economy::NUM_RESOURCES] =
+        ["Food", "Timber", "Wealth", "Knowledge", "Metal", "Oil"];
+    Ok(NAMES
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(name)))
+}
+
+fn leader_resource_args(args: &[Value]) -> Result<(usize, Option<usize>, i32), HostError> {
+    let who = args[0].as_int().wrapping_sub(1) as u32;
+    let resource = resource_index(string_arg(args, 1)?)?;
+    Ok((who as usize, resource, args[2].as_int()))
+}
+
+impl ScenarioHost for Sim {
+    fn script_frame(&self) -> i32 {
+        self.world.frame
+    }
+
+    fn game_seconds(&self) -> i32 {
+        self.world.seconds
+    }
+
+    fn map_size(&self) -> i32 {
+        self.map.world.xs.wrapping_shl(2)
+    }
+
+    fn call_scenario(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
+        match decl.index {
+            // `map_is_land` `0x009e4d90`: bounds against tile dimensions, then
+            // `(low_byte(tdata[y * tile_xs + x]) & 0x30) != 0x20`.
+            83 => {
+                let x = args[0].as_int();
+                let y = args[1].as_int();
+                if x < 0 || y < 0 || x >= self.map.world.tile_xs || y >= self.map.world.tile_ys {
+                    return Ok(Value::Int(-1));
+                }
+                let index = (y * self.map.world.tile_xs + x) as usize;
+                Ok(Value::Int(
+                    ((self.map.world.tdata[index] as u8 & 0x30) != 0x20) as i32,
+                ))
+            }
+            // `num_players` `0x009e5df0`: count `Leader::flags & 1` across all slots.
+            142 => Ok(Value::Int(
+                self.step8
+                    .leaders
+                    .iter()
+                    .filter(|leader| leader.flags & leaders::flag::IN_GAME != 0)
+                    .count() as i32,
+            )),
+            // `age` `0x009e8f50`: both Leader flags are required, then the alternate
+            // encrypted age slot at econ +0xdc is returned.
+            248 => {
+                let who = args[0].as_int().wrapping_sub(1) as u32;
+                let Some(flags) = self
+                    .step8
+                    .leaders
+                    .get(who as usize)
+                    .map(|leader| leader.flags)
+                else {
+                    return Ok(Value::Int(-1));
+                };
+                if flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                    != (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                {
+                    return Ok(Value::Int(-1));
+                }
+                let leader = &self.leaders[who as usize];
+                Ok(Value::Int(leader.econ.age_alt))
+            }
+            // `is_defeated` `0x009e9070`: active slot, then bit 6 of the low flags byte.
+            252 => {
+                let who = args[0].as_int().wrapping_sub(1) as u32;
+                let Some(flags) = self
+                    .step8
+                    .leaders
+                    .get(who as usize)
+                    .map(|leader| leader.flags)
+                else {
+                    return Ok(Value::Int(-1));
+                };
+                if flags & leaders::flag::IN_GAME == 0 {
+                    return Ok(Value::Int(-1));
+                }
+                Ok(Value::Int(((flags >> 6) & 1) as i32))
+            }
+            // `give_good` `0x009fb590`: leader active, resource type index < 6,
+            // wrapping add to the decoded stockpile.
+            661 => {
+                let (who, resource, amount) = leader_resource_args(args)?;
+                let Some(leader) = self.leaders.get_mut(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource else {
+                    return Ok(Value::Int(-1));
+                };
+                if !leader.active {
+                    return Ok(Value::Int(-1));
+                }
+                leader.econ.stockpile[resource] =
+                    leader.econ.stockpile[resource].wrapping_add(amount);
+                Ok(Value::Int(1))
+            }
+            // `set_good` `0x009fb6f0`: the same gates plus a non-negative value.
+            663 => {
+                let (who, resource, amount) = leader_resource_args(args)?;
+                let Some(leader) = self.leaders.get_mut(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource else {
+                    return Ok(Value::Int(-1));
+                };
+                if !leader.active || amount < 0 {
+                    return Ok(Value::Int(-1));
+                }
+                leader.econ.stockpile[resource] = amount;
+                Ok(Value::Int(1))
+            }
+            // `set_base_rate` `0x009fbb80`: both Leader flags, then `num << 4` at
+            // LeaderData +0x4b0. `DoGatherContext::extra_income` owns that exact term.
+            669 => {
+                let (who, resource, amount) = leader_resource_args(args)?;
+                let Some(leader) = self.leaders.get_mut(who) else {
+                    return Ok(Value::Int(-1));
+                };
+                let Some(resource) = resource else {
+                    return Ok(Value::Int(-1));
+                };
+                let flags = self.step8.leaders[who].flags;
+                if flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                    != (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                {
+                    return Ok(Value::Int(-1));
+                }
+                leader.gather_ctx.extra_income[resource] = amount.wrapping_shl(4);
+                Ok(Value::Int(1))
+            }
+            _ => Err(HostError::Unimplemented),
+        }
+    }
+
+    fn game_random(&mut self, lo: i32, hi: i32) -> Result<i32, HostError> {
+        Ok(self.world.random.get(lo, hi))
+    }
+
+    fn game_random_step(&mut self) -> Result<u32, HostError> {
+        Ok(self.world.random.advance() as u32)
+    }
+
+    fn game_random_seed(&self) -> Result<u32, HostError> {
+        Ok(self.world.random.state() as u32)
+    }
+
+    fn set_game_random_seed(&mut self, seed: u32) -> Result<(), HostError> {
+        self.world.random.reseed(seed as i32);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScriptTimers;
+
+    #[test]
+    fn timer_capacity_gate_precedes_replacement_and_expiry_consumes() {
+        let mut timers = ScriptTimers::default();
+        for i in 0..100 {
+            assert_eq!(timers.set(&format!("timer-{i}"), 100 - i, 0).unwrap(), 1);
+        }
+        assert!(
+            timers
+                .entries
+                .windows(2)
+                .all(|pair| pair[0].expires_at <= pair[1].expires_at),
+            "ordered_insert must retain expiry ordering"
+        );
+
+        // Retail checks count == 100 before seeking and removing a duplicate.
+        assert_eq!(timers.set("TIMER-0", 1, 0).unwrap(), -1);
+        assert_eq!(timers.expired("timer-0", 99).unwrap(), 0);
+        assert_eq!(timers.expired("TIMER-0", 100).unwrap(), 1);
+        assert_eq!(timers.expired("timer-0", 100).unwrap(), -1);
+
+        // Once expiry consumed the old entry, replacement has capacity again.
+        assert_eq!(timers.set("timer-0", 1, 100).unwrap(), 1);
+        assert_eq!(timers.expired("timer-0", 101).unwrap(), 1);
+    }
 }

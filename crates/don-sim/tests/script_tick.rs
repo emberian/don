@@ -1,10 +1,13 @@
+use don_bhs::chunk::load_program;
 use don_bhs::disasm::{asm, asm_len};
 use don_bhs::{find_builtin, Program, Script, ScriptFile, ScriptTy, Value, VarRef, VmError};
+use don_bhs_cc::sema::{self, Severity};
 use don_sim::rng::Random;
 use don_sim::script_runtime::{
     ScriptBindError, ScriptBinding, ScriptFailure, ScriptOutput, ScriptRuntime, ScriptSlot,
 };
 use don_sim::tick::{Sim, StepRun};
+use std::path::Path;
 
 fn void_script(name: &str, entry: u32) -> Script {
     Script {
@@ -65,8 +68,89 @@ fn one_builtin_program(name: &str, args: &[Value]) -> Program {
     })
 }
 
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_chunk_string(out: &mut Vec<u8>, value: &str) {
+    let units = value.encode_utf16().collect::<Vec<_>>();
+    push_u32(out, units.len() as u32);
+    for unit in units {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+}
+
+fn chunk(tag: u16, payload: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + payload.len());
+    push_u32(&mut out, (8 + payload.len()) as u32);
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&payload);
+    out
+}
+
+fn loaded_one_builtin_program(name: &str, args: &[Value]) -> Program {
+    let compiled = one_builtin_program(name, args);
+    let file = &compiled.files[0];
+
+    let mut script = Vec::new();
+    push_u32(&mut script, 0);
+    push_chunk_string(&mut script, "game_tick");
+    push_u32(&mut script, 0); // entry
+    push_u32(&mut script, 0); // script_type
+    push_u32(&mut script, ScriptTy::Void.tag());
+    push_u32(&mut script, 0); // trigger_count
+    push_u32(&mut script, 0); // param_count
+
+    let mut children = vec![chunk(2, script)];
+    for value in &file.const_pool {
+        let mut payload = Vec::new();
+        match value {
+            Value::Int(value) => {
+                push_u32(&mut payload, ScriptTy::Int.tag());
+                push_u32(&mut payload, *value as u32);
+            }
+            Value::Str(value) => {
+                push_u32(&mut payload, ScriptTy::Str.tag());
+                push_chunk_string(&mut payload, value);
+            }
+            _ => panic!("loaded fixture uses only shipped scalar chunk constants"),
+        }
+        children.push(chunk(3, payload));
+    }
+    children.push(chunk(4, file.code.clone()));
+
+    let size = 8 + children.iter().map(Vec::len).sum::<usize>();
+    let mut root = Vec::with_capacity(size);
+    push_u32(&mut root, size as u32);
+    root.extend_from_slice(&0u16.to_le_bytes());
+    root.extend_from_slice(&(children.len() as u16).to_le_bytes());
+    for child in children {
+        root.extend_from_slice(&child);
+    }
+    load_program(&root, "loaded_scenario_runtime.bhs").unwrap()
+}
+
 fn game_runtime(program: Program) -> ScriptRuntime {
     ScriptRuntime::new(program, Some(ScriptBinding::new(0, "game_tick")), None).unwrap()
+}
+
+fn compile_source_fixture(name: &str) -> Program {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
+    let includes = sema::IncludePath::with_roots([path.parent().unwrap().to_path_buf()]);
+    let unit = sema::analyze(&path, &includes).unwrap();
+    let (program, codegen_diags, _) = don_bhs_cc::codegen::compile(&unit);
+    let errors = unit
+        .diags
+        .iter()
+        .chain(codegen_diags.iter())
+        .filter(|diag| diag.severity == Severity::Error)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    program
 }
 
 fn static_counter_program() -> Program {
@@ -178,6 +262,71 @@ fn utility_rng_uses_the_simulation_stream() {
     let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
     assert_eq!(trace.steps[4], StepRun::Executed);
     assert_eq!(sim.world.random.state(), expected.state());
+}
+
+#[test]
+fn ordinary_source_runtime_mutates_world_and_persists_retail_timers() {
+    let program = compile_source_fixture("scenario_runtime.bhs");
+    let mut scripts =
+        ScriptRuntime::new(program, Some(ScriptBinding::new(0, "scenario_tick")), None).unwrap();
+    let mut sim = Sim::new(0x1234, 8);
+    sim.activate(0);
+    sim.activate(1);
+    sim.leaders[0].econ.age_alt = 4;
+    // The first queried tile has retail's water mask and the second remains land.
+    // A constant map answer changes the asserted Oil stockpile in either direction.
+    sim.map.world.tdata[0] = 0x20;
+    // `is_defeated` reads bit 6 from the exact Leader flags byte.
+    sim.step8.leaders[0].flags |= 1 << 6;
+
+    let first = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(first.steps[4], StepRun::Executed);
+    assert!(first.work[4] > 0, "source-compiled script did no VM work");
+    assert_eq!(
+        sim.leaders[0].econ.stockpile,
+        [15, 32, 2, 4, 101, 2],
+        "map, player, leader, clock, timer, and resource handlers all feed live state"
+    );
+    assert_eq!(sim.leaders[0].gather_ctx.extra_income[2], 3 << 4);
+
+    // The timer was set at Game::seconds 0 for one second. Step 23 reaches second 1
+    // only after frame 14; the next step-4 call observes and consumes the timer.
+    sim.run_with_scripts(&mut scripts, 14).unwrap();
+    assert_eq!(sim.world.seconds, 1);
+    assert_eq!(sim.leaders[0].econ.stockpile[0], 15);
+
+    let expiry = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(expiry.steps[4], StepRun::Executed);
+    assert_eq!(sim.leaders[0].econ.stockpile[0], 22);
+
+    // `ScriptTimers::check` removes an expired entry. The following absent check
+    // returns -1, so the source branch does not award the resource twice.
+    sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(sim.leaders[0].econ.stockpile[0], 22);
+    assert_eq!(
+        scripts.program().files[0].scripts[0].statics,
+        [Some(Value::Int(2))]
+    );
+}
+
+#[test]
+fn retail_chunk_loader_program_uses_the_same_mandatory_world_host() {
+    let program = loaded_one_builtin_program(
+        "give_good",
+        &[Value::Int(1), Value::str("Food"), Value::Int(9)],
+    );
+    assert!(
+        program.walk_meta().is_some(),
+        "test must execute the normal chunk-loader producer, not a hand-built Program"
+    );
+    let mut scripts = game_runtime(program);
+    let mut sim = Sim::new(0x5678, 8);
+    sim.activate(0);
+
+    let trace = sim.do_frame_with_scripts(&mut scripts).unwrap();
+    assert_eq!(trace.steps[4], StepRun::Executed);
+    assert!(trace.work[4] > 0);
+    assert_eq!(sim.leaders[0].econ.stockpile[0], 9);
 }
 
 #[test]

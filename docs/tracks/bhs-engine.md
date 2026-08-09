@@ -446,21 +446,56 @@ error return only for debt discovery; it is never the execution default.
 
 ### 5.2 Builtin coverage today
 
-The three shipped scripts in `ron-data/ai-scripts/` call **55 distinct builtins**
-(extracted by matching call syntax against the 813 registered names, excluding the 10
-functions the scripts define themselves). All 55 resolve against the table — there is
-a test, `every_shipped_script_builtin_resolves`, that fails if any does not.
+`don_bhs::call_util` implements 25 of the 31 utility registrations. The exclusions are
+explicit: the three VM-owned trigger functions, unrecovered `parse`, and two unresolved
+aggregate operations. `rand_int`, `rand_real`, seed reads/writes, and string printing are
+routed through the host; in `don-sim` this is the main `World::random` stream, never a
+private script RNG.
 
-**None of the 55 is implemented yet**, and that is deliberate: they are all
-simulation queries and actuators (`num_cities`, `place_building_with_cost`,
-`train_unit_with_cost`, `unit_move_order`, …) whose semantics belong to `don-sim`,
-which this lane must not edit. The `Host` trait is the seam; `NullHost` plus
-`Coverage` gives the next lane an exact, ordered work list.
+`don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
+The normal source compiler produces a `Program`, the chunk loader produces the same
+`Program`, and `ScriptRuntime` runs either producer against that live host. Twelve
+`ScenarioFuncSet` registrations have exact executable bodies:
 
-One that needs care when it *is* implemented: **`rand_int` draws from
-`GameAccess::game_random`, the main simulation stream** — a script rolling dice
-perturbs exactly the sequence the rest of the project reproduces. `Host::game_random`
-exists to force that routing to be explicit.
+| index | builtin | recovered state/action |
+|---:|---|---|
+| 77 | `set_timer` | `Game::seconds + duration`; replace by case-insensitive name; 100-entry pre-replacement cap |
+| 78 | `stop_timer` | remove by case-insensitive name; return 1 or -1 |
+| 79 | `timer_expired` | compare against `Game::seconds`; expired checks consume the timer |
+| 80 | `get_map_size` | `WorldData::xs << 2` (`0x009e4cb0`) |
+| 83 | `map_is_land` | tile bounds, then the exact `tdata` mask (`0x009e4d90`) |
+| 142 | `num_players` | count `Leader::flags & 1` across the eight slots (`0x009e5df0`) |
+| 248 | `age` | both Leader flag bits, then decoded `LeaderDataEncrypt+0xdc` (`0x009e8f50`) |
+| 252 | `is_defeated` | bit 6 of the active Leader's low flags byte (`0x009e9070`) |
+| 351 | `time_later_than` | signed `Game::seconds / 60 >= argument` (`0x009ee120`) |
+| 661 | `give_good` | wrapping add to one of the six decoded stockpiles (`0x009fb590`) |
+| 663 | `set_good` | non-negative replacement of one decoded stockpile (`0x009fb6f0`) |
+| 669 | `set_base_rate` | `num << 4` at `LeaderData+0x4b0`, the live gather extra-income term (`0x009fbb80`) |
+
+The current 363-file census contains 4,824 calls to those twelve registrations. Together
+with the 791 calls already covered by utility builtins, the strict runtime now handles
+5,615 of 39,957 measured shipped-corpus call sites (**14.05%**, up from **1.98%**).
+That is reachability coverage, not a claim that any complete retail scenario runs yet.
+
+Timer storage follows the PDB's `ScriptTimers : LinkList<String,int>` and the shipped
+`add_timer` / `remove_timer` / `check` bodies at `0x00a049e0`, `0x00a04b20`, and
+`0x00a04b80`. The ASCII timer-name subdomain covers the shipped reachable IDs; a
+non-ASCII case fold remains fail-closed because retail delegates it to locale-sensitive
+`_wcsicmp`.
+
+`crates/don-sim/tests/fixtures/scenario_runtime.bhs` is compiled through `don-bhs-cc`
+and run through the real tick. It proves non-vacuous bytecode work, shared map/clock/age
+queries, resource mutations that survive step 8, a live base-rate write, case-insensitive
+timer stop, delayed expiry, and consume-on-expiry. Changing the timer's comparison,
+removal, or tick placement changes the asserted world stockpile. A second focused test
+builds the recovered tag-0/tag-2/tag-3/tag-4 retail container, loads it through
+`don_bhs::chunk::load_program`, requires its channel-15 walk metadata, and executes its
+`give_good` call through the same mandatory host.
+
+The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
+830 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+authoritative game/scenario difficulty owner and `num_cities` lacks the live
+`LeaderData::city_num` field. They are not synthesized from nearby state.
 
 ---
 

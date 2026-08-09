@@ -1,0 +1,30 @@
+void scenario scenario_tick()
+{
+    static int phase = 0;
+
+    if (phase == 0) {
+        set_good(1, "Food", 10);
+        give_good(1, "Food", 5);
+        set_good(1, "Timber", get_map_size());
+        set_good(1, "Wealth", num_players());
+        set_good(1, "Knowledge", age(1));
+        set_good(1, "Oil", time_later_than(0));
+        give_good(1, "Oil", map_is_land(0, 0));
+        give_good(1, "Oil", map_is_land(1, 0));
+        set_base_rate(1, "Wealth", 3);
+
+        set_good(1, "Metal", 100);
+        set_timer("Stopped", 1);
+        give_good(1, "Metal", stop_timer("stopped"));
+        give_good(1, "Metal", timer_expired("STOPPED"));
+        give_good(1, "Metal", is_defeated(1));
+
+        set_timer("Gate", 1);
+        phase = 1;
+    }
+
+    if (timer_expired("gATE") == 1) {
+        give_good(1, "Food", 7);
+        phase = 2;
+    }
+}

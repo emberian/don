@@ -1155,7 +1155,7 @@ impl Sim {
         &mut self,
         runtime: &mut ScriptRuntime,
     ) -> Result<(StepRun, u32), ScriptRunError> {
-        let run = runtime.run_frame(self.world.frame, &mut self.world.random)?;
+        let run = runtime.run_frame(self)?;
         if run.calls == 0 {
             Ok((StepRun::Vacuous, 0))
         } else {

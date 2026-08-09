@@ -10,6 +10,7 @@ don-bhs = { path = "../don-bhs" }
 quick-xml = "0.38"
 
 [dev-dependencies]
+don-bhs-cc = { path = "../don-bhs-cc" }
 don-rules = { path = "../don-rules" }
 
 [[bin]]
