@@ -115,6 +115,12 @@ pub const COORD_HALF_TILE: i32 = 0x60;
 /// `Object` allocation.
 pub mod off {
     // -- Object / ObjectData ------------------------------------------------------------
+    /// `SubObjectData::o` — object index inside its owner's list.
+    pub const OBJECT_ID: usize = 10; // 0x0A
+    /// XOR-obfuscated `SubObjectData::x_internal`.
+    pub const X_INTERNAL: usize = 16; // 0x10
+    /// XOR-obfuscated `SubObjectData::y_internal`.
+    pub const Y_INTERNAL: usize = 20; // 0x14
     /// `ObjectData::myhits` — full (completed) max hit points.
     pub const MYHITS: usize = 32; // 0x20
     /// `ObjectData::damage` — accumulated damage; `hits_left = hits() - damage`.
@@ -1398,15 +1404,244 @@ pub trait QueueRoutingHost: QueueCompletionHost {
     fn parallel_slot_limit(&mut self, build: &BuildData, slot: usize) -> usize;
 }
 
-/// The three distinguishable unit-production exits from `Build::finished`.
+/// Exact `Objects::init_unit` call made at the head of `Build::train` (`0x0062F9D9`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitAllocationRequest {
+    pub owner: u8,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+    /// The final three `init_unit` parameters are all `-1` in this caller.
+    pub tail: [i32; 3],
+}
+
+/// Receipt from the world-owned unit allocator. Echoing the request prevents an adapter
+/// from silently allocating a different owner/type/position while reporting success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitAllocationReceipt {
+    pub request: UnitAllocationRequest,
+    /// Retail returns any negative value immediately; a non-negative value is the new
+    /// object index inside the owner's object list.
+    pub object_id: i32,
+}
+
+/// Common post-allocation placement/rally tail entered after `Unit::go_inside`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitPlacementRequest {
+    pub owner: u8,
+    pub type_index: i32,
+    pub object_id: i32,
+    pub producer_owner: u8,
+    pub producer_object_id: i32,
+    /// `ObjectTypeData::obj_masks & 0x200` (`'J'`, Holds Air), read after `go_inside`.
+    pub producer_holds_air: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitPlacementOutcome {
+    /// Placement/rally initialization completed and `Build::train` returns `object_id`.
+    Ready,
+    /// The air-host overflow path called `come_out`, killed the new unit, and returned `-1`.
+    DestroyedAtCapacity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitPlacementReceipt {
+    pub request: UnitPlacementRequest,
+    pub outcome: UnitPlacementOutcome,
+}
+
+/// Executed portion of `Build::train`. Even allocation failure is a completed
+/// `Build::finished` attempt: retail ignores `Build::train`'s return value and unqueues.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitTrainTransaction {
+    AllocationFailed {
+        request: UnitAllocationRequest,
+        returned_object_id: i32,
+    },
+    Initialized {
+        request: UnitAllocationRequest,
+        object_id: i32,
+        stance_inherited: bool,
+        placement: UnitPlacementOutcome,
+    },
+}
+
+/// The three pre-allocation gate families and the completed `Build::train` attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnitCompletionResult {
-    /// `Build::train(type)` ran and the queue may unqueue the completed record.
-    Trained,
-    /// Population availability rejected the spawn (`Build::finished` returns zero).
-    PopulationBlocked,
-    /// Support/placement/capacity rejected the spawn (`Build::finished` returns `-1`).
-    CapacityBlocked,
+    Completed(UnitTrainTransaction),
+    /// `control + UnitTypeData::control_cost > pop_cap`; retail returns zero.
+    PopulationBlocked {
+        required_control: i32,
+        control_cap: i32,
+    },
+    /// A caravan-counted type reached `LeaderData::get_caravan_limit(0)`.
+    CaravanCapacityBlocked {
+        units: i32,
+        limit: i32,
+    },
+    /// A non-helicopter trained at an Aircraft Carrier reached its host capacity.
+    AircraftCapacityBlocked {
+        aircraft: i32,
+        limit: i32,
+    },
+}
+
+/// Fail-closed adapter violations. Retail cannot return a receipt for a different request;
+/// these errors guard world integrations without inventing rollback after publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitCompletionError {
+    AllocationReceiptMismatch {
+        expected: UnitAllocationRequest,
+        observed: UnitAllocationRequest,
+    },
+    PlacementReceiptMismatch {
+        expected: UnitPlacementRequest,
+        observed: UnitPlacementRequest,
+    },
+}
+
+/// Mandatory leader/type/object boundary for the unit arm of `Build::finished` and the
+/// common head/tail of `Build::train`.
+pub trait UnitCompletionHost {
+    fn unit_control_cost(&mut self, type_index: i32) -> i32;
+    fn leader_control(&mut self, build: &BuildData) -> i32;
+    fn leader_control_cap(&mut self, build: &BuildData) -> i32;
+
+    fn uses_caravan_limit(&mut self, type_index: i32) -> bool;
+    fn trained_unit_count(&mut self, build: &BuildData, type_index: i32, queued: i32) -> i32;
+    fn caravan_limit(&mut self, build: &BuildData, queued: i32) -> i32;
+
+    fn producer_is_aircraft_carrier(&mut self, build: &BuildData) -> bool;
+    fn unit_is_helicopter(&mut self, type_index: i32) -> bool;
+    fn hosted_aircraft(&mut self, build: &BuildData, queued: i32) -> i32;
+    fn aircraft_limit(&mut self, build: &BuildData) -> i32;
+
+    /// `Objects::init_unit` (`0x0065E0C0`), the only checked failure before publication.
+    fn allocate_unit(&mut self, request: UnitAllocationRequest) -> UnitAllocationReceipt;
+    /// `ScenarioData::last_unit_built_o[owner] = object_id` (`0x0062FA16`).
+    fn publish_last_unit_built(&mut self, owner: u8, object_id: i32);
+    /// `LeaderData::last_unit_finished[type-50] = object_id` (`0x0062FA35`).
+    fn publish_last_unit_finished(&mut self, owner: u8, type_index: i32, object_id: i32);
+
+    fn unit_stance_type(&mut self, owner: u8, object_id: i32) -> i32;
+    fn producer_stance_type(&mut self, build: &BuildData) -> i32;
+    fn set_unit_stance(&mut self, owner: u8, object_id: i32, stance: i32, secondary: i32);
+    /// `Unit::go_inside(producer_o, producer_who, 0)` (`0x0062FAA3`).
+    fn put_unit_inside(
+        &mut self,
+        owner: u8,
+        object_id: i32,
+        producer_object_id: i32,
+        producer_owner: u8,
+        secondary: i32,
+    );
+    fn producer_holds_air(&mut self, build: &BuildData) -> bool;
+    /// The type-specific placement/rally body `0x0062FAC0..0x0063042E`. It owns gather
+    /// waypoint orders, `come_out`, air-host capacity death, carrier payload creation, and
+    /// local presentation. Its echoed receipt is checked before returning.
+    fn complete_unit_placement(
+        &mut self,
+        build: &BuildData,
+        request: UnitPlacementRequest,
+    ) -> UnitPlacementReceipt;
+}
+
+/// Execute the unit completion gate and common `Build::train` transaction. [measured]
+pub fn execute_unit_completion<H: UnitCompletionHost>(
+    build: &BuildData,
+    type_index: i32,
+    host: &mut H,
+) -> Result<UnitCompletionResult, UnitCompletionError> {
+    let control_cost = host.unit_control_cost(type_index);
+    let control = host.leader_control(build);
+    let required_control = control_cost.wrapping_add(control);
+    let control_cap = host.leader_control_cap(build);
+    if required_control > control_cap {
+        return Ok(UnitCompletionResult::PopulationBlocked {
+            required_control,
+            control_cap,
+        });
+    }
+
+    if host.uses_caravan_limit(type_index) {
+        let units = host.trained_unit_count(build, type_index, 0);
+        let limit = host.caravan_limit(build, 0);
+        if units >= limit {
+            return Ok(UnitCompletionResult::CaravanCapacityBlocked { units, limit });
+        }
+    }
+
+    if host.producer_is_aircraft_carrier(build) && !host.unit_is_helicopter(type_index) {
+        let aircraft = host.hosted_aircraft(build, 0);
+        let limit = host.aircraft_limit(build);
+        if aircraft >= limit {
+            return Ok(UnitCompletionResult::AircraftCapacityBlocked { aircraft, limit });
+        }
+    }
+
+    let (x, y) = build.position();
+    let allocation_request = UnitAllocationRequest {
+        owner: build.who,
+        type_index,
+        x,
+        y,
+        tail: [-1; 3],
+    };
+    let allocation = host.allocate_unit(allocation_request);
+    if allocation.request != allocation_request {
+        return Err(UnitCompletionError::AllocationReceiptMismatch {
+            expected: allocation_request,
+            observed: allocation.request,
+        });
+    }
+    if allocation.object_id < 0 {
+        return Ok(UnitCompletionResult::Completed(
+            UnitTrainTransaction::AllocationFailed {
+                request: allocation_request,
+                returned_object_id: allocation.object_id,
+            },
+        ));
+    }
+
+    let object_id = allocation.object_id;
+    host.publish_last_unit_built(build.who, object_id);
+    host.publish_last_unit_finished(build.who, type_index, object_id);
+
+    let unit_stance_type = host.unit_stance_type(build.who, object_id);
+    let producer_stance_type = host.producer_stance_type(build);
+    let stance_inherited = unit_stance_type == producer_stance_type;
+    if stance_inherited {
+        host.set_unit_stance(build.who, object_id, build.stance as i32, 0);
+    }
+
+    let producer_object_id = build.object_id() as i32;
+    host.put_unit_inside(build.who, object_id, producer_object_id, build.who, 0);
+    let placement_request = UnitPlacementRequest {
+        owner: build.who,
+        type_index,
+        object_id,
+        producer_owner: build.who,
+        producer_object_id,
+        producer_holds_air: host.producer_holds_air(build),
+    };
+    let placement = host.complete_unit_placement(build, placement_request);
+    if placement.request != placement_request {
+        return Err(UnitCompletionError::PlacementReceiptMismatch {
+            expected: placement_request,
+            observed: placement.request,
+        });
+    }
+
+    Ok(UnitCompletionResult::Completed(
+        UnitTrainTransaction::Initialized {
+            request: allocation_request,
+            object_id,
+            stance_inherited,
+            placement: placement.outcome,
+        },
+    ))
 }
 
 /// Leader flag set by the ordinary-building arm of `Build::finished` immediately after
@@ -1555,7 +1790,9 @@ impl FinishedEffectTransaction {
         !matches!(
             self,
             FinishedEffectTransaction::Unit(
-                UnitCompletionResult::PopulationBlocked | UnitCompletionResult::CapacityBlocked
+                UnitCompletionResult::PopulationBlocked { .. }
+                    | UnitCompletionResult::CaravanCapacityBlocked { .. }
+                    | UnitCompletionResult::AircraftCapacityBlocked { .. }
             )
         )
     }
@@ -1567,10 +1804,9 @@ impl FinishedEffectTransaction {
 /// false unit-availability or spell-ownership test falls through to the later classes.
 /// [`TechSetHost::gained_tech`] owns the 15,001-byte `Leader::gain_tech` one-shot body;
 /// [`TechState`] owns the checksum-visible bit and counter mutation that precedes it.
-pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost {
+pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost + UnitCompletionHost {
     fn is_unit_type(&mut self, type_index: i32) -> bool;
     fn can_make_unit(&mut self, type_index: i32) -> bool;
-    fn train_unit(&mut self, build: &BuildData, type_index: i32) -> UnitCompletionResult;
 
     fn is_spell_type(&mut self, type_index: i32) -> bool;
     fn has_spell(&mut self, type_index: i32) -> bool;
@@ -1604,19 +1840,21 @@ pub fn execute_finished_effect<H: FinishedEffectHost>(
     build: &BuildData,
     type_index: i32,
     host: &mut H,
-) -> FinishedEffectTransaction {
+) -> Result<FinishedEffectTransaction, UnitCompletionError> {
     if host.is_unit_type(type_index) && host.can_make_unit(type_index) {
-        return FinishedEffectTransaction::Unit(host.train_unit(build, type_index));
+        return Ok(FinishedEffectTransaction::Unit(execute_unit_completion(
+            build, type_index, host,
+        )?));
     }
 
     if host.is_spell_type(type_index) && host.has_spell(type_index) {
         host.cast_spell(build, type_index);
-        return FinishedEffectTransaction::SpellCast;
+        return Ok(FinishedEffectTransaction::SpellCast);
     }
 
     if host.is_build_type(type_index) && !host.building_completion_gains_tech(type_index) {
         let transaction = execute_building_completion(build, type_index, host);
-        return FinishedEffectTransaction::BuildingCompleted(transaction);
+        return Ok(FinishedEffectTransaction::BuildingCompleted(transaction));
     }
 
     let was_new = !tech.tech.get(type_index);
@@ -1633,11 +1871,11 @@ pub fn execute_finished_effect<H: FinishedEffectHost>(
         None
     };
 
-    FinishedEffectTransaction::TechGained {
+    Ok(FinishedEffectTransaction::TechGained {
         type_index,
         was_new,
         government_hero,
-    }
+    })
 }
 
 /// Stable identity for a building in the player-major object graph.
@@ -2553,6 +2791,32 @@ impl BuildData {
     #[inline]
     pub fn hits_left(&self, hits: i32) -> i32 {
         hits - self.damage
+    }
+
+    /// Producer identity consumed by `Unit::go_inside` in `Build::train`.
+    #[inline]
+    pub fn object_id(&self) -> i16 {
+        i16::from_le_bytes(
+            self.other[off::OBJECT_ID..off::OBJECT_ID + 2]
+                .try_into()
+                .expect("fixed BuildData object-id window"),
+        )
+    }
+
+    /// Deobfuscated producer position passed to `Objects::init_unit` by `Build::train`.
+    #[inline]
+    pub fn position(&self) -> (i32, i32) {
+        let encoded_x = i32::from_le_bytes(
+            self.other[off::X_INTERNAL..off::X_INTERNAL + 4]
+                .try_into()
+                .expect("fixed BuildData x window"),
+        );
+        let encoded_y = i32::from_le_bytes(
+            self.other[off::Y_INTERNAL..off::Y_INTERNAL + 4]
+                .try_into()
+                .expect("fixed BuildData y window"),
+        );
+        (encoded_x ^ 0x63637, encoded_y ^ 0x63637)
     }
 
     /// The head of `Wall::process` (`0x00640450`) that resets the per-frame helper state
@@ -3518,7 +3782,25 @@ mod tests {
     enum FinishedEvent {
         IsUnit(i32),
         CanMakeUnit(i32),
-        TrainUnit(i32),
+        UnitControlCost(i32, i32),
+        LeaderControl(i32),
+        LeaderControlCap(i32),
+        UsesCaravanLimit(i32, bool),
+        TrainedUnitCount(i32, i32, i32),
+        CaravanLimit(i32, i32),
+        ProducerIsAircraftCarrier(bool),
+        UnitIsHelicopter(i32, bool),
+        HostedAircraft(i32, i32),
+        AircraftLimit(i32),
+        AllocateUnit(UnitAllocationRequest),
+        PublishLastUnitBuilt(u8, i32),
+        PublishLastUnitFinished(u8, i32, i32),
+        UnitStanceType(u8, i32, i32),
+        ProducerStanceType(i32),
+        SetUnitStance(u8, i32, i32, i32),
+        PutUnitInside(u8, i32, i32, u8, i32),
+        ProducerHoldsAir(bool),
+        CompleteUnitPlacement(UnitPlacementRequest),
         IsSpell(i32),
         HasSpell(i32),
         CastSpell(i32),
@@ -3550,7 +3832,23 @@ mod tests {
     struct FinishedProbe {
         unit_types: Vec<i32>,
         makeable_units: Vec<i32>,
-        train_result: UnitCompletionResult,
+        control_cost: i32,
+        control: i32,
+        control_cap: i32,
+        uses_caravan_limit: bool,
+        trained_units: i32,
+        caravan_limit: i32,
+        aircraft_carrier: bool,
+        helicopter: bool,
+        hosted_aircraft: i32,
+        aircraft_limit: i32,
+        allocation_object_id: i32,
+        allocation_request_override: Option<UnitAllocationRequest>,
+        unit_stance_type: i32,
+        producer_stance_type: i32,
+        producer_holds_air: bool,
+        placement_outcome: UnitPlacementOutcome,
+        placement_request_override: Option<UnitPlacementRequest>,
         spell_types: Vec<i32>,
         owned_spells: Vec<i32>,
         build_types: Vec<i32>,
@@ -3567,7 +3865,23 @@ mod tests {
             Self {
                 unit_types: vec![60, 61],
                 makeable_units: vec![60, 61],
-                train_result: UnitCompletionResult::Trained,
+                control_cost: 1,
+                control: 0,
+                control_cap: 100,
+                uses_caravan_limit: false,
+                trained_units: 0,
+                caravan_limit: 1,
+                aircraft_carrier: false,
+                helicopter: false,
+                hosted_aircraft: 0,
+                aircraft_limit: 1,
+                allocation_object_id: 9,
+                allocation_request_override: None,
+                unit_stance_type: 1,
+                producer_stance_type: 2,
+                producer_holds_air: false,
+                placement_outcome: UnitPlacementOutcome::Ready,
+                placement_request_override: None,
                 spell_types: vec![630],
                 owned_spells: vec![630],
                 build_types: vec![414, 415],
@@ -3673,6 +3987,151 @@ mod tests {
         }
     }
 
+    impl UnitCompletionHost for FinishedProbe {
+        fn unit_control_cost(&mut self, type_index: i32) -> i32 {
+            self.events.push(FinishedEvent::UnitControlCost(
+                type_index,
+                self.control_cost,
+            ));
+            self.control_cost
+        }
+
+        fn leader_control(&mut self, _build: &BuildData) -> i32 {
+            self.events.push(FinishedEvent::LeaderControl(self.control));
+            self.control
+        }
+
+        fn leader_control_cap(&mut self, _build: &BuildData) -> i32 {
+            self.events
+                .push(FinishedEvent::LeaderControlCap(self.control_cap));
+            self.control_cap
+        }
+
+        fn uses_caravan_limit(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::UsesCaravanLimit(
+                type_index,
+                self.uses_caravan_limit,
+            ));
+            self.uses_caravan_limit
+        }
+
+        fn trained_unit_count(&mut self, _build: &BuildData, type_index: i32, queued: i32) -> i32 {
+            self.events.push(FinishedEvent::TrainedUnitCount(
+                type_index,
+                queued,
+                self.trained_units,
+            ));
+            self.trained_units
+        }
+
+        fn caravan_limit(&mut self, _build: &BuildData, queued: i32) -> i32 {
+            self.events
+                .push(FinishedEvent::CaravanLimit(queued, self.caravan_limit));
+            self.caravan_limit
+        }
+
+        fn producer_is_aircraft_carrier(&mut self, _build: &BuildData) -> bool {
+            self.events.push(FinishedEvent::ProducerIsAircraftCarrier(
+                self.aircraft_carrier,
+            ));
+            self.aircraft_carrier
+        }
+
+        fn unit_is_helicopter(&mut self, type_index: i32) -> bool {
+            self.events
+                .push(FinishedEvent::UnitIsHelicopter(type_index, self.helicopter));
+            self.helicopter
+        }
+
+        fn hosted_aircraft(&mut self, _build: &BuildData, queued: i32) -> i32 {
+            self.events
+                .push(FinishedEvent::HostedAircraft(queued, self.hosted_aircraft));
+            self.hosted_aircraft
+        }
+
+        fn aircraft_limit(&mut self, _build: &BuildData) -> i32 {
+            self.events
+                .push(FinishedEvent::AircraftLimit(self.aircraft_limit));
+            self.aircraft_limit
+        }
+
+        fn allocate_unit(&mut self, request: UnitAllocationRequest) -> UnitAllocationReceipt {
+            self.events.push(FinishedEvent::AllocateUnit(request));
+            UnitAllocationReceipt {
+                request: self.allocation_request_override.unwrap_or(request),
+                object_id: self.allocation_object_id,
+            }
+        }
+
+        fn publish_last_unit_built(&mut self, owner: u8, object_id: i32) {
+            self.events
+                .push(FinishedEvent::PublishLastUnitBuilt(owner, object_id));
+        }
+
+        fn publish_last_unit_finished(&mut self, owner: u8, type_index: i32, object_id: i32) {
+            self.events.push(FinishedEvent::PublishLastUnitFinished(
+                owner, type_index, object_id,
+            ));
+        }
+
+        fn unit_stance_type(&mut self, owner: u8, object_id: i32) -> i32 {
+            self.events.push(FinishedEvent::UnitStanceType(
+                owner,
+                object_id,
+                self.unit_stance_type,
+            ));
+            self.unit_stance_type
+        }
+
+        fn producer_stance_type(&mut self, _build: &BuildData) -> i32 {
+            self.events
+                .push(FinishedEvent::ProducerStanceType(self.producer_stance_type));
+            self.producer_stance_type
+        }
+
+        fn set_unit_stance(&mut self, owner: u8, object_id: i32, stance: i32, secondary: i32) {
+            self.events.push(FinishedEvent::SetUnitStance(
+                owner, object_id, stance, secondary,
+            ));
+        }
+
+        fn put_unit_inside(
+            &mut self,
+            owner: u8,
+            object_id: i32,
+            producer_object_id: i32,
+            producer_owner: u8,
+            secondary: i32,
+        ) {
+            self.events.push(FinishedEvent::PutUnitInside(
+                owner,
+                object_id,
+                producer_object_id,
+                producer_owner,
+                secondary,
+            ));
+        }
+
+        fn producer_holds_air(&mut self, _build: &BuildData) -> bool {
+            self.events
+                .push(FinishedEvent::ProducerHoldsAir(self.producer_holds_air));
+            self.producer_holds_air
+        }
+
+        fn complete_unit_placement(
+            &mut self,
+            _build: &BuildData,
+            request: UnitPlacementRequest,
+        ) -> UnitPlacementReceipt {
+            self.events
+                .push(FinishedEvent::CompleteUnitPlacement(request));
+            UnitPlacementReceipt {
+                request: self.placement_request_override.unwrap_or(request),
+                outcome: self.placement_outcome,
+            }
+        }
+    }
+
     impl FinishedEffectHost for FinishedProbe {
         fn is_unit_type(&mut self, type_index: i32) -> bool {
             self.events.push(FinishedEvent::IsUnit(type_index));
@@ -3682,11 +4141,6 @@ mod tests {
         fn can_make_unit(&mut self, type_index: i32) -> bool {
             self.events.push(FinishedEvent::CanMakeUnit(type_index));
             self.makeable_units.contains(&type_index)
-        }
-
-        fn train_unit(&mut self, _build: &BuildData, type_index: i32) -> UnitCompletionResult {
-            self.events.push(FinishedEvent::TrainUnit(type_index));
-            self.train_result
         }
 
         fn is_spell_type(&mut self, type_index: i32) -> bool {
@@ -3899,6 +4353,173 @@ mod tests {
         build
     }
 
+    fn unit_producer(who: u8, object_id: i16, x: i32, y: i32) -> BuildData {
+        let mut build = active_city_build(who);
+        build.stance = 5;
+        build.other[off::OBJECT_ID..off::OBJECT_ID + 2].copy_from_slice(&object_id.to_le_bytes());
+        build.other[off::X_INTERNAL..off::X_INTERNAL + 4]
+            .copy_from_slice(&(x ^ 0x63637).to_le_bytes());
+        build.other[off::Y_INTERNAL..off::Y_INTERNAL + 4]
+            .copy_from_slice(&(y ^ 0x63637).to_le_bytes());
+        build
+    }
+
+    #[test]
+    fn unit_completion_gates_control_caravan_and_carrier_before_allocation() {
+        let build = unit_producer(3, 77, 768, -192);
+        let mut host = FinishedProbe {
+            control_cost: 5,
+            control: 10,
+            control_cap: 14,
+            ..FinishedProbe::default()
+        };
+
+        assert_eq!(
+            execute_unit_completion(&build, 60, &mut host).unwrap(),
+            UnitCompletionResult::PopulationBlocked {
+                required_control: 15,
+                control_cap: 14,
+            }
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::UnitControlCost(60, 5),
+                FinishedEvent::LeaderControl(10),
+                FinishedEvent::LeaderControlCap(14),
+            ]
+        );
+
+        host.events.clear();
+        host.control_cap = 15;
+        host.uses_caravan_limit = true;
+        host.trained_units = 3;
+        host.caravan_limit = 3;
+        assert_eq!(
+            execute_unit_completion(&build, 60, &mut host).unwrap(),
+            UnitCompletionResult::CaravanCapacityBlocked { units: 3, limit: 3 }
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::UnitControlCost(60, 5),
+                FinishedEvent::LeaderControl(10),
+                FinishedEvent::LeaderControlCap(15),
+                FinishedEvent::UsesCaravanLimit(60, true),
+                FinishedEvent::TrainedUnitCount(60, 0, 3),
+                FinishedEvent::CaravanLimit(0, 3),
+            ]
+        );
+
+        host.events.clear();
+        host.uses_caravan_limit = false;
+        host.aircraft_carrier = true;
+        host.hosted_aircraft = 2;
+        host.aircraft_limit = 2;
+        assert_eq!(
+            execute_unit_completion(&build, 60, &mut host).unwrap(),
+            UnitCompletionResult::AircraftCapacityBlocked {
+                aircraft: 2,
+                limit: 2,
+            }
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::UnitControlCost(60, 5),
+                FinishedEvent::LeaderControl(10),
+                FinishedEvent::LeaderControlCap(15),
+                FinishedEvent::UsesCaravanLimit(60, false),
+                FinishedEvent::ProducerIsAircraftCarrier(true),
+                FinishedEvent::UnitIsHelicopter(60, false),
+                FinishedEvent::HostedAircraft(0, 2),
+                FinishedEvent::AircraftLimit(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn unit_train_publishes_identity_then_inherits_stance_and_enters_placement_tail() {
+        let build = unit_producer(3, 77, 768, -192);
+        let allocation_request = UnitAllocationRequest {
+            owner: 3,
+            type_index: 60,
+            x: 768,
+            y: -192,
+            tail: [-1; 3],
+        };
+        let placement_request = UnitPlacementRequest {
+            owner: 3,
+            type_index: 60,
+            object_id: 42,
+            producer_owner: 3,
+            producer_object_id: 77,
+            producer_holds_air: true,
+        };
+        let mut host = FinishedProbe {
+            allocation_object_id: 42,
+            unit_stance_type: 9,
+            producer_stance_type: 9,
+            producer_holds_air: true,
+            placement_outcome: UnitPlacementOutcome::DestroyedAtCapacity,
+            ..FinishedProbe::default()
+        };
+
+        assert_eq!(
+            execute_unit_completion(&build, 60, &mut host).unwrap(),
+            UnitCompletionResult::Completed(UnitTrainTransaction::Initialized {
+                request: allocation_request,
+                object_id: 42,
+                stance_inherited: true,
+                placement: UnitPlacementOutcome::DestroyedAtCapacity,
+            })
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::UnitControlCost(60, 1),
+                FinishedEvent::LeaderControl(0),
+                FinishedEvent::LeaderControlCap(100),
+                FinishedEvent::UsesCaravanLimit(60, false),
+                FinishedEvent::ProducerIsAircraftCarrier(false),
+                FinishedEvent::AllocateUnit(allocation_request),
+                FinishedEvent::PublishLastUnitBuilt(3, 42),
+                FinishedEvent::PublishLastUnitFinished(3, 60, 42),
+                FinishedEvent::UnitStanceType(3, 42, 9),
+                FinishedEvent::ProducerStanceType(9),
+                FinishedEvent::SetUnitStance(3, 42, 5, 0),
+                FinishedEvent::PutUnitInside(3, 42, 77, 3, 0),
+                FinishedEvent::ProducerHoldsAir(true),
+                FinishedEvent::CompleteUnitPlacement(placement_request),
+            ]
+        );
+
+        // A mismatched allocator receipt is rejected before either last-unit publication.
+        host.events.clear();
+        host.allocation_request_override = Some(UnitAllocationRequest {
+            owner: 4,
+            ..allocation_request
+        });
+        assert_eq!(
+            execute_unit_completion(&build, 60, &mut host),
+            Err(UnitCompletionError::AllocationReceiptMismatch {
+                expected: allocation_request,
+                observed: UnitAllocationRequest {
+                    owner: 4,
+                    ..allocation_request
+                },
+            })
+        );
+        assert_eq!(
+            host.events.last(),
+            Some(&FinishedEvent::AllocateUnit(allocation_request))
+        );
+        assert!(!host.events.iter().any(|event| matches!(
+            event,
+            FinishedEvent::PublishLastUnitBuilt(..) | FinishedEvent::PublishLastUnitFinished(..)
+        )));
+    }
+
     #[test]
     fn captured_building_completion_commits_population_and_border_tail_in_retail_order() {
         let mut build = active_city_build(3);
@@ -3981,11 +4602,24 @@ mod tests {
         let build = active_city_build(2);
         let mut tech = TechState::default();
         let mut host = FinishedProbe::default();
+        host.allocation_object_id = -7;
 
-        let trained = execute_finished_effect(&mut tech, &build, 60, &mut host);
+        let allocation_request = UnitAllocationRequest {
+            owner: 2,
+            type_index: 60,
+            x: 0x63637,
+            y: 0x63637,
+            tail: [-1; 3],
+        };
+        let trained = execute_finished_effect(&mut tech, &build, 60, &mut host).unwrap();
         assert_eq!(
             trained,
-            FinishedEffectTransaction::Unit(UnitCompletionResult::Trained)
+            FinishedEffectTransaction::Unit(UnitCompletionResult::Completed(
+                UnitTrainTransaction::AllocationFailed {
+                    request: allocation_request,
+                    returned_object_id: -7,
+                }
+            ))
         );
         assert!(trained.allows_unqueue());
         assert_eq!(
@@ -3993,16 +4627,24 @@ mod tests {
             vec![
                 FinishedEvent::IsUnit(60),
                 FinishedEvent::CanMakeUnit(60),
-                FinishedEvent::TrainUnit(60),
+                FinishedEvent::UnitControlCost(60, 1),
+                FinishedEvent::LeaderControl(0),
+                FinishedEvent::LeaderControlCap(100),
+                FinishedEvent::UsesCaravanLimit(60, false),
+                FinishedEvent::ProducerIsAircraftCarrier(false),
+                FinishedEvent::AllocateUnit(allocation_request),
             ]
         );
 
         host.events.clear();
-        host.train_result = UnitCompletionResult::PopulationBlocked;
-        let blocked = execute_finished_effect(&mut tech, &build, 61, &mut host);
+        host.control_cap = 0;
+        let blocked = execute_finished_effect(&mut tech, &build, 61, &mut host).unwrap();
         assert_eq!(
             blocked,
-            FinishedEffectTransaction::Unit(UnitCompletionResult::PopulationBlocked)
+            FinishedEffectTransaction::Unit(UnitCompletionResult::PopulationBlocked {
+                required_control: 1,
+                control_cap: 0,
+            })
         );
         assert!(!blocked.allows_unqueue());
         assert_eq!(
@@ -4010,12 +4652,15 @@ mod tests {
             vec![
                 FinishedEvent::IsUnit(61),
                 FinishedEvent::CanMakeUnit(61),
-                FinishedEvent::TrainUnit(61),
+                FinishedEvent::UnitControlCost(61, 1),
+                FinishedEvent::LeaderControl(0),
+                FinishedEvent::LeaderControlCap(0),
             ]
         );
 
         host.events.clear();
-        let spell = execute_finished_effect(&mut tech, &build, 630, &mut host);
+        host.control_cap = 100;
+        let spell = execute_finished_effect(&mut tech, &build, 630, &mut host).unwrap();
         assert_eq!(spell, FinishedEffectTransaction::SpellCast);
         assert_eq!(
             host.events,
@@ -4028,7 +4673,7 @@ mod tests {
         );
 
         host.events.clear();
-        let building = execute_finished_effect(&mut tech, &build, 414, &mut host);
+        let building = execute_finished_effect(&mut tech, &build, 414, &mut host).unwrap();
         assert_eq!(
             building,
             FinishedEffectTransaction::BuildingCompleted(BuildingCompletionTransaction {
@@ -4055,7 +4700,7 @@ mod tests {
         // ordinary research. It is not a bulk age/epoch setter and has no revalidation
         // tail; the TechSetHost implementation above panics if that tail is entered.
         host.events.clear();
-        let building_tech = execute_finished_effect(&mut tech, &build, 415, &mut host);
+        let building_tech = execute_finished_effect(&mut tech, &build, 415, &mut host).unwrap();
         assert_eq!(
             building_tech,
             FinishedEffectTransaction::TechGained {
@@ -4088,7 +4733,7 @@ mod tests {
         // mandatory one-shot callback, then runs the Capitol hero follow-up.
         host.events.clear();
         host.capitol = true;
-        let epoch = execute_finished_effect(&mut tech, &build, 551, &mut host);
+        let epoch = execute_finished_effect(&mut tech, &build, 551, &mut host).unwrap();
         assert_eq!(
             epoch,
             FinishedEffectTransaction::TechGained {
@@ -4123,7 +4768,7 @@ mod tests {
         // bit and does not enter set_age's ladder or bump any TechCounters field.
         host.events.clear();
         host.capitol = false;
-        let age = execute_finished_effect(&mut tech, &build, 544, &mut host);
+        let age = execute_finished_effect(&mut tech, &build, 544, &mut host).unwrap();
         assert_eq!(
             age,
             FinishedEffectTransaction::TechGained {
