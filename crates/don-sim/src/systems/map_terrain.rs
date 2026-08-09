@@ -1194,6 +1194,54 @@ impl World {
         }
     }
 
+    /// `Map::fix_lakes` `0x0069c470`–`0x0069c5f6`.
+    ///
+    /// This is the complete call-free first stage of `Map::make_coastlines`
+    /// (`0x006947a0`, direct call at `0x006947a9`), which `Map::make` invokes on
+    /// every generated map at `0x0068bef2`. Retail scans the interior in row-major
+    /// order and turns an ocean cell into fertile land when more than five of its
+    /// eight neighbours are not ocean. The writes are immediate, and the whole scan
+    /// repeats until a pass makes no changes, so both within-pass order and the
+    /// fixed-point loop are observable.
+    ///
+    /// Ocean is the exact `WorldData::is_ocean` predicate: `land` is coastal/ocean
+    /// and `WATERHALF` is clear. The retail 16-bit store at `WData+2` writes
+    /// `land = 0` and clears `land_sub` together; every other byte is preserved.
+    pub fn fix_lakes(&mut self) {
+        if self.xs <= 2 || self.ys <= 2 {
+            return;
+        }
+
+        loop {
+            let mut changed = false;
+            for y in 1..self.ys - 1 {
+                for x in 1..self.xs - 1 {
+                    if !self.is_ocean(x, y) {
+                        continue;
+                    }
+
+                    let mut non_ocean_neighbours = 0;
+                    for (&dx, &dy) in NEIGHBOUR_DX.iter().zip(NEIGHBOUR_DY.iter()) {
+                        if !self.is_ocean(x + dx, y + dy) {
+                            non_ocean_neighbours += 1;
+                        }
+                    }
+
+                    if non_ocean_neighbours > 5 {
+                        let center = self.w_index(x, y);
+                        self.wdata[center].land = land::FERTILE;
+                        self.wdata[center].land_sub = 0;
+                        changed = true;
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+    }
+
     // -- indexing ------------------------------------------------------------------------
 
     /// `World::get_wdata` `0x0046d220`: `wdata[wy * xs + wx]`, stride 28.
