@@ -911,7 +911,7 @@ pub trait CollUnits {
     fn effective_owner(&self, who: i32) -> i32;
     /// `LeaderData+0x74 diplos[other]`.
     fn diplomacy(&self, who: i32, other: i32) -> i32;
-    /// Candidate `UnitData::invalid_loc(tile_x, tile_y, 0, 0, 0, 0, 0, 0)`.
+    /// Candidate `UnitData::invalid_loc(tile_x, tile_y, 0, 0, 0, 0, 0)`.
     fn boat_invalid_loc(&self, who: i32, o: i32, tx: i32, ty: i32) -> bool;
     /// Candidate `Unit::set_new_location(x, y, 0, 0)`, including world links, per-guy
     /// destinations and collision stamps.
@@ -1076,9 +1076,9 @@ pub fn boat_hull_centres(
 /// 2. A movable candidate passes `invalid_loc`, then `set_new_location` runs.
 /// 3. With `move_other` and either a one-circle target or a land pusher, its blocker IDs are
 ///    set to the pusher; an idle target is turned, including its first guy.
-/// 4. Every candidate that did not force the early `false` exit receives
-///    `collide_frame = frame`, even if filtered, non-overlapping, or invalid at the proposed
-///    location. This surprising write is the common `0x005FAEEE` loop tail.
+/// 4. A successfully relocated candidate receives `collide_frame = frame` at `0x005FAEE0`.
+///    Filtered, non-overlapping, and invalid-location candidates jump directly to the loop
+///    increment at `0x005FAEEE` and receive no frame write.
 ///
 /// There is **no RNG call** anywhere in the 1,655-byte function. The exact state effect on
 /// `game_random` is therefore zero draws.
@@ -1205,6 +1205,9 @@ pub fn detect_boat_collision<U: CollUnits>(
                                 );
                             }
                         }
+                        other = units.row(other_who, other_o).unwrap_or(other);
+                        other.collide_frame = units.frame();
+                        units.write(other_who, other_o, &other);
                     }
                 }
             }
@@ -1213,9 +1216,6 @@ pub fn detect_boat_collision<U: CollUnits>(
         if early_block {
             return false;
         }
-        other = units.row(other_who, other_o).unwrap_or(other);
-        other.collide_frame = units.frame();
-        units.write(other_who, other_o, &other);
     }
     true
 }
@@ -2554,7 +2554,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_or_filtered_boat_candidate_still_gets_the_common_frame_tail() {
+    fn invalid_or_filtered_boat_candidate_skips_the_post_move_frame_write() {
         let me = boat_row(0, 7, 1000, 1000);
         let other = boat_row(0, 8, 1050, 1000);
         let expected = boat_project(1050, 1000, 0x4000_0000, 0x30);
@@ -2570,7 +2570,7 @@ mod tests {
             (units.row(0, 8).unwrap().x, units.row(0, 8).unwrap().y),
             (1050, 1000)
         );
-        assert_eq!(units.row(0, 8).unwrap().collide_frame, 101);
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 0);
 
         let filtered = UnitRow {
             domain: DOMAIN_LAND,
@@ -2582,7 +2582,7 @@ mod tests {
             ..UnitTable::default()
         };
         assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
-        assert_eq!(units.row(0, 8).unwrap().collide_frame, 102);
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 0);
     }
 
     #[test]
@@ -2672,7 +2672,7 @@ mod tests {
         };
         assert!(detect_boat_collision(&mut units, &me, 1000, 1000, true));
         assert!(units.boat_moves.is_empty());
-        assert_eq!(units.row(0, 8).unwrap().collide_frame, 55);
+        assert_eq!(units.row(0, 8).unwrap().collide_frame, 0);
 
         let me = UnitRow { group: -1, ..me };
         units.rows[0] = UnitRow {
