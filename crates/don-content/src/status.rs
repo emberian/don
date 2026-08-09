@@ -188,11 +188,16 @@ fn row_for(id: i32, m: &ModPackage) -> StatusRow {
 pub fn apply(stack: &mut ContentStack, rows: &[StatusRow]) -> usize {
     let mut applied = 0;
     for row in rows {
-        let want_local = row.local;
-        if let Some(m) = stack.mods_mut().iter_mut().find(|m| {
-            m.name.eq_ignore_ascii_case(&row.name)
-                && (m.location == Some(StorageLocation::MyMods)) == want_local
-        }) {
+        let want_location = if row.local {
+            StorageLocation::MyMods
+        } else {
+            StorageLocation::None
+        };
+        if let Some(m) = stack
+            .mods_mut()
+            .iter_mut()
+            .find(|m| m.name.eq_ignore_ascii_case(&row.name) && m.location == Some(want_location))
+        {
             m.priority = row.priority;
             m.enabled = row.enabled;
             m.timestamp = row.timestamp;
@@ -324,7 +329,7 @@ mod tests {
     fn apply_preserves_the_two_status_timestamps_but_not_identity_columns() {
         let mut stack = ContentStack::new();
         stack.push(ModPackage::new("Workshop Mod", "C:/ugc/42"));
-        stack.mods_mut()[0].location = Some(StorageLocation::GameRoot);
+        stack.mods_mut()[0].location = Some(StorageLocation::None);
         stack.mods_mut()[0].author_id = 33;
         stack.mods_mut()[0].published_file_id = 44;
 

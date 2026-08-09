@@ -8,8 +8,9 @@
 //!
 //! Four modules, in the order you should read them:
 //!
-//! * [`vfs`] — retail's discovery, classification and precedence, reproduced from
-//!   `ModManager` / `ModPackage`. This is the compatibility surface.
+//! * [`vfs`] — retail's path classification and precedence, reproduced from `ModManager` /
+//!   `ModPackage`. Directory discovery is separate because host enumeration order and the
+//!   engine's `SkipForbiddenFiles` filter are not certified cross-platform.
 //! * [`status`] — `mod-status.txt`, the on-disk enable/priority state, in retail's own
 //!   fixed-width format.
 //! * [`overlay`] — our addition: named, validated, field-level rule patches with an explicit

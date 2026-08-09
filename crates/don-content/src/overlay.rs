@@ -271,7 +271,7 @@ impl RuleStack {
                 }
             }
         }
-        for (_, patches) in self.layers.iter() {
+        for patches in self.layers.values() {
             for p in patches {
                 match lookup(&p.field) {
                     None => errs.push(OverlayError::UnknownField(p.field.clone())),

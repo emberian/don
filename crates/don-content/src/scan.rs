@@ -20,7 +20,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::vfs::{ModCategory, ModPackage, StorageLocation, ALL_CATEGORIES};
 
@@ -38,7 +38,11 @@ pub fn scan_mod_dir(
         let dir = if cat.relative_dir().is_empty() {
             root.to_path_buf()
         } else {
-            root.join(cat.relative_dir().trim_end_matches('/'))
+            let Some(dir) = find_windows_dir(root, cat.relative_dir().trim_end_matches('/'))?
+            else {
+                continue;
+            };
+            dir
         };
         let mut found = BTreeSet::new();
         collect(&dir, "", cat.recursive(), &mut found)?;
@@ -47,6 +51,47 @@ pub fn scan_mod_dir(
         }
     }
     Ok(m)
+}
+
+/// Resolve an ASCII category directory with Windows' case-insensitive component semantics.
+/// On a case-sensitive development host, choosing arbitrarily between both `data/` and
+/// `Data/` would invent behavior that cannot exist on the retail filesystem, so ambiguity is
+/// rejected.
+fn find_windows_dir(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> {
+    let mut at = root.to_path_buf();
+    for wanted in relative.split('/') {
+        let entries = match std::fs::read_dir(&at) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut matches = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(wanted)
+            {
+                matches.push(entry.path());
+            }
+        }
+        match matches.len() {
+            0 => return Ok(None),
+            1 => at = matches.pop().expect("one match"),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                    "{} contains multiple directories matching Windows path component {wanted:?}",
+                    at.display()
+                ),
+                ))
+            }
+        }
+    }
+    Ok(Some(at))
 }
 
 fn collect(
@@ -127,11 +172,11 @@ mod tests {
     fn recursion_follows_the_engines_per_category_flag() {
         let root = tmpdir("recursion");
         // data/ is NOT recursive; art/ IS.
-        fs::create_dir_all(root.join("data/deeper")).unwrap();
-        fs::write(root.join("data/rules.xml"), b"x").unwrap();
-        fs::write(root.join("data/deeper/hidden.xml"), b"x").unwrap();
-        fs::create_dir_all(root.join("art/units")).unwrap();
-        fs::write(root.join("art/units/Guy.BH3"), b"x").unwrap();
+        fs::create_dir_all(root.join("Data/deeper")).unwrap();
+        fs::write(root.join("Data/rules.xml"), b"x").unwrap();
+        fs::write(root.join("Data/deeper/hidden.xml"), b"x").unwrap();
+        fs::create_dir_all(root.join("ART/units")).unwrap();
+        fs::write(root.join("ART/units/Guy.BH3"), b"x").unwrap();
 
         let m = scan_mod_dir(&root, "T", "T", StorageLocation::MyMods).unwrap();
         assert!(m.has_asset(ModCategory::Data, "rules.xml"));
@@ -183,5 +228,25 @@ mod tests {
         assert!(scan_mods_root(Path::new("/nonexistent/mods"))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn windows_impossible_case_ambiguity_is_rejected_on_case_sensitive_hosts() {
+        let root = tmpdir("case-ambiguity");
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::create_dir_all(root.join("Data")).unwrap();
+        let distinct = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("data"))
+            .count()
+            > 1;
+        let result = scan_mod_dir(&root, "T", "T", StorageLocation::MyMods);
+        if distinct {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        } else {
+            assert!(result.is_ok());
+        }
+        fs::remove_dir_all(&root).unwrap();
     }
 }

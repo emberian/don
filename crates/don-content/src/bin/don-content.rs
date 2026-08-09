@@ -101,7 +101,11 @@ fn cmd_scan(dir: &Path) -> ExitCode {
         }
         println!(
             "      runtime gate: {}",
-            if r.fully_consumed() { "ACCEPT" } else { "REJECT (inert or unsupported files present)" }
+            if r.fully_consumed() {
+                "ACCEPT"
+            } else {
+                "REJECT (inert or unsupported files present)"
+            }
         );
         println!();
     }
@@ -122,7 +126,10 @@ fn cmd_check(dir: &Path) -> ExitCode {
     for m in stack.mods() {
         let r = report(m);
         if r.fully_consumed() {
-            println!("ACCEPT {}: every declared file has an end-to-end consumer", m.name);
+            println!(
+                "ACCEPT {}: every declared file has an end-to-end consumer",
+                m.name
+            );
             continue;
         }
         rejected += 1;

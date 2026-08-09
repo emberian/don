@@ -9,10 +9,11 @@ guest. Nothing here comes from community documentation. Nothing here is *verifie
 
 ## What a human can now do that they could not before
 
-1. **Point a tool at a folder of Rise of Nations mods and be told exactly what the engine
-   would do with them** — which files each mod claims, which categories, which Steam Workshop
-   tags it would be published under, and, per file, whether Descent of Nations can actually
-   consume it:
+1. **Point a tool at a folder of Rise of Nations mods and inspect the recovered loader
+   model** — which files each mod claims, which categories, which Steam Workshop tags the
+   recovered table assigns, and, per file, whether Descent of Nations can consume it. The
+   strict command rejects unresolved runtime behavior instead of presenting a synthetic scan
+   as live-retail certification:
 
    ```sh
    cargo run -p don-content --bin don-content -- scan  '/path/to/My Games/Rise of Nations/mods'

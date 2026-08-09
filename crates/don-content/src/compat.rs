@@ -5,8 +5,10 @@
 //!
 //! Two halves have to work, and they fail for different reasons:
 //!
-//! 1. **Discovery and precedence.** Retail's rule is [`crate::vfs`], which is small, closed
-//!    and now reproduced with the engine's own tables. Nothing about it needs Steam: the
+//! 1. **Path classification and precedence.** Retail's core rule is [`crate::vfs`], which is
+//!    small and reproduced with the engine's own tables. Cross-platform directory discovery
+//!    is not certified because enumeration order and `SkipForbiddenFiles` still need a live
+//!    retail corpus. Nothing about resolving an already-installed package needs Steam: the
 //!    Workshop is a *delivery* mechanism that ends with a directory on disk, and
 //!    `ModManager::buildModPackages` `0x00A221F0` then treats that directory exactly like a
 //!    local one. Subscribing needs Steam; loading does not.
@@ -197,7 +199,7 @@ pub fn classify_support(cat: ModCategory, filename: &str) -> &'static SupportRul
     SUPPORT
         .iter()
         .find(|r| {
-            r.category.map_or(true, |c| c == cat)
+            r.category.is_none_or(|c| c == cat)
                 && (r.ext.is_empty() || r.ext == ext || r.ext == base)
         })
         .expect("the table ends with a catch-all")

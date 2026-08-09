@@ -15,7 +15,7 @@ use crate::vfs::{ModCategory, TagLink, WorkshopTag};
 /// `s_ModCategoryInfo` `0x00C07AD0`, 12 x 120 bytes.
 ///
 /// `relative_dir` is the engine's `relativeDirectory` with `\\` rewritten to `/`;
-/// resolution is case-insensitive either way. `CAT_ROOT`'s is empty, which is why
+/// the engine's category-prefix comparison is case-sensitive. `CAT_ROOT`'s is empty, so
 /// it matches every path and must stay last in the classify scan.
 pub struct CategoryInfo {
     pub name: &'static str,

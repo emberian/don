@@ -158,8 +158,9 @@ pub struct TagLink {
     pub recursive: bool,
 }
 
-/// `enum StoragePoint::Location` — PDB `LF_ENUM` [measured]. Only the two a mod can live in
-/// are modelled; the rest are named so the discriminants stay honest.
+/// `enum StoragePoint::Location` — PDB `LF_ENUM` [measured]. Local packages use `MyMods`;
+/// Workshop packages use `None` plus an absolute install directory. The intervening storage
+/// points are named so status matching and the discriminants stay exact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(i32)]
 pub enum StorageLocation {
@@ -593,7 +594,7 @@ mod tests {
     fn workshop_mods_resolve_to_their_absolute_install_path() {
         let mut stack = ContentStack::new();
         let mut a = ModPackage::new("Ws", "C:/steam/workshop/content/287450/1234");
-        a.location = Some(StorageLocation::GameRoot);
+        a.location = Some(StorageLocation::None);
         a.declare_path("data/rules.xml");
         stack.push(a);
         assert_eq!(

@@ -285,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn the_balance_matrix_is_narrower_than_the_type_space() {
         assert!(BALANCE_TABLE_SIDE < RETAIL_NUM_TYPES);
         assert_eq!(BALANCE_TABLE_SIDE, 493);

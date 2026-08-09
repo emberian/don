@@ -154,7 +154,7 @@ def main() -> int:
     w("/// `s_ModCategoryInfo` `0x00C07AD0`, 12 x 120 bytes.")
     w("///")
     w("/// `relative_dir` is the engine's `relativeDirectory` with `\\\\` rewritten to `/`;")
-    w("/// resolution is case-insensitive either way. `CAT_ROOT`'s is empty, which is why")
+    w("/// the engine's category-prefix comparison is case-sensitive. `CAT_ROOT`'s is empty, so")
     w("/// it matches every path and must stay last in the classify scan.")
     w("pub struct CategoryInfo {")
     w("    pub name: &'static str,")
