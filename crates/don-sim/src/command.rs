@@ -271,9 +271,9 @@ impl ActionDef {
     }
 }
 
-/// How much of an inline `CommandPackage::process_*` state mutation the bridge carries.
-/// These handlers have [`Receiver::None`] because they write `Game` / `TurnControl` /
-/// per-player state directly rather than calling an `action_*` receiver.
+/// How much of an inline `CommandPackage::process_*` body the bridge carries.
+/// These handlers write `Game` / `TurnControl` / per-player state directly or emit an
+/// explicit receipt for presentation-only work rather than calling an `action_*` receiver.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InlinePort {
     /// Every deterministic simulation-side state mutation and gate is reproduced.
@@ -1479,7 +1479,7 @@ pub struct BridgeStats {
     /// Commands whose handler calls no `*::action_*` (lockstep, chat, camera, cheats we
     /// do not implement).
     pub inert: u64,
-    /// Inline `Game` / `TurnControl` / player-state handlers reproduced by this bridge.
+    /// Inline state or presentation-receipt handlers reproduced by this bridge.
     pub inline_state: u64,
     /// Orders actually installed on a unit.
     pub orders_installed: u64,
@@ -1576,6 +1576,56 @@ pub struct CheatWarningReceipt {
     pub sound_category: i32,
 }
 
+/// Ordered presentation/diagnostic evidence emitted by command handlers whose retail
+/// tails do not mutate walked simulation state.
+///
+/// Coordinates and text retain their raw wire representation. `delivered_to` records the
+/// exact leader slots which pass the symmetric chat-status gates in `process_ping` and
+/// `process_spline`; the product layer remains responsible for drawing the ping/spline,
+/// chat text, and camera motion and for writing diagnostic logs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandSideEffectReceipt {
+    Ping {
+        package_play: i32,
+        sender_who: Option<u8>,
+        x: i32,
+        y: i32,
+        delivered_to: Vec<u8>,
+    },
+    Spline {
+        package_play: i32,
+        sender_who: Option<u8>,
+        spline_type: u8,
+        spline_flags: u8,
+        spline_cmd: u8,
+        points: Vec<(i32, i32)>,
+        delivered_to: Vec<u8>,
+    },
+    CheckRandom {
+        seed: u32,
+    },
+    Chat {
+        package_play: i32,
+        sender_who: Option<u8>,
+        bits: u32,
+        taunt: i32,
+        taunt_num: i32,
+        text_len: u32,
+        /// The command carries `text_len + 1` UTF-16 code units, including the terminator.
+        utf16_with_nul: Vec<u16>,
+    },
+    Camera {
+        package_play: i32,
+        zoom: u8,
+        x: i32,
+        y: i32,
+        local_sender: bool,
+    },
+    Marwan {
+        start: u8,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HotKeyCamera {
     /// Raw IEEE-754 bits from `HotKeyCommand::x/y`; retaining bits preserves NaN payloads.
@@ -1627,10 +1677,18 @@ pub struct InlineCommandState {
     pub checksum_recheck: i32,
     /// `Player::who` for each package play slot; ChatSet indexes its state by this map.
     pub player_who: [u8; NUM_NETWORK_PLAYERS],
+    /// `LeaderData::valid & 1`, used by the presentation delivery loops.
+    pub leader_valid: [bool; NUM_NETWORK_PLAYERS],
+    /// `LeaderData::play` (`+0x08`) for the local spline delivery predicate.
+    pub leader_play: [i32; NUM_NETWORK_PLAYERS],
     /// Eight recipient status words for each `who` in the global chat matrix.
     pub chat_status: [[u32; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
     pub local_play: i32,
+    /// `Console+0x298`, distinct from the current command player's `Console+0x2A0`.
+    pub display_play: i32,
     pub reveal_map: bool,
+    /// `Game+0x820 & 0x40`, which bypasses both directed chat-status delivery gates.
+    pub chat_filter_bypass: bool,
     pub accum_cheated: [u8; NUM_OWNER_SLOTS],
     /// `PlayerData::valid & 1` for the eight player slots scanned by opcode 67.
     pub player_valid: [bool; CHEAT_INIT_PLAYER_SLOTS],
@@ -1648,6 +1706,7 @@ pub struct InlineCommandState {
     pub cheat_warning_receipts: Vec<CheatWarningReceipt>,
     /// Validated world transaction evidence for opcode 67.
     pub cheat_init_unit_receipts: Vec<CheatInitUnitReceiptRecord>,
+    pub command_side_effect_receipts: Vec<CommandSideEffectReceipt>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
@@ -1671,9 +1730,13 @@ impl Default for InlineCommandState {
             checksums: [0; NUM_NETWORK_PLAYERS],
             checksum_recheck: 0,
             player_who: std::array::from_fn(|play| play as u8),
+            leader_valid: [false; NUM_NETWORK_PLAYERS],
+            leader_play: std::array::from_fn(|play| play as i32),
             chat_status: [[0; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
             local_play: 0,
+            display_play: 0,
             reveal_map: false,
+            chat_filter_bypass: false,
             accum_cheated: [0; NUM_OWNER_SLOTS],
             player_valid: [false; CHEAT_INIT_PLAYER_SLOTS],
             tech_bits: [[0; CHEAT_TECH_BYTES]; NUM_NETWORK_PLAYERS],
@@ -1686,6 +1749,7 @@ impl Default for InlineCommandState {
             cheat_response_receipts: Vec::new(),
             cheat_warning_receipts: Vec::new(),
             cheat_init_unit_receipts: Vec::new(),
+            command_side_effect_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
@@ -1778,6 +1842,10 @@ impl Bridge {
         std::mem::take(&mut self.inline.cheat_init_unit_receipts)
     }
 
+    pub fn take_command_side_effect_receipts(&mut self) -> Vec<CommandSideEffectReceipt> {
+        std::mem::take(&mut self.inline.command_side_effect_receipts)
+    }
+
     /// `CommandPackage::process_all` `0x0094C500`: walk a payload, dispatching each
     /// command and advancing by exactly what its handler returns.
     ///
@@ -1854,6 +1922,8 @@ impl Bridge {
     fn process_inline(&mut self, pkg: &Package, cmd: &[u8], f: &mut dyn Fleet) {
         match cmd[0] {
             34 => self.process_hotkey(pkg, cmd),
+            50 => self.process_ping(pkg, cmd),
+            51 => self.process_spline(pkg, cmd),
             // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
             // wall-clock pacing, but `TurnControl+0x30` is the only deterministic state.
             52 => {
@@ -1888,7 +1958,13 @@ impl Bridge {
             }
             // CheckRandomCommand is deliberately log-only in this retail build. It reads
             // the seed dword at +1 for SyncLogger output but performs no comparison/store.
-            56 => {}
+            56 => {
+                if let Some(seed) = i32_at(cmd, 1) {
+                    self.inline
+                        .command_side_effect_receipts
+                        .push(CommandSideEffectReceipt::CheckRandom { seed: seed as u32 });
+                }
+            }
             // CheckSumsCommand logs all sixteen channel words, then stores the final
             // `total` word in CommandPackage::checksums[package.play].
             57 => {
@@ -1954,6 +2030,7 @@ impl Bridge {
                 }
             }
             67 => self.process_cheat_init_unit(cmd, f),
+            68 => self.process_chat(pkg, cmd),
             // ChatSetCommand replaces all eight recipient status words for the sender's
             // Player::who row. These values later gate chat and ping delivery.
             69 => {
@@ -1975,7 +2052,22 @@ impl Bridge {
             }
             // CameraCommand logs the remote viewpoint and may update only the local
             // Console/Scene zoom and scroll. It has no headless simulation mutation.
-            72 => {}
+            72 => {
+                let (Some(&zoom), Some(x), Some(y)) = (cmd.get(1), i32_at(cmd, 2), i32_at(cmd, 6))
+                else {
+                    return;
+                };
+                let local_sender = pkg.play == self.inline.local_play;
+                self.inline
+                    .command_side_effect_receipts
+                    .push(CommandSideEffectReceipt::Camera {
+                        package_play: pkg.play,
+                        zoom,
+                        x,
+                        y,
+                        local_sender,
+                    });
+            }
             74 => self.process_turn_data(pkg, cmd),
             76 => {
                 if let Some(&state) = cmd.get(1) {
@@ -1997,9 +2089,142 @@ impl Bridge {
                 }
             }
             // MarwanCommand only writes its start byte to the diagnostic log.
-            81 => {}
+            81 => {
+                if let Some(&start) = cmd.get(1) {
+                    self.inline
+                        .command_side_effect_receipts
+                        .push(CommandSideEffectReceipt::Marwan { start });
+                }
+            }
             _ => unreachable!("inline command table and dispatcher disagree"),
         }
+    }
+
+    fn sender_who(&self, play: i32) -> Option<u8> {
+        usize::try_from(play)
+            .ok()
+            .and_then(|play| self.inline.player_who.get(play).copied())
+            .filter(|&who| (who as usize) < NUM_NETWORK_PLAYERS)
+    }
+
+    /// Shared symmetric chat-status gate in `process_ping` and `process_spline`.
+    ///
+    /// Retail accepts a recipient when sender->recipient is zero and
+    /// recipient->sender is not two. Game semaphore bit `0x40` bypasses both tests.
+    fn presentation_delivery_allowed(&self, sender: u8, recipient: usize) -> bool {
+        self.inline
+            .leader_valid
+            .get(recipient)
+            .copied()
+            .unwrap_or(false)
+            && (self.inline.chat_filter_bypass
+                || (self.inline.chat_status[sender as usize][recipient] == 0
+                    && self.inline.chat_status[recipient][sender as usize] != 2))
+    }
+
+    /// `CommandPackage::process_ping` `0x009453F0`.
+    fn process_ping(&mut self, pkg: &Package, cmd: &[u8]) {
+        let (Some(x), Some(y)) = (i32_at(cmd, 1), i32_at(cmd, 5)) else {
+            return;
+        };
+        let sender_who = self.sender_who(pkg.play);
+        let delivered_to = sender_who.map_or_else(Vec::new, |sender| {
+            (0..NUM_NETWORK_PLAYERS)
+                .filter(|&recipient| self.presentation_delivery_allowed(sender, recipient))
+                .map(|recipient| recipient as u8)
+                .collect()
+        });
+        self.inline
+            .command_side_effect_receipts
+            .push(CommandSideEffectReceipt::Ping {
+                package_play: pkg.play,
+                sender_who,
+                x,
+                y,
+                delivered_to,
+            });
+    }
+
+    /// `CommandPackage::process_spline` `0x00945140`.
+    fn process_spline(&mut self, pkg: &Package, cmd: &[u8]) {
+        let (Some(&spline_type), Some(&spline_flags), Some(&spline_cmd), Some(len)) =
+            (cmd.get(1), cmd.get(2), cmd.get(3), u16_at(cmd, 4))
+        else {
+            return;
+        };
+        let Some(raw_points) = cmd.get(6..6 + len as usize * 8) else {
+            return;
+        };
+        let points: Vec<_> = raw_points
+            .chunks_exact(8)
+            .map(|point| {
+                (
+                    i32::from_le_bytes(point[..4].try_into().unwrap()),
+                    i32::from_le_bytes(point[4..].try_into().unwrap()),
+                )
+            })
+            .collect();
+        let sender_who = self.sender_who(pkg.play);
+        let delivered_to = sender_who.map_or_else(Vec::new, |sender| {
+            if !self.inline.leader_valid[sender as usize] {
+                return Vec::new();
+            }
+            (0..NUM_NETWORK_PLAYERS)
+                .filter(|&recipient| {
+                    self.presentation_delivery_allowed(sender, recipient)
+                        && self.inline.leader_play[recipient] == self.inline.display_play
+                })
+                .map(|recipient| recipient as u8)
+                .collect()
+        });
+        self.inline
+            .command_side_effect_receipts
+            .push(CommandSideEffectReceipt::Spline {
+                package_play: pkg.play,
+                sender_who,
+                spline_type,
+                spline_flags,
+                spline_cmd,
+                points,
+                delivered_to,
+            });
+    }
+
+    /// `CommandPackage::process_chat` `0x009454F0`.
+    ///
+    /// Chat display, taunts, cross-play moderation, and counters are presentation-only.
+    /// Preserve the raw recipient bits and all `len + 1` UTF-16 code units for the host.
+    fn process_chat(&mut self, pkg: &Package, cmd: &[u8]) {
+        let (Some(bits), Some(taunt), Some(taunt_num), Some(text_len)) = (
+            i32_at(cmd, 1),
+            i32_at(cmd, 5),
+            i32_at(cmd, 9),
+            i32_at(cmd, 13),
+        ) else {
+            return;
+        };
+        let Ok(text_len_usize) = usize::try_from(text_len) else {
+            return;
+        };
+        let Some(raw_text) = cmd.get(17..17 + (text_len_usize + 1) * 2) else {
+            return;
+        };
+        let utf16_with_nul = raw_text
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let sender_who = self.sender_who(pkg.play);
+        self.inline
+            .command_side_effect_receipts
+            .push(CommandSideEffectReceipt::Chat {
+                package_play: pkg.play,
+                sender_who,
+                bits: bits as u32,
+                taunt,
+                taunt_num,
+                text_len: text_len as u32,
+                utf16_with_nul,
+            });
     }
 
     /// `Game::action_cheat_view_all` `0x00592CD0`, excluding UI invalidation and the

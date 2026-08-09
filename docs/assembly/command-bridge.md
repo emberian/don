@@ -31,11 +31,11 @@ Concretely, what executes now:
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete transactional actions (`begin`, `halt`, and `disband`), one reproduced state
   action, and three capability-gated state paths.
-* **Twenty-three inline state handlers** — control-group save/camera, MP-log toggle, speed
-  set/up/down, all eight player-speed accumulators, two lockstep report stores, chat-route
-  status, reveal-map/turn telemetry, three bounded cheat-state handlers, three AI controls,
-  and three measured simulation no-ops are complete; pause's common state path is wired
-  but remains partial.
+* **Twenty-six inline handlers** — control-group save/camera, Ping/Spline presentation
+  delivery, MP-log toggle, speed set/up/down, all eight player-speed accumulators, two
+  lockstep report stores, chat-route status, reveal-map/turn telemetry, three bounded
+  cheat-state handlers, three AI controls, and three measured simulation no-ops are
+  complete; pause's common state path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -52,12 +52,13 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 4,201 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 23 `InlineDef` + 82 `OpDef` | 173 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 4,426 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 26 `InlineDef` + 82 `OpDef` | 176 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–66/69/72/74/76/79/81, 8 tests | 520 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–66/69/72/74/76/79/81, 8 tests | 538 |
 | `crates/don-sim/tests/command_cheat_init_unit.rs` | transactional world-receipt pins for opcode 67, 2 tests | 270 |
 | `crates/don-sim/tests/command_group_lifecycle.rs` | atomic HALT/DISBAND receipt, mask, ordering, and rollback pins, 2 tests | 184 |
+| `crates/don-sim/tests/command_presentation_receipts.rs` | Ping/Spline routing and raw presentation/diagnostic receipt pins, 3 tests | 157 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -65,11 +66,12 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-57 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+60 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
 `cargo test -p don-sim --test command_speed_state` 8/8,
 `cargo test -p don-sim --test command_cheat_init_unit` 2/2,
 `cargo test -p don-sim --test command_group_lifecycle` 2/2,
+`cargo test -p don-sim --test command_presentation_receipts` 3/3,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -253,6 +255,34 @@ and ping delivery, so the routing matrix is retained rather than dismissed as UI
 Opcode 72 is closure-green as a measured simulation no-op: every non-log branch targets
 local camera presentation, and the full ten-byte body is still consumed before the next
 command.
+
+### Presentation and diagnostic receipt cohort (2026-08-09)
+
+| opcode | handler | recovered boundary | status |
+|---:|---|---|---|
+| 50 | `process_ping` `0x009453F0` | signed x/y plus exact directed chat-status recipient filter | `complete` |
+| 51 | `process_spline` `0x00945140` | raw three-byte header, `u16` point count, ordered signed x/y vertices, local recipient filter | `complete` |
+| 56 | `process_check_random` `0x00946020` | raw seed diagnostic receipt | `complete` |
+| 68 | `process_chat` `0x009454F0` | recipient bits, taunt fields, and `len + 1` UTF-16 code units | `complete` |
+| 72 | `process_camera` `0x00943B00` | raw zoom/x/y and local-sender fact | `complete` |
+| 81 | `process_marwan` `0x00943660` | raw start-byte diagnostic receipt | `complete` |
+
+These handlers now append one ordered typed `CommandSideEffectReceipt` instead of
+silently disappearing at the headless boundary. Ping reproduces retail's eight-leader
+loop: the recipient must be valid, sender→recipient status must be zero, and
+recipient→sender status must not be two; `Game+0x820 & 0x40` bypasses both directed
+tests. Spline retains that symmetric filter, additionally requires a valid sender and a
+recipient whose `LeaderData::play` equals `Console+0x298`, and preserves every vertex in
+wire order. Neither handler mutates walked state, so these two newly become honestly
+closure-green without changing their conservative command-class metadata.
+The generated inventory consequently moves from 26/82 to 28/82 complete opcodes and
+from 159 to 157 remaining whole-simulation rows.
+
+CHAT retains the terminating UTF-16 unit because retail constructs its string at wire
+offset `+17` while returning `19 + 2*len`. CAMERA records whether the package sender is
+the local `Console+0x2A0` player but leaves availability, zoom, and scroll work to the
+presentation host. CHECK_RANDOM and MARWAN retain the exact values consumed by their
+diagnostic log calls. Draining all six receipt variants leaves simulation state unchanged.
 
 ### Reveal-map and turn telemetry tranche (2026-08-09)
 

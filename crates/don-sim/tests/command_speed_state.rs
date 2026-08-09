@@ -4,8 +4,9 @@
 //! are never called directly.
 
 use don_sim::command::{
-    Bridge, CheatResponseReceipt, CheatWarningReceipt, InlineDef, InlinePort, ObjectTable, Package,
-    Slot, CHEAT_TECH_BYTES, PLAYER_SPEED_FIELDS, RESOURCE_BUCKET_XOR,
+    Bridge, CheatResponseReceipt, CheatWarningReceipt, CommandSideEffectReceipt, InlineDef,
+    InlinePort, ObjectTable, Package, Slot, CHEAT_TECH_BYTES, PLAYER_SPEED_FIELDS,
+    RESOURCE_BUCKET_XOR,
 };
 use don_sim::rng::Random;
 
@@ -198,8 +199,15 @@ fn check_random_ai_controls_and_marwan_preserve_exact_simulation_effects() {
         &[56, 0x78, 0x56, 0x34, 0x12, 81, 0xff],
     );
     assert_eq!(
+        bridge.take_command_side_effect_receipts(),
+        vec![
+            CommandSideEffectReceipt::CheckRandom { seed: 0x1234_5678 },
+            CommandSideEffectReceipt::Marwan { start: 0xff },
+        ]
+    );
+    assert_eq!(
         bridge.inline, before,
-        "CheckRandom and Marwan have only diagnostic/presentation effects"
+        "draining the diagnostic evidence leaves simulation state unchanged"
     );
 
     issue(&mut bridge, &mut package, &[62]);
@@ -271,8 +279,18 @@ fn checksum_chat_status_and_camera_paths_preserve_exact_state_boundaries() {
     camera.extend_from_slice(&0x8000_0000u32.to_le_bytes());
     issue(&mut bridge, &mut package, &camera);
     assert_eq!(
+        bridge.take_command_side_effect_receipts(),
+        vec![CommandSideEffectReceipt::Camera {
+            package_play: 4,
+            zoom: 6,
+            x: i32::MAX,
+            y: i32::MIN,
+            local_sender: false,
+        }]
+    );
+    assert_eq!(
         bridge.inline, before_camera,
-        "CameraCommand mutates only local presentation state"
+        "draining CameraCommand evidence leaves simulation state unchanged"
     );
 
     bridge.inline.player_who[4] = 2;
