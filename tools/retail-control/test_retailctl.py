@@ -13,6 +13,42 @@ retailctl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(retailctl)
 
 
+def netsys_manifest_fixture() -> dict:
+    environment = retailctl.netsys_environment("load-only")
+    return {
+        "schema": retailctl.NETSYS_SCHEMA,
+        "state": "installed",
+        "created_unix_ms": 1,
+        "credential_material": "none",
+        "task_name": retailctl.NETSYS_TASK_NAME,
+        "retail_executable": {
+            "path": retailctl.RETAIL_EXE,
+            "size": 9_925_120,
+            "sha256": retailctl.EXPECTED_SHA256,
+        },
+        "original_dll": {
+            "path": retailctl.RETAIL_NETSYS_DLL,
+            "size": retailctl.EXPECTED_NETSYS_SIZE,
+            "sha256": retailctl.EXPECTED_NETSYS_SHA256,
+        },
+        "backup_dll": {
+            "path": retailctl.NETSYS_BACKUP,
+            "size": retailctl.EXPECTED_NETSYS_SIZE,
+            "sha256": retailctl.EXPECTED_NETSYS_SHA256,
+        },
+        "shim": {
+            "path": retailctl.NETSYS_STAGED,
+            "size": 198_656,
+            "sha256": "a" * 64,
+        },
+        "mode": "load-only",
+        "environment": environment,
+        "launcher_sha256": "b" * 64,
+        "generation": 1,
+        "rollover": None,
+    }
+
+
 class RetailCtlTests(unittest.TestCase):
     def test_coord_lookup_global_is_dereferenced_before_indexing(self):
         source = Path(__file__).with_name("retail_control.c").read_text()
@@ -576,39 +612,7 @@ class RetailCtlTests(unittest.TestCase):
             retailctl.netsys_environment("host", "192.0.2.1:31337")
 
     def test_netsys_manifest_is_bound_to_shipped_backup_and_exact_environment(self):
-        environment = retailctl.netsys_environment("load-only")
-        manifest = {
-            "schema": retailctl.NETSYS_SCHEMA,
-            "state": "installed",
-            "created_unix_ms": 1,
-            "credential_material": "none",
-            "task_name": retailctl.NETSYS_TASK_NAME,
-            "retail_executable": {
-                "path": retailctl.RETAIL_EXE,
-                "size": 9_925_120,
-                "sha256": retailctl.EXPECTED_SHA256,
-            },
-            "original_dll": {
-                "path": retailctl.RETAIL_NETSYS_DLL,
-                "size": retailctl.EXPECTED_NETSYS_SIZE,
-                "sha256": retailctl.EXPECTED_NETSYS_SHA256,
-            },
-            "backup_dll": {
-                "path": retailctl.NETSYS_BACKUP,
-                "size": retailctl.EXPECTED_NETSYS_SIZE,
-                "sha256": retailctl.EXPECTED_NETSYS_SHA256,
-            },
-            "shim": {
-                "path": retailctl.NETSYS_STAGED,
-                "size": 188_928,
-                "sha256": "a" * 64,
-            },
-            "mode": "load-only",
-            "environment": environment,
-            "launcher_sha256": "b" * 64,
-            "generation": 1,
-            "rollover": None,
-        }
+        manifest = netsys_manifest_fixture()
         self.assertIs(retailctl.validate_netsys_manifest(manifest), manifest)
         wrong_backup = copy.deepcopy(manifest)
         wrong_backup["backup_dll"]["sha256"] = "c" * 64
@@ -651,6 +655,31 @@ class RetailCtlTests(unittest.TestCase):
         self.assertNotIn("[IO.File]::Replace({ps_literal(NETSYS_BACKUP)}", rollover)
         self.assertIn('"mode": "load-only"', rollover)
         self.assertIn('"rollover": None', rollover)
+
+    def test_netsys_next_generation_migrates_exact_committed_v1_installed_manifest(self):
+        current = netsys_manifest_fixture()
+        legacy = copy.deepcopy(current)
+        legacy.pop("generation")
+        legacy.pop("rollover")
+        migrated = retailctl.migrate_netsys_manifest(legacy)
+        self.assertEqual(migrated["generation"], 1)
+        self.assertIsNone(migrated["rollover"])
+        self.assertEqual(migrated["shim"], legacy["shim"])
+        self.assertNotIn("generation", legacy)
+        with mock.patch.object(
+            retailctl,
+            "guest_read_bytes",
+            return_value=(json.dumps(legacy) + "\n").encode("utf-8"),
+        ):
+            self.assertEqual(retailctl.read_netsys_manifest(), migrated)
+        wrong_state = copy.deepcopy(legacy)
+        wrong_state["state"] = "restored"
+        with self.assertRaisesRegex(ValueError, "exact installed v1"):
+            retailctl.migrate_netsys_manifest(wrong_state)
+        extra = copy.deepcopy(legacy)
+        extra["unrecognized"] = True
+        with self.assertRaisesRegex(ValueError, "incomplete or unexpected"):
+            retailctl.migrate_netsys_manifest(extra)
 
     def test_netsys_trace_is_contiguous_pid_bound_and_credential_free(self):
         trace = (

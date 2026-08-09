@@ -4129,6 +4129,27 @@ def validate_netsys_manifest(manifest: object) -> dict:
     return manifest
 
 
+def migrate_netsys_manifest(manifest: object) -> dict:
+    """Lift the exact committed v1 installed manifest into generation-aware form."""
+    if not isinstance(manifest, dict):
+        raise ValueError("NetSys manifest is not an object")
+    current_fields = {
+        "schema", "state", "created_unix_ms", "credential_material", "task_name",
+        "retail_executable", "original_dll", "backup_dll", "shim", "mode",
+        "environment", "launcher_sha256", "generation", "rollover",
+    }
+    if set(manifest) == current_fields:
+        return validate_netsys_manifest(manifest)
+    legacy_fields = current_fields - {"generation", "rollover"}
+    if set(manifest) != legacy_fields:
+        raise ValueError("NetSys manifest fields are incomplete or unexpected")
+    if manifest.get("schema") != NETSYS_SCHEMA or manifest.get("state") != "installed":
+        raise ValueError("only the exact installed v1 NetSys manifest can migrate")
+    migrated = dict(manifest)
+    migrated.update({"generation": 1, "rollover": None})
+    return validate_netsys_manifest(migrated)
+
+
 def guest_file_record(path: str) -> dict:
     literal = ps_literal(path)
     script = f"""
@@ -4242,7 +4263,7 @@ def read_netsys_manifest() -> dict:
         manifest = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("NetSys manifest is not canonical UTF-8 JSON") from exc
-    return validate_netsys_manifest(manifest)
+    return migrate_netsys_manifest(manifest)
 
 
 def write_netsys_manifest(manifest: dict) -> None:
