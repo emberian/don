@@ -12,11 +12,34 @@ Microsoft/Big Huge Games executables, PDBs, rules, scripts, replays, art, audio,
 captures, and packs generated from those inputs are not covered by that license and are not
 release payloads.
 
-This repository does **not** yet provide an end-user installer or a supported owned-install
-extractor/bootstrap. The commands in
-[`docs/binary-ground-truth.md`](binary-ground-truth.md) document the provenance of the
-project's local research corpus; they are not a complete, portable installer and should not
-be presented as one. A future distributable edition must either:
+This repository does **not** yet provide a finished standalone game installer. It now does
+provide a supported, deliberately narrower owned-data bootstrap for the exact retail build:
+
+```sh
+python3 tools/install/bootstrap.py check \
+  --retail-root '/absolute/path/to/Rise of Nations'
+python3 tools/install/bootstrap.py install \
+  --retail-root '/absolute/path/to/Rise of Nations' \
+  --workspace /absolute/path/to/don --dry-run
+python3 tools/install/bootstrap.py install \
+  --retail-root '/absolute/path/to/Rise of Nations' \
+  --workspace /absolute/path/to/don
+```
+
+The manifest at [`tools/install/owned-inputs.json`](../tools/install/owned-inputs.json) binds
+the supported executable identity and 51 shipped data/script inputs by relative path, byte size
+and SHA-256. The executable is verified but never copied. Source paths are resolved
+case-insensitively for the Windows install layout, with ambiguous names and symlinks refused.
+All source bytes and every existing destination are checked before the first write. The installer
+then creates only missing exact files beneath the checkout's already-ignored `ron-data/`; it never
+overwrites or deletes a user file, downloads content, writes outside that root, or packages the
+result. Re-running it is idempotent. `check` and `install --dry-run` are non-mutating.
+
+This closes the reproducible local-input bootstrap boundary, not the product-install boundary.
+The commands in [`docs/binary-ground-truth.md`](binary-ground-truth.md) remain provenance notes,
+not a portable installer. The current browser still depends on live-derived tables that this
+static owned-data bootstrap cannot manufacture honestly, and the independent game is not yet a
+complete release. A distributable edition must still either:
 
 1. extract the necessary inputs on the user's machine from a legally owned install without
    redistributing them; or
