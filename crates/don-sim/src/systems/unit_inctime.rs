@@ -39,8 +39,8 @@
 //!   `build_mark` (`Objects +0x184`), and there is no third loop at base 3000. Walls get
 //!   `process` and never `inc_time`.
 //! * **The unit band calls a second virtual, `+0x154` `Unit::execute_events`
-//!   `0x0060EDC0`**, that the building band does not. It is unported and named in
-//!   [`IncTimeGaps::execute_events`].
+//!   `0x0060EDC0`**, that the building band does not. Its exact 131-byte dispatcher is
+//!   [`unit_execute_events`]; the two callback bodies remain blockers.
 //!
 //! # The `inc_time` family, complete
 //!
@@ -83,8 +83,11 @@
 //!
 //! `Guy::inc_time` calls `Guy::set_anim` `0x005DA300`, and **`Guy::set_anim` draws from
 //! `game_random`** — `mov ecx, [0x00C06184]` at `0x005DAC68`, `0x005DB21D` and
-//! `0x005DB339`, each `Random::get(0, 0xFFFF)` followed by `% 100` [measured]. Three
-//! conditional sites, so the draws per call are between 0 and 3 and are data-dependent.
+//! `0x005DB339`, each `Random::get(0, 0xFFFF)` followed by `% 100` [measured]. The sites
+//! sit in mutually exclusive requested-class arms (`0`, `12`, and `8` respectively), so
+//! one `set_anim` **activation** draws **zero or one time**, never three. The captain/uber
+//! path can recursively activate `set_anim` at `0x005DAB80`, so one root call has no finite
+//! draw bound established here. Whether any activation reaches its one site is data-dependent.
 //! Animation transitions therefore *move the simulation RNG stream*, which means a port
 //! that skips them silently desyncs everything drawn afterwards in the tick.
 //!
@@ -95,9 +98,11 @@
 //! `0x005DD200`, called from the tail of `Guy::inc_time` for owners 0..7, draws six times
 //! but from `internal_random`, so it does not perturb the sim stream.
 //!
-//! This module draws nothing. It **counts** every skipped site in [`IncTimeGaps`], the way
-//! the tick driver counts the anti-air dud roll: drawing the wrong number of values is
-//! strictly worse than drawing none and reporting the count.
+//! The partial `Guy`/`Unit` drivers draw nothing. They **count** every skipped root call in
+//! [`IncTimeGaps`], the way the tick driver counts the anti-air dud roll: drawing the wrong
+//! number of values is strictly worse than drawing none and reporting it. The isolated
+//! [`set_anim_rng_arm`] helper does advance a supplied RNG, but is not wired into those
+//! partial drivers because their missing head state cannot select an arm honestly.
 //!
 //! # Provenance
 //!
@@ -110,12 +115,13 @@
 //! | `Objects::inc_time` | `0x0065DB70` | 360 | step 15 driver |
 //! | `Unit::inc_time` | `0x00610B40` | 122 | dispatcher transcribed; called guy path is partial |
 //! | `Guy::inc_time` | `0x005D9E10` | 1251 | outer clock control flow; `set_anim` calls are partial |
-//! | `Guy::set_anim` | `0x005DA300` | 4723 | **tail ported, head unread** |
+//! | `Guy::set_anim` | `0x005DA300` | 4723 | head measured; local RNG sites isolated; full body unported |
 //! | `AnimationPacket::get_anim_time` | `0x00918C40` | 88 | anim duration, default `200` |
 //! | `AnimationPacket::get_game_frames` | `0x00918CC0` | 88 | used by `Wall`/`DeathObj` |
 //! | `Guy::set_new_location` | `0x005D86F0` | 899 | crew-guy call site ported exactly |
 //! | `GuyOut::graph_inc_frame` | `0x005DD200` | 3890 | presentation, `internal_random` |
-//! | `Unit::execute_events` | `0x0060EDC0` | — | the `+0x154` sibling call, unported |
+//! | `Unit::execute_events` | `0x0060EDC0` | 131 | exact dispatcher in [`unit_execute_events`] |
+//! | `Guy::execute_events` | `0x005D99C0` | 1093 | game-event package builder, unported |
 //! | anim-class table | `0x00AF4370` | 38×4 | transcribed in [`ANIM_CLASS`] |
 //!
 //! # Fidelity
@@ -129,14 +135,14 @@
 //! ledger is `docs/mechanics/unit-inctime.md`. Two boundaries inside the recovered unit/guy
 //! path are load-bearing and are counted rather than papered over:
 //!
-//! 1. **`Guy::set_anim`'s head is unread.** Bytes `0x005DA300..0x005DB3F0` resolve *which*
-//!    animation actually plays (variation selection, hero and spell special-cases, the
-//!    three RNG draws). What is ported is the tail, `0x005DB3FA..0x005DB570`, which is the
-//!    part that writes the checksummed fields: `cur_anim = <resolved>`, `cur_time = 0`,
-//!    `end_time = anim_frames(anim)`. There is a second tail path, gated on a head-local
-//!    (`[ebp-0x1C] == 8`) that preserves animation phase across the change instead of
-//!    zeroing `cur_time`; whether that local is the walk class is a *hypothesis* and is
-//!    deliberately not implemented. See [`set_anim_tail`].
+//! 1. **`Guy::set_anim`'s measured head is not integrated.** Bytes
+//!    `0x005DA300..0x005DB3F0` resolve *which* animation actually plays (same-family early
+//!    return, captain/uber recursion, hero/spell special-cases, packet fallbacks, and one of
+//!    three mutually exclusive local RNG sites). The test-only partial driver applies only
+//!    the common changed-animation writes: `cur_anim = <already resolved>`, `cur_time = 0`,
+//!    `end_time = anim_frames(anim)`. The class-8/walk path at `0x005DB3FA` instead preserves
+//!    phase; the binary queries `get_anim_time(old_cur_anim)` twice with the identical old
+//!    animation, so its observed rescale ratio is one. Neither path is exposed as runtime.
 //! 2. **The animation packets are art assets we do not load.** `end_time` is
 //!    `anim_frames[anim_index]` read out of the loaded `.anm` data. Retail's own fallback
 //!    when the animation is absent is `end_time = 3` (`mov eax, 3` at `0x005DB558`) and
@@ -145,9 +151,8 @@
 //!    *durations* are retail's missing-asset fallback rather than retail's real ones.
 
 use crate::objects::{Band, ObjectRegistry, BUILD_BAND_BASE, OWNER_SLOTS};
-#[cfg(test)]
-use crate::systems::groups_guys::UnitGuys;
-use crate::systems::groups_guys::{GuyData, UnitTypeStats};
+use crate::rng::Random;
+use crate::systems::groups_guys::{GuyData, UnitGuys, UnitTypeStats};
 
 /// Whether this module may serve step 15 on a fidelity or product surface.
 pub const RUNTIME_FIDELITY_READY: bool = false;
@@ -158,8 +163,9 @@ pub const RUNTIME_FIDELITY_READY: bool = false;
 /// `Objects::inc_time` step. The list stays explicit so green research tests cannot become
 /// a completeness claim.
 pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
-    "Guy::set_anim head 0x005DA300 (including game_random draws)",
-    "Unit::execute_events 0x0060EDC0",
+    "Guy::set_anim 0x005DA300 full state/RNG integration (including recursive activations)",
+    "Guy::execute_events 0x005D99C0 / GraphicEvents::execute_game_events 0x008E48E0",
+    "GraphicEvents::verify_load 0x008E4780",
     "retail AnimationPacket/.anm data",
     "Wall::inc_time 0x0063FB60",
     "DeathObj::inc_time 0x008D5240",
@@ -261,6 +267,154 @@ pub fn anim_class(a: i8) -> i8 {
         ANIM_CLASS[a as usize]
     } else {
         CLASS_OUT_OF_TABLE
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Guy::set_anim — the three mutually exclusive game_random sites
+// ---------------------------------------------------------------------------
+
+/// A `game_random` site in `Guy::set_anim`, in control-flow order.
+///
+/// These are alternatives, not a sequence. `0x005DA709` separates requested class `0`
+/// from the non-zero classes; `0x005DB20E` and `0x005DB2B8` then select class `12` or `8`.
+/// Consequently one call can reach at most one variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetAnimRngSite {
+    /// Default/idle fallback, call at `0x005DAC75` (site begins `0x005DAC68`).
+    DefaultVariation,
+    /// Attack variation, call at `0x005DB22A` (site begins `0x005DB21D`).
+    AttackVariation,
+    /// Nature locomotion variation, call at `0x005DB346` (site begins `0x005DB339`).
+    NatureWalkVariation,
+}
+
+impl SetAnimRngSite {
+    pub const fn call_va(self) -> u32 {
+        match self {
+            SetAnimRngSite::DefaultVariation => 0x005D_AC75,
+            SetAnimRngSite::AttackVariation => 0x005D_B22A,
+            SetAnimRngSite::NatureWalkVariation => 0x005D_B346,
+        }
+    }
+}
+
+/// The one optional random result produced by an entered `set_anim` class arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetAnimRngOutcome {
+    pub site: Option<SetAnimRngSite>,
+    /// `Random::get(0, 0xFFFF) % 100`, when a draw occurred.
+    pub percent: Option<i32>,
+    /// Immediate candidate selected by the attack or nature-walk roll, before packet
+    /// fallbacks and unit-mask overrides. The default arm's remaining selection depends on
+    /// more head state and therefore returns `None` here.
+    pub candidate_anim: Option<i8>,
+}
+
+impl SetAnimRngOutcome {
+    const fn no_draw(candidate_anim: Option<i8>) -> Self {
+        SetAnimRngOutcome {
+            site: None,
+            percent: None,
+            candidate_anim,
+        }
+    }
+}
+
+/// One already-entered, mutually exclusive animation-class arm.
+///
+/// This intentionally does not pretend to be all of `Guy::set_anim`: the 4.7 KiB
+/// function's prelude can return, redirect, or recursively invoke the function before these
+/// arms. It isolates only each site's final draw gate and its immediate roll mapping; packet
+/// fallbacks, unit-mask overrides, and the surrounding state writes remain outside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetAnimRngArm {
+    /// Control has reached `0x005DAC3E`. Retail draws only when the owning unit's
+    /// `UnitData::openlist` at `+0x104` is null; otherwise it installs percentage zero
+    /// without advancing the RNG.
+    DefaultVariation { unit_openlist_is_null: bool },
+    /// Control has reached the class-12 resolution block after its queue/hold early returns.
+    /// The third `Guy::set_anim` argument is the variation / autoselect gate: zero preserves
+    /// the actual requested attack anim and consumes no RNG; non-zero rolls among 11/12/13.
+    AttackVariation {
+        requested: i8,
+        variant_autoselect: bool,
+    },
+    /// Control has reached the class-8 resolution block. Only owner 9 and types
+    /// 0x192/0x193/0x194 draw here; a roll at least 50 selects jog (9), otherwise the
+    /// class-canonical walk (8) remains.
+    NatureWalkVariation { owner: i8, unit_type: i32 },
+    /// Any class/path with no `game_random` site.
+    None,
+}
+
+/// Execute the exact local RNG behavior of one entered [`SetAnimRngArm`].
+///
+/// Every draw is `Random::get(0, 0xFFFF)` followed by signed remainder `% 100`; the draw is
+/// non-negative, so Rust's `%` agrees with x86 `idiv`. The enum makes the retail CFG's
+/// mutual exclusion structural: this function cannot consume more than one draw.
+pub fn set_anim_rng_arm(arm: SetAnimRngArm, rng: &mut Random) -> SetAnimRngOutcome {
+    let mut draw = |site| {
+        let percent = rng.get(0, 0xFFFF) % 100;
+        SetAnimRngOutcome {
+            site: Some(site),
+            percent: Some(percent),
+            candidate_anim: None,
+        }
+    };
+
+    match arm {
+        SetAnimRngArm::DefaultVariation {
+            unit_openlist_is_null,
+        } => {
+            if unit_openlist_is_null {
+                draw(SetAnimRngSite::DefaultVariation)
+            } else {
+                SetAnimRngOutcome {
+                    site: None,
+                    percent: Some(0),
+                    candidate_anim: None,
+                }
+            }
+        }
+        SetAnimRngArm::AttackVariation {
+            requested,
+            variant_autoselect,
+        } => {
+            if !variant_autoselect {
+                return SetAnimRngOutcome::no_draw(Some(requested));
+            }
+            let mut out = draw(SetAnimRngSite::AttackVariation);
+            let percent = out.percent.expect("draw arm always sets percent");
+            out.candidate_anim = Some(if percent < 30 {
+                anim::CHAR_ATTACK1
+            } else if percent > 70 {
+                anim::CHAR_ATTACK3
+            } else {
+                anim::CHAR_ATTACK2
+            });
+            out
+        }
+        SetAnimRngArm::NatureWalkVariation { owner, unit_type } => {
+            if owner != 9 {
+                // Owners 0..8 take the speed-ratio branch before this site. That branch is
+                // deterministic but outside this RNG helper, so do not invent its result.
+                return SetAnimRngOutcome::no_draw(None);
+            }
+            if !matches!(unit_type, 0x192 | 0x193 | 0x194) {
+                return SetAnimRngOutcome::no_draw(Some(anim::CHAR_WALK));
+            }
+            let mut out = draw(SetAnimRngSite::NatureWalkVariation);
+            out.candidate_anim = Some(
+                if out.percent.expect("draw arm always sets percent") >= 50 {
+                    anim::CHAR_JOG
+                } else {
+                    anim::CHAR_WALK
+                },
+            );
+            out
+        }
+        SetAnimRngArm::None => SetAnimRngOutcome::no_draw(None),
     }
 }
 
@@ -472,6 +626,98 @@ impl UnitAnimView {
 }
 
 // ---------------------------------------------------------------------------
+// Unit::execute_events — exact 131-byte dispatcher
+// ---------------------------------------------------------------------------
+
+/// Inputs read by `Unit::execute_events` `0x0060EDC0` before it walks the live guy prefix.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitEventView {
+    /// Result of virtual slot `+0x08`, `UnitData::is_valid_unit` `0x0046CDA0`
+    /// (`flags & 1`).
+    pub unit_is_valid: bool,
+    /// Result of virtual slot `+0xBC`, `UnitData::is_on_map` `0x0046CE30`
+    /// (`(u16)inside_up >> 15`).
+    pub unit_is_on_map: bool,
+    /// `UnitData::unit_masks2` `+0x6C`; bit `0x10` selects verify-load instead of execution.
+    pub unit_masks2: u32,
+}
+
+/// Which side of `Unit::execute_events`'s only branch retail takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitEventPath {
+    /// Call `Guy::execute_events` `0x005D99C0` for every guy in `[0, guy_mark)`.
+    ExecuteGuyEvents,
+    /// Call `GraphicEvents::verify_load(guy.gpiece)` `0x008E4780` over the same prefix.
+    VerifyGraphicLoads,
+}
+
+impl UnitEventView {
+    /// The condition at `0x0060EDC6..0x0060EDDF`, transcribed from the instruction stream.
+    pub const fn path(self) -> UnitEventPath {
+        if !self.unit_is_valid
+            || !self.unit_is_on_map
+            || self.unit_masks2 & UNIT_MASKS2_FREEZE_ANIM != 0
+        {
+            UnitEventPath::VerifyGraphicLoads
+        } else {
+            UnitEventPath::ExecuteGuyEvents
+        }
+    }
+}
+
+/// The two external calls made by the exact `Unit::execute_events` dispatcher.
+///
+/// The callback receives the whole array and index for the execute path so it may mutate
+/// `guy_mark`; retail re-reads that byte at the loop backedge (`0x0060EDFF`).
+pub trait UnitEventSink {
+    fn execute_guy_events(&mut self, guys: &mut UnitGuys, index: usize);
+    fn verify_graphic_load(&mut self, gpiece: i32);
+}
+
+/// Structural state inconsistency that would be a null dereference in retail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitEventError {
+    NullGuySlot(usize),
+}
+
+/// Counts produced by one exact `Unit::execute_events` dispatcher pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitEventStats {
+    pub path: UnitEventPath,
+    pub guys: u32,
+}
+
+/// `Unit::execute_events` `0x0060EDC0`, all 131 bytes of control flow.
+///
+/// This closes the unit-level dispatcher only. The sink bodies remain separate blockers:
+/// `Guy::execute_events` builds a `GameDataPackage` and can call
+/// `GraphicEvents::execute_game_events`, while `GraphicEvents::verify_load` can initialise
+/// graphic-event data. Neither body is approximated here.
+pub fn unit_execute_events<S: UnitEventSink>(
+    view: UnitEventView,
+    guys: &mut UnitGuys,
+    sink: &mut S,
+) -> Result<UnitEventStats, UnitEventError> {
+    let path = view.path();
+    let mut stats = UnitEventStats { path, guys: 0 };
+    let mut i = 0i32;
+    while i < guys.guy_mark as i32 {
+        let idx = i as usize;
+        let gpiece = match guys.guys.get(idx) {
+            Some(Some(guy)) => guy.gpiece,
+            _ => return Err(UnitEventError::NullGuySlot(idx)),
+        };
+        match path {
+            UnitEventPath::ExecuteGuyEvents => sink.execute_guy_events(guys, idx),
+            UnitEventPath::VerifyGraphicLoads => sink.verify_graphic_load(gpiece),
+        }
+        stats.guys += 1;
+        i += 1;
+    }
+    Ok(stats)
+}
+
+// ---------------------------------------------------------------------------
 // Counters
 // ---------------------------------------------------------------------------
 
@@ -481,16 +727,17 @@ impl UnitAnimView {
 /// that is guessed at is an unmeasurable one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IncTimeGaps {
-    /// `Guy::set_anim` `0x005DA300` head calls. Each is **0–3 skipped `game_random`
-    /// draws** at `0x005DAC68` / `0x005DB21D` / `0x005DB339`, plus the unread animation
-    /// resolution. Only the tail is ported.
+    /// Root `Guy::set_anim` `0x005DA300` activations skipped by the partial driver. Each
+    /// activation has **0–1 local `game_random` draws** at one of the mutually exclusive
+    /// sites `0x005DAC68` / `0x005DB21D` / `0x005DB339`, but the captain/uber path may
+    /// recursively create more activations. Full animation resolution is also skipped.
     pub set_anim_head: u64,
     /// `GuyOut::graph_inc_frame` `0x005DD200` calls skipped (owners 0..7). Presentation;
     /// draws six times from `internal_random`, so skipping it does **not** move the sim
     /// stream.
     pub graph_inc_frame: u64,
-    /// `Unit::execute_events` `0x0060EDC0`, the `+0x154` call the unit band makes right
-    /// after `inc_time`. Unported.
+    /// Calls to the now-ported [`unit_execute_events`] dispatcher that the test-only
+    /// `Objects::inc_time` research driver still does not supply sink inputs for.
     pub execute_events: u64,
     /// `GraphicPieces[gpiece] == 0` — retail's fatal *"No Animation Packet"* path.
     pub no_anim_packet: u64,
@@ -539,11 +786,26 @@ pub struct IncTimeStats {
 }
 
 impl IncTimeStats {
-    /// Total `game_random` draws this pass failed to make, expressed as the range the
-    /// three conditional sites in `Guy::set_anim` permit. Reported as a range because the
-    /// exact count is decided in bytes we have not read.
-    pub fn missing_sim_rng_draws(&self) -> (u64, u64) {
-        (0, self.gaps.set_anim_head * 3)
+    /// Total `game_random` draws this pass failed to make.
+    ///
+    /// `None` means no finite upper bound has been established: one skipped root activation
+    /// can recursively invoke `set_anim` through captain/uber coordination. Returning the
+    /// direct-site count as a total bound would silently under-report that path.
+    pub fn missing_sim_rng_draws(&self) -> (u64, Option<u64>) {
+        (
+            0,
+            if self.gaps.set_anim_head == 0 {
+                Some(0)
+            } else {
+                None
+            },
+        )
+    }
+
+    /// Range contributed by the already-counted activations themselves, excluding any
+    /// recursive activations that the unported body would have created.
+    pub fn missing_direct_set_anim_rng_draws(&self) -> (u64, u64) {
+        (0, self.gaps.set_anim_head)
     }
 
     #[cfg(test)]
@@ -564,7 +826,8 @@ impl IncTimeStats {
 // Guy::set_anim — the tail
 // ---------------------------------------------------------------------------
 
-/// The tail of `Guy::set_anim` `0x005DA300`, `0x005DB3FA..0x005DB570` [measured].
+/// The common changed-animation write arm of `Guy::set_anim`, ending at `0x005DB570`
+/// [measured]. This is a test-only component of the partial `Guy::inc_time` driver.
 ///
 /// This is the part that writes checksummed state, and it is exactly:
 ///
@@ -575,25 +838,25 @@ impl IncTimeStats {
 /// end_time = anim_frames[cur_anim]         ; 0x005DB55D, or 3 when the anim is absent
 /// ```
 ///
-/// **The path not taken.** At `0x005DB3FA` retail tests a head-local against `8`, and the
-/// other arm preserves phase across the change — either subtracting a head-local from
-/// `cur_time` or rescaling it by the ratio of two `AnimationPacket::get_anim_time` results
-/// (`imul`/`div` at `0x005DB495`). Which calls land on that arm is decided in the 4,300
-/// unread bytes ahead of it. Implementing it on the guess that `8` means the walk class
-/// would be inventing sim state, so it is left out and every call is counted in
-/// [`IncTimeGaps::set_anim_head`].
+/// **The path not taken.** At `0x005DB3FA` retail tests the measured old animation class
+/// against `8` (walk). That arm either subtracts the old end time or preserves phase across
+/// an animation change. The latter calls `AnimationPacket::get_anim_time(old_cur_anim)`
+/// twice with the identical old animation (`0x005DB43C`, `0x005DB44D`), so the observed
+/// integer rescale ratio is one. The partial driver lacks the head state needed to select
+/// this path honestly, so every root call remains counted in [`IncTimeGaps::set_anim_head`].
 ///
-/// `force` is `set_anim`'s third argument. It gates one of the head's RNG draws
-/// (`0x005DB217`) and nothing in the ported tail; it is taken and recorded so call sites
-/// stay transcribed rather than simplified.
-pub fn set_anim_tail<A: AnimData>(
+/// `variant_autoselect` is `set_anim`'s third argument. It gates the attack-variation RNG
+/// draw at `0x005DB217` and nothing in the ported tail. The second argument is the separate
+/// same-class restart/override gate; all `Guy::inc_time` call sites pass it as zero.
+#[cfg(test)]
+pub(crate) fn set_anim_tail<A: AnimData>(
     g: &mut GuyData,
     a: i8,
-    force: i32,
+    variant_autoselect: i32,
     data: &A,
     st: &mut IncTimeStats,
 ) {
-    let _ = force;
+    let _ = variant_autoselect;
     st.gaps.set_anim_head += 1;
     st.anim_changes += 1;
     g.cur_anim = a;
@@ -998,10 +1261,253 @@ mod tests {
         assert!(!RUNTIME_FIDELITY_BLOCKERS.is_empty());
         assert!(RUNTIME_FIDELITY_BLOCKERS
             .iter()
-            .any(|s| s.contains("set_anim head")));
+            .any(|s| s.contains("set_anim")));
         assert!(RUNTIME_FIDELITY_BLOCKERS
             .iter()
             .any(|s| s.contains("Farms::inc_time")));
+    }
+
+    fn seed_for_set_anim_percent(want: i32) -> i32 {
+        for seed in 0..1_000_000 {
+            let mut rng = Random::new(seed);
+            if rng.get(0, 0xFFFF) % 100 == want {
+                return seed;
+            }
+        }
+        panic!("no seed found for set_anim percentage {want}");
+    }
+
+    #[test]
+    fn set_anim_rng_sites_are_mutually_exclusive_single_draw_arms() {
+        let arms = [
+            (
+                SetAnimRngArm::DefaultVariation {
+                    unit_openlist_is_null: true,
+                },
+                SetAnimRngSite::DefaultVariation,
+            ),
+            (
+                SetAnimRngArm::AttackVariation {
+                    requested: anim::CHAR_ATTACK2,
+                    variant_autoselect: true,
+                },
+                SetAnimRngSite::AttackVariation,
+            ),
+            (
+                SetAnimRngArm::NatureWalkVariation {
+                    owner: 9,
+                    unit_type: 0x192,
+                },
+                SetAnimRngSite::NatureWalkVariation,
+            ),
+        ];
+        for (arm, site) in arms {
+            let mut got = Random::new(0x1234_5678);
+            let mut expected = got;
+            let percent = expected.get(0, 0xFFFF) % 100;
+            let out = set_anim_rng_arm(arm, &mut got);
+            assert_eq!(out.site, Some(site));
+            assert_eq!(out.percent, Some(percent));
+            assert_eq!(got.state(), expected.state(), "exactly one LCG step");
+        }
+        assert_eq!(SetAnimRngSite::DefaultVariation.call_va(), 0x005D_AC75);
+        assert_eq!(SetAnimRngSite::AttackVariation.call_va(), 0x005D_B22A);
+        assert_eq!(SetAnimRngSite::NatureWalkVariation.call_va(), 0x005D_B346);
+    }
+
+    #[test]
+    fn set_anim_no_draw_gates_do_not_advance_game_random() {
+        let cases = [
+            SetAnimRngArm::DefaultVariation {
+                unit_openlist_is_null: false,
+            },
+            SetAnimRngArm::AttackVariation {
+                requested: anim::CHAR_ATTACKSPECIAL,
+                variant_autoselect: false,
+            },
+            SetAnimRngArm::NatureWalkVariation {
+                owner: 8,
+                unit_type: 0x192,
+            },
+            SetAnimRngArm::NatureWalkVariation {
+                owner: 9,
+                unit_type: 0x191,
+            },
+            SetAnimRngArm::None,
+        ];
+        for arm in cases {
+            let mut rng = Random::new(77);
+            let before = rng.state();
+            let out = set_anim_rng_arm(arm, &mut rng);
+            assert_eq!(out.site, None);
+            assert_eq!(rng.state(), before);
+        }
+        let mut rng = Random::new(77);
+        assert_eq!(
+            set_anim_rng_arm(
+                SetAnimRngArm::DefaultVariation {
+                    unit_openlist_is_null: false,
+                },
+                &mut rng,
+            )
+            .percent,
+            Some(0),
+            "retail writes a synthetic zero at 0x005DAC89"
+        );
+    }
+
+    #[test]
+    fn attack_variation_thresholds_are_30_and_70_inclusive_in_the_middle() {
+        for (percent, want) in [
+            (29, anim::CHAR_ATTACK1),
+            (30, anim::CHAR_ATTACK2),
+            (70, anim::CHAR_ATTACK2),
+            (71, anim::CHAR_ATTACK3),
+        ] {
+            let mut rng = Random::new(seed_for_set_anim_percent(percent));
+            let out = set_anim_rng_arm(
+                SetAnimRngArm::AttackVariation {
+                    requested: anim::CHAR_ATTACKSPECIAL,
+                    variant_autoselect: true,
+                },
+                &mut rng,
+            );
+            assert_eq!(out.percent, Some(percent));
+            assert_eq!(out.candidate_anim, Some(want));
+        }
+
+        let mut rng = Random::new(5);
+        let before = rng.state();
+        let out = set_anim_rng_arm(
+            SetAnimRngArm::AttackVariation {
+                requested: anim::CHAR_ATTACKSPECIAL,
+                variant_autoselect: false,
+            },
+            &mut rng,
+        );
+        assert_eq!(out.candidate_anim, Some(anim::CHAR_ATTACKSPECIAL));
+        assert_eq!(rng.state(), before);
+    }
+
+    #[test]
+    fn nature_walk_variation_jogs_at_fifty() {
+        for (percent, want) in [(49, anim::CHAR_WALK), (50, anim::CHAR_JOG)] {
+            let mut rng = Random::new(seed_for_set_anim_percent(percent));
+            let out = set_anim_rng_arm(
+                SetAnimRngArm::NatureWalkVariation {
+                    owner: 9,
+                    unit_type: 0x194,
+                },
+                &mut rng,
+            );
+            assert_eq!(out.percent, Some(percent));
+            assert_eq!(out.candidate_anim, Some(want));
+        }
+    }
+
+    #[derive(Default)]
+    struct EventProbe {
+        executed: Vec<usize>,
+        verified: Vec<i32>,
+        shrink_mark_after_first: bool,
+    }
+
+    impl UnitEventSink for EventProbe {
+        fn execute_guy_events(&mut self, guys: &mut UnitGuys, index: usize) {
+            self.executed.push(index);
+            if self.shrink_mark_after_first {
+                guys.guy_mark = 1;
+            }
+        }
+
+        fn verify_graphic_load(&mut self, gpiece: i32) {
+            self.verified.push(gpiece);
+        }
+    }
+
+    #[test]
+    fn unit_execute_events_takes_the_exact_gate_and_live_prefix() {
+        let mut guys = squad(2, 1);
+        guys.guys[0].as_mut().unwrap().gpiece = 40;
+        guys.guys[1].as_mut().unwrap().gpiece = 41;
+        guys.guys[2].as_mut().unwrap().gpiece = 99;
+
+        let mut execute = EventProbe::default();
+        let st = unit_execute_events(
+            UnitEventView {
+                unit_is_valid: true,
+                unit_is_on_map: true,
+                unit_masks2: 0,
+            },
+            &mut guys,
+            &mut execute,
+        )
+        .unwrap();
+        assert_eq!(st.path, UnitEventPath::ExecuteGuyEvents);
+        assert_eq!(st.guys, 2);
+        assert_eq!(execute.executed, vec![0, 1]);
+        assert!(execute.verified.is_empty());
+
+        for view in [
+            UnitEventView {
+                unit_is_valid: false,
+                unit_is_on_map: true,
+                unit_masks2: 0,
+            },
+            UnitEventView {
+                unit_is_valid: true,
+                unit_is_on_map: false,
+                unit_masks2: 0,
+            },
+            UnitEventView {
+                unit_is_valid: true,
+                unit_is_on_map: true,
+                unit_masks2: UNIT_MASKS2_FREEZE_ANIM,
+            },
+        ] {
+            let mut verify = EventProbe::default();
+            let st = unit_execute_events(view, &mut guys, &mut verify).unwrap();
+            assert_eq!(st.path, UnitEventPath::VerifyGraphicLoads);
+            assert_eq!(verify.verified, vec![40, 41]);
+            assert!(verify.executed.is_empty());
+        }
+    }
+
+    #[test]
+    fn unit_execute_events_reloads_guy_mark_and_fails_loudly_on_null() {
+        let mut guys = squad(3, 0);
+        let mut probe = EventProbe {
+            shrink_mark_after_first: true,
+            ..Default::default()
+        };
+        let st = unit_execute_events(
+            UnitEventView {
+                unit_is_valid: true,
+                unit_is_on_map: true,
+                unit_masks2: 0,
+            },
+            &mut guys,
+            &mut probe,
+        )
+        .unwrap();
+        assert_eq!(st.guys, 1);
+        assert_eq!(probe.executed, vec![0]);
+
+        let mut guys = squad(2, 0);
+        guys.guys[1] = None;
+        let mut probe = EventProbe::default();
+        assert_eq!(
+            unit_execute_events(
+                UnitEventView {
+                    unit_is_valid: true,
+                    unit_is_on_map: true,
+                    unit_masks2: 0,
+                },
+                &mut guys,
+                &mut probe,
+            ),
+            Err(UnitEventError::NullGuySlot(1))
+        );
     }
 
     fn ut(squad: i32, crew: i32) -> UnitTypeStats {
@@ -1482,7 +1988,7 @@ mod tests {
         assert_eq!(st.gaps.graph_inc_frame, 2, "owner 0 is below 8");
         assert_eq!(
             st.missing_sim_rng_draws(),
-            (0, 0),
+            (0, Some(0)),
             "no transitions, no draws"
         );
 
@@ -1502,7 +2008,8 @@ mod tests {
             &mut st,
         );
         assert_eq!(st.gaps.set_anim_head, 1);
-        assert_eq!(st.missing_sim_rng_draws(), (0, 3));
+        assert_eq!(st.missing_direct_set_anim_rng_draws(), (0, 1));
+        assert_eq!(st.missing_sim_rng_draws(), (0, None));
     }
 
     /// Owners 8 and 9 (nature) never reach `graph_inc_frame`.
