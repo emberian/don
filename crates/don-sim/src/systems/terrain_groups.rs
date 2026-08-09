@@ -23,6 +23,10 @@ use super::terrain_doobers::{
 use super::terrain_drop_tile::{
     DropTileExternalRequest, DropTileExternalResolution, DropTileReceipt,
 };
+use super::terrain_player_group::{
+    PlacePlayerGroupCall, PlacePlayerGroupError, PlacePlayerGroupOutcome, PlacePlayerGroupReceipt,
+    PlayerGroupExternalRequest, PlayerGroupExternalResolution,
+};
 use super::terrain_region_continuation::{
     PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupReceipt,
 };
@@ -164,6 +168,13 @@ pub struct PlaceAllPreviewReceipt {
     pub region_group_continuation: Option<PlaceRegionGroupReceipt>,
     /// Exact pattern-1/2/3 eligible-region and clump loop.
     pub region_pattern: Option<RegionPatternReceipt>,
+    /// Exact pattern-0 player/start-ring entry calls executed before the next
+    /// mountain, cliff, or orthogonal-growth dependency.
+    pub player_group_prefix: Option<Vec<PlacePlayerGroupReceipt>>,
+    pub player_group_host_events: Vec<PlaceAllHostEvent>,
+    pub player_group_placed_after: Vec<i32>,
+    pub player_group_formation_x: Vec<i32>,
+    pub player_group_formation_y: Vec<i32>,
 }
 
 /// Outputs of the still-upstream unit-catalog and region-selection block in
@@ -246,6 +257,12 @@ pub enum TreeifyMountainsError {
 pub enum PlaceAllHostEvent {
     /// `NetDaemon::process_all` at `0x006a7645`, before inspecting each group.
     NetDaemonProcessAll { group_index: usize },
+    /// The additional daemon pump immediately before a pattern-0 player call.
+    NetDaemonProcessAllPlayer {
+        group_index: usize,
+        clump_index: usize,
+        player_index: usize,
+    },
     /// Progress-display calls within the selected pattern arm.  They are
     /// simulation-external but ordered before that arm's gameplay dependency.
     ProgressDisplay { group_index: usize, pattern: i32 },
@@ -302,13 +319,45 @@ pub enum TerrainPlacementPreparationError {
 pub enum TerrainPlacementBoundary {
     /// Pattern 0 next enumerates players and calls `place_player_group`
     /// (`0x006a4190`).
-    PlayerRosterAndPlacementKernel { group_index: usize },
+    PlayerRosterAndPlacementKernel {
+        group_index: usize,
+    },
+    PlayerGroupExternalSubsystem {
+        group_index: usize,
+        clump_index: usize,
+        player_index: usize,
+        request: PlayerGroupExternalRequest,
+    },
+    PlayerGroupGrowthKernel {
+        group_index: usize,
+        clump_index: usize,
+        player_index: usize,
+    },
+    PlayerGroupReturnControl {
+        group_index: usize,
+        clump_index: usize,
+        player_index: usize,
+        return_value: i32,
+    },
+    PlayerGroupMountainTemplateRetry {
+        group_index: usize,
+        clump_index: usize,
+        player_index: usize,
+    },
+    PlayerGroupPatternComplete {
+        group_index: usize,
+    },
     /// Patterns 1--3 first inspect the unit-type catalog and then call
     /// `place_region_group` (`0x006a2f60`).
-    UnitTypeCatalogAndRegionPlacementKernel { group_index: usize, pattern: i32 },
+    UnitTypeCatalogAndRegionPlacementKernel {
+        group_index: usize,
+        pattern: i32,
+    },
     /// The chosen `drop_tile` branch belongs to another gameplay subsystem and
     /// needs the exact typed resolution before local continuation can advance.
-    RegionGroupDropTileExternalSubsystem { request: DropTileExternalRequest },
+    RegionGroupDropTileExternalSubsystem {
+        request: DropTileExternalRequest,
+    },
     /// The selected `place_region_group` call returned exactly; the enclosing
     /// catalog/per-clump continuation is the next unrecovered row.
     RegionGroupReturnControl {
@@ -317,7 +366,9 @@ pub enum TerrainPlacementBoundary {
     },
     /// The selected pattern-1/2/3 group completed every retail region/clump
     /// attempt. The next group iteration is downstream.
-    RegionGroupPatternComplete { group_index: usize },
+    RegionGroupPatternComplete {
+        group_index: usize,
+    },
     /// All selected groups were branch-skipped; retail next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
@@ -339,6 +390,10 @@ pub enum PlaceAllError {
     InvalidTreeifyMountains(TreeifyMountainsError),
     InvalidRegionGroupContinuation(PlaceRegionGroupError),
     InvalidRegionPattern(RegionPatternError),
+    InvalidPlayerGroupPrefix(PlacePlayerGroupError),
+    InvalidPlayerGroupInputs {
+        group_index: usize,
+    },
     InvalidRegionPatternInputs {
         group_index: usize,
     },
@@ -450,6 +505,7 @@ impl TerrainGroups {
             None,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -481,6 +537,7 @@ impl TerrainGroups {
             None,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -507,6 +564,7 @@ impl TerrainGroups {
             place_players,
             Some(rules),
             Some(map_style),
+            None,
             None,
             None,
             &mut host,
@@ -542,6 +600,7 @@ impl TerrainGroups {
             None,
             None,
             None,
+            None,
             Some((regions, resolved)),
             &mut host,
         )
@@ -570,7 +629,36 @@ impl TerrainGroups {
             place_players,
             None,
             None,
+            None,
             Some((regions, helping, externals)),
+            None,
+            &mut host,
+        )
+    }
+
+    /// Executes the exact pattern-0 start-ring/player entry transaction through
+    /// its first typed object effect or the post-drop growth kernel.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_player_group_inputs(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        externals: &[PlayerGroupExternalResolution],
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_preview(
+            world,
+            random,
+            mountains,
+            progress,
+            place_players,
+            None,
+            None,
+            Some(externals),
+            None,
             None,
             &mut host,
         )
@@ -713,6 +801,7 @@ impl TerrainGroups {
         place_players: i32,
         doober_rules: Option<DooberTilesetRules>,
         map_style: Option<u8>,
+        player_group_externals: Option<&[PlayerGroupExternalResolution]>,
         region_pattern_inputs: Option<(
             &Regions,
             Option<RegionHelpingState>,
@@ -751,7 +840,132 @@ impl TerrainGroups {
         let mut region_group_drop = None;
         let mut region_group_continuation = None;
         let mut region_pattern = None;
-        let boundary = if let Some((regions, helping, externals)) = region_pattern_inputs {
+        let mut player_group_prefix = None;
+        let mut player_group_host_events = Vec::new();
+        let mut player_group_placed_after = Vec::new();
+        let mut player_group_formation_x = Vec::new();
+        let mut player_group_formation_y = Vec::new();
+        let boundary = if let Some(externals) = player_group_externals {
+            let TerrainPlacementBoundary::PlayerRosterAndPlacementKernel { group_index } = boundary
+            else {
+                return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index: 0 });
+            };
+            let Some(prepared) = placement_preparation
+                .prepared_groups
+                .iter()
+                .find(|prepared| prepared.group_index == group_index)
+            else {
+                return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
+            };
+            let Some(&target_tiles) = prepared.primary_sizes.first() else {
+                return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
+            };
+            if world.start_x.items.is_empty() {
+                TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index }
+            } else {
+                let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                    group_index,
+                    clump_index: 0,
+                    player_index: 0,
+                };
+                host(event);
+                player_group_host_events.push(event);
+
+                let mut preview_world = world.clone();
+                let mut preview_group = self.groups[group_index].clone();
+                let land_subtype = if preview_group.group_type == 5 {
+                    preview_mountains.get_range_raw(target_tiles)
+                } else {
+                    target_tiles
+                };
+                let mut calls = Vec::new();
+                let mut consumed = 0usize;
+                let first = preview_group
+                    .apply_place_player_group_prefix(
+                        &mut preview_world,
+                        &mut preview_random,
+                        PlacePlayerGroupCall {
+                            target_tiles,
+                            player_index: 0,
+                            land_subtype,
+                            oil_deposits: prepared.secondary_sizes[0],
+                            group_index,
+                            strict_type_four: preview_group.group_type == 4,
+                        },
+                        &mut player_group_formation_x,
+                        &mut player_group_formation_y,
+                        &externals[consumed..],
+                    )
+                    .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                consumed += first.external_resolutions_consumed;
+                let mut outcome = first.outcome.clone();
+                calls.push(first);
+
+                // Pattern 0 retries a failed type-4 player call without the
+                // strict 9x9 forest probe and without another daemon pump.
+                if preview_group.group_type == 4
+                    && matches!(outcome, PlacePlayerGroupOutcome::Returned(0))
+                {
+                    let retry = preview_group
+                        .apply_place_player_group_prefix(
+                            &mut preview_world,
+                            &mut preview_random,
+                            PlacePlayerGroupCall {
+                                target_tiles,
+                                player_index: 0,
+                                land_subtype,
+                                oil_deposits: prepared.secondary_sizes[0],
+                                group_index,
+                                strict_type_four: false,
+                            },
+                            &mut player_group_formation_x,
+                            &mut player_group_formation_y,
+                            &externals[consumed..],
+                        )
+                        .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                    outcome = retry.outcome.clone();
+                    calls.push(retry);
+                }
+
+                let next = match outcome {
+                    PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
+                        TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
+                            group_index,
+                            clump_index: 0,
+                            player_index: 0,
+                            request,
+                        }
+                    }
+                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                        TerrainPlacementBoundary::PlayerGroupGrowthKernel {
+                            group_index,
+                            clump_index: 0,
+                            player_index: 0,
+                        }
+                    }
+                    PlacePlayerGroupOutcome::Returned(return_value) => {
+                        if preview_group.group_type == 5 && return_value == 0 {
+                            TerrainPlacementBoundary::PlayerGroupMountainTemplateRetry {
+                                group_index,
+                                clump_index: 0,
+                                player_index: 0,
+                            }
+                        } else {
+                            preview_group.placed.push(return_value);
+                            TerrainPlacementBoundary::PlayerGroupReturnControl {
+                                group_index,
+                                clump_index: 0,
+                                player_index: 0,
+                                return_value,
+                            }
+                        }
+                    }
+                };
+                player_group_placed_after = preview_group.placed.clone();
+                player_group_prefix = Some(calls);
+                next
+            }
+        } else if let Some((regions, helping, externals)) = region_pattern_inputs {
             let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
                 group_index,
                 ..
@@ -921,6 +1135,11 @@ impl TerrainGroups {
                 region_group_drop,
                 region_group_continuation,
                 region_pattern,
+                player_group_prefix,
+                player_group_host_events,
+                player_group_placed_after,
+                player_group_formation_x,
+                player_group_formation_y,
             },
             boundary,
         })

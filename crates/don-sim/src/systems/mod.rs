@@ -139,6 +139,7 @@ pub mod terrain_drop_tile;
 /// Exact `TerrainGroups::fill_fertile`, mountain/list RNG, grouped selection,
 /// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
+pub mod terrain_player_group;
 pub mod terrain_region_continuation;
 pub mod terrain_region_patterns;
 pub mod terrain_region_placement;
