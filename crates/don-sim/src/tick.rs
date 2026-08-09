@@ -1209,6 +1209,10 @@ impl Sim {
                 let row = row as usize;
                 view.active = self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0;
                 view.captain = self.world.units.o_up()[row] < 0;
+                view.unit_query_source = Some(leaders::UnitQuerySource {
+                    type_id: self.unit_type[row],
+                    unit_masks2: self.world.units.unit_masks2()[row] as u32,
+                });
                 view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
                 view.myhits = self.world.units.myhits()[row];
                 view.mylos = self.world.units.mylos()[row];

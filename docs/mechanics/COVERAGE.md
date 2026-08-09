@@ -415,16 +415,18 @@ Ranked by (value to a runnable, faithful sim) ÷ (work), not by byte count alone
    taunt-table scan. The four slots are resolved: `+0x4C` is `WallData::is_active`, `+0xE8`
    is `UnitData::is_captain`, and base `+0x15C/+0x160` run
    `Object::update_hits/update_los` and commit into real Unit/Wall state. Remaining are the
-   construction-time recompute, automatic wall/unit type/tech/tribe/wonder/city query
-   population, reached `Object::eject_contents`, and `Leader::process_taunt` AI chat. The
+   construction-time recompute, automatic Wall and Unit base hit/LOS query population,
+   reached `Object::eject_contents`, and `Leader::process_taunt` AI chat. The
    building `Wall::update_hits/update_los` overrides now run their complete 1,509/544-byte
    bodies when query packages are supplied, committing full/construction HP and signed-byte
    LOS into real `BuildData`. The
-   1,341-byte `Unit::update_speed` body now executes when its exact query package is
-   supplied, including retail's signed rounding and `o_down` propagation. The 215-byte
-   `ObjectData::armor` body and 249-byte `Unit::update_armor` suffix now run, including
-   Dutch age armor, the rare-31 cattle bonus, and `o_down` propagation. Coverage charges
-   only unresolved calls or input packages actually reached.
+   1,341-byte `Unit::update_speed` body now executes from packages automatically rebuilt
+   per reached captain from the tracked post-load retail Unit table and current decoded
+   leader/object state, including retail's signed rounding and `o_down` propagation. The
+   same population drives the 215-byte `ObjectData::armor` body and 249-byte
+   `Unit::update_armor` suffix, including Dutch age armor, the rare-31 cattle bonus, and
+   `o_down` propagation. Unknown type rows clear prior packages and remain charged red;
+   coverage charges only unresolved calls or input packages actually reached.
 9. **A `check_all` equivalent.** One function returning the 15 per-channel values plus the
    sum, in retail's order and wire layout (§1.1). This is what turns every other item into
    something measurable against a real game instead of against our own tests.

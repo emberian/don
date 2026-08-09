@@ -26,7 +26,7 @@ Concretely, these execute today and did not this morning:
 | the diplomacy / hostile scan | `0x006ED2E0`..`0x006ED321` | absent | ported |
 | `Leader::gather`'s `BitMask<44>` union | `0x006CE35F`..`0x006CE3D0` | absent | ported — **this is what arms the stat passes** |
 | `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal, `is_active`, plain-wall base bodies, and full building `Wall::update_hits/update_los` overrides execute when query packages are supplied; automatic query population, construction-time recompute, and reached ejection remain |
-| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, full `Unit::update_speed`, `ObjectData::armor`, and `Unit::update_armor` suffix execute when their query packages are supplied; automatic gate population remains |
+| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, full `Unit::update_speed`, `ObjectData::armor`, and `Unit::update_armor` suffix execute; speed/armor packages are automatically rebuilt from shipped live type rows and current leader/object state, while missing type identities and base hit/LOS rows remain explicit |
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
 | the three grace timers | `0x006ED35F`..`0x006ED3CE` | absent | ported |
@@ -362,8 +362,11 @@ Corrections, two sentences each:
   byte bodies when their query packages are supplied. This includes the HP percentage
   chain, construction ramp and both stores, plus signed-byte LOS science/type/wonder/rare
   arithmetic. `Object::eject_contents` remains independently red only when the recovered
-  tail predicate reaches it. `Wall::update_construct_time` and automatic wall/unit type,
-  tech, tribe, wonder, city, and upgrade query population remain red. The
+  tail predicate reaches it. `Wall::update_construct_time`, Wall query population, and
+  Unit base hit/LOS query population remain red. Unit speed/armor packages are now rebuilt
+  on every reached captain from the checked-in post-load retail Unit table, the current
+  Unit type and `unit_masks2`, and decoded leader epoch/tribe/Wonder/upgrade state; an
+  absent shipped row clears prior packages and stays red rather than replaying stale data. The
   1,341-byte `Unit::update_speed` body now executes its exact modifier order and signed
   rounding — military-epoch transport bonuses, Whales, type-family ratios, Bantu/French/
   Versailles, Aluminum, spy/general/supply upgrades, and Aztec — then stores signed

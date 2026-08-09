@@ -19,7 +19,9 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
         frozen: 0,
     };
 
-    let unit = sim.spawn_unit(0, 1, 1000, 1000, 2).unwrap();
+    // Type 0x32 is the shipped Citizen row. The step-8 adapter resolves its speed/armor
+    // package from the live type id; callers no longer preassemble either package.
+    let unit = sim.spawn_unit(0, 0x32, 1000, 1000, 2).unwrap();
     let unit_row = sim.world.row_of(unit).unwrap();
     // UnitData::is_captain is exactly the high bit of `o_up` (+0x8E).
     sim.world.units.o_up_mut()[unit_row] = -1;
@@ -39,23 +41,14 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
         },
     );
 
-    // Supply the type-table rows the resolved Object virtuals read. The tick adapter
-    // preserves these global inputs while replacing object-local fields from real bands.
+    // Supply the still-explicit base Object and Wall query rows. Unit speed/armor packages
+    // are deliberately absent: the tick adapter now rebuilds them from live state.
     sim.step8_env.leaders[0].objects.units = vec![leaders::StatObject {
         hit_inputs: Some(leaders::ObjectHitInputs {
             base_hits: 333,
             ..Default::default()
         }),
         type_los: Some(7),
-        speed_inputs: Some(leaders::UnitSpeedInputs {
-            type_moves: 27,
-            ..Default::default()
-        }),
-        armor_inputs: Some(leaders::UnitArmorInputs {
-            type_armor: 15,
-            special_family_32_33: false,
-            ..Default::default()
-        }),
         ..Default::default()
     }];
     sim.step8_env.leaders[0].objects.band_2000 = vec![leaders::StatObject {
@@ -101,8 +94,12 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.leader_taunt_dispatches, 0);
     assert_eq!(sim.world.units.myhits()[unit_row], 333);
     assert_eq!(sim.world.units.mylos()[unit_row], 7);
-    assert_eq!(sim.world.units.myspeed()[unit_row], 27);
-    assert_eq!(sim.world.units.myarmor()[unit_row], 15);
+    assert_eq!(sim.world.units.myspeed()[unit_row], 25);
+    assert_eq!(sim.world.units.myarmor()[unit_row], 0);
+    assert_eq!(
+        sim.step8_env.leaders[0].objects.units[0].unit_query_populations,
+        1
+    );
     assert_eq!(sim.builds[0].myhits, 555);
     assert_eq!(sim.builds[0].construct_hits, 555);
     assert_eq!(sim.builds[0].other[0x3c] as i8, 12);

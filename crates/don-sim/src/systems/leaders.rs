@@ -70,8 +70,9 @@
 //! * The four virtual slots are now resolved from the retail vtables. `+0x4C` is
 //!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
 //!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band's complete
-//!   `Wall::update_hits/update_los` overrides and `Unit::update_speed` now execute when
-//!   their global query packages are supplied. Automatic query population,
+//!   `Wall::update_hits/update_los` overrides and `Unit::update_speed` now execute. Unit
+//!   speed/armor packages are rebuilt from the checked-in shipped type table plus live
+//!   leader/object state; missing type identities remain explicit. Wall query population,
 //!   `Wall::update_construct_time`, and reached `Object::eject_contents` remain explicit.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
@@ -640,6 +641,10 @@ pub struct Leader {
     /// `Leader::calc_gather`'s `0x2000000` economy-dirty bit, held apart from [`flags`]
     /// because `economy::calc_gather_due` already owns its meaning.
     pub econ_dirty: bool,
+    /// Live leader answers used to rebuild Unit speed/armor query packages. These are
+    /// port-owned decoded state, like [`Leader::econ`], rather than another recovered
+    /// offset block.
+    pub unit_stats: UnitLeaderStatState,
 }
 
 impl Leader {
@@ -984,6 +989,259 @@ pub struct UnitSpeedInputs {
     pub aztec: bool,
 }
 
+/// Decoded leader state queried by `Unit::update_speed` and `ObjectData::armor`.
+///
+/// Retail obtains these values through `LeaderData` calls. Keeping them together on the
+/// leader makes automatic package population edge-safe: every dirty pass reads the current
+/// values instead of replaying a package built on a prior rare/tech edge. A new game starts
+/// at military epoch zero with no tribe bonuses, Wonders, or unit upgrades. Retail
+/// `Game::get_patch_version` returns 8 when the game version is at most the running build;
+/// 9 is only its forward-version arm.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UnitLeaderStatState {
+    pub military_epoch: i32,
+    /// `LeaderData::has_tribe_bonus(n)`, for the 24 shipped nation slots.
+    pub tribe_bonuses: u32,
+    /// `LeaderData::has_wonder(0x218)` — Versailles.
+    pub versailles: bool,
+    pub spy_upgrade: i32,
+    pub general_upgrade: i32,
+    pub supply_upgrade: i32,
+    pub patch_version: i32,
+}
+
+impl Default for UnitLeaderStatState {
+    fn default() -> Self {
+        UnitLeaderStatState {
+            military_epoch: 0,
+            tribe_bonuses: 0,
+            versailles: false,
+            spy_upgrade: 0,
+            general_upgrade: 0,
+            supply_upgrade: 0,
+            patch_version: 8,
+        }
+    }
+}
+
+impl UnitLeaderStatState {
+    #[inline]
+    pub const fn has_tribe_bonus(self, bonus: u32) -> bool {
+        bonus < 32 && self.tribe_bonuses & (1u32 << bonus) != 0
+    }
+
+    #[inline]
+    pub fn set_tribe_bonus(&mut self, bonus: u32, present: bool) {
+        if bonus >= 32 {
+            return;
+        }
+        if present {
+            self.tribe_bonuses |= 1u32 << bonus;
+        } else {
+            self.tribe_bonuses &= !(1u32 << bonus);
+        }
+    }
+}
+
+/// Live object facts that select a shipped `UnitTypeData` row.
+///
+/// `type_id` is the referent behind `UnitData::ptype` (`+0x18`); `unit_masks2` is the
+/// object-local dword at `UnitData +0x6C`. Presence of this source opts the object into
+/// automatic package population. An unknown type id clears any prior generated package and
+/// remains an unresolved call instead of borrowing stale inputs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UnitQuerySource {
+    pub type_id: i32,
+    pub unit_masks2: u32,
+}
+
+/// The scalar slice of shipped `UnitTypeData` needed by the two recovered Unit stat bodies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct UnitTypeStatRow {
+    type_id: i32,
+    from: i32,
+    where_type: i32,
+    obj_masks: u32,
+    armor: i32,
+    domain: i32,
+    graft: i32,
+    unit_flags: u32,
+    unit_flags2: u32,
+    moves: i32,
+}
+
+/// Parse the tracked post-load retail table once. The table is the exact source for the
+/// load-time-added `unit_flags` bits; reading `unitrules.xml` directly would lose them.
+fn shipped_unit_stat_rows() -> &'static [Option<UnitTypeStatRow>] {
+    static ROWS: std::sync::OnceLock<Vec<Option<UnitTypeStatRow>>> = std::sync::OnceLock::new();
+    ROWS.get_or_init(|| {
+        let tsv = include_str!("../../../../schema/live/live-tables-unit.tsv");
+        let mut lines = tsv.lines();
+        let Some(header) = lines.next() else {
+            return Vec::new();
+        };
+        let names: Vec<&str> = header.split('\t').collect();
+        let col = |name: &str| names.iter().position(|candidate| *candidate == name);
+        let Some(type_id_col) = col("type_id") else {
+            return Vec::new();
+        };
+        let Some(from_col) = col("from") else {
+            return Vec::new();
+        };
+        let Some(where_col) = col("where") else {
+            return Vec::new();
+        };
+        let Some(obj_masks_col) = col("obj_masks") else {
+            return Vec::new();
+        };
+        let Some(armor_col) = col("armor") else {
+            return Vec::new();
+        };
+        let Some(domain_col) = col("domain") else {
+            return Vec::new();
+        };
+        let Some(graft_col) = col("graft") else {
+            return Vec::new();
+        };
+        let Some(unit_flags_col) = col("unit_flags") else {
+            return Vec::new();
+        };
+        let Some(unit_flags2_col) = col("unit_flags2") else {
+            return Vec::new();
+        };
+        let Some(moves_col) = col("moves") else {
+            return Vec::new();
+        };
+        let max_col = [
+            type_id_col,
+            from_col,
+            where_col,
+            obj_masks_col,
+            armor_col,
+            domain_col,
+            graft_col,
+            unit_flags_col,
+            unit_flags2_col,
+            moves_col,
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+
+        let mut rows = Vec::<Option<UnitTypeStatRow>>::new();
+        for line in lines {
+            let cells: Vec<&str> = line.split('\t').collect();
+            if cells.len() <= max_col {
+                continue;
+            }
+            let parse_i32 = |column: usize| cells[column].parse::<i32>().ok();
+            let Some(type_id) = parse_i32(type_id_col) else {
+                continue;
+            };
+            let Ok(index) = usize::try_from(type_id) else {
+                continue;
+            };
+            let Some(row) = (|| {
+                Some(UnitTypeStatRow {
+                    type_id,
+                    from: parse_i32(from_col)?,
+                    where_type: parse_i32(where_col)?,
+                    obj_masks: parse_i32(obj_masks_col)? as u32,
+                    armor: parse_i32(armor_col)?,
+                    domain: parse_i32(domain_col)?,
+                    graft: parse_i32(graft_col)?,
+                    unit_flags: parse_i32(unit_flags_col)? as u32,
+                    unit_flags2: parse_i32(unit_flags2_col)? as u32,
+                    moves: parse_i32(moves_col)?,
+                })
+            })() else {
+                continue;
+            };
+            if rows.len() <= index {
+                rows.resize(index + 1, None);
+            }
+            rows[index] = Some(row);
+        }
+        rows
+    })
+}
+
+#[inline]
+fn shipped_unit_stat_row(type_id: i32) -> Option<UnitTypeStatRow> {
+    let index = usize::try_from(type_id).ok()?;
+    shipped_unit_stat_rows().get(index).copied().flatten()
+}
+
+/// `ObjectTypeData::is(type, 0)` over the exact load-time source relation.
+///
+/// `ObjectType::init_is_list` caches this result, but the cache is derived rather than
+/// walked source data: identity, then `graft`, then recursive `from`. A malformed cycle or
+/// a missing ancestor is an explicit missing fact.
+fn shipped_unit_is(mut type_id: i32, target: i32) -> Option<bool> {
+    let rows = shipped_unit_stat_rows();
+    let mut remaining = rows.len().max(1);
+    while remaining != 0 {
+        remaining -= 1;
+        let row = shipped_unit_stat_row(type_id)?;
+        if row.type_id == target || row.graft == target {
+            return Some(true);
+        }
+        if row.from < 0 {
+            return Some(false);
+        }
+        type_id = row.from;
+    }
+    None
+}
+
+/// Rebuild both global query packages from current shipped type, leader, and object state.
+fn derive_unit_query_packages(
+    source: UnitQuerySource,
+    leader: &Leader,
+) -> Option<(UnitSpeedInputs, UnitArmorInputs)> {
+    let row = shipped_unit_stat_row(source.type_id)?;
+    let live = leader.unit_stats;
+    let supply = row.unit_flags2 & 0x40 != 0;
+    let speed = UnitSpeedInputs {
+        type_moves: row.moves,
+        domain: row.domain,
+        unit_flags: row.unit_flags,
+        unit_data_flags: source.unit_masks2,
+        military_epoch: live.military_epoch,
+        has_objmask_2000: row.obj_masks & 0x2000 != 0,
+        is_68: shipped_unit_is(source.type_id, 0x68)?,
+        is_66: shipped_unit_is(source.type_id, 0x66)?,
+        is_64: shipped_unit_is(source.type_id, 0x64)?,
+        is_62: shipped_unit_is(source.type_id, 0x62)?,
+        is_42: shipped_unit_is(source.type_id, 0x42)?,
+        is_3a: shipped_unit_is(source.type_id, 0x3a)?,
+        type_line: row.where_type,
+        type_id: row.type_id,
+        bantu: live.has_tribe_bonus(3),
+        french: live.has_tribe_bonus(10),
+        versailles: live.versailles,
+        spy_upgrade: live.spy_upgrade,
+        hero: row.unit_flags2 & 0x20 != 0,
+        general_upgrade: live.general_upgrade,
+        supply,
+        supply_upgrade: live.supply_upgrade,
+        aztec: live.has_tribe_bonus(0),
+    };
+    let armor = UnitArmorInputs {
+        type_armor: row.armor,
+        dutch: live.has_tribe_bonus(0x16),
+        // UnitData's vtable `+0x18` is the shared true body `0x0041E0E0`.
+        dutch_armor_eligible: true,
+        type_id: row.type_id,
+        caravan: row.unit_flags2 & 8 != 0,
+        supply,
+        patch_version: live.patch_version,
+        gov_hero: row.unit_flags & 0x0400_0000 != 0,
+        special_family_32_33: row.type_id == 0x32 || row.type_id == 0x33,
+    };
+    Some((speed, armor))
+}
+
 /// Global query answers consumed by the percentage chain in `Wall::update_hits`
 /// `0x0063F0D0`. Object-local construction fields remain on [`StatObject`] and the base
 /// `Object::update_hits` row remains [`StatObject::hit_inputs`].
@@ -1063,6 +1321,8 @@ pub struct StatObject {
     pub armor_inputs: Option<UnitArmorInputs>,
     /// Type/tech/tribe gate package consumed by the exact `Unit::update_speed` body.
     pub speed_inputs: Option<UnitSpeedInputs>,
+    /// Presence opts this live Unit into automatic speed/armor package population.
+    pub unit_query_source: Option<UnitQuerySource>,
     /// Query packages consumed by the building-band Wall override pair.
     pub wall_hit_inputs: Option<WallHitInputs>,
     pub wall_los_inputs: Option<WallLosInputs>,
@@ -1107,6 +1367,10 @@ pub struct StatObject {
     pub unit_armor_updates: u32,
     /// Resolved `Unit::update_speed` calls (one per captain, not per propagated member).
     pub unit_speed_updates: u32,
+    /// Automatic shipped type/leader/object packages rebuilt this pass.
+    pub unit_query_populations: u32,
+    /// Automatic package requests that stopped at an unknown type/ancestor row.
+    pub unit_query_misses: u32,
     pub wall_hits_updates: u32,
     pub wall_los_updates: u32,
 }
@@ -1123,6 +1387,8 @@ pub struct StatPassCounts {
     pub object_los_updates: u32,
     pub unit_armor_updates: u32,
     pub unit_speed_updates: u32,
+    pub unit_query_populations: u32,
+    pub unit_query_misses: u32,
     pub wall_hits_updates: u32,
     pub wall_los_updates: u32,
     pub eject_contents_calls: u32,
@@ -1141,6 +1407,8 @@ impl StatPassCounts {
         self.object_los_updates += other.object_los_updates;
         self.unit_armor_updates += other.unit_armor_updates;
         self.unit_speed_updates += other.unit_speed_updates;
+        self.unit_query_populations += other.unit_query_populations;
+        self.unit_query_misses += other.unit_query_misses;
         self.wall_hits_updates += other.wall_hits_updates;
         self.wall_los_updates += other.wall_los_updates;
         self.eject_contents_calls += other.eject_contents_calls;
@@ -1645,6 +1913,21 @@ pub fn calc_unit_stats(
             c.unresolved_calls += 1;
         }
         if u.captain {
+            if let Some(source) = u.unit_query_source {
+                // Clear first: an unknown replacement type must not replay a package
+                // generated on the previous dirty edge.
+                u.speed_inputs = None;
+                u.armor_inputs = None;
+                if let Some((speed, armor)) = derive_unit_query_packages(source, leader) {
+                    u.speed_inputs = Some(speed);
+                    u.armor_inputs = Some(armor);
+                    u.unit_query_populations = u.unit_query_populations.wrapping_add(1);
+                    c.unit_query_populations += 1;
+                } else {
+                    u.unit_query_misses = u.unit_query_misses.wrapping_add(1);
+                    c.unit_query_misses += 1;
+                }
+            }
             u.v15c_calls += 1;
             if object_update_hits(u, false).is_some() {
                 c.object_hits_updates += 1;
@@ -2643,6 +2926,120 @@ mod tests {
         assert_eq!(object_data_armor(&input, &leader, &rules), 3);
         input.caravan = true;
         assert_eq!(object_data_armor(&input, &leader, &rules), 8);
+    }
+
+    #[test]
+    fn shipped_unit_packages_rebuild_type_families_and_live_leader_queries() {
+        let mut leader = Leader::new(0);
+        leader.unit_stats.military_epoch = 4;
+        leader.unit_stats.set_tribe_bonus(0, true);
+        leader.unit_stats.set_tribe_bonus(3, true);
+        leader.unit_stats.set_tribe_bonus(10, true);
+        leader.unit_stats.set_tribe_bonus(0x16, true);
+        leader.unit_stats.versailles = true;
+        leader.unit_stats.spy_upgrade = 1;
+        leader.unit_stats.general_upgrade = 2;
+        leader.unit_stats.supply_upgrade = 3;
+
+        // InfantryGerman (103) has `graft=102` and `from=100` in the post-load retail
+        // table. Both relations participate in non-strict ObjectTypeData::is.
+        let (speed, armor) = derive_unit_query_packages(
+            UnitQuerySource {
+                type_id: 103,
+                unit_masks2: 0x200,
+            },
+            &leader,
+        )
+        .unwrap();
+        assert_eq!(speed.type_moves, 32);
+        assert_eq!(speed.type_line, 427);
+        assert_eq!(speed.unit_data_flags, 0x200);
+        assert!(speed.is_66, "graft target 102 must match");
+        assert!(speed.is_64, "recursive from target 100 must match");
+        assert!(!speed.is_68);
+        assert!(speed.aztec && speed.bantu && speed.french && speed.versailles);
+        assert_eq!(speed.military_epoch, 4);
+        assert_eq!(speed.spy_upgrade, 1);
+        assert_eq!(speed.general_upgrade, 2);
+        assert_eq!(speed.supply_upgrade, 3);
+        assert_eq!(armor.type_armor, 4);
+        assert!(armor.dutch && armor.dutch_armor_eligible);
+        assert_eq!(armor.patch_version, 8);
+    }
+
+    #[test]
+    fn automatic_unit_packages_refresh_and_missing_types_cannot_replay_stale_stats() {
+        let mut leader = Leader::new(0);
+        let rules = Step8Rules::shipped();
+        let mut objects = OwnerObjects {
+            units: vec![StatObject {
+                active: true,
+                captain: true,
+                owner_in_game: true,
+                hit_inputs: Some(ObjectHitInputs {
+                    base_hits: 100,
+                    ..Default::default()
+                }),
+                type_los: Some(3),
+                unit_query_source: Some(UnitQuerySource {
+                    type_id: 0x32,
+                    unit_masks2: 0,
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let c = calc_unit_stats(
+            &mut leader,
+            &rules,
+            &AttritionGates::default(),
+            &mut objects,
+        );
+        let unit = &objects.units[0];
+        assert_eq!((unit.myspeed, unit.myarmor), (25, 0));
+        assert_eq!(c.unit_query_populations, 1);
+        assert_eq!(c.unit_query_misses, 0);
+        assert_eq!(c.unresolved_calls, 0);
+
+        // Mutating only the live type identity must replace both packages on the next
+        // dirty pass. Caravan is shipped type 59: speed 26, armor 0.
+        objects.units[0].unit_query_source.as_mut().unwrap().type_id = 59;
+        let c = calc_unit_stats(
+            &mut leader,
+            &rules,
+            &AttritionGates::default(),
+            &mut objects,
+        );
+        assert_eq!(
+            (objects.units[0].myspeed, objects.units[0].myarmor),
+            (26, 0)
+        );
+        assert_eq!(c.unit_query_populations, 1);
+        assert_eq!(c.unresolved_calls, 0);
+
+        // An unknown replacement row clears the generated packages before lookup. The
+        // derived fields remain at the externally-mutated values instead of replaying the
+        // Caravan package from the previous edge.
+        let unit = &mut objects.units[0];
+        unit.unit_query_source.as_mut().unwrap().type_id = 805;
+        unit.myspeed = 91;
+        unit.myarmor = 92;
+        unit.speed_written = false;
+        unit.armor_written = false;
+        let c = calc_unit_stats(
+            &mut leader,
+            &rules,
+            &AttritionGates::default(),
+            &mut objects,
+        );
+        let unit = &objects.units[0];
+        assert_eq!((unit.myspeed, unit.myarmor), (91, 92));
+        assert!(!unit.speed_written && !unit.armor_written);
+        assert!(unit.speed_inputs.is_none() && unit.armor_inputs.is_none());
+        assert_eq!(c.unit_query_populations, 0);
+        assert_eq!(c.unit_query_misses, 1);
+        assert_eq!(c.unresolved_calls, 2);
     }
 
     /// An externally-set dirty bit is honoured and consumed, which is how any other
