@@ -114,7 +114,20 @@ export class GameModule {
   }
 
   activatePlayers(players) {
-    if (!this.g || !Array.isArray(players)) return false;
+    const teams = Array.from({ length: this.playerCount }, (_, player) => player);
+    return this.startManualTeams(players, teams, 0, players?.[0] ?? 0, false);
+  }
+
+  /**
+   * Configure and start one frame-zero manual match in the authoritative Sim.
+   * JavaScript validates and packs the request but retains no roster or team copy; all
+   * success checks query the installed PlayerSetup owner back through the read-only ABI.
+   */
+  startManualTeams(players, teams, teamStyle = 0, localPlayer = 0, ranked = false) {
+    if (!this.g || !Array.isArray(players) || !Array.isArray(teams) ||
+        teams.length !== this.playerCount || !Number.isInteger(teamStyle) ||
+        teamStyle < 0 || teamStyle > 0xff || !Number.isInteger(localPlayer) ||
+        localPlayer < 0 || localPlayer >= this.playerCount || typeof ranked !== 'boolean') return false;
     const roster = [];
     const seen = new Set();
     for (const player of players) {
@@ -124,11 +137,23 @@ export class GameModule {
       seen.add(player);
       roster.push(player);
     }
-    for (const player of roster) {
-      if (this.x.game_activate_player(this.g, player) !== 1) return false;
+    if (!roster.length || !seen.has(localPlayer)) return false;
+    let mask = 0;
+    let packed = 0;
+    for (let player = 0; player < this.playerCount; player++) {
+      const team = seen.has(player) ? teams[player] : 8;
+      if (!Number.isInteger(team) || team < 0 || team > 0xff) return false;
+      mask |= seen.has(player) ? (1 << player) : 0;
+      packed |= team << (player * 8);
     }
+    if (this.x.game_start_manual_teams(
+      this.g, mask >>> 0, packed >>> 0, teamStyle, localPlayer, ranked ? 1 : 0) !== 1) return false;
     const active = new Set(this.activePlayers());
-    return roster.every((player) => active.has(player));
+    const configuredMask = this.x.game_team_configured_mask(this.g) >>> 0;
+    return roster.every((player) => active.has(player) &&
+      (configuredMask & (1 << player)) !== 0 &&
+      this.x.game_team(this.g, player) === (teamStyle === 3 ? (player === localPlayer ? 0 : 1) : teams[player])) &&
+      this.x.game_team_style(this.g) === teamStyle;
   }
 
   /** Live setup roster queried from `Sim::vic_leaders`; JavaScript owns no roster copy. */
@@ -310,11 +335,14 @@ export class GameModule {
       throw new RangeError(`leader slot ${p} is outside the browser player cohort`);
     }
     const flags = this.x.game_leader_flags(this.g, p) >>> 0;
+    const configuredMask = this.x.game_team_configured_mask(this.g) >>> 0;
     return Object.freeze({
       player: p,
       team: this.x.game_team(this.g, p),
-      teamConfigured: false,
-      teamSource: 'Sim victory Leaders::team_of default-own-slot hook',
+      teamConfigured: (configuredMask & (1 << p)) !== 0,
+      teamSource: (configuredMask & (1 << p)) !== 0
+        ? 'Sim PlayerSetup owner after deterministic init_teams transaction'
+        : 'Sim victory Leaders::team_of default-own-slot fallback',
       flags,
       active: (flags & (LEADER_FLAG.valid | LEADER_FLAG.active)) ===
         (LEADER_FLAG.valid | LEADER_FLAG.active),
@@ -342,7 +370,11 @@ export class GameModule {
     const activePlayers = Object.freeze(this.activePlayers());
     const gameOver = this.x.game_is_over(this.g) === 1;
     const phase = gameOver ? 'ended' : activePlayers.length ? 'active' : 'setup';
-    return Object.freeze({ modeId, ...mode, gameOver, phase, activePlayers });
+    return Object.freeze({
+      modeId, ...mode, gameOver, phase, activePlayers,
+      teamStyle: this.x.game_team_style(this.g),
+      teamConfiguredMask: this.x.game_team_configured_mask(this.g) >>> 0,
+    });
   }
 
   gaps() { return Array.from(this.views().gaps); }

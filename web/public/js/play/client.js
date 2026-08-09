@@ -26,6 +26,19 @@ const INCOME_MODES = Object.freeze([
   Object.freeze({ value: 0, slug: 'retail-cap', label: 'retail commerce cap' }),
   Object.freeze({ value: 1, slug: 'uncapped-experiment', label: 'DoN uncapped experiment' }),
 ]);
+// Deterministic browser presets only. The selected preset is packed into one frame-zero
+// Sim transaction; live teams are always queried back through the PlayerSetup owner.
+const TEAM_LAYOUTS = Object.freeze([
+  Object.freeze({ slug: 'ffa', label: 'free for all', teamStyle: 0, teams: Object.freeze([0, 1, 2, 3]) }),
+  Object.freeze({
+    slug: 'alternating-2v2', label: '2v2 — alternating', teamStyle: 1,
+    teams: Object.freeze([0, 1, 0, 1]),
+  }),
+  Object.freeze({
+    slug: 'adjacent-2v2', label: '2v2 — adjacent', teamStyle: 1,
+    teams: Object.freeze([0, 0, 1, 1]),
+  }),
+]);
 const QUEUE_CAPACITY = 8; // game_object_info exposes queue_n plus q0..q7.
 const SETTINGS_PROTOCOL = 'don.browser-settings.v1';
 const SETTINGS_STORAGE_KEY = 'don.browser-settings.v1';
@@ -51,7 +64,8 @@ const BINDING_ACTIONS = Object.freeze([
   Object.freeze({ id: 'idle', label: 'next idle worker', fallback: 'Period' }),
   Object.freeze({ id: 'selectAll', label: 'select all units', fallback: 'Primary+KeyA' }),
 ]);
-const JOURNAL_PROTOCOL = 'don.command-journal.v2';
+const JOURNAL_PROTOCOL = 'don.command-journal.v3';
+const ROSTER_JOURNAL_PROTOCOL = 'don.command-journal.v2';
 const LEGACY_JOURNAL_PROTOCOL = 'don.command-journal.v1';
 const MAX_JOURNAL_FRAMES = 1000000; // about 18.6 hours at the recovered 67 ms tick.
 const MAX_JOURNAL_EVENTS = 50000;
@@ -137,8 +151,10 @@ async function boot() {
   mod.setIncomeMode(state.sessionIncomeMode);
   mod.setPopSetting(state.sessionPopSetting);
   const requestedRoster = parseSessionRoster(params.get('slots'), mod.playerCount);
-  if (requestedRoster.length && !mod.activatePlayers(requestedRoster)) {
-    throw new Error('the authoritative Sim refused the roster encoded by the session link');
+  const requestedTeamLayout = parseSessionTeamLayout(params.get('team'));
+  if (requestedRoster.length && !mod.startManualTeams(
+    requestedRoster, requestedTeamLayout.teams, requestedTeamLayout.teamStyle, state.who, false)) {
+    throw new Error('the authoritative Sim refused the roster/team setup encoded by the session link');
   }
   state.sessionInitialDigest = mod.digest();
   if (requestedRoster.length) {
@@ -573,6 +589,26 @@ function parseSessionRoster(value, count) {
     throw new Error('session roster must be a strictly increasing list of exported player slots');
   }
   return slots;
+}
+
+function parseSessionTeamLayout(value) {
+  if (value === null || value === undefined || value === '' || /^unconfigured-\d+$/.test(value)) {
+    return TEAM_LAYOUTS[0];
+  }
+  return TEAM_LAYOUTS.find((layout) => layout.slug === value) ?? TEAM_LAYOUTS[0];
+}
+
+function selectedTeamLayout() {
+  return parseSessionTeamLayout($('session-team')?.value);
+}
+
+function coreTeamLayout() {
+  if (!state.mod || state.mod.match().teamConfiguredMask === 0) return selectedTeamLayout();
+  const teams = Array.from({ length: state.mod.playerCount }, (_, who) => state.mod.leader(who).team);
+  const teamStyle = state.mod.match().teamStyle;
+  return TEAM_LAYOUTS.find((layout) => layout.teamStyle === teamStyle &&
+    layout.teams.slice(0, state.mod.playerCount).every((team, who) => teams[who] === team)) ??
+    Object.freeze({ slug: `style-${teamStyle}-${teams.join('-')}`, label: 'custom core teams', teamStyle, teams });
 }
 
 function formatSeed(seed) { return `0x${(seed >>> 0).toString(16).padStart(8, '0')}`; }
@@ -1226,6 +1262,9 @@ function initializeSessionPanel() {
   const sizeOption = $('session-size').options[0];
   sizeOption.value = size;
   sizeOption.textContent = `${state.mod.tiles} × ${state.mod.tiles} tiles — fixed`;
+  const initialTeamLayout = state.mod.match().teamConfiguredMask
+    ? coreTeamLayout() : parseSessionTeamLayout(new URLSearchParams(location.search).get('team'));
+  $('session-team').value = initialTeamLayout.slug;
 
   $('session-new').addEventListener('click', restartSessionFromPanel);
   $('session-activate').addEventListener('click', activateSessionRoster);
@@ -1233,6 +1272,10 @@ function initializeSessionPanel() {
     if (event.key === 'Enter') restartSessionFromPanel();
   });
   players.addEventListener('change', () => switchPlayer(Number(players.value)));
+  $('session-team').addEventListener('change', () => {
+    syncSessionUrl();
+    renderSessionSummary();
+  });
   $('session-share').addEventListener('click', shareSessionLink);
   syncSessionUrl();
   renderSessionStatus();
@@ -1241,11 +1284,14 @@ function initializeSessionPanel() {
 
 function activateSessionRoster() {
   const requested = Array.from({ length: state.mod.playerCount }, (_, player) => player);
+  const layout = selectedTeamLayout();
   // Match start is a reproducible setup transaction, not a mutation of however many
   // inactive frames happened to elapse while the player read the setup panel.
   if (!state.mod.restart(state.sessionSeed)) return false;
   resetClientForWorld(state.sessionSeed, true, `manual match start: P${state.who}`);
-  if (!state.mod.activatePlayers(requested)) return false;
+  if (!state.mod.startManualTeams(requested, layout.teams, layout.teamStyle, state.who, false)) {
+    return false;
+  }
   const roster = state.mod.activePlayers();
   state.sessionInitialDigest = state.mod.digest();
   state.coreSaveStatus =
@@ -1257,7 +1303,8 @@ function activateSessionRoster() {
   renderSessionStatus();
   renderSessionSummary();
   renderObjectivesPanel();
-  say(`started authoritative Sim roster ${roster.join(', ')} from frame-zero setup`, 'ok');
+  say(`started authoritative Sim roster ${roster.join(', ')} as ${coreTeamLayout().label} ` +
+    'from frame-zero setup', 'ok');
   return true;
 }
 
@@ -1313,6 +1360,7 @@ function resetClientForWorld(seed, paused, cameraSource) {
     $('session-activate').textContent = state.mod.activePlayers().length
       ? 'manual match active' : 'start manual match';
   }
+  if ($('session-team')) $('session-team').disabled = state.mod.activePlayers().length > 0;
   if ($('core-save')) {
     $('core-save').disabled = !state.mod.supports('save') || state.mod.activePlayers().length > 0;
   }
@@ -1373,7 +1421,7 @@ function sessionUrl() {
   url.searchParams.set('map', SESSION_MAP);
   url.searchParams.set('size', `${state.mod.tiles}x${state.mod.tiles}`);
   url.searchParams.set('nation', 'unavailable');
-  url.searchParams.set('team', `unconfigured-${state.mod.leader(state.who).team}`);
+  url.searchParams.set('team', coreTeamLayout().slug);
   url.searchParams.set('slots', state.mod.activePlayers().join(','));
   url.searchParams.set('ai_slots', 'unavailable');
   url.searchParams.set('ai_difficulty', 'unavailable');
@@ -1420,6 +1468,7 @@ function renderSessionStatus() {
     $('session-activate').textContent = match.phase === 'setup'
       ? 'start manual match' : match.phase === 'active' ? 'manual match active' : 'match ended';
   }
+  $('session-team').disabled = match.phase !== 'setup';
   if ($('core-save')) {
     $('core-save').disabled = !state.mod.supports('save') || match.activePlayers.length > 0;
   }
@@ -1431,6 +1480,7 @@ function renderSessionStatus() {
 function sessionDescriptor() {
   const leader = state.mod.leader(state.who);
   const match = state.mod.match();
+  const layout = coreTeamLayout();
   const activePlayers = match.activePlayers.slice();
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
@@ -1440,7 +1490,11 @@ function sessionDescriptor() {
     nation: 'unavailable',
     team: leader.team,
     teamConfigured: leader.teamConfigured,
-    teamMutable: false,
+    teamMutable: match.phase === 'setup',
+    teamStyle: match.teamStyle,
+    teamLayout: layout.slug,
+    teams: Object.freeze(Array.from({ length: state.mod.playerCount }, (_, who) =>
+      state.mod.leader(who).team)),
     phase: match.phase,
     slots: activePlayers.length,
     activePlayers,
@@ -1458,10 +1512,11 @@ function renderSessionSummary() {
   const setup = sessionDescriptor();
   const leader = state.mod.leader(setup.player);
   const match = state.mod.match();
-  const teamOption = $('session-team').options[0];
-  teamOption.value = String(leader.team);
-  teamOption.textContent = `unconfigured slot ${leader.team} — core read-only`;
-  $('session-team').value = String(leader.team);
+  const layout = coreTeamLayout();
+  if (TEAM_LAYOUTS.some((candidate) => candidate.slug === layout.slug)) {
+    $('session-team').value = layout.slug;
+  }
+  $('session-team').disabled = match.phase !== 'setup';
   const victoryOption = $('session-victory').options[0];
   victoryOption.value = match.slug;
   victoryOption.textContent = `${match.label} — core read-only`;
@@ -1471,12 +1526,14 @@ function renderSessionSummary() {
   $('summary-phase').textContent = match.phase === 'setup'
     ? 'setup · roster inactive'
     : match.phase === 'active' ? 'active match · authoritative roster live' : 'ended · core game-over latch';
-  $('summary-player').textContent =
-    `P${setup.player} · nation unavailable · unconfigured team slot ${setup.team} (read-only)`;
+  $('summary-player').textContent = setup.teamConfigured
+    ? `P${setup.player} · nation unavailable · configured team ${setup.team} (Sim-owned)`
+    : `P${setup.player} · nation unavailable · ${layout.label} pending frame-zero setup`;
   $('summary-slots').textContent =
     `${setup.slots} active manual core leaders (${setup.activePlayers.join(', ')}) · AI unavailable`;
   $('summary-rules').textContent =
-    `income unavailable · population unavailable · ${match.label} victory (read-only)`;
+    `teams ${layout.label} · income unavailable · population unavailable · ` +
+    `${match.label} victory (read-only)`;
 }
 
 function initializeObjectivesPanel() {
@@ -1850,10 +1907,14 @@ function hexToBytes(hex) {
 }
 
 function replayBaseline() {
+  const match = state.mod.match();
   return Object.freeze({
     seed: formatSeed(state.sessionSeed),
     player: state.who,
     activePlayers: Object.freeze(state.mod.activePlayers()),
+    teamStyle: match.teamStyle,
+    teams: Object.freeze(Array.from(
+      { length: state.mod.playerCount }, (_, who) => state.mod.leader(who).team)),
     income: INCOME_MODES[state.sessionIncomeMode].slug,
     population: POPULATION_LIMITS[state.sessionPopSetting],
     initialDigest: state.sessionInitialDigest,
@@ -1950,7 +2011,8 @@ function normalizeReplayJournal(input) {
   if (!documentValue || typeof documentValue !== 'object' || Array.isArray(documentValue)) {
     throw new Error('journal root must be an object');
   }
-  if (![JOURNAL_PROTOCOL, LEGACY_JOURNAL_PROTOCOL].includes(documentValue.protocol)) {
+  if (![JOURNAL_PROTOCOL, ROSTER_JOURNAL_PROTOCOL, LEGACY_JOURNAL_PROTOCOL]
+      .includes(documentValue.protocol)) {
     throw new Error(`unsupported journal protocol ${JSON.stringify(documentValue.protocol)}`);
   }
   const setup = documentValue.setup;
@@ -1964,6 +2026,17 @@ function normalizeReplayJournal(input) {
     ? [] : setup.activePlayers;
   if (!isCanonicalRoster(activePlayers, state.mod.playerCount)) {
     throw new Error('journal active roster is not canonical');
+  }
+  if (activePlayers.length && !activePlayers.includes(player)) {
+    throw new Error('journal perspective must be an active manual player');
+  }
+  const teamStyle = documentValue.protocol === JOURNAL_PROTOCOL ? Number(setup.teamStyle) : 0;
+  const teams = documentValue.protocol === JOURNAL_PROTOCOL
+    ? setup.teams : Array.from({ length: state.mod.playerCount }, (_, who) => who);
+  if (!Number.isInteger(teamStyle) || teamStyle < 0 || teamStyle > 12 ||
+      !Array.isArray(teams) || teams.length !== state.mod.playerCount ||
+      teams.some((team) => !Number.isInteger(team) || ![0, 1, 2, 3, 8].includes(team))) {
+    throw new Error('journal team setup is malformed or requests an unsupported/random team');
   }
   const incomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income);
   if (!incomeMode) throw new Error('journal income mode is unsupported');
@@ -2038,6 +2111,7 @@ function normalizeReplayJournal(input) {
     protocol: JOURNAL_PROTOCOL,
     setup: Object.freeze({
       seed: formatSeed(seed), player, activePlayers: Object.freeze(activePlayers.slice()),
+      teamStyle, teams: Object.freeze(teams.slice()),
       income: incomeMode.slug,
       population: POPULATION_LIMITS[popIndex], initialDigest: setup.initialDigest.toLowerCase(),
     }),
@@ -2058,9 +2132,14 @@ function scratchReplayBaselineDigest(setup) {
   const game = x.game_create(parseSessionSeed(setup.seed), 0);
   if (!game) throw new Error('could not allocate a scratch world to validate the journal baseline');
   try {
-    for (const player of setup.activePlayers) {
-      if (x.game_activate_player(game, player) !== 1) {
-        throw new Error(`scratch world refused active roster slot ${player}`);
+    if (setup.activePlayers.length) {
+      const mask = setup.activePlayers.reduce((bits, player) => bits | (1 << player), 0) >>> 0;
+      const packedTeams = Array.from({ length: state.mod.playerCount }, (_, player) =>
+        setup.activePlayers.includes(player) ? setup.teams[player] : 8)
+        .reduce((packed, team, player) => packed | (team << (player * 8)), 0) >>> 0;
+      if (x.game_start_manual_teams(
+        game, mask, packedTeams, setup.teamStyle, setup.player, 0) !== 1) {
+        throw new Error('scratch world refused the journal PlayerSetup/team transaction');
       }
     }
     x.game_set_income_mode(game, INCOME_MODES.find((mode) => mode.slug === setup.income).value);
@@ -2112,8 +2191,9 @@ async function restoreReplayFrame(targetFrame) {
     state.sessionPopSetting = POPULATION_LIMITS.indexOf(setup.population);
     if (!state.mod.restart(parseSessionSeed(setup.seed))) throw new Error('Wasm world restart failed');
     resetClientForWorld(parseSessionSeed(setup.seed), true, `journal frame ${target}`);
-    if (!state.mod.activatePlayers(setup.activePlayers)) {
-      throw new Error('Wasm world refused the journal active roster');
+    if (setup.activePlayers.length && !state.mod.startManualTeams(
+      setup.activePlayers, setup.teams, setup.teamStyle, setup.player, false)) {
+      throw new Error('Wasm world refused the journal PlayerSetup/team transaction');
     }
     state.sessionInitialDigest = state.mod.digest();
     if (setup.activePlayers.length) {
@@ -3373,10 +3453,14 @@ window.don = {
     const x = state.mod.x;
     const g = x.game_create(seed >>> 0, 0);
     if (!g) throw new Error('fresh digest world allocation failed');
-    for (const player of activePlayers) {
-      if (x.game_activate_player(g, player) !== 1) {
+    if (activePlayers.length) {
+      const mask = activePlayers.reduce((bits, player) => bits | (1 << player), 0) >>> 0;
+      const packed = Array.from({ length: state.mod.playerCount }, (_, player) =>
+        activePlayers.includes(player) ? player : 8)
+        .reduce((bits, team, player) => bits | (team << (player * 8)), 0) >>> 0;
+      if (x.game_start_manual_teams(g, mask, packed, 0, activePlayers[0], 0) !== 1) {
         x.game_destroy(g);
-        throw new Error(`fresh digest world refused active roster slot ${player}`);
+        throw new Error('fresh digest world refused the PlayerSetup/team transaction');
       }
     }
     x.game_step(g, frames);

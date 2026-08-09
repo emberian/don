@@ -67,12 +67,15 @@ export const REQUIRED_PLAY_WASM_EXPORTS = Object.freeze([
   'game_set_pop_setting',
   'game_start_x',
   'game_start_y',
+  'game_start_manual_teams',
   'game_step',
   'game_submit',
   'game_subtile',
   'game_tag_ptr',
   'game_team',
+  'game_team_configured_mask',
   'game_team_score',
+  'game_team_style',
   'game_terrain_version',
   'game_tile_ptr',
   'game_tile_resource',
@@ -82,8 +85,8 @@ export const REQUIRED_PLAY_WASM_EXPORTS = Object.freeze([
   'game_y_ptr',
 ]);
 
-// These are deliberately not setup capabilities.  Team and victory values are projections
-// from the authoritative Sim until complete Sim-owned setup transactions exist.
+// Raw individual setters remain forbidden. Team setup is admitted only through the atomic
+// frame-zero `game_start_manual_teams` transaction; victory has no corresponding owner yet.
 export const FORBIDDEN_PLAY_WASM_EXPORTS = Object.freeze([
   'game_set_team',
   'game_set_victory_mode',

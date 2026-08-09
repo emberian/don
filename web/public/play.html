@@ -386,9 +386,11 @@
         </select>
       </label>
       <label>team
-        <select id="session-team" style="width:150px" disabled
-          title="Read-only: projected from the authoritative Sim team query; no team setter is exported">
-          <option value="0">unconfigured slot 0 — core read-only</option>
+        <select id="session-team" style="width:150px"
+          title="Applied once through the authoritative Sim frame-zero PlayerSetup transaction">
+          <option value="ffa">free for all</option>
+          <option value="alternating-2v2">2v2 — alternating</option>
+          <option value="adjacent-2v2">2v2 — adjacent</option>
         </select>
       </label>
       <label class="unavailable">AI slots

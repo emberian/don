@@ -11,9 +11,11 @@ use crate::wire_gen;
 use don_sim::deviations::{Deviation, ModeConfig, Surface};
 use don_sim::objects::{Band, BUILD_BAND_BASE, WALL_BAND_BASE};
 use don_sim::order::{Order, OrderIndex};
+use don_sim::systems::player_setup::ManualPlayerSetup;
 use don_sim::systems::production::runtime::LiveProductionType;
 use don_sim::systems::production::{self, BuildData, BuildQueueEntry};
 use don_sim::systems::save_load::{load_sim, save_sim};
+use don_sim::systems::setup_diplomacy::TEAM_AUTO;
 use don_sim::systems::victory_score;
 use don_sim::tick::Sim as CoreSim;
 use don_sim::Handle;
@@ -1241,6 +1243,57 @@ pub unsafe extern "C" fn game_activate_player(g: *mut Game, who: u32) -> u32 {
     1
 }
 
+/// Apply one complete manual PlayerSetup/team transaction and activate its roster.
+///
+/// `packed_teams` carries one unsigned team byte per browser slot in little-endian order.
+/// Active players admit only explicit teams 0..=3 or retail's independent-side byte 8;
+/// inactive players must be byte 8.  Ranked and random-team setup are explicit refusal
+/// paths, and a refusal leaves the Sim unchanged.
+#[no_mangle]
+pub unsafe extern "C" fn game_start_manual_teams(
+    g: *mut Game,
+    active_mask: u32,
+    packed_teams: u32,
+    team_style: u32,
+    local_player: u32,
+    ranked: u32,
+) -> u32 {
+    let game = game_ref!(g);
+    let browser_mask = (1u32 << PLAYERS) - 1;
+    if active_mask == 0
+        || active_mask & !browser_mask != 0
+        || team_style > u8::MAX as u32
+        || local_player >= PLAYERS as u32
+        || ranked > 1
+    {
+        game.set_error("manual player setup refused: malformed browser setup".to_owned());
+        return 0;
+    }
+
+    let mut teams = [TEAM_AUTO; victory_score::NUM_LEADERS];
+    for (who, team) in teams.iter_mut().take(PLAYERS).enumerate() {
+        *team = ((packed_teams >> (who * 8)) & 0xff) as u8 as i8;
+    }
+    let request = ManualPlayerSetup {
+        active_mask: active_mask as u8,
+        teams,
+        team_style: team_style as u8,
+        local_player_setup_slot: local_player as usize,
+        ranked: ranked != 0,
+    };
+    match game.core.start_manual_player_setup(request) {
+        Ok(_) => {
+            game.error.clear();
+            game.refresh();
+            1
+        }
+        Err(error) => {
+            game.set_error(format!("manual player setup refused: {error:?}"));
+            0
+        }
+    }
+}
+
 /// Authoritative browser-cohort roster as a bit mask of live victory leader slots.
 ///
 /// This is deliberately a query over `Sim::vic_leaders`, not an adapter-maintained copy.
@@ -1256,6 +1309,19 @@ pub unsafe extern "C" fn game_active_player_mask(g: *mut Game) -> u32 {
         }
     }
     mask
+}
+
+/// Bit mask of slots whose team comes from the canonical Sim-owned PlayerSetup image.
+#[no_mangle]
+pub unsafe extern "C" fn game_team_configured_mask(g: *mut Game) -> u32 {
+    game_ref!(g).core.vic_leaders.setup_owner.configured_mask() as u32
+}
+
+/// Read-only `GameInfo::team_style` projection. Victory mode remains independently
+/// read-only and has no setup transaction in this ABI.
+#[no_mangle]
+pub unsafe extern "C" fn game_team_style(g: *mut Game) -> u32 {
+    game_ref!(g).core.vic_match.options.team_style as u32
 }
 
 /// # Safety
@@ -2032,6 +2098,73 @@ mod tests {
         assert_eq!(game.core.channel_digest(), before_query);
         assert_eq!(unsafe { game_activate_player(&mut game, 0) }, 1);
         assert_eq!(unsafe { game_active_player_mask(&mut game) }, (1 << 2) | 1);
+    }
+
+    #[test]
+    fn manual_team_setup_is_atomic_sim_owned_and_save_refused() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x7ea0_2026);
+        let rng = game.core.world.random.state();
+        let packed = u32::from_le_bytes([0, 1, 0, 1]);
+
+        assert_eq!(
+            unsafe { game_start_manual_teams(&mut game, 0x0f, packed, 1, 0, 0) },
+            1
+        );
+        assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0x0f);
+        assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0x0f);
+        assert_eq!(unsafe { game_team_style(&mut game) }, 1);
+        assert_eq!(
+            (0..4)
+                .map(|who| unsafe { game_team(&mut game, who) })
+                .collect::<Vec<_>>(),
+            vec![0, 1, 0, 1]
+        );
+        assert_eq!(game.core.world.frame, 0);
+        assert_eq!(game.core.world.random.state(), rng);
+        assert_eq!(unsafe { game_diplomacy(&mut game, 0, 2) }, 0);
+
+        assert_eq!(unsafe { game_save(&mut game) }, 0);
+        assert!(String::from_utf8_lossy(&game.error).contains("player setup owner"));
+        assert_eq!(
+            unsafe { game_start_manual_teams(&mut game, 0x0f, packed, 1, 0, 0) },
+            0
+        );
+        assert!(String::from_utf8_lossy(&game.error).contains("MatchAlreadyStarted"));
+    }
+
+    #[test]
+    fn manual_team_setup_rejects_random_ranked_and_malformed_without_mutation() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+
+        let cases = [
+            (0x03, u32::from_le_bytes([5, 1, 8, 8]), 1, 0, 0),
+            (0x03, u32::from_le_bytes([0, 1, 8, 8]), 1, 0, 1),
+            (0x03, u32::from_le_bytes([0, 1, 8, 8]), 13, 0, 0),
+            (0x01, u32::from_le_bytes([0, 1, 8, 8]), 1, 0, 0),
+            (0x10, u32::from_le_bytes([0, 8, 8, 8]), 0, 0, 0),
+        ];
+        for (index, (mask, teams, style, local, ranked)) in cases.into_iter().enumerate() {
+            let mut game = Game::new(0x1000 + index as u64);
+            let digest = game.core.channel_digest();
+            let rng = game.core.world.random.state();
+            assert_eq!(
+                unsafe { game_start_manual_teams(&mut game, mask, teams, style, local, ranked) },
+                0
+            );
+            assert_eq!(game.core.channel_digest(), digest);
+            assert_eq!(game.core.world.random.state(), rng);
+            assert_eq!(unsafe { game_active_player_mask(&mut game) }, 0);
+            assert_eq!(unsafe { game_team_configured_mask(&mut game) }, 0);
+        }
     }
 
     #[test]

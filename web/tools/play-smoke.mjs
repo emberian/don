@@ -249,6 +249,7 @@ try {
       sessionSetup: window.don.session.setup(),
       sessionUrl: window.don.session.url(),
       coreActivationExported: typeof m.x.game_activate_player === 'function',
+      coreTeamSetupExported: typeof m.x.game_start_manual_teams === 'function',
       coreRosterQueryExported: typeof m.x.game_active_player_mask === 'function',
       coreActiveMask: m.x.game_active_player_mask(m.g) >>> 0,
       unsupportedSetupExportsAbsent:
@@ -258,8 +259,8 @@ try {
         'session-map', 'session-size', 'session-nation',
         'session-ai-slots', 'session-ai-difficulty', 'income', 'popset',
       ].every(id => document.getElementById(id)?.disabled),
-      sessionReadOnlyDisabled: ['session-team', 'session-victory']
-        .every(id => document.getElementById(id)?.disabled),
+      sessionTeamEnabled: !document.getElementById('session-team')?.disabled,
+      sessionVictoryReadOnly: document.getElementById('session-victory')?.disabled,
       sessionSummary: document.getElementById('session-summary')?.textContent ?? '',
       coreMatch: m.match(),
       coreLeader: m.leader(0),
@@ -339,8 +340,9 @@ try {
     ['the touch command dock is complete', out.ui.commandButtons >= 9],
     ['session setup exposes the deterministic seed', out.ui.sessionSeed === '0x00c0ffee'],
     ['session setup exposes every player perspective', out.ui.sessionPlayers >= 2],
-    ['explicit Sim roster activation is exposed but not hidden in world creation',
-      out.ui.coreActivationExported && out.ui.coreRosterQueryExported && out.ui.sessionActivate &&
+    ['atomic Sim PlayerSetup activation is exposed but not hidden in world creation',
+      out.ui.coreActivationExported && out.ui.coreTeamSetupExported &&
+      out.ui.coreRosterQueryExported && out.ui.sessionActivate &&
       out.ui.coreActiveMask === 0 && out.ui.sessionSetup.phase === 'setup' &&
       JSON.stringify(out.ui.sessionSetup.activePlayers) === JSON.stringify([]) &&
       !out.ui.coreLeader.active],
@@ -351,13 +353,14 @@ try {
     ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
     ['session links are shareable', out.ui.sessionShare],
     ['unsupported setup choices stay disabled', out.ui.sessionUnsupportedDisabled],
-    ['read-only team and victory facts have no pretend setter', out.ui.sessionReadOnlyDisabled],
+    ['team layout is frame-zero mutable while victory remains read-only',
+      out.ui.sessionTeamEnabled && out.ui.sessionVictoryReadOnly],
     ['unsupported URL requests are canonicalized to authoritative facts rather than fabricated',
       out.ui.sessionSetup.map === 'integration-land' && out.ui.sessionSetup.size === '128x128' &&
       out.ui.sessionSetup.nation === 'unavailable' && out.ui.sessionSetup.team === 0 &&
       out.ui.sessionSetup.aiSlots === 'unavailable' && out.ui.sessionSetup.aiDifficulty === 'unavailable' &&
       out.ui.sessionSetup.victory === 'standard' && !out.ui.sessionSetup.teamConfigured &&
-      !out.ui.sessionSetup.teamMutable &&
+      out.ui.sessionSetup.teamMutable && out.ui.sessionSetup.teamLayout === 'ffa' &&
       !out.ui.sessionSetup.victoryMutable],
     ['team, diplomacy, and victory values come through the read-only core ABI',
       out.ui.coreMatch.slug === 'standard' && !out.ui.coreMatch.gameOver &&
@@ -388,7 +391,7 @@ try {
       out.ui.minimapLabel.includes('All exported owners are visible') &&
       out.ui.minimapLabel.includes('fog is unavailable')],
     ['the command journal exposes playback, timeline, import, and export controls',
-      out.ui.replayProtocol === 'don.command-journal.v2' && out.ui.replayControls >= 5 &&
+      out.ui.replayProtocol === 'don.command-journal.v3' && out.ui.replayControls >= 5 &&
       out.ui.replayTimeline.includes('Command journal frame') && out.ui.replayJournalActionsEnabled &&
       out.ui.replayPauseWorked && out.ui.replaySpeedWorked],
     ['journal feedback is announced and does not claim to be a native save',
@@ -734,7 +737,7 @@ try {
       out.session.urlSeed === '0x1234abcd' && out.session.urlPlayer === '0'],
     ['the share URL records the fixed world, queried team, and missing player systems',
       out.session.urlMap === 'integration-land' && out.session.urlSize === '128x128' &&
-      out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unconfigured-0' &&
+      out.session.urlNation === 'unavailable' && out.session.urlTeam === 'ffa' &&
       out.session.urlSlots === '' && out.session.urlAiSlots === 'unavailable' &&
       out.session.urlAiDifficulty === 'unavailable'],
     ['the share URL records the read-only victory and unavailable rule hosts',
@@ -843,6 +846,9 @@ try {
   // victory state are not in the current save format, so the UI must never imply otherwise.
   out.activation = await c.eval(`(async () => {
     const d = window.don;
+    const teamLayout = document.getElementById('session-team');
+    teamLayout.value = 'alternating-2v2';
+    teamLayout.dispatchEvent(new Event('change', { bubbles: true }));
     const activated = d.session.activate();
     const m = d.state.mod;
     const leaders = Array.from({ length: m.playerCount }, (_, p) => m.leader(p));
@@ -864,15 +870,20 @@ try {
     ['frame-zero match start reaches every Sim leader and is queried without a JS roster copy',
       out.activation.activated && out.activation.startedFrame === 0 &&
       out.activation.leaders.every(leader => leader.active) &&
+      JSON.stringify(out.activation.leaders.map(leader => leader.team)) === JSON.stringify([0, 1, 0, 1]) &&
+      out.activation.leaders.every(leader => leader.teamConfigured) &&
       out.activation.activePlayers.length === out.activation.leaders.length &&
       out.activation.activeMask === (1 << out.activation.leaders.length) - 1 &&
-      out.activation.match.phase === 'active'],
-    ['journal v2 owns the authoritative roster and reconstructs the active baseline',
-      out.activation.journal.protocol === 'don.command-journal.v2' &&
+      out.activation.match.phase === 'active' && out.activation.match.teamStyle === 1],
+    ['journal v3 owns the authoritative roster/teams and reconstructs the active baseline',
+      out.activation.journal.protocol === 'don.command-journal.v3' &&
       JSON.stringify(out.activation.journal.setup.activePlayers) ===
         JSON.stringify(out.activation.activePlayers) &&
+      JSON.stringify(out.activation.journal.setup.teams) === JSON.stringify([0, 1, 0, 1]) &&
+      out.activation.journal.setup.teamStyle === 1 &&
       out.activation.journal.setup.initialDigest.length === 16 &&
       out.activation.imported.frame === 0 && out.activation.importedMatch.phase === 'active' &&
+      out.activation.importedMatch.teamStyle === 1 &&
       JSON.stringify(out.activation.importedMatch.activePlayers) ===
         JSON.stringify(out.activation.activePlayers)],
     ['active roster makes unsupported live save status explicit',
@@ -1001,7 +1012,7 @@ try {
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['the journal exports its bounded protocol and deterministic session baseline',
-      out.journal.protocol === 'don.command-journal.v2' &&
+      out.journal.protocol === 'don.command-journal.v3' &&
       out.journal.boundary.includes('not a native save') &&
       out.journal.setup.seed === '0x1234abcd' && out.journal.setup.initialDigest.length === 16 &&
       Array.isArray(out.journal.setup.activePlayers) && out.journal.setup.activePlayers.length === 0],

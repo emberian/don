@@ -65,11 +65,21 @@ fn main() {
     if digest_mode {
         // Browser `freshDigest` receives the same explicit roster argument. Never inherit
         // an unrelated live browser session or silently force the four-player match here.
-        for who in &active_players {
+        if let Some(&local_player) = active_players.first() {
+            let mut mask = 0u32;
+            let mut packed_teams = 0u32;
+            for who in 0..4u32 {
+                let active = active_players.contains(&who);
+                if active {
+                    mask |= 1 << who;
+                }
+                let team = if active { who } else { 8 };
+                packed_teams |= team << (who * 8);
+            }
             assert_eq!(
-                unsafe { game_activate_player(game, *who) },
+                unsafe { game_start_manual_teams(game, mask, packed_teams, 0, local_player, 0) },
                 1,
-                "manual roster activation failed for slot {who}"
+                "manual PlayerSetup/team activation failed"
             );
         }
     }

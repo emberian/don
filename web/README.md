@@ -90,28 +90,39 @@ creates a saved core foundation rather than browser state. Gather, other buildin
 ordinary technologies, live rule setters, fog/LOS, diplomacy mutation, AI, victory mutation, and
 objective countdowns remain disabled until their exact core hosts are exposed. Team identity,
 effective diplomacy, victory mode/status, and personal/team score are read-only projections from
-the authoritative Sim; the setup controls stay disabled because those queries do not assign state.
-The manual start action is the narrower exception: it recreates the requested seed at frame zero,
-calls `Sim::activate` for the explicit roster, and then queries the active-player mask back from
-`Sim::vic_leaders`. The browser retains no parallel roster or match-phase state. Shared-session URLs
-and command-journal v2 baselines carry that bounded roster and reconstruct it through the same
-transaction. A v1 journal remains importable as an inactive-roster baseline. `setup`, `active`, and
-`ended` are projections of the live roster plus the core game-over latch, not UI-only phases.
+the authoritative Sim. The team-layout control is the bounded exception: manual start recreates
+the requested seed and sends the complete roster, explicit team bytes, team style, and local slot
+through one frame-zero `Sim::start_manual_player_setup` transaction. That owner applies the
+recovered deterministic/non-ranked `Game::init_teams` body before activating any leader and retains
+its exact `PlayerSetup` image and ordered script-call receipt in the Sim. Random-team byte 5,
+ranked setup, malformed/inactive team bytes, repeated start, and nonzero frames all refuse without
+mutation. JavaScript queries the resulting roster and teams back; it retains no parallel copy.
+Shared-session URLs and command-journal v3 baselines carry the bounded team preset and reconstruct
+it through the same transaction. V1 and v2 journals remain importable as inactive/own-slot-team
+baselines. `setup`, `active`, and `ended` remain live core projections.
 
-This does not make team setup mutable. `setup_diplomacy::SetupDiplomacy` still lacks a Sim-owned
-`PlayerSetup` image in this adapter, so no team setter is exported; the current team hook remains
-explicitly unconfigured/read-only. Victory mode mutation remains absent for the same reason.
+This does not make diplomacy or victory setup complete. Retail `Game::init_teams` does not execute
+`Leader::set_diplo`, so configured teammates retain the separately-owned diplomacy declarations;
+the browser does not invent alliances. Raw `game_set_team` and `game_set_victory_mode` exports stay
+forbidden. The active setup owner is not yet serialized by DoNSave, so core save fails closed after
+match start instead of silently dropping roster/team state.
 
 The authoritative-roster ABI tranche passed six focused native tests in both independent remote
 profiles on 2026-08-09: hbox
 `web-authoritative-roster-20260809T214825Z-33897-19722-18c26aa332f9` and persvati release
 `web-authoritative-roster-release-20260809T214825Z-33893-25343-18c26aa332f9`. Both exited 0.
 The JavaScript modules and smoke source also pass `node --check`. Root convergence then rebuilt
-and optimized the Wasm, verified 73 required exports with both unsupported setup setters absent,
+and optimized the Wasm, verified the original 73 required exports with both unsupported setup setters absent,
 and passed the full Chrome/WebGPU smoke. The renderer read back 42,496 non-black pixels, real
 mouse input installed `MOVE_TO`, URL reload reconstructed the exact authoritative roster, and
 native/Wasm digests agreed at 600 frames for both inactive setup
 (`e526f20feb32cb49`) and roster `0,1,2,3` (`b68aa66f8a4703d0`).
+
+The subsequent deterministic PlayerSetup tranche rebuilt the artifact at 768,503 bytes and
+expanded the contract to 76 required exports while keeping both raw setup setters forbidden.
+Eight native ABI tests, five Sim owner tests, and the complete Chrome/WebGPU smoke passed. FFA and
+2v2 setup reconstruct through URL/journal state owned by Sim; both 600-frame digests remain
+unchanged from the values above.
 
 `web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
 checks the fresh Wasm export table both before and after optional optimization. The same three
