@@ -152,9 +152,10 @@
 //! * 21 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
+use crate::systems::groups_guys::{GuyData, GuyEnv, UnitTypeStats};
 use crate::systems::movement::{
-    self, vector_dist, Body, MoveStep, PathData, PathFinder, PathStack, PathUnit, SearchArgs,
-    SearchResult, UPathOutcome, UnitWorld,
+    self, vector_dist, Body, MoveStep, MoveTurnProfile, PathData, PathFinder, PathStack, PathUnit,
+    SearchArgs, SearchResult, UPathOutcome, UnitWorld,
 };
 
 // ---------------------------------------------------------------------------
@@ -246,6 +247,9 @@ pub mod masks {
     pub const ORDER_TRANSIENT: u32 = 0x0002_0000;
     /// Selects the snap-to-destination arm of `Unit::work`'s movement branch.
     pub const SNAP_DEST: u32 = 0x0008_0000;
+    /// `Unit::move_step` halves speed and clears this latch when the residual heading is under
+    /// its distance-scaled threshold [measured `0x005FB39B..0x005FB3D0`].
+    pub const HALF_SPEED_ON_TURN: u32 = 0x0010_0000;
     /// Selects the "facing move" fixup at `0x0060D36A`.
     pub const FACING_MOVE: u32 = 0x0400_0000;
     /// Cleared by the last instruction of `Unit::work` (`and [ebx+0x68], 0xFFFFFFEF`).
@@ -673,7 +677,7 @@ impl OrderQueue {
 /// The slice of `UnitData` that `Unit::work` `0x0060D180` touches, at the offsets in
 /// [`offsets`]. Every field carries its retail offset in its doc comment so a live-memory
 /// crawl and this port can be diffed field by field.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct UnitWork {
     /// `SubObjectData::who` `+9`.
     pub who: u8,
@@ -728,20 +732,25 @@ pub struct UnitWork {
     /// `UnitData::openlist` `+260` != NULL — a suspended `PathFinder` search is parked in
     /// this unit. `Unit::work` drops it when the current order is not a move.
     pub parked_search: bool,
+    /// The five pathfinder containers and scalar continuation frame which retail moves from
+    /// the singleton into `UnitData+0x104..+0x148` on suspension. Keeping this per unit lets
+    /// any number of units suspend during the same tick without overwriting one another.
+    pub parked_pathfinder: Option<Box<PathFinder>>,
     /// The `UnitType` fields the pathfinder reads.
     pub path_unit: PathUnit,
-    /// `Unit::move_step`'s turn-rate argument, a 32-bit binary angle per frame. Retail reads
-    /// it out of `UnitType` through `0x005DE340`, which is **not ported**, so this is a
-    /// host-supplied placeholder and never a derived value.
-    ///
-    /// It has a hard floor that is a property of the integrator, not of the port:
-    /// [`movement::move_step`] has **no anti-orbit guard**, so a unit whose turning circle
-    /// `speed / (2 pi * rate / 2^32)` exceeds the distance to its next waypoint circles it
-    /// forever, never satisfying the `dist <= speed` snap and never popping the record. With
-    /// the unit A*'s 48-unit cell that means `rate` must satisfy roughly
-    /// `rate > 2^32 * speed / (2 pi * 48)`. [`UnitWork::at`] defaults to `0x20000000`
-    /// (45 degrees per frame, a 41-unit circle at speed 32), which clears it.
-    pub turn_rate: i32,
+    /// The first squad body whose angle and `GuyData::turn_speed(0)` retail
+    /// `Unit::move_step` reads through `UnitData::guys` at `+0xE4`. The compact movement body
+    /// carries the same angle; [`do_move`] keeps the two views synchronized.
+    pub lead_guy: GuyData,
+    /// Static rules and global constants consumed by `GuyData::turn_speed` `0x005DE340`.
+    /// `ut.turn_speed` is the runtime binary angle (`45° == 0x20000000`), not the XML degree
+    /// integer; shipped `turn_scale` is 256 and `turn_scale2` is 2.
+    pub guy_env: GuyEnv,
+    /// `UnitTypeData::unit_flags +0x2B4 & 0x20`, the same-frame turn-and-translate gate.
+    pub type_moves_while_turning: bool,
+    /// Result of `Unit::move_step`'s virtual capability branch at `0x005FB288`. The shipped
+    /// PDB does not name the predicate, so the state remains explicit rather than guessed.
+    pub type_special_wide_turner: bool,
     /// `UnitType[+0x2B8] & 4` — selects `Unit::work`'s snap-to-destination arm.
     pub type_snap_arm: bool,
     /// `UnitType[+0x2B4] & 0x400` — exempts the unit from the `recharging` early-out.
@@ -755,6 +764,24 @@ pub struct UnitWork {
 impl UnitWork {
     /// A unit standing at `(x, y)` with an empty queue.
     pub fn at(who: u8, o: i16, x: i32, y: i32) -> UnitWork {
+        let lead_guy = GuyData {
+            who: who as i8,
+            o,
+            guy_num: 0,
+            ..GuyData::default()
+        };
+        let guy_env = GuyEnv {
+            ut: UnitTypeStats {
+                // Citizen's shipped runtime value: 45 degrees in binary-angle form.
+                turn_speed: 0x2000_0000,
+                squad_size: 1,
+                ..UnitTypeStats::default()
+            },
+            turn_scale: 256,
+            turn_scale2: 2,
+            ai_speed: 1,
+            ..GuyEnv::default()
+        };
         UnitWork {
             who,
             o,
@@ -785,8 +812,12 @@ impl UnitWork {
             path: PathStack::new(),
             orders: OrderQueue::new(),
             parked_search: false,
+            parked_pathfinder: None,
             path_unit: PathUnit::default(),
-            turn_rate: 0x2000_0000,
+            lead_guy,
+            guy_env,
+            type_moves_while_turning: false,
+            type_special_wide_turner: false,
             type_snap_arm: false,
             type_ignores_recharge: false,
             type_wants_work: false,
@@ -800,6 +831,12 @@ impl UnitWork {
     pub fn order_type(&mut self) -> OrderIndex {
         self.orders.reset();
         self.orders.current().map_or(OrderIndex::None, |o| o.kind)
+    }
+}
+
+impl Default for UnitWork {
+    fn default() -> Self {
+        Self::at(0, 0, 0, 0)
     }
 }
 
@@ -959,10 +996,11 @@ fn kill_current_order_inner(u: &mut UnitWork, _reason: KillReason) -> Option<Ord
 
 /// `Unit::clear_partial_path` `0x005E3920` (674 B). The reachable half: drop the parked
 /// search and the waypoint stack. The engine also returns the `PathFinder` trees it had
-/// adopted into the unit at `+0x104..+0x114`; [`movement::PathFinder`] does not implement
-/// suspension, so there is nothing to return.
+/// adopted into the unit at `+0x104..+0x114`; [`UnitWork::parked_pathfinder`] owns the same
+/// five containers and drops them here.
 pub fn clear_partial_path(u: &mut UnitWork) {
     u.parked_search = false;
+    u.parked_pathfinder = None;
     u.path.clear();
 }
 
@@ -1147,7 +1185,8 @@ impl DispatchCoverage {
 pub enum PathOutcome {
     /// Waypoints are on the stack (possibly just one, for a trivial hop).
     Found,
-    /// No path. The caller owes `game_random` a retry draw.
+    /// No path. When [`PathFinder::pending_retry_draw`] is set, the caller owes
+    /// `game_random` a retry draw; the pre-A* off-map/stalled exits consume none.
     Failed,
     /// The soft node budget ran out; the search would be parked in the unit.
     Suspended,
@@ -1161,11 +1200,11 @@ pub enum PathOutcome {
 /// it, then the waypoint compression. All three halves live in
 /// [`crate::systems::movement`]; this is the caller they did not have.
 ///
-/// **Note on budget exhaustion.** `movement`'s header records that a soft-budget hit
-/// suspends and a hard-budget hit with `quick != 0` fails. The lane brief for this wave
-/// states the opposite — failure on budget exhaustion for `quick == 0`. The two disagree and
-/// only `movement`'s claim comes with an instruction citation, so this function honours
-/// `movement`; the contradiction is recorded in `docs/assembly/order-dispatch.md`.
+/// The initial wrapper `PathFinder::find_upath` `0x00688EB0` installs a soft budget of
+/// `500 / player_path_scale²` (halved for quick mode). `find_upath_restore` `0x00688F40`
+/// installs `300 / player_path_scale²` and continues the parked open/closed trees. Both
+/// budgets and the resume are reproduced here; the scale comes from the same per-player
+/// `GameAccess::ai_speed` value already carried in [`GuyEnv::ai_speed`]. [measured]
 pub fn find_path<W: UnitWorld>(
     pf: &mut PathFinder,
     w: &W,
@@ -1174,43 +1213,68 @@ pub fn find_path<W: UnitWorld>(
     dest_y: i32,
     quick: i32,
 ) -> PathOutcome {
-    pf.kill_lists();
     pf.pending_retry_draw = false;
-    // `find_upath` expects the unit's current position on the stack as one record.
-    u.path.clear();
-    u.path.push(PathData {
-        to_x: u.body.x,
-        to_y: u.body.y,
-        tolerance: u.tolerance,
-        flags: PathData::FLAG_MORE,
-    });
     let unit = u.path_unit;
-    let out = match pf.find_upath_prepare(w, &mut u.path, &unit, dest_x, dest_y) {
-        UPathOutcome::OffMap => PathOutcome::Failed,
-        UPathOutcome::Trivial => PathOutcome::Found,
-        UPathOutcome::Stalled => {
-            // `find_upath` returns 0 here, which `do_move` reads as failure.
-            pf.pending_retry_draw = true;
-            PathOutcome::Failed
+    let scale_sq = u.guy_env.ai_speed.wrapping_mul(u.guy_env.ai_speed).max(1);
+    let args = SearchArgs { unit: &unit, quick };
+
+    let out = if u.parked_search {
+        let parked = u
+            .parked_pathfinder
+            .take()
+            .expect("UnitData::openlist requires parked PathFinder containers");
+        *pf = *parked;
+        assert!(pf.suspended, "parked PathFinder must carry a continuation frame");
+        pf.soft_node_limit = 300 / scale_sq;
+        pf.in_upath = 1;
+        let searched = pf.astar_path_unit(w, &mut u.path, &args);
+        pf.in_upath = 0;
+        match searched {
+            SearchResult::Found => {
+                pf.compress_path(&mut u.path);
+                PathOutcome::Found
+            }
+            SearchResult::Failed => PathOutcome::Failed,
+            SearchResult::Suspended => PathOutcome::Suspended,
         }
-        UPathOutcome::NeedsSearch => {
-            let args = SearchArgs { unit: &unit, quick };
-            match pf.astar_path_unit(w, &mut u.path, &args) {
-                SearchResult::Found => {
-                    pf.compress_path(&mut u.path);
-                    PathOutcome::Found
-                }
-                SearchResult::Failed => {
-                    pf.pending_retry_draw = true;
-                    PathOutcome::Failed
-                }
-                SearchResult::Suspended => {
-                    u.parked_search = true;
-                    PathOutcome::Suspended
+    } else {
+        pf.kill_lists();
+        // `find_upath` expects the unit's current position on the stack as one record.
+        u.path.clear();
+        u.path.push(PathData {
+            to_x: u.body.x,
+            to_y: u.body.y,
+            tolerance: u.tolerance,
+            flags: PathData::FLAG_MORE,
+        });
+        match pf.find_upath_prepare(w, &mut u.path, &unit, dest_x, dest_y) {
+            UPathOutcome::OffMap | UPathOutcome::Stalled => PathOutcome::Failed,
+            UPathOutcome::Trivial => PathOutcome::Found,
+            UPathOutcome::NeedsSearch => {
+                pf.soft_node_limit = (500 / scale_sq) / if quick != 0 { 2 } else { 1 };
+                pf.in_upath = 1;
+                let searched = pf.astar_path_unit(w, &mut u.path, &args);
+                pf.in_upath = 0;
+                match searched {
+                    SearchResult::Found => {
+                        pf.compress_path(&mut u.path);
+                        PathOutcome::Found
+                    }
+                    SearchResult::Failed => PathOutcome::Failed,
+                    SearchResult::Suspended => PathOutcome::Suspended,
                 }
             }
         }
     };
+    u.parked_search = out == PathOutcome::Suspended;
+    if u.parked_search {
+        // `astar_path` stores the five containers on this unit, then replaces the singleton's
+        // containers with fresh empty ones (`0x006845E5..0x006847F3`). Move the whole owned
+        // Rust search for the same effect.
+        u.parked_pathfinder = Some(Box::new(std::mem::replace(pf, PathFinder::new())));
+    } else {
+        u.parked_pathfinder = None;
+    }
 
     // Reconcile the anchor with `Unit::do_move`'s arrival test.
     //
@@ -1288,6 +1352,52 @@ pub enum ArmResult {
 ///
 /// Not reproduced: transport legs, `Unit::resolve_unit_collision`, the formation offset
 /// (`MoveOrder::off_x` / `off_y`), and the second-chance retry block at `0x005F8BD4`.
+fn apply_move_path_outcome<W: WorkWorld>(
+    outcome: PathOutcome,
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> Option<ArmResult> {
+    match outcome {
+        PathOutcome::Found => {
+            if let Some(c) = u.orders.front_mut() {
+                c.dest = 1;
+                c.flags |= ORDER_PATHED;
+            }
+            None
+        }
+        PathOutcome::Suspended => Some(ArmResult::Working),
+        PathOutcome::Failed => {
+            if pf.pending_retry_draw {
+                let delay = w.draw_path_retry_delay();
+                if let Some(c) = u.orders.front_mut() {
+                    c.retry = delay;
+                    c.last_x = -1;
+                    c.last_y = -1;
+                }
+                // Both A* failure epilogues add 0x1E to `UnitData::safe` after installing
+                // the 6..8 frame retry [measured `0x006848ED`, `0x00684E29`]. It is a byte
+                // add, so preserve retail wrapping rather than saturating.
+                u.safe = u.safe.wrapping_add(0x1e);
+                pf.pending_retry_draw = false;
+                cov.path_retry_draws += 1;
+            }
+            u.unit_masks |= masks::PATH_EXHAUSTED;
+            // Both kills here are bare `kill_current_order(0)` calls. A follow-on GUARD
+            // survives; only ATTACK and BUILD_AT take the measured cascade.
+            kill_current_order(u, KillReason::Failed);
+            cov.failed += 1;
+            let next = u.order_type();
+            if next == OrderIndex::Attack || next == OrderIndex::BuildAt {
+                kill_current_order(u, KillReason::Failed);
+                cov.failed += 1;
+            }
+            Some(ArmResult::Retired(KillReason::Failed))
+        }
+    }
+}
+
 pub fn do_move<W: WorkWorld>(
     u: &mut UnitWork,
     w: &mut W,
@@ -1297,6 +1407,16 @@ pub fn do_move<W: WorkWorld>(
     let Some(ord) = update_order(u) else {
         return ArmResult::NoOrder;
     };
+
+    // `UnitData::openlist` is serviced at `0x005F7BDD`, before MoveOrder::timer and the rest
+    // of `do_move`. `find_upath_restore` continues the same trees with its smaller per-frame
+    // budget; it does not restart from the unit's new position. [measured]
+    if u.parked_search {
+        let outcome = find_path(pf, w, u, ord.dest_x, ord.dest_y, 0);
+        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
+            return done;
+        }
+    }
 
     // 1. the timer.
     if ord.timer > 0 {
@@ -1309,6 +1429,24 @@ pub fn do_move<W: WorkWorld>(
             c.timer -= 1;
         }
         return ArmResult::Working;
+    }
+
+    // `MoveOrder::retry` at +0x1C is checked before any new route work. While non-zero the
+    // unit does nothing; reaching zero adds three to `attempts` (+0x20). The following arm
+    // decrements a non-zero `attempts` once per call. [measured `0x005F82C1..0x005F83BB`]
+    if ord.retry != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.retry = c.retry.wrapping_sub(1);
+            if c.retry == 0 {
+                c.attempts = c.attempts.wrapping_add(3);
+            }
+        }
+        return ArmResult::Working;
+    }
+    if ord.attempts != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.attempts = c.attempts.wrapping_sub(1);
+        }
     }
 
     let dest = (ord.dest_x, ord.dest_y);
@@ -1346,43 +1484,9 @@ pub fn do_move<W: WorkWorld>(
     // destination, which is also what retail's straight-line probe produces.
     let far = vector_dist(dx, dy) > movement::UCELL;
     if far && u.path.is_empty() && (u.unit_masks & masks::PATH_EXHAUSTED) == 0 {
-        match find_path(pf, w, u, dest.0, dest.1, 0) {
-            PathOutcome::Found => {
-                if let Some(c) = u.orders.front_mut() {
-                    c.dest = 1;
-                    c.flags |= ORDER_PATHED;
-                }
-            }
-            PathOutcome::Suspended => {
-                // The engine parks the search in the unit and returns; nothing moves.
-                return ArmResult::Working;
-            }
-            PathOutcome::Failed => {
-                if pf.pending_retry_draw {
-                    let delay = w.draw_path_retry_delay();
-                    if let Some(c) = u.orders.front_mut() {
-                        c.retry = delay;
-                        c.attempts += 1;
-                        c.last_x = -1;
-                        c.last_y = -1;
-                    }
-                    pf.pending_retry_draw = false;
-                    cov.path_retry_draws += 1;
-                }
-                u.unit_masks |= masks::PATH_EXHAUSTED;
-                // Both kills here are **bare** `kill_current_order(0)` — retail does not
-                // `repath` on a path failure, which is why a follow-on GUARD survives.
-                kill_current_order(u, KillReason::Failed);
-                cov.failed += 1;
-                // `0x005F8B5F`: an unreachable destination cancels a follow-on ATTACK or
-                // BUILD_AT, and only those two.
-                let next = u.order_type();
-                if next == OrderIndex::Attack || next == OrderIndex::BuildAt {
-                    kill_current_order(u, KillReason::Failed);
-                    cov.failed += 1;
-                }
-                return ArmResult::Retired(KillReason::Failed);
-            }
+        let outcome = find_path(pf, w, u, dest.0, dest.1, 0);
+        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
+            return done;
         }
     }
 
@@ -1393,11 +1497,41 @@ pub fn do_move<W: WorkWorld>(
         .map(|r| (r.to_x, r.to_y))
         .unwrap_or((dest.0, dest.1));
     let speed = u.myspeed.max(1) as i32;
+    let mut turn_env = u.guy_env;
+    turn_env.unit_speed = speed;
+    turn_env.unit_mask_turn_scale2 =
+        (u.unit_masks & crate::systems::groups_guys::UNIT_MASK_TURN_SCALE2) != 0;
+    let turn_rate = u.lead_guy.turn_speed(&turn_env, 0) as i32;
+    let mut turn_profile = MoveTurnProfile {
+        unit_flags: if u.type_moves_while_turning {
+            movement::UNIT_FLAG_MOVE_WHILE_TURNING
+        } else {
+            0
+        },
+        type_turn_speed: u.guy_env.ut.turn_speed as u32,
+        domain: u.guy_env.ut.domain,
+        special_wide_turner: u.type_special_wide_turner,
+        speed_half_latch: (u.unit_masks & masks::HALF_SPEED_ON_TURN) != 0,
+    };
     u.idle = 0;
     let mut body = u.body;
     let mut path = std::mem::take(&mut u.path);
-    let step = movement::move_step(&*w, &mut body, &mut path, target, speed, u.turn_rate);
+    let step = movement::move_step_profile(
+        &*w,
+        &mut body,
+        &mut path,
+        target,
+        speed,
+        turn_rate,
+        &mut turn_profile,
+    );
     u.body = body;
+    u.lead_guy.angle = body.angle;
+    if turn_profile.speed_half_latch {
+        u.unit_masks |= masks::HALF_SPEED_ON_TURN;
+    } else {
+        u.unit_masks &= !masks::HALF_SPEED_ON_TURN;
+    }
     u.path = path;
     match step {
         MoveStep::TurnedOnly => ArmResult::Turned,
@@ -2281,12 +2415,18 @@ mod tests {
             .push_back(OrderRec::move_to(9 * 192 + 24, 5 * 192 + 24, 24));
         u.orders.push_back(OrderRec::attack(1, 3, 7));
 
-        w.frame = 1;
-        let r = work(&mut u, &mut w, &mut pf, &mut cov);
+        let mut last = ArmResult::Working;
+        for frame in 1..=64 {
+            w.frame = frame;
+            last = work(&mut u, &mut w, &mut pf, &mut cov).result;
+            if u.order_type() != OrderIndex::MoveTo {
+                break;
+            }
+        }
         assert!(
-            matches!(r.result, ArmResult::Retired(KillReason::Failed)),
+            matches!(last, ArmResult::Retired(KillReason::Failed)),
             "expected a path failure, got {:?}",
-            r.result
+            last
         );
         assert!(
             u.orders.is_empty(),
@@ -2315,8 +2455,13 @@ mod tests {
             .push_back(OrderRec::move_to(9 * 192 + 24, 5 * 192 + 24, 24));
         u.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
 
-        w.frame = 1;
-        work(&mut u, &mut w, &mut pf, &mut cov);
+        for frame in 1..=64 {
+            w.frame = frame;
+            work(&mut u, &mut w, &mut pf, &mut cov);
+            if u.order_type() != OrderIndex::MoveTo {
+                break;
+            }
+        }
         assert_eq!(u.order_type(), OrderIndex::Guard);
         assert_eq!(cov.failed, 1);
     }
@@ -2336,8 +2481,13 @@ mod tests {
         u.orders
             .push_back(OrderRec::move_to(9 * 192 + 24, 5 * 192 + 24, 24));
         u.orders.push_back(OrderRec::of_kind(OrderIndex::BuildAt));
-        w.frame = 1;
-        work(&mut u, &mut w, &mut pf, &mut cov);
+        for frame in 1..=64 {
+            w.frame = frame;
+            work(&mut u, &mut w, &mut pf, &mut cov);
+            if u.order_type() != OrderIndex::MoveTo {
+                break;
+            }
+        }
         assert!(u.orders.is_empty());
     }
 
@@ -2549,35 +2699,28 @@ mod tests {
         assert_eq!(back.target_uid, 0);
     }
 
-    /// The orbit hazard, pinned so it cannot be rediscovered by accident.
-    ///
-    /// [`movement::move_step`] has no anti-orbit guard: a unit whose turning circle is wider
-    /// than the distance to its waypoint circles it forever. This is a property of the
-    /// integrator and of the host-supplied `turn_rate`, **not** of the order layer, and it is
-    /// why [`UnitWork::turn_rate`] carries a floor in its documentation.
+    /// Retail's close-waypoint arm turns in place until aligned. Omitting it produces the
+    /// artificial orbit that the earlier stripped integrator exhibited.
     #[test]
-    fn a_turn_rate_below_the_waypoint_floor_makes_the_unit_orbit_forever() {
+    fn a_slow_turner_uses_the_retail_near_waypoint_gate_and_arrives() {
         let mut w = TestWorld::open(24);
         let mut pf = PathFinder::new();
         let mut cov = DispatchCoverage::default();
         let mut slow = UnitWork::at(0, 5, 96 + 5 * 192, 96);
         slow.myspeed = 32;
         slow.tolerance = 24;
-        slow.turn_rate = 0x0800_0000; // 11.25 deg/frame -> a 163-unit circle at speed 32
+        slow.guy_env.ut.turn_speed = 0x0800_0000; // 11.25 deg/frame -> 163-unit circle
         slow.orders.push_back(OrderRec::move_to(96, 288, 24));
 
         let mut fast = slow.clone();
-        fast.turn_rate = 0x2000_0000; // 45 deg/frame -> a 41-unit circle
+        fast.guy_env.ut.turn_speed = 0x2000_0000; // 45 deg/frame -> a 41-unit circle
 
         for f in 0..400i32 {
             w.frame = f;
             work(&mut slow, &mut w, &mut pf, &mut cov);
             work(&mut fast, &mut w, &mut pf, &mut cov);
         }
-        assert!(
-            !slow.orders.is_empty(),
-            "the slow-turning unit was expected to orbit and never arrive"
-        );
+        assert!(slow.orders.is_empty(), "the slow-turning unit remained in an artificial orbit");
         assert!(
             fast.orders.is_empty(),
             "the fast-turning unit should have arrived and retired"

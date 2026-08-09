@@ -700,7 +700,7 @@ impl OrderedTree {
 /// `CheckSums::check_pathfinder` `0x00936E30` walks a flat 108-byte window at
 /// `pathfinder + 0x58` — the scalar search state below, not the containers — so the pathfinder is
 /// lockstep-critical but its trees are not directly hashed.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PathFinder {
     open: OrderedTree,
     /// `openlistrefs` `+0x44` — `BRTree<TreeNode*, ulong>` keyed by cell metric, the index that
@@ -761,6 +761,7 @@ pub struct PathFinder {
 struct UnitSearchResume {
     goal: (i32, i32),
     arrive_tol: i32,
+    unit_size: i32,
     step_scale: i32,
     row_stride: i32,
     dir_stride: i32,
@@ -980,7 +981,11 @@ impl PathFinder {
             let dx0 = sx - gx;
             let dy0 = sy - gy;
             let seed: i32 = if dy0.abs() < dx0.abs() {
-                if gx < sx { 7 } else { 3 }
+                if gx < sx {
+                    7
+                } else {
+                    3
+                }
             } else if sy <= gy {
                 5
             } else {
@@ -989,6 +994,7 @@ impl PathFinder {
             let frame = UnitSearchResume {
                 goal: (gx, gy),
                 arrive_tol,
+                unit_size,
                 step_scale,
                 row_stride,
                 dir_stride,
@@ -1002,6 +1008,7 @@ impl PathFinder {
         let (gx, gy) = frame.goal;
         let UnitSearchResume {
             arrive_tol,
+            unit_size,
             step_scale,
             row_stride,
             dir_stride,
@@ -1402,7 +1409,7 @@ impl PathFinder {
 /// Angle thresholds in `Unit::move_step`, as 32-bit binary angles. [measured]
 pub mod turn {
     /// `cmp eax, 0x2222220` — below this residual the unit does not bother turning at all.
-    /// `0x02222220 / 2^32` = 48.0 degrees... no: 1/75 turn = **4.8 degrees**.
+    /// `0x02222220 / 2^32` is **3 degrees** (one 120th of a turn).
     pub const IGNORE: u32 = 0x0222_2220;
     /// `cmp ecx, 0x20000000` — 45 degrees.
     pub const QUARTER_HALF: u32 = 0x2000_0000;
@@ -1443,9 +1450,37 @@ pub enum MoveStep {
     Refused,
 }
 
-/// `Unit::move_step` `0x005FAF30`. [measured for structure and for every constant named below;
-/// UNVERIFIED for the exact turn-rate arm, which reads `Unit+0xA1/+0x8C/+0xA2` through
-/// `0x005DE340` and is not modelled.]
+/// The `UnitType`/`UnitData` inputs which select `Unit::move_step`'s turning arms.
+///
+/// Field names are descriptive; offsets and bit positions are measured. Keeping these inputs
+/// explicit is essential: the near-waypoint turn-only gate is what prevents slow-turning ships
+/// and siege units from orbiting a 48-unit A* waypoint forever.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MoveTurnProfile {
+    /// `UnitTypeData::unit_flags` `+0x2B4` bit `0x20`. When set, residual turns of at most
+    /// 90 degrees may translate in the same frame; otherwise the distance/angle gates apply.
+    pub unit_flags: u32,
+    /// `UnitTypeData::turn_speed` `+0x2C4`, the runtime binary-angle rule value.
+    pub type_turn_speed: u32,
+    /// `ObjectTypeData::domain` `+0x218`.
+    pub domain: i32,
+    /// Result of the virtual capability branch at `0x005FB288` (vtable `+0x148` or the
+    /// UnitType vtable `+0xF0` fallback). Its semantic name is not recovered.
+    pub special_wide_turner: bool,
+    /// `UnitData::unit_masks` bit `0x00100000`; consumed when the residual is below the
+    /// 45-degree/factor threshold and halves this frame's speed.
+    pub speed_half_latch: bool,
+}
+
+pub const UNIT_FLAG_MOVE_WHILE_TURNING: u32 = 0x20;
+
+/// `Unit::move_step` `0x005FAF30`. [measured for structure and every constant named below.]
+///
+/// `turn_rate` is the **raw unsigned 32-bit binary-angle result** of
+/// `GuyData::turn_speed(0)` `0x005DE340`, carried in an `i32` solely for compatibility with
+/// the rest of the sim's angle storage. It must be reinterpreted, not clamped: retail uses
+/// `0x80000000` to mean an instant half-turn, and treating that bit pattern as a negative
+/// signed value disables turning entirely.
 ///
 /// The integrator, stripped to its arithmetic:
 /// ```text
@@ -1469,6 +1504,27 @@ pub fn move_step<W: UnitWorld>(
     speed: i32,
     turn_rate: i32,
 ) -> MoveStep {
+    // Compatibility entry for callers that only have the rate. It still uses retail's
+    // distance-dependent turn-only gates; the complete order path calls
+    // `move_step_profile` with the real UnitType fields.
+    let mut profile = MoveTurnProfile {
+        type_turn_speed: turn_rate as u32,
+        ..MoveTurnProfile::default()
+    };
+    move_step_profile(w, body, path, target, speed, turn_rate, &mut profile)
+}
+
+/// `Unit::move_step` with the measured UnitType-dependent turning arms enabled.
+pub fn move_step_profile<W: UnitWorld>(
+    w: &W,
+    body: &mut Body,
+    path: &mut PathStack,
+    target: (i32, i32),
+    speed: i32,
+    turn_rate: i32,
+    profile: &mut MoveTurnProfile,
+) -> MoveStep {
+    let mut speed = speed;
     let (tx, ty) = target;
     let dx = tx - body.x;
     let dy = ty - body.y;
@@ -1481,7 +1537,7 @@ pub fn move_step<W: UnitWorld>(
     let residual = if raw > 0x8000_0000 { !raw } else { raw };
     let mut turning = 0u32;
     if residual >= turn::IGNORE {
-        let rate = turn_rate.max(0) as u32;
+        let rate = turn_rate as u32;
         if residual <= rate {
             body.angle = want;
         } else {
@@ -1496,8 +1552,41 @@ pub fn move_step<W: UnitWorld>(
     } else {
         body.angle = want;
     }
-    if turning > turn::RIGHT {
-        return MoveStep::TurnedOnly;
+    // `0x005FB1A3..0x005FB39B`: retail does not merely compare the residual with 90°.
+    // It first turns in place near a waypoint, then applies distance-scaled 45°/80° gates
+    // farther away. This is the arm that prevents an orbit around close A* cells.
+    if (profile.unit_flags & UNIT_FLAG_MOVE_WHILE_TURNING) == 0 || turning > turn::RIGHT {
+        let factor = if profile.type_turn_speed < 0x0E38_E38C {
+            2u32
+        } else {
+            1u32
+        };
+        let close = dist < (factor as i32).wrapping_mul(TCELL)
+            || (waypoint.flags & PathData::FLAG_TRANSPORT) != 0;
+        if close {
+            if turning != 0 {
+                return MoveStep::TurnedOnly;
+            }
+        } else {
+            let wide = profile.domain != 0 || profile.special_wide_turner;
+            let may_translate = if !wide || dist < (factor as i32).wrapping_mul(TCELL * 2) {
+                turning < turn::QUARTER_HALF
+            } else {
+                turning < turn::WIDE
+            };
+            if !may_translate {
+                return MoveStep::TurnedOnly;
+            }
+        }
+
+        if turning < turn::QUARTER_HALF / factor {
+            if profile.speed_half_latch {
+                speed /= 2;
+                profile.speed_half_latch = false;
+            }
+        } else {
+            speed /= 2;
+        }
     }
 
     // --- translation ---
@@ -1939,6 +2028,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_soft_budget_slice_resumes_the_same_search_trees() {
+        let w = TestWorld::open(32, 32);
+        let u = PathUnit::default();
+        let mut pf = PathFinder::new();
+        pf.in_upath = 1;
+        pf.soft_node_limit = 0;
+        let mut s = PathStack::new();
+        frame(
+            &mut s,
+            ucell_centre(2),
+            ucell_centre(2),
+            ucell_centre(40),
+            ucell_centre(2),
+            0,
+        );
+
+        assert_eq!(
+            pf.astar_path_unit(&w, &mut s, &SearchArgs { unit: &u, quick: 0 }),
+            SearchResult::Suspended
+        );
+        assert!(pf.suspended);
+        assert_eq!(s.records.len(), 1, "goal/start stay in the continuation frame");
+        let nodes_after_slice = pf.nodes.len();
+        let spent_after_slice = pf.last_expanded;
+
+        pf.in_upath = 1;
+        pf.soft_node_limit = i32::MAX;
+        assert_eq!(
+            pf.astar_path_unit(&w, &mut s, &SearchArgs { unit: &u, quick: 0 }),
+            SearchResult::Found
+        );
+        assert!(!pf.suspended);
+        assert!(pf.resume.is_none());
+        assert!(pf.nodes.len() >= nodes_after_slice, "the parked trees were retained");
+        assert!(pf.last_expanded >= spent_after_slice, "hard-budget accounting is cumulative");
+        assert!(s.records.len() > 1, "the resumed search emitted waypoints");
+    }
+
     /// Budget exhaustion is a **failure** for a normal unit search and a **partial path** for a
     /// quick one. That asymmetry is the `param_3 != 0` short-circuit at `0x0068487C`.
     #[test]
@@ -2133,7 +2261,13 @@ mod tests {
             stuck_budget: 0,
         };
         let mut path = PathStack::new();
-        let r = move_step(&w, &mut body, &mut path, (-5000, 10), 40, 1 << 28);
+        let mut r = MoveStep::TurnedOnly;
+        for _ in 0..16 {
+            r = move_step(&w, &mut body, &mut path, (-5000, 10), 40, 1 << 28);
+            if r != MoveStep::TurnedOnly {
+                break;
+            }
+        }
         assert_eq!(r, MoveStep::Refused);
         assert_eq!((body.x, body.y), (10, 10));
     }
@@ -2152,6 +2286,63 @@ mod tests {
         let r = move_step(&w, &mut body, &mut path, (900, 300), 100, 1 << 28);
         assert_eq!(r, MoveStep::Blocked);
         assert!(body.stuck_budget > 0);
+    }
+
+    #[test]
+    fn move_step_treats_the_half_turn_rate_as_unsigned_bits() {
+        let w = TestWorld::open(16, 16);
+        let mut body = Body {
+            x: 300,
+            y: 300,
+            angle: 0,
+            stuck_budget: 0,
+        };
+        let mut path = PathStack::new();
+        let r = move_step(
+            &w,
+            &mut body,
+            &mut path,
+            (300, 500),
+            10,
+            0x8000_0000u32 as i32,
+        );
+        assert_eq!(r, MoveStep::Moved);
+        assert_eq!(body.angle as u32, 0x8000_0000);
+        assert!(body.y > 300, "the instant half-turn must not be clamped to zero");
+    }
+
+    #[test]
+    fn near_waypoint_turns_in_place_instead_of_orbiting() {
+        let w = TestWorld::open(16, 16);
+        let mut body = Body {
+            x: 300,
+            y: 300,
+            angle: 0,
+            stuck_budget: 0,
+        };
+        let mut path = PathStack::new();
+        path.push(PathData {
+            to_x: 360,
+            to_y: 300,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        let mut profile = MoveTurnProfile {
+            type_turn_speed: 0x0800_0000,
+            ..MoveTurnProfile::default()
+        };
+        let r = move_step_profile(
+            &w,
+            &mut body,
+            &mut path,
+            (360, 300),
+            32,
+            0x0800_0000,
+            &mut profile,
+        );
+        assert_eq!(r, MoveStep::TurnedOnly);
+        assert_eq!((body.x, body.y), (300, 300));
+        assert_ne!(body.angle, 0, "the turn itself still advances");
     }
 
     #[test]
