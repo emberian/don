@@ -59,9 +59,9 @@ the shared systems module map. It pins:
 
 No local compiler, formatter, or test command was run in this authoring lane.
 
-## Frozen integration map
+## Landed integration map
 
-After source review, the narrow shared integration is:
+The narrow shared integration is now live:
 
 1. path-declare `follow_action` from `command.rs` and import its request/receipt/effect types;
 2. change `Fleet::apply_follow_transaction` to the dedicated types;
@@ -72,9 +72,7 @@ After source review, the narrow shared integration is:
    longer leaks into BOARD_SHIP, TRADE, REPAIR, GUARD, GARRISON, or GATHER; and
 6. promote only the `follow` action-table row from `Port::Orders` to `Port::Complete`.
 
-That promotion changes group actions from 7 complete / 15 orders-partial to 8 complete /
-14 orders-partial. It does **not** change handled order executors from 18/28:
-`order_dispatch::ARMS[11]` still marks `Unit::do_follow` `0x005E65D0` unimplemented.
-Installation and multi-frame execution are separate closure axes. A later, dedicated
-executor tranche may make the honest 18/28 to 19/28 transition; this tranche must not claim
-it. No other row earns a status change here.
+With STOP_SPELL already complete in the committed baseline, this promotion changes group
+actions from **8 complete / 15 orders-partial** to **9 complete / 14 orders-partial**. The
+separate executor transaction below also landed; FOLLOW contributes exactly one handled
+order-executor row and no other action-table row earns a status change here.

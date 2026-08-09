@@ -1,6 +1,6 @@
 # FOLLOW executor transaction
 
-Lane `orders-green/follow-executor`, 2026-08-09. Tier C until shared integration.
+Lane `orders-green/follow-executor`, 2026-08-09. Tier C, shared integration landed.
 
 `crates/don-sim/src/systems/follow_executor.rs` recovers `Unit::do_follow` `0x005E65D0`
 (1,455 bytes) as a standalone, receipt-recomputable planner. It is deliberately separate
@@ -66,13 +66,14 @@ PDB and call anchors: `vector_dist` `0x0046CFF0`, `UnitData::speed` `0x0060AAE0`
 `crates/don-sim/tests/follow_executor_planner.rs` path-imports the subject and pins the two
 invalid-target tails, containment promotion, fallback UID/captain maintenance, unseen kill,
 radius arithmetic, all three search shapes, negative floor conversion, same-tick movement,
-search cardinality, and whole-receipt recomputation. No shared module declaration is needed.
+search cardinality, and whole-receipt recomputation. The shared dispatcher test additionally
+pins zero mutation for an unavailable host and the applied idle-animation effect.
 
 No compiler, test, formatter, or remote job was run in this lane.
 
-## Frozen shared integration map and coverage delta
+## Landed shared integration map and coverage delta
 
-The executor promotion requires one narrow but indivisible shared tranche:
+The executor promotion landed as one narrow but indivisible shared tranche:
 
 1. add secondary `(oxx,whose,uid2)` storage to `OrderRec` through a concrete FOLLOW payload;
 2. expose a dedicated `follow_preflight(actor,order) -> FollowExecutorReceipt` on `WorkWorld`;
@@ -81,10 +82,11 @@ The executor promotion requires one narrow but indivisible shared tranche:
 4. apply the returned `FollowOrderState` before its effects, preserve full `work()` reentry,
    and make move installation immediately invoke existing `do_move` in the same tick;
 5. dispatch `OrderIndex::Follow` to that adapter; and
-6. only then promote `order_dispatch::ARMS[11]` from `Unimplemented` to `Implemented` and
-   mirror the executor ledger status in `order.rs`.
+6. serialize both full-width identities and UID snapshots in DoNSave format 5; and
+7. promote `order_dispatch::ARMS[11]` from `Unimplemented` to `Implemented` and mirror the
+   executor ledger status in `order.rs`.
 
-That exact integration changes handled order executors from **18/28 to 19/28**. The isolated
-planner remains `Port::Planned`; action installation alone does not earn this executor delta.
-The group-action tranche separately changes actions from 7 complete / 15 orders-partial to
-8 complete / 14 orders-partial.
+FOLLOW's exact contribution changes handled order executors from **18/28 to 19/28**. Other
+concurrent executor promotions may make the combined dirty-tree aggregate higher; they are
+not part of this lane. The group-action tranche separately changes the current action ledger
+from **8 complete / 15 orders-partial** to **9 complete / 14 orders-partial**.
