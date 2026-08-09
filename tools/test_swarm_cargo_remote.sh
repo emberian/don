@@ -13,6 +13,23 @@ printf '%s\n' "$plan" | grep -qx 'NICE=10'
 printf '%s\n' "$plan" | grep -qx 'OVERLAY=tools/swarm-cargo-remote'
 printf '%s\n' "$plan" | grep -qx 'CARGO_ARG=don-sim'
 
+asset='schema/live/final-balance-runtime.bin'
+if [[ -f "$repo_root/$asset" ]]; then
+  asset_plan=$("$wrapper" --plan submit hbox asset-test \
+    --asset "$asset" -- check -p don-replay --lib)
+  printf '%s\n' "$asset_plan" | grep -qx "ASSET=$asset"
+  printf '%s\n' "$asset_plan" | grep -qx \
+    'ASSET_SHA256=501b47edc9f05f1c1be46d9a7a54984f43fc6dff2a909f4f5174415fe537c79d'
+  if "$wrapper" --plan submit hbox asset-test --path "$asset" -- check >/dev/null 2>&1; then
+    printf 'ignored asset unexpectedly passed as a source overlay\n' >&2
+    exit 1
+  fi
+fi
+if "$wrapper" --plan submit hbox asset-test --asset README.md -- check >/dev/null 2>&1; then
+  printf 'non-ignored file unexpectedly passed as an asset\n' >&2
+  exit 1
+fi
+
 if "$wrapper" --plan submit elsewhere lane -- check >/dev/null 2>&1; then
   printf 'unknown host unexpectedly succeeded\n' >&2
   exit 1

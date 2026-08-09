@@ -12,12 +12,13 @@ Usage:
 
 Submit options:
   --path FILE   Overlay one explicit local file on the clean HEAD baseline (repeatable)
+  --asset FILE  Overlay an ignored asset pinned in tools/swarm-remote-assets.sha256
   --jobs N      Cargo jobs in this lane (default: 6, maximum: 12)
   --nice N      Linux nice level (default: 10, range: 0-19)
 
 HOST is persvati or hbox. Lanes are persistent build caches; jobs are asynchronous.
-Only regular, non-ignored files may be overlaid. Directories and deletion overlays are
-intentionally unsupported so a lane can never copy the shared dirty tree accidentally.
+Regular, non-ignored source files use --path. Ignored assets require --asset and an exact
+SHA-256 allowlist entry. Directories and deletion overlays are intentionally unsupported.
 EOF
 }
 
@@ -37,6 +38,7 @@ valid_token() {
 
 script_dir=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
 repo_root=$(git -C "$script_dir/.." rev-parse --show-toplevel)
+asset_manifest="$repo_root/tools/swarm-remote-assets.sha256"
 remote_base='.cache/don-swarm'
 plan=0
 if [[ "${1:-}" == --plan ]]; then
@@ -60,11 +62,18 @@ case "$command" in
     jobs=6
     nice_level=10
     paths=()
+    assets=()
+    asset_hashes=()
     while [[ $# -gt 0 && "$1" != -- ]]; do
       case "$1" in
         --path)
           [[ $# -ge 2 ]] || die '--path requires a file'
           paths+=("$2")
+          shift 2
+          ;;
+        --asset)
+          [[ $# -ge 2 ]] || die '--asset requires a file'
+          assets+=("$2")
           shift 2
           ;;
         --jobs)
@@ -105,6 +114,22 @@ case "$command" in
         die "refusing ignored overlay: $path"
       fi
     done
+    [[ -f "$asset_manifest" ]] || die "missing asset allowlist: $asset_manifest"
+    for asset in "${assets[@]}"; do
+      valid_token "$asset" || die "unsafe asset path: $asset"
+      [[ -f "$asset" && ! -L "$asset" ]] || die "asset must be a regular file: $asset"
+      [[ "$(realpath -- "$asset")" == "$repo_root/$asset" ]] || die "asset crosses a symlink or is non-canonical: $asset"
+      if ! git check-ignore -q -- "$asset"; then
+        die "--asset is only for ignored files: $asset"
+      fi
+      match_count=$(awk -v path="$asset" '$2 == path { count++ } END { print count + 0 }' "$asset_manifest")
+      [[ "$match_count" == 1 ]] || die "asset must have one exact allowlist entry: $asset"
+      expected_hash=$(awk -v path="$asset" '$2 == path { print $1 }' "$asset_manifest")
+      [[ "$expected_hash" =~ ^[0-9a-f]{64}$ ]] || die "invalid allowlisted SHA-256 for asset: $asset"
+      actual_hash=$(shasum -a 256 -- "$asset" | awk '{ print $1 }')
+      [[ "$actual_hash" == "$expected_hash" ]] || die "asset SHA-256 mismatch: $asset"
+      asset_hashes+=("$expected_hash")
+    done
 
     commit=$(git rev-parse HEAD)
     short_commit=${commit:0:12}
@@ -120,6 +145,9 @@ case "$command" in
       printf 'HOST=%s\nLANE=%s\nJOB_ID=%s\nCOMMIT=%s\nORIGIN=%s\nJOBS=%s\nNICE=%s\n' \
         "$host" "$lane" "$job_id" "$commit" "$origin" "$jobs" "$nice_level"
       for path in "${paths[@]}"; do printf 'OVERLAY=%s\n' "$path"; done
+      for (( index = 0; index < ${#assets[@]}; index++ )); do
+        printf 'ASSET=%s\nASSET_SHA256=%s\n' "${assets[$index]}" "${asset_hashes[$index]}"
+      done
       for arg in "${cargo_args[@]}"; do printf 'CARGO_ARG=%s\n' "$arg"; done
       exit 0
     fi
@@ -144,7 +172,7 @@ if [[ -e "$job_dir" ]]; then
   printf 'job id collision: %s\n' "$job" >&2
   exit 73
 fi
-mkdir -p -- "$job_dir/overlay"
+mkdir -p -- "$job_dir/overlay" "$job_dir/assets"
 printf 'preparing\n' >"$job_dir/status"
 REMOTE_SETUP
 
@@ -162,6 +190,16 @@ REMOTE_ABORT
       if ! rsync -aR --checksum --protect-args -- "${paths[@]}" "$host:$remote_base/jobs/$job_id/overlay/"; then
         abort_remote
         die 'failed to sync explicit overlays'
+      fi
+    fi
+    if (( ${#assets[@]} > 0 )); then
+      if ! rsync -aR --checksum --protect-args -- "${assets[@]}" "$host:$remote_base/jobs/$job_id/assets/"; then
+        abort_remote
+        die 'failed to sync allowlisted assets'
+      fi
+      if ! rsync -a -- "$asset_manifest" "$host:$remote_base/jobs/$job_id/asset-allowlist.sha256"; then
+        abort_remote
+        die 'failed to upload asset allowlist'
       fi
     fi
     if ! rsync -a -- "$script_dir/swarm-cargo-remote-runner" "$host:$remote_base/jobs/$job_id/runner"; then

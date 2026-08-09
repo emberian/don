@@ -202,6 +202,8 @@ checkout of local `HEAD` fetched from the public origin, then overlay only files
 ```sh
 tools/swarm-cargo-remote submit persvati sim-orders \
   --path crates/don-sim/src/orders.rs -- test -p don-sim --lib orders::tests
+tools/swarm-cargo-remote submit hbox replay-rules \
+  --asset schema/live/final-balance-runtime.bin -- check -p don-replay --lib
 # Keep researching or authoring while the remote CPU works, then inspect it:
 tools/swarm-cargo-remote status persvati JOB_ID
 tools/swarm-cargo-remote log persvati JOB_ID
@@ -209,7 +211,10 @@ tools/swarm-cargo-remote wait persvati JOB_ID 60
 ```
 
 Never pass a directory as an overlay. The harness rejects directories, ignored files, unsafe
-paths, and target-directory overrides. Reuse a lane name for the same crate/configuration so
+paths, and target-directory overrides. The narrow exception is `--asset`: it accepts only an
+ignored file explicitly pinned by path and SHA-256 in `tools/swarm-remote-assets.sha256`, then
+checks the digest both before upload and on the executor. Never add a hash without reviewing
+the asset's provenance and whether transfer to the owned executor is lawful. Reuse a lane name for the same crate/configuration so
 its remote target stays warm; choose a different lane name for concurrent work. `hbox` is the
 only executor that can run the mapped i686 retail oracle cases, but it is also available for
 ordinary builds and tests. A detached build is a verification worker: the authoring agent

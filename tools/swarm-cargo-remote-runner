@@ -61,6 +61,45 @@ touch "$source_dir/.don-swarm-source"
 if [[ -d "$job_dir/overlay" ]]; then
   rsync -a -- "$job_dir/overlay/" "$source_dir/"
 fi
+if [[ -f "$job_dir/asset-allowlist.sha256" ]]; then
+  asset_root="$job_dir/assets"
+  manifest="$job_dir/asset-allowlist.sha256"
+  asset_count=0
+  while IFS= read -r -d '' staged_asset; do
+    relative_path=${staged_asset#"$asset_root"/}
+    if [[ ! "$relative_path" =~ ^[A-Za-z0-9_./+@%-]+$ ]] ||
+      [[ "$relative_path" == /* || "$relative_path" == *..* ]]; then
+      printf 'remote runner: unsafe staged asset path: %s\n' "$relative_path" >&2
+      exit 65
+    fi
+    match_count=$(awk -v path="$relative_path" '$2 == path { count++ } END { print count + 0 }' "$manifest")
+    expected_hash=$(awk -v path="$relative_path" '$2 == path { print $1 }' "$manifest")
+    if [[ "$match_count" != 1 || ! "$expected_hash" =~ ^[0-9a-f]{64}$ ]]; then
+      printf 'remote runner: asset is not uniquely allowlisted: %s\n' "$relative_path" >&2
+      exit 65
+    fi
+    actual_hash=$(sha256sum -- "$staged_asset" | awk '{ print $1 }')
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+      printf 'remote runner: received asset SHA-256 mismatch: %s\n' "$relative_path" >&2
+      exit 65
+    fi
+    asset_count=$((asset_count + 1))
+  done < <(find "$asset_root" -type f -print0)
+  if (( asset_count == 0 )); then
+    printf 'remote runner: asset allowlist supplied without assets\n' >&2
+    exit 65
+  fi
+  rsync -a -- "$asset_root/" "$source_dir/"
+  while IFS= read -r -d '' staged_asset; do
+    relative_path=${staged_asset#"$asset_root"/}
+    expected_hash=$(awk -v path="$relative_path" '$2 == path { print $1 }' "$manifest")
+    installed_hash=$(sha256sum -- "$source_dir/$relative_path" | awk '{ print $1 }')
+    if [[ "$installed_hash" != "$expected_hash" ]]; then
+      printf 'remote runner: installed asset SHA-256 mismatch: %s\n' "$relative_path" >&2
+      exit 65
+    fi
+  done < <(find "$asset_root" -type f -print0)
+fi
 
 printf 'running\n' >"$job_dir/status"
 set +e
