@@ -26,7 +26,7 @@
 
 ## 1. The shape of it
 
-`crates/don-sim/src/deviations.rs` — one module, no dependencies, 23 registry entries and
+`crates/don-sim/src/deviations.rs` — one module, no dependencies, 29 registry entries and
 the scoped readiness policy. `crates/don-sim/tests/fidelity_mode.rs` — integration tests
 for both mode immutability and reachable-gap gating. `crates/don-sim/src/bin/deviations.rs`
 — the CLI, `--assert-fidelity`, and `--assert-ready` checks.
@@ -117,8 +117,14 @@ form:
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
 | `env-patrol-execution` | orders 17/22 route, queue, execute, and cross retail airframe/search boundaries | *drift*: exact dynamic queue and patrol transitions; env air physics/target-search host remains incomplete | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
-| `arena-construction-model` | retail build-site/worker state | *drift*: MODEL 2 builder-frame construction | — |
-| `arena-gather-model` | retail resource objects/occupancy | *drift*: MODEL 3 inferred gather state | — |
+| `arena-construction-schedule-model` | persistent site/order identity and retail traversal | *drift*: MODEL 2 has no Arena schedule/state host | — |
+| `arena-construction-placement-model` | complete `blocked_site` transaction | *drift*: MODEL 2 has no authoritative placement host | — |
+| `arena-construction-lifecycle-model` | start/activate/reject/complete world transactions | *drift*: MODEL 2 has only a local lifecycle core | — |
+| `arena-construction-interruption-model` | builder/target death and cancellation transactions | *drift*: MODEL 2 lacks close/order integration | — |
+| `arena-gather-capacity-model` | terrain/type-derived signed-byte capacity | *drift*: MODEL 3 lacks complete `calc_gather` | — |
+| `arena-gather-occupancy-model` | persistent chain and generational order identity | *drift*: MODEL 3 has no Arena object/order host | — |
+| `arena-gather-reservation-model` | ordered MiningList and TData reservation lifecycle | *drift*: MODEL 3 has reservation writes only | — |
+| `arena-gather-payout-model` | authoritative six-slot evaluation and leader credit | *drift*: MODEL 3 has local arithmetic only | — |
 | `arena-target-acquisition-model` | complete retail spatial target scan | *drift*: MODEL 4 incomplete host | — |
 | `arena-guy-turret-model` | graphics-turret Guy materialization | *drift*: exact MODEL 5 path hard-gates unresolved turret types | — |
 | `arena-water-model` | water terrain/regions and water A* | *drift*: MODEL 6a absent host | — |

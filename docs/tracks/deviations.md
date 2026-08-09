@@ -268,13 +268,19 @@ systems do not falsely block unrelated replay, playable, or RL entrypoints.
 ### Arena MODEL 2–6 blockers
 
 The former aggregate `arena-model-simplifications` entry is split so one successful adapter
-cannot silently clear unrelated product gaps. All ten entries below independently block the
+cannot silently clear unrelated product gaps. All sixteen entries below independently block the
 playable surface while their runtime path remains incomplete:
 
 | registry slug | declared model | literal remaining system |
 |---|---:|---|
-| `arena-construction-model` | 2 | build-site, builder-order, interruption and completion state |
-| `arena-gather-model` | 3 | resource-object ownership, capacity, occupancy and depletion |
+| `arena-construction-schedule-model` | 2a | persistent `BuildData`, `(who,o,uid)` BuildAt identity, building-first scheduling and retail builder traversal |
+| `arena-construction-placement-model` | 2b | complete `blocked_site` terrain/territory/city/dock admission transaction |
+| `arena-construction-lifecycle-model` | 2c | `start`, `activate`, rejection/disband, `build_done` and reassignment transactions |
+| `arena-construction-interruption-model` | 2d | builder death/cancel and target close/disband transactions |
+| `arena-gather-capacity-model` | 3a | complete `calc_gather` terrain/type evaluator and signed-byte capacity refresh |
+| `arena-gather-occupancy-model` | 3b | persistent owner-local chain, generational order identity, attach/prune/detach and close paths |
+| `arena-gather-reservation-model` | 3c | ordered MiningList selection/verification, TData `0x1000` claims and non-flat rotation |
+| `arena-gather-payout-model` | 3d | authoritative six-slot per-worker evaluation and leader income/cap/expense transaction |
 | `arena-target-acquisition-model` | 4 | complete stable spatial scan with diplomacy, fog, validity, region and priority gates |
 | `arena-guy-turret-model` | post-5 prerequisite | graphics-turret Guy materialization and state |
 | `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
@@ -283,6 +289,15 @@ playable surface while their runtime path remains incomplete:
 | `arena-diplomacy-model` | 6d | declaration command plus retargeting, shared vision, event/chat and strategy side effects |
 | `arena-attrition-model` | 6e | per-unit period state/recomputation and exact fractional damage host |
 | `arena-supply-model` | 6f | `Supplies::find_supply`, building scans, reload call site and healing |
+
+The recovered construction and gathering cores do not clear these rows. Construction's
+local frame/builder state machine is guarded by mandatory effect callbacks and explicitly
+reports `RUNTIME_FIDELITY_READY = false`; gathering's exact occupancy, reservation-write and
+payout kernels require an externally authoritative `calc_gather` result. The fail-closed
+`arena::retail_systems::{ArenaConstructionHost,ArenaGatherHost}` adapters expose those exact
+seams without a no-op placement/lifecycle callback, a slot table, radius estimate, synthetic
+depletion pool, or hidden membership. `LIFECYCLE_INVENTORY` is the executable eight-row
+transaction inventory. A row clears only when the real Arena command/tick/close path owns it.
 
 The former greedy-movement model has already been replaced by the derived retail A*
 pathfinder and is not on this list. `arena::retail_systems::MODEL6_INVENTORY` is the

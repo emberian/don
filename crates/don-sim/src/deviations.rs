@@ -240,32 +240,44 @@ pub enum Deviation {
     EnvPatrolExecution = 9,
     /// `don-ai`'s six numbered model simplifications.
     AiModelSimplifications = 10,
-    /// Arena MODEL 2: builder-frame construction substitute.
-    ArenaConstructionModel = 11,
-    /// Arena MODEL 3: inferred gather ownership/slot substitute.
-    ArenaGatherModel = 12,
+    /// Arena MODEL 2a: no persistent retail construction schedule/identity host.
+    ArenaConstructionScheduleModel = 11,
+    /// Arena MODEL 2b: no authoritative construction placement transaction.
+    ArenaConstructionPlacementModel = 12,
+    /// Arena MODEL 2c: no authoritative construction lifecycle transaction.
+    ArenaConstructionLifecycleModel = 13,
+    /// Arena MODEL 2d: no authoritative construction interruption transaction.
+    ArenaConstructionInterruptionModel = 14,
+    /// Arena MODEL 3a: no authoritative gathering-capacity evaluator.
+    ArenaGatherCapacityModel = 15,
+    /// Arena MODEL 3b: no persistent retail gathering-occupancy host.
+    ArenaGatherOccupancyModel = 16,
+    /// Arena MODEL 3c: no authoritative gathering-terrain reservation lifecycle.
+    ArenaGatherReservationModel = 17,
+    /// Arena MODEL 3d: no authoritative gathering-payout transaction.
+    ArenaGatherPayoutModel = 18,
     /// Arena MODEL 4: incomplete retail target-acquisition host.
-    ArenaTargetAcquisitionModel = 13,
+    ArenaTargetAcquisitionModel = 19,
     /// Arena roster prerequisite: graphics-turret Guys are not materialized.
-    ArenaGuyTurretModel = 14,
+    ArenaGuyTurretModel = 20,
     /// Arena MODEL 6a: no retail water terrain/pathing host.
-    ArenaWaterModel = 15,
+    ArenaWaterModel = 21,
     /// Arena MODEL 6b: no retail naval object/order/production host.
-    ArenaNavalModel = 16,
+    ArenaNavalModel = 22,
     /// Arena MODEL 6c: no complete retail airframe host.
-    ArenaAirModel = 17,
+    ArenaAirModel = 23,
     /// Arena MODEL 6d: no complete retail diplomacy state/side-effect host.
-    ArenaDiplomacyModel = 18,
+    ArenaDiplomacyModel = 24,
     /// Arena MODEL 6e: no wired retail attrition state/damage host.
-    ArenaAttritionModel = 19,
+    ArenaAttritionModel = 25,
     /// Arena MODEL 6f: no wired retail supply-query/state host.
-    ArenaSupplyModel = 20,
+    ArenaSupplyModel = 26,
 
     // -- Rejected ------------------------------------------------------------------------
     /// "`attack_dir` does not mean what its name says" — it does.
-    AttackDirSemantics = 21,
+    AttackDirSemantics = 27,
     /// "The gather-enhancer tables are off by one" — they are 1-based by design.
-    GatherEnhancerTableBase = 22,
+    GatherEnhancerTableBase = 28,
 }
 
 /// One registry entry: the whole justification for a divergence, in one place.
@@ -676,17 +688,22 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::ArenaConstructionModel,
-        slug: "arena-construction-model",
-        title: "Arena MODEL 2 substitutes builder-frame construction",
+        id: Deviation::ArenaConstructionScheduleModel,
+        slug: "arena-construction-schedule-model",
+        title: "Arena lacks retail construction state, identity and scheduler order",
         kind: Kind::Drift,
-        retail: "Construction owns a live build site, exact worker order/state, progress, \
-                 interruption and completion side effects.",
-        ours: "MODEL 2 advances construction with an arena builder-frame model.",
-        why: "A build timer changes economy, obstruction and combat timing on the playable path.",
-        derived_from: &["crates/don-ai/src/arena/world.rs MODEL 2 declaration"],
-        evidence: "Self-declared arena model; production prerequisites are inventoried in \
-                   docs/mechanics/production.md.",
+        retail: "A persistent BuildData site is processed before live builders, whose BuildAt \
+                 orders retain (who,o,uid) and execute in retail object traversal order.",
+        ours: "The construction state machine and fail-closed adapter exist, but Arena does not \
+               persist their full site/order state or call them from the retail scheduler.",
+        why: "Builder order is load-bearing because each contributor receives the next harmonic \
+              share; a timer, set, or EntId-only target changes progress and slot-reuse behavior.",
+        derived_from: &[
+            "Unit::add_build_order 0x005E5210",
+            "Unit::do_build 0x005EEBF0",
+            "crates/don-sim/src/systems/construction.rs",
+        ],
+        evidence: "docs/mechanics/construction.md §§4-5; Tier C instruction/PDB recovery.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -695,18 +712,159 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::ArenaGatherModel,
-        slug: "arena-gather-model",
-        title: "Arena MODEL 3 infers gather ownership and worker slots",
+        id: Deviation::ArenaConstructionPlacementModel,
+        slug: "arena-construction-placement-model",
+        title: "Arena lacks the authoritative blocked-site transaction",
         kind: Kind::Drift,
-        retail: "Map resources and gatherer objects own the resource kind, capacity, occupancy \
-                 and depletion transitions.",
-        ours: "MODEL 3 derives gather targets/slots from arena state instead of executing the \
-               retail resource-object channel.",
-        why: "Invented capacity or ownership changes the opening economy that arena results rank.",
-        derived_from: &["crates/don-ai/src/arena/world.rs MODEL 3 declaration"],
-        evidence: "Self-declared arena model; gathering host recovery is tracked in \
-                   docs/mechanics/economy.md.",
+        retail: "BuildTypeData::blocked_site resolves terrain, territory, cliffs/water, \
+                 adjacency, dock, city and wonder-capacity dependencies before start.",
+        ours: "The recovered lifecycle requires a mandatory blocked_site callback; Arena has no \
+               complete implementation and may not substitute its custom placement predicate.",
+        why: "Accepting a site retail rejects changes obstruction, ownership, economy and combat.",
+        derived_from: &[
+            "BuildTypeData::blocked_site",
+            "BuildTypeData::blocked_location 0x006375B0",
+            "BuildTypeData::blocked_tcoord 0x00636DB0",
+        ],
+        evidence: "docs/mechanics/construction.md §§4-5; callback is fail-closed in \
+                   systems/construction.rs.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaConstructionLifecycleModel,
+        slug: "arena-construction-lifecycle-model",
+        title: "Arena lacks exact construction start, activation, rejection and completion",
+        kind: Kind::Drift,
+        retail: "Lazy Build::start, successful Build::activate, rejected Object::disband and \
+                 Unit::build_done/reassignment are full world transactions.",
+        ours: "The local progress/call ordering is recovered, but Arena implements none of the \
+               mandatory ownership, city, terrain, event, queue, RNG and checksum effects.",
+        why: "Flags-only completion would leave a plausible building with the wrong world graph.",
+        derived_from: &[
+            "Build::start",
+            "Build::activate",
+            "Object::disband",
+            "Unit::build_done 0x00603BF0",
+        ],
+        evidence: "docs/mechanics/construction.md §§4-5; RUNTIME_FIDELITY_READY is false.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaConstructionInterruptionModel,
+        slug: "arena-construction-interruption-model",
+        title: "Arena lacks exact construction death and cancellation transactions",
+        kind: Kind::Drift,
+        retail: "Builder death/cancel closes the unit/order transaction; target destruction \
+                 closes/disbands the target and builders observe invalid identity lazily.",
+        ours: "The interruption boundary is recovered, but Arena does not route death, cancel or \
+               target destruction through a complete object/order host.",
+        why: "Dropping a timer or eager-visiting builders loses retained work and order side effects.",
+        derived_from: &[
+            "Unit::do_build 0x005EEBF0",
+            "crates/don-sim/src/systems/construction.rs::interrupt_builder",
+        ],
+        evidence: "docs/mechanics/construction.md §§4-5; Tier C instruction/PDB recovery.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaGatherCapacityModel,
+        slug: "arena-gather-capacity-model",
+        title: "Arena lacks the authoritative gathering-capacity evaluator",
+        kind: Kind::Drift,
+        retail: "BuildTypeData::calc_gather evaluates the ordered MiningList, real terrain, \
+                 access, ownership/diplomacy and player modifiers into signed gather_max.",
+        ours: "Signed-byte storage is recovered, but Arena still has no complete evaluator and \
+               may not infer slots from a building table, radius or gather_from length.",
+        why: "Invented capacity changes the opening economy that arena results rank.",
+        derived_from: &[
+            "BuildTypeData::calc_gather 0x00639E40",
+            "BuildTypeData::max_gatherers 0x0063C430",
+        ],
+        evidence: "docs/mechanics/gathering.md §Capacity comes from the world, not a type table.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaGatherOccupancyModel,
+        slug: "arena-gather-occupancy-model",
+        title: "Arena lacks persistent retail gathering occupancy and order identity",
+        kind: Kind::Drift,
+        retail: "BuildData and UnitData keep an owner-local intrusive gather_down chain; a live \
+                 GatherOrder retains (whom,ox,uid), arrival state and exact detach/close paths.",
+        ours: "Exact attach, prune, detach and UID checks have an adapter, but Arena does not own \
+               the persistent object-table links or execute the gather command/order lifecycle.",
+        why: "Inferred membership or stale object identity changes crowding and payout.",
+        derived_from: &[
+            "Build::add_gatherer 0x0062F640",
+            "Build::check_gatherers 0x0062F710",
+            "Build::remove_gatherer 0x0062F8D0",
+        ],
+        evidence: "docs/mechanics/gathering.md §§The state model, Generational targets.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaGatherReservationModel,
+        slug: "arena-gather-reservation-model",
+        title: "Arena lacks the ordered gathering-terrain reservation lifecycle",
+        kind: Kind::Drift,
+        retail: "find_gather_tiles and verify_gather_tiles maintain an ordered weighted \
+                 MiningList and TData 0x1000 claims; non-flat gathering rotates entries.",
+        ours: "Atomic writes for already-authoritative tiles are recovered, but Arena has no \
+               selection, verification, invalidation or non-flat rotation transaction.",
+        why: "The reservation bit is world state, not a depletion counter or optional hint.",
+        derived_from: &[
+            "Build::find_gather_tiles 0x00623350",
+            "WorldData::is_gathered_from",
+            "Unit::do_non_flat_gather",
+        ],
+        evidence: "docs/mechanics/gathering.md §Terrain claims and non-depletion.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaGatherPayoutModel,
+        slug: "arena-gather-payout-model",
+        title: "Arena lacks the authoritative gathering-payout transaction",
+        kind: Kind::Drift,
+        retail: "The terrain/type evaluator produces six-slot per-worker gross, active occupancy \
+                 scales it, and Leader::do_gather applies carries, caps and expenses.",
+        ours: "Gross composition and carry kernels are recovered, but Arena has neither the \
+               authoritative evaluator nor the exact leader income/checksum transaction.",
+        why: "A custom resource-kind or direct credit path changes income values and timing.",
+        derived_from: &[
+            "BuildTypeData::calc_gather 0x00639E40",
+            "Leader::do_gather",
+            "crates/don-sim/src/systems/gathering.rs",
+        ],
+        evidence: "docs/mechanics/gathering.md §Rates, caps, and credit.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -967,7 +1125,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
 
 impl Deviation {
     /// The number of registry entries.
-    pub const COUNT: usize = 23;
+    pub const COUNT: usize = 29;
 
     /// Every deviation, in registry order.
     pub const ALL: [Deviation; Deviation::COUNT] = [
@@ -982,8 +1140,14 @@ impl Deviation {
         Deviation::RefineryBonusDead,
         Deviation::EnvPatrolExecution,
         Deviation::AiModelSimplifications,
-        Deviation::ArenaConstructionModel,
-        Deviation::ArenaGatherModel,
+        Deviation::ArenaConstructionScheduleModel,
+        Deviation::ArenaConstructionPlacementModel,
+        Deviation::ArenaConstructionLifecycleModel,
+        Deviation::ArenaConstructionInterruptionModel,
+        Deviation::ArenaGatherCapacityModel,
+        Deviation::ArenaGatherOccupancyModel,
+        Deviation::ArenaGatherReservationModel,
+        Deviation::ArenaGatherPayoutModel,
         Deviation::ArenaTargetAcquisitionModel,
         Deviation::ArenaGuyTurretModel,
         Deviation::ArenaWaterModel,

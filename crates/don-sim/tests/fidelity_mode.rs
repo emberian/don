@@ -106,7 +106,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         cfg.assert_ready(Surface::PlayableEdition),
         Err(ModeError::KnownDrift(
             Surface::PlayableEdition,
-            Deviation::ArenaConstructionModel,
+            Deviation::ArenaConstructionScheduleModel,
         ))
     );
     assert_eq!(
@@ -122,8 +122,14 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         product,
         vec![
             ReadinessBlocker::KnownDrift(Deviation::EnvPatrolExecution),
-            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionModel),
-            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionScheduleModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionPlacementModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionLifecycleModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionInterruptionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherCapacityModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherOccupancyModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherReservationModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherPayoutModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaTargetAcquisitionModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaGuyTurretModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaWaterModel),
@@ -147,8 +153,14 @@ fn wired_improvements_leave_only_known_product_drift() {
     assert_eq!(
         playable,
         vec![
-            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionModel),
-            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionScheduleModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionPlacementModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionLifecycleModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionInterruptionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherCapacityModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherOccupancyModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherReservationModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherPayoutModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaTargetAcquisitionModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaGuyTurretModel),
             ReadinessBlocker::KnownDrift(Deviation::ArenaWaterModel),

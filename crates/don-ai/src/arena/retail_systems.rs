@@ -1,10 +1,11 @@
-//! Fail-closed adapters for Arena MODEL 6 systems.
+//! Fail-closed adapters for Arena's recovered retail systems.
 //!
-//! This module does not make the arena naval or airborne by declaration. It names the
-//! recovered retail kernels that are safe to call, keeps every world-query prerequisite
-//! explicit, and inventories the missing host systems. `arena::world` may consume these
-//! adapters only when it owns the corresponding state; callers cannot obtain a convenient
-//! default for water reachability, supply coverage, air target search, or diplomacy AI.
+//! This module does not make the arena construction-complete, gather-capable, naval or
+//! airborne by declaration. It names the recovered retail kernels that are safe to call,
+//! keeps every world-query prerequisite explicit, and inventories the missing host systems.
+//! `arena::world` may consume these adapters only when it owns the corresponding state;
+//! callers cannot obtain a convenient default for placement, gathering capacity, water
+//! reachability, supply coverage, air target search, or diplomacy AI.
 
 use crate::arena::types::TypeRow;
 use don_sim::rng::Random;
@@ -12,7 +13,225 @@ use don_sim::systems::air::{self, AntiAirGate, AntiAirShot, FuelVerdict};
 use don_sim::systems::borders_fog::{
     self, AttritionDamage, AttritionInput, AttritionRules, SupplyInput,
 };
+use don_sim::systems::construction::{self, ConstructionEffects};
+use don_sim::systems::economy::NUM_RESOURCES;
+use don_sim::systems::gathering::{self, GatherCount, GatherSite, GatherTile, GatherWorker};
+use don_sim::systems::map_terrain::World;
+use don_sim::systems::production::{BuildData, ProdRules};
 use don_sim::systems::victory_score::{self, Diplo, NUM_LEADERS};
+
+/// Literal Arena host transactions behind the former aggregate MODEL 2/3 declarations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleSubsystem {
+    ConstructionScheduleAndIdentity,
+    ConstructionPlacement,
+    ConstructionLifecycle,
+    ConstructionInterruption,
+    GatherCapacity,
+    GatherOccupancy,
+    GatherTerrainReservation,
+    GatherPayout,
+}
+
+/// Executable construction/gathering integration inventory. An adapter is not a product
+/// completion claim: every row remains blocked until the real arena command/tick path owns
+/// the listed transaction and its checksum/RNG effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LifecycleIntegrationItem {
+    pub subsystem: LifecycleSubsystem,
+    pub status: IntegrationStatus,
+    pub recovered: &'static [&'static str],
+    pub missing: &'static [&'static str],
+}
+
+pub const LIFECYCLE_INVENTORY: &[LifecycleIntegrationItem] = &[
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::ConstructionScheduleAndIdentity,
+        status: IntegrationStatus::AdapterOnly,
+        recovered: &[
+            "persistent BuildData construction fields",
+            "(who,o,uid) BuildAt target and frame/builder state machine",
+        ],
+        missing: &[
+            "arena BuildData/object-key storage",
+            "building-band then retail owner/slot builder traversal",
+            "authoritative check_build_order builder gate",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::ConstructionPlacement,
+        status: IntegrationStatus::Blocked,
+        recovered: &["blocked_site result contract and wonder-capacity gate"],
+        missing: &[
+            "blocked_location and blocked_tcoord",
+            "terrain, territory, cliff/water, adjacency, dock and city-limit queries",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::ConstructionLifecycle,
+        status: IntegrationStatus::Blocked,
+        recovered: &["lazy start, reject, progress and completion call ordering"],
+        missing: &[
+            "Build::start and Build::activate world transactions",
+            "Object::disband and Unit::build_done/reassignment transactions",
+            "complete transitive RNG and checksum receipts",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::ConstructionInterruption,
+        status: IntegrationStatus::Blocked,
+        recovered: &["builder death/cancel boundary and lazy stale-target behavior"],
+        missing: &[
+            "arena unit close/order-cancel transaction",
+            "target close/disband object-generation transaction",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::GatherCapacity,
+        status: IntegrationStatus::Blocked,
+        recovered: &["signed-byte gather_max storage and fixed 1/7 helper cases"],
+        missing: &[
+            "complete BuildTypeData::calc_gather terrain/type evaluator",
+            "ordered MiningList, access, ownership, diplomacy and player modifiers",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::GatherOccupancy,
+        status: IntegrationStatus::AdapterOnly,
+        recovered: &[
+            "owner-local gather_down chain",
+            "generational GatherOrder identity and exact attach/prune/detach",
+        ],
+        missing: &[
+            "arena owner-local object table and persistent links",
+            "gather command/order execution and close-path detach",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::GatherTerrainReservation,
+        status: IntegrationStatus::Blocked,
+        recovered: &["atomic TData 0x1000 reservation writes for selected tiles"],
+        missing: &[
+            "find_gather_tiles and verify_gather_tiles ordered MiningList lifecycle",
+            "non-flat gather selection/rotation and territory invalidation",
+        ],
+    },
+    LifecycleIntegrationItem {
+        subsystem: LifecycleSubsystem::GatherPayout,
+        status: IntegrationStatus::Blocked,
+        recovered: &["active-worker count, six-slot gross composition and carry accumulators"],
+        missing: &[
+            "authoritative per-worker terrain/type six-slot evaluation",
+            "arena leader income/cap/expense transaction and checksum ownership",
+        ],
+    },
+];
+
+/// Stable construction boundary for an Arena host. The adapter deliberately provides no
+/// fallback effects: constructing it requires a concrete [`ConstructionEffects`] owner,
+/// and every callback error remains visible to the caller.
+pub struct ArenaConstructionHost<'a, E: ConstructionEffects> {
+    effects: &'a mut E,
+}
+
+impl<'a, E: ConstructionEffects> ArenaConstructionHost<'a, E> {
+    pub fn new(effects: &'a mut E) -> Self {
+        Self { effects }
+    }
+
+    pub fn begin_site_frame(
+        &mut self,
+        site: &mut BuildData,
+        frame: construction::ConstructionFrame,
+        rules: &ProdRules,
+    ) -> construction::EffectReceipt {
+        construction::begin_site_frame(site, frame, rules)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_builder(
+        &mut self,
+        site: &mut BuildData,
+        site_key: construction::ObjectKey,
+        builder: construction::ObjectKey,
+        target: construction::BuildOrderTarget,
+        contribution: construction::BuilderContribution,
+        rules: &ProdRules,
+    ) -> Result<construction::BuildReceipt, construction::ConstructionError<E::Error>> {
+        construction::execute_builder(
+            site,
+            site_key,
+            builder,
+            target,
+            contribution,
+            rules,
+            self.effects,
+        )
+    }
+
+    pub fn interrupt_builder(
+        &mut self,
+        builder: construction::ObjectKey,
+        target: construction::ObjectKey,
+        reason: construction::BuilderFinish,
+    ) -> Result<construction::BuildReceipt, construction::ConstructionError<E::Error>> {
+        construction::interrupt_builder(self.effects, builder, target, reason)
+    }
+}
+
+/// Explicit Arena-owned gathering state. Capacity and ordered tiles must already come from
+/// the authoritative evaluator; this type has no building-type/radius fallback and owns no
+/// hidden worker membership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArenaGatherHost {
+    pub site: GatherSite,
+    pub workers: Vec<GatherWorker>,
+    pub ordered_tiles: Vec<GatherTile>,
+}
+
+impl ArenaGatherHost {
+    pub fn from_authoritative_state(
+        site: GatherSite,
+        workers: Vec<GatherWorker>,
+        ordered_tiles: Vec<GatherTile>,
+    ) -> Self {
+        Self {
+            site,
+            workers,
+            ordered_tiles,
+        }
+    }
+
+    pub fn set_tiles_reserved(&self, world: &mut World, reserved: bool) -> Result<(), GatherTile> {
+        gathering::set_gather_tiles_reserved(world, &self.ordered_tiles, reserved)
+    }
+
+    pub fn attach_worker(&mut self, unit_o: i16) -> gathering::AttachResult {
+        gathering::attach_worker(&mut self.site, &mut self.workers, unit_o)
+    }
+
+    pub fn prune_workers(&mut self) -> Result<usize, &'static str> {
+        gathering::check_gatherers(&mut self.site, &mut self.workers)
+    }
+
+    pub fn detach_worker(&mut self, unit_o: i16) -> Result<bool, &'static str> {
+        gathering::detach_worker(&mut self.site, &mut self.workers, unit_o)
+    }
+
+    pub fn gross_from_evaluated_worker(
+        &self,
+        per_worker: [i32; NUM_RESOURCES],
+        count_inside: i32,
+    ) -> Result<[i32; NUM_RESOURCES], &'static str> {
+        let active =
+            gathering::num_gatherers(&self.site, &self.workers, GatherCount::Active, count_inside)?;
+        Ok(gathering::site_gross(
+            per_worker,
+            active,
+            self.site.gather_max,
+        ))
+    }
+}
 
 /// One literal product blocker formerly hidden inside the single MODEL 6 sentence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -374,6 +593,153 @@ mod tests {
                 item.subsystem
             );
         }
+    }
+
+    #[test]
+    fn lifecycle_inventory_stays_split_and_fail_closed() {
+        assert_eq!(LIFECYCLE_INVENTORY.len(), 8);
+        assert!(!construction::RUNTIME_FIDELITY_READY);
+        for item in LIFECYCLE_INVENTORY {
+            assert!(!item.recovered.is_empty());
+            assert!(
+                !item.missing.is_empty(),
+                "{:?} was falsely cleared",
+                item.subsystem
+            );
+        }
+    }
+
+    struct MissingConstructionHost;
+
+    impl ConstructionEffects for MissingConstructionHost {
+        type Error = &'static str;
+
+        fn builder_gate(
+            &mut self,
+            _builder: construction::ObjectKey,
+            _target: construction::ObjectKey,
+        ) -> Result<construction::BuilderGateReceipt, Self::Error> {
+            Err("authoritative builder gate unavailable")
+        }
+
+        fn blocked_site(
+            &mut self,
+            _site_key: construction::ObjectKey,
+            _site: &BuildData,
+        ) -> Result<construction::SiteCheckReceipt, Self::Error> {
+            Err("authoritative placement unavailable")
+        }
+
+        fn start_site(
+            &mut self,
+            _site_key: construction::ObjectKey,
+            _site: &mut BuildData,
+            _notify: i32,
+        ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+            Err("start transaction unavailable")
+        }
+
+        fn disband_site(
+            &mut self,
+            _site_key: construction::ObjectKey,
+            _site: &mut BuildData,
+            _mode: i32,
+        ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+            Err("disband transaction unavailable")
+        }
+
+        fn activate_site(
+            &mut self,
+            _site_key: construction::ObjectKey,
+            _site: &mut BuildData,
+            _arg0: i32,
+            _arg1: i32,
+            _arg2: i32,
+        ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+            Err("activate transaction unavailable")
+        }
+
+        fn finish_builder(
+            &mut self,
+            _builder: construction::ObjectKey,
+            _target: construction::ObjectKey,
+            _reason: construction::BuilderFinish,
+        ) -> Result<construction::EffectReceipt, Self::Error> {
+            Err("build_done transaction unavailable")
+        }
+
+        fn interrupt_builder(
+            &mut self,
+            _builder: construction::ObjectKey,
+            _target: construction::ObjectKey,
+            _reason: construction::BuilderFinish,
+        ) -> Result<construction::EffectReceipt, Self::Error> {
+            Err("cancel transaction unavailable")
+        }
+    }
+
+    #[test]
+    fn construction_adapter_propagates_a_missing_host_transaction() {
+        let site_key = construction::ObjectKey {
+            who: 1,
+            o: 4,
+            uid: 9,
+        };
+        let builder = construction::ObjectKey {
+            who: 1,
+            o: 7,
+            uid: 2,
+        };
+        let mut site = BuildData {
+            who: 1,
+            uid: 9,
+            ..BuildData::default()
+        };
+        let mut effects = MissingConstructionHost;
+        let mut host = ArenaConstructionHost::new(&mut effects);
+        assert_eq!(
+            host.execute_builder(
+                &mut site,
+                site_key,
+                builder,
+                construction::BuildOrderTarget::new(site_key, false),
+                construction::BuilderContribution::default(),
+                &ProdRules::shipped(),
+            ),
+            Err(construction::ConstructionError::Effect(
+                "authoritative builder gate unavailable"
+            ))
+        );
+    }
+
+    #[test]
+    fn gather_adapter_preserves_uid_capacity_chain_and_atomic_reservations() {
+        let mut site = GatherSite::new(2, 41);
+        site.uid = 91;
+        site.set_authoritative_capacity(1);
+        let mut worker = GatherWorker::new(2, 7, 0x32);
+        worker.assignment = Some(gathering::GatherAssignment {
+            target_owner: 2,
+            target_build: 41,
+            target_uid: 91,
+            been_there: true,
+            inside_target: None,
+        });
+        let valid = GatherTile { tx: 3, ty: 5 };
+        let invalid = GatherTile { tx: -1, ty: 0 };
+        let mut host =
+            ArenaGatherHost::from_authoritative_state(site, vec![worker], vec![valid, invalid]);
+        let mut world = World::init_default_rules(4, 4);
+
+        assert_eq!(host.set_tiles_reserved(&mut world, true), Err(invalid));
+        assert_eq!(gathering::gather_tile_reserved(&world, valid), Some(false));
+        host.ordered_tiles.pop();
+        assert_eq!(host.set_tiles_reserved(&mut world, true), Ok(()));
+        assert_eq!(host.attach_worker(7), gathering::AttachResult::Attached);
+        assert_eq!(
+            host.gross_from_evaluated_worker([160, 0, 0, 0, 0, 0], 0),
+            Ok([160, 0, 0, 0, 0, 0])
+        );
     }
 
     #[test]
