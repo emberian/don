@@ -8,7 +8,7 @@ Full write-up, architecture and measurements: **`docs/tracks/web-spectator.md`**
 node web/tools/pack-gamedata.mjs      # schema/live/* -> public/data/gamedata.bin (gitignored)
 node web/tools/gen-wire.mjs           # schema/command-wire.json -> the JS + Rust command codec
 node web/tools/gen-readiness.mjs      # replay scoreboard -> compact browser evidence
-web/build.sh                          # cargo -> wasm32 -> public/wasm/don_web.wasm
+web/build.sh                          # generated-source checks + cargo -> public/wasm/don_web.wasm
 node web/serve.mjs                    # http://127.0.0.1:8787/  with COOP/COEP set
 node web/bench.mjs --out results.json # launches Chrome, drives it over CDP, prints JSON
 ```
@@ -67,8 +67,12 @@ creation, so it cannot be switched live).
 its extra tables and run its native and browser gates with:
 
 ```sh
+node web/tools/pack-gamedata.mjs
 node web/tools/pack-playdata.mjs
+node web/tools/gen-wire.mjs --check
+node web/tools/gen-readiness.mjs --check
 web/build.sh
+node web/tools/check-play-wasm.mjs
 cargo run --manifest-path web/wasm/Cargo.toml --release --bin playcheck -- \
   web/public/data/gamedata.bin web/public/data/playdata.bin
 node web/serve.mjs 8787
@@ -102,8 +106,29 @@ The authoritative-roster ABI tranche passed six focused native tests in both ind
 profiles on 2026-08-09: hbox
 `web-authoritative-roster-20260809T214825Z-33897-19722-18c26aa332f9` and persvati release
 `web-authoritative-roster-release-20260809T214825Z-33893-25343-18c26aa332f9`. Both exited 0.
-The JavaScript modules and smoke source also pass `node --check`; a rebuilt Wasm/browser smoke is
-still required before treating generated browser artefacts as current.
+The JavaScript modules and smoke source also pass `node --check`. Root convergence then rebuilt
+and optimized the Wasm, verified 73 required exports with both unsupported setup setters absent,
+and passed the full Chrome/WebGPU smoke. The renderer read back 42,496 non-black pixels, real
+mouse input installed `MOVE_TO`, URL reload reconstructed the exact authoritative roster, and
+native/Wasm digests agreed at 600 frames for both inactive setup
+(`e526f20feb32cb49`) and roster `0,1,2,3` (`b68aa66f8a4703d0`).
+
+`web/build.sh` refuses stale command-wire or replay-readiness generated sources, then statically
+checks the fresh Wasm export table both before and after optional optimization. The same three
+source/artefact preflights run before `play-smoke.mjs` opens Chrome. The export contract requires
+the Sim-owned activation and active-roster query while forbidding `game_set_team` and
+`game_set_victory_mode`; a source advance paired with an old checked-in Wasm therefore fails with a
+specific stale-ABI error rather than a late panel exception.
+
+Cross-target digest checks take an explicit roster, so they never inherit browser session state.
+From the repository root, compare both supported baselines with:
+
+```sh
+cargo run --manifest-path web/wasm/Cargo.toml --release --bin playcheck -- \
+  digest web/public/data/gamedata.bin web/public/data/playdata.bin c0ffee 600 -
+cargo run --manifest-path web/wasm/Cargo.toml --release --bin playcheck -- \
+  digest web/public/data/gamedata.bin web/public/data/playdata.bin c0ffee 600 0,1,2,3
+```
 
 Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
 browser adapter (not `don_ai::arena::World`), the playable blocker list is read from

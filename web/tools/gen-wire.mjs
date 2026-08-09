@@ -1,6 +1,7 @@
 // Generate the command-wire codec from `schema/command-wire.json`, for both sides.
 //
 //     node web/tools/gen-wire.mjs
+//     node web/tools/gen-wire.mjs --check
 //       -> web/public/js/wire.gen.js     (browser encoder)
 //       -> web/wasm/src/wire_gen.rs      (wasm decoder)
 //
@@ -207,17 +208,25 @@ ${rustNames.map((c) => `        0x${c.op.toString(16).padStart(2, '0')} => "${c.
 
 #[inline]
 fn i32_at(b: &[u8], off: usize) -> i32 {
-    if off + 4 > b.len() { return 0; }
+    if off + 4 > b.len() {
+        return 0;
+    }
     i32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 #[inline]
 fn i16_at(b: &[u8], off: usize) -> i16 {
-    if off + 2 > b.len() { return 0; }
+    if off + 2 > b.len() {
+        return 0;
+    }
     i16::from_le_bytes([b[off], b[off + 1]])
 }
 #[inline]
 fn i8_at(b: &[u8], off: usize) -> i8 {
-    if off >= b.len() { return 0; } else { b[off] as i8 }
+    if off >= b.len() {
+        return 0;
+    } else {
+        b[off] as i8
+    }
 }
 
 ${(() => {
@@ -249,7 +258,9 @@ ${names.map((n) => {
       const fname = RUST_KEYWORDS.has(f.name) ? `${f.name}_` : f.name;
       return `    /// field \`${f.name}\`: \`${f.type}\` at byte ${f.off}, ${f.bytes} byte(s).
     #[inline]
-    pub fn ${fname}(b: &[u8]) -> ${ty} { ${rd}(b, ${f.off}) }`;
+    pub fn ${fname}(b: &[u8]) -> ${ty} {
+        ${rd}(b, ${f.off})
+    }`;
     }).join('\n')}
 }`);
   }
@@ -263,19 +274,46 @@ ${names.map((n) => {
 pub mod group {
     use super::*;
     #[inline]
-    pub fn num(b: &[u8]) -> usize { if b.len() > 1 { b[1] as usize } else { 0 } }
+    pub fn num(b: &[u8]) -> usize {
+        if b.len() > 1 {
+            b[1] as usize
+        } else {
+            0
+        }
+    }
     #[inline]
-    pub fn who(b: &[u8]) -> i8 { i8_at(b, 2) }
+    pub fn who(b: &[u8]) -> i8 {
+        i8_at(b, 2)
+    }
     /// Object index \`k\`, or \`None\` past the end of the packet.
     #[inline]
     pub fn entry(b: &[u8], k: usize) -> Option<i16> {
         let off = 3 + k * 2;
-        if off + 2 > b.len() { None } else { Some(i16_at(b, off)) }
+        if off + 2 > b.len() {
+            None
+        } else {
+            Some(i16_at(b, off))
+        }
     }
 }
 `;
 
-writeFileSync(join(REPO, 'web', 'public', 'js', 'wire.gen.js'), js);
-writeFileSync(join(REPO, 'web', 'wasm', 'src', 'wire_gen.rs'), rs);
-console.log(`wire.gen.js + wire_gen.rs: ${table.length} opcodes, ` +
-  `${table.reduce((n, c) => n + c.fields.length, 0)} fields`);
+const outputs = [
+  [join(REPO, 'web', 'public', 'js', 'wire.gen.js'), js],
+  [join(REPO, 'web', 'wasm', 'src', 'wire_gen.rs'), rs],
+];
+if (process.argv.includes('--check')) {
+  const stale = outputs.filter(([path, expected]) => readFileSync(path, 'utf8') !== expected)
+    .map(([path]) => path);
+  if (stale.length) {
+    console.error(`stale generated command-wire outputs:\n${stale.join('\n')}`);
+    console.error('run node web/tools/gen-wire.mjs');
+    process.exit(1);
+  }
+  console.log(`wire outputs current: ${table.length} opcodes, ` +
+    `${table.reduce((n, c) => n + c.fields.length, 0)} fields`);
+} else {
+  for (const [path, output] of outputs) writeFileSync(path, output);
+  console.log(`wire.gen.js + wire_gen.rs: ${table.length} opcodes, ` +
+    `${table.reduce((n, c) => n + c.fields.length, 0)} fields`);
+}

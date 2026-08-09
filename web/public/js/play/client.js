@@ -558,12 +558,19 @@ function parseSessionPlayer(value, count) {
   return Number.isInteger(player) && player >= 0 && player < count ? player : 0;
 }
 
+function isCanonicalRoster(players, count) {
+  return Array.isArray(players) && players.every((slot, index) =>
+    Number.isInteger(slot) && slot >= 0 && slot < count &&
+    (index === 0 || players[index - 1] < slot));
+}
+
 function parseSessionRoster(value, count) {
   if (value === null || value === undefined || value === '') return [];
-  const slots = String(value).split(',').map(Number);
-  if (!slots.length || slots.some((slot) =>
-    !Number.isInteger(slot) || slot < 0 || slot >= count) || new Set(slots).size !== slots.length) {
-    return [];
+  const encoded = String(value);
+  const slots = /^(?:0|[1-9]\d*)(?:,(?:0|[1-9]\d*))*$/.test(encoded)
+    ? encoded.split(',').map(Number) : null;
+  if (!isCanonicalRoster(slots, count)) {
+    throw new Error('session roster must be a strictly increasing list of exported player slots');
   }
   return slots;
 }
@@ -1955,10 +1962,8 @@ function normalizeReplayJournal(input) {
   }
   const activePlayers = documentValue.protocol === LEGACY_JOURNAL_PROTOCOL
     ? [] : setup.activePlayers;
-  if (!Array.isArray(activePlayers) || activePlayers.some((slot) =>
-    !Number.isInteger(slot) || slot < 0 || slot >= state.mod.playerCount) ||
-    new Set(activePlayers).size !== activePlayers.length) {
-    throw new Error('journal active roster is invalid');
+  if (!isCanonicalRoster(activePlayers, state.mod.playerCount)) {
+    throw new Error('journal active roster is not canonical');
   }
   const incomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income);
   if (!incomeMode) throw new Error('journal income mode is unsupported');
@@ -3361,10 +3366,14 @@ window.don = {
    * prints the same quantity from a native aarch64 build of the identical Rust, and the
    * two must agree bit for bit. It is a check that can fail.
    */
-  freshDigest(seed = 0xc0ffee, frames = 600) {
+  freshDigest(seed = 0xc0ffee, frames = 600, activePlayers = []) {
+    if (!isCanonicalRoster(activePlayers, state.mod.playerCount)) {
+      throw new Error('fresh digest roster must be a canonical list of exported player slots');
+    }
     const x = state.mod.x;
     const g = x.game_create(seed >>> 0, 0);
-    for (const player of state.mod.activePlayers()) {
+    if (!g) throw new Error('fresh digest world allocation failed');
+    for (const player of activePlayers) {
       if (x.game_activate_player(g, player) !== 1) {
         x.game_destroy(g);
         throw new Error(`fresh digest world refused active roster slot ${player}`);
@@ -3376,7 +3385,10 @@ window.don = {
     x.game_destroy(g);
     // Creating a second game can grow linear memory, which detaches every view.
     state.mod._buf = null;
-    return { seed, frames, live, digest: hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
+    return {
+      seed, frames, activePlayers: activePlayers.slice(), live,
+      digest: hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0'),
+    };
   },
   key(code, modifiers = {}) {
     onKeyDown({

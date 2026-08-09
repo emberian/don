@@ -8,6 +8,7 @@
 // theoretical.
 
 import { COMMANDS, OP, encode, encodeGroup } from '../wire.gen.js';
+import { assertPlayWasmContract } from './wasm-contract.mjs';
 
 export { OP, COMMANDS };
 
@@ -47,6 +48,7 @@ export const CORE_CAP = Object.freeze({
 export class GameModule {
   constructor(instance) {
     this.x = instance.exports;
+    assertPlayWasmContract(this.x);
     this.mem = this.x.memory;
     this.g = 0;
     this._buf = null;

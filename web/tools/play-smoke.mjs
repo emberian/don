@@ -16,11 +16,30 @@
 //
 // Exit 0 only if the playable boundary held, the renderer drew, and nothing threw.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = join(HERE, '..', '..');
+
+for (const [script, scriptArgs] of [
+  ['gen-wire.mjs', ['--check']],
+  ['gen-readiness.mjs', ['--check']],
+  ['check-play-wasm.mjs', []],
+]) {
+  const gate = spawnSync(process.execPath, [join(HERE, script), ...scriptArgs], {
+    cwd: REPO,
+    stdio: 'inherit',
+  });
+  if (gate.status !== 0) {
+    console.error(`play smoke preflight failed: ${script} ${scriptArgs.join(' ')}`.trim());
+    process.exit(4);
+  }
+}
 
 const args = process.argv.slice(2);
 const flag = (n, d = null) => { const i = args.indexOf(n); return i < 0 ? d : (args[i + 1] ?? true); };
@@ -837,10 +856,9 @@ try {
     d.replay.step();
     const imported = await d.replay.import(JSON.stringify(journal));
     const importedMatch = m.match();
-    d.session.restart('0x1234abcd');
+    const activeUrl = d.session.url();
     return JSON.stringify({ activated, leaders, activePlayers, activeMask, match, startedFrame,
-      journal, saveDisabled, status, imported, importedMatch,
-      afterRestart: m.activePlayers(), afterRestartMatch: m.match() });
+      journal, saveDisabled, status, imported, importedMatch, activeUrl });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['frame-zero match start reaches every Sim leader and is queried without a JS roster copy',
@@ -857,9 +875,51 @@ try {
       out.activation.imported.frame === 0 && out.activation.importedMatch.phase === 'active' &&
       JSON.stringify(out.activation.importedMatch.activePlayers) ===
         JSON.stringify(out.activation.activePlayers)],
-    ['active roster makes unsupported live save status explicit and restart returns to saveable setup',
-      out.activation.saveDisabled && out.activation.status.includes('not serialized') &&
-      out.activation.afterRestart.length === 0 && out.activation.afterRestartMatch.phase === 'setup'],
+    ['active roster makes unsupported live save status explicit',
+      out.activation.saveDisabled && out.activation.status.includes('not serialized')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // Reload the canonical URL rather than merely parsing it in the same JavaScript world.
+  // This proves the URL carries the roster into a new Sim and that the page queries it back
+  // through the Wasm mask before constructing its journal baseline.
+  await c.send('Page.navigate', { url: out.activation.activeUrl });
+  let sharedUp = false;
+  for (let i = 0; i < 100; i++) {
+    await sleep(200);
+    sharedUp = await c.eval('!!(window.don && window.don.ready && window.don.ready())');
+    if (sharedUp) break;
+    const bootError = await c.eval('window.don && window.don.bootError');
+    if (bootError) throw new Error('shared-session boot failed:\n' + bootError);
+  }
+  if (!sharedUp) throw new Error('shared-session reload never became ready');
+  out.sharedRoster = await c.eval(`(() => {
+    const d = window.don, m = d.state.mod;
+    const journal = JSON.parse(d.replay.export());
+    const beforeRestart = {
+      setup: d.session.setup(), activePlayers: m.activePlayers(), match: m.match(),
+      urlSlots: new URL(d.session.url()).searchParams.get('slots'),
+      saveDisabled: document.getElementById('core-save').disabled,
+      saveStatus: document.getElementById('core-save-status').textContent,
+      journalSetup: journal.setup,
+    };
+    d.session.restart('0x1234abcd');
+    return JSON.stringify({ beforeRestart, afterRestart: m.activePlayers(), afterRestartMatch: m.match() });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the shared-session URL reconstructs and queries the exact authoritative roster',
+      out.sharedRoster.beforeRestart.setup.phase === 'active' &&
+      JSON.stringify(out.sharedRoster.beforeRestart.activePlayers) ===
+        JSON.stringify(out.activation.activePlayers) &&
+      out.sharedRoster.beforeRestart.urlSlots === out.activation.activePlayers.join(',')],
+    ['a shared active roster owns its journal baseline and disables unsupported live save export',
+      JSON.stringify(out.sharedRoster.beforeRestart.journalSetup.activePlayers) ===
+        JSON.stringify(out.activation.activePlayers) &&
+      out.sharedRoster.beforeRestart.saveDisabled &&
+      out.sharedRoster.beforeRestart.saveStatus.includes('not serialized')],
+    ['restarting a shared match returns to an authoritative inactive setup',
+      out.sharedRoster.afterRestart.length === 0 && out.sharedRoster.afterRestartMatch.phase === 'setup'],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
@@ -911,6 +971,12 @@ try {
     try { await d.replay.import(JSON.stringify(wrongDigest)); }
     catch { wrongDigestRefused = true; }
     const stableAfterWrongDigest = { frame: m.frame, digest: m.digest() };
+    const noncanonicalRoster = JSON.parse(journal);
+    noncanonicalRoster.setup.activePlayers = [1, 0];
+    let noncanonicalRosterRefused = false;
+    try { await d.replay.import(JSON.stringify(noncanonicalRoster)); }
+    catch { noncanonicalRosterRefused = true; }
+    const stableAfterNoncanonicalRoster = { frame: m.frame, digest: m.digest() };
     const zero = await d.replay.seek(0);
     const sought = await d.replay.seek(parsed.headFrame);
     document.getElementById('replay-step').click();
@@ -923,8 +989,9 @@ try {
     d.replay.play();
     return JSON.stringify({
       mobile, recorded, advanced, imported, legacyImported, digestAtExport, digestAfterImport,
-      malformedRefused, wrongDigestRefused, stableBeforeMalformed, stableAfterMalformed,
-      stableAfterWrongDigest,
+      malformedRefused, wrongDigestRefused, noncanonicalRosterRefused,
+      stableBeforeMalformed, stableAfterMalformed, stableAfterWrongDigest,
+      stableAfterNoncanonicalRoster,
       zero, sought, resumed, status, time,
       protocol: parsed.protocol, boundary: parsed.boundary,
       setup: parsed.setup, eventKinds: parsed.events.map(event => event.kind),
@@ -953,10 +1020,13 @@ try {
     ['the live world can advance beyond an exported snapshot before restoration',
       out.journal.advanced.frame > out.journal.recorded.frame &&
       out.journal.advanced.digest !== out.journal.digestAtExport],
-    ['a malformed journal is fail-closed without mutating the restored world',
+    ['a malformed journal, digest, or noncanonical roster is fail-closed',
       out.journal.malformedRefused && out.journal.wrongDigestRefused &&
+      out.journal.noncanonicalRosterRefused &&
       JSON.stringify(out.journal.stableAfterMalformed) === JSON.stringify(out.journal.stableBeforeMalformed) &&
-      JSON.stringify(out.journal.stableAfterWrongDigest) === JSON.stringify(out.journal.stableBeforeMalformed)],
+      JSON.stringify(out.journal.stableAfterWrongDigest) === JSON.stringify(out.journal.stableBeforeMalformed) &&
+      JSON.stringify(out.journal.stableAfterNoncanonicalRoster) ===
+        JSON.stringify(out.journal.stableBeforeMalformed)],
     ['timeline seek reconstructs frame zero and the exact exported head',
       out.journal.zero.frame === 0 && out.journal.sought.frame === out.journal.headFrame &&
       out.journal.sought.digest === out.journal.digestAtExport],
@@ -1578,11 +1648,18 @@ try {
 
   // ---- 5. cross-target determinism -----------------------------------------------------
   out.freshDigest = await c.eval(
-    'JSON.stringify(window.don.freshDigest(0xc0ffee, 600))').then(JSON.parse);
-  console.log(`wasm fresh game: seed 0xc0ffee 600 frames -> ` +
+    'JSON.stringify(window.don.freshDigest(0xc0ffee, 600, []))').then(JSON.parse);
+  out.freshActiveDigest = await c.eval(
+    'JSON.stringify(window.don.freshDigest(0xc0ffee, 600, [0, 1, 2, 3]))').then(JSON.parse);
+  console.log(`wasm fresh inactive setup: seed 0xc0ffee 600 frames -> ` +
     `${out.freshDigest.live} live, digest ${out.freshDigest.digest}`);
-  console.log('  compare with: cd web/wasm && cargo run --release --bin playcheck -- ' +
-    'digest ../public/data/gamedata.bin ../public/data/playdata.bin c0ffee 600');
+  console.log('  compare with: cargo run --manifest-path web/wasm/Cargo.toml --release --bin ' +
+    'playcheck -- digest web/public/data/gamedata.bin web/public/data/playdata.bin c0ffee 600 -');
+  console.log(`wasm fresh active roster 0,1,2,3: seed 0xc0ffee 600 frames -> ` +
+    `${out.freshActiveDigest.live} live, digest ${out.freshActiveDigest.digest}`);
+  console.log('  compare with: cargo run --manifest-path web/wasm/Cargo.toml --release --bin ' +
+    'playcheck -- digest web/public/data/gamedata.bin web/public/data/playdata.bin ' +
+    'c0ffee 600 0,1,2,3');
   const expect = flag('--expect-digest', null);
   if (expect) {
     out.expectDigest = expect;
@@ -1591,6 +1668,17 @@ try {
       bad++;
     } else {
       console.log(`  wasm32 and native agree bit for bit: ${expect}`);
+    }
+  }
+  const expectActive = flag('--expect-active-digest', null);
+  if (expectActive) {
+    out.expectActiveDigest = expectActive;
+    if (expectActive !== out.freshActiveDigest.digest) {
+      console.error(`FAIL: active-roster wasm digest ${out.freshActiveDigest.digest} ` +
+        `!= native ${expectActive}`);
+      bad++;
+    } else {
+      console.log(`  active-roster wasm32 and native agree bit for bit: ${expectActive}`);
     }
   }
 

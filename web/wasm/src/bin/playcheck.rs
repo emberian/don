@@ -44,14 +44,30 @@ fn main() {
         .get(base + 3)
         .and_then(|value| value.parse().ok())
         .unwrap_or(600);
+    let active_players = args
+        .get(base + 4)
+        .filter(|value| !value.is_empty() && value.as_str() != "-")
+        .map(|value| {
+            value
+                .split(',')
+                .map(|slot| slot.parse::<u32>().expect("invalid roster slot"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for (index, slot) in active_players.iter().enumerate() {
+        assert!(
+            *slot < 4 && !active_players[..index].contains(slot),
+            "digest roster must contain unique slots in 0..4"
+        );
+    }
     let game = game_create(seed as u32, (seed >> 32) as u32);
     assert!(!game.is_null(), "game_create failed");
     if digest_mode {
-        // Browser `freshDigest` reproduces the explicitly activated manual roster.
-        // Keep the default (non-digest) check at the inactive/saveable setup boundary.
-        for who in 0..4 {
+        // Browser `freshDigest` receives the same explicit roster argument. Never inherit
+        // an unrelated live browser session or silently force the four-player match here.
+        for who in &active_players {
             assert_eq!(
-                unsafe { game_activate_player(game, who) },
+                unsafe { game_activate_player(game, *who) },
                 1,
                 "manual roster activation failed for slot {who}"
             );
