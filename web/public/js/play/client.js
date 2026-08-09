@@ -35,6 +35,9 @@ const state = {
   idleCursor: 0,
   selection: [],
   edge: null,
+  commandMode: null,
+  toastTimer: 0,
+  rendererErrorCount: 0,
 };
 
 // ---------------------------------------------------------------------------------------
@@ -179,6 +182,17 @@ function wireInput(canvas) {
     }
     if (e.button === 0) {
       if (state.buildType !== null) { placeBuilding(w); return; }
+      if (state.commandMode !== null) { targetCommand(w, e); return; }
+      // Touch has no middle button or screen-edge hover. A tap still selects; a drag pans
+      // the map, making every core interaction reachable without pretending touch has a
+      // right click. Mouse drag retains retail-style box selection.
+      if (e.pointerType === 'touch') {
+        state.panning = {
+          x: e.clientX, y: e.clientY, cx: state.cam.x, cy: state.cam.y,
+          touch: true, moved: false, tapWorld: w, pointerId: e.pointerId,
+        };
+        return;
+      }
       state.drag = { x0: w[0], y0: w[1], x1: w[0], y1: w[1], sx: e.clientX, sy: e.clientY, add: e.shiftKey };
       return;
     }
@@ -189,10 +203,14 @@ function wireInput(canvas) {
     const w = screenToWorld(e.clientX, e.clientY);
     state.hoverTile = [Math.floor(w[0] / state.mod.subtile), Math.floor(w[1] / state.mod.subtile)];
     if (state.panning) {
+      if (state.panning.pointerId !== undefined && state.panning.pointerId !== e.pointerId) return;
       const c = $('gl');
       const r = c.getBoundingClientRect();
       const dpr = c.width / r.width;
       const p = pxPerSub();
+      if (Math.abs(e.clientX - state.panning.x) + Math.abs(e.clientY - state.panning.y) > 6) {
+        state.panning.moved = true;
+      }
       state.cam.x = state.panning.cx - (e.clientX - state.panning.x) * dpr / p;
       state.cam.y = state.panning.cy - (e.clientY - state.panning.y) * dpr / p;
       clampCam();
@@ -202,7 +220,13 @@ function wireInput(canvas) {
   });
 
   canvas.addEventListener('pointerup', (e) => {
-    if (state.panning) { state.panning = null; return; }
+    if (state.panning) {
+      if (state.panning.pointerId !== undefined && state.panning.pointerId !== e.pointerId) return;
+      const pan = state.panning;
+      state.panning = null;
+      if (pan.touch && !pan.moved) clickSelect(pan.tapWorld, false, e.detail >= 2);
+      return;
+    }
     if (!state.drag) return;
     const d = state.drag;
     state.drag = null;
@@ -255,7 +279,8 @@ function wireInput(canvas) {
 }
 
 function onKeyDown(e) {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const tag = e.target && e.target.tagName;
+  if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tag) || e.target?.isContentEditable) return;
   keys.add(e.code);
   const m = state.mod;
 
@@ -279,7 +304,7 @@ function onKeyDown(e) {
   }
 
   switch (e.code) {
-    case 'Escape': state.buildType = null; renderMenus(); break;
+    case 'Escape': cancelTargeting(); break;
     case 'KeyH': logPacket('HALT', m.halt(state.who)); break;
     case 'KeyB': $('tab-build').click(); break;
     case 'KeyF': jumpToSelection(); break;
@@ -422,6 +447,60 @@ function rightClick(w, e) {
   issueMove(w);
 }
 
+/** Execute a dock-selected command against one map target. These are the same packet
+ * builders used by rightClick; the dock only replaces the missing right mouse button. */
+function targetCommand(w, e = {}) {
+  const m = state.mod;
+  if (!state.selection.length) {
+    say('select one or more units before choosing a target', 'warn');
+    setCommandMode(null);
+    return;
+  }
+  if (state.commandMode === 'move') {
+    issueMove(w);
+  } else if (state.commandMode === 'attack') {
+    const id = m.pickAt(w[0], w[1]);
+    const info = id >= 0 ? m.info(id) : null;
+    if (!info || info.owner === state.who) {
+      say('attack needs an enemy object target', 'warn');
+      return;
+    }
+    logPacket('ATTACK', m.attack(state.who, id));
+    ping(w, '#ff6b5b');
+  } else if (state.commandMode === 'gather') {
+    const tx = Math.floor(w[0] / m.subtile), ty = Math.floor(w[1] / m.subtile);
+    if (m.tileResource(tx, ty) < 0) {
+      say('gather needs a highlighted resource tile', 'warn');
+      return;
+    }
+    logPacket('GATHER', m.gather(state.who, ty * m.tiles + tx));
+    ping(w, '#6ee7a8');
+  }
+  if (!e.shiftKey) setCommandMode(null);
+}
+
+function setCommandMode(mode) {
+  state.commandMode = state.commandMode === mode ? null : mode;
+  if (state.commandMode !== null) state.buildType = null;
+  const prompts = {
+    move: 'move armed — choose a destination on the map',
+    attack: 'attack armed — choose an enemy object',
+    gather: 'gather armed — choose a highlighted resource tile',
+  };
+  if (state.commandMode) say(prompts[state.commandMode]);
+  renderActionDock();
+  drawOverlay();
+}
+
+function cancelTargeting() {
+  const hadMode = state.commandMode !== null || state.buildType !== null;
+  state.commandMode = null;
+  state.buildType = null;
+  if (hadMode) say('command cancelled');
+  renderMenus();
+  renderActionDock();
+}
+
 function issueMove(w) {
   if (!state.selection.length) return;
   logPacket('MOVE_TO', state.mod.moveTo(state.who, w[0], w[1]));
@@ -471,12 +550,45 @@ function wirePanels() {
   $('pause').addEventListener('click', () => setPaused(!state.paused));
   $('halt').addEventListener('click', () => logPacket('HALT', state.mod.halt(state.who)));
   $('palette-filter').addEventListener('input', renderMenus);
+  $('cmd-move').addEventListener('click', () => setCommandMode('move'));
+  $('cmd-attack').addEventListener('click', () => setCommandMode('attack'));
+  $('cmd-gather').addEventListener('click', () => setCommandMode('gather'));
+  $('cmd-build').addEventListener('click', () => {
+    if (state.buildType !== null) cancelTargeting();
+    else openCatalog('build');
+  });
+  $('cmd-train').addEventListener('click', () => openCatalog('train'));
+  $('cmd-halt').addEventListener('click', () => logPacket('HALT', state.mod.halt(state.who)));
+  $('cmd-pause').addEventListener('click', () => setPaused(!state.paused));
+  $('cmd-zoom-out').addEventListener('click', () => zoomCentre(1 / 1.25));
+  $('cmd-zoom-in').addEventListener('click', () => zoomCentre(1.25));
+  renderActionDock();
+}
+
+function openCatalog(which) {
+  const tab = which === 'train' ? $('tab-train') : $('tab-build');
+  tab.click();
+  if (matchMedia('(max-width:700px)').matches) {
+    $('side').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function zoomCentre(factor) {
+  const r = $('gl').getBoundingClientRect();
+  zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
 }
 
 function setPaused(paused) {
   state.paused = paused;
   const el = $('pause');
   if (el) el.textContent = paused ? 'resume (P)' : 'pause (P)';
+  const dock = $('cmd-pause');
+  if (dock) {
+    dock.firstElementChild.textContent = paused ? 'resume' : 'pause';
+    dock.classList.toggle('active', paused);
+    dock.setAttribute('aria-pressed', String(paused));
+  }
+  say(paused ? 'simulation paused — commands remain queued for the next tick' : 'simulation resumed');
 }
 
 function setSpeed(speed) {
@@ -561,6 +673,7 @@ function renderMenus() {
     el.addEventListener('click', () => activate(it));
     host.appendChild(el);
   });
+  renderActionDock();
 }
 
 function paletteActivate(slot) {
@@ -570,9 +683,13 @@ function paletteActivate(slot) {
 function activate(it) {
   const m = state.mod;
   if (it.kind === 'build') {
+    state.commandMode = null;
     state.buildType = state.buildType === it.id ? null : it.id;
     say(state.buildType ? `place ${it.name} — click the map, Esc cancels` : 'build cancelled');
     renderMenus();
+    if (state.buildType !== null && matchMedia('(max-width:700px)').matches) {
+      $('stage').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   } else if (it.kind === 'train') {
     logPacket('QUEUE_UP', m.queueUp(state.who, it.id, 1));
   } else if (it.kind === 'age') {
@@ -606,6 +723,12 @@ function showInspect(info) {
 
 function renderHud() {
   const m = state.mod;
+  if (state.gfx.errors.length > state.rendererErrorCount) {
+    const latest = state.gfx.errors.slice(state.rendererErrorCount).join(' | ');
+    state.rendererErrorCount = state.gfx.errors.length;
+    badge('be', `${state.gfx.kind}: renderer error`, 'bad');
+    say(`renderer error — ${latest}`, 'warn');
+  }
   const me = m.player(state.who);
   const bar = $('res');
   if (!bar.childElementCount) {
@@ -648,10 +771,18 @@ function renderHud() {
 function renderSelection() {
   const m = state.mod;
   const host = $('sel');
-  if (!state.selection.length) { host.innerHTML = '<div class="hint">nothing selected</div>'; return; }
+  if (!state.selection.length) {
+    host.innerHTML = '<div class="hint">nothing selected</div>';
+    renderActionDock();
+    return;
+  }
   const infos = state.selection.map((id) => m.info(id)).filter(Boolean);
   if (infos.length !== state.selection.length) state.selection = infos.map((i) => i.id);
-  if (!infos.length) { host.innerHTML = '<div class="hint">selection is gone</div>'; return; }
+  if (!infos.length) {
+    host.innerHTML = '<div class="hint">selection is gone</div>';
+    renderActionDock();
+    return;
+  }
 
   if (infos.length === 1) {
     const i = infos[0];
@@ -682,18 +813,50 @@ function renderSelection() {
     host.innerHTML = `<div class="big">${infos.length} selected</div>` +
       [...byType].map(([t, n]) => `<div class="row"><span>${typeName(t)}</span><b>${n}</b></div>`).join('');
   }
+  renderActionDock();
+}
+
+function renderActionDock() {
+  const selected = state.selection.length;
+  for (const mode of ['move', 'attack', 'gather']) {
+    const el = $(`cmd-${mode}`);
+    if (!el) continue;
+    const active = state.commandMode === mode;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-pressed', String(active));
+    el.disabled = selected === 0;
+  }
+  for (const id of ['cmd-halt']) if ($(id)) $(id).disabled = selected === 0;
+  const build = $('cmd-build');
+  if (build) {
+    const active = state.buildType !== null;
+    build.classList.toggle('active', active);
+    build.setAttribute('aria-pressed', String(active));
+  }
+  const ds = $('dock-state');
+  if (ds) ds.innerHTML = selected ? `<b>${selected}</b><br>selected` : 'no<br>selection';
 }
 
 let coverageEl = null;
+let previousGaps = null;
 function renderCoverage() {
   const m = state.mod;
   const gaps = m.gaps();
   const rows = gaps.map((v, i) => (v ? `${GAP_NAMES[i]}: ${v}` : null)).filter(Boolean);
   const el = $('coverage');
   const txt = rows.length
-    ? 'issued but not executed\n' + rows.join('\n')
-    : 'issued but not executed\n(none yet)';
+    ? 'unexecuted command counters\n' + rows.join('\n')
+    : 'unexecuted command counters\n(none yet)';
   if (txt !== coverageEl) { el.textContent = txt; coverageEl = txt; }
+  if (previousGaps) {
+    for (let i = 0; i < gaps.length; i++) {
+      const delta = gaps[i] - previousGaps[i];
+      if (delta > 0) {
+        say(`command not executed — ${GAP_NAMES[i]}${delta > 1 ? ` (×${delta})` : ''}`, 'warn');
+      }
+    }
+  }
+  previousGaps = gaps;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -712,6 +875,20 @@ function drawOverlay() {
   }
   g.clearRect(0, 0, c.width, c.height);
   const m = state.mod;
+
+  if (state.commandMode !== null) {
+    const [tx, ty] = state.hoverTile;
+    const [sx, sy] = worldToScreen(tx * m.subtile, ty * m.subtile);
+    const px = state.cam.tilePx / ($('gl').width / c.width);
+    const colours = { move: '#5ab7ff', attack: '#ff6b5b', gather: '#6ee7a8' };
+    g.strokeStyle = colours[state.commandMode];
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(sx + px / 2, sy + px / 2, Math.max(7, px * .38), 0, Math.PI * 2);
+    g.moveTo(sx + px * .18, sy + px / 2); g.lineTo(sx + px * .82, sy + px / 2);
+    g.moveTo(sx + px / 2, sy + px * .18); g.lineTo(sx + px / 2, sy + px * .82);
+    g.stroke();
+  }
 
   // footprint preview, tinted by the engine's own grade
   if (state.buildType !== null) {
@@ -900,6 +1077,13 @@ function say(msg, cls = '') {
   state.log.unshift(`<span class="${cls}">${msg}</span>`);
   state.log.length = Math.min(state.log.length, 60);
   $('log').innerHTML = state.log.join('\n');
+  const toast = $('toast');
+  if (toast) {
+    toast.textContent = msg;
+    toast.className = `show ${cls}`;
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => { toast.className = ''; }, cls === 'warn' ? 3600 : 2200);
+  }
 }
 
 function logPacket(label, bytes) {
@@ -1006,6 +1190,10 @@ window.don = {
 boot().catch((e) => {
   window.don.bootError = `${e.message}\n${e.stack}`;
   console.error(e);
-  document.body.insertAdjacentHTML('afterbegin',
-    `<pre style="color:#ff6b5b;padding:16px;font:12px monospace">boot failed: ${e.message}\n${e.stack}</pre>`);
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'position:fixed;z-index:20;inset:12px;overflow:auto;color:#ff6b5b;' +
+    'padding:16px;border:1px solid #5c2d2d;background:#140d0d;font:12px monospace';
+  pre.textContent = `playable client failed to start\n\n${e.message}\n\n${e.stack}`;
+  document.body.prepend(pre);
+  if ($('stat')) $('stat').textContent = 'boot failed';
 });

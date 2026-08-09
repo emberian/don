@@ -160,6 +160,10 @@ try {
       initialCatalog, filteredCatalog, pauseLabel,
       integrationLabel: document.querySelector('.status-note')?.textContent ?? '',
       incomeOptions: [...document.querySelectorAll('#income option')].map(o => o.textContent),
+      commandButtons: document.querySelectorAll('#command-dock button').length,
+      targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
+        .every(id => document.getElementById(id)?.disabled),
+      toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
     });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
@@ -168,9 +172,46 @@ try {
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
     ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
     ['no whole-world fidelity option is advertised', out.ui.incomeOptions.every((x) => !/^fidelity\b/i.test(x))],
+    ['the touch command dock is complete', out.ui.commandButtons >= 9],
+    ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
+    ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
+
+  // The narrow layout is a first-class play surface: the stage remains usable, the side
+  // panel moves below it, and the command dock stays inside the viewport (scrolling its
+  // own buttons when necessary). This is a layout assertion, not a screenshot judgement.
+  await c.send('Emulation.setDeviceMetricsOverride', {
+    width: 390, height: 844, deviceScaleFactor: 1, mobile: true,
+  });
+  await sleep(250);
+  out.narrow = await c.eval(`(() => {
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    const side = document.getElementById('side').getBoundingClientRect();
+    const dock = document.getElementById('command-dock').getBoundingClientRect();
+    const first = document.querySelector('#command-dock button').getBoundingClientRect();
+    return {
+      viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
+      sideBelowStage: side.top >= stage.bottom - 1,
+      dockInsideViewport: dock.left >= 0 && dock.right <= innerWidth,
+      dockScrollable: document.getElementById('command-dock').scrollWidth >= dock.width,
+      touchTarget: [first.width, first.height], coverageVisible:
+        getComputedStyle(document.getElementById('coverage')).display !== 'none',
+    };
+  })()`);
+  for (const [name, ok] of [
+    ['narrow stage remains playable', out.narrow.stage[0] >= 380 && out.narrow.stage[1] >= 360],
+    ['narrow panel follows the map', out.narrow.sideBelowStage],
+    ['narrow command dock stays in the viewport', out.narrow.dockInsideViewport],
+    ['narrow command dock owns its overflow', out.narrow.dockScrollable],
+    ['narrow command targets are at least 40 px', out.narrow.touchTarget[0] >= 40 && out.narrow.touchTarget[1] >= 40],
+    ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+  await c.send('Emulation.clearDeviceMetricsOverride');
+  await sleep(250);
 
   // ---- 1. does it actually draw? -------------------------------------------------------
   out.readback = await c.eval('window.don.snapshot().then(r => JSON.stringify(r))').then(JSON.parse);
@@ -387,12 +428,36 @@ try {
       const i = window.don.info(${target.id});
       return i ? i.order : -1;
     })()`);
-    out.mouse = { clickedId: target.id, selectedAfterClick: selN, orderAfterRightClick: ordered };
+    // The visible dock must arm the same map input and disarm after a target. This catches
+    // a decorative mobile toolbar that looks useful but never reaches the packet path.
+    const dockArmed = await c.eval(`(() => {
+      document.getElementById('cmd-move').click();
+      const b = document.getElementById('cmd-move');
+      return window.don.state.commandMode === 'move' && b.getAttribute('aria-pressed') === 'true';
+    })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await c.send('Input.dispatchMouseEvent', {
+        type, x: Math.round(target.sx) + 120, y: Math.round(target.sy) + 80,
+        button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1,
+      });
+    }
+    await c.eval('for (let i=0;i<3;i++) window.don.state.mod.step(1)');
+    const dockResult = await c.eval(`(() => {
+      const i = window.don.info(${target.id});
+      return { modeCleared: window.don.state.commandMode === null, order: i ? i.order : -1 };
+    })()`);
+    out.mouse = {
+      clickedId: target.id, selectedAfterClick: selN, orderAfterRightClick: ordered,
+      dockArmed, dockModeCleared: dockResult.modeCleared, orderAfterDockMove: dockResult.order,
+    };
     console.log(`real mouse: click selected ${selN}, right click set order ${ordered} ` +
       `(1 = MOVE_TO)`);
     if (selN !== 1) { console.error('FAIL: a real click did not select the unit'); bad++; }
     if (ordered !== 1 && ordered !== 3) {
       console.error('FAIL: a real right click produced no order'); bad++;
+    }
+    if (!dockArmed || !dockResult.modeCleared || (dockResult.order !== 1 && dockResult.order !== 3)) {
+      console.error('FAIL: command dock did not arm, issue, and clear a move target'); bad++;
     }
   }
 

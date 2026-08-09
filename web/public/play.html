@@ -20,6 +20,9 @@
   canvas#gl { position:absolute; inset:0; width:100%; height:100%; display:block;
     cursor:crosshair; touch-action:none; }
   canvas#ov { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  button:focus-visible, select:focus-visible, input:focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
 
   /* ---- top resource bar ---- */
   #top { position:absolute; left:0; right:0; top:0; display:flex; gap:2px; align-items:stretch;
@@ -39,6 +42,28 @@
   #coverage { position:absolute; right:10px; bottom:10px; font:10.5px var(--mono);
     color:var(--warn); white-space:pre; text-align:right; pointer-events:none;
     text-shadow:0 1px 2px #000; opacity:.9; }
+  #toast { position:absolute; z-index:4; left:50%; top:62px; translate:-50% 0;
+    max-width:min(560px,calc(100% - 32px)); padding:7px 10px; border:1px solid #2b6d99;
+    border-radius:7px; background:rgba(13,20,30,.92); color:var(--ink);
+    font:11px/1.35 var(--mono); text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.45);
+    opacity:0; transform:translateY(-4px); transition:opacity .14s,transform .14s;
+    pointer-events:none; }
+  #toast.show { opacity:1; transform:translateY(0); }
+  #toast.warn { color:var(--warn); border-color:#76572f; background:rgba(34,25,15,.95); }
+  #toast.ok { color:var(--good); border-color:#2d5c46; }
+
+  /* A visible command surface is essential on touch devices, where right click does not
+     exist. Every button still emits the same command packet as its mouse/keyboard peer. */
+  #command-dock { position:absolute; z-index:3; left:50%; bottom:12px; translate:-50% 0;
+    display:flex; align-items:center; gap:4px; padding:5px; border:1px solid var(--line);
+    border-radius:9px; background:rgba(12,15,22,.90); backdrop-filter:blur(10px);
+    box-shadow:0 8px 28px rgba(0,0,0,.48); }
+  .cmd { min-width:52px; min-height:38px; padding:4px 7px; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:1px; border-color:#303747; }
+  .cmd .ck { color:var(--dim); font-size:8px; line-height:1; }
+  .cmd.active { background:#16354d; border-color:#5ab7ff; color:#fff; }
+  .cmd:disabled { opacity:.42; cursor:not-allowed; }
+  #dock-state { min-width:58px; color:var(--dim); text-align:center; font:9px/1.25 var(--mono); }
 
   /* ---- minimap ---- */
   #minibox { position:absolute; left:10px; bottom:10px; border:1px solid var(--line);
@@ -105,6 +130,10 @@
     .rv { font-size:13px; }
     #meta { font-size:10px; }
     canvas#mini { width:160px; height:160px; }
+    #minibox { bottom:68px; }
+    #command-dock { max-width:calc(100% - 12px); overflow-x:auto; justify-content:flex-start; }
+    #coverage { bottom:72px; }
+    .cmd { min-width:46px; padding-inline:5px; }
   }
   @media (max-width:700px) {
     html,body { overflow:auto; }
@@ -112,8 +141,18 @@
       min-height:100%; }
     #side { border-left:0; border-top:1px solid var(--line); overflow:visible; }
     #top { overflow-x:auto; }
-    #minibox { transform:scale(.76); transform-origin:left bottom; }
+    #minibox { transform:scale(.62); transform-origin:left bottom; bottom:62px; }
+    #command-dock { bottom:7px; max-width:calc(100% - 12px); overflow-x:auto;
+      justify-content:flex-start; scrollbar-width:none; }
+    #command-dock::-webkit-scrollbar { display:none; }
+    .cmd { min-width:48px; min-height:42px; }
+    #dock-state { display:none; }
+    #coverage { top:54px; right:6px; bottom:auto; max-width:190px; padding:4px 6px;
+      overflow:hidden; border-radius:5px; background:rgba(8,10,14,.68); font-size:9px; }
+    #inspect { top:84px; }
+    #toast { top:104px; }
   }
+  @media (prefers-reduced-motion:reduce) { #toast { transition:none; } }
 </style>
 </head>
 <body>
@@ -125,7 +164,20 @@
     <div id="stat">booting…</div>
     <div id="inspect"></div>
     <div id="coverage"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
     <div id="minibox"><canvas id="mini" width="210" height="210"></canvas></div>
+    <nav id="command-dock" aria-label="Game commands">
+      <button id="cmd-move" class="cmd" aria-pressed="false" title="Choose a move destination"><span>move</span><span class="ck">target</span></button>
+      <button id="cmd-attack" class="cmd" aria-pressed="false" title="Choose an enemy target"><span>attack</span><span class="ck">target</span></button>
+      <button id="cmd-gather" class="cmd" aria-pressed="false" title="Choose a resource tile"><span>gather</span><span class="ck">target</span></button>
+      <button id="cmd-build" class="cmd" aria-pressed="false" title="Open the recovered building catalog"><span>build</span><span class="ck">B</span></button>
+      <button id="cmd-train" class="cmd" title="Show products for selected buildings"><span>train</span><span class="ck">catalog</span></button>
+      <button id="cmd-halt" class="cmd" title="Send HaltCommand to the current selection"><span>halt</span><span class="ck">H</span></button>
+      <button id="cmd-pause" class="cmd" title="Pause or resume local simulation time"><span>pause</span><span class="ck">P</span></button>
+      <button id="cmd-zoom-out" class="cmd" aria-label="Zoom out" title="Zoom out"><span>−</span><span class="ck">zoom</span></button>
+      <button id="cmd-zoom-in" class="cmd" aria-label="Zoom in" title="Zoom in"><span>+</span><span class="ck">zoom</span></button>
+      <div id="dock-state">no<br>selection</div>
+    </nav>
   </div>
 
   <div id="side">
@@ -186,7 +238,9 @@
         <b>same key twice</b> jump to it &middot; <b>.</b> next idle worker<br>
         <b>right click</b> move / attack / gather &middot; <b>B</b> build menu &middot;
         <b>Q W E R T Y U I</b> palette slots &middot; <b>Esc</b> cancel &middot;
-        <b>H</b> halt &middot; <b>P</b> pause &middot; <b>+ -</b> speed
+        <b>H</b> halt &middot; <b>P</b> pause &middot; <b>+ -</b> speed<br>
+        <b>touch</b> tap to select &middot; drag the map to pan &middot; use the command dock to
+        choose move, attack, or gather targets
       </div>
     </fieldset>
 

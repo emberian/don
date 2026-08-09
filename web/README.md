@@ -82,9 +82,11 @@ real, but their present composition is not called Fidelity mode.
 ## Playing
 
 Left click selects — that emits a real `GroupCommand` (`0x00`): `num`, `who`, then `num`
-two-byte object indices. Right click emits `MoveToCommand` (`0x07`, 22 bytes); shift +
-right click emits `AttackCommand` (`0x04`, 17 bytes); the halt button emits `HaltCommand`
-(`0x0c`, 1 byte). The bytes are laid out by `wire.gen.js` at the offsets
+two-byte object indices. Right click is contextual: an enemy emits `AttackCommand` (`0x04`,
+17 bytes), a resource tile emits `GatherCommand`, a friendly foundation emits build-assist,
+and open ground emits `MoveToCommand` (`0x07`, 22 bytes). The visible command dock exposes
+the same packet builders for touch users; it does not maintain a second input protocol. The
+halt button emits `HaltCommand` (`0x0c`, 1 byte). The bytes are laid out by `wire.gen.js` at the offsets
 `schema/command-wire.json` gives, posted to whichever worker owns that world, decoded in
 Rust by `wire_gen.rs`, and drained at a tick boundary in arrival order.
 
