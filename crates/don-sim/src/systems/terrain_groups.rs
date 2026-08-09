@@ -338,6 +338,45 @@ pub enum TreeifyMountainsError {
     },
 }
 
+/// Fixed global inputs read by the reporting tail. The PDB declares
+/// `player_scores` as `int[5][8]`; native indexes it as
+/// `player_scores[player][type_slot]`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlacementReportingInputs {
+    pub num_players: i32,
+    pub player_scores: [[i32; 5]; 8],
+}
+
+/// String-table rows selected by the retail instruction stream. The values are
+/// byte offsets into `int_str_array`'s 20-byte `String` rows; text remains a
+/// presentation concern and is not fabricated by the simulation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum PlacementReportString {
+    Header = 0x1fcc0,
+    GroupPrefix = 0x1fcd4,
+    GroupType4 = 0x1fce8,
+    GroupType5 = 0x1fcfc,
+    GroupType6 = 0x1fd10,
+    GroupType7 = 0x1fd24,
+    GroupType8 = 0x2878,
+    PlayerPrefix = 0x1f98c,
+    ScorePrefix = 0x1fd4c,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PlacementReportingError {
+    UnsupportedPlayerCount { num_players: i32, supported: i32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacementReportingReceipt {
+    pub host_events: Vec<PlaceAllHostEvent>,
+    pub console_info_before: i32,
+    pub console_info_after: i32,
+    pub return_value: i32,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PlaceAllHostEvent {
     /// `NetDaemon::process_all` at `0x006a7645`, before inspecting each group.
@@ -356,6 +395,23 @@ pub enum PlaceAllHostEvent {
     /// The same shipped `"bush"` add call from the mountain-rock fringe pass.
     AddMountainRockDoober {
         placement: MountainRockDooberPlacement,
+    },
+    /// First `Log::say` call in the post-placement reporting tail.
+    PlacementReportHeader { text: PlacementReportString },
+    /// One of the five outer-loop terrain-type lines. Native appends the
+    /// zero-based type slot after the localized prefix and label.
+    PlacementReportGroup {
+        prefix: PlacementReportString,
+        label: PlacementReportString,
+        type_slot: i32,
+    },
+    /// Inner-loop line for one `[player][type_slot]` score.
+    PlacementReportPlayerScore {
+        prefix: PlacementReportString,
+        player_index: i32,
+        score_prefix: PlacementReportString,
+        type_slot: i32,
+        score: i32,
     },
 }
 
@@ -449,6 +505,7 @@ pub enum PlaceAllError {
     InvalidBushFringe(BushFringeError),
     InvalidMountainRockFringe(MountainRockFringeError),
     InvalidTreeifyMountains(TreeifyMountainsError),
+    InvalidPlacementReporting(PlacementReportingError),
     InvalidRegionGroupContinuation(PlaceRegionGroupError),
     InvalidRegionPattern(RegionPatternError),
     InvalidPlayerGroupPrefix(PlacePlayerGroupError),
@@ -762,6 +819,7 @@ impl TerrainGroups {
             inputs,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -799,6 +857,7 @@ impl TerrainGroups {
             inputs,
             Some(rules),
             None,
+            None,
             &mut host,
         )
     }
@@ -833,6 +892,44 @@ impl TerrainGroups {
             inputs,
             Some(rules),
             Some(map_style),
+            None,
+            &mut host,
+        )
+    }
+
+    /// Complete heterogeneous `TerrainGroups::place_all` transaction through
+    /// its presentation-only reporting tail and native return value `1`.
+    /// Reporting inputs mirror the fixed `num_players` and `player_scores[8][5]`
+    /// globals. On success, deterministic preview state is committed only after
+    /// the final ordered log receipt and `console_info` clear.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_group_reporting_inputs(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        rules: DooberTilesetRules,
+        map_style: u8,
+        reporting: PlacementReportingInputs,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_with_group_inputs_preview(
+            world,
+            regions,
+            random,
+            mountains,
+            progress,
+            place_players,
+            helping,
+            inputs,
+            Some(rules),
+            Some(map_style),
+            Some(reporting),
             &mut host,
         )
     }
@@ -850,8 +947,13 @@ impl TerrainGroups {
         inputs: &[PlaceAllGroupInput],
         doober_rules: Option<DooberTilesetRules>,
         map_style: Option<u8>,
+        reporting: Option<PlacementReportingInputs>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
+        if let Some(reporting) = reporting {
+            validate_placement_reporting_inputs(reporting)
+                .map_err(PlaceAllError::InvalidPlacementReporting)?;
+        }
         if let Some(rules) = doober_rules {
             validate_bush_fringe_inputs(world, rules).map_err(PlaceAllError::InvalidBushFringe)?;
             validate_mountain_rock_fringe_inputs(world, rules)
@@ -1085,6 +1187,19 @@ impl TerrainGroups {
                 next = TerrainPlacementBoundary::PostPlacementReporting;
             }
         }
+        if next == TerrainPlacementBoundary::PostPlacementReporting {
+            if let Some(reporting) = reporting {
+                let receipt =
+                    Self::plan_placement_reporting(self.console_info, reporting, &mut *host)
+                        .map_err(PlaceAllError::InvalidPlacementReporting)?;
+                self.groups = preview_groups;
+                self.console_info = receipt.console_info_after;
+                *world = preview_world;
+                *random = preview_random;
+                *mountains = preview_mountains;
+                return Ok(receipt.return_value);
+            }
+        }
 
         Err(PlaceAllError::GameplayPlacementUnavailable {
             preview: PlaceAllPreviewReceipt {
@@ -1113,6 +1228,64 @@ impl TerrainGroups {
                 completed_placement_groups,
             },
             boundary: next,
+        })
+    }
+
+    /// Complete post-placement reporting tail (`0x006a8f12`--`0x006a937d`).
+    ///
+    /// String construction and `Log::say` are presentation-only, so each line
+    /// is surfaced as a typed host event carrying the exact string-table rows
+    /// and appended integers. The deterministic tail clears `console_info` only
+    /// after all lines and returns one.
+    pub fn plan_placement_reporting(
+        console_info_before: i32,
+        inputs: PlacementReportingInputs,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<PlacementReportingReceipt, PlacementReportingError> {
+        validate_placement_reporting_inputs(inputs)?;
+        let mut host_events = Vec::new();
+
+        let header = PlaceAllHostEvent::PlacementReportHeader {
+            text: PlacementReportString::Header,
+        };
+        host(header);
+        host_events.push(header);
+
+        const LABELS: [PlacementReportString; 5] = [
+            PlacementReportString::GroupType4,
+            PlacementReportString::GroupType5,
+            PlacementReportString::GroupType6,
+            PlacementReportString::GroupType7,
+            PlacementReportString::GroupType8,
+        ];
+        for (type_slot, label) in LABELS.into_iter().enumerate() {
+            let group = PlaceAllHostEvent::PlacementReportGroup {
+                prefix: PlacementReportString::GroupPrefix,
+                label,
+                type_slot: type_slot as i32,
+            };
+            host(group);
+            host_events.push(group);
+
+            for player_index in 0..inputs.num_players.max(0) as usize {
+                let score = inputs.player_scores[player_index][type_slot];
+                let player = PlaceAllHostEvent::PlacementReportPlayerScore {
+                    prefix: PlacementReportString::PlayerPrefix,
+                    player_index: player_index as i32,
+                    score_prefix: PlacementReportString::ScorePrefix,
+                    type_slot: type_slot as i32,
+                    score,
+                };
+                host(player);
+                host_events.push(player);
+            }
+        }
+
+        Ok(PlacementReportingReceipt {
+            host_events,
+            console_info_before,
+            console_info_after: 0,
+            return_value: 1,
         })
     }
 
@@ -2192,6 +2365,18 @@ fn validate_world(world: &World) -> Result<(), FillFertileError> {
             ys: world.ys,
             size: world.size,
             wdata_len: world.wdata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_placement_reporting_inputs(
+    inputs: PlacementReportingInputs,
+) -> Result<(), PlacementReportingError> {
+    if inputs.num_players > 8 {
+        return Err(PlacementReportingError::UnsupportedPlayerCount {
+            num_players: inputs.num_players,
+            supported: 8,
         });
     }
     Ok(())

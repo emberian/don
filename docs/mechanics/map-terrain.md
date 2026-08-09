@@ -474,8 +474,19 @@ call, so a later mountain-rock validation failure cannot leak earlier bush effec
 Style 9 records the shipped skip without a World read or RNG draw; every other value runs the
 complete treeification scan on the post-group World with the RNG left by both doober passes.
 The treeify storage domain is preflighted before any earlier host effect can escape. Caller-owned
-World, terrain groups, mountain lists and RNG remain unchanged when the transaction reaches its
-new exact residual: the localized placement-reporting tail beginning at `0x006a8f12`.
+World, terrain groups, mountain lists and RNG remain unchanged when the staged transaction reaches
+the localized placement-reporting tail beginning at `0x006a8f12`.
+
+That tail is now closed as a presentation-only typed stream. Retail logs one header, then iterates
+five terrain-type slots; each type line is followed by one line per signed `num_players` entry,
+reading the PDB-fixed `int player_scores[8][5]` as `[player][type_slot]`. String-table identities
+are preserved as byte-offset tokens (`0x1fcc0`, `0x1fcd4`, the five jump-table-selected labels,
+`0x1f98c`, and `0x1fd4c`) rather than invented English text. Counts above eight fail closed before
+the first earlier host call; nonpositive counts retain the header and five type lines but perform
+no score reads, matching the signed branch. After the final `Log::say`, retail writes zero to
+`TerrainGroups::console_info` and returns `1` at `0x006a937d`. The fully supplied adapter now does
+the same and atomically commits the accumulated World, terrain-group, mountain-list and RNG preview;
+the older staged adapters still stop transactionally at their declared boundaries.
 
 ### 7.2 Executable world-generation oracle boundary
 
