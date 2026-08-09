@@ -68,6 +68,23 @@ The broad phases remain mandatory host methods because their stores are not all 
 `don-sim`; returning an incomplete receipt is a host contract violation and cannot open the
 runtime gate. A flags-only activation is not a supported implementation.
 
+## Arena integration boundary
+
+Arena's `ResearchModel` now calls this executable transaction for plain
+Barracks/Tower/Temple/Market construction. The live host mutates persistent `BuildData`,
+world tile masks, own-seen state, leader dirty bits, the actual building object, and the
+builder's order/job state, then retains an identity-bearing aggregate receipt. A synthetic
+non-admitted code also drives the real six-good rejection loop, clears VALID, unlinks the
+target object, and refunds the paid Arena stockpile.
+
+The word *ResearchModel* is load-bearing. Its admission code comes from Arena's earlier
+custom placement test; reswarm and animation are compact projections; `mark_behind_tiles`
+lacks the live `behind_height`; and the broad city/leader/registry phases are Arena state
+projections rather than complete retail stores. Farm, Wonder, city, captured and other
+special activation families remain on the visibly separate gameplay fallback or fail
+closed. Consequently neither `construction_lifecycle::RUNTIME_FIDELITY_READY` nor the
+Arena product blocker is opened by this integration.
+
 ## Farm RNG
 
 A live Farm parent creates five animals. Each animal consumes exactly three calls to the

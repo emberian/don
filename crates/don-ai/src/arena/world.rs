@@ -47,12 +47,14 @@
 //!    attrition mutation are wired into the live unit band. Non-friendly period selection
 //!    and the remaining healing families stay explicit blockers.
 //!
-//! Construction no longer fabricates a builder-frame countdown.  Arena persists the
+//! Construction no longer fabricates a builder-frame countdown. Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
-//! `don-sim`, and runs the retail unit-then-building object bands. The first missing retail
-//! world transaction is recorded on the site and stops progress before any state is
-//! guessed. This is integration of recovered Tier-C
-//! structure, not a promotion of its fidelity tier.
+//! `don-sim`, and runs the retail unit-then-building object bands. `ResearchModel` routes
+//! the compact plain-building family through the recovered start/reject/activate
+//! transaction and retains an identity-bearing receipt on the site. Claim-bearing mode
+//! still records the first missing placement/animation/reswarm host input and stops before
+//! guessing. This is integration of recovered Tier-C structure, not a promotion of its
+//! fidelity tier.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,6 +83,10 @@ use don_sim::systems::construction::{
     self, BuildOrderRegions, BuildOrderTarget, ConstructionFrame, ObjectKey,
 };
 use don_sim::systems::construction_builder::{self, PreflightInput, PreflightPlan};
+use don_sim::systems::construction_lifecycle::{
+    self, BuildActivationPlan, CloseReceipt, ConstructionLifecycleHost, FarmAnimalSpawn,
+    FarmParent, QueryReceipt, TCoord, VisibilityReceipt, WallStartPlan,
+};
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
 use don_sim::systems::gather_lifecycle::OrdinaryGatherKind;
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
@@ -104,14 +110,14 @@ use super::gather_runtime::{
 };
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
-    self, ArenaAttritionRecomputeHost, ArenaHeroAuraHealingHost, ArenaIroquoisHealingHost,
-    ArenaPatriotHealingHost, ArenaReloadSupplyHost, ArenaSupplyAttritionHost,
-    ArenaSupplyHealingHost, ArenaWorkerHealingHost, AttritionRecomputeTransaction, DiplomacyState,
-    HealingRepairMutation, HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord,
-    IroquoisHealingTransaction, PatriotHealingTransaction, ReloadSupplyState,
-    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyHealingTransaction,
-    SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject, WorkerHealingTransaction,
-    SUPPORT_REGISTRY_ACTIVE,
+    self, ArenaAttritionRecomputeHost, ArenaConstructionReceipt, ArenaHeroAuraHealingHost,
+    ArenaIroquoisHealingHost, ArenaPatriotHealingHost, ArenaReloadSupplyHost,
+    ArenaSupplyAttritionHost, ArenaSupplyHealingHost, ArenaWorkerHealingHost,
+    AttritionRecomputeTransaction, DiplomacyState, HealingRepairMutation,
+    HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord, IroquoisHealingTransaction,
+    PatriotHealingTransaction, ReloadSupplyState, SupplyAttritionTransaction,
+    SupplyAttritionUnitState, SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord,
+    SupplySearchObject, WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -293,6 +299,15 @@ pub struct Ent {
     pub build_order: Option<BuildOrderTarget>,
     /// Fail-closed reason for a site whose next mandatory world transaction is absent.
     pub construction_refusal: Option<ConstructionRefusal>,
+    /// Result supplied to the recovered `Wall::do_construct` admission partition.
+    /// `Some(0)` is installed only by the explicitly labelled ResearchModel after its
+    /// own command-time placement test; claim-bearing sites retain `None` until the
+    /// separate retail blocked-site host exists. Tests may inject a non-admitted code to
+    /// exercise the real rejected-site transaction without reclassifying placement.
+    pub construction_admission_code: Option<i32>,
+    /// Last mutation-bearing construction receipt for this site. It pins the site,
+    /// builder and BUILD_AT identities beside the recovered outcome/checksum effects.
+    pub last_construction_receipt: Option<ArenaConstructionReceipt>,
     pub job: Job,
     pub cycle: AttackCycle,
     /// 32-bit turn units. Set when the entity moves or fires.
@@ -376,6 +391,9 @@ pub struct PlayerState {
     pub stance_type_0: i8,
     /// Retail player option byte `+0x1C`. Bits 3 and 4 initialise stance types 3 and 2.
     pub leader_option_flags: u8,
+    /// Arena-owned image of the recovered leader dirty bits written by construction
+    /// activation. Other LeaderData fields remain separately unavailable.
+    pub construction_lifecycle_flags: u32,
 }
 
 /// What a player remembers about an enemy object.
@@ -1501,6 +1519,718 @@ fn estimated_target_damage(
     Some(damage_traced(&input, &predicates, &rules, &terms).0)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArenaConstructionHostError {
+    IdentityMismatch,
+    MissingAdmission,
+    UnsupportedLifecycle(&'static str),
+    LifecycleInvariant(&'static str),
+}
+
+fn lifecycle_host_error(
+    error: construction_lifecycle::LifecycleError<ArenaConstructionHostError>,
+) -> ArenaConstructionHostError {
+    match error {
+        construction_lifecycle::LifecycleError::Host(error) => error,
+        construction_lifecycle::LifecycleError::UnexpectedRng { .. } => {
+            ArenaConstructionHostError::LifecycleInvariant("unexpected lifecycle RNG")
+        }
+        construction_lifecycle::LifecycleError::RandomOutOfRange { .. } => {
+            ArenaConstructionHostError::LifecycleInvariant("lifecycle RNG result out of range")
+        }
+        construction_lifecycle::LifecycleError::MissingStartPlan => {
+            ArenaConstructionHostError::LifecycleInvariant("missing defensive start plan")
+        }
+        construction_lifecycle::LifecycleError::InvalidFootprint { .. } => {
+            ArenaConstructionHostError::LifecycleInvariant("invalid construction footprint")
+        }
+        construction_lifecycle::LifecycleError::RejectedDisbandLeftValid { .. } => {
+            ArenaConstructionHostError::LifecycleInvariant("rejected site remained valid")
+        }
+        construction_lifecycle::LifecycleError::FarmParentIndexOutOfRange { .. } => {
+            ArenaConstructionHostError::LifecycleInvariant("farm parent identity out of range")
+        }
+    }
+}
+
+fn construction_effect(checksums: construction::ChecksumEffects) -> construction::EffectReceipt {
+    construction::EffectReceipt {
+        rng_draws: 0,
+        checksums,
+    }
+}
+
+fn construction_units_and_guys() -> construction::ChecksumEffects {
+    construction::ChecksumEffects {
+        units: true,
+        guys: true,
+        ..construction::ChecksumEffects::NONE
+    }
+}
+
+/// ResearchModel's live host for the recovered construction transaction. The ordered
+/// local writes and identities are retail-derived; admission, animation presentation and
+/// the compact Arena leader/city projections remain explicitly research-only inputs.
+/// Claim-bearing mode never constructs this host.
+struct ArenaResearchConstructionHost<'a> {
+    world: &'a mut World,
+    builder_index: usize,
+    site_index: usize,
+    gate: PreflightPlan,
+}
+
+impl ArenaResearchConstructionHost<'_> {
+    fn object_key(&self, index: usize) -> ObjectKey {
+        let ent = &self.world.ents[index];
+        ObjectKey {
+            who: i32::from(ent.who),
+            o: i32::from(ent.object_o),
+            uid: ent.object_uid,
+        }
+    }
+
+    fn require_key(&self, index: usize, key: ObjectKey) -> Result<(), ArenaConstructionHostError> {
+        if self.object_key(index) == key {
+            Ok(())
+        } else {
+            Err(ArenaConstructionHostError::IdentityMismatch)
+        }
+    }
+
+    fn site_type(&self) -> Result<TypeRow, ArenaConstructionHostError> {
+        let type_id = self.world.ents[self.site_index].type_id;
+        self.world.types.get(type_id).cloned().ok_or(
+            ArenaConstructionHostError::UnsupportedLifecycle("construction type row is missing"),
+        )
+    }
+
+    fn start_plan(&self, notify: i32) -> Result<WallStartPlan, ArenaConstructionHostError> {
+        let ent = &self.world.ents[self.site_index];
+        let ty = self.site_type()?;
+        let (tx, ty_coord) = ent.tile();
+        Ok(WallStartPlan {
+            frame: self.world.frame as i32,
+            corner: TCoord {
+                x: tx.wrapping_sub(ty.x_size / 2),
+                y: ty_coord.wrapping_sub(ty.y_size / 2),
+            },
+            x_size: ty.x_size,
+            y_size: ty.y_size,
+            is_wonder: (0x20E..0x21F).contains(&ent.type_id),
+            notify,
+        })
+    }
+
+    fn for_each_footprint(&mut self, mut f: impl FnMut(&mut World, i32, i32)) {
+        let plan = self
+            .start_plan(1)
+            .expect("live Arena construction keeps a positive footprint");
+        for dx in 0..plan.x_size {
+            for dy in 0..plan.y_size {
+                f(
+                    self.world,
+                    plan.corner.x.wrapping_add(dx),
+                    plan.corner.y.wrapping_add(dy),
+                );
+            }
+        }
+    }
+
+    fn supports_compact_activation(&self) -> bool {
+        let type_id = self.world.ents[self.site_index].type_id;
+        matches!(
+            type_id,
+            id if id == self.world.ids.barracks
+                || id == self.world.ids.tower
+                || id == self.world.ids.temple
+                || id == self.world.ids.market
+        )
+    }
+}
+
+impl construction::ConstructionEffects for ArenaResearchConstructionHost<'_> {
+    type Error = ArenaConstructionHostError;
+
+    fn builder_gate(
+        &mut self,
+        builder: ObjectKey,
+        target: ObjectKey,
+    ) -> Result<construction::BuilderGateReceipt, Self::Error> {
+        self.require_key(self.builder_index, builder)?;
+        self.require_key(self.site_index, target)?;
+        let PreflightPlan::AnimateFace {
+            animation,
+            set_angle,
+            ..
+        } = self.gate
+        else {
+            return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                "research lifecycle host requires a ready animation plan",
+            ));
+        };
+        for guy in self.world.ents[self.builder_index]
+            .guys
+            .guys
+            .iter_mut()
+            .flatten()
+        {
+            guy.cur_anim = animation as i8;
+            if let Some(angle) = set_angle {
+                guy.des_angle = angle;
+            }
+        }
+        if let Some(angle) = set_angle {
+            self.world.ents[self.builder_index].facing = angle;
+            if let Some(motion) = self.world.ents[self.builder_index].motion.as_mut() {
+                motion.body.angle = angle;
+            }
+        }
+        Ok(construction::BuilderGateReceipt {
+            gate: construction_builder::construction_gate(self.gate),
+            effect: construction_effect(construction_units_and_guys()),
+        })
+    }
+
+    fn blocked_site(
+        &mut self,
+        site_key: ObjectKey,
+        site: &BuildData,
+    ) -> Result<construction::SiteCheckReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        let admission = construction_lifecycle::check_site_admission(self, site_key, site)
+            .map_err(lifecycle_host_error)?;
+        Ok(construction::SiteCheckReceipt {
+            raw_code: admission.raw_code,
+            linked_city_wonder_capacity_allows: matches!(
+                (admission.linked_city_num_wonders, admission.wonder_capacity),
+                (Some(count), Some(capacity)) if count <= capacity
+            ),
+            effect: admission.effect,
+        })
+    }
+
+    fn start_site(
+        &mut self,
+        site_key: ObjectKey,
+        site: &mut BuildData,
+        notify: i32,
+    ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        let plan = self.start_plan(notify)?;
+        let effect = construction_lifecycle::start_wall(self, site_key, site, plan)
+            .map_err(lifecycle_host_error)?;
+        Ok(construction::SiteLifecycleReceipt {
+            flags_after: site.flags,
+            effect,
+        })
+    }
+
+    fn disband_site(
+        &mut self,
+        site_key: ObjectKey,
+        site: &mut BuildData,
+        mode: i32,
+    ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        if mode != 1
+            || ordinary_gather_kind(&self.world.ids, self.world.ents[self.site_index].type_id)
+                .is_some()
+        {
+            return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                "rejected gather/special site close is not materialised",
+            ));
+        }
+        let type_index = self.world.ents[self.site_index].type_id;
+        let receipt =
+            construction_lifecycle::disband_rejected_build(self, site_key, site, type_index)
+                .map_err(lifecycle_host_error)?;
+        Ok(construction::SiteLifecycleReceipt {
+            flags_after: receipt.flags_after,
+            effect: receipt.effect,
+        })
+    }
+
+    fn activate_site(
+        &mut self,
+        site_key: ObjectKey,
+        site: &mut BuildData,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+    ) -> Result<construction::SiteLifecycleReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        if (arg0, arg1, arg2) != (0, 1, 1) || !self.supports_compact_activation() {
+            return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                "special Build::activate family is not materialised",
+            ));
+        }
+        let ty = self.site_type()?;
+        let plan = BuildActivationPlan {
+            type_index: ty.id,
+            build_flags: ty.build_flags as i32,
+            // Arena has no local-human presentation player. The deterministic own-vision
+            // bytes are updated by the host callbacks instead.
+            completion_seen_mask: 0,
+            local_completion_event: false,
+            start_if_needed: Some(self.start_plan(1)?),
+        };
+        let receipt = construction_lifecycle::activate_build(self, site_key, site, plan)
+            .map_err(lifecycle_host_error)?;
+        Ok(construction::SiteLifecycleReceipt {
+            flags_after: receipt.flags_after,
+            effect: receipt.effect,
+        })
+    }
+
+    fn finish_builder(
+        &mut self,
+        builder: ObjectKey,
+        target: ObjectKey,
+        _reason: construction::BuilderFinish,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.builder_index, builder)?;
+        self.require_key(self.site_index, target)?;
+        let worker = self.world.ents[self.builder_index].id;
+        let site = self.world.ents[self.site_index].id;
+        let gather_after = self.world.ents[self.site_index].worker_cap > 0;
+        self.world.detach(worker);
+        self.world.ents[self.builder_index].job = if gather_after {
+            Job::Gather { target: site }
+        } else {
+            Job::Idle
+        };
+        Ok(construction_effect(construction::ChecksumEffects {
+            units: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn interrupt_builder(
+        &mut self,
+        _builder: ObjectKey,
+        _target: ObjectKey,
+        _reason: construction::BuilderFinish,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Err(ArenaConstructionHostError::UnsupportedLifecycle(
+            "construction interruption remains a separate blocker",
+        ))
+    }
+}
+
+impl ConstructionLifecycleHost for ArenaResearchConstructionHost<'_> {
+    type Error = ArenaConstructionHostError;
+
+    fn blocked_site(
+        &mut self,
+        site_key: ObjectKey,
+        _site: &BuildData,
+    ) -> Result<QueryReceipt<i32>, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        Ok(QueryReceipt {
+            value: self.world.ents[self.site_index]
+                .construction_admission_code
+                .ok_or(ArenaConstructionHostError::MissingAdmission)?,
+            effect: construction_effect(construction::ChecksumEffects::NONE),
+        })
+    }
+
+    fn city_num_wonders(
+        &mut self,
+        owner: i32,
+        city: i16,
+        include_unbuilt: i32,
+    ) -> Result<QueryReceipt<i32>, Self::Error> {
+        let value = self
+            .world
+            .ents
+            .iter()
+            .filter(|ent| {
+                ent.alive
+                    && i32::from(ent.who) == owner
+                    && ent.build.as_ref().is_some_and(|build| build.city == city)
+                    && (0x20E..0x21F).contains(&ent.type_id)
+                    && (include_unbuilt != 0 || ent.complete)
+            })
+            .count() as i32;
+        Ok(QueryReceipt {
+            value,
+            effect: construction_effect(construction::ChecksumEffects::NONE),
+        })
+    }
+
+    fn leader_has_tribe_bonus(
+        &mut self,
+        _owner: i32,
+        _bonus: i32,
+    ) -> Result<QueryReceipt<bool>, Self::Error> {
+        Err(ArenaConstructionHostError::UnsupportedLifecycle(
+            "wonder-capacity tribe bonus is unavailable",
+        ))
+    }
+
+    fn kill_competing_at(
+        &mut self,
+        site_key: ObjectKey,
+        tile: TCoord,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        for (index, ent) in self.world.ents.iter().enumerate() {
+            if index == self.site_index || !ent.alive || !ent.building || ent.complete {
+                continue;
+            }
+            let Some(ty) = self.world.types.get(ent.type_id) else {
+                continue;
+            };
+            let (tx, ty_coord) = ent.tile();
+            let corner_x = tx - ty.x_size / 2;
+            let corner_y = ty_coord - ty.y_size / 2;
+            if tile.x >= corner_x
+                && tile.x < corner_x + ty.x_size
+                && tile.y >= corner_y
+                && tile.y < corner_y + ty.y_size
+            {
+                return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                    "competing-site close requires the placement transaction",
+                ));
+            }
+        }
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn terrain_object_placed(
+        &mut self,
+        corner: TCoord,
+        x_size: i32,
+        y_size: i32,
+        placed: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        for dx in 0..x_size {
+            for dy in 0..y_size {
+                self.world.collision_world.set_started_at(
+                    corner.x.wrapping_add(dx),
+                    corner.y.wrapping_add(dy),
+                    placed != 0,
+                );
+            }
+        }
+        Ok(construction_effect(construction::ChecksumEffects {
+            world: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn mask_wall(
+        &mut self,
+        site_key: ObjectKey,
+        mask: i32,
+        _regen_roads: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        self.for_each_footprint(|world, tx, ty| {
+            world.collision_world.set_building_at(tx, ty, mask != 0)
+        });
+        Ok(construction_effect(construction::ChecksumEffects {
+            world: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn world_contains_tcoord(&mut self, tile: TCoord) -> Result<QueryReceipt<bool>, Self::Error> {
+        Ok(QueryReceipt {
+            value: tile.x >= 0
+                && tile.y >= 0
+                && tile.x < self.world.collision_world.tile_xs
+                && tile.y < self.world.collision_world.tile_ys,
+            effect: construction_effect(construction::ChecksumEffects::NONE),
+        })
+    }
+
+    fn or_footprint_owner(
+        &mut self,
+        owner: i32,
+        fine_tile: TCoord,
+        half_tile: TCoord,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        let bit = 1u8.wrapping_shl(owner as u32 & 31);
+        let wx = fine_tile.x >> 2;
+        let wy = fine_tile.y >> 2;
+        let wi = (wy * self.world.collision_world.xs + wx) as usize;
+        self.world.collision_world.wdata[wi].was_seen |= bit;
+        let fi = (half_tile.y * self.world.collision_world.fog_xs + half_tile.x) as usize;
+        self.world.collision_world.seen[fi] |= bit;
+        Ok(construction_effect(construction::ChecksumEffects {
+            world: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn check_ever_seen(
+        &mut self,
+        site_key: ObjectKey,
+        site: &BuildData,
+        _force: i32,
+    ) -> Result<VisibilityReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        let own = 1u8.wrapping_shl(site_key.who as u32 & 31);
+        Ok(VisibilityReceipt {
+            ever_seen: site.ever_seen | own,
+            ever_seen_completed: site.ever_seen_completed,
+            effect: construction_effect(construction::ChecksumEffects::BUILDS),
+        })
+    }
+
+    fn mark_behind_tiles(
+        &mut self,
+        site_key: ObjectKey,
+        _set: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        // The live Arena type projection does not retain BuildTypeData::behind_height.
+        // ResearchModel records the ordered callback but cannot claim the surrounding
+        // BEHIND_A footprint; the claim-bearing mode remains closed before this host.
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn update_local_seen(
+        &mut self,
+        site_key: ObjectKey,
+        site: &BuildData,
+    ) -> Result<VisibilityReceipt, Self::Error> {
+        self.check_ever_seen(site_key, site, 1)
+    }
+
+    fn emit_wonder_start_notice(
+        &mut self,
+        _site_key: ObjectKey,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Err(ArenaConstructionHostError::UnsupportedLifecycle(
+            "wonder start notice is outside the compact activation family",
+        ))
+    }
+
+    fn close_rejected_build(
+        &mut self,
+        site_key: ObjectKey,
+        site: &mut BuildData,
+        type_index: i32,
+    ) -> Result<CloseReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        if self.world.ents[self.site_index].type_id != type_index {
+            return Err(ArenaConstructionHostError::IdentityMismatch);
+        }
+        let target = target_ref(&self.world.ents[self.site_index]);
+        if !self.world.target_world.remove(target) {
+            return Err(ArenaConstructionHostError::IdentityMismatch);
+        }
+        self.for_each_footprint(|world, tx, ty| {
+            world.collision_world.set_started_at(tx, ty, false);
+            world.collision_world.set_building_at(tx, ty, false);
+        });
+        self.world.ents[self.site_index].alive = false;
+        self.world.ents[self.site_index].construction_admission_code = None;
+        let flags_after = site.flags & !production::flag::VALID;
+        Ok(CloseReceipt {
+            flags_after,
+            effect: construction_effect(construction::ChecksumEffects {
+                builds: true,
+                world: true,
+                objects_other: true,
+                ..construction::ChecksumEffects::NONE
+            }),
+        })
+    }
+
+    fn leader_type_avail(
+        &mut self,
+        owner: i32,
+        type_index: i32,
+        mode: i32,
+    ) -> Result<QueryReceipt<bool>, Self::Error> {
+        let valid_owner = usize::try_from(owner)
+            .ok()
+            .is_some_and(|owner| owner < self.world.players.len());
+        Ok(QueryReceipt {
+            value: valid_owner && mode == 1 && (0..NRES as i32).contains(&type_index),
+            effect: construction_effect(construction::ChecksumEffects::NONE),
+        })
+    }
+
+    fn full_build_cost(
+        &mut self,
+        _owner: i32,
+        type_index: i32,
+        good: usize,
+    ) -> Result<QueryReceipt<i32>, Self::Error> {
+        let value = self
+            .world
+            .types
+            .get(type_index)
+            .and_then(|ty| ty.cost.get(good))
+            .copied()
+            .ok_or(ArenaConstructionHostError::IdentityMismatch)?;
+        Ok(QueryReceipt {
+            value,
+            effect: construction_effect(construction::ChecksumEffects::NONE),
+        })
+    }
+
+    fn refund_owner_resource(
+        &mut self,
+        owner: i32,
+        good: usize,
+        amount: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        let owner =
+            usize::try_from(owner).map_err(|_| ArenaConstructionHostError::IdentityMismatch)?;
+        let slot = self
+            .world
+            .players
+            .get_mut(owner)
+            .and_then(|player| player.stock.get_mut(good))
+            .ok_or(ArenaConstructionHostError::IdentityMismatch)?;
+        *slot = slot.wrapping_add(amount);
+        Ok(construction_effect(construction::ChecksumEffects {
+            leaders: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn activate_before_recharging(
+        &mut self,
+        _site_key: ObjectKey,
+        _site: &mut BuildData,
+        _plan: BuildActivationPlan,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn activate_before_wall(
+        &mut self,
+        _site_key: ObjectKey,
+        site: &mut BuildData,
+        _plan: BuildActivationPlan,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        if site.flags & production::flag::CAPTURED != 0 {
+            return Err(ArenaConstructionHostError::UnsupportedLifecycle(
+                "captured construction activation is unavailable",
+            ));
+        }
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn increment_wall_stats(
+        &mut self,
+        _site_key: ObjectKey,
+        _plan: BuildActivationPlan,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Ok(construction_effect(construction::ChecksumEffects {
+            cities: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn decrement_in_progress_counters(
+        &mut self,
+        _owner: i32,
+        _type_index: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Ok(construction_effect(construction::ChecksumEffects {
+            leaders: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn or_leader_flags(
+        &mut self,
+        owner: i32,
+        flags: u32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        let owner =
+            usize::try_from(owner).map_err(|_| ArenaConstructionHostError::IdentityMismatch)?;
+        let player = self
+            .world
+            .players
+            .get_mut(owner)
+            .ok_or(ArenaConstructionHostError::IdentityMismatch)?;
+        player.construction_lifecycle_flags |= flags;
+        Ok(construction_effect(construction::ChecksumEffects {
+            leaders: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn emit_local_completion_event(
+        &mut self,
+        _site_key: ObjectKey,
+        _sound_event: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn remove_cover_doober(
+        &mut self,
+        _site_key: ObjectKey,
+        _type_index: i32,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Ok(construction_effect(construction::ChecksumEffects::NONE))
+    }
+
+    fn activate_build_through_gather(
+        &mut self,
+        site_key: ObjectKey,
+        _site: &mut BuildData,
+        _plan: BuildActivationPlan,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        self.world.ents[self.site_index].complete = true;
+        Ok(construction_effect(construction::ChecksumEffects {
+            builds: true,
+            leaders: true,
+            cities: true,
+            world: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+
+    fn farm_parent(
+        &mut self,
+        _owner: i32,
+        _farm_index: i16,
+    ) -> Result<QueryReceipt<Option<FarmParent>>, Self::Error> {
+        Err(ArenaConstructionHostError::UnsupportedLifecycle(
+            "Farm activation remains on the explicit gameplay model",
+        ))
+    }
+
+    fn shared_random_get(&mut self, low: u32, high: u32) -> Result<u32, Self::Error> {
+        Ok(self.world.game_random.get(low as i32, high as i32) as u32)
+    }
+
+    fn spawn_farm_animal(
+        &mut self,
+        _spawn: FarmAnimalSpawn,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        Err(ArenaConstructionHostError::UnsupportedLifecycle(
+            "neutral Farm animal object band is unavailable",
+        ))
+    }
+
+    fn activate_build_after_gather(
+        &mut self,
+        site_key: ObjectKey,
+        site: &mut BuildData,
+        _plan: BuildActivationPlan,
+    ) -> Result<construction::EffectReceipt, Self::Error> {
+        self.require_key(self.site_index, site_key)?;
+        site.construct_hits = site.myhits;
+        Ok(construction_effect(construction::ChecksumEffects {
+            builds: true,
+            world: true,
+            ..construction::ChecksumEffects::NONE
+        }))
+    }
+}
+
 impl World {
     /// Build an arena. `tribes` names one nation index per player.
     pub fn new(
@@ -1568,6 +2298,7 @@ impl World {
                     stance_type_1: 0,
                     stance_type_0: 0,
                     leader_option_flags: 0x0A,
+                    construction_lifecycle_flags: 0,
                 })
                 .collect(),
             types,
@@ -1820,6 +2551,10 @@ impl World {
             build,
             build_order: None,
             construction_refusal: None,
+            construction_admission_code: (!complete
+                && self.params.construction_mode == ConstructionMode::ResearchModel)
+                .then_some(0),
+            last_construction_receipt: None,
             job: Job::Idle,
             cycle: AttackCycle::default(),
             facing: if t.kind_unit { INITIAL_UNIT_ANGLE } else { 0 },
@@ -3169,14 +3904,17 @@ impl World {
             PreflightPlan::Reswarm { .. } => {
                 if self.params.construction_mode == ConstructionMode::ResearchModel {
                     // MODEL: the playable arena has no temporary Group/reswarm host. Its
-                    // old one-tile approach is retained only on this explicitly labelled
-                    // path, while progress itself uses the recovered harmonic kernel.
-                    self.apply_research_construction(
+                    // old one-tile approach is retained only as the prerequisite to the
+                    // recovered lifecycle transaction; the receipt begins after that
+                    // explicitly non-retail projection.
+                    self.apply_research_construction_lifecycle(
                         i,
                         site_index,
-                        construction_builder::CHAR_BUILD,
-                        None,
-                        true,
+                        PreflightPlan::AnimateFace {
+                            animation: construction_builder::CHAR_BUILD,
+                            set_angle: None,
+                            contribute: true,
+                        },
                     );
                     return;
                 }
@@ -3188,8 +3926,14 @@ impl World {
                 contribute,
             } => {
                 if self.params.construction_mode == ConstructionMode::ResearchModel {
-                    self.apply_research_construction(
-                        i, site_index, animation, set_angle, contribute,
+                    self.apply_research_construction_lifecycle(
+                        i,
+                        site_index,
+                        PreflightPlan::AnimateFace {
+                            animation,
+                            set_angle,
+                            contribute,
+                        },
                     );
                     return;
                 }
@@ -3213,13 +3957,128 @@ impl World {
         self.ents[site_index].construction_refusal = Some(refusal);
     }
 
-    /// Playable-only adapter around the exact local construction arithmetic.
+    /// Playable-only execution of the recovered construction/lifecycle transaction.
     ///
-    /// The `BuildData` writes and harmonic helper sequence are the recovered primitives.
-    /// Animation, start and activation below remain an explicit research model because
-    /// Arena cannot return the mandatory full-world receipts. Claim-bearing mode never
-    /// enters this function.
-    fn apply_research_construction(
+    /// The site BuildData is removed from its dense entity only for the duration of one
+    /// borrow: every callback still addresses the live Arena object tables by the same
+    /// `(who,o,uid)`. Plain Barracks/Tower/Temple/Market sites use the executable
+    /// `Wall::start`/`Build::activate` host. Gather, Wonder and city families keep the old
+    /// explicitly modelled gameplay fallback until their mandatory registries exist.
+    fn apply_research_construction_lifecycle(
+        &mut self,
+        builder_index: usize,
+        site_index: usize,
+        gate: PreflightPlan,
+    ) {
+        let type_id = self.ents[site_index].type_id;
+        let compact_family = matches!(
+            type_id,
+            id if id == self.ids.barracks
+                || id == self.ids.tower
+                || id == self.ids.temple
+                || id == self.ids.market
+        );
+        let rejected_plain_site = self.ents[site_index]
+            .construction_admission_code
+            .is_some_and(|code| !matches!(code, 0 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2B))
+            && ordinary_gather_kind(&self.ids, type_id).is_none();
+        if !compact_family && !rejected_plain_site {
+            let PreflightPlan::AnimateFace {
+                animation,
+                set_angle,
+                contribute,
+            } = gate
+            else {
+                unreachable!("research lifecycle receives only AnimateFace")
+            };
+            self.apply_research_construction_model(
+                builder_index,
+                site_index,
+                animation,
+                set_angle,
+                contribute,
+            );
+            return;
+        }
+
+        let site_key = ObjectKey {
+            who: i32::from(self.ents[site_index].who),
+            o: i32::from(self.ents[site_index].object_o),
+            uid: self.ents[site_index].object_uid,
+        };
+        let builder_key = ObjectKey {
+            who: i32::from(self.ents[builder_index].who),
+            o: i32::from(self.ents[builder_index].object_o),
+            uid: self.ents[builder_index].object_uid,
+        };
+        let order = self.ents[builder_index]
+            .build_order
+            .expect("live builder retains BUILD_AT identity");
+        let rules = self.prod_rules.clone();
+        let mut site = self.ents[site_index]
+            .build
+            .take()
+            .expect("construction site retains BuildData");
+        let result = {
+            let mut effects = ArenaResearchConstructionHost {
+                world: self,
+                builder_index,
+                site_index,
+                gate,
+            };
+            let mut host = retail_systems::ArenaConstructionHost::new(&mut effects);
+            host.execute_identified_builder(
+                &mut site,
+                site_key,
+                builder_key,
+                order,
+                construction::BuilderContribution {
+                    ai_speed: 1,
+                    korean_build_under_fire_bonus: false,
+                    construct_query: Default::default(),
+                },
+                &rules,
+            )
+        };
+        self.ents[site_index].build = Some(site);
+
+        let receipt = result.unwrap_or_else(|error| {
+            panic!(
+                "Arena research construction transaction failed for site {site_key:?}: {error:?}"
+            )
+        });
+        self.ents[site_index].last_construction_receipt = Some(receipt);
+        let build = self.ents[site_index]
+            .build
+            .as_ref()
+            .expect("construction transaction restored BuildData");
+        self.ents[site_index].build_left = if build.is_active() {
+            0
+        } else {
+            build
+                .constr_time
+                .saturating_sub(build.job_counter)
+                .min(i32::MAX as u32) as i32
+        };
+        if matches!(
+            receipt.receipt.outcome,
+            construction::BuildOutcome::Completed { .. }
+        ) {
+            self.sync_target_damage(self.ents[site_index].id);
+            let who = self.ents[site_index].who;
+            let name = self
+                .types
+                .get(type_id)
+                .map(|ty| ty.name.clone())
+                .unwrap_or_default();
+            self.note(who, format!("built {name}"));
+        }
+    }
+
+    /// Remaining playable-only construction families. The harmonic arithmetic is
+    /// recovered; the flags-only start/activation remains a named model and produces no
+    /// identity receipt.
+    fn apply_research_construction_model(
         &mut self,
         builder_index: usize,
         site_index: usize,

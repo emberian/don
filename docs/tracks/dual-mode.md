@@ -121,7 +121,7 @@ form:
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
 | `arena-construction-schedule-model` | owner-local bands, `(who,o,uid)`, unit-first traversal | **resolved**: exact Arena schedule/state host | — |
 | `arena-construction-placement-model` | complete `blocked_site` transaction | *drift*: MODEL 2 has no authoritative placement host | — |
-| `arena-construction-lifecycle-model` | start/activate/reject/complete world transactions | *drift*: MODEL 2 has only a local lifecycle core | — |
+| `arena-construction-lifecycle-model` | start/activate/reject/complete world transactions | *drift*: ResearchModel runs an identity-bearing plain-site transaction, but its admission/reswarm/animation and broad activation callbacks remain compact projections | — |
 | `arena-construction-interruption-model` | builder/target death and cancellation transactions | *drift*: MODEL 2 lacks close/order integration | — |
 | `arena-gather-capacity-model` | terrain/type-derived signed-byte capacity | *drift*: MODEL 3 lacks complete `calc_gather` | — |
 | `arena-gather-occupancy-model` | persistent chain and generational order identity | *drift*: MODEL 3 has no Arena object/order host | — |

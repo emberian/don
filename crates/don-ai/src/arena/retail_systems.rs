@@ -71,12 +71,15 @@ pub const LIFECYCLE_INVENTORY: &[LifecycleIntegrationItem] = &[
     },
     LifecycleIntegrationItem {
         subsystem: LifecycleSubsystem::ConstructionLifecycle,
-        status: IntegrationStatus::Blocked,
-        recovered: &["lazy start, reject, progress and completion call ordering"],
+        status: IntegrationStatus::AdapterOnly,
+        recovered: &[
+            "lazy Wall::start, rejected Object::disband and Build::activate transactions",
+            "identity-bearing Arena receipt over the executable construction core",
+        ],
         missing: &[
-            "Build::start and Build::activate world transactions",
-            "Object::disband and Unit::build_done/reassignment transactions",
-            "complete transitive RNG and checksum receipts",
+            "claim-bearing Arena placement and builder-animation inputs",
+            "complete retail city, leader, terrain, event and registry host bodies",
+            "retail-oracle channel and RNG receipt coverage",
         ],
     },
     LifecycleIntegrationItem {
@@ -171,6 +174,32 @@ impl<'a, E: ConstructionEffects> ArenaConstructionHost<'a, E> {
         )
     }
 
+    /// Execute one live Arena builder/site pair and retain every generational identity
+    /// beside the recovered construction receipt.
+    ///
+    /// `BuildReceipt` deliberately contains effects rather than object addresses.  Arena
+    /// must retain the latter too: an otherwise plausible completion receipt is useless
+    /// if it cannot prove which `(who,o,uid)` records were mutated.  The underlying core
+    /// still owns all lifecycle validation and callback ordering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_identified_builder(
+        &mut self,
+        site: &mut BuildData,
+        site_key: construction::ObjectKey,
+        builder: construction::ObjectKey,
+        target: construction::BuildOrderTarget,
+        contribution: construction::BuilderContribution,
+        rules: &ProdRules,
+    ) -> Result<ArenaConstructionReceipt, construction::ConstructionError<E::Error>> {
+        let receipt = self.execute_builder(site, site_key, builder, target, contribution, rules)?;
+        Ok(ArenaConstructionReceipt {
+            site: site_key,
+            builder,
+            order_target: target.target,
+            receipt,
+        })
+    }
+
     pub fn interrupt_builder(
         &mut self,
         builder: construction::ObjectKey,
@@ -179,6 +208,17 @@ impl<'a, E: ConstructionEffects> ArenaConstructionHost<'a, E> {
     ) -> Result<construction::BuildReceipt, construction::ConstructionError<E::Error>> {
         construction::interrupt_builder(self.effects, builder, target, reason)
     }
+}
+
+/// One mutation-bearing Arena construction result.  All three identities are retained
+/// even though a coherent BUILD_AT order normally makes `site == order_target`; keeping
+/// both mutation-pins the address-mismatch guard in `construction::execute_builder`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArenaConstructionReceipt {
+    pub site: construction::ObjectKey,
+    pub builder: construction::ObjectKey,
+    pub order_target: construction::ObjectKey,
+    pub receipt: construction::BuildReceipt,
 }
 
 /// Explicit Arena-owned gathering state. Capacity and ordered tiles must already come from

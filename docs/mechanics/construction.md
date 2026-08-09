@@ -119,8 +119,9 @@ the only cosmetic tail.
 
 ## 3. Frame boundary and multi-builder fidelity
 
-`begin_site_frame` must run once per live building before any unit builders, matching
-retail's building-band-before-unit-band scheduler.  It performs:
+`begin_site_frame` must run once per live building after the rotating unit bands, matching
+retail's unit-band-before-fixed-building-band scheduler. It consumes the helper
+contributions made earlier in that same object pass and performs:
 
 ```text
 if helpers == 0: build_masks &= ~0x400
@@ -157,8 +158,8 @@ Arena can remove MODEL 2 only after its adapter provides all of the following:
    construction HP, masks, helper accumulator, `recharging`, city link, and damage.
 2. **Persistent target identity:** every `Job::Work`/build order retains `(who,o,uid)`.
    `EntId` alone is not a sufficient reuse token.
-3. **Scheduler order:** call `begin_site_frame` for building slots, then call
-   `execute_builder` for live builders in retail object traversal order.
+3. **Scheduler order:** call `execute_builder` for live builders in the rotating unit-band
+   traversal, then `begin_site_frame` for sites in the fixed building bands.
 4. **Authoritative builder gate:** implement target validation, `check_build_order`, and
    the turn-pending test.  The current "within one tile" test is not this gate.
 5. **Authoritative placement:** call a complete port or coherent extractor-backed
@@ -175,13 +176,29 @@ Arena can remove MODEL 2 only after its adapter provides all of the following:
 Until these are satisfied, Arena should keep a loud fidelity blocker rather than adapting
 `build_left -= 1` to the new result enum.
 
+Arena's playable `ResearchModel` now exercises this boundary rather than duplicating its
+state machine for the plain Barracks/Tower/Temple/Market family.  It removes the live
+`BuildData` record only for the duration of one borrow, executes the recovered admission,
+`Wall::start`, progress, `Build::activate`, and builder-finish ordering, restores that same
+record, and stores an `ArenaConstructionReceipt` containing the site, builder, BUILD_AT
+target, outcome, RNG count, and checksum-effect set.  A non-admitted non-gather site takes
+the recovered rejected-disband/refund loop and invalidates the actual Arena target slot.
+
+That is an executable integration result, not a fidelity promotion.  ResearchModel's
+command-time `placement_ok` supplies code zero, its missing reswarm/animation bodies are
+still projected into the ready gate, and its compact leader/city callbacks do not implement
+the full retail activation graph.  `FailClosedRetail` still stops before those inputs.
+Gather buildings, cities, Wonders, captured sites, Farm animals, alternate-site
+`build_done`, and cancellation/death remain outside the integrated subdomain.
+
 ## 5. Open runtime blockers
 
 - Full `BuildTypeData::blocked_location` `0x006375B0`, `blocked_tcoord` `0x00636DB0`, and
   the `blocked_site` dependency graph (terrain, territory, cliffs/water, adjacency, dock,
   city limits).
-- A production host for the ordered `construction_lifecycle` start, activation,
-  rejection/refund, terrain, registry, city, leader, farm-spawn and visibility calls.
+- A claim-bearing Arena host for the ordered `construction_lifecycle` start, activation,
+  rejection/refund, terrain, registry, city, leader, Farm-spawn and visibility calls. The
+  live ResearchModel host covers a compact gameplay projection only.
 - Wiring `construction_builder`'s exact plans and executable short-circuiting `build_done`
   driver into the real unit/order/group stores, including `check_build_order` movement and
   alternate-site mutation bodies.
