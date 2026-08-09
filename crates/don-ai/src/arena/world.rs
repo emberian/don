@@ -2298,6 +2298,31 @@ impl WorkWorld for ArenaMoveWorld<'_> {
         panic!("arena movement host cannot dispatch air patrol orders")
     }
 
+    fn air_patrol_unit_target(
+        &mut self,
+        _: &UnitWork,
+        _: &don_sim::systems::patrol::AirPatrolOrder,
+        _: i32,
+        _: i32,
+        _: order_dispatch::AirPatrolSearch,
+    ) -> Option<don_sim::systems::patrol::AirPatrolTarget> {
+        // Fail closed at ArenaAirModel/MODEL 6: spawn and ordinary acquisition reject air
+        // domains, and the host has no retail air-patrol object search to delegate to.
+        None
+    }
+
+    fn air_patrol_building_target(
+        &mut self,
+        _: &UnitWork,
+        _: &don_sim::systems::patrol::AirPatrolOrder,
+        _: i32,
+        _: i32,
+    ) -> Option<don_sim::systems::patrol::AirPatrolTarget> {
+        // This explicit unsupported result is not a nearest-building substitute. Any air
+        // patrol reaching the arena host is already rejected by the panic gates above.
+        None
+    }
+
     fn group_patrol_move(
         &mut self,
         _: &mut UnitWork,
