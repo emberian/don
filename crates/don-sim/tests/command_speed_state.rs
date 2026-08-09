@@ -179,3 +179,53 @@ fn hotkey_copy_camera_clear_and_mp_log_toggle_are_exact_inline_state() {
     assert_eq!(bridge.inline.restart_delay, 2);
     assert_eq!(bridge.stats.inline_state, 5);
 }
+
+#[test]
+fn check_random_ai_controls_and_marwan_preserve_exact_simulation_effects() {
+    for op in [56, 62, 63, 64, 81] {
+        assert_eq!(InlineDef::find(op).unwrap().port, InlinePort::Complete);
+    }
+
+    let mut bridge = Bridge::new();
+    let mut package = Package::new(4, 0);
+
+    let before = bridge.inline.clone();
+    issue(
+        &mut bridge,
+        &mut package,
+        &[56, 0x78, 0x56, 0x34, 0x12, 81, 0xff],
+    );
+    assert_eq!(
+        bridge.inline, before,
+        "CheckRandom and Marwan have only diagnostic/presentation effects"
+    );
+
+    issue(&mut bridge, &mut package, &[62]);
+    assert_eq!(bridge.inline.ai_speed, 2);
+    bridge.inline.ai_speed = 10;
+    issue(&mut bridge, &mut package, &[62]);
+    assert_eq!(bridge.inline.ai_speed, 10, "increase clamps at ten");
+    bridge.inline.ai_speed = i32::MAX;
+    issue(&mut bridge, &mut package, &[62]);
+    assert_eq!(
+        bridge.inline.ai_speed,
+        i32::MIN,
+        "the x86 increment wraps before the signed upper clamp"
+    );
+    issue(&mut bridge, &mut package, &[63]);
+    assert_eq!(bridge.inline.ai_speed, 1);
+
+    bridge.inline.ai_off = -7;
+    issue(&mut bridge, &mut package, &[64]);
+    assert_eq!(bridge.inline.ai_off, 0, "any non-zero int toggles to zero");
+    issue(&mut bridge, &mut package, &[64]);
+    assert_eq!(bridge.inline.ai_off, 1);
+
+    bridge.inline.network = true;
+    bridge.inline.ai_speed = 7;
+    bridge.inline.ai_off = 1;
+    issue(&mut bridge, &mut package, &[62, 63, 64]);
+    assert_eq!((bridge.inline.ai_speed, bridge.inline.ai_off), (7, 1));
+    assert_eq!(bridge.stats.inline_state, 11);
+    assert_eq!(bridge.stats.inert, 0);
+}

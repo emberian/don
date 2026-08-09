@@ -30,9 +30,9 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Seven inline state handlers** — control-group save/camera, MP-log toggle, speed
-  set/up/down, and all eight player-speed accumulators are complete; pause's common state
-  path is wired but remains partial.
+* **Twelve inline state handlers** — control-group save/camera, MP-log toggle, speed
+  set/up/down, all eight player-speed accumulators, three AI controls, and two measured
+  simulation no-ops are complete; pause's common state path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -49,10 +49,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,376 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 7 `InlineDef` + 82 `OpDef` | 157 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,404 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 12 `InlineDef` + 82 `OpDef` | 162 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52/53/54/55/76/79, 3 tests | 181 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52/53/54/55/56/62/63/64/76/79/81, 4 tests | 231 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -60,9 +60,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-48 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+49 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 3/3,
+`cargo test -p don-sim --test command_speed_state` 4/4,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -208,6 +208,25 @@ MP_LOG has no payload fields. On the first command it sets bit `0x20` and zeroes
 restart delay; on the second it clears the bit and changes a zero delay to two. There is
 no `EndCommand` row in the 82-entry `CommandTypes` dispatch: `CommandPackage::end_process`
 `0x0094C800` is a package finalizer, not a wire opcode, so the bridge does not invent one.
+
+### AI controls and measured no-op tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 56 | `process_check_random` `0x00946020` | diagnostic log of `u32 seed` at `+1`; no comparison or store | `complete` |
+| 62 | `process_cheat_ai_speed_increase` `0x00944EC0` | `GameAccess::ai_speed`, wrapping increment capped at 10 in solo | `complete` |
+| 63 | `process_cheat_ai_speed_normal` `0x00944DF0` | `GameAccess::ai_speed = 1` in solo | `complete` |
+| 64 | `process_cheat_ai_toggle` `0x00944D20` | `GameAccess::ai_off = (ai_off == 0)` in solo | `complete` |
+| 81 | `process_marwan` `0x00943660` | diagnostic log of its start byte only | `complete` |
+
+All three AI mutations are refused when `Game+0x820 & 4` marks network play. Their
+`Log::say` calls are diagnostic-only; `ai_speed` and `ai_off` are the
+simulation globals at `0x00C061C0/0x00C061C4`. Opcode 56 is intentionally green as an
+exact simulation no-op: this build logs its seed and frame but does not compare or store
+them; the lockstep seed array is updated elsewhere in `begin_process/process_turn`.
+Opcode 81 likewise has no simulation tail after logging its byte. The bridge still
+consumes both exact fixed wire bodies (5 and 2 bytes),
+so a following command starts at the retail cursor.
 
 ## Five things worth keeping
 

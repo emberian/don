@@ -1141,11 +1141,12 @@ pub struct HotKeySlot {
     pub camera: Option<HotKeyCamera>,
 }
 
-/// State written inline by the speed/pause command family.
+/// State written inline by command handlers without an `action_*` receiver.
 ///
 /// `speed` is `TurnControl+0x30`. `network`, `speed_locked`, and `immediate_process`
 /// name the exact `Game+0x820/0x20/0x821` gates read by the handlers. The eight player
-/// counters are the `u32` fields at `PlayerData+0x48..+0x68` [measured].
+/// counters are the `u32` fields at `PlayerData+0x48..+0x68`. `ai_speed` and `ai_off`
+/// are the `GameAccess` globals at `0x00C061C0/0x00C061C4` [measured].
 #[derive(Clone, Debug, PartialEq)]
 pub struct InlineCommandState {
     pub speed: i32,
@@ -1157,6 +1158,9 @@ pub struct InlineCommandState {
     pub pause_override: bool,
     pub pauses: [u8; NUM_OWNER_SLOTS],
     pub player_speed: [[u32; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+    pub ai_speed: i32,
+    /// Retail stores an `int`, and toggles any non-zero value back to zero.
+    pub ai_off: i32,
     pub mp_log: bool,
     pub restart_delay: i32,
     pub hotkeys: Vec<HotKeySlot>,
@@ -1174,6 +1178,8 @@ impl Default for InlineCommandState {
             pause_override: false,
             pauses: [0; NUM_OWNER_SLOTS],
             player_speed: [[0; PLAYER_SPEED_FIELDS]; NUM_OWNER_SLOTS],
+            ai_speed: 1,
+            ai_off: 0,
             mp_log: false,
             restart_delay: 0,
             hotkeys: (0..HOTKEY_GROUP_SLOTS)
@@ -1360,6 +1366,26 @@ impl Bridge {
                     }
                 }
             }
+            // CheckRandomCommand is deliberately log-only in this retail build. It reads
+            // the seed dword at +1 for SyncLogger output but performs no comparison/store.
+            56 => {}
+            // The three AI controls write a diagnostic log before this branch. Their only
+            // simulation mutation is gated off in network play.
+            62 => {
+                if !self.inline.network {
+                    self.inline.ai_speed = self.inline.ai_speed.wrapping_add(1).min(10);
+                }
+            }
+            63 => {
+                if !self.inline.network {
+                    self.inline.ai_speed = 1;
+                }
+            }
+            64 => {
+                if !self.inline.network {
+                    self.inline.ai_off = i32::from(self.inline.ai_off == 0);
+                }
+            }
             76 => {
                 if let Some(&state) = cmd.get(1) {
                     self.process_pause(pkg.play, state);
@@ -1379,6 +1405,8 @@ impl Bridge {
                     *total = total.wrapping_add(add as u32);
                 }
             }
+            // MarwanCommand only writes its start byte to the diagnostic log.
+            81 => {}
             _ => unreachable!("inline command table and dispatcher disagree"),
         }
     }
