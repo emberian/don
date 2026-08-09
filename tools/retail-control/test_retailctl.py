@@ -50,10 +50,417 @@ class RetailCtlTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 retailctl.generation_root(generation)
 
+    def test_process_absence_and_tasklist_noise_are_reported_cleanly(self):
+        with mock.patch.object(
+            retailctl, "guest_cmd_status",
+            return_value=(0, "INFO: No tasks are running which match the specified criteria."),
+        ):
+            self.assertEqual(retailctl.process_pids()[0], [])
+        with mock.patch.object(
+            retailctl, "guest_cmd_status",
+            return_value=(0, "Parallels noise\n12324\n7804\n12324\n"),
+        ):
+            self.assertEqual(retailctl.process_pids()[0], [7804, 12324])
+        with mock.patch.object(
+            retailctl, "guest_cmd_status", return_value=(1, "VM unavailable")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "could not enumerate"):
+                retailctl.process_pids()
+
+    def test_donject_v2_module_records_are_strict_and_legacy_zero_is_indeterminate(self):
+        mapped = (
+            'protocol=donject.v2 command=base status=mapped pid=12324 '
+            'module_name="retail_control-tactical-v21.dll" '
+            'module_path="C:\\Users\\Public\\don-retail-control-tactical-v21\\'
+            'retail_control-tactical-v21.dll" module_base=0x6AF00000 '
+            'module_size=0x00023000'
+        )
+        self.assertEqual(
+            retailctl.parse_module_base_output(mapped)["base"], 0x6AF00000
+        )
+        absent = (
+            'protocol=donject.v2 command=base status=absent pid=12324 '
+            'module_name="retail_control-next.dll"'
+        )
+        self.assertEqual(retailctl.parse_module_base_output(absent)["status"], "absent")
+        explicit_error = (
+            "protocol=donject.v2 command=base status=error stage=module-snapshot "
+            "pid=12324 module_name=retail_control-next.dll win32_error=5"
+        )
+        self.assertEqual(
+            retailctl.parse_module_base_output(explicit_error)["status"], "error"
+        )
+        decimal_size = mapped.replace("module_size=0x00023000", "module_size=143360")
+        self.assertEqual(
+            retailctl.parse_module_base_output(decimal_size)["status"], "error"
+        )
+        self.assertEqual(retailctl.parse_module_base_output("00000000")["status"], "error")
+        duplicate = mapped + "\n" + mapped
+        self.assertEqual(retailctl.parse_module_base_output(duplicate)["status"], "error")
+
+    def test_injector_prepare_is_atomic_hash_bound_and_selftested(self):
+        digest = "b" * 64
+        server = mock.Mock()
+        commands = []
+
+        def record_command(command, **_kwargs):
+            commands.append(command)
+            return ""
+
+        with (
+            mock.patch.object(retailctl, "build_injector", return_value=digest),
+            mock.patch.object(retailctl, "serve_once", return_value=server),
+            mock.patch.object(retailctl, "guest_cmd", side_effect=record_command),
+            mock.patch.object(retailctl, "guest_sha256", side_effect=[digest, digest]),
+            mock.patch.object(
+                retailctl, "guest_cmd_status",
+                return_value=(0, "selftest: status=ok architecture=PE32/i386"),
+            ),
+            mock.patch("builtins.print"),
+        ):
+            result = retailctl.prepare_injector()
+        self.assertTrue(result["ready"])
+        curl_index = next(i for i, command in enumerate(commands) if "curl.exe" in command)
+        move_index = next(i for i, command in enumerate(commands) if "move /y" in command)
+        self.assertLess(curl_index, move_index)
+        server.shutdown.assert_called_once()
+        server.server_close.assert_called_once()
+
+        commands.clear()
+        server = mock.Mock()
+        with (
+            mock.patch.object(retailctl, "build_injector", return_value=digest),
+            mock.patch.object(retailctl, "serve_once", return_value=server),
+            mock.patch.object(retailctl, "guest_cmd", side_effect=record_command),
+            mock.patch.object(retailctl, "guest_sha256", return_value="c" * 64),
+        ):
+            with self.assertRaisesRegex(SystemExit, "download hash"):
+                retailctl.prepare_injector()
+        self.assertFalse(any("move /y" in command for command in commands))
+
+    def test_strict_injector_build_is_byte_reproducible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.exe"
+            second = Path(directory) / "second.exe"
+            first_hash = retailctl.build_injector(first)
+            second_hash = retailctl.build_injector(second)
+            self.assertEqual(first_hash, second_hash)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_module_probe_binds_explicit_status_to_exit_pid_and_name(self):
+        record = (
+            'protocol=donject.v2 command=base status=absent pid=12324 '
+            'module_name="retail_control-next.dll"'
+        )
+        with mock.patch.object(retailctl, "guest_cmd_status", return_value=(10, record)):
+            probe = retailctl.module_probe(12324, "retail_control-next.dll")
+        self.assertEqual(probe["status"], "absent")
+        with mock.patch.object(retailctl, "guest_cmd_status", return_value=(0, record)):
+            probe = retailctl.module_probe(12324, "retail_control-next.dll")
+        self.assertEqual(probe["status"], "error")
+        with mock.patch.object(retailctl, "module_probe", return_value=probe):
+            with self.assertRaisesRegex(SystemExit, "indeterminate"):
+                retailctl.loaded_module(12324, "retail_control-next.dll")
+
+    def test_donject_v2_full_module_list_is_counted_and_identity_bound(self):
+        captured = "\n".join([
+            "unrelated prlctl noise",
+            "protocol=donject.v2 command=modules status=ok pid=12324 count=2",
+            'protocol=donject.v2 command=modules status=module pid=12324 index=0 '
+            'module_name="riseofnations.exe" module_path="C:\\Game\\riseofnations.exe" '
+            'module_base=0x00D60000 module_size=0x00BB4000',
+            'protocol=donject.v2 command=modules status=module pid=12324 index=1 '
+            'module_name="retail_control-v2.dll" '
+            'module_path="C:\\Users\\Public\\don-retail-control-v2\\retail_control-v2.dll" '
+            'module_base=0x6AF00000 module_size=0x00023000',
+        ])
+        parsed = retailctl.parse_module_list_output(captured)
+        self.assertEqual(parsed["status"], "ok")
+        self.assertEqual(parsed["pid"], 12324)
+        self.assertEqual(parsed["modules"][1]["base_hex"], "0x6af00000")
+        self.assertEqual(parsed["modules"][1]["size"], 0x23000)
+        incomplete = captured.replace("count=2", "count=3")
+        self.assertEqual(retailctl.parse_module_list_output(incomplete)["status"], "error")
+        with mock.patch.object(retailctl, "guest_cmd_status", return_value=(12, captured)):
+            self.assertEqual(retailctl.remote_modules(12324)["status"], "error")
+
+    def test_injector_postcondition_rejects_timeout_and_already_loaded_race(self):
+        name = "retail_control-fresh-v1.dll"
+        path = rf"C:\Users\Public\don-retail-control-fresh-v1\{name}"
+        canonical_path = "\\\\?\\" + path
+        dll_hash = "a" * 64
+        loaded = (
+            f"inject: result=loaded status=ok pid=12324 module={name} "
+            f"base=6AF00000 path={canonical_path} sha256={dll_hash}"
+        )
+        result = retailctl.parse_inject_output(
+            loaded, 0, 12324, name, path, dll_hash
+        )
+        self.assertEqual(result["status"], "loaded")
+        self.assertEqual(result["module_base"], 0x6AF00000)
+        already = loaded.replace("result=loaded", "result=already-loaded")
+        self.assertEqual(
+            retailctl.parse_inject_output(
+                already, 0, 12324, name, path, dll_hash
+            )["status"],
+            "error",
+        )
+        timeout = (
+            "inject: INDETERMINATE remote-thread-timeout wait_ms=15000 "
+            "remote_path=01230000 allocation=retained target_state=tainted "
+            "restart_required=1"
+        )
+        result = retailctl.parse_inject_output(timeout, 15, 12324, name, path, dll_hash)
+        self.assertEqual(result["status"], "indeterminate")
+        self.assertTrue(result["restart_required"])
+
+    def test_deployed_generation_capture_rejects_marker_and_ready_noise(self):
+        payload = [{
+            "root_name": "don-retail-control-tactical-v21",
+            "root": r"C:\Users\Public\don-retail-control-tactical-v21",
+            "dlls": ["retail_control-tactical-v21.dll"],
+            "downloads": [],
+            "ready": (
+                "state=parked\r\npid=7804\r\n"
+                "root=C:\\Users\\Public\\don-retail-control-tactical-v21\r\n"
+                "base=0x00d60000\r\nturn_call_site=0x00ef1686\r\n"
+                "turn_do_frame=0x012b7dd0\r\n"
+            ),
+        }]
+        captured = (
+            "unrelated guest noise\n" + retailctl.PREFLIGHT_JSON_BEGIN + "\n" +
+            json.dumps(payload) + "\n" + retailctl.PREFLIGHT_JSON_END + "\nmore noise"
+        )
+        rows, errors = retailctl.parse_deployed_generations(captured)
+        self.assertEqual(errors, [])
+        self.assertEqual(rows[0]["generation"], "tactical-v21")
+        self.assertEqual(rows[0]["ready"]["values"]["state"], "parked")
+        with self.assertRaises(ValueError):
+            retailctl.parse_deployed_generations(captured + "\n" + captured)
+
+    def test_hook_probe_distinguishes_original_patch_and_unrecognized_bytes(self):
+        original = (
+            "# base=00D60000 addr=00EF1686 len=5\n"
+            "00EF1686: E8 45 67 3C 00"
+        )
+        self.assertEqual(retailctl.parse_hook_peek_output(original)["status"], "original")
+        address = 0x00EF1686
+        target = 0x6A001000
+        displacement = target - (address + 5)
+        patched_bytes = b"\xe8" + displacement.to_bytes(4, "little", signed=True)
+        patched = (
+            "# base=00D60000 addr=00EF1686 len=5\n"
+            f"00EF1686: {' '.join(f'{byte:02X}' for byte in patched_bytes)}"
+        )
+        parsed = retailctl.parse_hook_peek_output(patched)
+        self.assertEqual(parsed["status"], "patched")
+        self.assertEqual(parsed["call_target"], "0x6a001000")
+        unknown = original.replace("E8 45 67 3C 00", "90 90 90 90 90")
+        self.assertEqual(retailctl.parse_hook_peek_output(unknown)["status"], "unknown")
+        self.assertEqual(
+            retailctl.parse_hook_peek_output(original + "\n" + original)["status"],
+            "unreadable",
+        )
+
+    def test_ready_record_is_bound_to_pid_root_and_exact_rebased_addresses(self):
+        root = r"C:\Users\Public\don-retail-control-tactical-v21"
+        raw = (
+            f"state=parked\npid=7804\nroot={root}\nbase=0x00d60000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+        )
+        record = retailctl.parse_ready_record(raw)
+        self.assertEqual(retailctl.ready_identity_errors(record, 7804, root), [])
+        self.assertIn(
+            "ready pid does not match target",
+            retailctl.ready_identity_errors(record, 12324, root),
+        )
+        torn = retailctl.parse_ready_record(raw + "pid=7804\n")
+        self.assertTrue(torn["errors"])
+
+    def test_retail_requests_require_exact_current_hook_ownership(self):
+        root = retailctl.generation_root("fresh-v1")
+        exact = {
+            "complete": True,
+            "issues": [],
+            "hook_owner": "fresh-v1",
+        }
+        with (
+            mock.patch.object(
+                retailctl, "injector_diagnostic", return_value={"ready": True, "issues": []}
+            ),
+            mock.patch.object(retailctl, "pid", return_value=12324),
+            mock.patch.object(retailctl, "preflight"),
+            mock.patch.object(retailctl, "controller_inventory", return_value=exact),
+        ):
+            self.assertEqual(retailctl.require_armed_controller(root), (12324, "fresh-v1"))
+        wrong = {**exact, "hook_owner": "other-v1"}
+        with (
+            mock.patch.object(
+                retailctl, "injector_diagnostic", return_value={"ready": True, "issues": []}
+            ),
+            mock.patch.object(retailctl, "pid", return_value=12324),
+            mock.patch.object(retailctl, "preflight"),
+            mock.patch.object(retailctl, "controller_inventory", return_value=wrong),
+        ):
+            with self.assertRaisesRegex(SystemExit, "ownership is not exact"):
+                retailctl.require_armed_controller(root)
+
+    def test_refused_stop_is_not_substring_misread_as_parked(self):
+        root = r"C:\Users\Public\don-retail-control-tactical-v21"
+        raw = (
+            f"state=refused-stop\npid=7804\nroot={root}\nbase=0x00d60000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+        )
+        with mock.patch.object(
+            retailctl, "read_ready", return_value=(raw, retailctl.parse_ready_record(raw))
+        ):
+            with self.assertRaisesRegex(SystemExit, "refused-stop"):
+                retailctl.wait_for_ready_state(root, 7804, "parked", 0.1)
+
+    def test_generation_budget_refuses_projected_mapping_before_deploy(self):
+        inventory = {
+            "complete": True,
+            "mapped_generation_count": 4,
+            "mapped_modules": [
+                {"name": f"retail_control-old-{i}.dll"} for i in range(4)
+            ],
+            "issues": [],
+        }
+        with mock.patch.object(retailctl, "controller_inventory", return_value=inventory):
+            with self.assertRaisesRegex(SystemExit, "configured maximum 4"):
+                retailctl.enforce_generation_budget(12324, "next", 4)
+
+    def test_deployment_refuses_incomplete_inventory_and_an_owned_hook(self):
+        incomplete = {
+            "complete": False,
+            "mapped_generation_count": 0,
+            "mapped_modules": [],
+            "issues": ["could not determine module state for retail_control.dll"],
+        }
+        with mock.patch.object(retailctl, "controller_inventory", return_value=incomplete):
+            with self.assertRaisesRegex(SystemExit, "inventory is incomplete"):
+                retailctl.enforce_generation_budget(12324, "next", 4)
+        owned = {
+            "complete": True,
+            "mapped_generation_count": 1,
+            "mapped_modules": [{"name": "retail_control-old.dll"}],
+            "issues": [],
+            "hook": {"status": "patched"},
+        }
+        with mock.patch.object(retailctl, "controller_inventory", return_value=owned):
+            with self.assertRaisesRegex(SystemExit, "another controller owns"):
+                retailctl.enforce_generation_budget(12324, "next", 4)
+
+    def test_inventory_flags_stale_armed_ready_against_original_hook(self):
+        root = r"C:\Users\Public\don-retail-control-tactical-v21"
+        ready = retailctl.parse_ready_record(
+            f"state=armed\npid=7804\nroot={root}\nbase=0x00d60000\n"
+            "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+        )
+        row = {
+            "generation": "tactical-v21",
+            "root": root,
+            "expected_dll": "retail_control-tactical-v21.dll",
+            "dlls": ["retail_control-tactical-v21.dll"],
+            "downloads": [],
+            "ready": ready,
+        }
+        mapped = {
+            "status": "mapped", "name": "retail_control-tactical-v21.dll",
+            "path": root + r"\retail_control-tactical-v21.dll",
+            "base": 0x6AF00000, "base_hex": "0x6af00000",
+            "size": 0x23000, "size_hex": "0x23000",
+        }
+        with (
+            mock.patch.object(retailctl, "deployed_generations", return_value=([row], [])),
+            mock.patch.object(
+                retailctl, "remote_modules",
+                return_value={"status": "ok", "pid": 7804, "modules": [mapped]},
+            ),
+            mock.patch.object(retailctl, "hook_call_state", return_value={"status": "original"}),
+        ):
+            inventory = retailctl.controller_inventory(7804)
+        self.assertIn(
+            "armed ready record conflicts with original retail call bytes",
+            inventory["issues"],
+        )
+
+    def test_inventory_does_not_promote_historical_unmapped_ready_noise(self):
+        row = {
+            "generation": "v1",
+            "root": retailctl.generation_root("v1"),
+            "expected_dll": retailctl.generation_dll("v1"),
+            "dlls": [retailctl.generation_dll("v1")],
+            "downloads": [],
+            "ready": retailctl.parse_ready_record(
+                "state=armed\npid=12324\nbase=0x00d60000\n"
+                "turn_call_site=0x00ef1686\nturn_do_frame=0x012b7dd0\n"
+            ),
+        }
+        with (
+            mock.patch.object(retailctl, "deployed_generations", return_value=([row], [])),
+            mock.patch.object(
+                retailctl, "remote_modules",
+                return_value={"status": "ok", "pid": 7804, "modules": []},
+            ),
+            mock.patch.object(retailctl, "hook_call_state", return_value={"status": "original"}),
+        ):
+            inventory = retailctl.controller_inventory(7804)
+        self.assertEqual(inventory["issues"], [])
+        self.assertTrue(inventory["complete"])
+
+    def test_wer_diagnostics_require_both_scoped_views_full_dumps_and_free_space(self):
+        views = [{
+            "view": view,
+            "present": True,
+            "folder": retailctl.EXPECTED_DUMP_FOLDER,
+            "expanded_folder": retailctl.EXPECTED_DUMP_FOLDER,
+            "folder_exists": True,
+            "dump_type": 2,
+            "dump_count": 2,
+        } for view in ["64", "32"]]
+        payload = {
+            "views": views,
+            "free_bytes": retailctl.MIN_DUMP_FREE_BYTES,
+            "wer_service_status": "Stopped",
+        }
+        captured = (
+            retailctl.PREFLIGHT_JSON_BEGIN + "\n" + json.dumps(payload) + "\n" +
+            retailctl.PREFLIGHT_JSON_END
+        )
+        diagnostic = retailctl.parse_wer_diagnostics(captured)
+        self.assertTrue(diagnostic["ready"])
+        self.assertIn("informational", diagnostic["wer_service_note"])
+        payload["views"][1]["dump_type"] = 1
+        payload["free_bytes"] -= 1
+        captured = (
+            retailctl.PREFLIGHT_JSON_BEGIN + "\n" + json.dumps(payload) + "\n" +
+            retailctl.PREFLIGHT_JSON_END
+        )
+        diagnostic = retailctl.parse_wer_diagnostics(captured)
+        self.assertFalse(diagnostic["ready"])
+        self.assertTrue(any("registry view 32" in issue for issue in diagnostic["issues"]))
+
+    def test_prelaunch_report_treats_absent_retail_as_a_clean_process_state(self):
+        wer = {"ready": True, "issues": []}
+        with (
+            mock.patch.object(
+                retailctl, "injector_diagnostic", return_value={"ready": True, "issues": []}
+            ),
+            mock.patch.object(retailctl, "process_pids", return_value=([], "no tasks")),
+            mock.patch.object(retailctl, "deployed_generations", return_value=([], [])),
+            mock.patch.object(retailctl, "wer_diagnostics", return_value=wer),
+        ):
+            report = retailctl.prelaunch_report(4)
+        self.assertEqual(report["process"]["status"], "absent")
+        self.assertEqual(report["controllers"]["hook"]["status"], "not-applicable")
+        self.assertTrue(report["ready"])
+
     def test_command_tokens_accept_the_documented_protocol(self):
         for words in [
-            ["observe"], ["pause", "1"], ["speed", "3"], ["speed-up"],
-            ["checksum"], ["halt", "0", "12", "13"],
+            ["observe"], ["observe-network"], ["pause", "1"], ["speed", "3"],
+            ["speed-up"],
+            ["halt", "0", "12", "13"],
             ["move", "0", "100", "200", "2", "1", "-1", "-1", "0", "12"],
             ["attack", "0", "1", "22", "0", "2", "12", "13"],
             ["attack-visible", "0", "1", "22", "37", "0", "2", "12"],
@@ -80,6 +487,38 @@ class RetailCtlTests(unittest.TestCase):
     def test_unknown_verb_is_refused(self):
         with self.assertRaises(SystemExit):
             retailctl.validate_words(["cheat"])
+        with self.assertRaises(SystemExit):
+            retailctl.validate_words(["checksum"])
+
+    def test_multiplayer_observation_is_passive_and_checksum_capture_is_strict(self):
+        network = {
+            "phase": "observed",
+            "checksum_gate": "not_connected",
+            "mutates_outgoing_package": 0,
+            "network_last_num_received": [0] * 8,
+            "network_peer_checksums": [0] * 8,
+            "checksum_capture_valid": 0,
+        }
+        retailctl.validate_multiplayer_events("observe-network", [network])
+        with self.assertRaisesRegex(SystemExit, "passive observation"):
+            retailctl.validate_multiplayer_events(
+                "observe-network", [{**network, "checksum_capture_valid": 1}]
+            )
+        checksum = {
+            **network,
+            "phase": "queued",
+            "checksum_gate": "eligible",
+            "mutates_outgoing_package": 1,
+            "checksum_capture_valid": 1,
+            "checksum_total_consistent": 1,
+            "checksum_adler_shaped": 1,
+            "checksum_words": list(range(16)),
+        }
+        retailctl.validate_multiplayer_events("checksum", [checksum])
+        with self.assertRaisesRegex(SystemExit, "complete retail capture"):
+            retailctl.validate_multiplayer_events(
+                "checksum", [{**checksum, "checksum_total_consistent": 0}]
+            )
 
     def test_tactical_move_and_attack_replay_exact_public_identities(self):
         observation = json.loads(

@@ -12,6 +12,7 @@
 
 #include <windows.h>
 #include <tlhelp32.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +33,7 @@
 #define RVA_WORLD_PTR      (0x00c061d0u - PREFERRED_BASE)
 #define RVA_LEADERS_PTR    (0x00c061e0u - PREFERRED_BASE)
 #define RVA_BUILDTYPES_PTR (0x00c061f4u - PREFERRED_BASE)
+#define RVA_CONSOLE_PTR    (0x00c06210u - PREFERRED_BASE)
 #define RVA_COORD_LOOKUP   (0x00cae5fcu - PREFERRED_BASE)
 #define RVA_CIRCLE_X       (0x00cb7e90u - PREFERRED_BASE)
 #define RVA_CIRCLE_Y       (0x00cbb0e0u - PREFERRED_BASE)
@@ -62,6 +64,8 @@
 #define RVA_BUILD_IS_SEEN   (0x0062e1a0u - PREFERRED_BASE)
 #define RVA_WALL_IS_SEEN    (0x00642bd0u - PREFERRED_BASE)
 #define RVA_LEADER_IS_ENEMY (0x006ebaa0u - PREFERRED_BASE)
+#define RVA_PLAYER_IS_CONNECTION (0x006edb90u - PREFERRED_BASE)
+#define RVA_GAME_IS_SOLO   (0x0043ec40u - PREFERRED_BASE)
 #define RVA_VECTOR_DIST_COORDS (0x0046d060u - PREFERRED_BASE)
 #define RVA_MOVE_ORDER_VTABLE (0x00b4a12cu - PREFERRED_BASE)
 #define RVA_ATTACK_ORDER_VTABLE (0x00b47628u - PREFERRED_BASE)
@@ -71,6 +75,8 @@
 #define RVA_BUILD_VTABLE (0x00b42174u - PREFERRED_BASE)
 #define RVA_ANIMAL_VTABLE (0x00b4145cu - PREFERRED_BASE)
 #define RVA_WALL_VTABLE  (0x00b42cf8u - PREFERRED_BASE)
+#define RVA_LAST_NUM_RECEIVED (0x00cbee88u - PREFERRED_BASE)
+#define RVA_PEER_CHECKSUMS (0x00cbee90u - PREFERRED_BASE)
 
 #define OFF_GAME_FRAME 0x550u
 #define OFF_GAME_SECONDS 0x560u
@@ -93,6 +99,8 @@
 
 #define PACKAGE_LENGTH 0x10u
 #define PACKAGE_BYTES  0x12u
+/* Random::get(0,2) at 0x00a39d70 is half-open, so multiplayer padding is
+   exactly zero or one byte and a package beginning at 0x200 can reach 0x201. */
 #define PACKAGE_CAP    0x201u
 #define GROUP_NUM      0x0cu
 #define GROUP_WHO      0x4au
@@ -107,6 +115,9 @@
 #define MAX_QUEUED_TYPES 128
 #define MAX_COMMAND_CAPTURE 160
 #define EVENT_CAP 256
+#define PLAYER_PAYLOAD_SLOTS 4
+#define EVENT_JSON_CAP (512u * 1024u)
+#define WORKER_STACK_RESERVE (128u * 1024u)
 
 enum Verb {
     V_NONE = 0,
@@ -132,7 +143,25 @@ enum Verb {
     V_FIND_BUILD,
     V_FIND_GATHER_BUILD,
     V_FIND_SCOUT_STEP,
-    V_VALIDATE_ATTACK
+    V_VALIDATE_ATTACK,
+    V_OBSERVE_NETWORK
+};
+
+enum ChecksumGate {
+    CHECKSUM_ELIGIBLE = 0,
+    CHECKSUM_NO_GAME,
+    CHECKSUM_PLAYBACK,
+    CHECKSUM_NETWORK_CLEAR,
+    CHECKSUM_IMMEDIATE_PROCESS,
+    CHECKSUM_NO_CONSOLE,
+    CHECKSUM_BAD_PLAY,
+    CHECKSUM_PLAYER_INVALID,
+    CHECKSUM_PLAYER_TERMINAL,
+    CHECKSUM_NOT_CONNECTED,
+    CHECKSUM_PACKAGE_INVALID,
+    CHECKSUM_PACKAGE_FULL,
+    CHECKSUM_TORN,
+    CHECKSUM_ACTIVE_DISABLED
 };
 
 typedef struct {
@@ -204,6 +233,19 @@ typedef struct {
     int num_ids;
     short ids[MAX_IDS];
 } request_t;
+
+/*
+ * The full public-player observation is almost 96 KiB on x86.  It is rare and
+ * must not be multiplied into every SPSC event slot (or placed on retail's
+ * main-thread stack).  Event records instead point at a bounded payload pool;
+ * push_event clones the callback scratch payload before publishing the slot.
+ */
+typedef struct {
+    unsigned char player_tech_bits[101];
+    queued_type_sample_t player_queued_types[MAX_QUEUED_TYPES];
+    public_object_t player_objects[MAX_PUBLIC_OBJECTS];
+    public_object_t visible_enemies[MAX_VISIBLE_ENEMIES];
+} player_payload_t;
 
 typedef struct {
     unsigned seq;
@@ -284,20 +326,56 @@ typedef struct {
     int player_over_cap[6];
     int player_age;
     int player_epochs[4];
-    unsigned char player_tech_bits[101];
     int player_queued_type_count;
     int player_queued_type_truncated;
-    queued_type_sample_t player_queued_types[MAX_QUEUED_TYPES];
     int player_slots;
     int player_unit_mark;
     int player_build_mark;
     int player_wall_mark;
     int player_object_count;
     int player_object_truncated;
-    public_object_t player_objects[MAX_PUBLIC_OBJECTS];
     int visible_enemy_count;
     int visible_enemy_truncated;
-    public_object_t visible_enemies[MAX_VISIBLE_ENEMIES];
+    player_payload_t *player_payload;
+    int network_state_valid;
+    unsigned network_game_flags;
+    int network_is_solo;
+    int network_playback;
+    int network_immediate_process;
+    unsigned network_console;
+    int network_console_valid;
+    int network_play;
+    int network_play_valid;
+    unsigned network_local_player_flags;
+    int network_local_connected;
+    unsigned network_player_valid_mask;
+    unsigned network_player_won_mask;
+    unsigned network_player_dropped_mask;
+    unsigned network_player_resigned_mask;
+    unsigned network_player_defeated_mask;
+    unsigned network_player_connected_mask;
+    unsigned network_eligible_reporter_mask;
+    unsigned network_seed;
+    int network_checksum_deep;
+    int network_checksum_window;
+    int network_checksum_failure_threshold;
+    unsigned network_checksum_settings_flags;
+    int network_netlib_type;
+    int network_turn_length;
+    int network_turn_counter;
+    unsigned network_package_stamp;
+    int network_package_size;
+    int network_checksum_room;
+    unsigned network_last_num_received[8];
+    unsigned network_peer_checksums[8];
+    unsigned checksum_gate;
+    int checksum_eligible;
+    int mutates_outgoing_package;
+    int checksum_capture_valid;
+    int checksum_padding_length;
+    unsigned checksum_words[16];
+    int checksum_total_consistent;
+    int checksum_adler_shaped;
     int validation_result;
     int placement_x;
     int placement_y;
@@ -310,6 +388,13 @@ typedef struct {
     int placement_ring;
     unsigned note;
 } event_t;
+
+_Static_assert((EVENT_CAP & (EVENT_CAP - 1)) == 0,
+               "EVENT_CAP must remain a power of two");
+_Static_assert(sizeof(event_t) <= 4096,
+               "event_t must remain safe for the bounded SPSC ring");
+_Static_assert(sizeof(player_payload_t) <= 131072,
+               "player payload exceeded the bounded serialization design");
 
 typedef struct {
     int active;
@@ -330,9 +415,12 @@ typedef struct {
 } trace_t;
 
 static unsigned g_base;
+static unsigned g_controller_base;
+static unsigned g_controller_size;
 static HANDLE g_self_process;
 static char g_root[MAX_PATH];
 static char g_request_path[MAX_PATH];
+static char g_request_tmp_path[MAX_PATH];
 static char g_events_path[MAX_PATH];
 static char g_ready_path[MAX_PATH];
 static char g_stop_path[MAX_PATH];
@@ -340,6 +428,7 @@ static char g_log_path[MAX_PATH];
 static volatile LONG g_pending;
 static volatile LONG g_stopping;
 static volatile LONG g_stop_ack;
+static volatile LONG g_hook_inflight;
 static request_t g_request;
 static verify_t g_verify;
 static trace_t g_trace;
@@ -347,13 +436,29 @@ static trace_t g_trace;
 static event_t g_events[EVENT_CAP];
 static volatile LONG g_event_head;
 static volatile LONG g_event_tail;
+static volatile LONG g_dropped_events;
+static volatile LONG g_reported_dropped_events;
+
+typedef struct {
+    volatile LONG busy;
+    player_payload_t payload;
+} player_payload_slot_t;
+
+/* Single retail-main-thread producer scratch; never put event_t on its stack. */
+static event_t g_callback_event;
+static event_t g_trace_event;
+static player_payload_t g_player_scratch;
+static player_payload_slot_t g_player_payloads[PLAYER_PAYLOAD_SLOTS];
 
 static BYTE *g_hook_addr;
-static BYTE g_hook_orig[5];
 static BYTE *g_trampoline;
-static int g_hook_installed;
+static volatile LONG g_hook_installed;
+
+static const BYTE g_hook_orig[5] = {0xe8, 0x45, 0x67, 0x3c, 0x00};
+static BYTE g_hook_patch[5];
 
 static int write_code(BYTE *dst, const BYTE *src, unsigned n);
+static int package_length(void);
 
 static int join_path(char out[MAX_PATH], const char *root, const char *leaf) {
     int n = _snprintf(out, MAX_PATH, "%s\\%s", root, leaf);
@@ -374,6 +479,7 @@ static int init_paths(HINSTANCE module) {
     if (!slash || slash == g_root) return 0;
     *slash = 0;
     return join_path(g_request_path, g_root, "request.txt") &&
+           join_path(g_request_tmp_path, g_root, "request.tmp") &&
            join_path(g_events_path, g_root, "events.ndjson") &&
            join_path(g_ready_path, g_root, "ready.txt") &&
            join_path(g_stop_path, g_root, "STOP") &&
@@ -445,6 +551,8 @@ static int object_category(unsigned who, int id) {
 typedef int (__attribute__((thiscall)) *fn_seen_object)(const void *self,
                                                         int who, int force);
 typedef int (__attribute__((thiscall)) *fn_is_enemy)(const void *self, int who);
+typedef int (__attribute__((thiscall)) *fn_player_is_connection)(const void *self);
+typedef int (__attribute__((thiscall)) *fn_game_is_solo)(const void *self);
 
 static int object_is_seen(unsigned object, int category, unsigned class_vtable,
                           int local_who) {
@@ -507,7 +615,12 @@ static int sample_visible_identity(public_object_t *out, unsigned object,
 
 static void observe_visible_enemies(event_t *e, unsigned leaders, unsigned leader,
                                     unsigned objects, int local_who) {
+    player_payload_t *payload = e->player_payload;
     int enemy_who;
+    if (!payload) {
+        e->note = 24;
+        return;
+    }
     for (enemy_who = 0; enemy_who < 8; enemy_who++) {
         unsigned enemy_leader, array, list = 0;
         unsigned enemy_flags = 0;
@@ -560,7 +673,7 @@ static void observe_visible_enemies(event_t *e, unsigned leaders, unsigned leade
                     e->visible_enemy_truncated = 1;
                     continue;
                 }
-                out = &e->visible_enemies[e->visible_enemy_count];
+                out = &payload->visible_enemies[e->visible_enemy_count];
                 if (!sample_visible_identity(out, object, enemy_who, id,
                                              categories[band])) {
                     e->note = 20;
@@ -681,6 +794,7 @@ static void observe_public_order(unsigned unit, unsigned who, public_object_t *o
 }
 
 static void observe_player_public(event_t *e) {
+    player_payload_t *payload = e->player_payload;
     unsigned world = 0, leaders = 0, leader = 0, encrypted = 0;
     unsigned objects = 0, array = 0, list = 0, game_after = 0;
     unsigned flags = 0, flags_after = 0, encrypted_after = 0;
@@ -695,6 +809,10 @@ static void observe_player_public(event_t *e) {
     int band_start[3], band_end[3], band_category[3];
     int band, i, r;
     e->local_player = -1;
+    if (!payload) {
+        e->note = 24;
+        return;
+    }
     if (!rd32(g_base + RVA_LEADERS_PTR, &leaders) || !leaders) {
         e->note = 10;
         return;
@@ -783,8 +901,8 @@ static void observe_player_public(event_t *e) {
             }
             e->player_epochs[r] = (int)(v ^ 0x00063187u);
         }
-        if (!safe_read(leader + 0x6c18u, e->player_tech_bits,
-                       sizeof(e->player_tech_bits))) {
+        if (!safe_read(leader + 0x6c18u, payload->player_tech_bits,
+                       sizeof(payload->player_tech_bits))) {
             e->note = 14;
             return;
         }
@@ -799,8 +917,8 @@ static void observe_player_public(event_t *e) {
                 e->player_queued_type_truncated = 1;
                 continue;
             }
-            e->player_queued_types[e->player_queued_type_count].type = r;
-            e->player_queued_types[e->player_queued_type_count].count = queued;
+            payload->player_queued_types[e->player_queued_type_count].type = r;
+            payload->player_queued_types[e->player_queued_type_count].count = queued;
             e->player_queued_type_count++;
         }
     }
@@ -845,7 +963,7 @@ static void observe_player_public(event_t *e) {
                 e->player_object_truncated = 1;
                 continue;
             }
-            out = &e->player_objects[e->player_object_count++];
+            out = &payload->player_objects[e->player_object_count++];
             out->owner = who;
             out->id = i;
             out->pointer = p;
@@ -1046,11 +1164,131 @@ static void observe_unit(event_t *e, const request_t *r) {
     }
 }
 
+/*
+ * Read-only post-TurnControl network state.  Field locations and the checksum
+ * gates are from issue_check_sums at 0x00940770, Player::is_connection at
+ * 0x006edb90, Game::is_solo at 0x0043ec40, and the matching shipped PDB.
+ */
+static void observe_network(event_t *e) {
+    unsigned game = e->game, game_after = 0, turn = 0, turn_after = 0;
+    unsigned console = 0, console_after = 0, flags = 0, flags_after = 0;
+    unsigned frame_after = 0;
+    int play = -1, play_after = -1, package_size, i;
+    unsigned short local_flags = 0;
+
+    e->network_play = -1;
+    e->network_package_size = -1;
+    e->checksum_gate = CHECKSUM_NO_GAME;
+    if (!game || !rd32(g_base + RVA_TURN_PTR, &turn) || !turn ||
+        !rd32(game + OFF_GAME_SEMAPHORE, &flags) ||
+        !rd32(g_base + RVA_CONSOLE_PTR, &console) ||
+        !safe_read(game + 0x10u, &e->network_seed, 4) ||
+        !safe_read(game + 0x14u, &e->network_checksum_deep, 4) ||
+        !safe_read(game + 0x18u, &e->network_checksum_window, 4) ||
+        !safe_read(game + 0x1cu, &e->network_checksum_failure_threshold, 4) ||
+        !safe_read(game + 0x20u, &e->network_checksum_settings_flags, 4) ||
+        !safe_read(game + 0xbf0u, &e->network_netlib_type, 4) ||
+        !safe_read(turn + 0x3cu, &e->network_turn_length, 4) ||
+        !safe_read(turn + 0x40u, &e->network_turn_counter, 4) ||
+        !safe_read(g_base + RVA_COMMAND_MANAGER + 0x24u,
+                   &e->network_package_stamp, 4)) {
+        e->note = 25;
+        return;
+    }
+    e->network_game_flags = flags;
+    e->network_is_solo = ((fn_game_is_solo)(g_base + RVA_GAME_IS_SOLO))(
+        (const void *)game) != 0;
+    e->network_playback = (flags & 0x10u) != 0;
+    e->network_immediate_process = (flags & 0x0800u) != 0;
+    e->network_console = console;
+    e->network_console_valid = console != 0;
+    if (console && safe_read(console + 0x2a0u, &play, 4)) {
+        e->network_play = play;
+        e->network_play_valid = play >= 0 && play < 8;
+    }
+
+    for (i = 0; i < 8; i++) {
+        unsigned player = game + 0x44u + (unsigned)i * 0x8cu;
+        unsigned short player_flags = 0;
+        unsigned char last = 0;
+        int connected = 0;
+        if (!safe_read(player + 0x30u, &player_flags, 2) ||
+            !safe_read(g_base + RVA_LAST_NUM_RECEIVED + (unsigned)i, &last, 1) ||
+            !safe_read(g_base + RVA_PEER_CHECKSUMS + (unsigned)i * 4u,
+                       &e->network_peer_checksums[i], 4)) {
+            e->note = 25;
+            return;
+        }
+        e->network_last_num_received[i] = last;
+        if (player_flags & 0x0001u) e->network_player_valid_mask |= 1u << i;
+        if (player_flags & 0x0100u) e->network_player_won_mask |= 1u << i;
+        if (player_flags & 0x0010u) e->network_player_dropped_mask |= 1u << i;
+        if (player_flags & 0x0040u) e->network_player_resigned_mask |= 1u << i;
+        if (player_flags & 0x0080u) e->network_player_defeated_mask |= 1u << i;
+        if (player_flags & 0x0001u)
+            connected = ((fn_player_is_connection)(
+                g_base + RVA_PLAYER_IS_CONNECTION))((const void *)player) != 0;
+        if (connected) e->network_player_connected_mask |= 1u << i;
+        if ((player_flags & 0x0001u) && !(player_flags & 0x01d0u) && connected)
+            e->network_eligible_reporter_mask |= 1u << i;
+        if (i == play) {
+            local_flags = player_flags;
+            e->network_local_player_flags = player_flags;
+            e->network_local_connected = connected;
+        }
+    }
+
+    package_size = package_length();
+    e->network_package_size = package_size;
+    e->network_checksum_room = package_size >= 0 && package_size <= 0x1bf;
+    if (e->network_playback)
+        e->checksum_gate = CHECKSUM_PLAYBACK;
+    else if (!(flags & 0x04u))
+        e->checksum_gate = CHECKSUM_NETWORK_CLEAR;
+    else if (e->network_immediate_process)
+        e->checksum_gate = CHECKSUM_IMMEDIATE_PROCESS;
+    else if (!e->network_console_valid)
+        e->checksum_gate = CHECKSUM_NO_CONSOLE;
+    else if (!e->network_play_valid)
+        e->checksum_gate = CHECKSUM_BAD_PLAY;
+    else if (!(local_flags & 0x0001u))
+        e->checksum_gate = CHECKSUM_PLAYER_INVALID;
+    else if (local_flags & 0x01d0u)
+        e->checksum_gate = CHECKSUM_PLAYER_TERMINAL;
+    else if (!e->network_local_connected)
+        e->checksum_gate = CHECKSUM_NOT_CONNECTED;
+    else if (package_size < 0)
+        e->checksum_gate = CHECKSUM_PACKAGE_INVALID;
+    else if (!e->network_checksum_room)
+        e->checksum_gate = CHECKSUM_PACKAGE_FULL;
+    else
+        e->checksum_gate = CHECKSUM_ELIGIBLE;
+
+    if (!rd32(g_base + RVA_GAME_PTR, &game_after) ||
+        !rd32(g_base + RVA_TURN_PTR, &turn_after) ||
+        !rd32(g_base + RVA_CONSOLE_PTR, &console_after) ||
+        !rd32(game + OFF_GAME_FRAME, &frame_after) ||
+        !rd32(game + OFF_GAME_SEMAPHORE, &flags_after) ||
+        (console && !safe_read(console + 0x2a0u, &play_after, 4)) ||
+        game_after != game || turn_after != turn || console_after != console ||
+        frame_after != e->frame || flags_after != flags ||
+        (console && play_after != play) ||
+        e->network_is_solo == ((flags & 0x04u) != 0)) {
+        e->checksum_gate = CHECKSUM_TORN;
+        e->note = 26;
+        return;
+    }
+    e->network_state_valid = 1;
+    e->checksum_eligible = e->checksum_gate == CHECKSUM_ELIGIBLE;
+}
+
 static void snapshot(event_t *e, const request_t *r) {
     unsigned game = 0, turn = 0, flags = 0, sem = 0;
     e->win_tick = GetTickCount();
     e->paused = -1;
     e->speed = -1;
+    e->checksum_gate = CHECKSUM_NO_GAME;
+    e->checksum_padding_length = -1;
     if (rd32(g_base + RVA_GAME_PTR, &game) && game) {
         e->game = game;
         rd32(game + OFF_GAME_FRAME, &e->frame);
@@ -1062,16 +1300,59 @@ static void snapshot(event_t *e, const request_t *r) {
         safe_read(turn + 0x30u, &e->speed, 4);
     }
     observe_unit(e, r);
-    if (r && r->verb == V_OBSERVE_PLAYER) observe_player_public(e);
+    if (r && r->verb == V_OBSERVE_PLAYER) {
+        memset(&g_player_scratch, 0, sizeof(g_player_scratch));
+        e->player_payload = &g_player_scratch;
+        observe_player_public(e);
+    }
+    if (r && (r->verb == V_OBSERVE_NETWORK || r->verb == V_CHECKSUM))
+        observe_network(e);
 }
 
-static void push_event(const event_t *event) {
-    LONG head = g_event_head;
-    LONG tail = g_event_tail;
-    if (head - tail >= EVENT_CAP) return;
-    g_events[(unsigned)head & (EVENT_CAP - 1)] = *event;
+static player_payload_t *clone_player_payload(const player_payload_t *payload) {
+    int i;
+    for (i = 0; i < PLAYER_PAYLOAD_SLOTS; i++) {
+        if (InterlockedCompareExchange(&g_player_payloads[i].busy, 1, 0) == 0) {
+            memcpy(&g_player_payloads[i].payload, payload, sizeof(*payload));
+            return &g_player_payloads[i].payload;
+        }
+    }
+    return NULL;
+}
+
+static void release_player_payload(player_payload_t *payload) {
+    int i;
+    if (!payload) return;
+    for (i = 0; i < PLAYER_PAYLOAD_SLOTS; i++) {
+        if (payload == &g_player_payloads[i].payload) {
+            InterlockedExchange(&g_player_payloads[i].busy, 0);
+            return;
+        }
+    }
+}
+
+static int push_event(const event_t *event) {
+    LONG head = InterlockedCompareExchange(&g_event_head, 0, 0);
+    LONG tail = InterlockedCompareExchange(&g_event_tail, 0, 0);
+    event_t *slot;
+    player_payload_t *payload = NULL;
+    if ((unsigned)(head - tail) >= EVENT_CAP) {
+        InterlockedIncrement(&g_dropped_events);
+        return 0;
+    }
+    if (event->player_payload) {
+        payload = clone_player_payload(event->player_payload);
+        if (!payload) {
+            InterlockedIncrement(&g_dropped_events);
+            return 0;
+        }
+    }
+    slot = &g_events[(unsigned)head & (EVENT_CAP - 1)];
+    *slot = *event;
+    slot->player_payload = payload;
     MemoryBarrier();
     InterlockedIncrement(&g_event_head);
+    return 1;
 }
 
 typedef void (__attribute__((thiscall)) *fn_void0)(void *self);
@@ -1236,6 +1517,7 @@ static int dispatch(const request_t *r, event_t *e) {
         case V_OBSERVE:
         case V_OBSERVE_GUYS:
         case V_OBSERVE_PLAYER:
+        case V_OBSERVE_NETWORK:
             return 1;
         case V_VALIDATE_QUEUE: {
             int is_unit = 0;
@@ -1452,8 +1734,14 @@ static int dispatch(const request_t *r, event_t *e) {
             ((fn_void0)(g_base + RVA_ISSUE_SPEED_DOWN))(manager);
             break;
         case V_CHECKSUM:
-            ((fn_void0)(g_base + RVA_ISSUE_CHECKSUM))(manager);
-            break;
+            /* process_turn at 0x0093ef10 already calls issue_check_sums once
+               per multiplayer turn.  A manual second emission can fill the
+               package and starve retail's mandatory native checksum/turn data. */
+            e->checksum_gate = CHECKSUM_ACTIVE_DISABLED;
+            e->checksum_eligible = 0;
+            e->mutates_outgoing_package = 0;
+            e->package_after = e->package_before;
+            return 0;
         case V_MOVE:
             make_group(group, r);
             ((fn_move)(g_base + RVA_ISSUE_MOVE))(manager, group,
@@ -1515,46 +1803,45 @@ static int dispatch(const request_t *r, event_t *e) {
 }
 
 static void trace_tick(void) {
-    event_t e, terminal;
+    event_t *e = &g_trace_event;
     void *manager = (void *)(g_base + RVA_COMMAND_MANAGER);
     if (!g_trace.active) return;
-    memset(&e, 0, sizeof(e));
-    e.seq = g_trace.req.seq;
-    e.verb = g_trace.req.verb;
-    snapshot(&e, &g_trace.req);
-    if (e.frame == g_trace.last_frame) {
-        if (g_trace.finishing && e.paused == 1) {
-            e.phase = g_trace.bounded ? 7 : 6;
-            push_event(&e);
+    memset(e, 0, sizeof(*e));
+    e->seq = g_trace.req.seq;
+    e->verb = g_trace.req.verb;
+    snapshot(e, &g_trace.req);
+    if (e->frame == g_trace.last_frame) {
+        if (g_trace.finishing && e->paused == 1) {
+            e->phase = g_trace.bounded ? 7 : 6;
+            push_event(e);
             g_trace.active = 0;
         }
         return;
     }
-    g_trace.last_frame = e.frame;
-    if (g_trace.req.verb == V_TRACE_MOVE && e.order_length > 0)
+    g_trace.last_frame = e->frame;
+    if (g_trace.req.verb == V_TRACE_MOVE && e->order_length > 0)
         g_trace.saw_order = 1;
-    e.phase = 5; /* trace-sample */
+    e->phase = 5; /* trace-sample */
 
     if (!g_trace.finishing &&
-        ((g_trace.req.verb == V_TRACE_MOVE && g_trace.saw_order && e.order_length == 0) ||
-         (unsigned)(e.frame - g_trace.start_frame) >=
+        ((g_trace.req.verb == V_TRACE_MOVE && g_trace.saw_order && e->order_length == 0) ||
+         (unsigned)(e->frame - g_trace.start_frame) >=
              (unsigned)(g_trace.req.verb == V_TRACE_MOVE ?
                         g_trace.req.arg[3] : g_trace.req.arg[0]))) {
         g_trace.bounded = g_trace.req.verb == V_TRACE_MOVE &&
-                          !(g_trace.saw_order && e.order_length == 0);
-        e.package_before = package_length();
+                          !(g_trace.saw_order && e->order_length == 0);
+        e->package_before = package_length();
         ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, 1);
-        capture_append(&e);
+        capture_append(e);
         g_trace.finishing = 1;
     }
-    push_event(&e);
+    push_event(e);
 
-    if (g_trace.finishing && e.paused == 1) {
-        terminal = e;
-        terminal.phase = g_trace.bounded ? 7 : 6; /* trace-bounded/trace-complete */
-        terminal.command_len = 0;
-        terminal.command[0] = 0;
-        push_event(&terminal);
+    if (g_trace.finishing && e->paused == 1) {
+        e->phase = g_trace.bounded ? 7 : 6; /* trace-bounded/trace-complete */
+        e->command_len = 0;
+        e->command[0] = 0;
+        push_event(e);
         g_trace.active = 0;
     }
 }
@@ -1588,85 +1875,139 @@ static int verify_applied(event_t *e, const verify_t *v) {
 }
 
 /* Runs on the retail main thread immediately before and after TurnControl::do_frame. */
-static void __cdecl on_turn_frame(void) {
-    event_t e;
+static void __cdecl on_turn_frame(int is_post) {
+    event_t *e = &g_callback_event;
     request_t r;
     LONG verb;
-    if (g_stopping) {
-        /* The active game thread has already followed the patched call into this
-           trampoline, so it can restore the future call site without racing its
-           own instruction fetch.  The trampoline stays mapped until process exit. */
-        if (g_hook_installed &&
-            InterlockedCompareExchange(&g_stop_ack, 0, 0) == 0) {
-            if (write_code(g_hook_addr, g_hook_orig, 5)) {
-                g_hook_installed = 0;
-                InterlockedExchange(&g_stop_ack, 1);
-            } else {
-                InterlockedExchange(&g_stop_ack, -1);
-            }
-        }
-        return;
-    }
-
     trace_tick();
 
     if (g_verify.active) {
-        memset(&e, 0, sizeof(e));
-        e.seq = g_verify.req.seq;
-        e.verb = g_verify.req.verb;
-        snapshot(&e, &g_verify.req);
-        if (verify_applied(&e, &g_verify)) {
-            e.phase = 2;
-            push_event(&e);
+        memset(e, 0, sizeof(*e));
+        e->seq = g_verify.req.seq;
+        e->verb = g_verify.req.verb;
+        snapshot(e, &g_verify.req);
+        if (verify_applied(e, &g_verify)) {
+            e->phase = 2;
+            push_event(e);
             g_verify.active = 0;
-        } else if ((unsigned)(e.win_tick - g_verify.started) >= 3000u) {
-            e.phase = 3;
-            push_event(&e);
+        } else if ((unsigned)(e->win_tick - g_verify.started) >= 3000u) {
+            e->phase = 3;
+            push_event(e);
             g_verify.active = 0;
         }
     }
 
+    /* Peer checksum totals are meaningful only after TurnControl::do_frame. */
+    if (!is_post &&
+        InterlockedCompareExchange(&g_pending, 0, 0) == V_OBSERVE_NETWORK)
+        return;
     verb = InterlockedExchange(&g_pending, V_NONE);
     if (verb == V_NONE) return;
     MemoryBarrier();
     r = g_request;
-    memset(&e, 0, sizeof(e));
-    e.seq = r.seq;
-    e.verb = r.verb;
-    snapshot(&e, &r);
+    memset(e, 0, sizeof(*e));
+    e->seq = r.seq;
+    e->verb = r.verb;
+    snapshot(e, &r);
     if ((r.verb == V_TRACE_MOVE || r.verb == V_RUN_FRAMES) &&
-        (g_trace.active || e.paused != 1 ||
-         (r.verb == V_TRACE_MOVE && !e.first_object))) {
-        e.phase = 4;
-        e.note = g_trace.active ? 3 : (e.paused != 1 ? 2 : 4);
-        push_event(&e);
-    } else if (dispatch(&r, &e)) {
-        e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
-                   r.verb == V_OBSERVE_PLAYER || r.verb == V_VALIDATE_QUEUE ||
+        (g_trace.active || e->paused != 1 ||
+         (r.verb == V_TRACE_MOVE && !e->first_object))) {
+        e->phase = 4;
+        e->note = g_trace.active ? 3 : (e->paused != 1 ? 2 : 4);
+        push_event(e);
+    } else if (dispatch(&r, e)) {
+        e->phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
+                   r.verb == V_OBSERVE_PLAYER || r.verb == V_OBSERVE_NETWORK ||
+                   r.verb == V_VALIDATE_QUEUE ||
                    r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD ||
                    r.verb == V_FIND_GATHER_BUILD ||
                    r.verb == V_FIND_SCOUT_STEP ||
                    r.verb == V_VALIDATE_ATTACK) ? 0 : 1;
-        push_event(&e);
+        push_event(e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
             r.verb == V_HALT || r.verb == V_ATTACK ||
             r.verb == V_ATTACK_VISIBLE) {
             g_verify.active = 1;
             g_verify.req = r;
             g_verify.started = GetTickCount();
-            g_verify.initial_order_length = e.order_length;
-            g_verify.initial_order_vtable = e.current_order_vtable;
+            g_verify.initial_order_length = e->order_length;
+            g_verify.initial_order_vtable = e->current_order_vtable;
         } else if (r.verb == V_TRACE_MOVE || r.verb == V_RUN_FRAMES) {
             memset(&g_trace, 0, sizeof(g_trace));
             g_trace.active = 1;
             g_trace.req = r;
-            g_trace.start_frame = e.frame;
-            g_trace.last_frame = e.frame;
+            g_trace.start_frame = e->frame;
+            g_trace.last_frame = e->frame;
         }
     } else {
-        e.phase = 4;
-        e.note = 1; /* retail gate rejected it or package had no room */
-        push_event(&e);
+        e->phase = 4;
+        e->note = 1; /* retail gate rejected it or package had no room */
+        push_event(e);
+    }
+}
+
+static void cancel_main_thread_work(void) {
+    InterlockedExchange(&g_pending, V_NONE);
+    g_verify.active = 0;
+    g_trace.active = 0;
+    g_trace.finishing = 0;
+    MemoryBarrier();
+}
+
+/*
+ * STOP may be noticed in either half of the trampoline.  Restore only bytes
+ * owned by this generation, but publish the acknowledgement only from the
+ * post-turn boundary after the matching in-flight trampoline has retired.
+ */
+static void stop_from_main_thread(void) {
+    LONG installed;
+    cancel_main_thread_work();
+    if (InterlockedCompareExchange(&g_stop_ack, 0, 0) != 0) return;
+    installed = InterlockedCompareExchange(&g_hook_installed, 0, 0);
+    if (installed) {
+        if (memcmp(g_hook_addr, g_hook_patch, sizeof(g_hook_patch)) != 0) {
+            InterlockedExchange(&g_stop_ack, -1);
+            return;
+        }
+        if (!write_code(g_hook_addr, g_hook_orig, 5)) {
+            if (memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0)
+                InterlockedExchange(&g_hook_installed, 0);
+            InterlockedExchange(&g_stop_ack, -1);
+            return;
+        }
+        InterlockedExchange(&g_hook_installed, 0);
+    } else if (memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) != 0) {
+        InterlockedExchange(&g_stop_ack, -1);
+    }
+}
+
+static void publish_main_thread_stop(LONG remaining) {
+    if (remaining == 0 &&
+        InterlockedCompareExchange(&g_stop_ack, 0, 0) == 0 &&
+        InterlockedCompareExchange(&g_hook_installed, 0, 0) == 0 &&
+        memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0)
+        InterlockedExchange(&g_stop_ack, 1);
+}
+
+static void __cdecl on_turn_pre(void) {
+    InterlockedIncrement(&g_hook_inflight);
+    if (InterlockedCompareExchange(&g_stopping, 0, 0))
+        stop_from_main_thread();
+    else
+        on_turn_frame(0);
+}
+
+static void __cdecl on_turn_post(void) {
+    LONG remaining;
+    if (InterlockedCompareExchange(&g_stopping, 0, 0))
+        stop_from_main_thread();
+    else
+        on_turn_frame(1);
+    remaining = InterlockedDecrement(&g_hook_inflight);
+    /* Close the race where STOP becomes visible while the post callback runs. */
+    if (InterlockedCompareExchange(&g_stopping, 0, 0)) {
+        stop_from_main_thread();
+        publish_main_thread_stop(remaining);
     }
 }
 
@@ -1675,8 +2016,9 @@ static BYTE *emit32(BYTE *p, unsigned v) { memcpy(p, &v, 4); return p + 4; }
 
 static BYTE *build_trampoline(void) {
     BYTE *m = (BYTE *)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                   PAGE_EXECUTE_READWRITE);
+                                   PAGE_READWRITE);
     BYTE *p;
+    DWORD old;
     if (!m) return NULL;
     memset(m, 0xcc, 0x1000);
     p = m;
@@ -1684,7 +2026,7 @@ static BYTE *build_trampoline(void) {
     p = emit8(p, 0x9c);                         /* pushfd */
     p = emit8(p, 0x60);                         /* pushad */
     p = emit8(p, 0xe8);                         /* call rel32 */
-    p = emit32(p, (unsigned)((BYTE *)on_turn_frame - (p + 4)));
+    p = emit32(p, (unsigned)((BYTE *)on_turn_pre - (p + 4)));
     p = emit8(p, 0x61);                         /* popad */
     p = emit8(p, 0x9d);                         /* popfd */
     p = emit8(p, 0xe8);                         /* original TurnControl::do_frame */
@@ -1693,15 +2035,36 @@ static BYTE *build_trampoline(void) {
     p = emit8(p, 0x9c);
     p = emit8(p, 0x60);
     p = emit8(p, 0xe8);
-    p = emit32(p, (unsigned)((BYTE *)on_turn_frame - (p + 4)));
+    p = emit32(p, (unsigned)((BYTE *)on_turn_post - (p + 4)));
     p = emit8(p, 0x61);
     p = emit8(p, 0x9d);
     p = emit8(p, 0xc3);                         /* return to Game::loop */
-    FlushInstructionCache(g_self_process, m, 0x1000);
+    if (!VirtualProtect(m, 0x1000, PAGE_EXECUTE_READ, &old) ||
+        !FlushInstructionCache(g_self_process, m, 0x1000)) {
+        VirtualFree(m, 0, MEM_RELEASE);
+        return NULL;
+    }
     return m;
 }
 
-static void resume_all(HANDLE *threads, int n);
+static int resume_all(HANDLE *threads, int n);
+
+static int resume_one(HANDLE thread) {
+    int tries;
+    for (tries = 0; tries < 3; tries++) {
+        if (ResumeThread(thread) != (DWORD)-1) return 1;
+        Sleep(0);
+    }
+    return 0;
+}
+
+static int has_suspended_thread(HANDLE *threads, int n, DWORD thread_id) {
+    int i;
+    for (i = 0; i < n; i++) {
+        if (GetThreadId(threads[i]) == thread_id) return 1;
+    }
+    return 0;
+}
 
 static int suspend_others(HANDLE *threads, int cap) {
     HANDLE snap;
@@ -1715,33 +2078,92 @@ static int suspend_others(HANDLE *threads, int cap) {
         CloseHandle(snap);
         return -1;
     }
-    do {
+    for (;;) {
         HANDLE h;
-        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
-        if (n >= cap) {
+        if (te.th32OwnerProcessID == pid && te.th32ThreadID != self) {
+            if (n >= cap) {
+                CloseHandle(snap);
+                resume_all(threads, n);
+                return -1;
+            }
+            h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                           THREAD_QUERY_INFORMATION,
+                           FALSE, te.th32ThreadID);
+            if (h) {
+                DWORD previous = SuspendThread(h);
+                if (previous == (DWORD)-1) {
+                    CloseHandle(h);
+                    h = NULL;
+                } else if (previous != 0) {
+                    /* Preserve an external suspend count exactly; do not treat
+                       an already-suspended thread as a quiesced thread we own. */
+                    resume_one(h);
+                    CloseHandle(h);
+                    h = NULL;
+                }
+            }
+            if (!h) {
+                CloseHandle(snap);
+                resume_all(threads, n);
+                return -1;
+            }
+            threads[n++] = h;
+        }
+        if (!Thread32Next(snap, &te)) {
+            DWORD error = GetLastError();
+            if (error != ERROR_NO_MORE_FILES) {
+                CloseHandle(snap);
+                resume_all(threads, n);
+                return -1;
+            }
+            break;
+        }
+    }
+    CloseHandle(snap);
+    /* A second complete snapshot refuses a thread created during the first
+       enumeration instead of overstating the dormant fallback's coverage. */
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        resume_all(threads, n);
+        return -1;
+    }
+    te.dwSize = sizeof(te);
+    if (!Thread32First(snap, &te)) {
+        CloseHandle(snap);
+        resume_all(threads, n);
+        return -1;
+    }
+    for (;;) {
+        if (te.th32OwnerProcessID == pid && te.th32ThreadID != self &&
+            !has_suspended_thread(threads, n, te.th32ThreadID)) {
             CloseHandle(snap);
             resume_all(threads, n);
             return -1;
         }
-        h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, te.th32ThreadID);
-        if (!h || SuspendThread(h) == (DWORD)-1) {
-            if (h) CloseHandle(h);
-            CloseHandle(snap);
-            resume_all(threads, n);
-            return -1;
+        if (!Thread32Next(snap, &te)) {
+            DWORD error = GetLastError();
+            if (error != ERROR_NO_MORE_FILES) {
+                CloseHandle(snap);
+                resume_all(threads, n);
+                return -1;
+            }
+            break;
         }
-        threads[n++] = h;
-    } while (Thread32Next(snap, &te));
+    }
     CloseHandle(snap);
     return n;
 }
 
-static void resume_all(HANDLE *threads, int n) {
-    int i;
-    for (i = 0; i < n; i++) { ResumeThread(threads[i]); CloseHandle(threads[i]); }
+static int resume_all(HANDLE *threads, int n) {
+    int i, ok = 1;
+    for (i = 0; i < n; i++) {
+        if (!resume_one(threads[i])) ok = 0;
+        CloseHandle(threads[i]);
+    }
+    return ok;
 }
 
-static int eip_in_patch(HANDLE *threads, int n) {
+static int eip_in_owned_code(HANDLE *threads, int n) {
     int i;
     CONTEXT c;
     for (i = 0; i < n; i++) {
@@ -1749,7 +2171,11 @@ static int eip_in_patch(HANDLE *threads, int n) {
         c.ContextFlags = CONTEXT_CONTROL;
         if (!GetThreadContext(threads[i], &c))
             return -1;
-        if (c.Eip >= (DWORD)g_hook_addr && c.Eip < (DWORD)g_hook_addr + 5)
+        if ((c.Eip >= (DWORD)g_hook_addr && c.Eip < (DWORD)g_hook_addr + 5) ||
+            (g_trampoline && c.Eip >= (DWORD)g_trampoline &&
+             c.Eip < (DWORD)g_trampoline + 0x1000u) ||
+            (g_controller_base && c.Eip >= g_controller_base &&
+             c.Eip < g_controller_base + g_controller_size))
             return 1;
     }
     return 0;
@@ -1761,9 +2187,9 @@ static int quiesce(HANDLE *threads, int cap) {
         int in_patch;
         n = suspend_others(threads, cap);
         if (n < 0) return -1;
-        in_patch = eip_in_patch(threads, n);
+        in_patch = eip_in_owned_code(threads, n);
         if (in_patch == 0) return n;
-        resume_all(threads, n);
+        if (!resume_all(threads, n)) return -1;
         if (in_patch < 0) return -1;
         Sleep(2);
     }
@@ -1771,42 +2197,62 @@ static int quiesce(HANDLE *threads, int cap) {
 }
 
 static int write_code(BYTE *dst, const BYTE *src, unsigned n) {
-    DWORD old;
+    DWORD old, ignored;
+    int ok = 1, tries;
     if (!VirtualProtect(dst, n, PAGE_EXECUTE_READWRITE, &old)) return 0;
     memcpy(dst, src, n);
-    FlushInstructionCache(g_self_process, dst, n);
-    if (!VirtualProtect(dst, n, old, &old)) return 0;
-    FlushInstructionCache(g_self_process, dst, n);
-    return memcmp(dst, src, n) == 0;
+    if (!FlushInstructionCache(g_self_process, dst, n)) ok = 0;
+    for (tries = 0; tries < 3; tries++) {
+        if (VirtualProtect(dst, n, old, &ignored)) break;
+        Sleep(0);
+    }
+    if (tries == 3) ok = 0;
+    if (!FlushInstructionCache(g_self_process, dst, n)) ok = 0;
+    return ok && memcmp(dst, src, n) == 0;
 }
 
 static int install_hook(void) {
-    static const BYTE expected[5] = {0xe8, 0x45, 0x67, 0x3c, 0x00};
-    BYTE patch[5];
     HANDLE threads[128];
-    int n, ok;
-    if (g_hook_installed) return 1;
-    if (memcmp(g_hook_addr, expected, 5) != 0) {
+    int n, ok, resumed;
+    LONG installed = InterlockedCompareExchange(&g_hook_installed, 0, 0);
+    if (installed)
+        return memcmp(g_hook_addr, g_hook_patch, sizeof(g_hook_patch)) == 0;
+    if (InterlockedCompareExchange(&g_stopping, 0, 0) ||
+        memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) != 0) {
         log_line("REFUSED: Game::loop TurnControl call site does not match supported image");
         return 0;
     }
-    memcpy(g_hook_orig, g_hook_addr, 5);
     if (!g_trampoline) g_trampoline = build_trampoline();
     if (!g_trampoline) return 0;
-    patch[0] = 0xe8;
-    *(int *)(patch + 1) = (int)(g_trampoline - (g_hook_addr + 5));
+    g_hook_patch[0] = 0xe8;
+    *(int *)(g_hook_patch + 1) = (int)(g_trampoline - (g_hook_addr + 5));
     n = quiesce(threads, 128);
     if (n < 0) return 0;
-    ok = write_code(g_hook_addr, patch, 5);
-    resume_all(threads, n);
-    if (ok) { g_hook_installed = 1; log_line("hook installed"); }
+    /* Ownership must still be unambiguous after every competing worker is suspended. */
+    if (memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) != 0) {
+        resume_all(threads, n);
+        return 0;
+    }
+    ok = write_code(g_hook_addr, g_hook_patch, sizeof(g_hook_patch));
+    if (memcmp(g_hook_addr, g_hook_patch, sizeof(g_hook_patch)) == 0)
+        InterlockedExchange(&g_hook_installed, 1);
+    if (!ok && InterlockedCompareExchange(&g_hook_installed, 0, 0)) {
+        log_line("REFUSED: hook write incomplete; attempting exact rollback");
+        write_code(g_hook_addr, g_hook_orig, sizeof(g_hook_orig));
+        if (memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0)
+            InterlockedExchange(&g_hook_installed, 0);
+    }
+    resumed = resume_all(threads, n);
+    ok = ok && resumed &&
+         InterlockedCompareExchange(&g_hook_installed, 0, 0) == 1 &&
+         memcmp(g_hook_addr, g_hook_patch, sizeof(g_hook_patch)) == 0;
+    if (ok) log_line("hook installed");
     return ok;
 }
 
 static int remove_hook(void) {
     HANDLE threads[128];
-    int n, ok, tries;
-    if (!g_hook_installed) return 1;
+    int n, ok, resumed, tries;
     InterlockedExchange(&g_stop_ack, 0);
     InterlockedExchange(&g_stopping, 1);
     /* Normal live removal is acknowledged by the retail main-thread callback.
@@ -1815,6 +2261,10 @@ static int remove_hook(void) {
     for (tries = 0; tries < 100; tries++) {
         LONG ack = InterlockedCompareExchange(&g_stop_ack, 0, 0);
         if (ack > 0) {
+            if (InterlockedCompareExchange(&g_hook_inflight, 0, 0) != 0 ||
+                InterlockedCompareExchange(&g_hook_installed, 0, 0) != 0 ||
+                memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) != 0)
+                return 0;
             log_line("hook removed on retail main thread; DLL parked");
             return 1;
         }
@@ -1823,9 +2273,24 @@ static int remove_hook(void) {
     }
     n = quiesce(threads, 128);
     if (n < 0) return 0;
-    ok = write_code(g_hook_addr, g_hook_orig, 5);
-    resume_all(threads, n);
-    if (ok) { g_hook_installed = 0; log_line("hook removed; DLL parked"); }
+    if (InterlockedCompareExchange(&g_hook_inflight, 0, 0) != 0 ||
+        (InterlockedCompareExchange(&g_hook_installed, 0, 0) != 0 &&
+         memcmp(g_hook_addr, g_hook_patch, sizeof(g_hook_patch)) != 0)) {
+        resume_all(threads, n);
+        return 0;
+    }
+    cancel_main_thread_work();
+    ok = InterlockedCompareExchange(&g_hook_installed, 0, 0) == 0
+             ? memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0
+             : write_code(g_hook_addr, g_hook_orig, sizeof(g_hook_orig));
+    if (memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0)
+        InterlockedExchange(&g_hook_installed, 0);
+    if (ok) InterlockedExchange(&g_stop_ack, 1);
+    resumed = resume_all(threads, n);
+    ok = ok && resumed &&
+         InterlockedCompareExchange(&g_hook_installed, 0, 0) == 0 &&
+         memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0;
+    if (ok) log_line("hook removed; DLL parked");
     return ok;
 }
 
@@ -1864,7 +2329,7 @@ static int tokenize(char *line, char **tok, int cap) {
 /* Protocol:
  * seq observe
  * seq pause 0|1
- * seq speed N | speed-up | speed-down | checksum
+ * seq speed N | speed-up | speed-down
  * seq halt WHO ID...
  * seq move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK ID...
  * seq attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED ID...
@@ -1873,6 +2338,7 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq run-frames FRAMES
  * seq observe-guys WHO ID
  * seq observe-player
+ * seq observe-network
  * seq validate-queue WHO PRODUCER_ID TYPE
  * seq validate-build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
  * seq find-build WHO ORIGIN_X ORIGIN_Y RADIUS TYPE WORKER_ID
@@ -1892,6 +2358,8 @@ static int parse_request(char *line, request_t *r) {
     if (!ok || !r->seq) return 0;
     if (!strcmp(t[1], "observe") && n == 2) r->verb = V_OBSERVE;
     else if (!strcmp(t[1], "observe-player") && n == 2) r->verb = V_OBSERVE_PLAYER;
+    else if (!strcmp(t[1], "observe-network") && n == 2)
+        r->verb = V_OBSERVE_NETWORK;
     else if (!strcmp(t[1], "observe-guys") && n == 4) {
         int id;
         r->verb = V_OBSERVE_GUYS;
@@ -1944,7 +2412,6 @@ static int parse_request(char *line, request_t *r) {
         if (r->arg[0] < 0 || r->arg[0] > 4) ok = 0;
     } else if (!strcmp(t[1], "speed-up") && n == 2) r->verb = V_SPEED_UP;
     else if (!strcmp(t[1], "speed-down") && n == 2) r->verb = V_SPEED_DOWN;
-    else if (!strcmp(t[1], "checksum") && n == 2) r->verb = V_CHECKSUM;
     else if (!strcmp(t[1], "halt") && n >= 4) {
         r->verb = V_HALT; r->arg[0] = parse_int(t[2], &ok); first = 3;
     } else if (!strcmp(t[1], "move") && n >= 11) {
@@ -2071,6 +2538,23 @@ static int read_request(char *buf, unsigned cap) {
     return got != 0;
 }
 
+static int delete_control_file_if_present(const char *path) {
+    DWORD error;
+    if (DeleteFileA(path)) return 1;
+    error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
+/*
+ * A STOP/rearm boundary is also a request epoch boundary.  Both the published
+ * request and the host's atomic-rename staging name must be absent before a
+ * generation can arm.  Failure to prove that fence leaves the hook removed.
+ */
+static int fence_request_epoch(void) {
+    return delete_control_file_if_present(g_request_path) &&
+           delete_control_file_if_present(g_request_tmp_path);
+}
+
 static const char *verb_name(unsigned verb) {
     switch (verb) {
         case V_OBSERVE: return "observe"; case V_PAUSE: return "pause";
@@ -2081,6 +2565,7 @@ static const char *verb_name(unsigned verb) {
         case V_TRACE_MOVE: return "trace-move";
         case V_OBSERVE_GUYS: return "observe-guys";
         case V_OBSERVE_PLAYER: return "observe-player";
+        case V_OBSERVE_NETWORK: return "observe-network";
         case V_GATHER: return "gather"; case V_QUEUE_UP: return "queue";
         case V_BUILD: return "build";
         case V_VALIDATE_QUEUE: return "validate-queue";
@@ -2103,19 +2588,62 @@ static const char *phase_name(unsigned phase) {
     }
 }
 
+static const char *checksum_gate_name(unsigned gate) {
+    switch (gate) {
+        case CHECKSUM_ELIGIBLE: return "eligible";
+        case CHECKSUM_NO_GAME: return "no_game";
+        case CHECKSUM_PLAYBACK: return "playback";
+        case CHECKSUM_NETWORK_CLEAR: return "network_clear";
+        case CHECKSUM_IMMEDIATE_PROCESS: return "immediate_process";
+        case CHECKSUM_NO_CONSOLE: return "no_console";
+        case CHECKSUM_BAD_PLAY: return "bad_play";
+        case CHECKSUM_PLAYER_INVALID: return "player_invalid";
+        case CHECKSUM_PLAYER_TERMINAL: return "player_terminal";
+        case CHECKSUM_NOT_CONNECTED: return "not_connected";
+        case CHECKSUM_PACKAGE_INVALID: return "package_invalid";
+        case CHECKSUM_PACKAGE_FULL: return "package_full";
+        case CHECKSUM_TORN: return "torn";
+        case CHECKSUM_ACTIVE_DISABLED: return "active_disabled";
+        default: return "unknown";
+    }
+}
+
+static int append_json(char *line, size_t cap, size_t *used,
+                       const char *format, ...) {
+    int n;
+    va_list args;
+    if (*used >= cap) return 0;
+    va_start(args, format);
+    n = _vsnprintf(line + *used, cap - *used, format, args);
+    va_end(args);
+    if (n < 0 || (size_t)n >= cap - *used) {
+        line[cap - 1] = 0;
+        return 0;
+    }
+    *used += (size_t)n;
+    return 1;
+}
+
 static void write_event(const event_t *e) {
-    char line[262144], hex[MAX_COMMAND_CAPTURE * 2 + 1], tech_hex[203];
+    char *line, hex[MAX_COMMAND_CAPTURE * 2 + 1], tech_hex[203];
+    const player_payload_t *payload = e->player_payload;
     unsigned i;
-    size_t used;
+    size_t used = 0, length, offset;
     HANDLE h;
     DWORD wrote;
+    line = (char *)HeapAlloc(GetProcessHeap(), 0, EVENT_JSON_CAP);
+    if (!line) {
+        log_line("REFUSED: event JSON allocation failed");
+        return;
+    }
     for (i = 0; i < e->command_len && i < MAX_COMMAND_CAPTURE; i++)
-        sprintf(hex + i * 2, "%02x", e->command[i]);
+        _snprintf(hex + i * 2, 3, "%02x", e->command[i]);
     hex[i * 2] = 0;
-    for (i = 0; i < sizeof(e->player_tech_bits); i++)
-        sprintf(tech_hex + i * 2, "%02x", e->player_tech_bits[i]);
-    tech_hex[sizeof(e->player_tech_bits) * 2] = 0;
-    _snprintf(line, sizeof(line) - 1,
+    for (i = 0; i < 101; i++)
+        _snprintf(tech_hex + i * 2, 3, "%02x",
+                  payload ? payload->player_tech_bits[i] : 0);
+    tech_hex[202] = 0;
+    if (!append_json(line, EVENT_JSON_CAP, &used,
         "{\"seq\":%u,\"verb\":\"%s\",\"phase\":\"%s\","
         "\"tick\":%u,\"game\":\"0x%08x\",\"frame\":%u,\"seconds\":%u,"
         "\"paused\":%d,\"speed\":%d,\"network\":%u,\"package_before\":%d,"
@@ -2157,12 +2685,11 @@ static void write_event(const event_t *e) {
         e->move_orig_x, e->move_orig_y, e->move_off_x, e->move_off_y,
         e->attack_valid, e->attack_target_who, e->attack_target_id,
         e->attack_target_uid, e->note,
-        e->guy_length, e->guy_capacity, e->guy_count, e->guy_truncated);
-    line[sizeof(line) - 1] = 0;
-    used = strlen(line);
+        e->guy_length, e->guy_capacity, e->guy_count, e->guy_truncated))
+        goto serialize_failed;
     for (i = 0; i < (unsigned)e->guy_count && i < MAX_GUYS; i++) {
         const guy_sample_t *g = &e->guys[i];
-        int n = _snprintf(line + used, sizeof(line) - used,
+        if (!append_json(line, EVENT_JSON_CAP, &used,
             "%s{\"index\":%u,\"pointer\":\"0x%08x\",\"type\":%d,"
             "\"x\":%d,\"y\":%d,\"z\":%d,\"angle\":%u,"
             "\"des_x\":%d,\"des_y\":%d,\"des_angle\":%u,"
@@ -2170,12 +2697,10 @@ static void write_event(const event_t *e) {
             "\"guy_num\":%u}",
             i ? "," : "", i, g->pointer, g->type, g->x, g->y, g->z, g->angle,
             g->des_x, g->des_y, g->des_angle, g->last_x, g->last_y,
-            g->off_x, g->off_y, g->guy_num);
-        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-        used += (size_t)n;
+            g->off_x, g->off_y, g->guy_num))
+            goto serialize_failed;
     }
-    {
-        int n = _snprintf(line + used, sizeof(line) - used,
+    if (!append_json(line, EVENT_JSON_CAP, &used,
             "],\"local_player\":%d,\"world_tile_xs\":%d,\"world_tile_ys\":%d,"
             "\"player_pop\":%d,\"player_pop_cap\":%d,"
             "\"player_leader_flags\":%u,\"player_identity_flags\":%u,"
@@ -2195,8 +2720,7 @@ static void write_event(const event_t *e) {
             "\"placement_y\":%d,\"placement_tested\":%d,"
             "\"placement_legal\":%d,\"placement_seen\":%d,"
             "\"placement_capacity\":%d,\"placement_snap_x\":%d,"
-            "\"placement_snap_y\":%d,\"placement_ring\":%d,"
-            "\"player_queued_types\":[",
+            "\"placement_snap_y\":%d,\"placement_ring\":%d,",
             e->local_player, e->world_tile_xs, e->world_tile_ys,
             e->player_pop, e->player_pop_cap, e->player_leader_flags,
             e->player_identity_flags, e->player_tribe, e->player_team,
@@ -2216,25 +2740,85 @@ static void write_event(const event_t *e) {
             e->visible_enemy_truncated, e->validation_result,
             e->placement_x, e->placement_y, e->placement_tested,
             e->placement_legal, e->placement_seen, e->placement_capacity,
-            e->placement_snap_x, e->placement_snap_y, e->placement_ring);
-        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
-    }
+            e->placement_snap_x, e->placement_snap_y, e->placement_ring))
+        goto serialize_failed;
+    if (!append_json(line, EVENT_JSON_CAP, &used,
+            "\"network_state_valid\":%d,\"network_game_flags\":%u,"
+            "\"network_is_solo\":%d,\"network_playback\":%d,"
+            "\"network_immediate_process\":%d,"
+            "\"network_console\":\"0x%08x\",\"network_console_valid\":%d,"
+            "\"network_play\":%d,\"network_play_valid\":%d,"
+            "\"network_local_player_flags\":%u,\"network_local_connected\":%d,"
+            "\"network_player_valid_mask\":%u,\"network_player_won_mask\":%u,"
+            "\"network_player_dropped_mask\":%u,"
+            "\"network_player_resigned_mask\":%u,"
+            "\"network_player_defeated_mask\":%u,"
+            "\"network_player_connected_mask\":%u,"
+            "\"network_eligible_reporter_mask\":%u,"
+            "\"network_seed\":%u,\"network_checksum_deep\":%d,"
+            "\"network_checksum_window\":%d,"
+            "\"network_checksum_failure_threshold\":%d,"
+            "\"network_checksum_settings_flags\":%u,"
+            "\"network_netlib_type\":%d,\"network_turn_length\":%d,"
+            "\"network_turn_counter\":%d,\"network_package_stamp\":%u,"
+            "\"network_package_size\":%d,\"network_checksum_room\":%d,"
+            "\"network_last_num_received\":[%u,%u,%u,%u,%u,%u,%u,%u],"
+            "\"network_peer_checksums\":[%u,%u,%u,%u,%u,%u,%u,%u],"
+            "\"checksum_gate\":\"%s\",\"checksum_eligible\":%d,"
+            "\"mutates_outgoing_package\":%d,\"checksum_capture_valid\":%d,"
+            "\"checksum_padding_length\":%d,"
+            "\"checksum_total_consistent\":%d,\"checksum_adler_shaped\":%d,"
+            "\"checksum_words\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u],"
+            "\"player_queued_types\":[",
+            e->network_state_valid, e->network_game_flags, e->network_is_solo,
+            e->network_playback, e->network_immediate_process,
+            e->network_console, e->network_console_valid, e->network_play,
+            e->network_play_valid, e->network_local_player_flags,
+            e->network_local_connected, e->network_player_valid_mask,
+            e->network_player_won_mask, e->network_player_dropped_mask,
+            e->network_player_resigned_mask, e->network_player_defeated_mask,
+            e->network_player_connected_mask, e->network_eligible_reporter_mask,
+            e->network_seed, e->network_checksum_deep,
+            e->network_checksum_window, e->network_checksum_failure_threshold,
+            e->network_checksum_settings_flags, e->network_netlib_type,
+            e->network_turn_length, e->network_turn_counter,
+            e->network_package_stamp, e->network_package_size,
+            e->network_checksum_room,
+            e->network_last_num_received[0], e->network_last_num_received[1],
+            e->network_last_num_received[2], e->network_last_num_received[3],
+            e->network_last_num_received[4], e->network_last_num_received[5],
+            e->network_last_num_received[6], e->network_last_num_received[7],
+            e->network_peer_checksums[0], e->network_peer_checksums[1],
+            e->network_peer_checksums[2], e->network_peer_checksums[3],
+            e->network_peer_checksums[4], e->network_peer_checksums[5],
+            e->network_peer_checksums[6], e->network_peer_checksums[7],
+            checksum_gate_name(e->checksum_gate), e->checksum_eligible,
+            e->mutates_outgoing_package, e->checksum_capture_valid,
+            e->checksum_padding_length, e->checksum_total_consistent,
+            e->checksum_adler_shaped,
+            e->checksum_words[0], e->checksum_words[1], e->checksum_words[2],
+            e->checksum_words[3], e->checksum_words[4], e->checksum_words[5],
+            e->checksum_words[6], e->checksum_words[7], e->checksum_words[8],
+            e->checksum_words[9], e->checksum_words[10], e->checksum_words[11],
+            e->checksum_words[12], e->checksum_words[13], e->checksum_words[14],
+            e->checksum_words[15]))
+        goto serialize_failed;
+    if ((e->player_queued_type_count || e->player_object_count ||
+         e->visible_enemy_count) && !payload)
+        goto serialize_failed;
     for (i = 0; i < (unsigned)e->player_queued_type_count && i < MAX_QUEUED_TYPES; i++) {
-        const queued_type_sample_t *q = &e->player_queued_types[i];
-        int n = _snprintf(line + used, sizeof(line) - used,
+        const queued_type_sample_t *q = &payload->player_queued_types[i];
+        if (!append_json(line, EVENT_JSON_CAP, &used,
                           "%s{\"type\":%d,\"count\":%u}",
-                          i ? "," : "", q->type, q->count);
-        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-        used += (size_t)n;
+                          i ? "," : "", q->type, q->count))
+            goto serialize_failed;
     }
-    {
-        int n = _snprintf(line + used, sizeof(line) - used, "],\"player_objects\":[");
-        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
-    }
+    if (!append_json(line, EVENT_JSON_CAP, &used, "],\"player_objects\":["))
+        goto serialize_failed;
     for (i = 0; i < (unsigned)e->player_object_count && i < MAX_PUBLIC_OBJECTS; i++) {
-        const public_object_t *o = &e->player_objects[i];
+        const public_object_t *o = &payload->player_objects[i];
         unsigned q;
-        int n = _snprintf(line + used, sizeof(line) - used,
+        if (!append_json(line, EVENT_JSON_CAP, &used,
             "%s{\"owner\":%d,\"id\":%d,\"pointer\":\"0x%08x\",\"category\":%u,"
             "\"flags\":%u,\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
             "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
@@ -2255,55 +2839,78 @@ static void write_event(const event_t *e) {
             o->queued_build_target_id, o->queued_build_target_uid,
             o->queued_build_target_valid, o->queued_build_order_seen, o->guy_length,
             o->gather_max, o->queue_logical, o->queue_size,
-            o->queue_count, o->queue_truncated);
-        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-        used += (size_t)n;
+            o->queue_count, o->queue_truncated))
+            goto serialize_failed;
         for (q = 0; q < (unsigned)o->queue_count && q < MAX_BUILD_QUEUE; q++) {
-            n = _snprintf(line + used, sizeof(line) - used,
+            if (!append_json(line, EVENT_JSON_CAP, &used,
                           "%s{\"elapsed\":%d,\"type\":%d}", q ? "," : "",
-                          o->queue[q].elapsed, o->queue[q].type);
-            if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-            used += (size_t)n;
+                          o->queue[q].elapsed, o->queue[q].type))
+                goto serialize_failed;
         }
-        n = _snprintf(line + used, sizeof(line) - used, "]}");
-        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-        used += (size_t)n;
+        if (!append_json(line, EVENT_JSON_CAP, &used, "]}"))
+            goto serialize_failed;
     }
-    {
-        int n = _snprintf(line + used, sizeof(line) - used,
-                          "],\"visible_enemy_objects\":[");
-        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
-    }
+    if (!append_json(line, EVENT_JSON_CAP, &used,
+                     "],\"visible_enemy_objects\":["))
+        goto serialize_failed;
     for (i = 0; i < (unsigned)e->visible_enemy_count && i < MAX_VISIBLE_ENEMIES; i++) {
-        const public_object_t *o = &e->visible_enemies[i];
-        int n = _snprintf(line + used, sizeof(line) - used,
+        const public_object_t *o = &payload->visible_enemies[i];
+        if (!append_json(line, EVENT_JSON_CAP, &used,
             "%s{\"owner\":%d,\"id\":%d,\"category\":%u,\"flags\":%u,"
             "\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
             "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
             "\"class_vtable\":\"0x%08x\",\"angle\":%u}",
             i ? "," : "", o->owner, o->id, o->category, o->flags, o->uid,
             o->type, o->type_valid, o->x, o->y, o->z, o->hits,
-            o->class_vtable, o->angle);
-        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
-        used += (size_t)n;
+            o->class_vtable, o->angle))
+            goto serialize_failed;
     }
-    _snprintf(line + used, sizeof(line) - used, "]}\r\n");
-    line[sizeof(line) - 1] = 0;
+    if (!append_json(line, EVENT_JSON_CAP, &used, "]}\r\n"))
+        goto serialize_failed;
     h = CreateFileA(g_events_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
-        WriteFile(h, line, (DWORD)strlen(line), &wrote, NULL);
-        FlushFileBuffers(h);
+        length = used;
+        offset = 0;
+        while (offset < length) {
+            if (!WriteFile(h, line + offset, (DWORD)(length - offset), &wrote, NULL) ||
+                !wrote) {
+                log_line("REFUSED: event JSON write failed");
+                break;
+            }
+            offset += wrote;
+        }
+        if (offset == length && !FlushFileBuffers(h))
+            log_line("REFUSED: event JSON flush failed");
         CloseHandle(h);
-    }
+    } else log_line("REFUSED: events.ndjson open failed");
+    HeapFree(GetProcessHeap(), 0, line);
+    return;
+
+serialize_failed:
+    log_line("REFUSED: event JSON exceeded bounded serializer");
+    HeapFree(GetProcessHeap(), 0, line);
 }
 
 static void drain_events(void) {
-    while (g_event_tail < g_event_head) {
-        LONG tail = g_event_tail;
+    LONG drops, reported;
+    while (InterlockedCompareExchange(&g_event_tail, 0, 0) !=
+           InterlockedCompareExchange(&g_event_head, 0, 0)) {
+        LONG tail = InterlockedCompareExchange(&g_event_tail, 0, 0);
+        event_t *event = &g_events[(unsigned)tail & (EVENT_CAP - 1)];
         MemoryBarrier();
-        write_event(&g_events[(unsigned)tail & (EVENT_CAP - 1)]);
+        write_event(event);
+        release_player_payload(event->player_payload);
+        event->player_payload = NULL;
         InterlockedIncrement(&g_event_tail);
+    }
+    drops = InterlockedCompareExchange(&g_dropped_events, 0, 0);
+    reported = InterlockedExchange(&g_reported_dropped_events, drops);
+    if (drops > reported) {
+        char line[96];
+        _snprintf(line, sizeof(line), "REFUSED: dropped %ld full event record(s)",
+                  drops - reported);
+        log_line(line);
     }
 }
 
@@ -2312,10 +2919,12 @@ static void write_ready(const char *state) {
     HANDLE h;
     DWORD wrote;
     _snprintf(buf, sizeof(buf), "state=%s\r\npid=%lu\r\nroot=%s\r\nbase=0x%08x\r\n"
-              "turn_call_site=0x%08x\r\nturn_do_frame=0x%08x\r\n", state,
+              "turn_call_site=0x%08x\r\nturn_do_frame=0x%08x\r\n"
+              "dropped_events=%ld\r\n", state,
               GetCurrentProcessId(), g_root,
               g_base, g_base + RVA_TURN_CALL_SITE,
-              g_base + RVA_TURN_DO_FRAME);
+              g_base + RVA_TURN_DO_FRAME,
+              InterlockedCompareExchange(&g_dropped_events, 0, 0));
     h = CreateFileA(g_ready_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
@@ -2334,31 +2943,62 @@ static DWORD WINAPI worker(LPVOID unused) {
         write_ready("refused-image");
         return 0;
     }
+    if (!fence_request_epoch()) {
+        log_line("REFUSED: could not establish initial request epoch");
+        write_ready("refused-request-epoch");
+        return 0;
+    }
     if (!install_hook()) {
+        if (InterlockedCompareExchange(&g_hook_installed, 0, 0))
+            remove_hook();
         write_ready("refused-hook");
         return 0;
     }
     write_ready("armed");
     for (;;) {
         request_t r;
-        drain_events();
         if (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
             if (!remove_hook()) {
                 log_line("REFUSED: could not restore hook bytes safely");
                 write_ready("refused-stop");
                 return 0;
             }
+            drain_events();
+            if (!fence_request_epoch()) {
+                log_line("REFUSED: could not fence request bytes at STOP");
+                write_ready("refused-request-epoch");
+                return 0;
+            }
             write_ready("parked");
             while (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
+                if (!fence_request_epoch()) {
+                    log_line("REFUSED: request bytes appeared while parked");
+                    write_ready("refused-request-epoch");
+                    return 0;
+                }
                 drain_events(); Sleep(100);
             }
-            InterlockedExchange(&g_stopping, 0);
+            if (!fence_request_epoch()) {
+                log_line("REFUSED: could not establish fresh rearm request epoch");
+                write_ready("refused-request-epoch");
+                return 0;
+            }
             InterlockedExchange(&g_stop_ack, 0);
-            if (!install_hook()) { write_ready("refused-rearm"); return 0; }
+            InterlockedExchange(&g_stopping, 0);
+            if (!install_hook()) {
+                if (InterlockedCompareExchange(&g_hook_installed, 0, 0))
+                    remove_hook();
+                write_ready("refused-rearm");
+                return 0;
+            }
             write_ready("armed");
         }
+        drain_events();
         if (read_request(line, sizeof(line)) && parse_request(line, &r) &&
-            r.seq != last_seq && g_pending == V_NONE) {
+            r.seq != last_seq &&
+            InterlockedCompareExchange(&g_pending, 0, 0) == V_NONE &&
+            !InterlockedCompareExchange(&g_stopping, 0, 0) &&
+            GetFileAttributesA(g_stop_path) == INVALID_FILE_ATTRIBUTES) {
             g_request = r;
             MemoryBarrier();
             InterlockedExchange(&g_pending, (LONG)r.verb);
@@ -2372,12 +3012,26 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         HANDLE thread;
+        IMAGE_DOS_HEADER *controller_dos = (IMAGE_DOS_HEADER *)module;
+        IMAGE_NT_HEADERS32 *controller_nt = NULL;
         DisableThreadLibraryCalls(module);
         if (!init_paths(module)) return TRUE;
+        g_controller_base = (unsigned)(ULONG_PTR)module;
+        if (controller_dos->e_magic == IMAGE_DOS_SIGNATURE) {
+            controller_nt = (IMAGE_NT_HEADERS32 *)(g_controller_base +
+                                                   (unsigned)controller_dos->e_lfanew);
+            if (controller_nt->Signature == IMAGE_NT_SIGNATURE)
+                g_controller_size = controller_nt->OptionalHeader.SizeOfImage;
+        }
+        if (!g_controller_size) return TRUE;
         g_base = (unsigned)(ULONG_PTR)GetModuleHandleA(NULL);
         g_self_process = GetCurrentProcess();
         g_hook_addr = (BYTE *)(g_base + RVA_TURN_CALL_SITE);
-        thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
+        /* write_event uses a bounded heap buffer; the worker's measured O2
+           frame is under 6 KiB, so immutable generations need not each reserve
+           the executable's default 1 MiB thread stack. */
+        thread = CreateThread(NULL, WORKER_STACK_RESERVE, worker, NULL,
+                              STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
         if (thread) CloseHandle(thread);
     }
     return TRUE;

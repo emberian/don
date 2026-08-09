@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import http.server
 import json
 import os
 from pathlib import Path
 import random
 import re
+import shlex
 import socketserver
 import subprocess
 import sys
@@ -25,6 +27,18 @@ DEFAULT_GENERATION = "v2"
 LEGACY_GENERATION = "v1"
 GUEST_ROOT_BASE = r"C:\Users\Public\don-retail-control"
 EXPECTED_SHA256 = "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079"
+DEFAULT_GENERATION_BUDGET = 1
+INJECTOR = r"C:\Users\ember\donhook\donject.exe"
+TURN_CALL_RVA = 0x00191686
+TURN_DO_FRAME_RVA = 0x00557DD0
+ORIGINAL_TURN_CALL = bytes.fromhex("e8 45 67 3c 00")
+PREFLIGHT_JSON_BEGIN = "DON_RETAIL_PREFLIGHT_JSON_BEGIN"
+PREFLIGHT_JSON_END = "DON_RETAIL_PREFLIGHT_JSON_END"
+EXPECTED_DUMP_FOLDER = r"C:\Users\Public\don-crashdumps\riseofnations"
+MIN_DUMP_FREE_BYTES = 12 * 1024 * 1024 * 1024
+DAMAGE_HOOK = HERE.parent / "damage-hook"
+INJECTOR_SOURCE = DAMAGE_HOOK / "donject.c"
+HOST_INJECTOR = DAMAGE_HOOK / "donject.exe"
 
 
 def validate_generation(generation: str) -> str:
@@ -47,6 +61,15 @@ def generation_dll(generation: str) -> str:
     return f"retail_control-{generation}.dll"
 
 
+def normalize_windows_path(path: str) -> str:
+    normalized = path.replace("/", "\\")
+    if normalized.startswith("\\\\?\\UNC\\"):
+        normalized = "\\\\" + normalized[len("\\\\?\\UNC\\"):]
+    elif normalized.startswith("\\\\?\\"):
+        normalized = normalized[len("\\\\?\\"):]
+    return normalized.rstrip("\\").lower()
+
+
 def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           check=check)
@@ -57,6 +80,11 @@ def guest_cmd(command: str, *, check: bool = True) -> str:
     return p.stdout.replace("\r\n", "\n").strip()
 
 
+def guest_cmd_status(command: str) -> tuple[int, str]:
+    p = run(["prlctl", "exec", VM, "cmd.exe", "/d", "/s", "/c", command], check=False)
+    return p.returncode, p.stdout.replace("\r\n", "\n").strip()
+
+
 def guest_ps(command: str, *, check: bool = True) -> str:
     p = run(["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-Command", command],
             check=check)
@@ -64,20 +92,35 @@ def guest_ps(command: str, *, check: bool = True) -> str:
 
 
 def pid() -> int:
-    out = guest_cmd("for /f \"tokens=2\" %p in ('tasklist /nh /fi \"imagename eq riseofnations.exe\"') do @echo %p")
-    values = [line.strip() for line in out.splitlines() if line.strip().isdigit()]
+    try:
+        values, out = process_pids()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     if len(values) != 1:
         raise SystemExit(f"expected one riseofnations.exe, got {values!r}:\n{out}")
-    return int(values[0])
+    return values[0]
+
+
+def process_pids() -> tuple[list[int], str]:
+    returncode, out = guest_cmd_status(
+        "for /f \"tokens=2\" %p in "
+        "('tasklist /nh /fi \"imagename eq riseofnations.exe\"') do @echo %p"
+    )
+    if returncode != 0:
+        raise RuntimeError(
+            f"could not enumerate riseofnations.exe processes (exit {returncode}):\n{out}"
+        )
+    values = [line.strip() for line in out.splitlines() if line.strip().isdigit()]
+    return sorted({int(value) for value in values}), out
 
 
 class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def serve_once(port: int):
+def serve_once(port: int, directory: Path = HERE):
     handler = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(  # noqa: E731
-        *a, directory=str(HERE), **kw
+        *a, directory=str(directory), **kw
     )
     server = ReusableTCPServer(("0.0.0.0", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -90,6 +133,118 @@ def build() -> None:
     print(p.stdout, end="")
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_injector(output: Path = HOST_INJECTOR) -> str:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "zig", "cc", "-target", "x86-windows-gnu", "-O2",
+        "-Wall", "-Wextra", "-Werror", "-s", "-o", str(output), str(INJECTOR_SOURCE),
+    ]
+    result = run(command)
+    if result.stdout:
+        print(result.stdout, end="")
+    identity = run(["file", str(output)]).stdout.strip()
+    if "PE32 executable" not in identity or "Intel 80386" not in identity:
+        raise RuntimeError(f"injector build has unexpected identity: {identity}")
+    return sha256_file(output)
+
+
+def parse_single_sha256(output: str) -> str | None:
+    hashes = sorted(set(value.lower() for value in re.findall(
+        r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{64})(?![0-9A-Fa-f])", output
+    )))
+    return hashes[0] if len(hashes) == 1 else None
+
+
+def guest_sha256(path: str) -> str | None:
+    output = guest_ps(
+        f"if (Test-Path -LiteralPath '{path}' -PathType Leaf) {{ "
+        f"(Get-FileHash -Algorithm SHA256 -LiteralPath '{path}').Hash }}",
+        check=False,
+    )
+    return parse_single_sha256(output)
+
+
+def injector_diagnostic() -> dict:
+    try:
+        host_hash = build_injector()
+    except Exception as exc:
+        return {
+            "ready": False,
+            "host_sha256": None,
+            "guest_sha256": None,
+            "selftest": None,
+            "issues": [f"strict host injector build failed: {exc}"],
+            "mutation": "guest read-only; host build artifact only",
+        }
+    guest_hash = guest_sha256(INJECTOR)
+    selftest_returncode, selftest_output = guest_cmd_status(f'"{INJECTOR}" selftest')
+    selftest_ok = (
+        selftest_returncode == 0 and
+        "selftest: status=ok architecture=PE32/i386" in selftest_output
+    )
+    issues = []
+    if guest_hash != host_hash:
+        issues.append("guest injector hash does not match the strict current host build")
+    if not selftest_ok:
+        issues.append("guest injector selftest did not report PE32/i386 success")
+    return {
+        "ready": not issues,
+        "host_sha256": host_hash,
+        "guest_sha256": guest_hash,
+        "selftest": selftest_output,
+        "issues": issues,
+        "mutation": "guest read-only; host build artifact only",
+    }
+
+
+def prepare_injector(port: int = 18081) -> dict:
+    host_hash = build_injector()
+    server = serve_once(port, DAMAGE_HOOK)
+    download = INJECTOR + ".download"
+    try:
+        guest_cmd(r'if not exist "C:\Users\ember\donhook" mkdir "C:\Users\ember\donhook"')
+        guest_cmd(
+            f'curl.exe -f -sS -o "{download}" '
+            f'http://10.211.55.2:{port}/{HOST_INJECTOR.name}'
+        )
+        downloaded_hash = guest_sha256(download)
+        if downloaded_hash != host_hash:
+            raise SystemExit(
+                "REFUSING injector install: guest download hash does not match host build"
+            )
+        guest_cmd(f'move /y "{download}" "{INJECTOR}" >nul')
+        installed_hash = guest_sha256(INJECTOR)
+        if installed_hash != host_hash:
+            raise SystemExit(
+                "REFUSING injector install: atomically installed guest hash does not match"
+            )
+        returncode, selftest = guest_cmd_status(f'"{INJECTOR}" selftest')
+        if (returncode != 0 or
+                "selftest: status=ok architecture=PE32/i386" not in selftest):
+            raise SystemExit(f"REFUSING injector install: guest selftest failed:\n{selftest}")
+        result = {
+            "schema": "don.injector-prepare.v1",
+            "host_sha256": host_hash,
+            "guest_sha256": installed_hash,
+            "selftest": selftest,
+            "ready": True,
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return result
+    finally:
+        guest_cmd(f'del /q "{download}" 2>nul & exit /b 0', check=False)
+        server.shutdown()
+        server.server_close()
+
+
 def preflight(target_pid: int) -> None:
     out = guest_ps(f"(Get-FileHash -Algorithm SHA256 (Get-Process -Id {target_pid}).Path).Hash")
     compact = "".join(out.lower().split())
@@ -97,22 +252,981 @@ def preflight(target_pid: int) -> None:
         raise SystemExit(f"REFUSING unsupported target digest; expected {EXPECTED_SHA256}:\n{out}")
 
 
-def loaded_module(target_pid: int, dll_name: str) -> str:
+def extract_marked_json(output: str) -> object:
+    lines = output.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == PREFLIGHT_JSON_BEGIN]
+    ends = [i for i, line in enumerate(lines) if line.strip() == PREFLIGHT_JSON_END]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0]:
+        raise ValueError("preflight response has missing or ambiguous JSON markers")
+    payload = "\n".join(lines[starts[0] + 1:ends[0]]).strip()
+    if not payload:
+        raise ValueError("preflight response has an empty JSON payload")
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError("preflight response contains malformed JSON") from exc
+
+
+def parse_ready_record(raw: object) -> dict:
+    record: dict[str, object] = {"present": raw is not None, "values": {}, "errors": []}
+    if raw is None:
+        return record
+    if not isinstance(raw, str):
+        record["errors"].append("ready record is not text")
+        return record
+    values: dict[str, str] = {}
+    for line in raw.replace("\r\n", "\n").splitlines():
+        if not line:
+            continue
+        if "=" not in line:
+            record["errors"].append(f"malformed ready line: {line!r}")
+            continue
+        key, value = line.split("=", 1)
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value:
+            record["errors"].append(f"malformed ready line: {line!r}")
+            continue
+        if key in values:
+            record["errors"].append(f"duplicate ready key: {key}")
+            continue
+        values[key] = value
+    record["values"] = values
+    return record
+
+
+def generation_from_root_name(root_name: str) -> str | None:
+    base = GUEST_ROOT_BASE.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
+    if root_name.lower() == base.lower():
+        return LEGACY_GENERATION
+    prefix = base + "-"
+    if not root_name.lower().startswith(prefix.lower()):
+        return None
+    generation = root_name[len(prefix):]
+    try:
+        return validate_generation(generation)
+    except SystemExit:
+        return None
+
+
+def parse_deployed_generations(output: str) -> tuple[list[dict], list[str]]:
+    payload = extract_marked_json(output)
+    if not isinstance(payload, list):
+        raise ValueError("deployed-generation payload is not an array")
+    rows: list[dict] = []
+    errors: list[str] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            errors.append("deployed-generation row is not an object")
+            continue
+        root_name = item.get("root_name")
+        root = item.get("root")
+        dlls = item.get("dlls")
+        downloads = item.get("downloads")
+        if (not isinstance(root_name, str) or not isinstance(root, str) or
+                not isinstance(dlls, list) or not isinstance(downloads, list) or
+                any(not isinstance(value, str) for value in [*dlls, *downloads])):
+            errors.append("deployed-generation row has invalid fields")
+            continue
+        generation = generation_from_root_name(root_name)
+        if generation is None:
+            errors.append(f"unsafe or unrecognized controller root: {root_name!r}")
+            continue
+        expected_root = generation_root(generation)
+        if root.lower() != expected_root.lower():
+            errors.append(f"controller root does not match generation {generation!r}: {root!r}")
+            continue
+        rows.append({
+            "generation": generation,
+            "root": root,
+            "expected_dll": generation_dll(generation),
+            "dlls": sorted(set(dlls), key=str.lower),
+            "downloads": sorted(set(downloads), key=str.lower),
+            "ready": parse_ready_record(item.get("ready")),
+        })
+    rows.sort(key=lambda row: row["generation"].lower())
+    return rows, errors
+
+
+def deployed_generations() -> tuple[list[dict], list[str]]:
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$rows = @()
+Get-ChildItem -LiteralPath 'C:\\Users\\Public' -Directory -Filter 'don-retail-control*' |
+    Sort-Object Name | ForEach-Object {{
+        $readyPath = Join-Path $_.FullName 'ready.txt'
+        $ready = if (Test-Path -LiteralPath $readyPath -PathType Leaf) {{
+            [IO.File]::ReadAllText($readyPath)
+        }} else {{ $null }}
+        $dlls = @(Get-ChildItem -LiteralPath $_.FullName -File -Filter 'retail_control*.dll' |
+            Sort-Object Name | ForEach-Object {{ $_.Name }})
+        $downloads = @(Get-ChildItem -LiteralPath $_.FullName -File -Filter '*.download' |
+            Sort-Object Name | ForEach-Object {{ $_.Name }})
+        $rows += [pscustomobject]@{{
+            root_name = $_.Name
+            root = $_.FullName
+            dlls = $dlls
+            downloads = $downloads
+            ready = $ready
+        }}
+    }}
+Write-Output '{PREFLIGHT_JSON_BEGIN}'
+ConvertTo-Json -InputObject @($rows) -Compress -Depth 5
+Write-Output '{PREFLIGHT_JSON_END}'
+"""
+    return parse_deployed_generations(guest_ps(script))
+
+
+def parse_module_base_output(output: str) -> dict:
+    fields: dict[str, str] = {}
+    errors = []
+    records = [line.strip() for line in output.splitlines()
+               if line.strip().startswith("protocol=donject.v2 ")]
+    if len(records) != 1:
+        return {
+            "status": "error",
+            "detail": "module probe did not return exactly one donject.v2 record",
+        }
+    try:
+        tokens = shlex.split(records[0])
+    except ValueError:
+        return {"status": "error", "detail": "module probe record has invalid quoting"}
+    for token in tokens:
+        if "=" not in token:
+            errors.append("injector record contains a non-field token")
+            continue
+        key, value = token.split("=", 1)
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value:
+            errors.append("injector record contains an invalid field")
+            continue
+        if key in fields:
+            errors.append(f"duplicate injector field: {key}")
+        else:
+            fields[key] = value
+    if (errors or fields.get("protocol") != "donject.v2" or
+            fields.get("command") != "base"):
+        return {
+            "status": "error",
+            "detail": "module probe did not return an unambiguous donject.v2 record",
+        }
+    status = fields.get("status")
+    if status == "mapped":
+        base = fields.get("module_base", "")
+        size = fields.get("module_size", "")
+        if (not re.fullmatch(r"0x[0-9A-Fa-f]{8}", base) or int(base, 16) == 0 or
+                not re.fullmatch(r"0x[0-9A-Fa-f]{8}", size) or int(size, 16) == 0):
+            return {"status": "error", "detail": "mapped module record lacks base or size"}
+        return {
+            "status": "mapped",
+            "base": int(base, 16),
+            "size": int(size, 16),
+            "pid": fields.get("pid"),
+            "module_name": fields.get("module_name"),
+            "module_path": fields.get("module_path"),
+        }
+    if status == "absent":
+        return {
+            "status": "absent",
+            "pid": fields.get("pid"),
+            "module_name": fields.get("module_name"),
+        }
+    if status == "error":
+        return {
+            "status": "error",
+            "detail": "injector module probe reported an error",
+            "stage": fields.get("stage"),
+            "win32_error": fields.get("win32_error"),
+        }
+    return {"status": "error", "detail": "injector module status was not recognized"}
+
+
+def parse_module_list_output(output: str) -> dict:
+    records = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line.startswith("protocol=donject.v2 "):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            return {"status": "error", "detail": "module-list record has invalid quoting"}
+        fields: dict[str, str] = {}
+        for token in tokens:
+            if "=" not in token:
+                return {"status": "error", "detail": "module-list record has a bare token"}
+            key, value = token.split("=", 1)
+            if (not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value or
+                    key in fields):
+                return {"status": "error", "detail": "module-list record has invalid fields"}
+            fields[key] = value
+        if fields.get("protocol") == "donject.v2" and fields.get("command") == "modules":
+            records.append(fields)
+    headers = [record for record in records if record.get("status") == "ok"]
+    errors = [record for record in records if record.get("status") == "error"]
+    modules = [record for record in records if record.get("status") == "module"]
+    if errors:
+        return {
+            "status": "error",
+            "detail": "injector module enumeration reported an error",
+            "record": errors[0],
+        }
+    if len(headers) != 1:
+        return {"status": "error", "detail": "module-list header is missing or ambiguous"}
+    header = headers[0]
+    try:
+        target_pid = int(header.get("pid", ""))
+        count = int(header.get("count", ""))
+    except ValueError:
+        return {"status": "error", "detail": "module-list header count or pid is invalid"}
+    if count < 0 or count > 4096 or len(modules) != count:
+        return {"status": "error", "detail": "module-list count is invalid or incomplete"}
+    normalized = []
+    indices = set()
+    for module in modules:
+        try:
+            module_pid = int(module.get("pid", ""))
+            index = int(module.get("index", ""))
+            base_text = module.get("module_base", "")
+            size_text = module.get("module_size", "")
+            base = int(base_text, 16)
+            size = int(size_text, 16)
+        except ValueError:
+            return {"status": "error", "detail": "module-list entry has invalid numerics"}
+        name = module.get("module_name")
+        path = module.get("module_path")
+        if (module_pid != target_pid or index in indices or index < 0 or index >= count or
+                not isinstance(name, str) or not name or
+                not isinstance(path, str) or not path or
+                not re.fullmatch(r"0x[0-9A-Fa-f]{8}", base_text) or base == 0 or
+                not re.fullmatch(r"0x[0-9A-Fa-f]{8}", size_text) or size == 0):
+            return {"status": "error", "detail": "module-list entry identity is invalid"}
+        indices.add(index)
+        normalized.append({
+            "name": name,
+            "path": path,
+            "base": base,
+            "size": size,
+            "base_hex": f"0x{base:08x}",
+            "size_hex": f"0x{size:x}",
+        })
+    if indices != set(range(count)):
+        return {"status": "error", "detail": "module-list indices are not contiguous"}
+    return {"status": "ok", "pid": target_pid, "modules": normalized}
+
+
+def remote_modules(target_pid: int) -> dict:
+    returncode, out = guest_cmd_status(f'"{INJECTOR}" modules {target_pid}')
+    result = parse_module_list_output(out)
+    if result["status"] == "ok" and result["pid"] != target_pid:
+        result = {"status": "error", "detail": "module-list pid does not match request"}
+    if result["status"] == "ok" and returncode != 0:
+        result = {
+            "status": "error",
+            "detail": f"module-list status/exit mismatch: host observed {returncode}",
+        }
+    if result["status"] == "error":
+        result["output"] = out
+    return result
+
+
+def module_probe(target_pid: int, dll_name: str) -> dict:
     # The host PowerShell is 64-bit and does not reliably enumerate emulated x86
     # modules. Use the already-deployed x86 Toolhelp probe in the same ABI instead.
-    injector = r"C:\Users\ember\donhook\donject.exe"
-    out = guest_cmd(f'"{injector}" base {target_pid} "{dll_name}"', check=False)
-    for line in out.splitlines():
-        value = line.strip()
-        if re.fullmatch(r"[0-9A-Fa-f]{8}", value) and int(value, 16):
-            return f"{dll_name}@0x{value.lower()}"
+    returncode, out = guest_cmd_status(f'"{INJECTOR}" base {target_pid} "{dll_name}"')
+    result = parse_module_base_output(out)
+    result["name"] = dll_name
+    try:
+        reported_pid = int(result.get("pid", ""))
+    except (TypeError, ValueError):
+        reported_pid = None
+    reported_name = result.get("module_name")
+    if (result["status"] != "error" and
+            (reported_pid != target_pid or not isinstance(reported_name, str) or
+             reported_name.lower() != dll_name.lower())):
+        result = {
+            "status": "error",
+            "detail": "module probe identity does not match its request",
+            "name": dll_name,
+        }
+    expected_returncode = 0 if result["status"] == "mapped" else (
+        10 if result["status"] == "absent" else None
+    )
+    if expected_returncode is not None and returncode != expected_returncode:
+        result = {
+            "status": "error",
+            "detail": (f"module probe status/exit mismatch: status expected "
+                       f"{expected_returncode}, host observed {returncode}"),
+            "name": dll_name,
+        }
+    if result["status"] == "mapped":
+        result["base_hex"] = f"0x{result['base']:08x}"
+        result["size_hex"] = f"0x{result['size']:x}"
+    elif result["status"] == "error":
+        result["output"] = out
+    return result
+
+
+def loaded_module(target_pid: int, dll_name: str) -> str:
+    result = module_probe(target_pid, dll_name)
+    if result["status"] == "mapped":
+        return f"{dll_name}@{result['base_hex']}"
+    if result["status"] == "error":
+        raise SystemExit(
+            f"REFUSING because module state for {dll_name!r} is indeterminate: "
+            f"{result.get('detail', 'unknown injector error')}"
+        )
     return ""
 
 
-def deploy(target_pid: int, port: int, generation: str) -> None:
+def parse_inject_output(output: str, returncode: int, target_pid: int,
+                        dll_name: str, dll_path: str, expected_sha256: str) -> dict:
+    matches = []
+    pattern = re.compile(
+        r"inject: result=(loaded|already-loaded) status=ok pid=([0-9]+) "
+        r"module=([^\s]+) base=([0-9A-Fa-f]{8}) path=(.+) "
+        r"sha256=([0-9A-Fa-f]{64})"
+    )
+    for raw in output.splitlines():
+        match = pattern.fullmatch(raw.strip())
+        if match:
+            matches.append(match)
+    if returncode != 0:
+        return {
+            "status": "indeterminate" if "inject: INDETERMINATE " in output else "error",
+            "detail": output,
+            "restart_required": True,
+        }
+    if len(matches) != 1:
+        return {"status": "error", "detail": "injector success record is missing or ambiguous"}
+    match = matches[0]
+    result_kind, pid_text, module_name, base_text, module_path, dll_sha256 = match.groups()
+    if (result_kind != "loaded" or int(pid_text) != target_pid or
+            module_name.lower() != dll_name.lower() or
+            normalize_windows_path(module_path) != normalize_windows_path(dll_path) or
+            int(base_text, 16) == 0 or
+            dll_sha256.lower() != expected_sha256.lower()):
+        return {
+            "status": "error",
+            "detail": "injector success record does not match the requested new module",
+        }
+    return {
+        "status": "loaded",
+        "module_base": int(base_text, 16),
+        "module_base_hex": f"0x{int(base_text, 16):08x}",
+        "module_path": module_path,
+    }
+
+
+def parse_hook_peek_output(output: str) -> dict:
+    header_matches = []
+    byte_matches = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        header = re.fullmatch(
+            r"#\s+base=([0-9A-Fa-f]{8})\s+addr=([0-9A-Fa-f]{8})\s+len=5",
+            line,
+        )
+        if header:
+            header_matches.append((int(header.group(1), 16), int(header.group(2), 16)))
+            continue
+        data = re.fullmatch(
+            r"([0-9A-Fa-f]{8}):\s+"
+            r"([0-9A-Fa-f]{2})\s+([0-9A-Fa-f]{2})\s+([0-9A-Fa-f]{2})\s+"
+            r"([0-9A-Fa-f]{2})\s+([0-9A-Fa-f]{2})",
+            line,
+        )
+        if data:
+            byte_matches.append((
+                int(data.group(1), 16),
+                bytes(int(data.group(i), 16) for i in range(2, 7)),
+            ))
+    if len(header_matches) != 1 or len(byte_matches) != 1:
+        return {"status": "unreadable", "detail": "ambiguous hook-byte response"}
+    base, address = header_matches[0]
+    byte_address, call = byte_matches[0]
+    if address != byte_address or address != base + TURN_CALL_RVA:
+        return {"status": "unreadable", "detail": "hook-byte response address mismatch"}
+    result = {
+        "executable_base": f"0x{base:08x}",
+        "call_site": f"0x{address:08x}",
+        "bytes": call.hex(),
+    }
+    if call == ORIGINAL_TURN_CALL:
+        result.update({
+            "status": "original",
+            "call_target": f"0x{base + TURN_DO_FRAME_RVA:08x}",
+        })
+        return result
+    if call[0] != 0xE8:
+        result.update({"status": "unknown", "detail": "call site is not a relative call"})
+        return result
+    displacement = int.from_bytes(call[1:], "little", signed=True)
+    result.update({
+        "status": "patched",
+        "call_target": f"0x{(address + 5 + displacement) & 0xffffffff:08x}",
+    })
+    return result
+
+
+def hook_call_state(target_pid: int) -> dict:
+    out = guest_cmd(
+        f'"{INJECTOR}" peek {target_pid} riseofnations.exe '
+        f'{TURN_CALL_RVA:x} 0 0 5',
+        check=False,
+    )
+    result = parse_hook_peek_output(out)
+    if result["status"] == "unreadable":
+        result["output"] = out
+    return result
+
+
+def controller_inventory(target_pid: int, extra_generation: str | None = None) -> dict:
+    rows, scan_errors = deployed_generations()
+    if extra_generation is not None:
+        extra_generation = validate_generation(extra_generation)
+        if not any(row["generation"].lower() == extra_generation.lower() for row in rows):
+            rows.append({
+                "generation": extra_generation,
+                "root": generation_root(extra_generation),
+                "expected_dll": generation_dll(extra_generation),
+                "dlls": [],
+                "downloads": [],
+                "ready": parse_ready_record(None),
+            })
+            rows.sort(key=lambda row: row["generation"].lower())
+
+    basename_roots: dict[str, list[str]] = {}
+    for row in rows:
+        names = set(row["dlls"])
+        names.add(row["expected_dll"])
+        for name in names:
+            if not re.fullmatch(r"retail_control(?:-[A-Za-z0-9._-]+)?\.dll", name,
+                                re.IGNORECASE):
+                scan_errors.append(f"unexpected controller DLL name: {name!r}")
+                continue
+            basename_roots.setdefault(name.lower(), []).append(row["root"])
+
+    listing = remote_modules(target_pid)
+    if listing["status"] != "ok":
+        scan_errors.append("x86 remote module enumeration failed")
+        remote_controller_modules = []
+    else:
+        remote_controller_modules = [
+            module for module in listing["modules"]
+            if re.fullmatch(
+                r"retail_control(?:-[A-Za-z0-9._-]+)?\.dll",
+                module["name"], re.IGNORECASE,
+            )
+        ]
+    remote_by_name: dict[str, list[dict]] = {}
+    for module in remote_controller_modules:
+        remote_by_name.setdefault(module["name"].lower(), []).append(module)
+    probes: dict[str, dict] = {}
+    for basename in sorted(basename_roots):
+        matches = remote_by_name.get(basename, [])
+        if len(matches) == 1:
+            probes[basename] = {**matches[0], "status": "mapped"}
+        elif not matches:
+            probes[basename] = {"name": basename, "status": "absent"}
+        else:
+            probes[basename] = {
+                "name": basename, "status": "error",
+                "detail": "multiple mapped modules share this basename",
+            }
+    issues = list(scan_errors)
+    for basename, roots in basename_roots.items():
+        if len(set(root.lower() for root in roots)) > 1:
+            issues.append(f"duplicate controller DLL basename across roots: {basename}")
+    for probe in probes.values():
+        if probe["status"] == "error":
+            issues.append(f"could not determine module state for {probe['name']}")
+    for basename, modules in remote_by_name.items():
+        if basename not in basename_roots:
+            issues.append(
+                f"mapped controller has no immutable generation root: "
+                f"{modules[0]['path']}"
+            )
+        if len(modules) > 1:
+            issues.append(f"multiple mapped controller modules share basename: {basename}")
+
+    generation_rows = []
+    armed_mapped = []
+    for row in rows:
+        expected_name = row["expected_dll"].lower()
+        probe = probes.get(expected_name, {
+            "name": expected_name, "status": "error", "detail": "name was not probed"
+        })
+        ready = row["ready"]
+        values = ready["values"]
+        row_issues = []
+        ready_issues = list(ready["errors"])
+        if row["downloads"]:
+            row_issues.append("incomplete DLL download remains on disk")
+        if ready["present"]:
+            if values.get("root", "").lower() != row["root"].lower():
+                ready_issues.append("ready root does not match generation root")
+            try:
+                ready_pid = int(values.get("pid", ""))
+            except ValueError:
+                ready_pid = None
+                ready_issues.append("ready pid is missing or invalid")
+            state = values.get("state")
+            if not isinstance(state, str) or not (
+                    state in {"armed", "parked"} or state.startswith("refused")):
+                ready_issues.append("ready state is missing or invalid")
+        else:
+            ready_pid = None
+            state = None
+        if probe["status"] == "mapped":
+            row_issues.extend(ready_issues)
+            expected_path = f"{row['root']}\\{row['expected_dll']}"
+            if normalize_windows_path(probe.get("path", "")) != normalize_windows_path(
+                    expected_path):
+                row_issues.append("mapped controller path does not match immutable generation")
+            if not ready["present"]:
+                row_issues.append("mapped controller has no ready record")
+            elif ready_pid != target_pid:
+                row_issues.append("mapped controller ready pid does not match target")
+            elif state == "armed":
+                armed_mapped.append(row["generation"])
+        elif ready["present"] and ready_pid == target_pid:
+            row_issues.extend(ready_issues)
+            row_issues.append(
+                f"current-pid {state or 'invalid'} ready record has no matching mapped module"
+            )
+        for name in row["dlls"]:
+            normalized_name = name.lower()
+            if normalized_name != expected_name and probes.get(normalized_name, {}).get(
+                    "status") == "mapped":
+                row_issues.append(f"unexpected mapped DLL in generation root: {name}")
+        issues.extend(f"generation {row['generation']}: {issue}" for issue in row_issues)
+        generation_rows.append({
+            **row,
+            "module": probe,
+            "issues": row_issues,
+        })
+
+    hook = hook_call_state(target_pid)
+    hook_owner = None
+    if hook["status"] in {"unknown", "unreadable"}:
+        issues.append("retail hook call site could not be classified")
+    elif hook["status"] == "original" and armed_mapped:
+        issues.append("armed ready record conflicts with original retail call bytes")
+    elif hook["status"] == "patched":
+        if len(armed_mapped) != 1:
+            issues.append("patched retail call has ambiguous controller ownership")
+        else:
+            hook_owner = armed_mapped[0]
+    mapped_modules = sorted(
+        remote_controller_modules,
+        key=lambda module: (module["name"].lower(), module["path"].lower()),
+    )
+    return {
+        "enumeration": "complete x86 Toolhelp module list reconciled to immutable roots",
+        "complete": listing["status"] == "ok" and not scan_errors and all(
+            probe["status"] != "error" for probe in probes.values()
+        ),
+        "generations": generation_rows,
+        "mapped_modules": mapped_modules,
+        "mapped_generation_count": len(mapped_modules),
+        "hook": hook,
+        "hook_owner": hook_owner,
+        "issues": sorted(set(issues)),
+    }
+
+
+def parse_wer_diagnostics(output: str) -> dict:
+    payload = extract_marked_json(output)
+    if not isinstance(payload, dict):
+        raise ValueError("WER payload is not an object")
+    views = payload.get("views")
+    free_bytes = payload.get("free_bytes")
+    service_status = payload.get("wer_service_status")
+    if (not isinstance(views, list) or not isinstance(free_bytes, int) or
+            not isinstance(service_status, str)):
+        raise ValueError("WER payload has invalid fields")
+    issues = []
+    normalized_views = []
+    seen_views = set()
+    for view in views:
+        if not isinstance(view, dict):
+            raise ValueError("WER registry view is not an object")
+        name = view.get("view")
+        present = view.get("present")
+        folder = view.get("folder")
+        expanded_folder = view.get("expanded_folder")
+        folder_exists = view.get("folder_exists")
+        dump_type = view.get("dump_type")
+        dump_count = view.get("dump_count")
+        if (name not in {"32", "64"} or name in seen_views or
+                not isinstance(present, bool) or
+                folder is not None and not isinstance(folder, str) or
+                expanded_folder is not None and not isinstance(expanded_folder, str) or
+                not isinstance(folder_exists, bool) or
+                dump_type is not None and not isinstance(dump_type, int) or
+                dump_count is not None and not isinstance(dump_count, int)):
+            raise ValueError("WER registry view has invalid fields")
+        seen_views.add(name)
+        view_issues = []
+        if not present:
+            view_issues.append("scoped riseofnations.exe LocalDumps key is missing")
+        if not folder:
+            view_issues.append("DumpFolder is not explicitly configured")
+        elif (expanded_folder or "").rstrip("\\").lower() != EXPECTED_DUMP_FOLDER.lower():
+            view_issues.append(f"DumpFolder is not the scoped capture path {EXPECTED_DUMP_FOLDER}")
+        elif not folder_exists:
+            view_issues.append("DumpFolder does not exist")
+        if dump_type != 2:
+            view_issues.append("DumpType is not an explicit full dump (2)")
+        if dump_count != 2:
+            view_issues.append("DumpCount is not explicitly 2")
+        issues.extend(f"registry view {name}: {issue}" for issue in view_issues)
+        normalized_views.append({
+            "view": name,
+            "present": present,
+            "folder": folder,
+            "expanded_folder": expanded_folder,
+            "folder_exists": folder_exists,
+            "dump_type": dump_type,
+            "dump_count": dump_count,
+            "ready": not view_issues,
+            "issues": view_issues,
+        })
+    if seen_views != {"32", "64"}:
+        raise ValueError("WER payload does not contain both registry views")
+    if free_bytes < MIN_DUMP_FREE_BYTES:
+        issues.append(
+            f"dump volume has less than {MIN_DUMP_FREE_BYTES} bytes free"
+        )
+    return {
+        "scope": (r"HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+                  r"\riseofnations.exe"),
+        "required_registry_views": ["32", "64"],
+        "views": sorted(normalized_views, key=lambda view: view["view"]),
+        "expected_folder": EXPECTED_DUMP_FOLDER,
+        "free_bytes": free_bytes,
+        "minimum_free_bytes": MIN_DUMP_FREE_BYTES,
+        "wer_service_status": service_status,
+        "wer_service_note": "demand-start service state is informational",
+        "ready": not issues,
+        "issues": issues,
+        "mutation": "none; diagnostics are read-only",
+    }
+
+
+def wer_diagnostics() -> dict:
+    script = rf"""
+$ErrorActionPreference = 'Stop'
+$subpath = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\riseofnations.exe'
+$views = @()
+foreach ($viewName in @('64', '32')) {{
+    $registryView = if ($viewName -eq '64') {{
+        [Microsoft.Win32.RegistryView]::Registry64
+    }} else {{
+        [Microsoft.Win32.RegistryView]::Registry32
+    }}
+    $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine, $registryView)
+    try {{
+        $key = $baseKey.OpenSubKey($subpath, $false)
+        try {{
+            $present = $null -ne $key
+            $folder = if ($present) {{
+                $key.GetValue('DumpFolder', $null,
+                    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            }} else {{ $null }}
+            $dumpType = if ($present) {{ $key.GetValue('DumpType', $null) }} else {{ $null }}
+            $dumpCount = if ($present) {{ $key.GetValue('DumpCount', $null) }} else {{ $null }}
+            $expanded = if ($null -ne $folder) {{
+                [Environment]::ExpandEnvironmentVariables([string]$folder)
+            }} else {{ $null }}
+            $folderExists = ($null -ne $expanded) -and
+                (Test-Path -LiteralPath $expanded -PathType Container)
+            $views += [pscustomobject]@{{
+                view = $viewName
+                present = [bool]$present
+                folder = $folder
+                expanded_folder = $expanded
+                folder_exists = [bool]$folderExists
+                dump_type = $dumpType
+                dump_count = $dumpCount
+            }}
+        }} finally {{
+            if ($null -ne $key) {{ $key.Dispose() }}
+        }}
+    }} finally {{
+        $baseKey.Dispose()
+    }}
+}}
+$service = Get-Service -Name WerSvc -ErrorAction SilentlyContinue
+$result = [pscustomobject]@{{
+    views = $views
+    free_bytes = [int64](Get-PSDrive -Name 'C').Free
+    wer_service_status = if ($null -eq $service) {{ 'missing' }} else {{ [string]$service.Status }}
+}}
+Write-Output '{PREFLIGHT_JSON_BEGIN}'
+ConvertTo-Json -InputObject $result -Compress -Depth 3
+Write-Output '{PREFLIGHT_JSON_END}'
+"""
+    return parse_wer_diagnostics(guest_ps(script))
+
+
+def target_digest_diagnostic(target_pid: int) -> dict:
+    out = guest_ps(f"(Get-FileHash -Algorithm SHA256 (Get-Process -Id {target_pid}).Path).Hash")
+    hashes = sorted(set(value.lower() for value in re.findall(
+        r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{64})(?![0-9A-Fa-f])", out
+    )))
+    return {
+        "expected_sha256": EXPECTED_SHA256,
+        "observed_sha256": hashes[0] if len(hashes) == 1 else None,
+        "supported": hashes == [EXPECTED_SHA256],
+        "response_unambiguous": len(hashes) == 1,
+    }
+
+
+def positive_generation_budget(value: str) -> int:
+    try:
+        budget = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("generation budget must be an integer") from exc
+    if budget < 1 or budget > 64:
+        raise argparse.ArgumentTypeError("generation budget must be between 1 and 64")
+    return budget
+
+
+def prelaunch_report(max_generations: int, target_pid: int | None = None) -> dict:
+    issues = []
+    injector = injector_diagnostic()
+    issues.extend(f"injector: {issue}" for issue in injector["issues"])
+    try:
+        pids, _ = process_pids()
+        process_error = None
+    except RuntimeError as exc:
+        pids = []
+        process_error = str(exc)
+        issues.append(process_error)
+    if process_error is None and target_pid is not None and target_pid not in pids:
+        issues.append(f"requested PID {target_pid} is not a running riseofnations.exe")
+    if target_pid is None and len(pids) == 1:
+        target_pid = pids[0]
+    if len(pids) > 1:
+        issues.append(f"multiple riseofnations.exe processes are running: {pids}")
+    process = {
+        "status": ("error" if process_error else
+                   ("absent" if not pids else
+                    ("single" if len(pids) == 1 else "ambiguous"))),
+        "pids": pids,
+        "selected_pid": target_pid,
+        "error": process_error,
+    }
+    inventory = None
+    digest = None
+    if target_pid is not None and target_pid in pids:
+        try:
+            digest = target_digest_diagnostic(target_pid)
+        except Exception as exc:
+            digest = {
+                "supported": False,
+                "error": f"target digest query failed: {exc}",
+            }
+        if not digest["supported"]:
+            issues.append("selected retail executable identity is unsupported or ambiguous")
+        try:
+            if not injector["ready"]:
+                raise RuntimeError("current hash-bound guest injector is not ready")
+            inventory = controller_inventory(target_pid)
+        except Exception as exc:
+            detail = f"controller inventory failed: {exc}"
+            issues.append(detail)
+            inventory = {
+                "enumeration": "failed",
+                "complete": False,
+                "generations": [],
+                "mapped_modules": [],
+                "mapped_generation_count": 0,
+                "hook": {"status": "unknown"},
+                "hook_owner": None,
+                "issues": [detail],
+            }
+        issues.extend(inventory["issues"])
+        if inventory["mapped_generation_count"] > max_generations:
+            issues.append(
+                f"mapped controller generations exceed budget "
+                f"({inventory['mapped_generation_count']} > {max_generations})"
+            )
+    else:
+        try:
+            rows, row_errors = deployed_generations()
+        except Exception as exc:
+            rows = []
+            row_errors = [f"deployed-generation scan failed: {exc}"]
+        issues.extend(row_errors)
+        stale_ready_records = [{
+            "generation": row["generation"],
+            "state": row["ready"]["values"].get("state"),
+            "pid": row["ready"]["values"].get("pid"),
+            "relation": "historical-only; no retail process is running",
+        } for row in rows if row["ready"]["present"]]
+        inventory = {
+            "enumeration": "on-disk only; retail process is absent",
+            "complete": not row_errors,
+            "generations": rows,
+            "stale_ready_records": stale_ready_records,
+            "mapped_modules": [],
+            "mapped_generation_count": 0,
+            "hook": {"status": "not-applicable"},
+            "hook_owner": None,
+            "issues": row_errors,
+        }
+    try:
+        wer = wer_diagnostics()
+    except Exception as exc:
+        wer = {
+            "ready": False,
+            "issues": [f"WER diagnostics failed: {exc}"],
+            "mutation": "none; diagnostic query failed before any mutation",
+        }
+    issues.extend(f"WER: {issue}" for issue in wer["issues"])
+    return {
+        "schema": "don.retail-control-preflight.v1",
+        "mode": "guest/process read-only; strict host injector build only",
+        "injector": injector,
+        "process": process,
+        "target": digest,
+        "controllers": inventory,
+        "generation_budget": {
+            "maximum_mapped": max_generations,
+            "current_mapped": inventory["mapped_generation_count"],
+            "within_budget": inventory["mapped_generation_count"] <= max_generations,
+        },
+        "wer_local_dumps": wer,
+        "ready": not issues,
+        "issues": sorted(set(issues)),
+    }
+
+
+def prelaunch_command(max_generations: int, target_pid: int | None = None) -> None:
+    report = prelaunch_report(max_generations, target_pid)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if not report["ready"]:
+        raise SystemExit(2)
+
+
+def enforce_generation_budget(target_pid: int, generation: str,
+                              max_generations: int,
+                              require_unhooked: bool = True) -> dict:
+    inventory = controller_inventory(target_pid, generation)
+    if not inventory["complete"]:
+        raise SystemExit(
+            "REFUSING deployment because controller module inventory is incomplete:\n" +
+            "\n".join(inventory["issues"])
+        )
+    requested_name = generation_dll(generation).lower()
+    already_mapped = any(
+        module["name"].lower() == requested_name
+        for module in inventory["mapped_modules"]
+    )
+    projected = inventory["mapped_generation_count"] + (0 if already_mapped else 1)
+    if projected > max_generations:
+        raise SystemExit(
+            f"REFUSING deployment: generation {generation!r} would map controller "
+            f"{projected} of a configured maximum {max_generations}; restart retail "
+            "instead of accumulating parked DLL generations"
+        )
+    if inventory["issues"]:
+        raise SystemExit(
+            "REFUSING deployment because controller ownership is not clean:\n" +
+            "\n".join(inventory["issues"])
+        )
+    if require_unhooked and inventory["hook"]["status"] != "original":
+        raise SystemExit(
+            "REFUSING deployment while another controller owns the retail call site; "
+            "park that generation with upgrade or stop first"
+        )
+    return inventory
+
+
+def ready_identity_errors(record: dict, target_pid: int, root: str) -> list[str]:
+    errors = list(record["errors"])
+    values = record["values"]
+    if not record["present"]:
+        return [*errors, "ready record is missing"]
+    try:
+        ready_pid = int(values.get("pid", ""))
+    except ValueError:
+        ready_pid = None
+    if ready_pid != target_pid:
+        errors.append("ready pid does not match target")
+    if values.get("root", "").lower() != root.lower():
+        errors.append("ready root does not match controller root")
+    try:
+        base_text = values.get("base", "")
+        base = int(base_text, 16) if re.fullmatch(r"0x[0-9A-Fa-f]{8}", base_text) else None
+        call_text = values.get("turn_call_site", "")
+        call = int(call_text, 16) if re.fullmatch(r"0x[0-9A-Fa-f]{8}", call_text) else None
+        turn_text = values.get("turn_do_frame", "")
+        turn = int(turn_text, 16) if re.fullmatch(r"0x[0-9A-Fa-f]{8}", turn_text) else None
+    except (TypeError, ValueError):
+        base = call = turn = None
+    if base is None or call != base + TURN_CALL_RVA or turn != base + TURN_DO_FRAME_RVA:
+        errors.append("ready executable addresses are missing or inconsistent")
+    return errors
+
+
+def read_ready(root: str) -> tuple[str, dict]:
+    raw = guest_cmd(f'if exist "{root}\\ready.txt" type "{root}\\ready.txt"', check=False)
+    return raw, parse_ready_record(raw if raw else None)
+
+
+def wait_for_ready_state(root: str, target_pid: int, desired: str,
+                         timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    last_detail = "ready record was not present"
+    while time.monotonic() < deadline:
+        raw, record = read_ready(root)
+        errors = ready_identity_errors(record, target_pid, root)
+        state = record["values"].get("state")
+        if not errors and state == desired:
+            return raw
+        if not errors and isinstance(state, str) and state.startswith("refused"):
+            raise SystemExit(raw)
+        last_detail = "; ".join(errors) if errors else f"state={state!r}"
+        time.sleep(0.05)
+    raise SystemExit(
+        f"controller did not publish identity-bound state={desired}: {last_detail}"
+    )
+
+
+def require_armed_controller(root: str) -> tuple[int, str]:
+    injector = injector_diagnostic()
+    if not injector["ready"]:
+        raise SystemExit(
+            "REFUSING retail request because the hash-bound guest injector is not ready: " +
+            "; ".join(injector["issues"])
+        )
+    target_pid = pid()
+    preflight(target_pid)
+    root_name = root.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
+    generation = generation_from_root_name(root_name)
+    if generation is None:
+        raise SystemExit(f"REFUSING request through unrecognized controller root {root!r}")
+    inventory = controller_inventory(target_pid)
+    if (not inventory["complete"] or inventory["issues"] or
+            inventory["hook_owner"] != generation):
+        detail = "; ".join(inventory["issues"]) or (
+            f"hook owner is {inventory['hook_owner']!r}, expected {generation!r}"
+        )
+        raise SystemExit("REFUSING request because controller ownership is not exact: " + detail)
+    return target_pid, generation
+
+
+def deploy(target_pid: int, port: int, generation: str,
+           max_generations: int = DEFAULT_GENERATION_BUDGET,
+           injector_port: int = 18081, prepare: bool = True) -> None:
     root = generation_root(generation)
     dll_name = generation_dll(generation)
+    if prepare:
+        prepare_injector(injector_port)
     preflight(target_pid)
+    enforce_generation_budget(target_pid, generation, max_generations)
     mapped = loaded_module(target_pid, dll_name)
     if mapped:
         raise SystemExit(
@@ -120,6 +1234,7 @@ def deploy(target_pid: int, port: int, generation: str) -> None:
             "choose a new --generation; mapped controller DLLs remain parked by design"
         )
     build()
+    dll_hash = sha256_file(HERE / "retail_control.dll")
     server = serve_once(port)
     try:
         guest_cmd(f'if not exist "{root}" mkdir "{root}"')
@@ -127,25 +1242,51 @@ def deploy(target_pid: int, port: int, generation: str) -> None:
             f'curl.exe -f -sS -o "{root}\\{dll_name}.download" '
             f'http://10.211.55.2:{port}/retail_control.dll'
         )
+        downloaded_hash = guest_sha256(f"{root}\\{dll_name}.download")
+        if downloaded_hash != dll_hash:
+            raise SystemExit(
+                "REFUSING controller deployment: guest download hash does not match host DLL"
+            )
         guest_cmd(f'move /y "{root}\\{dll_name}.download" "{root}\\{dll_name}" >nul')
+        installed_hash = guest_sha256(f"{root}\\{dll_name}")
+        if installed_hash != dll_hash:
+            raise SystemExit(
+                "REFUSING controller deployment: installed guest DLL hash does not match host"
+            )
         guest_cmd(
             f'del /q "{root}\\STOP" "{root}\\ready.txt" "{root}\\request.txt" '
             f'"{root}\\request.tmp" "{root}\\events.ndjson" 2>nul & exit /b 0'
         )
-        injector = r"C:\Users\ember\donhook\donject.exe"
-        out = guest_cmd(f'"{injector}" inject {target_pid} "{root}\\{dll_name}"')
+        dll_path = f"{root}\\{dll_name}"
+        inject_returncode, out = guest_cmd_status(
+            f'"{INJECTOR}" inject {target_pid} "{dll_path}" {dll_hash}'
+        )
         print(out)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            ready = guest_cmd(f'if exist "{root}\\ready.txt" type "{root}\\ready.txt"',
-                              check=False)
-            if "state=armed" in ready:
-                print(ready)
-                return
-            if "state=refused" in ready:
-                raise SystemExit(ready)
-            time.sleep(0.1)
-        raise SystemExit("DLL loaded but did not publish state=armed")
+        inject_result = parse_inject_output(
+            out, inject_returncode, target_pid, dll_name, dll_path, dll_hash
+        )
+        if inject_result["status"] == "indeterminate":
+            raise SystemExit(
+                "INDETERMINATE injection: this retail process is tainted and must be "
+                "terminated before any retry\n" + inject_result["detail"]
+            )
+        if inject_result["status"] != "loaded":
+            raise SystemExit("REFUSING after failed injector postcondition; do not retry "
+                             "this retail process: " +
+                             inject_result["detail"])
+        ready = wait_for_ready_state(root, target_pid, "armed", 10.0)
+        hook = hook_call_state(target_pid)
+        if hook["status"] != "patched":
+            raise SystemExit(
+                f"controller reported armed but external hook bytes are {hook['status']}"
+            )
+        mapped_after = module_probe(target_pid, dll_name)
+        if (mapped_after["status"] != "mapped" or
+                mapped_after["base"] != inject_result["module_base"] or
+                normalize_windows_path(mapped_after.get("module_path", "")) !=
+                normalize_windows_path(dll_path)):
+            raise SystemExit("controller reported armed without an identity-bound mapped DLL")
+        print(ready)
     finally:
         guest_cmd(f'del /q "{root}\\{dll_name}.download" 2>nul & exit /b 0', check=False)
         server.shutdown()
@@ -159,7 +1300,7 @@ def next_seq() -> int:
 def validate_words(words: list[str]) -> None:
     if not words:
         raise SystemExit("a retail command is required")
-    allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
+    allowed = {"observe", "observe-network", "pause", "speed", "speed-up", "speed-down",
                "move", "halt", "attack", "attack-visible", "trace-move", "observe-guys",
                "observe-player", "validate-queue", "validate-build", "gather",
                "queue", "build", "run-frames", "find-build", "find-gather-build",
@@ -171,8 +1312,49 @@ def validate_words(words: list[str]) -> None:
             raise SystemExit(f"unsafe token {word!r}")
 
 
+def validate_multiplayer_events(verb: str, events: list[dict]) -> None:
+    if verb not in {"observe-network", "checksum"}:
+        return
+    gates = {
+        "eligible", "no_game", "playback", "network_clear", "immediate_process",
+        "no_console", "bad_play", "player_invalid", "player_terminal",
+        "not_connected", "package_invalid", "package_full", "torn",
+    }
+    terminal = [event for event in events if event.get("phase") in {
+        "observed", "queued", "rejected"
+    }]
+    if len(terminal) != 1:
+        raise SystemExit(f"REFUSING malformed {verb} response: expected one terminal event")
+    event = terminal[0]
+    gate = event.get("checksum_gate")
+    if (gate not in gates or
+            event.get("mutates_outgoing_package") != (0 if verb == "observe-network" else 1) or
+            not isinstance(event.get("network_last_num_received"), list) or
+            len(event["network_last_num_received"]) != 8 or
+            not all(isinstance(value, int) for value in event["network_last_num_received"]) or
+            not isinstance(event.get("network_peer_checksums"), list) or
+            len(event["network_peer_checksums"]) != 8 or
+            not all(isinstance(value, int) for value in event["network_peer_checksums"])):
+        raise SystemExit(f"REFUSING malformed {verb} network-gate evidence")
+    if verb == "observe-network":
+        if event.get("phase") != "observed" or event.get("checksum_capture_valid") != 0:
+            raise SystemExit("REFUSING observe-network response that is not passive observation")
+        return
+    if event.get("phase") == "queued":
+        words = event.get("checksum_words")
+        if (gate != "eligible" or event.get("checksum_capture_valid") != 1 or
+                event.get("checksum_total_consistent") != 1 or
+                event.get("checksum_adler_shaped") != 1 or
+                not isinstance(words, list) or len(words) != 16 or
+                not all(isinstance(value, int) for value in words)):
+            raise SystemExit("REFUSING checksum packet without complete retail capture evidence")
+    elif gate == "eligible":
+        raise SystemExit("REFUSING eligible checksum response that did not capture a packet")
+
+
 def send(words: list[str], timeout: float, root: str) -> list[dict]:
     validate_words(words)
+    require_armed_controller(root)
     seq = next_seq()
     line = " ".join([str(seq), *words])
     # A rename makes the one-slot request atomic from the worker's point of view.
@@ -205,9 +1387,11 @@ def send(words: list[str], timeout: float, root: str) -> list[dict]:
         raise SystemExit(
             "no main-thread response; the process is attached but TurnControl::do_frame is not running"
         )
-    for event in seen.values():
+    events = list(seen.values())
+    validate_multiplayer_events(words[0], events)
+    for event in events:
         print(json.dumps(event, sort_keys=True))
-    return list(seen.values())
+    return events
 
 
 def normalized_trace_event(event: dict, start_frame: int, base: int) -> dict:
@@ -2557,27 +3741,36 @@ def status(root: str) -> None:
 
 
 def stop(root: str) -> None:
+    target_pid = pid()
     guest_cmd(f'(echo stop)>"{root}\\STOP"')
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        ready = guest_cmd(f'type "{root}\\ready.txt"', check=False)
-        if "state=parked" in ready:
-            print(ready)
-            return
-        time.sleep(0.05)
-    raise SystemExit("STOP written but hook did not report parked")
+    ready = wait_for_ready_state(root, target_pid, "parked", 8.0)
+    hook = hook_call_state(target_pid)
+    if hook["status"] != "original":
+        raise SystemExit(
+            f"STOP remains asserted: parked record arrived but external hook bytes are "
+            f"{hook['status']}"
+        )
+    print(ready)
 
 
 def rearm(root: str) -> None:
+    target_pid = pid()
+    preflight(target_pid)
+    root_name = root.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
+    generation = generation_from_root_name(root_name)
+    if generation is None:
+        raise SystemExit(f"REFUSING rearm of unrecognized controller root {root!r}")
+    probe = module_probe(target_pid, generation_dll(generation))
+    if probe["status"] != "mapped":
+        raise SystemExit("REFUSING rearm without an identity-bound mapped controller DLL")
     guest_cmd(f'del /q "{root}\\STOP"')
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        ready = guest_cmd(f'type "{root}\\ready.txt"', check=False)
-        if "state=armed" in ready:
-            print(ready)
-            return
-        time.sleep(0.05)
-    raise SystemExit("STOP removed but hook did not report armed")
+    ready = wait_for_ready_state(root, target_pid, "armed", 5.0)
+    hook = hook_call_state(target_pid)
+    if hook["status"] != "patched":
+        raise SystemExit(
+            f"controller reported armed but external hook bytes are {hook['status']}"
+        )
+    print(ready)
 
 
 def main() -> None:
@@ -2588,15 +3781,33 @@ def main() -> None:
 
     status_parser = sub.add_parser("status")
     add_generation(status_parser)
+    preflight_parser = sub.add_parser(
+        "preflight", help="read-only retail relaunch and controller-lifecycle diagnostics"
+    )
+    preflight_parser.add_argument("--pid", type=int)
+    preflight_parser.add_argument(
+        "--max-generations", type=positive_generation_budget,
+        default=DEFAULT_GENERATION_BUDGET,
+    )
+    prepare_parser = sub.add_parser(
+        "prepare-injector", help="strict-build and atomically install the x86 guest injector"
+    )
+    prepare_parser.add_argument("--port", type=int, default=18081)
     sub.add_parser("build")
     d = sub.add_parser("deploy")
     d.add_argument("--pid", type=int)
     d.add_argument("--port", type=int, default=18082)
+    d.add_argument("--max-generations", type=positive_generation_budget,
+                   default=DEFAULT_GENERATION_BUDGET)
+    d.add_argument("--injector-port", type=int, default=18081)
     add_generation(d)
     u = sub.add_parser("upgrade")
     u.add_argument("--pid", type=int)
     u.add_argument("--port", type=int, default=18082)
     u.add_argument("--from-generation", default=LEGACY_GENERATION)
+    u.add_argument("--max-generations", type=positive_generation_budget,
+                   default=DEFAULT_GENERATION_BUDGET)
+    u.add_argument("--injector-port", type=int, default=18081)
     add_generation(u)
     s = sub.add_parser("send")
     s.add_argument("--timeout", type=float, default=5.0)
@@ -2669,12 +3880,23 @@ def main() -> None:
     add_generation(rearm_parser)
     a = ap.parse_args()
     if a.action == "status": status(generation_root(a.generation))
+    elif a.action == "preflight": prelaunch_command(a.max_generations, a.pid)
+    elif a.action == "prepare-injector": prepare_injector(a.port)
     elif a.action == "build": build()
-    elif a.action == "deploy": deploy(a.pid or pid(), a.port, a.generation)
+    elif a.action == "deploy": deploy(
+        a.pid or pid(), a.port, a.generation, a.max_generations, a.injector_port
+    )
     elif a.action == "upgrade":
         target_pid = a.pid or pid()
+        prepare_injector(a.injector_port)
+        enforce_generation_budget(
+            target_pid, a.generation, a.max_generations, require_unhooked=False
+        )
         stop(generation_root(a.from_generation))
-        deploy(target_pid, a.port, a.generation)
+        deploy(
+            target_pid, a.port, a.generation, a.max_generations,
+            a.injector_port, prepare=False,
+        )
     elif a.action == "send": send(a.command, a.timeout, generation_root(a.generation))
     elif a.action == "trajectory":
         trajectory(a.owner, a.unit_id, a.x, a.y, a.max_frames, a.timeout,

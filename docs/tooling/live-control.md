@@ -34,7 +34,7 @@ on the game thread.
 | `pause 0|1` | `CommandManager::issue_pause` `0x00940BA0` | exact opcode `0x4c` bytes + pause bit transition |
 | `speed N` (`0..4`) | `issue_speed_set` `0x00940B60` | exact opcode `0x34` bytes + `TurnControl+0x30` state |
 | `speed-up` / `speed-down` | `0x00940B30` / `0x00940B00` | exact `0x35` / `0x36` bytes |
-| `checksum` | `issue_check_sums` `0x00940770` | exact 65-byte opcode `0x39` packet when retail's multiplayer gates allow it |
+| `observe-network` | read-only post-`do_frame` snapshot | exact network/playback/immediate/player gates, seed/settings, package room, and eight peer totals |
 | `halt WHO IDS...` | `issue_halt` `0x009418D0` | retail-generated group+halt bytes; selected unit order list becomes empty |
 | `move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK IDS...` | `issue_move_to` `0x00941720` | retail-generated group+move bytes; current order pointer/vtable transition |
 | `attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED IDS...` | `issue_attack` `0x009415E0` | retail-generated group+attack bytes; current order pointer/vtable transition |
@@ -54,8 +54,12 @@ The probe does not bypass those gates.
 ## Use
 
 ```sh
+python3 tools/retail-control/wer_localdumps.py check
+python3 tools/retail-control/retailctl.py prepare-injector
+python3 tools/retail-control/retailctl.py preflight
 python3 tools/retail-control/retailctl.py deploy --pid 5236
 python3 tools/retail-control/retailctl.py send observe
+python3 tools/retail-control/retailctl.py send observe-network
 python3 tools/retail-control/retailctl.py send pause 1
 python3 tools/retail-control/retailctl.py send pause 0
 python3 tools/retail-control/retailctl.py send move 0 16000 12000 2 1 -1 -1 0 12 13
@@ -63,20 +67,42 @@ python3 tools/retail-control/retailctl.py stop
 python3 tools/retail-control/retailctl.py rearm
 ```
 
+`preflight` is read-only in the guest. It requires the current strict PE32 injector build and
+guest copy to have the same deterministic SHA-256 and passing self-test, reconciles a complete
+x86 module inventory to immutable controller roots, enforces the mapped-generation budget
+(default one), classifies the external call-site bytes, and checks the two scoped WER LocalDumps
+registry views. `wer_localdumps.py check` additionally proves the dump directory's exact protected
+ACL; `setup` is the only command that creates that reversible per-executable policy and refuses
+while retail is running.
+
 Every response is NDJSON with `queued`, then (where state evidence exists) `applied` or
 `timeout`. `command_hex` is copied from the exact range appended to retail's live
-`CommandPackage`; it includes multiplayer padding when retail inserts it. Unit order
+`CommandPackage`; it includes the optional one-byte multiplayer padding when retail inserts it.
+Passive `observe-network` never calls the sender. The controller contains a structurally strict
+decoder for 65/66-byte opcode-`0x39` captures, but the request protocol deliberately does not expose
+a manual checksum sender: retail already emits one automatically in `process_turn`, so a second
+packet could consume package capacity and perturb lockstep. Multiplayer proof therefore comes from
+the passive post-turn totals plus the recorded replay packet. Unit order
 evidence reads the PDB-defined `UnitData::orderlist` at `+0xc8`, specifically its current
 order pointer (`Unit+0xcc`) and length (`Unit+0xd8`). Vtable values can be resolved through
 `schema/vtables.json` (for example `MoveOrder` `0x00B4A12C`, rebased at runtime).
 
 ## Reversibility and current exercise
 
-`STOP` first prevents callbacks, then suspends other threads long enough to restore the
-five original call bytes and flushes the emulator instruction cache through both
-`FlushInstructionCache` and `WriteProcessMemory`. The DLL deliberately remains loaded and
-parked; this avoids unloading code while another thread could still have a return address
-inside it. Deleting `STOP` rechecks the prologue and reinstalls the detour.
+`STOP` first prevents new work and cancels any pending request, verification, or trace. During
+an active game loop, the main-thread wrapper restores the five original call bytes only after
+the post-`TurnControl::do_frame` boundary and after every wrapper invocation from that generation
+has left. It verifies that the live bytes are that generation's exact detour before restoring
+them and requires `FlushInstructionCache` to succeed. If the loop is dormant, the worker uses a
+fail-closed fallback: it completely enumerates and suspends the other target threads, refuses if
+any instruction pointer is inside the call site, trampoline, or controller image, rechecks hook
+ownership while quiescent, restores the bytes, and resumes every suspended thread. Normal STOP
+does not use `WriteProcessMemory` as an emulator-cache workaround.
+
+Only then does the controller publish an identity-bound `parked` acknowledgement. The DLL
+deliberately remains loaded; this avoids unloading code while a thread could retain a return
+address inside it. Deleting `STOP` starts a fresh request epoch, rechecks the original prologue,
+and reinstalls the detour.
 
 ### Live upgrades do not overwrite mapped DLLs
 

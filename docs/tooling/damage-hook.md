@@ -185,7 +185,7 @@ Reproduction:
 ```sh
 prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && dontest.exe 120 200000 > dontest.out 2>&1"
 prlctl exec "Windows 11" cmd.exe /c "type C:\Users\ember\donhook\dontest_rva.txt"   # pid + rvas
-prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe inject <pid> C:\Users\ember\donhook\donhook.dll"
+prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe inject <pid> C:\Users\ember\donhook\donhook.dll <donhook-dll-sha256>"
 ```
 
 ---
@@ -205,15 +205,32 @@ base=00D60000 delta=00960000
 and a read-only comparison of the live prologue bytes against the shipped image at all seven
 addresses, which matched exactly [measured].
 
-Injection is the classic `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread`
-(`LoadLibraryA`). Two things worth recording:
+Injection uses `VirtualAllocEx` + `WriteProcessMemory` + `CreateRemoteThread` with
+`LoadLibraryW`. The injector resolves the local export's actual owner image, converts the export
+to an RVA, identifies the byte-identical owner image in the target, rebases that RVA, and verifies
+that the remote address is committed executable image memory before creating the thread. It does
+not assume that `kernel32.dll` has the same base in both processes. The old equal-base observation
+(`0x76650000` in both x86 processes during one ARM64 Windows boot session) remains useful historical
+evidence, but it is no longer a safety contract.
 
-* On ARM64 Windows, **every x86 process in a boot session maps `SysWOW64\kernel32.dll` at the
-  same base** — 0x76650000 for both the injector and the game [measured] — so a 32-bit injector's
-  local `LoadLibraryA` address is valid remotely. `donject` verifies this and **refuses to inject
-  if the bases differ** rather than firing a remote thread at a wrong address.
-* `CreateRemoteThread` into an x86 process from an x86 process works fine under the emulator
-  [measured]; the remote `LoadLibraryA` returned the DLL's base.
+Before injection, `donject` binds all checks to one open process handle, requires an x86 target,
+explicitly restricts its current `main(char **)` DLL argument to 7-bit ASCII, converts it to a
+canonical absolute wide path, validates both target and DLL as PE32/i386,
+and refuses a basename collision with a different loaded path. A completed loader thread is not
+accepted on its return value alone: the exact module path, base, and image size must appear in a
+fresh module inventory. A wait timeout is explicitly **indeterminate**, retains the remote path
+allocation because the loader may still read it, and taints the target for restart rather than
+allowing a retry.
+
+Read-only module probes use the `donject.v2` protocol. `base` distinguishes `status=mapped`
+(exit 0), `status=absent` (exit 10), and `status=error` (exit 11); `modules` returns a bounded,
+counted inventory. Toolhelp failure can therefore never masquerade as an absent module.
+
+`CreateRemoteThread` into an x86 process from an x86 process works under the emulator [measured];
+the hardened `LoadLibraryW` path has also been exercised against the disposable `dontest.exe`
+target, including an exact-loaded confirmation. A second injection of the same mapped path is
+explicitly refused because `DllMain` would not run again; callers must re-arm the parked module or
+use a fresh immutable generation rather than treating `LoadLibraryW` as a successful upgrade.
 
 Session 1 hooked three functions and ran for roughly a quarter of an hour of real play
 (8,400 sim frames):
@@ -243,7 +260,7 @@ prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe
 prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe chain 14644 riseofnations.exe 244130 0"
 
 # 3. arm  (STOP must not exist)
-prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe inject 14644 C:\Users\ember\donhook\donhook.dll"
+prlctl exec "Windows 11" cmd.exe /c "cd /d C:\Users\ember\donhook && donject.exe inject 14644 C:\Users\ember\donhook\donhook.dll <donhook-dll-sha256>"
 
 # 4. disarm — restores the original bytes and drains the log
 prlctl exec "Windows 11" cmd.exe /c "echo x > C:\Users\ember\donhook\STOP"
