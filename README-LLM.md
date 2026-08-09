@@ -3,6 +3,15 @@
 Orientation for an agent landing on this repo cold. `README.md` is Ember's, human-written;
 this file is ours. Read this first, then `docs/CHARTER.md`, then whatever your task touches.
 
+## Repository workflow — one permanent branch
+
+**This repository works directly on `dev`, its GitHub default branch. Never create, switch,
+rename, or delete branches, and never create a Git worktree.** In particular, do not create
+`codex/*`, recovery, feature, or agent-specific branches. Every agent stays on the already
+checked-out `dev` branch and preserves unrelated shared-tree changes. If the checkout is ever
+not on `dev`, stop and ask Ember rather than changing branches. This is a deliberate permanent
+workflow rule; `main` is not used here.
+
 ## What this is
 
 **Descent of Nations** — a deterministic, batch-parallel Rust reimplementation of the
