@@ -1,0 +1,210 @@
+{
+  "schema": "don.release-component-provenance.v1",
+  "component": {
+    "name": "don-web-wasm",
+    "version": "0.1.0"
+  },
+  "payload": {
+    "path": "web/public/wasm/don_web.wasm",
+    "size": 745507,
+    "sha256": "b3faf22a5a53076d1fe300472903182d993920d9f8c2e17ab77a09fff0d45c68"
+  },
+  "lock": {
+    "path": "web/wasm/Cargo.lock",
+    "size": 737,
+    "sha256": "7f311db3db512ef3d3b1b74c3455ec5513a3a1d6f2f8e12c3291f750bffe35d0"
+  },
+  "selection": {
+    "root_package": "don-web",
+    "method": "transitive package graph reachable from root_package in the exact Cargo.lock",
+    "packages": [
+      {
+        "identity": {
+          "name": "don-bhs",
+          "version": "0.1.0",
+          "source": null,
+          "checksum": null
+        },
+        "origin": "repository-path",
+        "archive": null,
+        "license": {
+          "declared_expression": "GPL-3.0-or-later",
+          "declaration_evidence": [
+            {
+              "path": "crates/don-bhs/Cargo.toml",
+              "size": 386,
+              "sha256": "8fde64ffe6d0cc1115583b9b1bf7ddfb52a168b9c81b58ea9871c2a8c16a0b3d"
+            },
+            {
+              "path": "Cargo.toml",
+              "size": 827,
+              "sha256": "4ec85f2ac0273bfe147b37eba61149bae0b4ad4dd73d90372bf5097010c03470"
+            },
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "bundled_texts": [
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "review_state": "pending-human-obligation-review"
+        }
+      },
+      {
+        "identity": {
+          "name": "don-sim",
+          "version": "0.1.0",
+          "source": null,
+          "checksum": null
+        },
+        "origin": "repository-path",
+        "archive": null,
+        "license": {
+          "declared_expression": "GPL-3.0-or-later",
+          "declaration_evidence": [
+            {
+              "path": "crates/don-sim/Cargo.toml",
+              "size": 615,
+              "sha256": "fa63a98c76b69915f16032ea33b0b655b7da9d54eb2b756df20b40a89b8c12b9"
+            },
+            {
+              "path": "Cargo.toml",
+              "size": 827,
+              "sha256": "4ec85f2ac0273bfe147b37eba61149bae0b4ad4dd73d90372bf5097010c03470"
+            },
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "bundled_texts": [
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "review_state": "pending-human-obligation-review"
+        }
+      },
+      {
+        "identity": {
+          "name": "don-web",
+          "version": "0.1.0",
+          "source": null,
+          "checksum": null
+        },
+        "origin": "repository-path",
+        "archive": null,
+        "license": {
+          "declared_expression": "GPL-3.0-or-later",
+          "declaration_evidence": [
+            {
+              "path": "web/wasm/Cargo.toml",
+              "size": 940,
+              "sha256": "89b4c512524be8641c707f7feab5baee18369ed51b7dedd68ed3e67780601ce9"
+            },
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "bundled_texts": [
+            {
+              "path": "LICENSE",
+              "size": 35149,
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+            }
+          ],
+          "review_state": "pending-human-obligation-review"
+        }
+      },
+      {
+        "identity": {
+          "name": "memchr",
+          "version": "2.8.3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+        },
+        "origin": "crates.io-registry",
+        "archive": {
+          "url": "https://static.crates.io/crates/memchr/memchr-2.8.3.crate",
+          "sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+        },
+        "license": {
+          "declared_expression": "Unlicense OR MIT",
+          "declaration_evidence": {
+            "path": "release/notices/web-wasm/memchr-2.8.3/Cargo.toml.orig",
+            "size": 2560,
+            "sha256": "2d004168044e88b00f971e65d7e6c988a555aa00d7ef4d0ceb5b5a9c228fb0c9"
+          },
+          "bundled_texts": [
+            {
+              "path": "release/notices/web-wasm/memchr-2.8.3/COPYING",
+              "size": 126,
+              "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+            },
+            {
+              "path": "release/notices/web-wasm/memchr-2.8.3/LICENSE-MIT",
+              "size": 1081,
+              "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+            },
+            {
+              "path": "release/notices/web-wasm/memchr-2.8.3/UNLICENSE",
+              "size": 1211,
+              "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+            }
+          ],
+          "review_state": "pending-human-obligation-review"
+        }
+      },
+      {
+        "identity": {
+          "name": "quick-xml",
+          "version": "0.38.4",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+        },
+        "origin": "crates.io-registry",
+        "archive": {
+          "url": "https://static.crates.io/crates/quick-xml/quick-xml-0.38.4.crate",
+          "sha256": "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+        },
+        "license": {
+          "declared_expression": "MIT",
+          "declaration_evidence": {
+            "path": "release/notices/web-wasm/quick-xml-0.38.4/Cargo.toml.orig",
+            "size": 8814,
+            "sha256": "9b27365ee12d666f3a33f4a3348be9debe2a8bdff77f55233a843b9d01f29220"
+          },
+          "bundled_texts": [
+            {
+              "path": "release/notices/web-wasm/quick-xml-0.38.4/LICENSE-MIT.md",
+              "size": 1105,
+              "sha256": "5b2c207dcf571267ebe0bbdd5bf321f561ddc22ff597e7b363e96f4539507a29"
+            }
+          ],
+          "review_state": "pending-human-obligation-review"
+        }
+      }
+    ]
+  },
+  "claims": {
+    "component_bytes_hash_bound": true,
+    "lock_graph_hash_bound": true,
+    "registry_archive_checksums_verified": true,
+    "license_declarations_mechanically_captured": true,
+    "binary_dependency_reachability_proven": false,
+    "notice_sufficiency_reviewed": false,
+    "source_provision_reviewed": false,
+    "whole_product_payload": false
+  }
+}

@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import fnmatch
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import sys
 import tomllib
@@ -157,13 +159,20 @@ def _optional_regular_file(root: Path, relative: str) -> Path | None:
 
 def _discover(root: Path, basename: str) -> set[str]:
     found: set[str] = set()
-    for path in root.rglob(basename):
-        relative = path.relative_to(root)
-        if any(part in IGNORED_DISCOVERY_PARTS for part in relative.parts):
-            continue
-        if path.is_symlink() or not path.is_file():
-            raise ProofError(f"discovered {basename} is not a regular file: {relative.as_posix()}")
-        found.add(relative.as_posix())
+    for directory, children, files in os.walk(root):
+        children[:] = [
+            child for child in children if child not in IGNORED_DISCOVERY_PARTS
+        ]
+        for name in files:
+            if not fnmatch.fnmatchcase(name, basename):
+                continue
+            path = Path(directory) / name
+            relative = path.relative_to(root)
+            if path.is_symlink() or not path.is_file():
+                raise ProofError(
+                    f"discovered {basename} is not a regular file: {relative.as_posix()}"
+                )
+            found.add(relative.as_posix())
     return found
 
 

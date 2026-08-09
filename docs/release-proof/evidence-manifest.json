@@ -107,6 +107,61 @@
       "path": "web/wasm/Cargo.lock",
       "sha256": "7f311db3db512ef3d3b1b74c3455ec5513a3a1d6f2f8e12c3291f750bffe35d0",
       "role": "browser wasm dependency snapshot"
+    },
+    {
+      "path": "tools/release-proof/component_provenance.py",
+      "sha256": "f754c5a9335aea16598997799db0c6fe2f0c605a86b12993aba8633de3bae413",
+      "role": "fail-closed component byte, lock graph, archive checksum, and license-evidence verifier"
+    },
+    {
+      "path": "tools/release-proof/test_component_provenance.py",
+      "sha256": "82ce864504611d2a584ede57ee279669dd27a61884c681f172a01ca5b56c1c29",
+      "role": "synthetic component-provenance capture and refusal regressions"
+    },
+    {
+      "path": "tools/release-proof/component-provenance.schema.json",
+      "sha256": "a37cdfe8bd54264ac6cfdfe4da0783633c865c9a04181004de99f4ba52d57b6e",
+      "role": "structural contract for the component dependency provenance precursor"
+    },
+    {
+      "path": "docs/release-proof/web-wasm-component-provenance.md",
+      "sha256": "e19b4119e1a07472fb764225a8b33750c3c3f3ef8d4ac0cf3012668987215e8d",
+      "role": "scope and explicit non-claims for the browser Wasm dependency precursor"
+    },
+    {
+      "path": "release/web-wasm-component-provenance.json",
+      "sha256": "5b29dfd979b6df32a8246581da3e9b46cb673f7696ad0be5e06e8b7a359cea23",
+      "role": "exact browser Wasm component, lock graph, and pending-review package provenance"
+    },
+    {
+      "path": "release/notices/web-wasm/memchr-2.8.3/Cargo.toml.orig",
+      "sha256": "2d004168044e88b00f971e65d7e6c988a555aa00d7ef4d0ceb5b5a9c228fb0c9",
+      "role": "memchr 2.8.3 declared-license evidence from its checksum-matching registry archive"
+    },
+    {
+      "path": "release/notices/web-wasm/memchr-2.8.3/COPYING",
+      "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+      "role": "memchr 2.8.3 license-choice notice from its checksum-matching registry archive"
+    },
+    {
+      "path": "release/notices/web-wasm/memchr-2.8.3/LICENSE-MIT",
+      "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+      "role": "memchr 2.8.3 MIT text from its checksum-matching registry archive"
+    },
+    {
+      "path": "release/notices/web-wasm/memchr-2.8.3/UNLICENSE",
+      "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+      "role": "memchr 2.8.3 Unlicense text from its checksum-matching registry archive"
+    },
+    {
+      "path": "release/notices/web-wasm/quick-xml-0.38.4/Cargo.toml.orig",
+      "sha256": "9b27365ee12d666f3a33f4a3348be9debe2a8bdff77f55233a843b9d01f29220",
+      "role": "quick-xml 0.38.4 declared-license evidence from its checksum-matching registry archive"
+    },
+    {
+      "path": "release/notices/web-wasm/quick-xml-0.38.4/LICENSE-MIT.md",
+      "sha256": "5b2c207dcf571267ebe0bbdd5bf321f561ddc22ff597e7b363e96f4539507a29",
+      "role": "quick-xml 0.38.4 MIT text from its checksum-matching registry archive"
     }
   ],
   "license_text_catalog": [
@@ -434,9 +489,20 @@
         "crates/oracle/Cargo.lock",
         "tools/owned-peer/Cargo.lock",
         "tools/pdb-extract/Cargo.lock",
-        "web/wasm/Cargo.lock"
+        "web/wasm/Cargo.lock",
+        "tools/release-proof/component_provenance.py",
+        "tools/release-proof/test_component_provenance.py",
+        "tools/release-proof/component-provenance.schema.json",
+        "docs/release-proof/web-wasm-component-provenance.md",
+        "release/web-wasm-component-provenance.json",
+        "release/notices/web-wasm/memchr-2.8.3/Cargo.toml.orig",
+        "release/notices/web-wasm/memchr-2.8.3/COPYING",
+        "release/notices/web-wasm/memchr-2.8.3/LICENSE-MIT",
+        "release/notices/web-wasm/memchr-2.8.3/UNLICENSE",
+        "release/notices/web-wasm/quick-xml-0.38.4/Cargo.toml.orig",
+        "release/notices/web-wasm/quick-xml-0.38.4/LICENSE-MIT.md"
       ],
-      "blocker": "The seven repository lock snapshots contain 179 candidate package records, including first-party and research/tool packages, but no exact assembled-product SBOM identifies the conveyed subset and binds its audited notices/source treatment. Expected artifact: release/product-dependency-notices.json."
+      "blocker": "A component-only precursor now binds the checked-in browser Wasm to its five-package lock graph and captures the two registry packages' declared licenses and archive-carried texts. All five records remain pending human obligation/source-treatment review; the graph is not a linked-code SBOM, and no exact assembled-product payload identifies the conveyed subset across the product. Expected completion artifact: release/product-dependency-notices.json."
     },
     {
       "id": "owned-data-bootstrap-boundary",

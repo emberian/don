@@ -15,10 +15,13 @@ whole-game/product readiness; gameplay completion remains governed by `GOAL.md` 
   inventory and a reviewed classification of tracked binary/PDB/live-derived fact extracts are
   absent.
 - **distribution proof:** in addition to that source blocker, the seven exact Cargo lock
-  snapshots contain 179 package records without an audited dependency notice inventory; there is
-  no standalone product payload/installer and no human-cleared manifest for independently licensed
-  art, audio, fonts, and presentation data; the recorded retail-controller incident retained no dump;
-  and the five-cycle STOP/rearm result lacks a compact per-cycle machine record.
+  snapshots contain 179 package records without an audited product dependency notice inventory.
+  One component-only precursor now binds the checked-in browser Wasm to its five-package lock graph
+  and mechanically captures both registry packages' archive-carried declarations/texts, but every
+  record remains pending review and the graph is not a linked-code SBOM. There is no standalone
+  product payload/installer and no human-cleared manifest for independently licensed art, audio,
+  fonts, and presentation data; the recorded retail-controller incident retained no dump; and the
+  five-cycle STOP/rearm result lacks a compact per-cycle machine record.
 
 These findings do not revoke or reinterpret any declaration. They prevent the project from
 claiming that its release proof is complete until the missing evidence is supplied with authority.
@@ -41,6 +44,9 @@ The pack also preserves narrow positive conclusions already supported elsewhere:
   keeps distribution proof red until those results have a compact hash-bound machine record;
 - the scoped WER workflow has setup, exact-owned removal, dump preservation, and stable in-place
   MDMP verification logic plus synthetic regressions.
+- the checked-in browser Wasm component and exact five-package lock graph are hash-bound, while
+  checksum-matching registry archives supply retained declaration and license-text evidence for
+  `memchr 2.8.3` and `quick-xml 0.38.4`; all package obligation decisions remain explicitly pending.
 
 None of those claims a finished installer, independent content, a retained live minidump, or an
 assembled release. Those remain separate red gates in `evidence-manifest.json`.
@@ -64,6 +70,9 @@ Run the text-only regressions:
 
 ```sh
 python3 -m unittest tools/release-proof/test_check.py
+python3 -m unittest tools/release-proof/test_component_provenance.py
+python3 tools/release-proof/component_provenance.py verify \
+  --artifact release/web-wasm-component-provenance.json
 ```
 
 The checker does not compile, download, access a retail installation, copy content, or modify the

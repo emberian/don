@@ -301,6 +301,17 @@ class ReleaseProofTests(unittest.TestCase):
         with self.assertRaisesRegex(release_proof.ProofError, "Cargo manifest coverage drift"):
             self.validate_payload(value)
 
+    def test_discovery_prunes_ignored_build_trees(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="don-release-discovery-") as directory:
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            ignored = root / "target/deep"
+            ignored.mkdir(parents=True)
+            (ignored / "Cargo.lock").write_text("not repository evidence\n", encoding="utf-8")
+            (ignored / "Cargo.toml").write_text("not repository evidence\n", encoding="utf-8")
+            self.assertEqual(release_proof._discover(root, "Cargo.lock"), {"Cargo.lock"})
+            self.assertEqual(release_proof._discover_cargo_manifests(root), set())
+
     def test_remote_workspace_template_is_in_manifest_coverage(self) -> None:
         value = payload()
         paths = {item["path"] for item in value["repository_cargo_manifests"]}
