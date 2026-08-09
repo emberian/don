@@ -119,11 +119,26 @@ impl GameData {
             let o = head + k * unit_fields * 4;
             let f = |j: usize| i32_at(o + j * 4);
             units.push(UnitTypeRec {
-                type_id: f(0), attack: f(1), armor: f(2), hits: f(3), moves: f(4),
-                max_range: f(5), min_range: f(6), recharge: f(7), to_hit: f(8),
-                domain: f(9), military_level: f(10), splash_area: f(11),
-                splash_percent: f(12), obj_masks: f(13), target_size: f(14), age: f(15),
-                unit_flags: f(16), los: f(17), role: f(18), roster: f(19),
+                type_id: f(0),
+                attack: f(1),
+                armor: f(2),
+                hits: f(3),
+                moves: f(4),
+                max_range: f(5),
+                min_range: f(6),
+                recharge: f(7),
+                to_hit: f(8),
+                domain: f(9),
+                military_level: f(10),
+                splash_area: f(11),
+                splash_percent: f(12),
+                obj_masks: f(13),
+                target_size: f(14),
+                age: f(15),
+                unit_flags: f(16),
+                los: f(17),
+                role: f(18),
+                roster: f(19),
             });
         }
 
@@ -132,11 +147,20 @@ impl GameData {
         // Field order is the declaration order of `don_sim::CombatRules`; the packer emits
         // them from the retail offsets named in that struct's own doc comments.
         let rules = CombatRules {
-            height_increment: r(0), height_bonus: r(1), flank_bonus: r(2),
-            cavalry_flank_bonus: r(3), vehicle_flank_bonus: r(4), rocky_modifier: r(5),
-            overkill_frames: r(6), overkill_damage: r(7), entrenchment_modifier: r(8),
-            river_modifier: r(9), recapture_city_modifier: r(10),
-            red_fort_air_defense: r(11), rule_0x558: r(12), rule_0x76c: r(13),
+            height_increment: r(0),
+            height_bonus: r(1),
+            flank_bonus: r(2),
+            cavalry_flank_bonus: r(3),
+            vehicle_flank_bonus: r(4),
+            rocky_modifier: r(5),
+            overkill_frames: r(6),
+            overkill_damage: r(7),
+            entrenchment_modifier: r(8),
+            river_modifier: r(9),
+            recapture_city_modifier: r(10),
+            red_fort_air_defense: r(11),
+            rule_0x558: r(12),
+            rule_0x76c: r(13),
             rule_0xb98: r(14),
         };
         let rules_0x8b8 = r(15);
@@ -154,9 +178,14 @@ impl GameData {
         }
 
         let mut gd = GameData {
-            units, by_id: Vec::new(), roster: Vec::with_capacity(roster_count),
-            rules, rules_0x8b8, balance,
-            balance_n: balance_n as i32, balance_base: balance_base as i32,
+            units,
+            by_id: Vec::new(),
+            roster: Vec::with_capacity(roster_count),
+            rules,
+            rules_0x8b8,
+            balance,
+            balance_n: balance_n as i32,
+            balance_base: balance_base as i32,
             is_real: true,
         };
         gd.reindex();
@@ -171,11 +200,29 @@ impl GameData {
     /// Round numbers on purpose: nobody should be able to mistake a screenshot of this for
     /// a screenshot of the real table.
     pub fn synthetic() -> GameData {
-        let mk = |type_id, attack, armor, hits, moves, max_range, recharge, age, roster| UnitTypeRec {
-            type_id, attack, armor, hits, moves, max_range, min_range: 0, recharge,
-            to_hit: 0, domain: 0, military_level: 0, splash_area: 0, splash_percent: 100,
-            obj_masks: 0, target_size: 144, age, unit_flags: 0, los: 5, role: 0, roster,
-        };
+        let mk =
+            |type_id, attack, armor, hits, moves, max_range, recharge, age, roster| UnitTypeRec {
+                type_id,
+                attack,
+                armor,
+                hits,
+                moves,
+                max_range,
+                min_range: 0,
+                recharge,
+                to_hit: 0,
+                domain: 0,
+                military_level: 0,
+                splash_area: 0,
+                splash_percent: 100,
+                obj_masks: 0,
+                target_size: 144,
+                age,
+                unit_flags: 0,
+                los: 5,
+                role: 0,
+                roster,
+            };
         let units = vec![
             mk(50, 100, 0, 100, 24, 0, 30, 0, 0),
             mk(51, 200, 2, 200, 20, 0, 40, 1, 1),
@@ -186,16 +233,29 @@ impl GameData {
         ];
         let n = 8i32;
         let mut gd = GameData {
-            units, by_id: Vec::new(), roster: Vec::new(),
+            units,
+            by_id: Vec::new(),
+            roster: Vec::new(),
             // Flat 100 everywhere: no matchup means anything in the synthetic table.
             balance: vec![100; (n * n) as usize],
-            balance_n: n, balance_base: 50,
+            balance_n: n,
+            balance_base: 50,
             rules: CombatRules {
-                height_increment: 100, height_bonus: 0, flank_bonus: 0,
-                cavalry_flank_bonus: 0, vehicle_flank_bonus: 0, rocky_modifier: 256,
-                overkill_frames: 0, overkill_damage: 256, entrenchment_modifier: 256,
-                river_modifier: 256, recapture_city_modifier: 256, red_fort_air_defense: 0,
-                rule_0x558: 0, rule_0x76c: 0, rule_0xb98: 256,
+                height_increment: 100,
+                height_bonus: 0,
+                flank_bonus: 0,
+                cavalry_flank_bonus: 0,
+                vehicle_flank_bonus: 0,
+                rocky_modifier: 256,
+                overkill_frames: 0,
+                overkill_damage: 256,
+                entrenchment_modifier: 256,
+                river_modifier: 256,
+                recapture_city_modifier: 256,
+                red_fort_air_defense: 0,
+                rule_0x558: 0,
+                rule_0x76c: 0,
+                rule_0xb98: 256,
             },
             rules_0x8b8: 0,
             is_real: false,
@@ -205,7 +265,13 @@ impl GameData {
     }
 
     fn reindex(&mut self) {
-        let max_id = self.units.iter().map(|u| u.type_id).max().unwrap_or(0).max(0) as usize;
+        let max_id = self
+            .units
+            .iter()
+            .map(|u| u.type_id)
+            .max()
+            .unwrap_or(0)
+            .max(0) as usize;
         self.by_id = vec![-1; max_id + 1];
         for (k, u) in self.units.iter().enumerate() {
             if u.type_id >= 0 {
@@ -226,7 +292,11 @@ impl GameData {
     #[inline]
     pub fn index_of_type(&self, type_id: i32) -> Option<usize> {
         let k = *self.by_id.get(type_id.max(0) as usize)?;
-        if k < 0 { None } else { Some(k as usize) }
+        if k < 0 {
+            None
+        } else {
+            Some(k as usize)
+        }
     }
 
     /// `Balance::final_balance_table[attacker][defender]`, as a percent.

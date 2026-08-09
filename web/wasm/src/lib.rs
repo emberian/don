@@ -163,7 +163,9 @@ impl Sim {
             }
             let b = &q[o..o + len];
             o += len;
-            let Some(w) = self.batch.worlds.get_mut(world) else { continue };
+            let Some(w) = self.batch.worlds.get_mut(world) else {
+                continue;
+            };
             if b.is_empty() {
                 continue;
             }
@@ -280,8 +282,7 @@ pub extern "C" fn sim_create(
     worlds: u32,
     owners: u32,
     per_owner: u32,
-    #[allow(dead_code)]
-    capacity: u32,
+    #[allow(dead_code)] capacity: u32,
     seed_lo: u32,
     seed_hi: u32,
 ) -> *mut Sim {
@@ -374,7 +375,11 @@ pub unsafe extern "C" fn sim_live_total(s: *mut Sim) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn sim_frame(s: *mut Sim) -> u32 {
     let sim = sim_ref!(s);
-    sim.batch.worlds.first().map(|w| w.frame as u32).unwrap_or(0)
+    sim.batch
+        .worlds
+        .first()
+        .map(|w| w.frame as u32)
+        .unwrap_or(0)
 }
 
 /// Total kills across the shard — an output of the derived damage chain, so it is the
@@ -391,7 +396,12 @@ pub unsafe extern "C" fn sim_kills(s: *mut Sim) -> u32 {
 /// `s` must be a live handle from [`sim_create`].
 #[no_mangle]
 pub unsafe extern "C" fn sim_damage_lo(s: *mut Sim) -> u32 {
-    sim_ref!(s).batch.worlds.iter().map(|w| w.damage_dealt).sum::<u64>() as u32
+    sim_ref!(s)
+        .batch
+        .worlds
+        .iter()
+        .map(|w| w.damage_dealt)
+        .sum::<u64>() as u32
 }
 
 /// Advance the shard by `frames` frames, draining the command queue at each tick boundary.
@@ -493,7 +503,11 @@ pub unsafe extern "C" fn sim_world_tag_ptr(s: *mut Sim, w: u32) -> *const u32 {
 #[no_mangle]
 pub unsafe extern "C" fn sim_world_live(s: *mut Sim, w: u32) -> u32 {
     let sim = sim_ref!(s);
-    sim.batch.worlds.get(w as usize).map(|x| x.live_count()).unwrap_or(0)
+    sim.batch
+        .worlds
+        .get(w as usize)
+        .map(|x| x.live_count())
+        .unwrap_or(0)
 }
 
 // ---- commands --------------------------------------------------------------------------
@@ -551,7 +565,9 @@ pub unsafe extern "C" fn sim_pick_box(
     radius: i32,
 ) -> u32 {
     let sim = sim_ref!(s);
-    let Some(w) = sim.batch.worlds.get(world as usize) else { return 0 };
+    let Some(w) = sim.batch.worlds.get(world as usize) else {
+        return 0;
+    };
     w.pick(who as u8, x, y, radius, &mut sim.pick) as u32
 }
 
@@ -571,8 +587,12 @@ pub unsafe extern "C" fn sim_pick_ptr(s: *mut Sim) -> *mut i16 {
 pub unsafe extern "C" fn sim_pick_nearest(s: *mut Sim, world: u32, x: i32, y: i32) -> u32 {
     let sim = sim_ref!(s);
     let gd = &sim.batch.gd;
-    let Some(w) = sim.batch.worlds.get(world as usize) else { return 0 };
-    let Some((id, owner, tidx, hits, maxh)) = w.pick_nearest(x, y) else { return 0 };
+    let Some(w) = sim.batch.worlds.get(world as usize) else {
+        return 0;
+    };
+    let Some((id, owner, tidx, hits, maxh)) = w.pick_nearest(x, y) else {
+        return 0;
+    };
     let ut = gd.units[tidx as usize];
     let i = &mut sim.info;
     i[0] = id as i32;

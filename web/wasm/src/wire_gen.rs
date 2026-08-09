@@ -360,17 +360,25 @@ pub fn struct_name(op: u8) -> &'static str {
 
 #[inline]
 fn i32_at(b: &[u8], off: usize) -> i32 {
-    if off + 4 > b.len() { return 0; }
+    if off + 4 > b.len() {
+        return 0;
+    }
     i32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 #[inline]
 fn i16_at(b: &[u8], off: usize) -> i16 {
-    if off + 2 > b.len() { return 0; }
+    if off + 2 > b.len() {
+        return 0;
+    }
     i16::from_le_bytes([b[off], b[off + 1]])
 }
 #[inline]
 fn i8_at(b: &[u8], off: usize) -> i8 {
-    if off >= b.len() { return 0; } else { b[off] as i8 }
+    if off >= b.len() {
+        return 0;
+    } else {
+        b[off] as i8
+    }
 }
 
 /// `AttackCommand` (0x04), 17 bytes.
@@ -378,13 +386,19 @@ pub mod attack {
     use super::*;
     /// field `ox`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn ox(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn ox(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `whom`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn whom(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn whom(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
     /// field `queued`: `QueuePos` at byte 13, 4 byte(s).
     #[inline]
-    pub fn queued(b: &[u8]) -> i32 { i32_at(b, 13) }
+    pub fn queued(b: &[u8]) -> i32 {
+        i32_at(b, 13)
+    }
 }
 
 /// `MoveToCommand` (0x07), 22 bytes.
@@ -392,16 +406,24 @@ pub mod move_to {
     use super::*;
     /// field `to_x`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn to_x(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn to_x(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `to_y`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn to_y(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn to_y(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
     /// field `queued`: `char` at byte 18, 1 byte(s).
     #[inline]
-    pub fn queued(b: &[u8]) -> i8 { i8_at(b, 18) }
+    pub fn queued(b: &[u8]) -> i8 {
+        i8_at(b, 18)
+    }
     /// field `form`: `char` at byte 19, 1 byte(s).
     #[inline]
-    pub fn form(b: &[u8]) -> i8 { i8_at(b, 19) }
+    pub fn form(b: &[u8]) -> i8 {
+        i8_at(b, 19)
+    }
 }
 
 /// `PatrolCommand` (0x0a), 10 bytes.
@@ -409,13 +431,19 @@ pub mod patrol {
     use super::*;
     /// field `to_x`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn to_x(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn to_x(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `to_y`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn to_y(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn to_y(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
     /// field `queued`: `char` at byte 9, 1 byte(s).
     #[inline]
-    pub fn queued(b: &[u8]) -> i8 { i8_at(b, 9) }
+    pub fn queued(b: &[u8]) -> i8 {
+        i8_at(b, 9)
+    }
 }
 
 /// `GatherCommand` (0x13), 9 bytes.
@@ -423,10 +451,14 @@ pub mod gather {
     use super::*;
     /// field `ox`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn ox(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn ox(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `queued`: `QueuePos` at byte 5, 4 byte(s).
     #[inline]
-    pub fn queued(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn queued(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
 }
 
 /// `QueueUpCommand` (0x18), 9 bytes.
@@ -434,10 +466,14 @@ pub mod queue_up {
     use super::*;
     /// field `type`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn type_(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `num`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn num(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn num(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
 }
 
 /// `BuildCommand` (0x19), 25 bytes.
@@ -445,19 +481,29 @@ pub mod build {
     use super::*;
     /// field `x`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn x(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn x(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `y`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn y(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn y(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
     /// field `x2`: `int` at byte 9, 4 byte(s).
     #[inline]
-    pub fn x2(b: &[u8]) -> i32 { i32_at(b, 9) }
+    pub fn x2(b: &[u8]) -> i32 {
+        i32_at(b, 9)
+    }
     /// field `y2`: `int` at byte 13, 4 byte(s).
     #[inline]
-    pub fn y2(b: &[u8]) -> i32 { i32_at(b, 13) }
+    pub fn y2(b: &[u8]) -> i32 {
+        i32_at(b, 13)
+    }
     /// field `type`: `int` at byte 17, 4 byte(s).
     #[inline]
-    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 17) }
+    pub fn type_(b: &[u8]) -> i32 {
+        i32_at(b, 17)
+    }
 }
 
 /// `UnqueueCommand` (0x30), 15 bytes.
@@ -465,16 +511,24 @@ pub mod unqueue {
     use super::*;
     /// field `who`: `int` at byte 1, 4 byte(s).
     #[inline]
-    pub fn who(b: &[u8]) -> i32 { i32_at(b, 1) }
+    pub fn who(b: &[u8]) -> i32 {
+        i32_at(b, 1)
+    }
     /// field `o`: `int` at byte 5, 4 byte(s).
     #[inline]
-    pub fn o(b: &[u8]) -> i32 { i32_at(b, 5) }
+    pub fn o(b: &[u8]) -> i32 {
+        i32_at(b, 5)
+    }
     /// field `type`: `int` at byte 9, 4 byte(s).
     #[inline]
-    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 9) }
+    pub fn type_(b: &[u8]) -> i32 {
+        i32_at(b, 9)
+    }
     /// field `uid`: `short` at byte 13, 2 byte(s).
     #[inline]
-    pub fn uid(b: &[u8]) -> i16 { i16_at(b, 13) }
+    pub fn uid(b: &[u8]) -> i16 {
+        i16_at(b, 13)
+    }
 }
 
 /// `GroupCommand` (0x00) — selection. Variable length: `num` u8, `who` i8, then `num`
@@ -484,13 +538,25 @@ pub mod unqueue {
 pub mod group {
     use super::*;
     #[inline]
-    pub fn num(b: &[u8]) -> usize { if b.len() > 1 { b[1] as usize } else { 0 } }
+    pub fn num(b: &[u8]) -> usize {
+        if b.len() > 1 {
+            b[1] as usize
+        } else {
+            0
+        }
+    }
     #[inline]
-    pub fn who(b: &[u8]) -> i8 { i8_at(b, 2) }
+    pub fn who(b: &[u8]) -> i8 {
+        i8_at(b, 2)
+    }
     /// Object index `k`, or `None` past the end of the packet.
     #[inline]
     pub fn entry(b: &[u8], k: usize) -> Option<i16> {
         let off = 3 + k * 2;
-        if off + 2 > b.len() { None } else { Some(i16_at(b, off)) }
+        if off + 2 > b.len() {
+            None
+        } else {
+            Some(i16_at(b, off))
+        }
     }
 }

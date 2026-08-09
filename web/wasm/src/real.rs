@@ -99,8 +99,8 @@ fn isqrt(v: i64) -> i64 {
         return 0;
     }
     let mut x = (v as f64).sqrt() as i64; // seed only; the loop below is what decides
-    // Newton correction in integers: two steps are always enough from a f64 seed, but the
-    // loop is written to converge from anything so the seed can never be load-bearing.
+                                          // Newton correction in integers: two steps are always enough from a f64 seed, but the
+                                          // loop is written to converge from anything so the seed can never be load-bearing.
     for _ in 0..4 {
         if x <= 0 {
             x = 1;
@@ -650,7 +650,11 @@ impl RealWorld {
             self.cooldown[row] -= 1;
         }
         let ut: UnitTypeRec = gd.units[self.type_idx[row] as usize];
-        let reach = if ut.max_range > 0 { ut.max_range * SUBTILE } else { MELEE_REACH };
+        let reach = if ut.max_range > 0 {
+            ut.max_range * SUBTILE
+        } else {
+            MELEE_REACH
+        };
         let reach2 = (reach as i64) * (reach as i64);
 
         // Resolve the standing target, re-acquiring when it is gone.
@@ -666,7 +670,11 @@ impl RealWorld {
         if trow.is_none() {
             let id = self.acquire(row);
             self.target[row] = id;
-            trow = if id == NO_TARGET { None } else { self.row_of_id(id) };
+            trow = if id == NO_TARGET {
+                None
+            } else {
+                self.row_of_id(id)
+            };
         }
 
         // A standing move order outranks chasing: an order the player issued must be
@@ -969,8 +977,8 @@ impl RealWorld {
 fn unit_circle(angle: u32, radius: i32) -> (i32, i32) {
     // sin over a quarter turn, scaled by 4096, 16 samples + endpoint.
     const S: [i32; 17] = [
-        0, 400, 799, 1189, 1567, 1928, 2268, 2582, 2867, 3119, 3335, 3513, 3650, 3745, 3797,
-        3822, 4096,
+        0, 400, 799, 1189, 1567, 1928, 2268, 2582, 2867, 3119, 3335, 3513, 3650, 3745, 3797, 3822,
+        4096,
     ];
     let t = (angle >> 22) as usize; // 0..1023 over a full turn -> 0..1023
     let q = (t / 256) % 4;
@@ -983,7 +991,10 @@ fn unit_circle(angle: u32, radius: i32) -> (i32, i32) {
         2 => (-c, -s),
         _ => (s, -c),
     };
-    (((sx as i64 * radius as i64) / 4096) as i32, ((sy as i64 * radius as i64) / 4096) as i32)
+    (
+        ((sx as i64 * radius as i64) / 4096) as i32,
+        ((sy as i64 * radius as i64) / 4096) as i32,
+    )
 }
 
 /// A shard: many independent worlds plus the contiguous render mirror an instanced draw
@@ -994,7 +1005,14 @@ pub struct RealBatch {
 }
 
 impl RealBatch {
-    pub fn new(gd: GameData, worlds: usize, capacity: usize, owners: u8, per_owner: u32, seed: u64) -> RealBatch {
+    pub fn new(
+        gd: GameData,
+        worlds: usize,
+        capacity: usize,
+        owners: u8,
+        per_owner: u32,
+        seed: u64,
+    ) -> RealBatch {
         let mut ws = Vec::with_capacity(worlds);
         for w in 0..worlds {
             // Splitmix-style spread so neighbouring worlds do not start correlated.
@@ -1055,7 +1073,19 @@ mod tests {
 
     #[test]
     fn isqrt_is_exact() {
-        for v in [0i64, 1, 2, 3, 4, 99, 100, 101, 1 << 20, (1 << 31) - 1, 1 << 40] {
+        for v in [
+            0i64,
+            1,
+            2,
+            3,
+            4,
+            99,
+            100,
+            101,
+            1 << 20,
+            (1 << 31) - 1,
+            1 << 40,
+        ] {
             let r = isqrt(v);
             assert!(r * r <= v && (r + 1) * (r + 1) > v, "isqrt({v}) = {r}");
         }
@@ -1086,7 +1116,10 @@ mod tests {
             let w = &b.worlds[0];
             let mut ids = w.handle_of_row.clone();
             ids.sort_unstable();
-            assert!(ids.iter().copied().eq(0..w.capacity()), "id permutation broken");
+            assert!(
+                ids.iter().copied().eq(0..w.capacity()),
+                "id permutation broken"
+            );
             for row in 0..w.live_count() as usize {
                 assert_eq!(w.row_of_id(w.handle_of_row[row]).unwrap(), row);
             }

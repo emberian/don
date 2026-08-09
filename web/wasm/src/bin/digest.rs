@@ -55,7 +55,11 @@ fn stage_gamedata() -> bool {
     println!(
         "game data: {path} ({} bytes) — {}",
         bytes.len(),
-        if ok { "REAL" } else { "REJECTED, falling back to synthetic" }
+        if ok {
+            "REAL"
+        } else {
+            "REJECTED, falling back to synthetic"
+        }
     );
     ok
 }
@@ -65,7 +69,11 @@ fn main() {
     if a.is_empty() {
         usage();
     }
-    let n = |i: usize| -> u32 { a.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()) };
+    let n = |i: usize| -> u32 {
+        a.get(i)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| usage())
+    };
     stage_gamedata();
 
     match a[0].as_str() {
@@ -76,7 +84,14 @@ fn main() {
             let (worlds, owners, per, capacity, frames) = (n(1), n(2), n(3), n(4), n(5));
             let seed =
                 u64::from_str_radix(a[6].trim_start_matches("0x"), 16).unwrap_or_else(|_| usage());
-            let s = don_web::sim_create(worlds, owners, per, capacity, seed as u32, (seed >> 32) as u32);
+            let s = don_web::sim_create(
+                worlds,
+                owners,
+                per,
+                capacity,
+                seed as u32,
+                (seed >> 32) as u32,
+            );
             assert!(!s.is_null(), "sim_create returned null");
             // SAFETY: `s` is the handle just returned by `sim_create`, destroyed below.
             unsafe {
@@ -153,11 +168,13 @@ fn main() {
                 usage();
             }
             let (at, dt) = (n(1) as i32, n(2) as i32);
-            let gd = don_web::gamedata::GameData::parse(&std::fs::read(
-                std::env::var("DON_GAMEDATA")
-                    .unwrap_or_else(|_| "../public/data/gamedata.bin".into()),
+            let gd = don_web::gamedata::GameData::parse(
+                &std::fs::read(
+                    std::env::var("DON_GAMEDATA")
+                        .unwrap_or_else(|_| "../public/data/gamedata.bin".into()),
+                )
+                .unwrap_or_default(),
             )
-            .unwrap_or_default())
             .unwrap_or_else(don_web::gamedata::GameData::synthetic);
             let (Some(ai), Some(di)) = (gd.index_of_type(at), gd.index_of_type(dt)) else {
                 eprintln!("unknown type id");
@@ -170,10 +187,18 @@ fn main() {
             // established, and the chain's own bias (`facing - dir - 0x80000000`) makes the
             // equal-angle case the one that scores a flank tier. Reporting the raw angle and
             // the tier is the honest form.
-            for (label, dir) in [("dir == facing", 0u32), ("dir = facing + 1/2 turn", 0x8000_0000u32)] {
+            for (label, dir) in [
+                ("dir == facing", 0u32),
+                ("dir = facing + 1/2 turn", 0x8000_0000u32),
+            ] {
                 let i = don_sim::DamageInput {
                     balance_pct: bal,
-                    attack: don_sim::get_attack(au.attack, false, au.military_level, gd.rules_0x8b8),
+                    attack: don_sim::get_attack(
+                        au.attack,
+                        false,
+                        au.military_level,
+                        gd.rules_0x8b8,
+                    ),
                     armor: don_sim::get_armor(du.armor, false, du.military_level, gd.rules_0x8b8),
                     attacker_masks: au.obj_masks as u32,
                     defender_masks: du.obj_masks as u32,
@@ -205,7 +230,11 @@ fn main() {
                 let delta = (i.defender_facing as u32)
                     .wrapping_sub(i.attack_dir as u32)
                     .wrapping_sub(0x8000_0000);
-                let tier = if delta >= 0x2AAA_AAAA { don_sim::flank_level(delta) } else { 0 };
+                let tier = if delta >= 0x2AAA_AAAA {
+                    don_sim::flank_level(delta)
+                } else {
+                    0
+                };
                 println!(
                     "{:>24}: attack_x10={} armor={} balance={}% -> damage {}  flank_tier={tier}  steps[{}]",
                     label,
