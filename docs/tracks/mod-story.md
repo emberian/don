@@ -270,10 +270,10 @@ row     0x00B14950  "%-10d%-49s %-10d%-10s%-10s%-12d%-12d%-24llu%-24llu"
 | 3 | `PRIORITY` | `int` | lower wins |
 | 4 | `ENABLED` | `Yes`/`No` | |
 | 5 | `LOCAL` | `Yes`/`No` | `Yes` = `MYMODS`, `No` = Workshop |
-| 6 | `TIMESTAMP` | `int` | |
-| 7 | `TIMESTAMP2` | `int` | |
-| 8 | `AUTHOR` | `u64` | SteamID64 |
-| 9 | `WORKSHOPID` | `u64` | `PublishedFileId` |
+| 6 | `TIMESTAMP` | `int` | stored at package `+0x164` |
+| 7 | `TIMESTAMP2` | `int` | stored at package `+0x160` |
+| 8 | `AUTHOR` | `u64` | SteamID64; parsed and validated, not restored from the row |
+| 9 | `WORKSHOPID` | `u64` | `PublishedFileId`; parsed and validated, not restored |
 
 The reader validates every field and **skips the whole line** on any failure, then matches rows
 to already-discovered packages by `(name, local)`. A row naming an uninstalled mod is dropped;
@@ -332,6 +332,10 @@ same bytes. What it does mean is that a replay captured without a mod cannot be 
 against a stack with one, because `Game::walk_rules_data` `0x00589550` (checksum channel 13)
 walks the loaded values. `RuleStack::content_digest` is the hook for carrying that identity
 into a handshake, mirroring `GameMod::compute_checksum`.
+
+The content result must enter as a whole `Rules` base through `RuleStack::from_content`.
+`RuleStack::validate` rejects patches attached to `Layer::Shipped` or `Layer::Content`; allowing
+those would let an arbitrary field overlay masquerade as a fidelity-safe retail file.
 
 ### 2.2 Validation a mod actually gets
 

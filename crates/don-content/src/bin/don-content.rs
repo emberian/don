@@ -1,7 +1,7 @@
 //! `don-content` — inspect a mod the way the engine would.
 //!
 //! ```text
-//! don-content scan  <mods-dir>              what the engine would find, per mod
+//! don-content scan  <mods-dir>              inspect packages through the recovered model
 //! don-content check <mods-dir>              reject anything not consumed end-to-end
 //! don-content probe <mods-dir> <path>...    where each content path resolves
 //! don-content rules                         the 12 categories and the extension table
@@ -136,7 +136,7 @@ fn cmd_check(dir: &Path) -> ExitCode {
         println!("REJECT {}:", m.name);
         for f in r.files.iter().filter(|f| f.support != Support::Consumed) {
             println!(
-                "  {}/{}: {} — {}",
+                "  {}{}: {} — {}",
                 f.category.relative_dir(),
                 f.filename,
                 f.support.label(),

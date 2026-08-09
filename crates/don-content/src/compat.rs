@@ -12,8 +12,8 @@
 //!    Workshop is a *delivery* mechanism that ends with a directory on disk, and
 //!    `ModManager::buildModPackages` `0x00A221F0` then treats that directory exactly like a
 //!    local one. Subscribing needs Steam; loading does not.
-//! 2. **Consumption.** A mod ships bytes for a subsystem. `data/rules.xml` lands in a parser
-//!    we have; `art/foo.bh3` lands in a renderer we do not.
+//! 2. **Consumption.** A mod ships bytes for a subsystem. We have a model of the shipped
+//!    `rules.xml` result, but no external XML loader; `art/foo.bh3` likewise has no renderer.
 //!
 //! So this module does not answer yes/no. It takes a mod's declared file list and reports,
 //! per file, which of those two halves it clears. That is the number worth quoting — "N of M
@@ -62,7 +62,8 @@ impl Support {
 /// One rule of the support table, with the reason it says what it says.
 pub struct SupportRule {
     pub category: Option<ModCategory>,
-    /// Lowercase extension including the dot, or `""` to match any extension in the category.
+    /// Lowercase extension including the dot, an exact basename, or `""` to match every file
+    /// in the category.
     pub ext: &'static str,
     pub support: Support,
     pub reason: &'static str,

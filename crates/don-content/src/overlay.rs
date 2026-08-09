@@ -25,6 +25,9 @@
 //!
 //! Higher layer wins. Within layer 2, retail's own rule applies: lowest `priority` wins and
 //! the scan stops at the first mod that declares the file.
+//! `Content` is supplied as the whole parsed base via [`RuleStack::from_content`]; it is never
+//! legal to add field [`Patch`] values to `Shipped` or `Content`, because that would disguise
+//! an overlay as a retail file replacement.
 //!
 //! # What fidelity mode means here, precisely
 //!
@@ -73,7 +76,8 @@ impl Layer {
 pub enum Mode {
     /// Reproduce retail. Layers `Edition`, `Overlay` and `Session` must be empty.
     Fidelity,
-    /// Free to deviate. Every layer is allowed and every deviation is recorded.
+    /// Free to deviate through edition, overlay, and session patches. Shipped/content bases
+    /// still enter through constructors because a content file is not a field overlay.
     Improved,
 }
 
@@ -152,6 +156,9 @@ pub enum OverlayError {
     /// (`unit_block_radius`, `americans_marine_entrench`). Writing them by text would require
     /// guessing the scale, which is folklore.
     UnclassifiedParser(String),
+    /// `Shipped` and `Content` are whole-file bases, not patch lists. Accepting patches here
+    /// would let a caller disguise an improved-mode deviation as retail content.
+    BaseLayerMustUseConstructor { layer: Layer, count: usize },
     /// A non-empty deviating layer under [`Mode::Fidelity`].
     FidelityViolation { layer: Layer, count: usize },
 }
@@ -176,6 +183,11 @@ impl std::fmt::Display for OverlayError {
                     "`{n}` has an unclassified loader site; set its value explicitly"
                 )
             }
+            OverlayError::BaseLayerMustUseConstructor { layer, count } => write!(
+                f,
+                "the `{}` layer is a whole-file base, not a patch list ({count} patch(es)); use RuleStack::shipped/from_content",
+                layer.name()
+            ),
             OverlayError::FidelityViolation { layer, count } => {
                 write!(
                     f,
@@ -263,6 +275,12 @@ impl RuleStack {
     /// see their whole file's problems in one pass.
     pub fn validate(&self) -> Vec<OverlayError> {
         let mut errs = Vec::new();
+        for layer in [Layer::Shipped, Layer::Content] {
+            let n = self.patches(layer).len();
+            if n > 0 {
+                errs.push(OverlayError::BaseLayerMustUseConstructor { layer, count: n });
+            }
+        }
         if self.mode == Mode::Fidelity {
             for layer in [Layer::Edition, Layer::Overlay, Layer::Session] {
                 let n = self.patches(layer).len();
@@ -400,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn fidelity_mode_refuses_deviating_layers_but_allows_content() {
+    fn fidelity_refuses_deviations_and_accepts_content_only_as_a_whole_base() {
         let mut s = RuleStack::shipped(Mode::Fidelity);
         s.add(Layer::Overlay, Patch::new("unit_move_speed", 1));
         assert!(matches!(
@@ -411,9 +429,22 @@ mod tests {
             }]
         ));
 
-        let mut c = RuleStack::shipped(Mode::Fidelity);
-        c.add(Layer::Content, Patch::new("unit_move_speed", 1));
+        let mut bad = RuleStack::shipped(Mode::Fidelity);
+        bad.add(Layer::Content, Patch::new("unit_move_speed", 1));
+        assert_eq!(
+            bad.validate(),
+            vec![OverlayError::BaseLayerMustUseConstructor {
+                layer: Layer::Content,
+                count: 1,
+            }]
+        );
+
+        let mut content = Rules::shipped();
+        content.raw[1] += 1;
+        let c = RuleStack::from_content(Mode::Fidelity, content.clone(), 0x1234);
         assert!(c.validate().is_empty());
+        assert_eq!(c.content_digest(), 0x1234);
+        assert_eq!(c.compose().unwrap().0.raw, content.raw);
     }
 
     #[test]
