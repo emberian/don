@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 import re
+import struct
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -27,6 +32,132 @@ CAPTURED_RUNNING = (
 )
 USER_SID = "S-1-5-21-1000-1001-1002-1003"
 HASH = wer.EXPECTED_SHA256.upper()
+
+
+def minidump_fixture(
+    *,
+    pid: int = 12324,
+    process_name: str = wer.PROCESS_NAME,
+    full_memory: bool = True,
+) -> bytes:
+    """Build a compact but structurally complete x86 full-memory minidump."""
+
+    stream_types = (7, 4, 3, 6, 15, 9)
+    image_base = 0x0040_0000
+    image_size = 0x2000
+    stack_start = 0x7000_0000
+    stack_size = 0x1000
+    thread_id = 77
+    data = bytearray(32 + len(stream_types) * 12)
+
+    def allocate(blob: bytes | bytearray, alignment: int = 4) -> int:
+        while len(data) % alignment:
+            data.append(0)
+        rva = len(data)
+        data.extend(blob)
+        return rva
+
+    context = bytes((index * 17) & 0xFF for index in range(256))
+    context_rva = allocate(context)
+    encoded_name = (
+        rf"C:\Program Files (x86)\Steam\{process_name}".encode("utf-16-le")
+    )
+    module_name_rva = allocate(struct.pack("<I", len(encoded_name)) + encoded_name)
+
+    memory_payload = bytes(image_size + stack_size)
+    memory_base_rva = allocate(memory_payload, alignment=8)
+
+    system_info = bytearray(56)
+    struct.pack_into("<HHHBB", system_info, 0, 0, 6, 0x3A09, 4, 1)
+    struct.pack_into("<IIII", system_info, 8, 10, 0, 19045, 2)
+
+    module = bytearray(108)
+    struct.pack_into(
+        "<QIIII",
+        module,
+        0,
+        image_base,
+        image_size,
+        0,
+        0x63A1_B2C3,
+        module_name_rva,
+    )
+    module_list = struct.pack("<I", 1) + module
+
+    thread = struct.pack(
+        "<IIIIQQIIII",
+        thread_id,
+        0,
+        0,
+        0,
+        0x7FFD_E000,
+        stack_start,
+        stack_size,
+        memory_base_rva + image_size,
+        len(context),
+        context_rva,
+    )
+    thread_list = struct.pack("<I", 1) + thread
+
+    exception = bytearray(168)
+    struct.pack_into("<IIII", exception, 0, thread_id, 0, 0xC000_0005, 0)
+    struct.pack_into("<QQ", exception, 16, 0, image_base + 0x1000)
+    struct.pack_into("<I", exception, 32, 0)
+    struct.pack_into("<II", exception, 160, len(context), context_rva)
+
+    misc_info = struct.pack(
+        "<IIIIII", 24, wer.MINIDUMP_MISC1_PROCESS_ID, pid, 1_700_000_000, 1, 1
+    )
+    memory64 = struct.pack(
+        "<QQQQQQ",
+        2,
+        memory_base_rva,
+        image_base,
+        image_size,
+        stack_start,
+        stack_size,
+    )
+
+    payloads = {
+        7: bytes(system_info),
+        4: bytes(module_list),
+        3: bytes(thread_list),
+        6: bytes(exception),
+        15: misc_info,
+        9: memory64,
+    }
+    directories: list[tuple[int, int, int]] = []
+    for stream_type in stream_types:
+        payload = payloads[stream_type]
+        directories.append((stream_type, len(payload), allocate(payload)))
+
+    flags = wer.MINIDUMP_WITH_FULL_MEMORY if full_memory else 0
+    struct.pack_into(
+        "<IIIIIIQ",
+        data,
+        0,
+        wer.MINIDUMP_SIGNATURE,
+        wer.MINIDUMP_VERSION,
+        len(directories),
+        32,
+        0,
+        1_723_170_600,
+        flags,
+    )
+    for index, directory in enumerate(directories):
+        struct.pack_into("<III", data, 32 + index * 12, *directory)
+    return bytes(data)
+
+
+def stream_rva(dump: bytes | bytearray, wanted: int) -> int:
+    _, _, count, directory_rva = struct.unpack_from("<IIII", dump, 0)
+    for index in range(count):
+        stream_type, _, rva = struct.unpack_from(
+            "<III", dump, directory_rva + index * 12
+        )
+        if stream_type == wanted:
+            return rva
+    raise AssertionError(f"missing fixture stream {wanted}")
 
 
 def exact_values() -> dict[str, dict[str, object]]:
@@ -319,6 +450,169 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\Local
     def test_since_requires_an_offset(self) -> None:
         with self.assertRaises(wer.WorkflowError):
             wer._parse_since("2026-08-09T03:00:00")
+
+
+class MinidumpValidationTests(unittest.TestCase):
+    def test_complete_full_dump_binds_pid_module_exception_and_stack(self) -> None:
+        report = wer.validate_minidump(
+            minidump_fixture(),
+            expected_pid=12324,
+            expected_process_create_time=1_700_000_000,
+            expected_module_timestamp=0x63A1_B2C3,
+            expected_module_size=0x2000,
+        )
+        self.assertTrue(report["valid"], report["reasons"])
+        self.assertEqual(report["header"]["version"], wer.MINIDUMP_VERSION)
+        self.assertEqual(report["misc_info"]["process_id"], 12324)
+        self.assertEqual(
+            PureWindowsPath(report["target_module"]["name"]).name.casefold(),
+            wer.PROCESS_NAME,
+        )
+        self.assertEqual(report["memory_kind"], "Memory64ListStream")
+        self.assertTrue(report["exception_coverage"]["thread_present"])
+        self.assertTrue(report["exception_coverage"]["context_present"])
+        self.assertTrue(report["exception_coverage"]["stack_covered"])
+        self.assertTrue(report["exception_coverage"]["address_covered"])
+
+    def test_truncated_header_and_stream_directory_fail_closed(self) -> None:
+        header = wer.validate_minidump(minidump_fixture()[:20])
+        self.assertFalse(header["valid"])
+        self.assertIn("truncated MINIDUMP_HEADER", header["reasons"])
+
+        directory = bytearray(minidump_fixture())
+        struct.pack_into("<I", directory, 12, len(directory) - 4)
+        report = wer.validate_minidump(directory)
+        self.assertFalse(report["valid"])
+        self.assertTrue(
+            any("MINIDUMP_DIRECTORY" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+    def test_torn_memory64_payload_and_missing_full_memory_flag_are_rejected(self) -> None:
+        torn = bytearray(minidump_fixture())
+        memory64_rva = stream_rva(torn, 9)
+        struct.pack_into("<Q", torn, memory64_rva + 40, 0x1000_0000)
+        report = wer.validate_minidump(torn)
+        self.assertFalse(report["valid"])
+        self.assertTrue(
+            any("Memory64" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+        no_flag = wer.validate_minidump(minidump_fixture(full_memory=False))
+        self.assertFalse(no_flag["valid"])
+        self.assertIn("full-memory dump flag is absent", no_flag["reasons"])
+
+    def test_exception_thread_pid_and_module_identity_mismatches_are_rejected(self) -> None:
+        pid = wer.validate_minidump(minidump_fixture(), expected_pid=999)
+        self.assertFalse(pid["valid"])
+        self.assertTrue(any("expected PID" in reason for reason in pid["reasons"]))
+
+        create_time = wer.validate_minidump(
+            minidump_fixture(), expected_process_create_time=1_700_000_001
+        )
+        self.assertFalse(create_time["valid"])
+        self.assertIn(
+            "dump process creation time does not match expected attempt",
+            create_time["reasons"],
+        )
+
+        missing_module = wer.validate_minidump(
+            minidump_fixture(process_name="someone-else.exe")
+        )
+        self.assertFalse(missing_module["valid"])
+        self.assertTrue(
+            any("exactly one" in reason for reason in missing_module["reasons"])
+        )
+
+        missing_thread = bytearray(minidump_fixture())
+        exception_rva = stream_rva(missing_thread, 6)
+        struct.pack_into("<I", missing_thread, exception_rva, 999)
+        report = wer.validate_minidump(missing_thread)
+        self.assertFalse(report["valid"])
+        self.assertIn(
+            "ExceptionStream thread is absent from ThreadListStream", report["reasons"]
+        )
+
+
+class ArchiveValidationTests(unittest.TestCase):
+    def _archive(self, directory: str, payload: bytes, name_hash: str | None = None) -> Path:
+        digest = name_hash or hashlib.sha256(payload).hexdigest()
+        path = Path(directory, digest + ".dmp")
+        path.write_bytes(payload)
+        path.chmod(0o444)
+        return path
+
+    def test_content_addressed_read_only_archive_round_trips(self) -> None:
+        payload = minidump_fixture()
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._archive(directory, payload)
+            report = wer.validate_content_addressed_archive(
+                path,
+                expected_sha256=digest,
+                expected_length=len(payload),
+                expected_pid=12324,
+                expected_process_create_time=1_700_000_000,
+            )
+        self.assertTrue(report["valid"], report["reasons"])
+        self.assertEqual(report["sha256"], digest)
+        self.assertEqual(report["content_address"], "sha256:" + digest)
+        self.assertTrue(report["read_only"])
+        self.assertTrue(report["dump"]["valid"])
+
+    def test_archive_rejects_hash_mismatch_writable_and_truncated_content(self) -> None:
+        payload = minidump_fixture()
+        wrong = "0" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._archive(directory, payload, wrong)
+            mismatch = wer.validate_content_addressed_archive(
+                path, expected_sha256="1" * 64, expected_pid=12324
+            )
+            self.assertFalse(mismatch["valid"])
+            self.assertIn(
+                "archive filename hash does not match file content", mismatch["reasons"]
+            )
+            self.assertIn(
+                "archive SHA-256 does not match expected hash", mismatch["reasons"]
+            )
+
+            path.chmod(0o644)
+            writable = wer.validate_content_addressed_archive(path, expected_pid=12324)
+            self.assertFalse(writable["valid"])
+            self.assertIn("archive file is writable", writable["reasons"])
+
+            truncated = payload[:64]
+            truncated_path = self._archive(directory, truncated)
+            broken = wer.validate_content_addressed_archive(
+                truncated_path, expected_pid=12324
+            )
+            self.assertFalse(broken["valid"])
+            self.assertIn("archived minidump is structurally invalid", broken["reasons"])
+
+    def test_archive_detects_path_identity_changing_during_validation(self) -> None:
+        payload = minidump_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._archive(directory, payload)
+            original = os.lstat(path)
+            changed = SimpleNamespace(
+                st_dev=original.st_dev,
+                st_ino=original.st_ino,
+                st_mode=original.st_mode,
+                st_size=original.st_size,
+                st_mtime_ns=original.st_mtime_ns + 1,
+                st_ctime_ns=original.st_ctime_ns,
+            )
+            snapshots = iter((original, changed))
+            report = wer.validate_content_addressed_archive(
+                path,
+                expected_pid=12324,
+                _stat_provider=lambda _: next(snapshots),
+            )
+        self.assertFalse(report["valid"])
+        self.assertIn(
+            "archive path changed while it was being validated", report["reasons"]
+        )
 
 
 class WorkflowTests(unittest.TestCase):

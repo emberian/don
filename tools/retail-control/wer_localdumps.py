@@ -13,13 +13,17 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
-from pathlib import PureWindowsPath
+import os
+from pathlib import Path, PureWindowsPath
 import re
+import stat
+import struct
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, BinaryIO, Callable
 
 
 VM = "Windows 11"
@@ -39,6 +43,27 @@ DUMP_COUNT = 2
 DUMP_TYPE = 2
 MIN_FREE_BYTES = 12 * 1024**3
 
+# MINIDUMP_HEADER and MINIDUMP_STREAM_TYPE values from minidumpapiset.h.  WER
+# DumpType=2 promises a full dump, so verification requires both the header flag
+# and the Memory64 stream that carries its process-memory ranges.
+MINIDUMP_SIGNATURE = 0x504D444D
+MINIDUMP_VERSION = 0xA793
+MINIDUMP_WITH_FULL_MEMORY = 0x00000002
+MINIDUMP_STREAM_NAMES = {
+    3: "ThreadListStream",
+    4: "ModuleListStream",
+    5: "MemoryListStream",
+    6: "ExceptionStream",
+    7: "SystemInfoStream",
+    9: "Memory64ListStream",
+    15: "MiscInfoStream",
+}
+REQUIRED_MINIDUMP_STREAMS = frozenset((3, 4, 6, 7, 15))
+MINIDUMP_MISC1_PROCESS_ID = 0x00000001
+MAX_MINIDUMP_STREAMS = 65_536
+MAX_MINIDUMP_RECORDS = 4_000_000
+ARCHIVE_NAME_RE = re.compile(r"^(?P<sha256>[0-9a-f]{64})\.dmp$")
+
 SYSTEM_SID = "S-1-5-18"
 ADMINISTRATORS_SID = "S-1-5-32-544"
 FULL_CONTROL = 2_032_127
@@ -50,6 +75,621 @@ OBJECT_AND_CONTAINER_INHERIT = 3
 
 class WorkflowError(RuntimeError):
     """A fail-closed precondition, mutation, or round-trip failure."""
+
+
+class _MinidumpFormatError(ValueError):
+    """An invalid offset, count, or fixed-layout record in an offline dump."""
+
+
+class _RandomAccessReader:
+    """Small bounds-checking adapter; never materialises a full-memory dump."""
+
+    def __init__(self, source: bytes | bytearray | memoryview | BinaryIO) -> None:
+        if isinstance(source, (bytes, bytearray, memoryview)):
+            self._bytes = memoryview(source)
+            self._file: BinaryIO | None = None
+            self.size = len(self._bytes)
+            return
+        if not hasattr(source, "read") or not hasattr(source, "seek"):
+            raise TypeError("minidump source must be bytes or a seekable binary file")
+        self._bytes = None
+        self._file = source
+        try:
+            position = source.tell()
+            source.seek(0, os.SEEK_END)
+            self.size = source.tell()
+            source.seek(position)
+        except (OSError, ValueError) as error:
+            raise _MinidumpFormatError(f"minidump is not seekable: {error}") from error
+
+    def read(self, offset: int, size: int, context: str) -> bytes:
+        if offset < 0 or size < 0 or offset > self.size or size > self.size - offset:
+            raise _MinidumpFormatError(
+                f"{context} range is outside the file: offset={offset} size={size} "
+                f"file_size={self.size}"
+            )
+        if self._bytes is not None:
+            return self._bytes[offset : offset + size].tobytes()
+        assert self._file is not None
+        try:
+            position = self._file.tell()
+            self._file.seek(offset)
+            data = self._file.read(size)
+            self._file.seek(position)
+        except (OSError, ValueError) as error:
+            raise _MinidumpFormatError(f"could not read {context}: {error}") from error
+        if len(data) != size:
+            raise _MinidumpFormatError(
+                f"short read for {context}: wanted={size} received={len(data)}"
+            )
+        return data
+
+    def unpack(self, fmt: str, offset: int, context: str) -> tuple[Any, ...]:
+        size = struct.calcsize(fmt)
+        return struct.unpack(fmt, self.read(offset, size, context))
+
+
+def _checked_count(
+    count: int, record_size: int, available: int, context: str
+) -> int:
+    if count < 0 or count > MAX_MINIDUMP_RECORDS:
+        raise _MinidumpFormatError(f"implausible {context} count: {count}")
+    required = count * record_size
+    if required > available:
+        raise _MinidumpFormatError(
+            f"truncated {context}: count={count} record_size={record_size} "
+            f"available={available}"
+        )
+    return required
+
+
+def _range_covered(start: int, size: int, ranges: list[tuple[int, int]]) -> bool:
+    if size <= 0:
+        return False
+    end = start + size
+    if end <= start or end > 1 << 64:
+        return False
+    cursor = start
+    for range_start, range_size in sorted(ranges):
+        range_end = range_start + range_size
+        if range_end <= cursor:
+            continue
+        if range_start > cursor:
+            return False
+        cursor = range_end
+        if cursor >= end:
+            return True
+    return False
+
+
+def _read_minidump_string(reader: _RandomAccessReader, rva: int, context: str) -> str:
+    (byte_length,) = reader.unpack("<I", rva, context + " length")
+    if byte_length % 2:
+        raise _MinidumpFormatError(f"{context} has an odd UTF-16 byte length")
+    raw = reader.read(rva + 4, byte_length, context)
+    try:
+        return raw.decode("utf-16-le")
+    except UnicodeDecodeError as error:
+        raise _MinidumpFormatError(f"{context} is not valid UTF-16LE") from error
+
+
+def validate_minidump(
+    source: bytes | bytearray | memoryview | BinaryIO,
+    *,
+    expected_pid: int | None = None,
+    expected_process_create_time: int | None = None,
+    expected_process_name: str | None = PROCESS_NAME,
+    expected_module_timestamp: int | None = None,
+    expected_module_size: int | None = None,
+    require_full_memory: bool = DUMP_TYPE == 2,
+) -> dict[str, Any]:
+    """Parse and validate a minidump without loading or debugging its process.
+
+    The result is deliberately data-only so the same contract can be emitted by
+    the guest-side single-handle probe and validated by offline archive tooling.
+    """
+
+    reasons: list[str] = []
+    report: dict[str, Any] = {
+        "valid": False,
+        "reasons": reasons,
+        "required_full_memory": bool(require_full_memory),
+    }
+
+    def reject(reason: str) -> None:
+        if reason not in reasons:
+            reasons.append(reason)
+
+    try:
+        reader = _RandomAccessReader(source)
+        report["file_size"] = reader.size
+        if reader.size < 32:
+            raise _MinidumpFormatError("truncated MINIDUMP_HEADER")
+        (
+            signature,
+            version,
+            stream_count,
+            directory_rva,
+            checksum,
+            timestamp,
+            flags,
+        ) = reader.unpack("<IIIIIIQ", 0, "MINIDUMP_HEADER")
+        report["header"] = {
+            "signature": signature,
+            "version": version,
+            "stream_count": stream_count,
+            "directory_rva": directory_rva,
+            "checksum": checksum,
+            "timestamp": timestamp,
+            "flags": flags,
+        }
+        if signature != MINIDUMP_SIGNATURE:
+            reject("missing MDMP signature")
+        if version & 0xFFFF != MINIDUMP_VERSION:
+            reject("unsupported minidump version")
+        if not 0 < stream_count <= MAX_MINIDUMP_STREAMS:
+            raise _MinidumpFormatError(
+                f"implausible minidump stream count: {stream_count}"
+            )
+        reader.read(
+            directory_rva,
+            stream_count * 12,
+            "MINIDUMP_DIRECTORY array",
+        )
+
+        streams: dict[int, tuple[int, int]] = {}
+        stream_records: list[dict[str, Any]] = []
+        for index in range(stream_count):
+            stream_type, data_size, rva = reader.unpack(
+                "<III", directory_rva + index * 12, f"stream directory {index}"
+            )
+            reader.read(rva, data_size, f"stream {stream_type}")
+            stream_records.append(
+                {
+                    "type": stream_type,
+                    "name": MINIDUMP_STREAM_NAMES.get(
+                        stream_type, f"StreamType{stream_type}"
+                    ),
+                    "size": data_size,
+                    "rva": rva,
+                }
+            )
+            if stream_type in streams:
+                reject(f"duplicate {MINIDUMP_STREAM_NAMES.get(stream_type, stream_type)}")
+            else:
+                streams[stream_type] = (data_size, rva)
+        report["streams"] = stream_records
+        for required in sorted(REQUIRED_MINIDUMP_STREAMS):
+            if required not in streams:
+                reject(f"missing required {MINIDUMP_STREAM_NAMES[required]}")
+        if 5 not in streams and 9 not in streams:
+            reject("missing required Memory64ListStream/MemoryListStream")
+        if require_full_memory:
+            if not flags & MINIDUMP_WITH_FULL_MEMORY:
+                reject("full-memory dump flag is absent")
+            if 9 not in streams:
+                reject("full-memory contract requires Memory64ListStream")
+
+        if 7 in streams:
+            size, rva = streams[7]
+            if size < 56:
+                reject("truncated SystemInfoStream")
+            else:
+                architecture, level, revision, processors, product_type = reader.unpack(
+                    "<HHHBB", rva, "SystemInfoStream"
+                )
+                major, minor, build, platform = reader.unpack(
+                    "<IIII", rva + 8, "SystemInfoStream versions"
+                )
+                report["system_info"] = {
+                    "processor_architecture": architecture,
+                    "processor_level": level,
+                    "processor_revision": revision,
+                    "number_of_processors": processors,
+                    "product_type": product_type,
+                    "major_version": major,
+                    "minor_version": minor,
+                    "build_number": build,
+                    "platform_id": platform,
+                }
+
+        process_id: int | None = None
+        process_create_time: int | None = None
+        if 15 in streams:
+            size, rva = streams[15]
+            if size < 12:
+                reject("truncated MiscInfoStream")
+            else:
+                size_of_info, misc_flags, misc_pid = reader.unpack(
+                    "<III", rva, "MiscInfoStream"
+                )
+                if size_of_info < 12 or size_of_info > size:
+                    reject("invalid MiscInfoStream SizeOfInfo")
+                if misc_flags & MINIDUMP_MISC1_PROCESS_ID:
+                    process_id = misc_pid
+                if size >= 16 and size_of_info >= 16:
+                    (process_create_time,) = reader.unpack(
+                        "<I", rva + 12, "MiscInfoStream ProcessCreateTime"
+                    )
+                if expected_pid is not None:
+                    if process_id is None:
+                        reject("MiscInfoStream does not bind a process ID")
+                    elif process_id != expected_pid:
+                        reject(
+                            f"dump process ID {process_id} does not match expected PID "
+                            f"{expected_pid}"
+                        )
+                if expected_process_create_time is not None:
+                    if process_create_time is None:
+                        reject("MiscInfoStream does not bind a process creation time")
+                    elif process_create_time != expected_process_create_time:
+                        reject(
+                            "dump process creation time does not match expected attempt"
+                        )
+                report["misc_info"] = {
+                    "size_of_info": size_of_info,
+                    "flags": misc_flags,
+                    "process_id": process_id,
+                    "process_create_time": process_create_time,
+                }
+
+        modules: list[dict[str, Any]] = []
+        if 4 in streams:
+            size, rva = streams[4]
+            if size < 4:
+                reject("truncated ModuleListStream")
+            else:
+                (count,) = reader.unpack("<I", rva, "ModuleListStream count")
+                _checked_count(count, 108, size - 4, "module list")
+                for index in range(count):
+                    base = rva + 4 + index * 108
+                    image_base, image_size, image_checksum, image_timestamp, name_rva = (
+                        reader.unpack("<QIIII", base, f"module {index}")
+                    )
+                    name = _read_minidump_string(
+                        reader, name_rva, f"module {index} name"
+                    )
+                    modules.append(
+                        {
+                            "base": image_base,
+                            "size": image_size,
+                            "checksum": image_checksum,
+                            "timestamp": image_timestamp,
+                            "name": name,
+                        }
+                    )
+        report["modules"] = modules
+        target_module: dict[str, Any] | None = None
+        if expected_process_name is not None:
+            matches = [
+                module
+                for module in modules
+                if PureWindowsPath(str(module["name"])).name.casefold()
+                == expected_process_name.casefold()
+            ]
+            if len(matches) != 1:
+                reject(
+                    f"ModuleListStream does not contain exactly one "
+                    f"{expected_process_name} module"
+                )
+            else:
+                target_module = matches[0]
+                if (
+                    expected_module_timestamp is not None
+                    and target_module["timestamp"] != expected_module_timestamp
+                ):
+                    reject("target module timestamp does not match expected identity")
+                if (
+                    expected_module_size is not None
+                    and target_module["size"] != expected_module_size
+                ):
+                    reject("target module image size does not match expected identity")
+        report["target_module"] = target_module
+
+        threads: dict[int, dict[str, Any]] = {}
+        if 3 in streams:
+            size, rva = streams[3]
+            if size < 4:
+                reject("truncated ThreadListStream")
+            else:
+                (count,) = reader.unpack("<I", rva, "ThreadListStream count")
+                _checked_count(count, 48, size - 4, "thread list")
+                for index in range(count):
+                    base = rva + 4 + index * 48
+                    (
+                        thread_id,
+                        suspend_count,
+                        priority_class,
+                        priority,
+                        teb,
+                        stack_start,
+                        stack_size,
+                        stack_rva,
+                        context_size,
+                        context_rva,
+                    ) = reader.unpack("<IIIIQQIIII", base, f"thread {index}")
+                    if thread_id in threads:
+                        reject(f"duplicate thread ID {thread_id}")
+                    if stack_size == 0:
+                        reject(f"thread {thread_id} has an empty stack descriptor")
+                    else:
+                        reader.read(stack_rva, stack_size, f"thread {thread_id} stack")
+                    if context_size == 0:
+                        reject(f"thread {thread_id} has an empty context descriptor")
+                    else:
+                        reader.read(
+                            context_rva,
+                            context_size,
+                            f"thread {thread_id} context",
+                        )
+                    threads[thread_id] = {
+                        "thread_id": thread_id,
+                        "suspend_count": suspend_count,
+                        "priority_class": priority_class,
+                        "priority": priority,
+                        "teb": teb,
+                        "stack_start": stack_start,
+                        "stack_size": stack_size,
+                        "stack_rva": stack_rva,
+                        "context_size": context_size,
+                        "context_rva": context_rva,
+                    }
+        report["threads"] = list(threads.values())
+
+        exception: dict[str, Any] | None = None
+        if 6 in streams:
+            size, rva = streams[6]
+            if size < 168:
+                reject("truncated ExceptionStream")
+            else:
+                thread_id, alignment, code, exception_flags = reader.unpack(
+                    "<IIII", rva, "ExceptionStream"
+                )
+                exception_record, exception_address = reader.unpack(
+                    "<QQ", rva + 16, "ExceptionStream record"
+                )
+                parameter_count = reader.unpack(
+                    "<I", rva + 32, "ExceptionStream parameter count"
+                )[0]
+                context_size, context_rva = reader.unpack(
+                    "<II", rva + 160, "ExceptionStream context"
+                )
+                if alignment != 0:
+                    reject("ExceptionStream alignment field is nonzero")
+                if parameter_count > 15:
+                    reject("ExceptionStream has too many exception parameters")
+                if context_size == 0:
+                    reject("ExceptionStream has an empty context descriptor")
+                else:
+                    reader.read(context_rva, context_size, "exception thread context")
+                exception = {
+                    "thread_id": thread_id,
+                    "code": code,
+                    "flags": exception_flags,
+                    "record": exception_record,
+                    "address": exception_address,
+                    "parameter_count": parameter_count,
+                    "context_size": context_size,
+                    "context_rva": context_rva,
+                }
+                if thread_id not in threads:
+                    reject("ExceptionStream thread is absent from ThreadListStream")
+        report["exception"] = exception
+
+        memory_ranges: list[tuple[int, int]] = []
+        memory_kind: str | None = None
+        if 9 in streams:
+            size, rva = streams[9]
+            if size < 16:
+                reject("truncated Memory64ListStream")
+            else:
+                count, base_rva = reader.unpack("<QQ", rva, "Memory64ListStream")
+                _checked_count(count, 16, size - 16, "Memory64 range list")
+                total = 0
+                previous_end = 0
+                for index in range(count):
+                    start, range_size = reader.unpack(
+                        "<QQ", rva + 16 + index * 16, f"Memory64 range {index}"
+                    )
+                    if range_size == 0 or start + range_size > 1 << 64:
+                        reject(f"invalid Memory64 range {index}")
+                    if index and start < previous_end:
+                        reject("Memory64 ranges overlap or are out of order")
+                    previous_end = start + range_size
+                    total += range_size
+                    if total > reader.size:
+                        reject("Memory64 payload exceeds the dump length")
+                        break
+                    memory_ranges.append((start, range_size))
+                reader.read(base_rva, total, "Memory64 payload")
+                report["memory64"] = {
+                    "range_count": count,
+                    "base_rva": base_rva,
+                    "payload_size": total,
+                }
+                memory_kind = "Memory64ListStream"
+        if 5 in streams:
+            size, rva = streams[5]
+            if size < 4:
+                reject("truncated MemoryListStream")
+            else:
+                (count,) = reader.unpack("<I", rva, "MemoryListStream count")
+                _checked_count(count, 16, size - 4, "memory range list")
+                list_ranges: list[tuple[int, int]] = []
+                for index in range(count):
+                    start, range_size, data_rva = reader.unpack(
+                        "<QII", rva + 4 + index * 16, f"memory range {index}"
+                    )
+                    if range_size == 0:
+                        reject(f"invalid MemoryList range {index}")
+                    else:
+                        reader.read(data_rva, range_size, f"memory range {index} payload")
+                    list_ranges.append((start, range_size))
+                if not memory_ranges:
+                    memory_ranges = list_ranges
+                    memory_kind = "MemoryListStream"
+                report["memory_list"] = {"range_count": count}
+        report["memory_kind"] = memory_kind
+        report["memory_ranges"] = [
+            {"start": start, "size": size} for start, size in memory_ranges
+        ]
+
+        exception_thread = (
+            threads.get(int(exception["thread_id"])) if exception is not None else None
+        )
+        stack_covered = bool(
+            exception_thread
+            and _range_covered(
+                int(exception_thread["stack_start"]),
+                int(exception_thread["stack_size"]),
+                memory_ranges,
+            )
+        )
+        address_covered = bool(
+            exception
+            and _range_covered(int(exception["address"]), 1, memory_ranges)
+        )
+        report["exception_coverage"] = {
+            "thread_present": exception_thread is not None,
+            "context_present": bool(exception and exception["context_size"]),
+            "stack_covered": stack_covered,
+            "address_covered": address_covered,
+        }
+        if exception_thread is not None and not stack_covered:
+            reject("exception thread stack is not covered by a memory stream")
+        if require_full_memory and exception is not None and not address_covered:
+            reject("exception address is not covered by full-memory ranges")
+    except (_MinidumpFormatError, struct.error, OverflowError) as error:
+        reject(str(error))
+
+    report["valid"] = not reasons
+    return report
+
+
+def _archive_stat_fingerprint(value: os.stat_result | Any) -> tuple[int, ...]:
+    return (
+        int(getattr(value, "st_dev", 0)),
+        int(getattr(value, "st_ino", 0)),
+        int(getattr(value, "st_mode", 0)),
+        int(getattr(value, "st_size", -1)),
+        int(getattr(value, "st_mtime_ns", int(getattr(value, "st_mtime", 0) * 1e9))),
+        int(getattr(value, "st_ctime_ns", int(getattr(value, "st_ctime", 0) * 1e9))),
+    )
+
+
+def _archive_is_read_only(value: os.stat_result | Any) -> bool:
+    attributes = getattr(value, "st_file_attributes", None)
+    if attributes is not None and hasattr(stat, "FILE_ATTRIBUTE_READONLY"):
+        return bool(attributes & stat.FILE_ATTRIBUTE_READONLY)
+    return int(getattr(value, "st_mode", 0)) & 0o222 == 0
+
+
+def validate_content_addressed_archive(
+    path: str | os.PathLike[str],
+    *,
+    expected_sha256: str | None = None,
+    expected_length: int | None = None,
+    expected_pid: int | None = None,
+    expected_process_create_time: int | None = None,
+    expected_process_name: str | None = PROCESS_NAME,
+    expected_module_timestamp: int | None = None,
+    expected_module_size: int | None = None,
+    require_full_memory: bool = DUMP_TYPE == 2,
+    require_read_only: bool = True,
+    _stat_provider: Callable[[Path], os.stat_result | Any] | None = None,
+) -> dict[str, Any]:
+    """Validate a local immutable ``<sha256>.dmp`` archive in one open-file epoch.
+
+    The private stat-provider hook exists solely to make replacement/change races
+    deterministic in offline tests; production callers use ``os.lstat``.
+    """
+
+    archive = Path(path)
+    reasons: list[str] = []
+    report: dict[str, Any] = {
+        "schema": "don.wer-minidump-archive-validation.v1",
+        "path": str(archive),
+        "valid": False,
+        "reasons": reasons,
+    }
+
+    def reject(reason: str) -> None:
+        if reason not in reasons:
+            reasons.append(reason)
+
+    stat_provider = _stat_provider or os.lstat
+    name_match = ARCHIVE_NAME_RE.fullmatch(archive.name)
+    if name_match is None:
+        reject("archive filename is not canonical <sha256>.dmp")
+        addressed_sha256 = ""
+    else:
+        addressed_sha256 = name_match.group("sha256")
+    if expected_sha256 is not None:
+        expected_sha256 = expected_sha256.casefold()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            reject("expected archive SHA-256 is malformed")
+
+    try:
+        before_path = stat_provider(archive)
+        if stat.S_ISLNK(int(getattr(before_path, "st_mode", 0))):
+            reject("archive path is a symbolic link")
+        if not stat.S_ISREG(int(getattr(before_path, "st_mode", 0))):
+            reject("archive path is not a regular file")
+        if require_read_only and not _archive_is_read_only(before_path):
+            reject("archive file is writable")
+
+        with archive.open("rb") as stream:
+            before_fd = os.fstat(stream.fileno())
+            if _archive_stat_fingerprint(before_path) != _archive_stat_fingerprint(
+                before_fd
+            ):
+                reject("archive path changed before it was opened")
+            digest = hashlib.sha256()
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            sha256 = digest.hexdigest()
+            stream.seek(0)
+            dump = validate_minidump(
+                stream,
+                expected_pid=expected_pid,
+                expected_process_create_time=expected_process_create_time,
+                expected_process_name=expected_process_name,
+                expected_module_timestamp=expected_module_timestamp,
+                expected_module_size=expected_module_size,
+                require_full_memory=require_full_memory,
+            )
+            after_fd = os.fstat(stream.fileno())
+        after_path = stat_provider(archive)
+
+        report.update(
+            {
+                "sha256": sha256,
+                "content_address": f"sha256:{sha256}",
+                "length": int(before_fd.st_size),
+                "read_only": _archive_is_read_only(before_path),
+                "dump": dump,
+            }
+        )
+        if addressed_sha256 and addressed_sha256 != sha256:
+            reject("archive filename hash does not match file content")
+        if expected_sha256 is not None and expected_sha256 != sha256:
+            reject("archive SHA-256 does not match expected hash")
+        if expected_length is not None and int(before_fd.st_size) != expected_length:
+            reject("archive length does not match expected length")
+        if _archive_stat_fingerprint(before_fd) != _archive_stat_fingerprint(after_fd):
+            reject("archive changed while it was being validated")
+        if _archive_stat_fingerprint(before_path) != _archive_stat_fingerprint(after_path):
+            reject("archive path changed while it was being validated")
+        if not dump["valid"]:
+            reject("archived minidump is structurally invalid")
+    except (OSError, ValueError) as error:
+        reject(f"archive validation failed: {error}")
+
+    report["valid"] = not reasons
+    return report
 
 
 @dataclass(frozen=True)
