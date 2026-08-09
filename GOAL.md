@@ -40,15 +40,15 @@ Measured on the shared worktree on 2026-08-08:
 
 | Gate | State | Evidence |
 |---|---|---|
-| Rust workspace | green | `cargo test --workspace --all-targets`: 809 passed, 0 failed |
+| Rust workspace | green | `cargo test --workspace --all-targets`: 1,019 passed, 0 failed |
 | Retail oracle regression | green, current | 12/12 cases, 16,236,396 trials, 0 fail/skip/crash; 7 Tier-B claims remain outside the suite |
 | Replay harness | green but trivial | full corpus command above; all current matches walk zero bytes |
-| Simulation derivation | broad | 563 functions / 495,573 bytes in a seeded retail potential-reachability closure are cited; the closure and citations are both approximations, not fidelity |
+| Simulation derivation | broad | 572 functions / 498,343 bytes in a seeded retail potential-reachability closure are cited; the closure and citations are both approximations, not fidelity |
 | Runnable tick wiring | not yet mechanically measured | direct review finds most `systems/*.rs` code isolated behind unit tests; the old “3 call sites” metric was only a textual grep and has been retired |
 | RL surface | working over partial dynamics | `crates/don-env`, `python/don_env`, `docs/tracks/rl-env.md` |
 | Headless networking | our peers work | two processes complete a 40-turn TCP lockstep run; retail internet join is not complete |
 | AI / analytics / web | working prototypes | each has a lane report under `docs/tracks/`; none implies whole-game fidelity |
-| Worktree | recovered, not checkpointed | 58 tracked paths (53 modified + 5 deleted), 46 untracked entries; preserve all until classified |
+| Recovery | checkpointed, with older dirt preserved | interrupted mechanics, replay viewer, ledgers, and the RoNtoy R1 slice are committed on `codex/rontoy-recovery`; unrelated Claude-era/user changes remain deliberately unstaged |
 
 The coverage denominator and method live in `schema/coverage.json` and
 `docs/mechanics/COVERAGE.md`. “Cited,” “compiled,” “called by a tick,” and “agrees with
@@ -98,8 +98,8 @@ divergence. A merely green Rust suite is not completion.
   victory, walls, air, naval, and items only as their prerequisites enter the tick.
 - Replace placeholder action effects in `don-env` and `don-ai` with the same command path the
   replay harness uses; keep `accepted_no_effect` visible until it reaches zero.
-- Turn the partial live attach and replay viewer into repeatable tools with reports and smoke
-  tests; do not treat “file exists” as a landed lane.
+- Measure the now-repeatable live reader/host/dashboard in a controlled retail match and keep
+  the replay viewer's decoded-state/WASM limitations explicit.
 
 ## Later — P2 product tracks
 
@@ -112,21 +112,24 @@ divergence. A merely green Rust suite is not completion.
 - Benchmark the smallest fidelity relaxation that unlocks the next throughput order of
   magnitude; keep the bit-exact path as the reference.
 
-## Recovered work that still needs landing
+## Recovered work: landed versus still quarantined
 
-The final Claude coverage wave died at the session limit. Its exact transcript and artifact
-state are recorded in `docs/RECOVERY.md`. Immediate integration facts:
+The final Claude wave's transcript and artifact-by-artifact history are recorded in
+`docs/RECOVERY.md`. Recovery is now checkpointed:
 
-- `air.rs` and `walls.rs` compile in the 809-test umbrella suite.
-- `naval.rs` and `items.rs` exist but remain quarantined outside `systems/mod.rs`: isolated
-  audits found one compile blocker plus one bad roster fixture in naval, and one caller-contract
-  fixture failure plus known visibility/unlink gaps in items.
-- `donscan/src/live.rs` and the replay-viewer edits are partial and lack their lane reports.
-- casters/animals stopped after derivation, before writing code.
-- wonders/nations produced `schema/effects.json`, but its generator is still temp-only and no
-  runtime module or report exists.
-- the real-game join lane produced no report, but its transcript contains the recovered
-  PlayFab title id (`84214`) and a completed `steam_api.dll` transfer in scratch space.
+- air, walls, naval, items, and casters/animals are compiled, focused-test green, and have
+  explicit Tier-C reports; their missing runtime callers/state/oracles remain quarantined.
+- rules, scenario, and script have strict structural checksum primitives. Types reproduce
+  the live rules checkpoint exactly; the 24 Tribe graft blocks still lack sufficient checked-in
+  source data, while scenario/script remain disconnected from runtime producers.
+- the effects ledger has a deterministic repo-relative generator; it inventories 475 sites
+  but does not claim typed effect semantics.
+- the replay viewer has corpus and browser smoke coverage with honest partial decoding.
+- RoNtoy has a golden-tested read-only R1 path from Windows reader through bridge/host to the
+  browser. `rontoy-proto` and `rontoy-core` are separately tested R2 foundations, not wired into
+  that path. A controlled live deployment and HUD/overhead acceptance run are the next step.
+- the PlayFab title id (`84214`) and transferred Steam shim are preserved; real join still
+  needs a genuine Steam ticket and retail load/ABI test.
 
 ## Wave protocol
 

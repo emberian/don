@@ -283,8 +283,8 @@ CHANNELS = [
     (11, "goods",      "0x00937710", "CheckSums::check_goods",     "Good::walk_data 0x0066E5D0",       "economy",              "partial"),
     (12, "world",      "inline",     "World::walk_data",           "World::walk_data 0x006B5CF0",      "borders_fog,map_terrain", "partial"),
     (13, "rules",      "inline",     "Game::walk_rules_data",      "Types + Balance walk_rules_data",  "rules_channel",          "partial"),
-    (14, "scenario",   "inline",     "ScenarioData::walk_data",    "ScenarioData::walk_data 0x00997AD0", "",                   "absent"),
-    (15, "script",     "inline",     "RunTimeEnv::walk_data",      "RunTimeEnv::walk_data 0x009C41A0", "",                     "absent"),
+    (14, "scenario",   "inline",     "ScenarioData::walk_data",    "ScenarioData::walk_data 0x00997AD0", "scenario_channel",     "partial"),
+    (15, "script",     "inline",     "RunTimeEnv::walk_data",      "RunTimeEnv::walk_data 0x009C41A0", "script_channel",       "partial"),
 ]
 
 # Re-derive: `python tools/pdb/calls.py 00591ef0` (architecture.md §3.3).
@@ -296,7 +296,7 @@ DO_FRAME = [
     (1,  "GameLog::begin_frame",               "0x00932A70", "out_of_scope"),
     (2,  "Random::get (artificial lag)",       "0x00A39D70", "out_of_scope"),
     (3,  "CommandManager::issue_player_speed", "0x00943100", "out_of_scope"),
-    (4,  "RunTimeEnv::run_script",             "0x0043D0E0", "absent"),
+    (4,  "RunTimeEnv::run_script",             "0x0043D0E0", "module_exists"),
     (5,  "ConquestGame::place_reinforcements", "0x00798880", "out_of_scope"),
     (6,  "TutorialPromptWin::exec",            "0x007C2810", "out_of_scope"),
     (7,  "SteamLeaderboards::UploadScore",     "0x00A36190", "out_of_scope"),

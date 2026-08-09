@@ -25,7 +25,7 @@ and false negatives and must not be called “tick-reachable” (§4).
 
 | layer | question it answers | measure | share |
 |---|---|---:|---:|
-| **named** | has a lane read this retail function and written Rust citing it? | 485,227 B | **27.8 %** |
+| **named** | has a lane read this retail function and written Rust citing it? | 487,997 B | **27.9 %** |
 | **runtime-core inventory** | is the citing source in a small reviewed frontend/runtime allowlist? | 89,241 B | **5.1 %** |
 | **tested** | is it differentially tested against retail machine code? | 4,158 B | **0.24 %** |
 
@@ -78,10 +78,10 @@ it is the engine telling us how much of a class is sim-critical.
 | 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 1 / 48 | `economy` (`goods_channel`) | partial |
 | 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | unresolved / 372 | `borders_fog` **and** `map_terrain` | partial, **contested** |
 | 13 | `rules` | inline | `Game::walk_rules_data` `0x00589550` | 997,846 bytes in the live shipped walk | `rules_channel` | partial; exact walker, incomplete checked-in inputs |
-| 14 | `scenario` | inline | `ScenarioData::walk_data` `0x00997AD0` | — | **none** | **absent** |
-| 15 | `script` | inline | `RunTimeEnv::walk_data` `0x009C41A0` | — | **none** | **absent** |
+| 14 | `scenario` | inline | `ScenarioData::walk_data` `0x00997AD0` | pointer-rich structural walk | `scenario_channel` | partial; no runtime producer |
+| 15 | `script` | inline | `RunTimeEnv::walk_data` `0x009C41A0` | pointer-rich structural walk | `script_channel` | partial; no BHS execution/runtime producer |
 
-**Thirteen partial, two absent, zero complete.** No
+**Fifteen partial, zero complete.** No
 module reproduces a whole integrated channel, and nothing composes the fifteen into a
 `check_all` equivalent — there is no Rust function that returns a comparable checksum for a
 whole world.
@@ -152,7 +152,7 @@ code actually does.
 | 1 | `GameLog::begin_frame` | `0x00932A70` | out of scope | desync log |
 | 2 | `Random::get` (artificial lag) | `0x00A39D70` | out of scope | debug lag injector, **not a sim draw** |
 | 3 | `CommandManager::issue_player_speed` | `0x00943100` | out of scope | |
-| 4 | `RunTimeEnv::run_script` ×2 | `0x0043D0E0` | **absent** | channel 15 has no module |
+| 4 | `RunTimeEnv::run_script` ×2 | `0x0043D0E0` | module exists, runtime call unverified | structural checksum primitive only; no BHS execution |
 | 5 | `ConquestGame::place_reinforcements` | `0x00798880` | out of scope | CTW |
 | 6 | `TutorialPromptWin::exec` | `0x007C2810` | out of scope | |
 | 7 | `SteamLeaderboards::UploadScore` | `0x00A36190` | out of scope | |
@@ -178,7 +178,7 @@ code actually does.
 | 27 | `Game::process_end_game` | `0x00591CE0` | module exists, runtime call unverified | `victory_score.rs` |
 | 28 | `Scene::process_capture_sequence` | `0x008C13C0` | out of scope | |
 
-**Hand-table tally: 3 implemented, 5 have a module whose runtime path is unverified, 6
+**Hand-table tally: 3 implemented, 6 have a module whose runtime path is unverified, 5
 absent, 15 out of scope.** This classifies artifacts, not executable call paths.
 
 Of the 14 in-scope steps, three run. And the three that run — `Objects::process_all`'s

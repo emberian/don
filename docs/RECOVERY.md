@@ -22,21 +22,20 @@ state survives as ten agent transcripts plus files in the shared worktree.
 
 | Lane | Agent | Recovered state | Artifacts on disk | Next action |
 |---|---|---|---|---|
-| coverage audit | `a5c25cf2` | landed; generator rerun completed just before cutoff | `tools/coverage-ledger.py`, `schema/coverage.json`, `docs/mechanics/COVERAGE.md` | keep regenerated with code changes; correct stale prose when wiring changes |
+| coverage audit | `a5c25cf2` | landed and re-audited; generator now labels seeded reachability and textual references honestly | `tools/coverage-ledger.py`, `schema/coverage.json`, `docs/mechanics/COVERAGE.md` | keep regenerated with code changes; runtime execution still needs a real call/path analysis |
 | join real game | `a7372f3a` | title id `84214` recovered statically from `CrossplayProxy.dll`; the apparently timed-out DLL transfer completed; no report | scratch `jrg/xfer/steam_api.dll` (217,376 B, SHA-256 `dc204ea6ad73ae127a2f6977055f861dc9c850a3c14d66e0810b8650cc1340a0`); no named report | preserve the capture, obtain a real Steam session ticket, then test the unverified shim ABI/load path in retail |
-| live attach | `a6611bcc` | quarantined orphan: not exported or in the workspace; forced harness compiles but 4/6 live tests fail; Windows binary predates it | `crates/donscan/src/live.rs`; no `docs/tracks/live-attach.md` | fix the 68-vs-64-byte header, Build/Wall HP, stockpile address, frame coherence and identity/wire gaps before a measured 1–2 Hz disposable-game smoke |
-| replay viewer | `a8452ffd` | substantial coherent UI; syntax checks and 3/3 browser pages pass, but default audits exit nonzero and several coverage/security claims are wrong | six viewer files under `web/public/` and `web/tools/`; no report | fix the tautological round-trip metric, expected no-stream handling, Chrome cleanup, command claims and unescaped replay HTML; then add the report/link and rerun solo+MP+full smoke |
-| casters + animals | `aaa5073c` | derivation reached “write the Rust module”; no write occurred | no named module or report | resume from transcript; do not re-derive from scratch |
-| wonders + nations | `aca399d9` | 475 effect sites extracted (428 call, 47 inline); runtime and completeness audit not started | `schema/effects.json`; its only generator remains temporary scratch `wn/gen_effects.py`; no report | promote and make the generator reproducible, audit the 2 dynamic subjects and missing constants, then design typed dispatch |
-| air | `ac73a0c7` | module written; 37/37 focused tests passed after correcting a local change-detector fixture | `crates/don-sim/src/systems/air.rs`, module declaration; no report | write `docs/mechanics/air.md`, add the currently uncalled anti-air gate to the live ammo path, replay-measure RNG impact |
-| naval | `a273b7d8` | quarantined: isolated compile needs a missing `Dock: Default`; with a temporary shim 60/61 tests pass and the failing 29-unit expectation contradicts the 30-unit XML roster | `crates/don-sim/src/systems/naval.rs`; no module declaration or report | repair the sentinel/test, recover all 289 retail spiral offsets (currently 91), and close the pathing/RNG proxies before declaring it |
-| items | `a740c2fd` | quarantined: isolated compile runs 42 tests, 41 pass; the failing empty-cell test contradicts the direct retail function's caller-gated contract | `crates/don-sim/src/systems/items.rs`; no module declaration or report | correct the test/contract and `mark_seen`, document the omitted full visibility/unlink/move behavior, then integrate the channel into World/SimBridge |
-| walls | `a61232fa` | module written and declared; 41/41 focused tests and the full 643-test `don-sim` suite passed | `crates/don-sim/src/systems/walls.rs`; no report | write `docs/mechanics/walls.md`, connect the currently uncalled code to build/world state, replay-measure the channel |
+| live attach | `a6611bcc` | recovered into a targeted leader-only `donfeed` path: exact image allowlist, read-only imports, coherence/mode/pause/human guards, 15/15 tests and Windows cross-build green | `crates/donscan/{src/live.rs,src/bin/donfeed.rs,fixtures/,examples/}`, `docs/tracks/rontoy.md`, `tools/rontoy-host/` | deploy at 1 Hz in a controlled solo match; run HUD, MP suppression, pause/restart/fault, and observer-effect acceptance gates |
+| replay viewer | `a8452ffd` | landed and audited: default corpus checker exits zero, hostile strings are escaped, browser cleanup/seek checks pass, and scope is labelled partial | viewer files under `web/public/` and `web/tools/`; `docs/tracks/replay-viewer.md` | decode state blobs and execute sim/WASM only as a later separately measured lane |
+| casters + animals | `aaa5073c` | recovered as a bounded Tier-C module; 23/23 focused tests green | `crates/don-sim/src/systems/casters_animals.rs`, `docs/mechanics/casters-animals.md` | integrate casting/animal orders, allocation, hunting/food, checksum state, and a retail oracle before runtime use |
+| wonders + nations | `aca399d9` | reproducible 475-site effect ledger landed; corrected register provenance and named all constants | `tools/effects-ledger.py`, `schema/effects.json`, `docs/mechanics/effects-ledger.md` | typed runtime semantics and differential tests remain separate work |
+| air | `ac73a0c7` | module and Tier-C report landed; 37/37 focused tests green | `crates/don-sim/src/systems/air.rs`, `docs/mechanics/air.md` | connect the still-uncalled anti-air gate to the ammo/world path and replay-measure RNG impact |
+| naval | `a273b7d8` | recovered, declared, and documented; 30-unit roster and all 289 offsets fixed; 65 focused tests green | `crates/don-sim/src/systems/naval.rs`, `docs/mechanics/naval.md` | keep pathing, boarding, gull objects, dock queues, and supply quarantined until full retail behavior/oracle work lands |
+| items | `a740c2fd` | recovered, declared, and documented; caller contract, visibility, bit semantics, and object unlink repaired; 49 focused tests green | `crates/don-sim/src/systems/items.rs`, `docs/mechanics/items.md` | integrate World/SimBridge state and the deferred terrain transaction before claiming replay impact |
+| walls | `a61232fa` | module and Tier-C report landed; two checksum/bit defects repaired; 43/43 focused tests green | `crates/don-sim/src/systems/walls.rs`, `docs/mechanics/walls.md` | connect the still-uncalled code to build/world state and replay-measure the channel |
 
-“Focused tests passed” means only that the transcript shows the command succeeded. The current
-umbrella suite independently compiles air and walls, but neither has a runtime caller. Naval
-and items are not declared by `systems/mod.rs`; their isolated audits above are deliberately
-outside the green workspace.
+“Focused tests passed” remains narrower than end-to-end fidelity. The recovered mechanics are
+now compiled by their parent crates and documented, but air/walls/naval/items/casters still
+lack the complete runtime state and retail-ordered callers described in their reports.
 
 The join lane also validated the title endpoint with
 `POST https://84214.playfabapi.com/...LoginWithSteam`: a dummy ticket reached PlayFab and
@@ -72,11 +71,11 @@ PIDs were terminated; the game process was not targeted. Audit guest processes a
 starting another attach rather than assuming a timed-out host client left no detached child.
 The replay-viewer audit also found and terminated its orphaned loopback server on port 8791.
 
-The live-attach transcript created a Windows scheduled task named `DONRoN`. Its reader is
-state-safe but currently broken and prior broad scans moved roughly 0.84–0.92 GiB each, so no
-fresh attach was attempted during Ember's valued solo match. Inspect the guest task after the
-match; repair the targeted scanner and add a frame guard before measuring it at 1, 5, and 15 Hz
-on a disposable skirmish.
+The live-attach transcript created a Windows scheduled task named `DONRoN`. The new reader is
+a foreground targeted process and does not depend on that task. Inspect/remove the old guest
+task before the next deployment, then start the new feed at 1 Hz and measure 1/5/15 Hz only in
+controlled skirmishes; the earlier broad scanner moved roughly 0.84–0.92 GiB per scan and is
+not part of RoNtoy R1.
 
 ## Landing checklist for recovered artifacts
 

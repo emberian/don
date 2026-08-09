@@ -13,10 +13,10 @@
  "headline": {
   "reachable_funcs": 3612,
   "reachable_bytes": 2537989,
-  "cited_funcs": 563,
-  "cited_bytes": 495573,
-  "pct_funcs": 15.59,
-  "pct_bytes": 19.53,
+  "cited_funcs": 572,
+  "cited_bytes": 498343,
+  "pct_funcs": 15.84,
+  "pct_bytes": 19.64,
   "external_system_reference_count": 3,
   "differential_cases": 12,
   "differential_trials": 16236396,
@@ -40,8 +40,8 @@
    "retail_bytes": 89241
   },
   "other": {
-   "lines": 63287,
-   "procs": 530,
+   "lines": 64435,
+   "procs": 541,
    "files": [
     "crates/don-sim/src/bin/bench.rs",
     "crates/don-sim/src/container.rs",
@@ -53,6 +53,7 @@
     "crates/don-sim/src/systems/air.rs",
     "crates/don-sim/src/systems/ammo.rs",
     "crates/don-sim/src/systems/borders_fog.rs",
+    "crates/don-sim/src/systems/casters_animals.rs",
     "crates/don-sim/src/systems/combat.rs",
     "crates/don-sim/src/systems/economy.rs",
     "crates/don-sim/src/systems/groups_guys.rs",
@@ -67,7 +68,7 @@
     "crates/don-sim/src/systems/walls.rs",
     "crates/don-sim/src/trig.rs"
    ],
-   "retail_bytes": 404785
+   "retail_bytes": 407736
   }
  },
  "channels": [
@@ -194,8 +195,8 @@
    "checker_va": "inline",
    "checker": "ScenarioData::walk_data",
    "walker": "ScenarioData::walk_data 0x00997AD0",
-   "rust_modules": "",
-   "status": "absent"
+   "rust_modules": "scenario_channel",
+   "status": "partial"
   },
   {
    "idx": 15,
@@ -203,8 +204,8 @@
    "checker_va": "inline",
    "checker": "RunTimeEnv::walk_data",
    "walker": "RunTimeEnv::walk_data 0x009C41A0",
-   "rust_modules": "",
-   "status": "absent"
+   "rust_modules": "script_channel",
+   "status": "partial"
   }
  ],
  "do_frame": [
@@ -236,7 +237,7 @@
    "idx": 4,
    "name": "RunTimeEnv::run_script",
    "va": "0x0043D0E0",
-   "status": "absent"
+   "status": "module_exists"
   },
   {
    "idx": 5,
@@ -592,8 +593,8 @@
     "bytes": 2926855,
     "reach_funcs": 2627,
     "reach_bytes": 1746457,
-    "cited_funcs": 532,
-    "cited_bytes": 485227
+    "cited_funcs": 541,
+    "cited_bytes": 487997
    },
    "presentation": {
     "files": 148,
@@ -641,8 +642,8 @@
     "walk_data": 1,
     "reach_funcs": 206,
     "reach_bytes": 192469,
-    "cited_funcs": 60,
-    "cited_bytes": 93139,
+    "cited_funcs": 62,
+    "cited_bytes": 93307,
     "suffix_bytes": {
      "behaviour": 193381,
      "sim": 23805,
@@ -1335,8 +1336,8 @@
     "walk_data": 0,
     "reach_funcs": 34,
     "reach_bytes": 23615,
-    "cited_funcs": 0,
-    "cited_bytes": 0,
+    "cited_funcs": 1,
+    "cited_bytes": 152,
     "suffix_bytes": {
      "rules": 21763,
      "sim": 5490
@@ -1692,8 +1693,8 @@
     "walk_data": 1,
     "reach_funcs": 13,
     "reach_bytes": 8443,
-    "cited_funcs": 1,
-    "cited_bytes": 77,
+    "cited_funcs": 2,
+    "cited_bytes": 624,
     "suffix_bytes": {
      "free": 6153,
      "sim": 666,
@@ -3612,8 +3613,8 @@
     "walk_data": 1,
     "reach_funcs": 5,
     "reach_bytes": 1941,
-    "cited_funcs": 2,
-    "cited_bytes": 442,
+    "cited_funcs": 3,
+    "cited_bytes": 1178,
     "suffix_bytes": {
      "behaviour": 2973,
      "sim": 1476
@@ -6130,8 +6131,8 @@
     "walk_data": 1,
     "reach_funcs": 6,
     "reach_bytes": 681,
-    "cited_funcs": 1,
-    "cited_bytes": 40,
+    "cited_funcs": 2,
+    "cited_bytes": 112,
     "suffix_bytes": {
      "behaviour": 1004
     }
@@ -6144,8 +6145,8 @@
     "walk_data": 1,
     "reach_funcs": 4,
     "reach_bytes": 863,
-    "cited_funcs": 1,
-    "cited_bytes": 23,
+    "cited_funcs": 3,
+    "cited_bytes": 637,
     "suffix_bytes": {
      "behaviour": 943
     }
@@ -6399,8 +6400,8 @@
     "walk_data": 1,
     "reach_funcs": 2,
     "reach_bytes": 502,
-    "cited_funcs": 0,
-    "cited_bytes": 0,
+    "cited_funcs": 1,
+    "cited_bytes": 481,
     "suffix_bytes": {
      "behaviour": 794
     }
@@ -9340,13 +9341,13 @@
   ]
  },
  "citations_per_crate": {
-  "don-sim": 2143,
+  "don-sim": 2158,
   "don-rules": 756,
-  "don-replay": 374,
+  "don-replay": 388,
   "don-ai": 136,
   "oracle": 64,
   "don-net": 34,
-  "donscan": 17,
+  "donscan": 20,
   "don-env": 10,
   "netsys-shim": 9,
   "don-gpu": 2

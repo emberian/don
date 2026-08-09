@@ -1,10 +1,10 @@
 # RoNtoy — read-only live coaching for Rise of Nations
 
-Status: **product contract and implementation plan**. RoNtoy is not yet a landed live
-product. The repository contains unusually strong ingredients—a native Windows memory
-scanner, a partial live entity reader, derived economy mechanics, opening-search code, and a
-browser spectator—but the interrupted live-attach lane did not join them and is explicitly
-quarantined in [`../RECOVERY.md`](../RECOVERY.md).
+Status: **attach-ready R1 prototype; live retail acceptance still pending**. A read-only
+Windows `donfeed` binary, strict Mac bridge/host, and same-origin browser dashboard now form a
+golden-tested vertical slice. It has not yet been deployed into a fresh match or passed the
+HUD differential, restart/fault, multiplayer-suppression, pause, and 30-minute observer-effect
+gates below, so it is not yet a proven live product.
 
 This track treats RoNtoy as a first-class product, not a debugging panel bolted onto
 `donscan`. Its first useful form is a local second-screen economy coach for a solo game. Its
@@ -30,48 +30,46 @@ anti-cheat system. Advice ends at the human.
 
 ## Current evidence and blockers
 
-What can be reused now:
+- `crates/donscan` now fingerprints the exact supported executable, uses query/read-only
+  process rights, selects one unique console human, reads only leader-economy fields, and
+  drops snapshots unless the Game, mode, pause, human, encrypted-pointer, and frame guards
+  remain coherent. It emits no enemy, object, or map telemetry in R1.
+- The Rust encoder's redacted NDJSON golden is consumed by the real Python bridge, admitted by
+  the host, streamed over SSE, and rendered by Chrome. Reader tests, host tests, malformed/XSS
+  browser smoke, and the Windows cross-build/import audit are green.
+- [`../derivation/rontoy-econ.md`](../derivation/rontoy-econ.md) records the exact economy
+  chain and masks, population correction, cache-age semantics, queue caveat, and live witnesses.
+- The current normalized R1 surface is intentionally narrow: six stockpiles, direct cached
+  HUD rates plus their age, population/cap, build/process identity, SP/MP and pause evidence,
+  and capture health. It does not yet transport cap state, cities, worker assignments, or
+  trustworthy per-producer queues.
+- The remaining blocker is empirical: deploy the new binary in a controlled match, compare
+  every displayed signal with the HUD, prove multiplayer and pause suppression, exercise
+  restart/source-loss/torn-frame paths, and measure the observer effect at 1/5/15 Hz. Start at
+  1 Hz.
 
-- `crates/donscan` already identifies the shipped executable under ASLR and can read the
-  x86 game from a native ARM64 Windows process. Repeated full-heap scans were measured around
-  0.45–0.68 seconds, but RoNtoy must use targeted reads rather than repeat those scans.
-- `crates/donscan/src/live.rs` derives the engine's ten owner lists, three object bands,
-  `flags & 1` liveness, XOR-masked object coordinates, leader array, map grid, and a compact
-  object/leader frame.
-- [`../mechanics/economy.md`](../mechanics/economy.md) and
-  [`analytics-v2.md`](analytics-v2.md) identify the 248-byte `LeaderDataEncrypt` block at
-  `*(Leader + 0x6EB8)`, including stockpile, gross income, expense, displayed income,
-  commerce cap, over-cap state, age, and XOR masks.
-- `don-ai::optimum` can compare opening plans in a derived integer economy, while the
-  transcribed shipped `economic.bhs` provides a useful baseline. These are models, not live
-  truth, and must remain labelled as such.
-- `web/` already proves the browser visualization path has ample rendering headroom.
+## Architecture and transport boundary
 
-What prevents an honest live demo today:
+The **frozen, tested R1 path** is:
 
-- The current `DONL` encoder declares a 64-byte header but writes 68 bytes. The debug
-  assertion and any correct decoder reject it.
-- The current leader reader treats `Leader + 0x450` as six plain stockpiles. Retail uses a
-  pointer at `Leader + 0x6EB8`, then six XOR-obfuscated dwords at block offset `0x00`.
-- Build/wall hit points, type identity, and some wire assumptions failed the interrupted
-  lane's synthetic audit. Four of six forced live-reader tests failed. Those defects
-  quarantine object telemetry; they do not gate the leader-only economy slice.
-- `snapshot()` reads the game frame near the beginning but never reads it again. A frame can
-  therefore contain object, leader, and map data from different simulation frames.
-- The live module is not exported or wired into the Windows binary, and the binary in the
-  guest predates it.
-- A scheduled task named `DONRoN` survives from the interrupted experiment. It must be
-  inspected and removed or replaced; RoNtoy runs as a foreground, owned process, never an
-  anonymous scheduled task.
+```text
+donfeed.exe rontoy.observation v1 NDJSON
+  -> tools/rontoy-host/bridge.py
+  -> Python snapshot v1 / latest-only SSE
+  -> host-served rontoy-web
+```
 
-These are preconditions, not reasons to make RoNtoy small.
+`rontoy-proto` (`DONF`) and `rontoy-core` are tested R2 foundations, not participants in that
+live path yet. Migrating R1 to them requires one owner, an explicit field mapping, a
+cross-language golden, and a deprecation/version plan; neither contract should be called the
+current canonical transport until that integration lands.
 
-## Architecture
+The longer-term architecture remains:
 
 ```mermaid
 flowchart LR
-    R["riseofnations.exe"] -->|"PROCESS_VM_READ only"| P["rontoy-probe<br/>Windows guest"]
-    P -->|"authenticated DONF stream<br/>Parallels host-only network"| D["rontoyd<br/>Mac host"]
+    R["riseofnations.exe"] -->|"PROCESS_VM_READ only"| P["donfeed / rontoy-probe<br/>Windows guest"]
+    P -->|"future authenticated DONF stream"| D["rontoyd<br/>Mac host"]
     D --> N["normalizer + session store"]
     N --> E["economy analyzer"]
     N --> Q["production analyzer"]
@@ -165,15 +163,17 @@ exclusive-fullscreen problems, and Windows overlay fragility. A transparent alwa
 window may come later, but it consumes the same loopback API and still does not hook the
 game.
 
-## Versioned telemetry: `.donfeed` / `DONF`
+## R2 versioned telemetry: `.donfeed` / `DONF`
 
-The current prototype `DONL v1` is not a stable contract and must not be repaired in place
-while retaining the same version. RoNtoy uses a new `DONF` file/stream envelope.
+The interrupted `DONL v1` is not a stable contract and must not be repaired in place while
+retaining the same version. `crates/rontoy-proto` defines a new `DONF` file/stream envelope
+for the planned R2 migration; the frozen R1 NDJSON/Python path above remains the only wired
+vertical slice today.
 
 ### Compatibility rules
 
-- The outer stream is length-prefixed little-endian binary. NDJSON is a debug/export view,
-  never the canonical live transport.
+- The future outer stream is length-prefixed little-endian binary. After R2 migration,
+  NDJSON remains a debug/export view rather than the canonical live transport.
 - A file header identifies `DONF`, schema major/minor, session UUID, source build
   fingerprint, and creation time. Each record has a type, length, sequence, and integrity
   check so a truncated recording is detectable.
