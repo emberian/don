@@ -47,6 +47,7 @@ fn main() {
         println!("  \"root\": {:?},", root.display().to_string());
         println!("  \"files\": {},", c.files.len());
         println!("  \"lines\": {},", c.lines);
+        println!("  \"ref_parameters\": {},", c.ref_parameters);
         println!("  \"distinct_builtins_called\": {},", c.distinct_called());
         println!("  \"total_builtin_calls\": {},", c.total_calls());
         println!(
@@ -73,9 +74,10 @@ fn main() {
 
     println!("corpus: {}", root.display());
     println!(
-        "{} files, {} lines, {} of 873 registered builtins called, {} call sites",
+        "{} files, {} lines, {} ref parameters, {} of 873 registered builtins called, {} call sites",
         c.files.len(),
         c.lines,
+        c.ref_parameters,
         c.distinct_called(),
         c.total_calls()
     );

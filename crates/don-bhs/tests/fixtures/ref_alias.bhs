@@ -1,0 +1,12 @@
+int scenario increment(ref int value)
+{
+    value = value + 1;
+    return value;
+}
+
+int scenario ref_alias()
+{
+    int value = 41;
+    increment(value);
+    return value;
+}

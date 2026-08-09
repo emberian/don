@@ -124,10 +124,38 @@ impl VarRef {
 #[derive(Debug, Clone)]
 pub enum Slot {
     Val(Value),
-    /// An alias for a local / static / constant.
-    Ref(VarRef),
+    /// A bound alias for a local / static / constant. Retail's run stack holds raw
+    /// `ScriptType*`, so a reference pushed by a caller keeps naming the caller's
+    /// storage after `OP_CALL` installs the callee frame. Keeping only a `VarRef`
+    /// here would reinterpret `local[0]` relative to the callee and silently break
+    /// every shipped `ref` parameter.
+    Ref(BoundRef),
     /// An alias for one element slot inside an aggregate.
     Cell(Cell),
+}
+
+/// The storage identity behind a run-stack pointer.
+///
+/// `VarRef` is an encoded bytecode operand and is relative to the *currently
+/// executing* VM. `BoundRef` is the corresponding runtime pointer identity. This
+/// distinction is required by the measured ref-parameter prologue: retail emits
+/// `OP_INIT local[n]` for `ref` and `OP_INIT_COPY local[n]` for by-value, so the
+/// former stores the caller's pointer in the callee's local array unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundRef {
+    Const {
+        file: usize,
+        index: u32,
+    },
+    Static {
+        file: usize,
+        script: usize,
+        index: u32,
+    },
+    Local {
+        frame: usize,
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +165,10 @@ struct Frame {
     /// `VirtualMachine::bip` (+12) — a **byte** offset into the file's code array.
     bip: usize,
     /// `VirtualMachine::vars` (+24) — the local slots.
-    locals: Vec<Option<Value>>,
+    /// `VirtualMachine::vars`: raw `ScriptType*` slots. An entry can therefore be
+    /// an owned value or an alias into an older frame. Retail ref parameters rely
+    /// on the latter; flattening this to `Value` turns mutation into pass-by-value.
+    locals: Vec<Option<Slot>>,
     /// `VirtualMachine::expected_stack_size` (+16).
     expected_stack: usize,
     /// `VirtualMachine::flags` bit 3 — the callee returns void.
@@ -307,10 +338,50 @@ impl<'a, H: Host> Vm<'a, H> {
         script: usize,
         args: &[Value],
     ) -> Result<RunOutcome, VmError> {
+        let slots = args.iter().cloned().map(Slot::Val).collect();
+        self.run_script_slots(file, script, slots)
+    }
+
+    /// Run a script through the external `RunTimeEnv::run_script` boundary and
+    /// copy mutations of `ref` parameters back into the caller's values.
+    ///
+    /// Retail's boundary passes `ScriptType*` arguments into the shared run stack;
+    /// the shipped compiler's OP_INIT prologue keeps that pointer for a `ref`
+    /// parameter and OP_INIT_COPY duplicates it for a value parameter. `&[Value]`
+    /// cannot express the observable write-back, so this explicit mutable entry
+    /// point supplies stable cells. The bytecode—not the metadata—decides whether
+    /// a cell changes: OP_INIT aliases it, OP_INIT_COPY leaves it untouched. This
+    /// mirrors the retail VM, which does not consult `Script::refs` while calling.
+    pub fn run_script_index_mut(
+        &mut self,
+        file: usize,
+        script: usize,
+        args: &mut [Value],
+    ) -> Result<RunOutcome, VmError> {
+        self.prog
+            .files
+            .get(file)
+            .and_then(|f| f.scripts.get(script))
+            .ok_or(VmError::BadScriptIndex(script))?;
+        let cells: Vec<Cell> = args.iter().cloned().map(cell).collect();
+        let slots = cells.iter().cloned().map(Slot::Cell).collect();
+        let out = self.run_script_slots(file, script, slots)?;
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = cells[i].borrow().clone();
+        }
+        Ok(out)
+    }
+
+    fn run_script_slots(
+        &mut self,
+        file: usize,
+        script: usize,
+        args: Vec<Slot>,
+    ) -> Result<RunOutcome, VmError> {
         let before = self.bytecodes_executed;
         self.returned = None;
         for a in args {
-            self.stack.push(Slot::Val(a.clone()));
+            self.stack.push(a);
         }
         self.push_frame(file, script)?;
         let mut error = None;
@@ -367,27 +438,22 @@ impl<'a, H: Host> Vm<'a, H> {
         let void_return = s.return_type == ScriptTy::Void.tag();
         let arity = s.arity;
         let entry = s.entry as usize;
-        if s.refs.iter().any(|&r| r != 0) {
-            // Retail's parameter writer/loader encoding is measured, but the compiler's
-            // copy-versus-alias lowering and the VM ownership transition are not. Passing
-            // these as ordinary values would look plausible while discarding mutations.
-            return Err(VmError::Unimplemented("ref script parameters"));
+        if self.stack.len() < arity {
+            return Err(VmError::StackUnderflow);
         }
         // `expected_stack_size = stack.len() - nparams (+1 if non-void)`.
-        let expected = self.stack.len().saturating_sub(arity) + usize::from(!void_return);
-        // Arguments occupy the lowest local slots; `check_params` (`0x009c3b00`)
-        // moves them from the run stack into the frame before entry.
-        let mut locals: Vec<Option<Value>> = Vec::new();
-        for _ in 0..arity {
-            let v = self.pop_value()?;
-            locals.push(Some(v));
-        }
-        locals.reverse();
+        let expected = self.stack.len() - arity + usize::from(!void_return);
+        // Arguments remain on the shared run stack. The shipped compiler emits one
+        // prologue instruction per parameter to install them in `vars`: OP_INIT_COPY
+        // (0x32) for by-value, OP_INIT (0x33) for `ref`. Two shipped-compiler captures
+        // of otherwise identical functions differ at exactly that byte. Consuming the
+        // arguments here would bypass that measured ownership transition and make the
+        // retail bytecode underflow on its first instruction.
         self.frames.push(Frame {
             file,
             script,
             bip: entry,
-            locals,
+            locals: Vec::new(),
             expected_stack: expected,
             void_return,
         });
@@ -466,42 +532,57 @@ impl<'a, H: Host> Vm<'a, H> {
 
     // -------------------------------------------------------------- values
 
-    /// `VirtualMachine::get_value` (`0x004d1010`), including both masks and both
-    /// bounds checks.
-    fn get_value(&self, r: VarRef) -> Result<Value, VmError> {
-        let f = self.frames.last().unwrap();
+    /// Bind a bytecode-relative variable reference to the same storage identity a
+    /// retail `ScriptType*` on the run stack carries.
+    fn bind_ref(&self, r: VarRef) -> Result<BoundRef, VmError> {
+        let frame = self.frames.len() - 1;
+        let f = &self.frames[frame];
         match r {
-            VarRef::Const(i) => self.prog.files[f.file]
-                .const_pool
-                .get(i as usize)
-                .cloned()
-                .ok_or(VmError::BadVarRef(r)),
+            VarRef::Const(i) => {
+                self.prog.files[f.file]
+                    .const_pool
+                    .get(i as usize)
+                    .ok_or(VmError::BadVarRef(r))?;
+                Ok(BoundRef::Const {
+                    file: f.file,
+                    index: i,
+                })
+            }
             VarRef::Static(i) => {
                 let s = &self.prog.files[f.file].scripts[f.script];
                 match s.statics.get(i as usize) {
                     // Note the engine's bound is `static_vars.count > i`; a slot
                     // that exists but is null is legal and is what
                     // OP_JUMP_IF_INITED tests.
-                    Some(v) => Ok(v.clone().unwrap_or(Value::Null)),
+                    Some(_) => Ok(BoundRef::Static {
+                        file: f.file,
+                        script: f.script,
+                        index: i,
+                    }),
                     None => Err(VmError::BadVarRef(r)),
                 }
             }
-            VarRef::Local(i) => match f.locals.get(i as usize) {
-                Some(v) => Ok(v.clone().unwrap_or(Value::Null)),
-                None => Err(VmError::BadVarRef(r)),
-            },
+            VarRef::Local(i) => {
+                f.locals.get(i as usize).ok_or(VmError::BadVarRef(r))?;
+                Ok(BoundRef::Local { frame, index: i })
+            }
         }
     }
 
     /// `VirtualMachine::set_value` (`0x009e07b0`). Note the engine *grows* the
     /// target array with null entries until the index is in range rather than
     /// failing, so we do the same.
-    fn set_value(&mut self, r: VarRef, v: Value) -> Result<(), VmError> {
+    fn set_slot(&mut self, r: VarRef, v: Slot) -> Result<(), VmError> {
         let f = self.frames.last().unwrap();
         let (file, script) = (f.file, f.script);
         match r {
             VarRef::Const(_) => Err(VmError::BadVarRef(r)),
             VarRef::Static(i) => {
+                // Retail stores a ScriptType* here. Program statics are the public,
+                // checksummed value representation rather than a VM-frame pointer
+                // graph, so materialise the value. The shipped compiler uses
+                // OP_INIT_COPY for static initialisers; ref parameters are locals.
+                let v = self.deref(&v)?;
                 let s = &mut self.prog.files[file].scripts[script];
                 if s.statics.len() <= i as usize {
                     s.statics.resize(i as usize + 1, None);
@@ -523,7 +604,30 @@ impl<'a, H: Host> Vm<'a, H> {
     fn deref(&self, s: &Slot) -> Result<Value, VmError> {
         match s {
             Slot::Val(v) => Ok(v.clone()),
-            Slot::Ref(r) => self.get_value(*r),
+            Slot::Ref(BoundRef::Const { file, index }) => self.prog.files[*file]
+                .const_pool
+                .get(*index as usize)
+                .cloned()
+                .ok_or(VmError::BadVarRef(VarRef::Const(*index))),
+            Slot::Ref(BoundRef::Static {
+                file,
+                script,
+                index,
+            }) => self.prog.files[*file].scripts[*script]
+                .statics
+                .get(*index as usize)
+                .cloned()
+                .map(|v| v.unwrap_or(Value::Null))
+                .ok_or(VmError::BadVarRef(VarRef::Static(*index))),
+            Slot::Ref(BoundRef::Local { frame, index }) => {
+                let inner = self
+                    .frames
+                    .get(*frame)
+                    .and_then(|f| f.locals.get(*index as usize))
+                    .and_then(Option::as_ref)
+                    .ok_or(VmError::BadVarRef(VarRef::Local(*index)))?;
+                self.deref(inner)
+            }
             Slot::Cell(c) => Ok(c.borrow().clone()),
         }
     }
@@ -545,7 +649,37 @@ impl<'a, H: Host> Vm<'a, H> {
     /// Write through a stack slot, which is how assignment mutates a variable.
     fn store(&mut self, target: &Slot, v: Value) -> Result<(), VmError> {
         match target {
-            Slot::Ref(r) => self.set_value(*r, v),
+            Slot::Ref(BoundRef::Const { index, .. }) => {
+                Err(VmError::BadVarRef(VarRef::Const(*index)))
+            }
+            Slot::Ref(BoundRef::Static {
+                file,
+                script,
+                index,
+            }) => {
+                let slot = self.prog.files[*file].scripts[*script]
+                    .statics
+                    .get_mut(*index as usize)
+                    .ok_or(VmError::BadVarRef(VarRef::Static(*index)))?;
+                *slot = Some(v);
+                Ok(())
+            }
+            Slot::Ref(BoundRef::Local { frame, index }) => {
+                let inner = self
+                    .frames
+                    .get(*frame)
+                    .and_then(|f| f.locals.get(*index as usize))
+                    .and_then(Option::as_ref)
+                    .cloned()
+                    .ok_or(VmError::BadVarRef(VarRef::Local(*index)))?;
+                match inner {
+                    Slot::Val(_) => {
+                        self.frames[*frame].locals[*index as usize] = Some(Slot::Val(v));
+                        Ok(())
+                    }
+                    alias => self.store(&alias, v),
+                }
+            }
             Slot::Cell(c) => {
                 *c.borrow_mut() = v;
                 Ok(())
@@ -575,8 +709,9 @@ impl<'a, H: Host> Vm<'a, H> {
             0x26 => {
                 let r = VarRef::decode(self.fetch_u32()?);
                 // Validate exactly where the engine validates.
-                self.get_value(r)?;
-                self.stack.push(Slot::Ref(r));
+                let bound = self.bind_ref(r)?;
+                self.deref(&Slot::Ref(bound))?;
+                self.stack.push(Slot::Ref(bound));
             }
             // ---- OP_POP
             0x27 => {
@@ -654,17 +789,18 @@ impl<'a, H: Host> Vm<'a, H> {
             // ---- OP_INIT / OP_INIT_COPY: pop, set_value(operand, popped).
             // 0x32 (`OP_INIT_COPY`, handler 0x009e0f62) calls `duplicate()` on the
             // popped value first (`call [eax+0x1c]`); 0x33 (`OP_INIT`, handler
-            // 0x009e0f99) stores the pointer as-is. For aggregates that is the
-            // difference between a copy and an alias.
+            // 0x009e0f99) stores the pointer as-is. The shipped compiler uses this
+            // exact one-byte distinction for parameters: 0x32 for by-value and
+            // 0x33 for `ref`. It therefore matters for scalars as well as aggregates.
             0x32 => {
                 let v = self.pop_value()?.duplicate();
                 let r = VarRef::decode(self.fetch_u32()?);
-                self.set_value(r, v)?;
+                self.set_slot(r, Slot::Val(v))?;
             }
             0x33 => {
-                let v = self.pop_value()?;
+                let v = self.pop()?;
                 let r = VarRef::decode(self.fetch_u32()?);
-                self.set_value(r, v)?;
+                self.set_slot(r, v)?;
             }
             // ---- OP_CAST_BOOL: push is_false ? 0 : 1
             0x35 => {

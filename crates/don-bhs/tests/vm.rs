@@ -46,17 +46,151 @@ fn arithmetic_and_return() {
     assert_eq!(run_once(&mut p), Some(Value::Int(42)));
 }
 
+fn decode_hex(s: &str) -> Vec<u8> {
+    assert_eq!(s.len() % 2, 0);
+    s.as_bytes()
+        .chunks_exact(2)
+        .map(|p| {
+            let d = |b: u8| match b {
+                b'0'..=b'9' => b - b'0',
+                b'a'..=b'f' => b - b'a' + 10,
+                _ => panic!("non-hex fixture byte"),
+            };
+            d(p[0]) << 4 | d(p[1])
+        })
+        .collect()
+}
+
+/// Exact pointer-free output captured from the supported shipped compiler
+/// (`Compiler::compile`, 0x009bf160) on hbox. The two sources are identical except
+/// for `ref`; their bytecode differs at exactly offset 5: OP_INIT (pointer alias)
+/// versus OP_INIT_COPY (duplicate). This is the ownership transition the VM must
+/// preserve, not a hand-selected calling convention.
+fn retail_param_program(by_ref: bool) -> Program {
+    let code_hex = if by_ref {
+        "4700000000330000000026000000002600000020042600000000002726000000003e\
+         470100000026010000203200000000260000000036000000002726000000003e"
+    } else {
+        "4700000000320000000026000000002600000020042600000000002726000000003e\
+         470100000026010000203200000000260000000036000000002726000000003e"
+    };
+    let callee_name = if by_ref {
+        "increment"
+    } else {
+        "increment_copy"
+    };
+    let entry_name = if by_ref { "ref_alias" } else { "value_param" };
+    Program::single(ScriptFile {
+        code: decode_hex(&code_hex.replace(' ', "")),
+        const_pool: vec![Value::Int(1), Value::Int(41)],
+        scripts: vec![
+            Script {
+                name: callee_name.into(),
+                entry: 0,
+                arity: 1,
+                params: vec![don_bhs::ScriptTy::Int.tag()],
+                refs: vec![u8::from(by_ref)],
+                return_type: don_bhs::ScriptTy::Int.tag(),
+                var_names: vec!["value".into()],
+                ..Default::default()
+            },
+            Script {
+                name: entry_name.into(),
+                entry: 34,
+                return_type: don_bhs::ScriptTy::Int.tag(),
+                var_names: vec!["value".into()],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    })
+}
+
 #[test]
-fn ref_parameters_fail_closed_until_aliasing_is_recovered() {
-    let mut p = prog(asm(&[(0x3e, &[])]), Vec::new(), 0);
-    p.files[0].scripts[0].arity = 1;
-    p.files[0].scripts[0].refs = vec![1];
+fn shipped_compiler_ref_prologue_mutates_the_callers_scalar() {
+    // Fixture SHA-256 cf4fb7fb00c03be5cdefa98349465a47a3ec5cda6a891f2700c97d9254fea08f.
+    assert_eq!(
+        include_str!("fixtures/ref_alias.bhs"),
+        concat!(
+            "int scenario increment(ref int value)\n",
+            "{\n",
+            "    value = value + 1;\n",
+            "    return value;\n",
+            "}\n",
+            "\n",
+            "int scenario ref_alias()\n",
+            "{\n",
+            "    int value = 41;\n",
+            "    increment(value);\n",
+            "    return value;\n",
+            "}\n",
+        )
+    );
+    let mut p = retail_param_program(true);
     let mut host = NullHost;
     let mut vm = Vm::new(&mut p, &mut host);
-    assert!(matches!(
-        vm.run_script(0, "tick"),
-        Err(VmError::Unimplemented("ref script parameters"))
-    ));
+    let out = vm.run_script(0, "ref_alias").unwrap();
+    assert_eq!(out.returned, Some(Value::Int(42)));
+    assert!(out.error.is_none());
+
+    // The same measured callee through the external script boundary must write
+    // the ref argument back to the C++/simulation-side owner, which is how the
+    // shipped economic/defensive scripts advance `ref int step`.
+    let mut p = retail_param_program(true);
+    let mut host = NullHost;
+    let mut vm = Vm::new(&mut p, &mut host);
+    let mut args = [Value::Int(9)];
+    let out = vm.run_script_index_mut(0, 0, &mut args).unwrap();
+    assert_eq!(out.returned, Some(Value::Int(10)));
+    assert_eq!(args, [Value::Int(10)]);
+}
+
+#[test]
+fn shipped_compiler_value_prologue_copies_and_the_mutation_gate_bites() {
+    // Fixture SHA-256 e2ed9f9830421c02c8fa3a61f65e2ad309d0cb0a9a00f97bfac2487a7acf69b1.
+    assert_eq!(
+        include_str!("fixtures/value_param.bhs"),
+        concat!(
+            "int scenario increment_copy(int value)\n",
+            "{\n",
+            "    value = value + 1;\n",
+            "    return value;\n",
+            "}\n",
+            "\n",
+            "int scenario value_param()\n",
+            "{\n",
+            "    int value = 41;\n",
+            "    increment_copy(value);\n",
+            "    return value;\n",
+            "}\n",
+        )
+    );
+    let mut by_value = retail_param_program(false);
+    let mut host = NullHost;
+    let out = Vm::new(&mut by_value, &mut host)
+        .run_script(0, "value_param")
+        .unwrap();
+    assert_eq!(out.returned, Some(Value::Int(41)));
+
+    let mut by_value = retail_param_program(false);
+    let mut host = NullHost;
+    let mut vm = Vm::new(&mut by_value, &mut host);
+    let mut args = [Value::Int(9)];
+    let out = vm.run_script_index_mut(0, 0, &mut args).unwrap();
+    assert_eq!(out.returned, Some(Value::Int(10)));
+    assert_eq!(args, [Value::Int(9)], "by-value must not write back");
+
+    // One-byte mutant: replacing the captured ref OP_INIT with OP_INIT_COPY must
+    // stop the callee's write from reaching the caller. If alias propagation is
+    // vacuous, this assertion cannot distinguish the implementations.
+    let mut mutant = retail_param_program(true);
+    assert_eq!(mutant.files[0].code[5], 0x33);
+    mutant.files[0].code[5] = 0x32;
+    let mut host = NullHost;
+    let out = Vm::new(&mut mutant, &mut host)
+        .run_script(0, "ref_alias")
+        .unwrap();
+    assert_eq!(out.returned, Some(Value::Int(41)));
 }
 
 /// The defining property of a per-frame script: `Game::do_frame` calls it once per

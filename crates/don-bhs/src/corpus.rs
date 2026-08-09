@@ -72,6 +72,10 @@ pub struct Census {
     /// Files scanned.
     pub files: Vec<PathBuf>,
     pub lines: u64,
+    /// `ref` parameter tokens in shipped declarations. `ref` is only grammatical
+    /// in a parameter list, so the lexical count over comment/string-stripped
+    /// source is an exact reachability count rather than a call-shape estimate.
+    pub ref_parameters: u64,
     /// Registered builtins, by call count descending then index ascending.
     pub builtins: Vec<Row>,
     /// Names the corpus defines itself (script functions), excluded from the counts.
@@ -188,6 +192,26 @@ fn is_ident(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
+fn ident_count(src: &str, needle: &str) -> u64 {
+    let b: Vec<char> = src.chars().collect();
+    let mut count = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if is_ident_start(b[i]) && (i == 0 || !is_ident(b[i - 1])) {
+            let start = i;
+            while i < b.len() && is_ident(b[i]) {
+                i += 1;
+            }
+            if b[start..i].iter().copied().eq(needle.chars()) {
+                count += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
 /// Every `identifier (` in `src`.
 fn call_sites(src: &str) -> Vec<String> {
     let b: Vec<char> = src.chars().collect();
@@ -272,6 +296,7 @@ pub fn scan_dir(root: &Path) -> std::io::Result<Census> {
         let src = String::from_utf8_lossy(&raw).into_owned();
         c.lines += src.lines().count() as u64;
         let s = strip(&src);
+        c.ref_parameters += ident_count(&s, "ref");
         for d in definitions(&s) {
             c.defined.insert(d.to_ascii_lowercase());
         }

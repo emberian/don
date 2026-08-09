@@ -34,6 +34,22 @@ fn the_corpus_scans_and_the_headline_numbers_hold() {
         c.distinct_called()
     );
     assert!(c.total_calls() >= 39_000, "calls {}", c.total_calls());
+    assert_eq!(
+        c.ref_parameters, 75,
+        "the shipped ref surface changed; re-audit the runtime alias gate"
+    );
+}
+
+#[test]
+fn shipped_ai_entries_require_ref_writeback() {
+    let root = corpus_or_skip!();
+    for rel in ["ai/scripts/economic.bhs", "ai/scripts/defensive.bhs"] {
+        let src = std::fs::read_to_string(root.join(rel)).unwrap();
+        assert!(
+            src.contains("ref int step"),
+            "{rel} no longer carries the production-stage ref parameter"
+        );
+    }
 }
 
 #[test]

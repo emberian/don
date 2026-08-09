@@ -1,0 +1,12 @@
+int scenario increment_copy(int value)
+{
+    value = value + 1;
+    return value;
+}
+
+int scenario value_param()
+{
+    int value = 41;
+    increment_copy(value);
+    return value;
+}
