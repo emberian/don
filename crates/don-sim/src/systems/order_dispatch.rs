@@ -174,6 +174,11 @@ use crate::systems::patrol::{
     GroundPatrolAction, GroupMoveRequest, GroupPatrolOrder, StrafeOrder,
 };
 use crate::systems::repair_order;
+use crate::systems::special_anim_executor::{
+    self, ActorFacts as SpecialAnimActorFacts, ObjectIdentity as SpecialAnimObjectIdentity,
+    SpecialAnimBranch, SpecialAnimExecutorPlan, SpecialAnimExecutorReceipt,
+    SpecialAnimExecutorRequest, SpecialAnimHostSnapshot, SpecialAnimKind, SpecialAnimState,
+};
 use crate::systems::targeted_order_plans::{
     self, AirAttackGroundFacts, AirAttackGroundOrderState, AttackGroundFacts,
     AttackGroundOrderState, ExploreToFacts, HostFact, OrderEffect,
@@ -636,6 +641,16 @@ impl OrderRec {
             target_who: payload.whom,
             target_uid: payload.uid,
             follow: Some(payload),
+            ..OrderRec::default()
+        }
+    }
+
+    /// Construct one complete `SpecialAnimOrder` node without narrowing its nine walked words.
+    pub fn special_anim(state: SpecialAnimOrderState) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::SpecialAnim,
+            flags: ORDER_GROUP,
+            special_anim: Some(state),
             ..OrderRec::default()
         }
     }
@@ -1786,6 +1801,45 @@ pub struct RepairCommitReceipt {
     pub committed_effects: usize,
 }
 
+/// Why SPECIAL_ANIM could not acquire or publish one coherent actor/order/world transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialAnimHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// Attestation returned only after the host atomically publishes the complete SPECIAL_ANIM plan.
+///
+/// The host must revalidate the `SpecialAnimExecutorReceipt::snapshot` immediately before the
+/// commit. A failed commit authorizes no actor/order/queue/path/Guy/terrain/external mutation and
+/// consumes no RNG. The dispatcher checks the entire preflight image and exact effect count; a
+/// partial count is a broken host contract rather than a successful animation frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecialAnimCommitReceipt {
+    pub snapshot: SpecialAnimHostSnapshot,
+    pub request: SpecialAnimExecutorRequest,
+    pub plan: SpecialAnimExecutorPlan,
+    pub committed_steps: usize,
+}
+
+impl SpecialAnimCommitReceipt {
+    pub fn applied(preflight: &SpecialAnimExecutorReceipt) -> Self {
+        Self {
+            snapshot: preflight.snapshot,
+            request: preflight.request,
+            plan: preflight.plan.clone(),
+            committed_steps: preflight.plan.steps.len(),
+        }
+    }
+
+    pub fn validates(&self, preflight: &SpecialAnimExecutorReceipt) -> bool {
+        self.snapshot == preflight.snapshot
+            && self.request == preflight.request
+            && self.plan == preflight.plan
+            && self.committed_steps == preflight.plan.steps.len()
+    }
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -2033,6 +2087,31 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::follow_set_anim requires an applied FOLLOW receipt")
     }
 
+    /// Acquire every conditional object/type/terrain/Guy fact, the canonical RNG observations,
+    /// and the capability to publish every step reachable from this SPECIAL_ANIM snapshot.
+    /// The default leaves the actor byte-for-byte unchanged.
+    fn special_anim_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<SpecialAnimExecutorReceipt, SpecialAnimHostError> {
+        Err(SpecialAnimHostError::Unavailable)
+    }
+
+    /// Revalidate the preflight snapshot and atomically publish the complete ordered plan.
+    ///
+    /// This callback owns local-looking writes too: payload `frames/started`, queue retirement,
+    /// actor angle/location, the same-tick recursive work call, and all external containment,
+    /// death, terrain, Guy, and RNG effects. An error must publish none of them.
+    fn special_anim_commit(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _preflight: &SpecialAnimExecutorReceipt,
+    ) -> Result<SpecialAnimCommitReceipt, SpecialAnimHostError> {
+        panic!("WorkWorld::special_anim_commit requires a successful SPECIAL_ANIM preflight")
+    }
+
     /// Acquire all branch facts and the capability to commit every effect which REPAIR can
     /// reach. This callback is read-only with respect to simulation state. The default makes
     /// a generic movement host fail closed with no animation, queue, target, or economy write.
@@ -2259,9 +2338,11 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
     ArmStatus::Implemented,     // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
     ArmStatus::Implemented,     // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
-    ArmStatus::Unimplemented,   // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
-    ArmStatus::Unimplemented,   // 26 GARRISON        Unit::do_garrison 0x005E6B80
-    ArmStatus::Implemented,     // 27 THINK           Unit::do_think_order 0x005E5BF0
+    // StateWired behind an atomic WorkWorld transaction; closure stays red until Sim::do_frame
+    // reaches this dispatcher with a production host.
+    ArmStatus::Unimplemented, // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
+    ArmStatus::Unimplemented, // 26 GARRISON        Unit::do_garrison 0x005E6B80
+    ArmStatus::Implemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0
 ];
 
 /// Per-arm dispatch counts, so coverage is measured rather than estimated.
@@ -4459,6 +4540,118 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
     }
 }
 
+fn special_anim_state(state: SpecialAnimOrderState) -> SpecialAnimState {
+    SpecialAnimState {
+        special_type: match state.special_type {
+            crate::order::SpecialAnimType::Enter => SpecialAnimKind::Enter,
+            crate::order::SpecialAnimType::Exit => SpecialAnimKind::Exit,
+            crate::order::SpecialAnimType::Unit => SpecialAnimKind::Unit,
+        },
+        started: state.started,
+        frames: state.frames,
+        data1: state.data1,
+        data2: state.data2,
+        data3: state.data3,
+        data4: state.data4,
+        ox: state.ox,
+        whom: state.whom,
+    }
+}
+
+/// State-wired SPECIAL_ANIM adapter.
+///
+/// The pure module fixes the exact branch/effect sequence. This boundary accepts it only through
+/// a snapshot-bound preflight followed by one atomic host commit. It deliberately does not make
+/// order 25 closure-complete: the production `Sim::do_frame` path still bypasses this dispatcher.
+pub fn do_special_anim<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order_before) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order_before.kind != OrderIndex::SpecialAnim
+        || !order_before.has(ORDER_GROUP)
+        || order_before.follow.is_some()
+        || order_before.form_order.is_some()
+        || !matches!(&order_before.targeted_payload, TargetedOrderPayload::None)
+        || !matches!(&order_before.patrol_payload, PatrolPayload::None)
+    {
+        return ArmResult::MalformedOrder;
+    }
+    let Some(walked) = order_before.special_anim else {
+        return ArmResult::MalformedOrder;
+    };
+    let order = special_anim_state(walked);
+    let actor_identity = SpecialAnimObjectIdentity {
+        o: i32::from(actor.o),
+        who: i32::from(actor.who),
+        uid: actor.uid,
+    };
+
+    // The shipped SPECIAL_UNIT arm is a literal no-op and reaches no host surface.
+    if order.special_type == SpecialAnimKind::Unit {
+        let request = SpecialAnimExecutorRequest {
+            order,
+            actor: SpecialAnimActorFacts {
+                identity: actor_identity,
+            },
+            enter_target: None,
+            exit_target: None,
+            random_draws: None,
+            helicopter_samples: None,
+            terrain_z: None,
+        };
+        return match special_anim_executor::plan_special_anim_executor(request) {
+            Ok(plan) if plan.branch == SpecialAnimBranch::UnitNoOp && plan.steps.is_empty() => {
+                ArmResult::Working
+            }
+            _ => ArmResult::MalformedOrder,
+        };
+    }
+
+    let preflight = match world.special_anim_preflight(&*actor, &order_before) {
+        Ok(receipt) => receipt,
+        Err(SpecialAnimHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(SpecialAnimHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    let recomputed = special_anim_executor::preflight_special_anim_executor(
+        preflight.snapshot,
+        preflight.request,
+    );
+    if preflight.request.actor.identity != actor_identity
+        || preflight.request.order != order
+        || !matches!(recomputed, Ok(ref receipt) if receipt == &preflight)
+    {
+        return ArmResult::MalformedOrder;
+    }
+
+    // `special_anim_commit` owns both local and external writes. Retain a local before-image so
+    // a malformed receipt cannot strand the compact actor half-mutated; the host contract makes
+    // the same guarantee for all external surfaces.
+    let before = actor.clone();
+    let commit = match world.special_anim_commit(actor, &order_before, &preflight) {
+        Ok(receipt) => receipt,
+        Err(SpecialAnimHostError::Unavailable) => {
+            *actor = before;
+            return ArmResult::HostUnavailable;
+        }
+        Err(SpecialAnimHostError::InvalidState(_)) => {
+            *actor = before;
+            return ArmResult::MalformedOrder;
+        }
+    };
+    if !commit.validates(&preflight) {
+        *actor = before;
+        return ArmResult::MalformedOrder;
+    }
+
+    debug_assert_ne!(preflight.plan.branch, SpecialAnimBranch::UnitNoOp);
+    cov.completed += 1;
+    ArmResult::Retired(KillReason::Completed)
+}
+
 /// `Unit::do_job(enum OrderIndex, class UnitOrder*)` `0x00617A10`, the 28-entry jump table at
 /// `0x00617B94`. [measured — the `switch` has 27 case labels; `PATROL` (5) has none.]
 ///
@@ -4498,6 +4691,7 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::GroupPatrol => do_group_patrol(u, w),
         OrderIndex::AttackGround => do_attack_ground(u, w, cov),
         OrderIndex::AirAttackGround => do_air_attack_ground(u, w, cov),
+        OrderIndex::SpecialAnim => do_special_anim(u, w, cov),
         // Arm 5 has no case label. Doing nothing here is faithful, not missing.
         OrderIndex::Patrol => ArmResult::Empty,
         _ => {

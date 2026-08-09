@@ -1,12 +1,13 @@
 # SPECIAL_ANIM order executor reconstruction
 
-Status: **complete source proof of the concrete executor CFG; not live-integrated**.
+Status: **StateWired behind an atomic dispatcher receipt; production Sim frame bridge red**.
 
 This note bounds `SpecialAnimOrder` installation and every reachable branch of
-`Unit::do_spec_anim` in the shipped Rise of Nations binary. The source-only planner and its
-mutation-sensitive tests do not change the strict order ledger. The strict row must remain red
-until the typed receipt is connected to the production frame path and all host tails below are
-implemented atomically.
+`Unit::do_spec_anim` in the shipped Rise of Nations binary. The source planner is now registered
+and consumed by `systems::order_dispatch`: ENTER/EXIT require one snapshot-bound preflight and
+one whole-plan commit receipt, while SPECIAL_UNIT is the shipped host-free no-op. This is
+StateWired, not closure-complete. The strict row remains red until that adapter is connected to
+the production frame path and the real host publishes every reached effect atomically.
 
 ## Ground truth
 
@@ -126,21 +127,38 @@ The explicit unresolved host adapters are:
 - terrain and primary-Guy mutation;
 - `go_inside` and `die`;
 - queue retirement plus same-tick `Unit::work`;
-- dispatcher and production live-tick publication.
+- production Sim host and live-tick publication.
 
-## Frozen shared integration map
+## StateWired dispatcher boundary
 
-The proof files are exclusive and source-only. A later shared integration must:
+`OrderRec::special_anim` retains the existing nine-word `SpecialAnimOrderState`. The dispatcher
+rejects a missing payload, missing `ORDER_GROUP`, or any foreign concrete payload before asking
+the host for facts. For ENTER/EXIT, `WorkWorld::special_anim_preflight` must return the existing
+actor/target/version/epoch-bound proof receipt. The dispatcher recomputes that receipt, binds its
+actor identity and complete order image to the live node, and then calls
+`WorkWorld::special_anim_commit` exactly once. That callback owns the entire step slice, including
+local-looking payload and queue writes, same-tick recursive work, external object/Guy/terrain
+mutations, and any canonical RNG consumption. The returned `SpecialAnimCommitReceipt` must match
+the full preflight image and exact effect count. Unavailable or malformed receipts restore the
+compact actor before-image; the host contract permits no external partial publication.
 
-1. register `systems::special_anim_executor` in `systems/mod.rs`;
-2. add a typed SPECIAL_ANIM preflight/commit arm in `systems/order_dispatch.rs`, validate the
-   existing complete `SpecialAnimOrderState`, publish the receipt atomically, flip `ARMS[25]`,
-   and update the dynamic `(implemented, partial, unimplemented)` count from `(21,1,6)` to
-   `(22,1,5)`;
-3. bridge that arm into the actual `Sim::do_frame` / `World::unit_work` path; the core Sim/World
+`tests/special_anim_dispatch_statewired.rs` pins successful whole-plan publication, unavailable
+preflight, malformed commit attestation, and the host-free SPECIAL_UNIT behavior. Its real
+`Sim::do_frame` test also pins the remaining blocker: step 14 visits the actor, but `tick.rs` still
+uses its compact five-arm switch rather than `systems::order_dispatch::work`, so the order stays
+unchanged and both authoritative status tables remain red.
+
+## Remaining shared integration map
+
+The remaining convergence work must:
+
+1. supply the production object/type/Guy/terrain/RNG/containment/death host behind the typed
+   preflight and commit boundary;
+2. bridge that arm into the actual `Sim::do_frame` / `World::unit_work` path; the core Sim/World
    production frame path does not currently reach `order_dispatch::work`, so a dispatcher-only
    flip is a silent no-op there (the separate `don-ai` arena runtime already calls it);
-4. only after the live frame test passes, flip `order.rs::EXECUTORS[25]` and regenerate
+3. only after a positive live frame test passes, flip `order_dispatch::ARMS[25]` and
+   `order.rs::EXECUTORS[25]`, then regenerate
    `schema/simulation-closure.json` with the normal closure generator.
 
 No payload, save/load, or player-command format change belongs to this lane. The full nine-word
@@ -166,11 +184,18 @@ tools/swarm-cargo-remote submit persvati special-anim-tests \
   --jobs 12 -- test -p don-sim --tests
 ```
 
-The source proof earns **zero** strict closure rows. Full host adapters, atomic live-tick wiring,
-and evidence can earn exactly **orders +1** (`21/28` to `22/28`, assuming no concurrent ledger
-movement). It earns no command/group-action or opcode row.
+The source proof and StateWired adapter earn **zero** strict closure rows. Full production host
+adapters, atomic live-tick wiring, and evidence can earn exactly **orders +1** (`21/28` to
+`22/28`, assuming no concurrent ledger movement). They earn no command/group-action or opcode
+row.
 
 The frozen proof passed both independent convergence profiles on 2026-08-09: hbox
 `special-anim-executor-20260809T215933Z-42540-32075-9f11e3ea7d82` and persvati release
 `special-anim-executor-release-20260809T215933Z-42546-23998-9f11e3ea7d82`, each with 16/16
 focused tests and exit 0. Evidence-only VA constants produced warnings; no strict row was promoted.
+
+The subsequent StateWired dispatcher boundary passed 4/4 tests in the same two independent
+profiles as the BHS factory: hbox
+`bhs-factory-special-state-20260809T222235Z-65491-19369-3437590ed646` and persvati release
+`bhs-factory-special-state-release-20260809T222236Z-65494-7499-3437590ed646`. The live-frame
+negative pin confirms why both strict order inventories remain red.

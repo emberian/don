@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Source-only reconstruction of `SpecialAnimOrder` installation and execution.
 //!
-//! This module is deliberately not registered in `systems/mod.rs`. It records a fail-closed,
-//! mutation-ordered transaction whose remaining host calls are listed in
-//! `SPECIAL_ANIM_OPEN_TAILS`. Shared dispatcher and live-tick wiring is deferred to the
-//! integration map in `docs/assembly/special-anim-executor.md`.
+//! The module is registered and its fail-closed, mutation-ordered transaction is consumed by
+//! the typed `systems::order_dispatch` host seam. The production `Sim::do_frame` bridge and
+//! concrete world effects remain listed in `SPECIAL_ANIM_OPEN_TAILS`; see the integration map
+//! in `docs/assembly/special-anim-executor.md`.
 
 pub const SPECIAL_ANIM_ORDER_INDEX: i32 = 25;
 pub const SPECIAL_ANIM_ORDER_SIZE: usize = 44;

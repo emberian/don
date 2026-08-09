@@ -153,6 +153,9 @@ pub mod roads;
 /// authoritative seed/frame/RNG, terrain, unit/object/order/path, and leader-economy state.
 /// It is explicitly not a partial `.svx` writer: unsupported live subsystems are refused.
 pub mod save_load;
+/// Source-exact SPECIAL_ANIM planner plus the typed atomic receipt consumed by the live order
+/// dispatcher. The production [`crate::tick::Sim`] frame bridge remains an explicit red seam.
+pub mod special_anim_executor;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
