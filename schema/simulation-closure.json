@@ -4,7 +4,7 @@
   "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
   "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
   "ready": false,
-  "red": 135,
+  "red": 127,
   "summary": {
     "tick": {
       "total": 29,
@@ -13,18 +13,18 @@
     },
     "orders": {
       "total": 28,
-      "complete": 17,
-      "red": 11
+      "complete": 21,
+      "red": 7
     },
     "group_actions": {
       "total": 42,
-      "complete": 7,
-      "red": 35
+      "complete": 9,
+      "red": 33
     },
     "opcodes": {
       "total": 82,
-      "complete": 43,
-      "red": 39
+      "complete": 45,
+      "red": 37
     },
     "checksums": {
       "total": 15,
@@ -411,9 +411,9 @@
         "name": "FOLLOW",
         "retail_va": "0x005E65D0",
         "symbol": "Unit::do_follow",
-        "status": "unimplemented",
-        "note": "calls through to do_move",
-        "complete": false
+        "status": "implemented",
+        "note": "exact containment/fallback transaction, three-search close and same-tick do_move",
+        "complete": true
       },
       {
         "id": 12,
@@ -429,9 +429,9 @@
         "name": "REPAIR",
         "retail_va": "0x005EE420",
         "symbol": "Unit::do_repair",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact planner with one mandatory atomic WorkWorld snapshot/commit receipt",
+        "complete": true
       },
       {
         "id": 14,
@@ -474,9 +474,9 @@
         "name": "CHANGE_FORM",
         "retail_va": "0x005E8670",
         "symbol": "Unit::do_form_change",
-        "status": "unimplemented",
-        "note": "",
-        "complete": false
+        "status": "implemented",
+        "note": "exact atomic form/angle/retirement/idle transaction",
+        "complete": true
       },
       {
         "id": 19,
@@ -555,9 +555,9 @@
         "name": "THINK",
         "retail_va": "0x005E5BF0",
         "symbol": "Unit::do_think_order",
-        "status": "unimplemented",
-        "note": "unit AI entry",
-        "complete": false
+        "status": "implemented",
+        "note": "exact atomic retirement and four-type think_peasant tail",
+        "complete": true
       }
     ],
     "group_actions": [
@@ -670,8 +670,8 @@
         "delegates": [
           "halt"
         ],
-        "status": "orders_partial",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "stop_spell",
@@ -680,8 +680,8 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
-        "complete": false
+        "status": "complete",
+        "complete": true
       },
       {
         "name": "alarm_peasant",
@@ -726,7 +726,7 @@
         "delegates": [
           "flight"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -780,7 +780,7 @@
         "call_sites": 1,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -829,7 +829,7 @@
         "call_sites": 2,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -1013,7 +1013,7 @@
           "alarm_peasant",
           "garrison"
         ],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -1056,7 +1056,7 @@
         "call_sites": 3,
         "installs": [],
         "delegates": [],
-        "status": "unimplemented",
+        "status": "state_wired",
         "complete": false
       },
       {
@@ -1268,7 +1268,7 @@
         "action": "transport",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1328,7 +1328,7 @@
         "action": "city_gather",
         "wire_bytes": "9",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1376,7 +1376,7 @@
         "action": "gather_point",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1424,7 +1424,7 @@
         "action": "eject_all",
         "wire_bytes": "17",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1436,7 +1436,7 @@
         "action": "alarm",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "unimplemented",
+        "bridge_status": "state_wired",
         "complete": false
       },
       {
@@ -1460,8 +1460,8 @@
         "action": "stop_spell",
         "wire_bytes": "1",
         "class": "sim",
-        "bridge_status": "unimplemented",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 30,
@@ -1472,8 +1472,8 @@
         "action": "follow",
         "wire_bytes": "13",
         "class": "sim",
-        "bridge_status": "orders_partial",
-        "complete": false
+        "bridge_status": "complete",
+        "complete": true
       },
       {
         "op": 31,
