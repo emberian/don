@@ -610,9 +610,9 @@
       <div class="keys">
         This page now owns the repository's authoritative <code>don_sim::Sim</code> and
         projects its unit columns, terrain, frame, checksum digest, and RNG state into the
-        existing renderer ABI. Move, attack, halt, deterministic core save, and atomic core
-        load use that same state.<br><br>
-        Build, train, research, gather-resource composition, live rule setters, fog, market,
+        existing renderer ABI. Move, attack, halt, City unit training/cancellation/completion,
+        deterministic core save, and atomic core load use that same state.<br><br>
+        Build, research, gather-resource composition, live rule setters, fog, market,
         diplomacy, AI, and victory remain unavailable in this adapter. The central save format
         also refuses post-step live leader views until that owner joins its receipt-checked
         transaction. These boundaries are disabled or reported as refusals;

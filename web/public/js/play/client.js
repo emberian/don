@@ -2390,8 +2390,8 @@ function renderMenus() {
     const producerNames = [...new Set(ctx.producers.map((p) => typeName(p.typeId)))];
     $('palette-context').textContent = ctx.producers.length
       ? `${ctx.producers.length} completed producer(s): ${producerNames.join(', ')} · ` +
-        'exact WHERE edges shown as evidence; authoritative training is unavailable'
-      : 'no authoritative core producer is selected; training is unavailable';
+        'exact WHERE edges queue through the authoritative Sim production runtime'
+      : 'select a completed producer to train through the authoritative Sim queue';
     const seen = new Set();
     for (const b of ctx.producers) {
       for (const t of m.products(b.typeId)) {
@@ -2465,7 +2465,7 @@ function missingCost(cost, stock) {
 function paletteGate(it, ctx = selectedPaletteContext()) {
   if (it.kind === 'unavailable') return { enabled: false, reasons: [it.reason], detail: '' };
   const reasons = [];
-  if (['build', 'train', 'research'].includes(it.kind)) {
+  if (['build', 'research'].includes(it.kind)) {
     reasons.push(`${it.kind} is unavailable in the authoritative don_sim browser adapter`);
   }
   if (it.kind === 'build') {
@@ -2476,7 +2476,10 @@ function paletteGate(it, ctx = selectedPaletteContext()) {
     if (!producers.length) reasons.push(`select ${typeName(it.producerType)}`);
     else if (producers.every((p) => p.queueN >= QUEUE_CAPACITY)) reasons.push('producer queue full');
     if (it.age > ctx.me.age) reasons.push(`requires age ${it.age}`);
-    if (ctx.me.pop + Math.max(0, it.pop) > ctx.me.popCap) reasons.push('population capped');
+    if (ctx.me.popCap > 0 && ctx.me.pop + Math.max(0, it.pop) > ctx.me.popCap) {
+      reasons.push('population capped');
+    }
+    if (!state.mod.supports('train')) reasons.push('authoritative training capability unavailable');
   } else if (it.kind === 'research') {
     if (ctx.me.research > 0) reasons.push('age research already active');
     if (state.paletteNotice.includes('research packet submitted') && state.mod.transport().pending > 0) {
@@ -2633,7 +2636,7 @@ function renderReadinessStatic() {
   const localSlug = document.createElement('code');
   localSlug.textContent = 'web-core-adapter-incomplete';
   local.append(localSlug, document.createTextNode(
-    ' — the browser now owns don_sim::Sim, but build/train/research and live step-8 save coverage remain fail-closed'));
+    ' — the browser now owns don_sim::Sim and its live unit-production queue, but build/research and live step-8 save coverage remain fail-closed'));
   list.appendChild(local);
   for (const blocker of registry.blockers) {
     const li = document.createElement('li');
@@ -2787,8 +2790,14 @@ function renderActionDock() {
   }
   const train = $('cmd-train');
   if (train) {
-    train.disabled = true;
-    train.title = 'Train unavailable in the authoritative don_sim adapter';
+    const producers = selectedPaletteContext().producers;
+    const supported = state.mod.supports('train');
+    train.disabled = !supported || producers.length === 0;
+    train.title = supported
+      ? (producers.length
+        ? 'Open authoritative training actions for the selected producer'
+        : 'Select a completed producer to train')
+      : 'Train unavailable in the authoritative don_sim adapter';
   }
   const ds = $('dock-state');
   if (ds) ds.innerHTML = selected ? `<b>${selected}</b><br>selected` : 'no<br>selection';

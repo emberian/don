@@ -6,8 +6,8 @@
 //
 //   1. reads back pixels the *renderer itself* owns (`window.don.snapshot()`), and counts
 //      non-black pixels and distinct colours;
-//   2. drives selection and MoveTo through real input, proves unsupported economy actions
-//      fail closed, and round-trips authoritative core save bytes without shadow state;
+//   2. drives selection, MoveTo, and City training through real input, proves unsupported
+//      economy actions fail closed, and round-trips core save bytes without shadow state;
 //   3. measures frames per second over a fixed window at a stated unit count, and reports
 //      the browser, backend and viewport it measured on.
 //
@@ -159,11 +159,14 @@ try {
     const initialCatalogDisabled = [...document.querySelectorAll('#palette button')]
       .every(button => button.disabled);
     const m = window.don.state.mod, views = m.views();
-    let mobile = -1;
+    let mobile = -1, city = -1;
     for (let row = 0; row < m.live; row++) {
       const tag = views.tag[row];
       if ((tag & 0x80000000) && (tag & 0xf) === 0 && !((tag >>> 29) & 1)) {
-        mobile = m.idAtRow(row); break;
+        if (mobile < 0) mobile = m.idAtRow(row);
+      } else if ((tag & 0x80000000) && (tag & 0xf) === 0 && ((tag >>> 29) & 1)) {
+        const candidate = m.idAtRow(row), info = m.info(candidate);
+        if (info?.typeId === 414 && info.buildProgress < 0) city = candidate;
       }
     }
     window.don.select([mobile]);
@@ -175,8 +178,12 @@ try {
     filter.dispatchEvent(new Event('input', { bubbles: true }));
     const futureBuildDisabled = [...document.querySelectorAll('#palette button')]
       .some(button => button.disabled && button.querySelector('.why')?.textContent.includes('requires age'));
+    window.don.select([city]);
     window.don.key('KeyT', { shiftKey: true });
     const keyboardTrain = document.getElementById('tab-train').classList.contains('sel');
+    const trainHasEnabledUnit = !!document.querySelector('#palette [data-kind="train"]:not(:disabled)');
+    const trainDockEnabled = !document.getElementById('cmd-train').disabled;
+    const trainContext = document.getElementById('palette-context').textContent;
     window.don.key('KeyR', { shiftKey: true });
     const keyboardResearch = document.getElementById('tab-research').classList.contains('sel');
     const researchHasEnabledAge = !!document.querySelector('#palette [data-kind="research"]:not(:disabled)');
@@ -198,7 +205,8 @@ try {
     replaySpeed.dispatchEvent(new Event('change', { bubbles: true }));
     return JSON.stringify({
       initialCatalog, initialCatalogDisabled, filteredCatalog, buildButtonEnabled,
-      futureBuildDisabled, keyboardTrain, keyboardResearch, researchHasEnabledAge,
+      futureBuildDisabled, keyboardTrain, trainHasEnabledUnit, trainDockEnabled, trainContext,
+      keyboardResearch, researchHasEnabledAge,
       unavailableResearchDisabled, orderTabs: document.querySelectorAll('.tabs .tab').length,
       pauseLabel,
       integrationLabel: document.querySelector('.status-note')?.textContent ?? '',
@@ -277,6 +285,8 @@ try {
       !out.ui.buildButtonEnabled],
     ['known future-age prerequisites disable building actions', out.ui.futureBuildDisabled],
     ['keyboard shortcuts open train and research modes', out.ui.keyboardTrain && out.ui.keyboardResearch],
+    ['the opening City exposes an enabled authoritative train action and touch dock affordance',
+      out.ui.trainHasEnabledUnit && out.ui.trainDockEnabled && out.ui.trainContext.includes('production runtime')],
     ['research data remains inspectable while every unavailable action is disabled',
       !out.ui.researchHasEnabledAge && out.ui.unavailableResearchDisabled && out.ui.orderTabs === 3],
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
@@ -654,8 +664,8 @@ try {
     ['new game replaced the Wasm world', out.session.restarted && out.session.frameAfterRestart === 0],
     ['the selected seed reached session state', out.session.seedAfterRestart === 0x1234abcd],
     ['restart retains the packed data tables', out.session.packsAfterRestart.every(Boolean)],
-    ['restart exposes the core ledger without advancing',
-      JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([0, 0, 0, 0, 0, 0])],
+    ['restart exposes packed starting goods in the core ledger without advancing',
+      JSON.stringify(out.session.stockAfterRestart) === JSON.stringify([200, 200, 100, 100, 100, 100])],
     ['unsupported setup rules are explicit and do not fabricate a core population cap',
       out.session.configured.income === 'unavailable' && out.session.configured.population === 'unavailable' &&
       out.session.popCapAfterRuleTick === 0],
@@ -1037,8 +1047,8 @@ try {
   }
 
   // ---- 2. authoritative-core action boundary -------------------------------------------
-  // Move remains playable; gather/build/train/research must stay disabled until their
-  // exact state is owned by don_sim rather than a browser-only GameWorld.
+  // Move and City training are playable through Sim. Gather/build/research stay disabled
+  // until their exact state is owned by don_sim rather than a browser-only GameWorld.
   const script = `(async () => {
     const s = window.don.state, m = s.mod;
     const R = { steps: [] };
@@ -1085,7 +1095,7 @@ try {
     note('stockBefore', before); note('stockAfter', after);
     note('workers', m.player(0).workers);
 
-    // place a Barracks (427) on the first FULLY_CLEAR anchor near the base
+    // Building placement remains catalog evidence only.
     window.don.select(ids.slice(0, 3));
     document.getElementById('tab-build').click();
     const paletteFilter = document.getElementById('palette-filter');
@@ -1097,23 +1107,6 @@ try {
     note('buildPaletteArmed', s.buildType === 427);
     paletteFilter.value = '';
     paletteFilter.dispatchEvent(new Event('input', { bubbles: true }));
-    let placed = null;
-    search:
-    for (let r = 3; r < 22; r++) {
-      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-        const tx = stx + dx, ty = sty + dy;
-        if (m.placementGrade(0, 427, tx, ty) === 4) {
-          const b = s.play.buildings['427'];
-          window.don.order.build([
-            (tx + (b.xSize >> 1)) * m.subtile,
-            (ty + (b.ySize >> 1)) * m.subtile,
-          ]);
-          placed = [tx, ty]; break search;
-        }
-      }
-    }
-    note('barracksAt', placed);
-    for (let i = 0; i < 2500; i++) m.step(1);
     let barracks = -1;
     for (let i = 0; i < m.live; i++) {
       const id = m.idAtRow(i);
@@ -1122,19 +1115,32 @@ try {
     }
     note('barracksBuilt', barracks >= 0);
 
-    // train from it — the menu is the WHERE join, so ask the join what it can make
-    let trained = 0;
-    if (barracks >= 0) {
-      window.don.select([barracks]);
-      const prods = m.products(427);
-      note('barracksProducts', prods.length);
+    // The opening Small City is a concrete Sim Build row. Queue two packed WHERE products,
+    // cancel/refund the last, and let the remaining entry complete in live production.
+    let city = -1;
+    for (let i = 0; i < m.live; i++) {
+      const id = m.idAtRow(i);
+      const inf = id >= 0 ? m.info(id) : null;
+      if (inf && inf.owner === 0 && inf.typeId === 414 && inf.buildProgress < 0) {
+        city = id; break;
+      }
+    }
+    note('cityFound', city >= 0);
+    let trained = 0, trainedType = -1, trainCost = null;
+    let stockTrainBefore = null, stockAfterTwo = null, stockAfterCancel = null, stockAfterTrain = null;
+    let queueAfterTwo = -1, queueAfterCancel = -1, queueAfterTrain = -1;
+    if (city >= 0) {
+      window.don.select([city]);
+      const prods = m.products(414);
+      note('cityProducts', prods.slice());
       document.getElementById('tab-train').click();
       const trainAction = document.querySelector('#palette [data-kind="train"]:not(:disabled)');
       const futureTrainDisabled = [...document.querySelectorAll('#palette [data-kind="train"]:disabled')]
         .some(button => button.querySelector('.why')?.textContent.includes('requires age'));
       note('trainPaletteAction', !!trainAction);
       note('futureTrainDisabled', futureTrainDisabled);
-      const trainedType = Number(trainAction?.dataset.typeId ?? -1);
+      trainedType = Number(trainAction?.dataset.typeId ?? -1);
+      trainCost = s.play.units[String(trainedType)]?.cost ?? null;
       const countType = () => {
         let n = 0;
         for (let i = 0; i < m.live; i++) {
@@ -1144,17 +1150,27 @@ try {
         return n;
       };
       const trainedBefore = countType();
+      stockTrainBefore = m.player(0).stock.slice();
       trainAction?.click();
       trainAction?.click();
       m.step(1);
-      await new Promise(resolve => setTimeout(resolve, 160));
-      const queued = m.info(barracks);
-      note('queueAfterPalette', queued ? queued.queueN : -1);
+      queueAfterTwo = m.info(city)?.queueN ?? -1;
+      stockAfterTwo = m.player(0).stock.slice();
+      m.unqueue(0, -1);
+      m.step(1);
+      queueAfterCancel = m.info(city)?.queueN ?? -1;
+      stockAfterCancel = m.player(0).stock.slice();
       note('queueFeedback', document.getElementById('palette-feedback').textContent);
-      for (let i = 0; i < 1500; i++) m.step(1);
+      for (let i = 0; i < 800 && (m.info(city)?.queueN ?? 0) > 0; i++) m.step(1);
+      queueAfterTrain = m.info(city)?.queueN ?? -1;
+      stockAfterTrain = m.player(0).stock.slice();
       trained = countType() - trainedBefore;
     }
-    note('trained', trained);
+    note('trainedType', trainedType); note('trainCost', trainCost);
+    note('stockTrainBefore', stockTrainBefore); note('stockAfterTwo', stockAfterTwo);
+    note('stockAfterCancel', stockAfterCancel); note('stockAfterTrain', stockAfterTrain);
+    note('queueAfterTwo', queueAfterTwo); note('queueAfterCancel', queueAfterCancel);
+    note('queueAfterTrain', queueAfterTrain); note('trained', trained);
 
     // Advance an age through the only implemented research path. The second card stays
     // disabled because ordinary technology/prerequisite execution is not exported.
@@ -1179,8 +1195,9 @@ try {
   console.log(`core action boundary: ${S.selected} citizens, ${S.gatherOrders} gather orders, ` +
     `workers ${JSON.stringify(S.workers)}`);
   console.log(`  stock ${JSON.stringify(S.stockBefore)} -> ${JSON.stringify(S.stockAfter)}`);
-  console.log(`  barracks at ${JSON.stringify(S.barracksAt)} built=${S.barracksBuilt} ` +
-    `products=${S.barracksProducts} trained=${S.trained}  age ${JSON.stringify(S.age)}`);
+  console.log(`  city=${S.cityFound} products=${JSON.stringify(S.cityProducts)} ` +
+    `queues ${S.queueAfterTwo}->${S.queueAfterCancel}->${S.queueAfterTrain} ` +
+    `trained=${S.trained} age ${JSON.stringify(S.age)}`);
   const stockMoved = S.stockAfter.some((v, i) => v !== S.stockBefore[i]);
   for (const [name, ok] of [
     ['a citizen was selected', S.selected > 0],
@@ -1189,8 +1206,16 @@ try {
     ['build data remains inspectable but the action is visibly disabled',
       S.buildPaletteAction === false && S.buildPaletteArmed === false],
     ['no shadow building state is created', S.barracksBuilt === false],
-    ['training is unavailable without an authoritative core producer',
-      S.barracksProducts === undefined && S.trained === 0],
+    ['the authoritative opening City exposes packed WHERE products',
+      S.cityFound === true && Array.isArray(S.cityProducts) && S.cityProducts.includes(S.trainedType)],
+    ['training action is enabled only through the selected producer', S.trainPaletteAction === true],
+    ['two queue packets charge twice, then cancel refunds exactly one packed cost',
+      S.queueAfterTwo === 2 && [0, 1].includes(S.queueAfterCancel) && S.trainCost &&
+      S.stockAfterTwo.every((v, i) => v === S.stockTrainBefore[i] - 2 * S.trainCost[i]) &&
+      S.stockAfterCancel.every((v, i) => v === S.stockTrainBefore[i] - S.trainCost[i])],
+    ['the live production runtime completes exactly one unit and drains the queue',
+      S.trained === 1 && S.queueAfterTrain === 0 &&
+      S.stockAfterTrain.every((v, i) => v === S.stockAfterCancel[i])],
     ['research is visibly unavailable and does not mutate core age',
       S.researchPaletteAction === false && S.otherTechDisabled === true &&
       S.researchStarted === false && S.age[1] === S.age[0]],
@@ -1217,8 +1242,8 @@ try {
     });
   })()`).then(JSON.parse);
   for (const [name, ok] of [
-    ['the owner snapshot stays on the authoritative unit population',
-      out.objectivesAfterPlay.snapshot.owners[0].objects === out.objectives.snapshot.owners[0].objects &&
+    ['the owner snapshot includes the one authoritative trained unit',
+      out.objectivesAfterPlay.snapshot.owners[0].objects === out.objectives.snapshot.owners[0].objects + 1 &&
       out.objectivesAfterPlay.playerZeroText.includes(
         `${out.objectivesAfterPlay.snapshot.owners[0].objects} objects`)],
     ['post-play owner totals still equal the live world',

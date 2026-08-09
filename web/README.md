@@ -78,9 +78,11 @@ node web/tools/play-smoke.mjs --json web/play-results.json
 The playable page requires both packed data files; it will not fall back to synthetic data.
 Its authoritative state is `don_sim::tick::Sim`; the browser-facing position, tag, player,
 and query arrays are projections rebuilt from that core rather than a second gameplay world.
-Move, attack, halt, frame stepping, digest, RNG, and core save/load use that same state.
-Gather, build, train, research, live rule setters, fog/LOS, diplomacy, AI, and victory remain
-disabled until their exact core hosts are exposed.
+Move, attack, halt, City unit training/cancellation/completion, frame stepping, digest, RNG,
+and core save/load use that same state. Training uses packed `WHERE` edges and costs with the
+Sim's concrete `BuildData` queue and live production runtime; it does not maintain a browser
+queue. Gather, building placement, research, live rule setters, fog/LOS, diplomacy, AI, and
+victory remain disabled until their exact core hosts are exposed.
 
 Its readiness panel has three independent inputs: the runtime identifies the Sim-backed
 browser adapter (not `don_ai::arena::World`), the playable blocker list is read from

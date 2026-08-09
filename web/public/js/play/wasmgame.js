@@ -24,6 +24,7 @@ export const TAG = {
 };
 export const CORE_CAP = Object.freeze({
   save: 1 << 0, load: 1 << 1, move: 1 << 2, attack: 1 << 3, halt: 1 << 4,
+  train: 1 << 5,
 });
 
 export class GameModule {
