@@ -131,6 +131,10 @@ struct State {
     load_only: bool,
     game_version: u32,
     active: bool,
+    /// Friend Game calls NetSys::host before its direct OnPlayerJoined export.
+    /// Keep the local player pending until that later DTO supplies the retail
+    /// identity; the callback must never expose our temporary transport id.
+    defer_local_add_until_identity: bool,
     local_member_id: Vec<u16>,
     setup_bridge: bool,
     bridged_slots: BTreeMap<i32, i32>,
@@ -250,6 +254,7 @@ pub fn create() -> *mut NetSysBase {
         load_only,
         game_version: 0,
         active: false,
+        defer_local_add_until_identity: false,
         local_member_id: Vec::new(),
         setup_bridge: env_truthy("DON_NET_SETUP_BRIDGE"),
         bridged_slots: BTreeMap::new(),
@@ -519,6 +524,30 @@ unsafe fn notify_player_added(this: *mut NetSysBase, player: *const NetPlayerObj
     }
 }
 
+/// Shipped `host` asks NetMessenger slot 11 for session data and copies its
+/// first two bytes into the concrete CrossplayNetLibSys field at +0xB0 before
+/// returning. Preserve that direct-access field for retail's later setup path.
+unsafe fn retain_host_session_data(this: *mut NetSysBase) {
+    let Some(messenger) = messenger(this) else {
+        return;
+    };
+    let vtable = (*messenger).vftable;
+    if vtable.is_null() {
+        return;
+    }
+    let data = ((*vtable).get_session_data)(messenger);
+    if data.is_null() {
+        return;
+    }
+    let object = this as *mut NetSysObj;
+    // reserved_to_crossplay begins at +0x60; +0xB0 is byte index 0x50.
+    core::ptr::copy_nonoverlapping(
+        data.cast::<u8>(),
+        (*object).reserved_to_crossplay.as_mut_ptr().add(0x50),
+        2,
+    );
+}
+
 unsafe fn notify_player_deleted(this: *mut NetSysBase, player: *const NetPlayerObj) {
     let Some(messenger) = messenger(this) else {
         return;
@@ -711,6 +740,14 @@ unsafe fn pump(this: *mut NetSysBase) {
     (*object).base.local_player = next_local;
     (*object).base.host_player = next_host;
     for player in added_ptrs {
+        let defer_local = (*player).flags & SNLPLAYER_LOCAL != 0
+            && st(this).is_some_and(|state| state.defer_local_add_until_identity);
+        if defer_local {
+            trace_detail(format_args!(
+                "callback=NetMessenger.on_player_added deferred=retail-identity"
+            ));
+            continue;
+        }
         let bridged_slot = bridge_add_player(this, player);
         if let Some(slot) = bridged_slot {
             if let Some(state) = st(this) {
@@ -728,17 +765,35 @@ unsafe fn pump(this: *mut NetSysBase) {
     }
 }
 
+/// Enter the common Friend Game host lifecycle. Retail and the native smoke
+/// share this exact implementation so the acceptance is mutation-sensitive
+/// to the local pointer/pending/callback ordering used in `ns_host`.
+unsafe fn activate_host_lifecycle(this: *mut NetSysBase, connected: bool) -> bool {
+    let Some(state) = st(this) else { return false };
+    if state.session.role != Role::Host {
+        return false;
+    }
+    state.active = true;
+    state.defer_local_add_until_identity = true;
+    state.joining = 0;
+    let object = this as *mut NetSysObj;
+    (*object).flags |= 0x11;
+    retain_host_session_data(this);
+    if connected {
+        CONNECTED.store(true, Ordering::Relaxed);
+    }
+    pump(this);
+    true
+}
+
 /// Activate only the loopback/ephemeral diagnostic session so the external
 /// PE32 smoke can dispatch every NetPlayer slot. This never enables traffic
 /// and refuses normal retail mode.
 pub unsafe fn materialize_load_only_peer(this: *mut NetSysBase) -> bool {
-    let Some(state) = st(this) else { return false };
-    if !state.load_only {
+    if !st(this).is_some_and(|state| state.load_only) {
         return false;
     }
-    state.active = true;
-    pump(this);
-    true
+    activate_host_lifecycle(this, false)
 }
 
 /// Capture the authenticated retail host's own lobby-member id without ever
@@ -756,25 +811,42 @@ pub unsafe fn capture_local_member_id(this: *mut NetSysBase, member: *const c_vo
         return false;
     }
     let copy = units.to_vec();
-    let Some(state) = st(this) else { return false };
-    state.local_member_id = copy;
-    if let Some(player) = state
-        .players
-        .iter_mut()
-        .find(|player| player.flags & SNLPLAYER_LOCAL != 0)
-    {
+    let (player, ok, code_units) = {
+        let Some(state) = st(this) else { return false };
+        state.local_member_id = copy;
+        let code_units = state.local_member_id.len();
+        let Some(player) = state
+            .players
+            .iter_mut()
+            .find(|player| player.flags & SNLPLAYER_LOCAL != 0)
+        else {
+            trace_detail(format_args!(
+                "local_member_id=captured code_units={code_units} player_updated=false"
+            ));
+            return true;
+        };
         let ok = set_player_id(player, &state.local_member_id);
+        let ptr = player.as_mut() as *mut NetPlayerObj;
+        state.defer_local_add_until_identity = false;
+        (ptr, ok, code_units)
+    };
+    if ok {
+        // Exact process_playerlist lifecycle: callback observes PENDING and the
+        // final authenticated ID; only its return clears the pending bit.
+        if (*player).flags & SNLPLAYER_PENDING != 0 {
+            notify_player_added(this, player);
+            (*player).flags &= !SNLPLAYER_PENDING;
+        }
         trace_detail(format_args!(
             "local_member_id=captured code_units={} player_updated={ok}",
-            state.local_member_id.len()
+            code_units
         ));
         ok
     } else {
         trace_detail(format_args!(
-            "local_member_id=captured code_units={} player_updated=false",
-            state.local_member_id.len()
+            "local_member_id=captured code_units={code_units} player_updated=false"
         ));
-        true
+        false
     }
 }
 
@@ -1041,7 +1113,7 @@ unsafe extern "thiscall" fn ns_poll_services(this: *mut NetSysBase, _services: *
 
 unsafe extern "thiscall" fn ns_host(
     this: *mut NetSysBase,
-    _a: *const c_void,
+    a: *const c_void,
     _b: *const c_void,
     _c: *const c_void,
     _d: *const c_void,
@@ -1054,15 +1126,17 @@ unsafe extern "thiscall" fn ns_host(
     let Some(state) = st(this) else {
         return LIBERR_NOT_AVAILABLE;
     };
-    if state.load_only || state.session.role != Role::Host || !ready {
+    // Shipped host reads the first BHG String's length at +8 and returns
+    // failure before touching session state when it is empty.
+    let first_arg_nonempty = !a.is_null() && *a.cast::<u8>().add(8).cast::<u16>() != 0;
+    if state.load_only || state.session.role != Role::Host || !ready || !first_arg_nonempty {
         return LIBERR_NOT_AVAILABLE;
     }
-    state.active = true;
-    state.joining = 0;
-    (*object).flags |= 0x11;
-    CONNECTED.store(true, Ordering::Relaxed);
-    pump(this);
-    LIBERR_OK
+    if activate_host_lifecycle(this, true) {
+        LIBERR_OK
+    } else {
+        LIBERR_NOT_AVAILABLE
+    }
 }
 
 unsafe extern "thiscall" fn ns_join(

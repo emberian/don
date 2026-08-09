@@ -25,6 +25,7 @@ const SEND_READY: &[u8] = b"?send_ready_flag@CrossplayNetLibSys@@QAEX_N@Z\0";
 const RESET_READY: &[u8] = b"?reset_ready_flags@CrossplayNetLibSys@@QAEXXZ\0";
 const IS_HOST: &[u8] =
     b"?IsHost@CrossplayNetLibSys@@QAE_NABVLobbyMemberDTO@DTO@Lobby@Crossplay@@@Z\0";
+const ON_PLAYER_JOINED: &[u8] = b"?OnPlayerJoined@CrossplayNetLibSys@@QAEXABVLobbyMemberDTO@DTO@Lobby@Crossplay@@ABV?$basic_string@_WU?$char_traits@_W@std@@V?$allocator@_W@2@@std@@@Z\0";
 const SHIM_MARKER: &[u8] = b"shim_is_connected_to_network\0";
 const SHIM_MATERIALIZE: &[u8] = b"shim_materialize_load_only_peer\0";
 
@@ -63,6 +64,8 @@ struct NetPlayerPrefix {
     flags: i32,
     crossplay_player: *mut c_void,
     ready: bool,
+    ready_padding: [u8; 3],
+    id: MsvcWstring,
 }
 
 #[repr(C)]
@@ -72,6 +75,8 @@ struct FakeMessenger {
     added: u32,
     flags_seen_on_add: i32,
     crossplay_non_null_on_add: bool,
+    id_seen_on_add: MsvcWstring,
+    session_data: u16,
 }
 
 #[repr(C)]
@@ -140,6 +145,7 @@ unsafe extern "thiscall" fn msg_added(this: *mut FakeMessenger, player: *const N
     if !player.is_null() {
         (*this).flags_seen_on_add = (*player).flags;
         (*this).crossplay_non_null_on_add = !(*player).crossplay_player.is_null();
+        (*this).id_seen_on_add = (*player).id;
     }
 }
 unsafe extern "thiscall" fn msg_void(_this: *mut FakeMessenger) {}
@@ -147,8 +153,8 @@ unsafe extern "thiscall" fn msg_join(_this: *mut FakeMessenger, _result: i32, _v
 unsafe extern "thiscall" fn msg_allow(_this: *mut FakeMessenger, _data: *const c_void) -> i32 {
     1
 }
-unsafe extern "thiscall" fn msg_session(_this: *mut FakeMessenger) -> *const c_void {
-    core::ptr::null()
+unsafe extern "thiscall" fn msg_session(this: *mut FakeMessenger) -> *const c_void {
+    (&raw const (*this).session_data).cast()
 }
 unsafe extern "thiscall" fn service_set_timeout(this: *mut FakeService, timeout_ms: i32) {
     (*this).timeout_ms = timeout_ms;
@@ -277,6 +283,12 @@ fn run() -> Result<String, String> {
         added: 0,
         flags_seen_on_add: 0,
         crossplay_non_null_on_add: false,
+        id_seen_on_add: MsvcWstring {
+            sso: [0; 8],
+            len: 0,
+            capacity: 7,
+        },
+        session_data: 0x5a31,
     };
     let mut service_vtable = [core::ptr::null::<c_void>(); 58];
     service_vtable[47] = service_set_timeout as *const c_void;
@@ -549,9 +561,10 @@ fn run() -> Result<String, String> {
         return Err("load-only host object did not report its role".into());
     }
 
-    // A shim-only, load-only gate materialises the inert local player for ABI
-    // dispatch. Ordinary retail mode cannot call this and get_num_players by
-    // itself preserves the shipped empty pre-host state.
+    // Friend Game calls ns_host first and invokes the direct OnPlayerJoined
+    // export only afterwards. The shim-only load-only gate reproduces that
+    // exact split without traffic: pointers are coherent at host return, but
+    // the pending local callback must wait for the authenticated retail id.
     let materialize: unsafe extern "C" fn(*mut NetSysPrefix) -> bool =
         unsafe { std::mem::transmute(resolve(&module, SHIM_MATERIALIZE)?) };
     let materialized = checked_call(
@@ -559,17 +572,78 @@ fn run() -> Result<String, String> {
         &mut stack_pointer_checks,
         || unsafe { materialize(object) },
     )?;
-    if !materialized || messenger.added != 1 {
+    if !materialized || messenger.added != 0 {
         return Err(format!(
-            "diagnostic materialisation failed: returned={materialized} callbacks={} added={}",
+            "pre-OnPlayerJoined materialisation/callback split failed: returned={materialized} callbacks={} added={}",
             messenger.callbacks, messenger.added
         ));
     }
-    if messenger.flags_seen_on_add & 2 == 0 || !messenger.crossplay_non_null_on_add {
+    if unsafe {
+        u16::from_le_bytes([
+            (*object).reserved_to_crossplay[0x50],
+            (*object).reserved_to_crossplay[0x51],
+        ])
+    } != messenger.session_data
+    {
+        return Err("host lifecycle did not retain NetMessenger session data at +0xB0".into());
+    }
+    let player = unsafe { (*object).players[0] };
+    if player.is_null()
+        || unsafe { (*object).local_player != player }
+        || unsafe { (*object).host_player != player }
+        || unsafe { (*player).flags & 2 == 0 }
+    {
+        return Err(
+            "pre-OnPlayerJoined host did not expose one coherent pending local player".into(),
+        );
+    }
+
+    let retail_id = MsvcWstring {
+        sso: [
+            b'r' as u16,
+            b'e' as u16,
+            b't' as u16,
+            b'a' as u16,
+            b'i' as u16,
+            b'l' as u16,
+            b'1' as u16,
+            0,
+        ],
+        len: 7,
+        capacity: 7,
+    };
+    let on_player_joined: unsafe extern "thiscall" fn(
+        *mut NetSysPrefix,
+        *const MsvcWstring,
+        *const MsvcWstring,
+    ) = unsafe { std::mem::transmute(resolve(&module, ON_PLAYER_JOINED)?) };
+    checked_call(
+        "export OnPlayerJoined(retail local identity)",
+        &mut stack_pointer_checks,
+        || unsafe { on_player_joined(object, &retail_id, &retail_id) },
+    )?;
+    if messenger.added != 1
+        || messenger.flags_seen_on_add & 2 == 0
+        || !messenger.crossplay_non_null_on_add
+        || messenger.id_seen_on_add.len != 7
+        || messenger.id_seen_on_add.sso[..7] != retail_id.sso[..7]
+        || unsafe { (*player).flags & 2 != 0 }
+    {
         return Err(format!(
-            "on_player_added did not observe pending+connected player: flags=0x{:x} crossplay_non_null={}",
-            messenger.flags_seen_on_add, messenger.crossplay_non_null_on_add
+            "OnPlayerJoined did not callback with final id while pending then clear: added={} flags_seen=0x{:x} pending_after={} id_len={}",
+            messenger.added,
+            messenger.flags_seen_on_add,
+            unsafe { (*player).flags & 2 != 0 },
+            messenger.id_seen_on_add.len
         ));
+    }
+    checked_call(
+        "export OnPlayerJoined(idempotent repeat)",
+        &mut stack_pointer_checks,
+        || unsafe { on_player_joined(object, &retail_id, &retail_id) },
+    )?;
+    if messenger.added != 1 {
+        return Err("repeated OnPlayerJoined emitted a duplicate player-added callback".into());
     }
 
     // Then call every non-destructor NetPlayer slot. This protects the hidden
@@ -587,7 +661,6 @@ fn run() -> Result<String, String> {
             unsafe { (*object).num_players }
         ));
     }
-    let player = unsafe { (*object).players[0] };
     if player.is_null()
         || unsafe { (*object).local_player != player }
         || unsafe { (*object).host_player != player }
