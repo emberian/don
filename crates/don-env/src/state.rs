@@ -19,7 +19,11 @@ use crate::generated as g;
 use crate::typecaps::{
     load_formation_caps, FormationCaps, TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE,
 };
-use don_sim::command::{Fleet, QueuePos};
+use don_sim::command::{
+    Fleet, GroupDisbandTransactionReceipt, GroupDisbandTransactionRequest,
+    GroupDisbandTransactionStatus, GroupHaltTransactionReceipt, GroupHaltTransactionRequest,
+    GroupHaltTransactionStatus, QueuePos,
+};
 use don_sim::objects::Band;
 use don_sim::order::{OrderIndex, ORDER_PATHED};
 use don_sim::systems::collision::{UnitRow, UnitTable, DOMAIN_LAND};
@@ -36,7 +40,10 @@ use don_sim::systems::gathering::{
     GatherAssignment, GatherCount, GatherOrderWalk, GatherSite, GatherWorker, NonFlatGatherState,
     NO_OBJECT,
 };
-use don_sim::systems::groups_guys::FormationMember;
+use don_sim::systems::groups_guys::{
+    plan_action_disband, plan_action_halt, DisbandMemberFacts, DisbandStep, FormationMember,
+    HaltMemberFacts, HaltStep, GROUP_MAX_MEMBERS,
+};
 use don_sim::systems::movement::vector_dist;
 use don_sim::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, AirPatrolSearch, OrderQueue, OrderRec, PatrolInstall,
@@ -2503,6 +2510,174 @@ impl Fleet for EnvWorld {
             return false;
         };
         EnvWorld::install_order(self, row, order, queue).is_ok()
+    }
+
+    fn apply_group_halt_transaction(
+        &mut self,
+        request: GroupHaltTransactionRequest,
+    ) -> GroupHaltTransactionReceipt {
+        // Retail gates a building selection before reading any member/type fact. EnvWorld
+        // can therefore apply this exact no-op even when the optional live type table is
+        // unavailable.
+        if request.group.buildings != 0 {
+            let Ok(plan) = plan_action_halt(&request.group, request.flags, &[]) else {
+                return GroupHaltTransactionReceipt::unavailable(request);
+            };
+            return GroupHaltTransactionReceipt {
+                request: request.clone(),
+                status: GroupHaltTransactionStatus::Applied,
+                group_after_ignore_orders: Some(request.group.clone()),
+                members: Vec::new(),
+                plan: Some(plan),
+            };
+        }
+
+        // Every command-side call site currently supplies zero. Non-zero flags read three
+        // retail predicates EnvWorld does not carry, and the permissive table cannot prove
+        // UnitData::is_plane; both cases must remain transactionally unavailable.
+        if request.flags != 0 || self.rules.caps.is_permissive() {
+            return GroupHaltTransactionReceipt::unavailable(request);
+        }
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let mut members = Vec::with_capacity(n);
+        for &o in &request.group.list[..n] {
+            let Some(row) = self.fleet_row(request.group.who, o) else {
+                members.push(HaltMemberFacts {
+                    o,
+                    ..Default::default()
+                });
+                continue;
+            };
+            let cap = *self.cap(self.type_index[row]);
+            // A zero building count paired with a building member is not an authoritative
+            // retail group snapshot. Refuse instead of manufacturing the gate outcome.
+            if cap.has(F_BUILDING) {
+                return GroupHaltTransactionReceipt::unavailable(request);
+            }
+            members.push(HaltMemberFacts {
+                o,
+                valid_unit: cap.has(crate::typecaps::F_UNIT),
+                on_map: self.sim.hits()[row] > 0,
+                is_plane: cap.is_plane,
+                domain: i32::from(cap.domain),
+                // TypeCaps::is_plane is already the shipped `domain == AIR &&
+                // !(unit_flags & 0x20)` predicate, so zero reproduces its admitted arm.
+                unit_flags: 0,
+                // EnvWorld has no containment/enter/exit transition. The flag-specific
+                // facts above are unread because only flags==0 reaches this point.
+                entering_or_exiting: false,
+                flag_4_veto: false,
+                special: false,
+                spy: false,
+            });
+        }
+        let Ok(plan) = plan_action_halt(&request.group, request.flags, &members) else {
+            return GroupHaltTransactionReceipt::unavailable(request);
+        };
+
+        let checkpoint = self.clone();
+        for step in &plan.steps {
+            match *step {
+                HaltStep::ClearUnitMask { who, o, mask } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupHaltTransactionReceipt::unavailable(request);
+                    };
+                    let value = self.sim.units.get_unit_masks(row) & !mask;
+                    self.sim.units.set_unit_masks(row, value);
+                }
+                HaltStep::CloseOrders { who, o, .. } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupHaltTransactionReceipt::unavailable(request);
+                    };
+                    if self.clear_orders(row).is_err() {
+                        *self = checkpoint;
+                        return GroupHaltTransactionReceipt::unavailable(request);
+                    }
+                }
+                // The compact environment does not carry the retail path stack and action
+                // pointer as independent columns. clear_orders synchronizes every state
+                // column it does represent, as in the direct action path.
+                HaltStep::ClearPathAnchor { .. }
+                | HaltStep::ClearPartialPath { .. }
+                | HaltStep::UpdateAction { .. } => {}
+            }
+        }
+        GroupHaltTransactionReceipt {
+            request: request.clone(),
+            status: GroupHaltTransactionStatus::Applied,
+            group_after_ignore_orders: Some(request.group.clone()),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_disband_transaction(
+        &mut self,
+        request: GroupDisbandTransactionRequest,
+    ) -> GroupDisbandTransactionReceipt {
+        // Active buildings require GroupOut::validate_disband and the production queue.
+        // Neither is an EnvWorld fact, so only the exact ordinary object branch is hosted.
+        if request.group.buildings != 0 || self.rules.caps.is_permissive() {
+            return GroupDisbandTransactionReceipt::unavailable(request);
+        }
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let mut members = Vec::with_capacity(n);
+        for &o in &request.group.list[..n] {
+            let Some(row) = self.fleet_row(request.group.who, o) else {
+                members.push(DisbandMemberFacts {
+                    o,
+                    ..Default::default()
+                });
+                continue;
+            };
+            if self.cap(self.type_index[row]).has(F_BUILDING) {
+                return GroupDisbandTransactionReceipt::unavailable(request);
+            }
+            members.push(DisbandMemberFacts {
+                o,
+                active: self.sim.hits()[row] > 0,
+                is_build: false,
+                ..Default::default()
+            });
+        }
+        let Ok(plan) = plan_action_disband(&request.group, request.all, false, false, &members)
+        else {
+            return GroupDisbandTransactionReceipt::unavailable(request);
+        };
+        if plan
+            .steps
+            .iter()
+            .any(|step| !matches!(step, DisbandStep::DisbandObject { .. }))
+        {
+            return GroupDisbandTransactionReceipt::unavailable(request);
+        }
+
+        let checkpoint = self.clone();
+        for step in &plan.steps {
+            let DisbandStep::DisbandObject { who, o, .. } = *step else {
+                unreachable!("unsupported steps were rejected before the transaction")
+            };
+            let Some(row) = self.fleet_row(who, o) else {
+                *self = checkpoint;
+                return GroupDisbandTransactionReceipt::unavailable(request);
+            };
+            let handle = self.handle_at(row);
+            if !matches!(self.try_despawn(handle), Ok(true)) {
+                *self = checkpoint;
+                return GroupDisbandTransactionReceipt::unavailable(request);
+            }
+        }
+        GroupDisbandTransactionReceipt {
+            request: request.clone(),
+            status: GroupDisbandTransactionStatus::Applied,
+            group_after_ignore_orders: Some(request.group.clone()),
+            validate_disband: Some(false),
+            owner_is_local: Some(false),
+            members,
+            plan: Some(plan),
+        }
     }
 
     fn set_stance(&mut self, who: u8, o: i16, stance: i8) {

@@ -125,7 +125,6 @@ fn every_advertised_unit_verb_applies_without_accepted_no_effect() {
     }
 
     let expected = [
-        g::uv::STANCE,
         g::uv::FORM,
         g::uv::ATTACK,
         g::uv::SIEGE_ATTACK,

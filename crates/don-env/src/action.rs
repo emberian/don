@@ -21,6 +21,10 @@ use crate::spec::{EnvConfig, AMOUNT_BUCKETS, COUNT_BUCKETS};
 use crate::state::{EnvWorld, GatherHost, GatherHostError};
 use crate::typecaps::{F_BUILDING, F_CIVILIAN, F_PRODUCER};
 use don_sim::command::QueuePos;
+use don_sim::systems::groups_guys::{
+    plan_action_disband, plan_action_halt, DisbandMemberFacts, DisbandStep, GroupData,
+    HaltMemberFacts, HaltStep,
+};
 use don_sim::systems::order_dispatch::OrderRec;
 use don_sim::world::SUBTILE;
 
@@ -248,9 +252,64 @@ pub fn apply_unit(
             st.applied += 1;
         }
         g::uv::HALT => {
-            if w.clear_orders(row).is_err() {
+            let cap = *w.cap(w.type_index[row]);
+            // `Group::action_halt` gates the whole body for a building selection and
+            // skips a true airborne plane. The permissive table has no plane evidence,
+            // so it cannot honestly choose either branch.
+            if w.rules.caps.is_permissive() || cap.has(F_BUILDING) || cap.is_plane {
                 st.illegal += 1;
                 return;
+            }
+            let owner = w.sim.owner()[row] as u8;
+            let object = w.sim.units.o()[row];
+            let mut group = GroupData::default();
+            group.add(object, owner, false, 0, 0);
+            let plan = plan_action_halt(
+                &group,
+                0,
+                &[HaltMemberFacts {
+                    o: object,
+                    valid_unit: true,
+                    on_map: true,
+                    is_plane: cap.is_plane,
+                    domain: i32::from(cap.domain),
+                    // `is_plane` in the derived table already includes
+                    // `!(unit_flags & 0x20)`; the non-plane path does not read this.
+                    unit_flags: 0,
+                    // EnvWorld has no containment/enter/exit transition. Flags are zero
+                    // for the HALT command, so the three flag-specific facts are unread.
+                    entering_or_exiting: false,
+                    flag_4_veto: false,
+                    special: false,
+                    spy: false,
+                }],
+            )
+            .expect("single-member HALT facts match the transient group");
+
+            // The planner is pure; take the product checkpoint before committing its
+            // ordered effects. In particular, a malformed Farm Gather chain must restore
+            // the first unit-mask clear as well as the gather/order columns.
+            let checkpoint = w.clone();
+            for step in plan.steps {
+                match step {
+                    HaltStep::ClearUnitMask { mask, .. } => {
+                        let value = w.sim.units.get_unit_masks(row) & !mask;
+                        w.sim.units.set_unit_masks(row, value);
+                    }
+                    HaltStep::CloseOrders { .. } => {
+                        if w.clear_orders(row).is_err() {
+                            *w = checkpoint;
+                            st.illegal += 1;
+                            return;
+                        }
+                    }
+                    // EnvWorld does not carry the retail path stack or action pointer as
+                    // separate columns. `clear_orders` performs their represented sync;
+                    // the destination anchor below is its reduced-world idle state.
+                    HaltStep::ClearPathAnchor { .. }
+                    | HaltStep::ClearPartialPath { .. }
+                    | HaltStep::UpdateAction { .. } => {}
+                }
             }
             let (px, py) = (w.sim.pos_x()[row], w.sim.pos_y()[row]);
             w.dest_x[row] = px;
@@ -258,14 +317,51 @@ pub fn apply_unit(
             st.applied += 1;
         }
         g::uv::STANCE => {
-            w.stance[row] = a.stance.min(3) as u8;
-            st.applied += 1;
+            // Full retail STANCE needs get_stance_type/get_stance_option plus the
+            // stance-specific mandatory-order/repath transition. TypeCaps does not yet
+            // carry those facts, so this verb is masked and an unmasked request is illegal.
+            w.unimplemented.unit[vi] += 1;
+            st.illegal += 1;
         }
         g::uv::FORM => {
             w.form[row] = g::FORMS[(a.form as usize).min(g::FORMS.len() - 1)].1;
             st.applied += 1;
         }
         g::uv::DISBAND => {
+            let cap = *w.cap(w.type_index[row]);
+            // Active buildings take the special Build::queue_up(DISBAND) branch and the
+            // permissive table cannot distinguish buildings. Keep those cases fail-closed.
+            if w.rules.caps.is_permissive() || cap.has(F_BUILDING) {
+                st.illegal += 1;
+                return;
+            }
+            let owner = w.sim.owner()[row] as u8;
+            let object = w.sim.units.o()[row];
+            let mut group = GroupData::default();
+            group.add(object, owner, false, 0, 0);
+            let plan = plan_action_disband(
+                &group,
+                false,
+                false, // GroupOut::validate_disband returns false for non-build groups.
+                owner == who,
+                &[DisbandMemberFacts {
+                    o: object,
+                    active: true,
+                    is_build: false,
+                    ..Default::default()
+                }],
+            )
+            .expect("single-member DISBAND facts match the transient group");
+            if plan.steps
+                != [DisbandStep::DisbandObject {
+                    who: owner,
+                    o: object,
+                    arg: 0,
+                }]
+            {
+                st.illegal += 1;
+                return;
+            }
             let h = w.handle_at(row);
             match w.try_despawn(h) {
                 Ok(true) => st.applied += 1,

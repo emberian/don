@@ -2153,6 +2153,305 @@ pub enum MemberState {
 }
 
 // ---------------------------------------------------------------------------
+// State/lifecycle group actions
+// ---------------------------------------------------------------------------
+
+/// `UnitData::unit_masks` bits cleared by `Group::action_halt` `0x0070D0C0`.
+///
+/// Retail clears `0x0400_0000` before closing the order list and `0x0000_0100` after
+/// `Unit::update_action`.  They are kept separate in [`HaltStep`] because the ordering is
+/// observable to those callees; this combined value is only a convenience for hosts which
+/// checkpoint and commit a complete member transition at once.
+pub const HALT_UNIT_MASK_CLEAR: u32 = 0x0400_0100;
+
+/// The two pseudo-`TypeIndex` values tested by `Group::action_disband` `0x0070E260`.
+pub const TYPE_DEPOPULATE: i32 = 0x286;
+pub const TYPE_DISBAND: i32 = 0x29A;
+
+/// All object/type predicates read for one member by `Group::action_halt`.
+///
+/// The action planner takes these as a value instead of reading a live world piecemeal. A
+/// product host must resolve the complete member vector first; consequently a missing
+/// virtual/type fact cannot leave the group form or an earlier member's orders half changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HaltMemberFacts {
+    /// Identity sentinel. Must equal the corresponding `GroupData::list` entry.
+    pub o: i16,
+    /// `SubObjectData::is_valid_unit` (vtable `+0x08`).
+    pub valid_unit: bool,
+    /// `ObjectData::is_on_map` (vtable `+0xBC`).
+    pub on_map: bool,
+    /// `UnitData::is_plane` (vtable `+0xC0`).
+    pub is_plane: bool,
+    /// Effective `ObjectTypeData::domain` (`+0x218`), read only for a plane.
+    pub domain: i32,
+    /// Effective `UnitTypeData::unit_flags` (`+0x2B4`), read only for a plane.
+    pub unit_flags: u32,
+    /// `UnitData::is_entering_or_exiting` `0x0060A6F0`.
+    pub entering_or_exiting: bool,
+    /// The virtual `UnitTypeData` veto at slot `+0x10C`, read when action flag 4 is set.
+    pub flag_4_veto: bool,
+    /// `ObjectData::is_special`, read when action flag 2 is set.
+    pub special: bool,
+    /// `ObjectData::is(SPY, 0)`, read when action flag 1 is set.
+    pub spy: bool,
+}
+
+/// One instruction-ordered effect emitted by `Group::action_halt`.
+///
+/// `ClearPathAnchor` names the explicit zero store to `Unit+0xC0` immediately before
+/// `Unit::close_orders(0)`. The PDB places that address inside the path stack rather than
+/// giving the word a standalone field name, so the port keeps the address-derived name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HaltStep {
+    ClearUnitMask { who: u8, o: i16, mask: u32 },
+    ClearPathAnchor { who: u8, o: i16 },
+    CloseOrders { who: u8, o: i16, arg: i32 },
+    ClearPartialPath { who: u8, o: i16 },
+    UpdateAction { who: u8, o: i16 },
+}
+
+/// A transaction-ready `Group::action_halt` result.
+///
+/// The caller commits `group` and `steps` only after every required host fact and every
+/// lifecycle checkpoint has succeeded. Planning itself never mutates the input group.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HaltPlan {
+    pub group: GroupData,
+    pub steps: Vec<HaltStep>,
+}
+
+/// An invalid host snapshot supplied to a group-action planner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupActionPlanError {
+    MemberCount,
+    MemberIdentity {
+        index: usize,
+        expected: i16,
+        got: i16,
+    },
+}
+
+/// Recover the complete state-changing body of `Group::action_halt(int)` `0x0070D0C0`.
+///
+/// This begins after retail's scenario `ignore_orders` prelude. That prelude calls the
+/// independently recovered virtual `Group::kill` for each scenario-owned object and must
+/// therefore be committed by the host before supplying its resulting group snapshot here.
+/// In ordinary multiplayer/product execution `ScenarioData::ignore_orders == 0`, so the
+/// supplied group is the addressed receiver unchanged.
+///
+/// The remaining body is exact:
+///
+/// - building selections do nothing;
+/// - otherwise `form` becomes `-1` even for an empty group;
+/// - members are visited in forward list order;
+/// - airborne planes (`is_plane && domain == 2 && !(unit_flags & 0x20)`) are skipped;
+/// - the entering/exiting and flag-specific vetoes are evaluated before any effect; and
+/// - the two mask clears surround the order/path/action calls in retail order.
+pub fn plan_action_halt(
+    group_after_ignore_orders: &GroupData,
+    flags: i32,
+    members: &[HaltMemberFacts],
+) -> Result<HaltPlan, GroupActionPlanError> {
+    let n = group_after_ignore_orders
+        .num
+        .clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    if group_after_ignore_orders.buildings != 0 {
+        return Ok(HaltPlan {
+            group: group_after_ignore_orders.clone(),
+            steps: Vec::new(),
+        });
+    }
+    if members.len() != n {
+        return Err(GroupActionPlanError::MemberCount);
+    }
+
+    let mut group = group_after_ignore_orders.clone();
+    group.form = -1;
+    let mut steps = Vec::with_capacity(n.saturating_mul(6));
+    for (index, facts) in members.iter().enumerate() {
+        let expected = group_after_ignore_orders.list[index];
+        if facts.o != expected {
+            return Err(GroupActionPlanError::MemberIdentity {
+                index,
+                expected,
+                got: facts.o,
+            });
+        }
+        if !facts.valid_unit
+            || !facts.on_map
+            || (facts.is_plane && facts.domain == 2 && facts.unit_flags & 0x20 == 0)
+            || facts.entering_or_exiting
+            || (flags & 4 != 0 && facts.flag_4_veto)
+            || (flags & 2 != 0 && facts.special)
+            || (flags & 1 != 0 && facts.spy)
+        {
+            continue;
+        }
+
+        let who = group_after_ignore_orders.who;
+        let o = facts.o;
+        steps.extend([
+            HaltStep::ClearUnitMask {
+                who,
+                o,
+                mask: 0x0400_0000,
+            },
+            HaltStep::ClearPathAnchor { who, o },
+            HaltStep::CloseOrders { who, o, arg: 0 },
+            HaltStep::ClearPartialPath { who, o },
+            HaltStep::UpdateAction { who, o },
+            HaltStep::ClearUnitMask {
+                who,
+                o,
+                mask: 0x0000_0100,
+            },
+        ]);
+    }
+    Ok(HaltPlan { group, steps })
+}
+
+/// All predicates read for one member by `Group::action_disband` `0x0070E260`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisbandMemberFacts {
+    /// Identity sentinel. Must equal the corresponding `GroupData::list` entry.
+    pub o: i16,
+    /// Object flag byte `+0x08 & 1`.
+    pub active: bool,
+    /// `SubObjectData::is_build` (vtable `+0x20`).
+    pub is_build: bool,
+    /// `SubObjectData::is_active` (vtable `+0x4C`), meaningful for a build.
+    pub build_active: bool,
+    /// `Build::can_make(DISBAND, 1)`.
+    pub can_make_disband: bool,
+    /// `Build::can_make(DEPOPULATE, 1)`.
+    pub can_make_depopulate: bool,
+}
+
+/// One retail-ordered effect emitted by `Group::action_disband`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisbandStep {
+    /// Local-player building feedback (`Sound::play(0x14D)`) immediately before disband.
+    PlayBuildingSound { who: u8, o: i16, sound: i32 },
+    /// `Object::disband(0)`.
+    DisbandObject { who: u8, o: i16, arg: i32 },
+    /// `Build::queue_up(DISBAND, 0)`.
+    QueueDisband {
+        who: u8,
+        o: i16,
+        type_index: i32,
+        arg: i32,
+    },
+    /// The local-player "cannot disband" message/sound tail.
+    NotifyRejected { who: u8 },
+}
+
+/// A transaction-ready `Group::action_disband` result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisbandPlan {
+    /// The action itself does not compact the member arrays. Directly disbanded objects
+    /// remain named until `Group::normalize`/`get_num` observes their dead state.
+    pub group: GroupData,
+    pub steps: Vec<DisbandStep>,
+    pub successes: usize,
+    pub rejected_buildings: usize,
+}
+
+/// Recover the complete state-changing body of `Group::action_disband(int)` `0x0070E260`.
+///
+/// As with [`plan_action_halt`], `group_after_ignore_orders` is the snapshot after the
+/// scenario-owned `Group::kill` prelude. `validate_disband != 0` is the exact `GroupOut`
+/// refusal gate; it produces no further effects. The host supplies `owner_is_local` only
+/// for UI sound/message effects, never for simulation selection.
+///
+/// A load-bearing retail detail is preserved: `all == 0` stops after the first direct
+/// `Object::disband`, but **does not** stop after an active building queues the `DISBAND`
+/// pseudo-type. The reverse scan continues in that branch.
+pub fn plan_action_disband(
+    group_after_ignore_orders: &GroupData,
+    all: bool,
+    validate_disband: bool,
+    owner_is_local: bool,
+    members: &[DisbandMemberFacts],
+) -> Result<DisbandPlan, GroupActionPlanError> {
+    let n = group_after_ignore_orders
+        .num
+        .clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    if validate_disband {
+        return Ok(DisbandPlan {
+            group: group_after_ignore_orders.clone(),
+            steps: Vec::new(),
+            successes: 0,
+            rejected_buildings: 0,
+        });
+    }
+    if members.len() != n {
+        return Err(GroupActionPlanError::MemberCount);
+    }
+    for (index, facts) in members.iter().enumerate() {
+        let expected = group_after_ignore_orders.list[index];
+        if facts.o != expected {
+            return Err(GroupActionPlanError::MemberIdentity {
+                index,
+                expected,
+                got: facts.o,
+            });
+        }
+    }
+
+    let who = group_after_ignore_orders.who;
+    let mut steps = Vec::new();
+    let mut successes = 0usize;
+    let mut rejected_buildings = 0usize;
+    for facts in members.iter().rev() {
+        if !facts.active {
+            continue;
+        }
+        if facts.is_build && facts.build_active {
+            if facts.can_make_disband || facts.can_make_depopulate {
+                rejected_buildings += 1;
+            } else {
+                steps.push(DisbandStep::QueueDisband {
+                    who,
+                    o: facts.o,
+                    type_index: TYPE_DISBAND,
+                    arg: 0,
+                });
+                successes += 1;
+            }
+            continue;
+        }
+
+        if facts.is_build && owner_is_local {
+            steps.push(DisbandStep::PlayBuildingSound {
+                who,
+                o: facts.o,
+                sound: 0x14D,
+            });
+        }
+        steps.push(DisbandStep::DisbandObject {
+            who,
+            o: facts.o,
+            arg: 0,
+        });
+        successes += 1;
+        if !all {
+            break;
+        }
+    }
+    if rejected_buildings != 0 && successes == 0 && owner_is_local {
+        steps.push(DisbandStep::NotifyRejected { who });
+    }
+
+    Ok(DisbandPlan {
+        group: group_after_ignore_orders.clone(),
+        steps,
+        successes,
+        rejected_buildings,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Groups — the global container and its per-frame pass
 // ---------------------------------------------------------------------------
 
@@ -3255,6 +3554,239 @@ mod tests {
         let mut e = GroupData::default();
         e.compute_speed(Some(42));
         assert_eq!(e.speed, 0);
+    }
+
+    fn halt_facts(o: i16) -> HaltMemberFacts {
+        HaltMemberFacts {
+            o,
+            valid_unit: true,
+            on_map: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn action_halt_plans_forward_retail_order_and_resets_form() {
+        let mut g = GroupData {
+            form: 4,
+            ..Default::default()
+        };
+        g.add(7, 2, false, 0, 0);
+        g.add(9, 2, false, 0, 0);
+        let plan = plan_action_halt(&g, 0, &[halt_facts(7), halt_facts(9)]).unwrap();
+
+        assert_eq!(g.form, 4, "planning is mutation-free");
+        assert_eq!(plan.group.form, -1);
+        assert_eq!(plan.steps.len(), 12);
+        assert_eq!(
+            &plan.steps[..6],
+            &[
+                HaltStep::ClearUnitMask {
+                    who: 2,
+                    o: 7,
+                    mask: 0x0400_0000,
+                },
+                HaltStep::ClearPathAnchor { who: 2, o: 7 },
+                HaltStep::CloseOrders {
+                    who: 2,
+                    o: 7,
+                    arg: 0,
+                },
+                HaltStep::ClearPartialPath { who: 2, o: 7 },
+                HaltStep::UpdateAction { who: 2, o: 7 },
+                HaltStep::ClearUnitMask {
+                    who: 2,
+                    o: 7,
+                    mask: 0x100,
+                },
+            ]
+        );
+        assert!(matches!(
+            plan.steps[6],
+            HaltStep::ClearUnitMask { o: 9, .. }
+        ));
+    }
+
+    #[test]
+    fn action_halt_vetoes_airborne_plane_and_each_requested_flag_predicate() {
+        let mut g = GroupData::default();
+        for o in 0..5i16 {
+            g.add(o, 1, false, 0, 0);
+        }
+        let mut members = [
+            halt_facts(0),
+            halt_facts(1),
+            halt_facts(2),
+            halt_facts(3),
+            halt_facts(4),
+        ];
+        members[0].is_plane = true;
+        members[0].domain = 2;
+        members[1].entering_or_exiting = true;
+        members[2].flag_4_veto = true;
+        members[3].special = true;
+        members[4].spy = true;
+        let plan = plan_action_halt(&g, 7, &members).unwrap();
+        assert!(plan.steps.is_empty());
+
+        // The precise plane exception in the machine code: either a non-air effective
+        // domain or unit flag 0x20 admits the member even when is_plane returned true.
+        members[0].unit_flags = 0x20;
+        let plan = plan_action_halt(&g, 7, &members).unwrap();
+        assert_eq!(plan.steps.len(), 6);
+        assert!(matches!(
+            plan.steps[0],
+            HaltStep::ClearUnitMask { o: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn action_halt_building_gate_precedes_member_snapshot_and_errors_are_transactional() {
+        let building = GroupData {
+            buildings: 1,
+            form: 3,
+            num: 1,
+            ..Default::default()
+        };
+        let plan = plan_action_halt(&building, 0, &[]).unwrap();
+        assert_eq!(plan.group, building);
+        assert!(plan.steps.is_empty());
+
+        let mut group = GroupData::default();
+        group.add(4, 0, false, 0, 0);
+        let before = group.clone();
+        let error = plan_action_halt(&group, 0, &[halt_facts(5)]).unwrap_err();
+        assert_eq!(
+            error,
+            GroupActionPlanError::MemberIdentity {
+                index: 0,
+                expected: 4,
+                got: 5,
+            }
+        );
+        assert_eq!(group, before, "a failed preflight changed no group byte");
+    }
+
+    fn disband_facts(o: i16) -> DisbandMemberFacts {
+        DisbandMemberFacts {
+            o,
+            active: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn action_disband_scans_backward_and_does_not_compact_the_group() {
+        let mut g = GroupData::default();
+        for o in [10, 11, 12] {
+            g.add(o, 3, false, 0, 0);
+        }
+        let before = g.clone();
+        let plan = plan_action_disband(
+            &g,
+            false,
+            false,
+            false,
+            &[disband_facts(10), disband_facts(11), disband_facts(12)],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![DisbandStep::DisbandObject {
+                who: 3,
+                o: 12,
+                arg: 0,
+            }]
+        );
+        assert_eq!(plan.successes, 1);
+        assert_eq!(plan.group, before, "retail leaves pruning to normalize");
+        assert_eq!(g, before, "planning is mutation-free");
+    }
+
+    #[test]
+    fn action_disband_queue_branch_continues_even_when_all_is_false() {
+        let mut g = GroupData::default();
+        for o in [20, 21] {
+            g.add(o, 4, false, 0, 0);
+        }
+        let unit = disband_facts(20);
+        let building = DisbandMemberFacts {
+            o: 21,
+            active: true,
+            is_build: true,
+            build_active: true,
+            can_make_disband: false,
+            can_make_depopulate: false,
+        };
+        let plan = plan_action_disband(&g, false, false, false, &[unit, building]).unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                DisbandStep::QueueDisband {
+                    who: 4,
+                    o: 21,
+                    type_index: TYPE_DISBAND,
+                    arg: 0,
+                },
+                DisbandStep::DisbandObject {
+                    who: 4,
+                    o: 20,
+                    arg: 0,
+                },
+            ]
+        );
+        assert_eq!(plan.successes, 2);
+    }
+
+    #[test]
+    fn action_disband_rejection_tail_and_validate_gate_are_exact() {
+        let mut g = GroupData::default();
+        g.add(30, 5, true, 0, 0);
+        let rejected = DisbandMemberFacts {
+            o: 30,
+            active: true,
+            is_build: true,
+            build_active: true,
+            can_make_disband: true,
+            can_make_depopulate: false,
+        };
+        let plan = plan_action_disband(&g, true, false, true, &[rejected]).unwrap();
+        assert_eq!(plan.successes, 0);
+        assert_eq!(plan.rejected_buildings, 1);
+        assert_eq!(plan.steps, vec![DisbandStep::NotifyRejected { who: 5 }]);
+
+        let gated = plan_action_disband(&g, true, true, true, &[]).unwrap();
+        assert!(gated.steps.is_empty());
+        assert_eq!(gated.group, g);
+    }
+
+    #[test]
+    fn action_disband_inactive_build_sound_precedes_direct_disband() {
+        let mut g = GroupData::default();
+        g.add(40, 6, true, 0, 0);
+        let stopped_site = DisbandMemberFacts {
+            o: 40,
+            active: true,
+            is_build: true,
+            build_active: false,
+            ..Default::default()
+        };
+        let plan = plan_action_disband(&g, false, false, true, &[stopped_site]).unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                DisbandStep::PlayBuildingSound {
+                    who: 6,
+                    o: 40,
+                    sound: 0x14D,
+                },
+                DisbandStep::DisbandObject {
+                    who: 6,
+                    o: 40,
+                    arg: 0,
+                },
+            ]
+        );
     }
 
     #[test]

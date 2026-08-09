@@ -169,9 +169,21 @@ impl MaskWriter {
                 // Every bit below has an executable `apply_unit` body in the ordinary
                 // environment. Keep unsupported taxonomy entries in `generated.rs`, but
                 // do not advertise them to a policy until their mandatory host exists.
-                allow(g::uv::HALT);
-                allow(g::uv::STANCE);
-                allow(g::uv::DISBAND);
+                // HALT's exact body refuses building selections and skips true airborne
+                // planes. The permissive table has no is_plane evidence, so only derived
+                // ordinary non-plane units can advertise it.
+                if !w.rules.caps.is_permissive() && !is_building && !c.is_plane {
+                    allow(g::uv::HALT);
+                }
+                // Active buildings route DISBAND through Build::queue_up(DISBAND), which
+                // this reduced world does not yet own. Ordinary non-build objects take the
+                // exact Object::disband branch. The permissive table marks every type as a
+                // building, naturally keeping this fail-closed.
+                if !is_building {
+                    allow(g::uv::DISBAND);
+                }
+                // STANCE remains masked until TypeCaps supplies get_stance_type and the
+                // mandatory-order/repath facts consumed by the full retail action.
                 if c.has(F_MOVE) && !is_building {
                     allow(g::uv::MOVE_TO);
                     allow(g::uv::MOVE_NEAR);

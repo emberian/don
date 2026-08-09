@@ -319,9 +319,10 @@ mod tests {
     /// The spatial digest was captured with the pre-optimization implementation at
     /// `fc7e2b0`. The mask digest was recaptured from the shipped type-capability path
     /// after the action-honesty gate stopped advertising unsupported verbs and removed
-    /// padding fallback bits from live records. Together they catch accidental changes
-    /// to plane clearing, entity occupancy, or packed-mask emission independently of the
-    /// cross-thread comparison above.
+    /// padding fallback bits from live records. It was recaptured again when exact HALT
+    /// and DISBAND lifecycle predicates replaced the approximate STANCE advertisement.
+    /// Together they catch accidental changes to plane clearing, entity occupancy, or
+    /// packed-mask emission independently of the cross-thread comparison above.
     #[test]
     fn hot_output_fingerprint_matches_the_pre_optimization_capture() {
         let cfg = EnvConfig {
@@ -344,7 +345,7 @@ mod tests {
             (h ^ u32::from(*v)).wrapping_mul(0x0100_0193)
         });
         assert_eq!(spatial, 0xD9EA_9DC5);
-        assert_eq!(masks, 0xD098_E035);
+        assert_eq!(masks, 0xC6DD_05D1);
     }
 
     #[test]

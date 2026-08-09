@@ -11,7 +11,7 @@ use don_env::state::{
     EnvFarmGatherOrder, EnvWorld, GatherHost, GatherHostBoundary, GatherHostError,
     GatherLeaderFrame, Rules,
 };
-use don_sim::command::QueuePos;
+use don_sim::command::{build, Bridge, Package, QueuePos};
 use don_sim::systems::collision::DOMAIN_LAND;
 use don_sim::systems::economy::{CapGates, DoGatherContext, GatherInputs};
 use don_sim::systems::gather_lifecycle::{OrdinaryGatherKind, OrdinaryGatherTarget};
@@ -303,6 +303,45 @@ fn invalid_retirement_chain_refuses_halt_without_partial_cleanup() {
     assert_eq!(f.world.orders[worker_row], before_order);
     assert_eq!(f.world.order[worker_row], before_mirror);
     assert_eq!(f.world.players[0].gather_dirty, before_dirty);
+
+    if !f.world.rules.caps.is_permissive() {
+        f.world
+            .sim
+            .units
+            .set_unit_masks(worker_row, 0x8400_0100 | 0x20);
+        let before_masks = f.world.sim.units.get_unit_masks(worker_row);
+        let before_gather = f.world.gather.clone();
+        let before_order = f.world.orders[worker_row].clone();
+        let mut stats = ApplyStats::default();
+        apply_unit(
+            &mut f.world,
+            &f.cfg,
+            0,
+            f.worker,
+            UnitAction {
+                verb: (g::uv::HALT + 1) as u16,
+                ..Default::default()
+            },
+            &mut stats,
+        );
+        assert_eq!(stats.illegal, 1);
+        assert_eq!(f.world.sim.units.get_unit_masks(worker_row), before_masks);
+        assert_eq!(f.world.gather, before_gather);
+        assert_eq!(f.world.orders[worker_row], before_order);
+
+        let worker_o = f.world.sim.units.o()[worker_row];
+        let mut bridge = Bridge::new();
+        let mut package = Package::new(0, 0);
+        bridge
+            .process_all(&mut package, &build::group(0, &[worker_o]), &mut f.world)
+            .unwrap();
+        bridge
+            .process_all(&mut package, &build::halt(), &mut f.world)
+            .unwrap();
+        assert_eq!(f.world.sim.units.get_unit_masks(worker_row), before_masks);
+        assert_eq!(f.world.gather, before_gather);
+        assert_eq!(f.world.orders[worker_row], before_order);
+    }
 }
 
 #[test]
