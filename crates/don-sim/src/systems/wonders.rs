@@ -422,6 +422,62 @@ impl Wonders {
         })
     }
 
+    /// `LeaderData::get_wonders` `0x006DB680`: number of valid completed records in
+    /// this owner's logical Wonder prefix.
+    pub fn get_wonders(&self, who: usize) -> Result<i32, WonderError> {
+        let owner = checked_owner(who as i32)?;
+        let mark = checked_mark(owner, self.wonder_mark[owner], self.lists[owner].len())?;
+        Ok(self.lists[owner][..mark]
+            .iter()
+            .filter(|record| record.is_valid())
+            .count() as i32)
+    }
+
+    /// `LeaderData::get_team_wonders` `0x006DA2D0`: completed Wonders held by the
+    /// valid owner and every mutual ally.
+    pub fn get_team_wonders(&self, who: usize, leaders: &Leaders) -> Result<i32, WonderError> {
+        checked_owner(who as i32)?;
+        let mut total = 0i32;
+        for member in 0..NUM_WONDER_OWNERS {
+            if leaders.slots[member].flag(victory_score::leader_flag::VALID)
+                && (member == who || leaders.is_ally(who, member))
+            {
+                total = total.wrapping_add(self.get_wonders(member)?);
+            }
+        }
+        Ok(total)
+    }
+
+    /// `LeaderData::get_unbuilt_wonders` `0x006DA290`: number of live object links
+    /// in this owner's unbuilt list. Retail permits negative retired links in walked
+    /// arrays, so this intentionally counts `o >= 0` instead of using `Vec::len`.
+    pub fn get_unbuilt_wonders(&self, who: usize) -> Result<i32, WonderError> {
+        let owner = checked_owner(who as i32)?;
+        Ok(self.unbuilt[owner]
+            .iter()
+            .filter(|record| record.o >= 0)
+            .count() as i32)
+    }
+
+    /// `LeaderData::get_team_unbuilt_wonders` `0x006DA3A0`: live unbuilt Wonder
+    /// links held by the valid owner and every mutual ally.
+    pub fn get_team_unbuilt_wonders(
+        &self,
+        who: usize,
+        leaders: &Leaders,
+    ) -> Result<i32, WonderError> {
+        checked_owner(who as i32)?;
+        let mut total = 0i32;
+        for member in 0..NUM_WONDER_OWNERS {
+            if leaders.slots[member].flag(victory_score::leader_flag::VALID)
+                && (member == who || leaders.is_ally(who, member))
+            {
+                total = total.wrapping_add(self.get_unbuilt_wonders(member)?);
+            }
+        }
+        Ok(total)
+    }
+
     /// `UnbuiltWonders::add_unbuilt_wonder` `0x0073C1D0`.
     pub fn add_unbuilt_wonder(&mut self, who: i32, o: i32) -> Result<(), WonderError> {
         let owner = checked_owner(who)?;
@@ -1716,6 +1772,33 @@ mod tests {
         *world.values.get_mut(&(0, 10)).unwrap() = 5;
         let (net, _) = registry.victory_inputs(&mut world, &leaders).unwrap();
         assert_eq!(&net[..4], &[1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn completed_and_unbuilt_counts_follow_live_records_and_mutual_allies() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        for (who, o) in [(0, 10), (0, 11), (1, 12), (2, 13)] {
+            world.add(who, o, WONDER_FIRST + who, 1);
+            registry.init_wonder(&mut world, who, o).unwrap();
+        }
+        registry.add_unbuilt_wonder(0, 20).unwrap();
+        registry.add_unbuilt_wonder(1, 21).unwrap();
+        registry.add_unbuilt_wonder(2, 22).unwrap();
+
+        let mut leaders = leaders(&[0, 1, 2]);
+        ally(&mut leaders, 0, 1);
+        // One-sided Ally is Peace in retail and must not enter either team total.
+        leaders.set_diplo(0, 2, Diplo::Ally);
+
+        assert_eq!(registry.get_wonders(0), Ok(2));
+        assert_eq!(registry.get_team_wonders(0, &leaders), Ok(3));
+        assert_eq!(registry.get_unbuilt_wonders(0), Ok(1));
+        assert_eq!(registry.get_team_unbuilt_wonders(0, &leaders), Ok(2));
+
+        registry.close_wonder(0, 0).unwrap();
+        assert_eq!(registry.get_wonders(0), Ok(1));
+        assert_eq!(registry.get_team_wonders(0, &leaders), Ok(2));
     }
 
     #[test]

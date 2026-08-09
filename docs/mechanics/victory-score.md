@@ -23,7 +23,7 @@ line are named.
 | Victory conditions: wonder, territory, score, time limit, economic, conquest/last-alliance | complete state machine; completed-Wonder value/net supply is tick-wired behind the mandatory `WonderWorld` boundary |
 | Musical chairs cull | implemented, **weakest** part — see §8 |
 | Elimination: capital-loss timer (`ELIMINATION_CAPITAL`) | complete |
-| `Leader::victory` / `Leader::defeat` state transitions, ally propagation | complete |
+| `Leader::victory` / `Leader::defeat` state transitions, queue cleanup, ally propagation, terminal `check_victory` | complete |
 | Map-scaled timers (`wonder_timer`, `popwin_timer`, `retake_capital`) | complete |
 | Checksum-channel byte emitters + `adler32` | complete |
 | Tech-race victory (`VICTORY_TECH_RACE`, `VICTORY_BY_TECH_RACE`) | **not implemented** — see §8 |
@@ -361,12 +361,15 @@ game's alternate win paths.
 `wonderwins.list[info.wonderwin].data[0]`. Ties: between **allies** the higher
 `get_wonder_value` (`0x006EBB90`) wins; between **non-allies** nobody wins.
 
-Under dedicated `Wonder` victory it fires immediately. Under `Standard` /
-`SuddenDeath` it arms a countdown in `LeaderData::wonderwin_timer` (`+0x44C`) /
-`wonderwin_stamp` (`+0x448`) and fires when
-`Game::wonder_timer() - (frame - stamp) <= 0`. Losing the qualification clears the
-timer and rewinds the stamp by `frame`. Warning announcements are emitted at 4500 /
-1800 / 900 frames remaining (`0x1194 / 0x708 / 0x384`), which is presentation.
+Dedicated `Wonder` and `SuddenDeath` victories fire immediately. `Standard` arms a
+countdown only when the game is networked/recording (`Game` semaphore bit 2) or has more
+than one nation. It also fires immediately if any valid member of the qualifying alliance
+has prerequisite `0x2B9`; that bypass is passed as `instant=1` to `Leader::victory` and
+therefore sets `INSTANT_VICTORY`. The countdown lives in `LeaderData::wonderwin_timer` (`+0x44C`) /
+`wonderwin_stamp` (`+0x448`) and fires when `Game::wonder_timer() - (frame - stamp) <= 0`.
+Losing qualification clears the timer and rewinds the stamp by `frame`. Warning
+announcements are emitted at 4500 / 1800 / 900 frames remaining (`0x1194 / 0x708 /
+0x384`), which is presentation.
 
 Thresholds, `<CATEGORIES id="wonderwins">`: 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 20,
 24, **9999** (= "No Wonder Victory").
@@ -538,6 +541,7 @@ if leader_flags & (LEADER_WON | LEADER_DEFEATED): return
 leader_flags |= LEADER_WON
 leader_flags2 = instant ? |INSTANT_VICTORY : &~INSTANT_VICTORY
 victory_type = vt
+clean_queue(0) on every live owned Build                 # aggregate num_queued -> 0
 for every other active leader:
     leader_flags |= LEADER_SURVIVED
     if is_ally(other, me):  other.victory(vt, instant)     # recursive — allies win too
@@ -554,7 +558,9 @@ leader_flags = (leader_flags & ~LEADER_ACTIVE) | LEADER_DEFEATED
 leader_flags2 |= LEADER_UNIT_AI_OFF
 game.musical_chairs = game.frame                # 0x006ECB94
 defeat_type = dt
+clean_queue(0) on every live owned Build
 ... then raze every object the player owns (objects lane) ...
+if GAME_OVER is not set: Game::check_victory()
 ```
 
 `Leader::process_elimination` @ `0x006B8A20`, called per active leader from

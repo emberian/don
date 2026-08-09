@@ -806,6 +806,10 @@ pub struct LeaderState {
     /// `LeaderData::get_economic()` @ `0x006D6490` — the per-player income figure the
     /// Economic victory averages over the team.
     pub economic: i32,
+    /// `LeaderData::has_preq(0x2B9)` in the Wonder-victory block at
+    /// `0x00730FFA..0x00731010`. Any valid member of the qualifying alliance with this
+    /// prerequisite bypasses the Standard-mode Wonder countdown.
+    pub has_preq_2b9: bool,
 }
 
 impl Default for LeaderState {
@@ -847,6 +851,7 @@ impl Default for LeaderState {
             researching: [vec![false; NUM_TYPES], vec![false; NUM_TYPES]],
             resource_avail: [true; NUM_RESOURCES],
             economic: 0,
+            has_preq_2b9: false,
         }
     }
 }
@@ -1387,8 +1392,11 @@ impl Leaders {
 
     /// `Leader::victory(int victory_type, int instant)` @ `0x006EC9B0`, state part.
     ///
-    /// Marks the winner, then walks every other active leader: allies win with the
-    /// same type (recursively), everyone else is defeated with `DEFEAT_VICTORY`.
+    /// Marks the winner, cleans every production queue owned by that leader, then
+    /// walks every other active leader: allies win with the same type (recursively),
+    /// everyone else is defeated with `DEFEAT_VICTORY`. Retail's defeated-player
+    /// path calls `Game::check_victory`; [`Self::defeat`] does the same, so a Wonder
+    /// win reaches both game-over semaphores instead of stopping at leader flags.
     pub fn victory(&mut self, m: &mut Match, who: usize, vt: VictoryType, instant: i32) {
         if self.slots[who].leader_flags & (leader_flag::WON | leader_flag::DEFEATED) != 0 {
             return;
@@ -1400,6 +1408,10 @@ impl Leaders {
             self.slots[who].leader_flags2 |= leader_flag2::INSTANT_VICTORY;
         }
         self.slots[who].victory_type = vt as i32;
+        // `0x006ECA04..0x006ECA5C`: every live Build owned by the winner receives
+        // `Build::clean_queue(0)`. `num_queued` is the aggregate side effect of those
+        // per-building queues and therefore becomes exactly zero after the sweep.
+        self.slots[who].num_queued.fill(0);
         self.events.push(MatchEvent::Victory {
             who,
             victory_type: vt,
@@ -1419,8 +1431,9 @@ impl Leaders {
     }
 
     /// `Leader::defeat(int defeat_type, int arg, int instant)` @ `0x006ECB00`,
-    /// state part. The retail function then razes the player's objects, which lives
-    /// in the objects lane; the flags, stamps and `musical_chairs` reset are here.
+    /// state part. Retail first cleans the player's production queues and later razes
+    /// the player's objects (the latter remains in the objects lane). It then calls
+    /// `Game::check_victory`; that terminal transition is executable here.
     pub fn defeat(&mut self, m: &mut Match, who: usize, dt: DefeatType, by: i32, instant: i32) {
         self.slots[who].defeated_by = by;
         if self.slots[who].flag(leader_flag::DEFEATED) {
@@ -1438,10 +1451,17 @@ impl Leaders {
         // musical-chairs interval.
         m.musical_chairs = m.frame;
         self.slots[who].defeat_type = dt as i32;
+        self.slots[who].num_queued.fill(0);
         self.events.push(MatchEvent::Defeat {
             who,
             defeat_type: dt,
         });
+        // `Leader::defeat` `0x006ECDD8..0x006ECDE8`: unless the game-over bit was
+        // already set, retail calls `Game::check_victory` after the cleanup. This is
+        // what turns a completed Wonder victory into a terminal match.
+        if !m.sem(game_sem::GAME_OVER) {
+            self.check_victory(m);
+        }
     }
 
     /// `Leader::process_elimination` @ `0x006B8A20` — the capital-loss timer.
@@ -1564,9 +1584,23 @@ impl Leaders {
                     }
                     continue;
                 }
-                if v == Victory::Wonder as u8 {
-                    // Dedicated Wonder victory: instant.
-                    self.victory(m, who, VictoryType::ByWonder, 0);
+                let countdown_bypassed = (0..NUM_LEADERS).any(|member| {
+                    self.slots[member].flag(leader_flag::VALID)
+                        && (member == who || self.is_ally(who, member))
+                        && self.slots[member].has_preq_2b9
+                });
+                let standard_multiplayer_countdown = v == Victory::Standard as u8
+                    && (m.sem(game_sem::NET_OR_RECORDING) || m.num_nations > 1)
+                    && !countdown_bypassed;
+                if !standard_multiplayer_countdown {
+                    // Dedicated Wonder, Sudden Death, Standard solo, and the
+                    // prerequisite-0x2B9 alliance bypass are immediate.
+                    self.victory(
+                        m,
+                        who,
+                        VictoryType::ByWonder,
+                        if countdown_bypassed { 1 } else { 0 },
+                    );
                     break;
                 }
                 if self.slots[who].wonderwin_timer == 0 {
@@ -2131,6 +2165,7 @@ mod tests {
         let mut ls = one_leader(&m);
         for i in 0..4 {
             ls.slots[i].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+            ls.slots[i].num_queued[0x40 + i] = (i + 1) as u16;
         }
         ls.set_diplo(0, 1, Diplo::Ally);
         ls.set_diplo(1, 0, Diplo::Ally);
@@ -2141,6 +2176,86 @@ mod tests {
         assert!(ls.slots[2].flag(leader_flag::DEFEATED));
         assert_eq!(ls.slots[2].defeat_type, DefeatType::Victory as i32);
         assert!(ls.slots[3].flag(leader_flag::DEFEATED));
+        assert!(ls.slots[..4]
+            .iter()
+            .all(|leader| leader.num_queued.iter().all(|queued| *queued == 0)));
+        assert!(m.sem(game_sem::GAME_OVER));
+        assert!(m.sem(game_sem::VICTORY_RESOLVED));
+    }
+
+    #[test]
+    fn wonder_victory_expiry_executes_terminal_cleanup() {
+        let mut m = Match::default();
+        m.options.victory = Victory::Standard as u8;
+        m.num_nations = 2;
+        m.world_xs = 70;
+        let mut ls = one_leader(&m);
+        ls.slots[1].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+        ls.slots[0].num_queued[0x20e] = 2;
+        ls.slots[1].num_queued[0x1a0] = 3;
+
+        m.frame = 10;
+        ls.process_victory(&mut m, &[1, 0, 0, 0, 0, 0, 0, 0], &[1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(ls.slots[0].wonderwin_timer, 1);
+        assert!(!m.sem(game_sem::GAME_OVER));
+
+        m.frame = 10 + m.wonder_timer();
+        ls.process_victory(&mut m, &[1, 0, 0, 0, 0, 0, 0, 0], &[1, 0, 0, 0, 0, 0, 0, 0]);
+
+        assert!(ls.slots[0].flag(leader_flag::WON));
+        assert!(ls.slots[1].flag(leader_flag::DEFEATED));
+        assert!(ls.slots[0].num_queued.iter().all(|queued| *queued == 0));
+        assert!(ls.slots[1].num_queued.iter().all(|queued| *queued == 0));
+        assert!(m.sem(game_sem::GAME_OVER));
+        assert!(m.sem(game_sem::VICTORY_RESOLVED));
+    }
+
+    #[test]
+    fn wonder_countdown_gate_distinguishes_modes_network_and_prerequisite() {
+        let net = [1, 0, 0, 0, 0, 0, 0, 0];
+
+        let mut solo = Match::default();
+        solo.options.victory = Victory::Standard as u8;
+        let mut solo_leaders = one_leader(&solo);
+        solo_leaders.slots[1].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+        solo_leaders.process_victory(&mut solo, &net, &net);
+        assert!(solo_leaders.slots[0].flag(leader_flag::WON));
+        assert_eq!(solo_leaders.slots[0].wonderwin_timer, 0);
+
+        let mut recorded = Match::default();
+        recorded.options.victory = Victory::Standard as u8;
+        recorded.set_sem(game_sem::NET_OR_RECORDING);
+        let mut recorded_leaders = one_leader(&recorded);
+        recorded_leaders.slots[1].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+        recorded_leaders.process_victory(&mut recorded, &net, &net);
+        assert!(!recorded_leaders.slots[0].flag(leader_flag::WON));
+        assert_eq!(recorded_leaders.slots[0].wonderwin_timer, 1);
+
+        let mut sudden = Match::default();
+        sudden.options.victory = Victory::SuddenDeath as u8;
+        sudden.num_nations = 2;
+        let mut sudden_leaders = one_leader(&sudden);
+        sudden_leaders.slots[1].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+        sudden_leaders.process_victory(&mut sudden, &net, &net);
+        assert!(sudden_leaders.slots[0].flag(leader_flag::WON));
+        assert_eq!(
+            sudden_leaders.slots[0].leader_flags2 & leader_flag2::INSTANT_VICTORY,
+            0
+        );
+
+        let mut bypass = Match::default();
+        bypass.options.victory = Victory::Standard as u8;
+        bypass.num_nations = 2;
+        let mut bypass_leaders = one_leader(&bypass);
+        bypass_leaders.slots[1].leader_flags = leader_flag::VALID | leader_flag::ACTIVE;
+        bypass_leaders.slots[0].has_preq_2b9 = true;
+        bypass_leaders.process_victory(&mut bypass, &net, &net);
+        assert!(bypass_leaders.slots[0].flag(leader_flag::WON));
+        assert_ne!(
+            bypass_leaders.slots[0].leader_flags2 & leader_flag2::INSTANT_VICTORY,
+            0
+        );
+        assert_eq!(bypass_leaders.slots[0].wonderwin_timer, 0);
     }
 
     #[test]

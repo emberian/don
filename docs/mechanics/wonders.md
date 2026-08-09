@@ -20,6 +20,7 @@ two arrays consumed by the existing Wonder victory state machine. It implements:
 - close/invalidate and trailing-mark compaction;
 - the lifetime `LeaderData::wonders_held` high-water update;
 - individual, allied-team, strongest-hostile-team, and net Wonder values;
+- exact individual/allied completed and unbuilt Wonder counts used by leader/AI queries;
 - completed-build close, including mandatory receipts for the leader dirty flag and the
   type-specific bonus/terrain recalculation remainder;
 - capture transfer as retail performs it: receipt-confirmed generic build swap, new-owner
@@ -109,7 +110,12 @@ statistics.
 Standard, Sudden Death, and Wonder modes. With no active completed Wonder, zero arrays remain
 exact and no host is required. With an active Wonder, values are queried live each frame, so
 a changed object/type result immediately changes qualification rather than using a cached
-completion-time score.
+completion-time score. The retail mode gate is executable too: Wonder and Sudden Death are
+immediate; Standard counts down only in multiplayer/recorded play, with prerequisite
+`0x2B9` providing the recovered alliance-wide bypass. When a win fires, the victory lane
+also reproduces the aggregate `Build::clean_queue(0)` effects and defeated-player
+`Game::check_victory` tail, so the match reaches both game-over and victory-resolved
+semaphores.
 
 The integration regression begins below threshold, changes the mandatory host's live value,
 arms the Standard-mode countdown on the next frame, and wins on the exact map-scaled expiry.
