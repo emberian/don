@@ -6,6 +6,10 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The browser prints replay evidence next to the compiled deviation registry. Refuse a
+# build when that generated snapshot has drifted from the authoritative replay scoreboard.
+node "$here/tools/gen-readiness.mjs" --check
+
 cd "$here/wasm"
 cargo build --release --target wasm32-unknown-unknown
 

@@ -159,6 +159,10 @@ try {
     return JSON.stringify({
       initialCatalog, filteredCatalog, pauseLabel,
       integrationLabel: document.querySelector('.status-note')?.textContent ?? '',
+      runtimeLabel: document.getElementById('readiness-runtime')?.textContent ?? '',
+      gateLabel: document.getElementById('readiness-gate')?.textContent ?? '',
+      replayLabel: document.getElementById('readiness-replay')?.textContent ?? '',
+      blockerItems: document.querySelectorAll('#readiness-blockers li').length,
       incomeOptions: [...document.querySelectorAll('#income option')].map(o => o.textContent),
       commandButtons: document.querySelectorAll('#command-dock button').length,
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
@@ -171,6 +175,12 @@ try {
     ['catalog filtering works', out.ui.filteredCatalog === 1],
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
     ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
+    ['runtime identity says the web GameWorld is not Arena',
+      out.ui.runtimeLabel.includes('web::wasm::game::GameWorld') && out.ui.runtimeLabel.includes('connected: no')],
+    ['the compiled playable gate is visibly blocked', out.ui.gateLabel.includes('BLOCKED')],
+    ['the replay card reports non-empty walks and zero matches',
+      out.ui.replayLabel.includes('world walks non-empty') && out.ui.replayLabel.includes('0 matches')],
+    ['the local boundary and compiled blockers are inspectable', out.ui.blockerItems > 1],
     ['no whole-world fidelity option is advertised', out.ui.incomeOptions.every((x) => !/^fidelity\b/i.test(x))],
     ['the touch command dock is complete', out.ui.commandButtons >= 9],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
@@ -336,6 +346,15 @@ try {
     ['the producer menu is non-empty', S.barracksProducts > 0],
     ['a unit was trained', S.trained > 0],
     ['the age advanced', S.age[1] > S.age[0]],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+  out.scriptTransport = await c.eval('window.don.readiness().transport');
+  for (const [name, ok] of [
+    ['commands crossed the exact packet boundary', out.scriptTransport.submitted > 0],
+    ['every submitted packet drained at a tick',
+      out.scriptTransport.drained === out.scriptTransport.submitted && out.scriptTransport.pending === 0],
+    ['packet handlers applied object orders', out.scriptTransport.ordersApplied > 0],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

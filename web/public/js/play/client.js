@@ -11,6 +11,7 @@
 
 import { GameModule, RES_NAMES, GAP_NAMES, OP } from './wasmgame.js';
 import { makeRenderer } from './gfx.js';
+import { REPLAY_EVIDENCE } from './readiness.gen.js';
 import { decode } from '../wire.gen.js';
 
 const $ = (id) => document.getElementById(id);
@@ -65,6 +66,7 @@ async function boot() {
   if (!mod.hasGameData || !mod.hasPlayData) {
     throw new Error('packed retail-derived tables failed validation');
   }
+  renderReadinessStatic();
   say(`wasm up — ${mod.tiles}x${mod.tiles} tiles, ${mod.playerCount} players`, 'ok');
   badge('data', mod.hasGameData ? 'unit tables: live' : 'unit tables: SYNTHETIC',
     mod.hasGameData ? 'on' : 'bad');
@@ -721,6 +723,64 @@ function showInspect(info) {
 // HUD
 // ---------------------------------------------------------------------------------------
 
+function renderReadinessStatic() {
+  const registry = state.mod.readiness();
+  const replay = REPLAY_EVIDENCE;
+  $('readiness-head').textContent =
+    'Not Fidelity mode: independent GPL integration build; this page is not running the Arena.';
+
+  const runtime = $('readiness-runtime');
+  runtime.textContent =
+    'web::wasm::game::GameWorld — local integration composition; don_ai::arena::World connected: no';
+  runtime.className = 'rv bad';
+
+  const gate = $('readiness-gate');
+  gate.textContent = registry.ready
+    ? 'READY — no compiled blockers'
+    : `BLOCKED — ${registry.blockers.length} compiled known drifts`;
+  gate.className = `rv ${registry.ready ? 'ok' : 'bad'}`;
+  gate.title = registry.source;
+
+  const first = replay.world.firstDivergenceTurns.join(', ') || 'not observed';
+  const replayEl = $('readiness-replay');
+  replayEl.textContent =
+    `${replay.prefixesParsed}/${replay.files} prefixes parsed · ` +
+    `${replay.world.nontrivial.toLocaleString()}/${replay.world.comparisons.toLocaleString()} ` +
+    `world walks non-empty · ${replay.world.matches.toLocaleString()} matches · ` +
+    `first divergence turn ${first}`;
+  replayEl.className = `rv ${replay.world.matches === replay.world.comparisons ? 'ok' : 'bad'}`;
+  replayEl.title = `${replay.source}; ${replay.world.unsourcedBytes.min.toLocaleString()}–` +
+    `${replay.world.unsourcedBytes.max.toLocaleString()} walked bytes remain unsourced`;
+
+  const list = $('readiness-blockers');
+  list.replaceChildren();
+  const local = document.createElement('li');
+  const localSlug = document.createElement('code');
+  localSlug.textContent = 'web-gameworld-not-arena';
+  local.append(localSlug, document.createTextNode(
+    ' — command packets terminate in the standalone web GameWorld, not don-ai Arena'));
+  list.appendChild(local);
+  for (const blocker of registry.blockers) {
+    const li = document.createElement('li');
+    const slug = document.createElement('code');
+    slug.textContent = blocker.slug;
+    li.append(slug, document.createTextNode(` — ${blocker.title}`));
+    list.appendChild(li);
+  }
+  $('readiness-blocker-summary').textContent =
+    `${registry.blockers.length} compiled blockers + 1 browser runtime boundary`;
+  renderTransport();
+}
+
+function renderTransport() {
+  const t = state.mod.transport();
+  const gaps = state.mod.gaps().reduce((a, b) => a + b, 0);
+  $('readiness-transport').textContent =
+    `${t.submitted.toLocaleString()} submitted · ${t.drained.toLocaleString()} drained at ticks · ` +
+    `${t.ordersApplied.toLocaleString()} object orders applied · ${t.pending.toLocaleString()} pending · ` +
+    `${gaps.toLocaleString()} fail-closed gaps`;
+}
+
 function renderHud() {
   const m = state.mod;
   if (state.gfx.errors.length > state.rendererErrorCount) {
@@ -766,6 +826,7 @@ function renderHud() {
 
   renderSelection();
   renderCoverage();
+  renderTransport();
 }
 
 function renderSelection() {
@@ -1110,6 +1171,13 @@ window.don = {
   info: (id) => state.mod.info(id),
   player: (p = 0) => state.mod.player(p),
   gaps: () => state.mod.gaps(),
+  readiness: () => ({
+    runtime: 'web::wasm::game::GameWorld',
+    arenaConnected: false,
+    registry: state.mod.readiness(),
+    replay: REPLAY_EVIDENCE,
+    transport: state.mod.transport(),
+  }),
   digest: () => state.mod.digest(),
   // The only capture that tells the truth about a GPU canvas — see gfx.js `readback`.
   snapshot: () => state.gfx.readback(state.mod.views(), state.mod.live, camPack()),
@@ -1123,6 +1191,9 @@ window.don = {
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
+    transport: state.mod.transport(),
+    playableBlockers: state.mod.readiness().blockers.length,
+    arenaConnected: false,
     paletteSize: paletteItems.length,
   }),
   centreOn,

@@ -7,7 +7,8 @@ Full write-up, architecture and measurements: **`docs/tracks/web-spectator.md`**
 ```sh
 node web/tools/pack-gamedata.mjs      # schema/live/* -> public/data/gamedata.bin (gitignored)
 node web/tools/gen-wire.mjs           # schema/command-wire.json -> the JS + Rust command codec
-web/build.sh                          # cargo -> wasm32 -> public/wasm/don_web.wasm  (~62 KB)
+node web/tools/gen-readiness.mjs      # replay scoreboard -> compact browser evidence
+web/build.sh                          # cargo -> wasm32 -> public/wasm/don_web.wasm  (~168 KB)
 node web/serve.mjs                    # http://127.0.0.1:8787/  with COOP/COEP set
 node web/bench.mjs --out results.json # launches Chrome, drives it over CDP, prints JSON
 ```
@@ -41,6 +42,7 @@ arithmetic of a hit is the engine's; who hits whom is ours.
 |---|---|
 | `tools/pack-gamedata.mjs` | packs `schema/live/{live-tables-unit.tsv,balance-real.bin,rules-block-*.txt}` into one blob |
 | `tools/gen-wire.mjs` | generates `public/js/wire.gen.js` **and** `wasm/src/wire_gen.rs` from `schema/command-wire.json` |
+| `tools/gen-readiness.mjs` | generates the compact replay card from `schema/replay-validation.json`; `web/build.sh` refuses stale evidence |
 | `wasm/` | `don-web`: raw C-ABI wasm shim. No `wasm-bindgen`. Standalone cargo workspace, so the root `cargo test` never builds it. |
 | `wasm/src/real.rs` | the simulation: SoA world, owner-slot rotation, derived damage. **Read its module docs before believing anything on screen.** |
 | `wasm/src/gamedata.rs` | reader for the packed tables, plus the synthetic fallback |
@@ -78,6 +80,12 @@ It exposes every rejected command in the HUD and labels itself an integration bu
 map generation, nation/builder eligibility, movement/collision, acquisition, construction,
 fog/LOS, and parts of the economy are not yet retail-complete. The recovered primitives are
 real, but their present composition is not called Fidelity mode.
+
+Its readiness panel has three independent inputs: the runtime identifies itself as the
+standalone `web::wasm::game::GameWorld` (not `don_ai::arena::World`), the playable blocker
+list is read from `don_sim::deviations` compiled into the Wasm module, and replay evidence is
+generated from the authoritative validation JSON. Packet counters show submitted, tick-drained,
+applied, pending, and fail-closed commands, so UI activity is not mistaken for engine activity.
 
 ## Playing
 

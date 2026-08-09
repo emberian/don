@@ -120,6 +120,22 @@
   code { font:9.5px var(--mono); color:var(--accent); }
   .status-note { padding:6px 7px; border:1px solid #5c4a2d; border-radius:6px;
     color:var(--warn); background:#1b1711; font:9.5px/1.4 var(--mono); }
+  .readiness-grid { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .readiness-card { min-width:0; padding:6px; border:1px solid var(--line); border-radius:5px;
+    background:#0d1016; }
+  .readiness-card.wide { grid-column:1/3; }
+  .readiness-card .rh { color:var(--dim); font:8.5px var(--mono); text-transform:uppercase;
+    letter-spacing:.08em; }
+  .readiness-card .rv { margin-top:2px; color:var(--ink); font:10px/1.35 var(--mono);
+    overflow-wrap:anywhere; }
+  .readiness-card .rv.bad { color:var(--bad); }
+  .readiness-card .rv.ok { color:var(--good); }
+  #readiness details { margin-top:6px; color:var(--dim); font:9.5px/1.45 var(--mono); }
+  #readiness summary { cursor:pointer; color:var(--accent); }
+  #readiness-blockers { margin:5px 0 0; padding-left:18px; user-select:text;
+    -webkit-user-select:text; }
+  #readiness-blockers li { margin:3px 0; }
+  #readiness-blockers code { color:var(--warn); }
   #palette-filter { width:100%; margin-bottom:6px; padding:4px 6px; }
 
   @media (max-width:900px) {
@@ -188,8 +204,29 @@
       <span id="pdata" class="badge">play tables?</span>
       <span class="badge off">integration build</span>
     </div>
-    <div class="status-note">Not Fidelity mode yet: the page exposes recovered retail
-      primitives, while unported world systems remain explicit below.</div>
+    <div id="readiness-head" class="status-note">Loading compiled readiness registry…</div>
+
+    <fieldset id="readiness">
+      <legend>runtime &amp; evidence</legend>
+      <div class="readiness-grid">
+        <div class="readiness-card wide">
+          <div class="rh">running world</div><div id="readiness-runtime" class="rv">booting…</div>
+        </div>
+        <div class="readiness-card">
+          <div class="rh">repo playable gate</div><div id="readiness-gate" class="rv">checking…</div>
+        </div>
+        <div class="readiness-card">
+          <div class="rh">replay checksum evidence</div><div id="readiness-replay" class="rv">loading…</div>
+        </div>
+        <div class="readiness-card wide">
+          <div class="rh">command packets</div><div id="readiness-transport" class="rv">0 submitted</div>
+        </div>
+      </div>
+      <details>
+        <summary id="readiness-blocker-summary">readiness blockers</summary>
+        <ol id="readiness-blockers"></ol>
+      </details>
+    </fieldset>
 
     <fieldset>
       <legend>orders</legend>

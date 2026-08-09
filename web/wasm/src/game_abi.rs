@@ -12,6 +12,7 @@ use crate::game::{gap, GameWorld, PlayData, MAP_SPAN, MAP_TILES, PLAYERS};
 use crate::gamedata::GameData;
 use crate::real::SUBTILE;
 use crate::wire_gen;
+use don_sim::deviations::{Deviation, ModeConfig, Surface};
 use don_sim::systems::economy as econ;
 use std::cell::UnsafeCell;
 
@@ -457,6 +458,69 @@ pub extern "C" fn game_gap_count() -> u32 {
     gap::COUNT as u32
 }
 
+/// Number of exact wire packets drained at tick boundaries. This counts packets, including
+/// ones that reached a fail-closed gap; [`game_orders_applied`] counts affected objects.
+/// Together with the JS submit counter this makes queued -> drained -> applied visible.
+/// # Safety
+/// `g` must be a live handle from [`game_create`].
+#[no_mangle]
+pub unsafe extern "C" fn game_commands_seen(g: *mut Game) -> u32 {
+    game_ref!(g).world.commands_seen as u32
+}
+
+/// Number of object-order mutations returned by command handlers.
+/// # Safety
+/// `g` must be a live handle from [`game_create`].
+#[no_mangle]
+pub unsafe extern "C" fn game_orders_applied(g: *mut Game) -> u32 {
+    game_ref!(g).world.orders_applied as u32
+}
+
+fn playable_blocker(index: u32) -> Option<Deviation> {
+    ModeConfig::improved()
+        .readiness_blockers(Surface::PlayableEdition)
+        .nth(index as usize)
+        .map(|b| b.deviation())
+}
+
+/// Current repository-level blockers for the playable product surface, taken directly
+/// from `don_sim::deviations`. These are not a claim that this standalone `GameWorld` is
+/// the Arena; the browser labels that separate runtime identity explicitly.
+#[no_mangle]
+pub extern "C" fn game_playable_blocker_count() -> u32 {
+    ModeConfig::improved()
+        .readiness_blockers(Surface::PlayableEdition)
+        .count() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn game_playable_blocker_slug_ptr(index: u32) -> *const u8 {
+    playable_blocker(index)
+        .map(|d| d.entry().slug.as_ptr())
+        .unwrap_or(std::ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn game_playable_blocker_slug_len(index: u32) -> u32 {
+    playable_blocker(index)
+        .map(|d| d.entry().slug.len() as u32)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn game_playable_blocker_title_ptr(index: u32) -> *const u8 {
+    playable_blocker(index)
+        .map(|d| d.entry().title.as_ptr())
+        .unwrap_or(std::ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn game_playable_blocker_title_len(index: u32) -> u32 {
+    playable_blocker(index)
+        .map(|d| d.entry().title.len() as u32)
+        .unwrap_or(0)
+}
+
 /// `WorldData::space_at_corner`'s grade for a footprint at a tile: 0 blocked, 2 partial,
 /// 3 approach clear, 4 fully clear. **This is the engine's own predicate** and it is what
 /// tints the placement preview.
@@ -612,4 +676,25 @@ pub extern "C" fn game_subtile() -> i32 {
 #[no_mangle]
 pub extern "C" fn game_players_count() -> u32 {
     PLAYERS as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_readiness_is_the_compiled_playable_registry() {
+        let expected: Vec<_> = ModeConfig::improved()
+            .readiness_blockers(Surface::PlayableEdition)
+            .map(|b| b.deviation())
+            .collect();
+        assert!(!expected.is_empty(), "the page must not advertise product readiness");
+        assert_eq!(game_playable_blocker_count() as usize, expected.len());
+        for (i, d) in expected.into_iter().enumerate() {
+            assert_eq!(game_playable_blocker_slug_len(i as u32), d.entry().slug.len() as u32);
+            assert_eq!(game_playable_blocker_title_len(i as u32), d.entry().title.len() as u32);
+        }
+        assert!(game_playable_blocker_slug_ptr(u32::MAX).is_null());
+        assert_eq!(game_playable_blocker_title_len(u32::MAX), 0);
+    }
 }

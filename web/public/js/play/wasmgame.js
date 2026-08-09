@@ -36,6 +36,8 @@ export class GameModule {
     this.playerCount = this.x.game_players_count();
     this.playerFields = this.x.game_player_fields();
     this.gapCount = this.x.game_gap_count();
+    this._submitted = 0;
+    this._readiness = this._loadReadiness();
   }
 
   static async load(url) {
@@ -56,8 +58,34 @@ export class GameModule {
       new Uint8Array(this.mem.buffer, p, playdataBytes.length).set(playdataBytes);
     }
     this.g = this.x.game_create(seed >>> 0, 0);
+    this._submitted = 0;
     this._buf = null;
     return this.g !== 0;
+  }
+
+  _staticText(ptr, len) {
+    if (!ptr || !len) return '';
+    return new TextDecoder().decode(new Uint8Array(this.mem.buffer, ptr, len));
+  }
+
+  _loadReadiness() {
+    const blockers = [];
+    const n = this.x.game_playable_blocker_count();
+    for (let i = 0; i < n; i++) {
+      blockers.push({
+        slug: this._staticText(
+          this.x.game_playable_blocker_slug_ptr(i), this.x.game_playable_blocker_slug_len(i)),
+        title: this._staticText(
+          this.x.game_playable_blocker_title_ptr(i), this.x.game_playable_blocker_title_len(i)),
+      });
+    }
+    return Object.freeze({
+      mode: 'improved',
+      surface: 'playable',
+      ready: blockers.length === 0,
+      blockers: Object.freeze(blockers.map(Object.freeze)),
+      source: 'don_sim::deviations compiled into don_web.wasm',
+    });
   }
 
   /**
@@ -156,6 +184,20 @@ export class GameModule {
 
   gaps() { return Array.from(this.views().gaps); }
 
+  /** Repository product gate, not a claim that this local GameWorld is the Arena. */
+  readiness() { return this._readiness; }
+
+  /** Exact packet lifecycle at the browser/Wasm boundary. */
+  transport() {
+    const drained = this.x.game_commands_seen(this.g) >>> 0;
+    return {
+      submitted: this._submitted,
+      drained,
+      pending: Math.max(0, this._submitted - drained),
+      ordersApplied: this.x.game_orders_applied(this.g) >>> 0,
+    };
+  }
+
   // ---- commands ------------------------------------------------------------------------
 
   /**
@@ -166,6 +208,7 @@ export class GameModule {
     const v = this.views();
     v.cmd.set(bytes, 0);
     this.x.game_submit(this.g, who, bytes.length);
+    this._submitted++;
     return bytes;
   }
 
