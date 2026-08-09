@@ -1528,6 +1528,7 @@ impl EnvWorld {
             match self.order[row] {
                 x if x == g::OrderIndex::MoveTo as u8 => self.advance_move(row, true),
                 x if x == g::OrderIndex::AttackTo as u8 => self.advance_attack_to(row),
+                x if x == g::OrderIndex::BuildAt as u8 => self.advance_build_at(row),
                 x if x == g::OrderIndex::GroupMove as u8 => self.advance_group_move(row),
                 x if x == g::OrderIndex::GroupAttack as u8 => self.advance_group_attack(row),
                 x if x == g::OrderIndex::GroupAttackTo as u8 => self.advance_group_attack_to(row),
@@ -2115,6 +2116,25 @@ impl EnvWorld {
             return;
         }
         self.advance_move(row, true);
+    }
+
+    /// Product boundary for `BUILD_AT`.
+    ///
+    /// EnvWorld owns the order's generational target payload, but not a persistent
+    /// `BuildData`, Wall virtual state, adjacency/footprint result, `blocked_site`,
+    /// animation/Guys state, reswarm Groups transaction, or activation/build-done graph.
+    /// Even apparently invalid targets can enter `build_done`, so no local retirement is
+    /// safe without that host. Preserve the entire node and expose the BUILD gap.
+    fn advance_build_at(&mut self, row: usize) {
+        let Some(order) = self.orders[row].front() else {
+            self.order[row] = OrderIndex::None as u8;
+            return;
+        };
+        if order.kind != OrderIndex::BuildAt {
+            self.unimplemented.unit[g::uv::BUILD] += 1;
+            return;
+        }
+        self.unimplemented.unit[g::uv::BUILD] += 1;
     }
 
     /// Integrate one frame toward an explicit target using the environment's existing

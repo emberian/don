@@ -149,10 +149,14 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 14 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 13 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
+use crate::systems::construction::{BuilderFinish, ObjectKey};
+use crate::systems::construction_builder::{
+    self, AfterInvalidTarget, PreflightInput as BuildAtPreflightInput, PreflightPlan,
+};
 use crate::systems::groups_guys::{GuyData, GuyEnv, UnitTypeStats};
 use crate::systems::movement::{
     self, vector_dist, Body, MoveStep, MoveTurnProfile, PathData, PathFinder, PathStack, PathUnit,
@@ -1442,6 +1446,45 @@ pub enum AttackToPostMove {
     Pause { set_pause: bool },
 }
 
+/// Why `BUILD_AT` cannot acquire one coherent builder/target/site transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildAtHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// Infallible unit/group effects reached after [`WorkWorld::build_at_preflight`].
+///
+/// Animation and facing are separate because retail performs both before testing the raw
+/// `UNIT_DECOY` bit. `Reswarm` is reached only after the current BUILD_AT node was bare-killed;
+/// `FinishTail` is likewise called after retirement so `check_build_order`/auto-gather/
+/// `build_done` observe the newly exposed queue head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildAtEffect {
+    SetAnimation { animation: i32 },
+    SetAngle { angle: i32 },
+    Reswarm { preserve_group_flag: bool },
+    FinishTail { reason: BuilderFinish },
+}
+
+/// Exact return partition of `Wall::do_construct` as consumed by `Unit::do_build`.
+///
+/// Placement, start/rejection, harmonic helper progress and `Build::activate(0,1,1)` are
+/// owned by the mandatory construction host. Only `Completed` retires the builder order in
+/// this call; a rejected site is observed as invalid by the builder on a later activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildAtConstructResult {
+    SiteRejected,
+    Progressed {
+        credited: u32,
+        started_this_call: bool,
+    },
+    Completed {
+        credited: u32,
+        started_this_call: bool,
+    },
+}
+
 /// Why `GROUP_ATTACK` could not acquire its global group/target snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupAttackHostError {
@@ -1671,6 +1714,39 @@ pub trait WorkWorld: UnitWorld {
         panic!("WorkWorld::attack_to_find_melee_target requires successful preflight")
     }
 
+    /// Acquire every external fact and capability which `Unit::do_build` may reach from this
+    /// node. The returned local fields are checked against the actor/order before any effect.
+    /// A successful host must also have infallible animation, facing, reswarm, placement,
+    /// lifecycle and finish-tail callbacks ready for the branch selected by these facts.
+    fn build_at_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<BuildAtPreflightInput, BuildAtHostError> {
+        Err(BuildAtHostError::Unavailable)
+    }
+
+    /// Apply one ordered Unit/Guys/Groups effect after successful BUILD_AT preflight.
+    fn build_at_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _effect: BuildAtEffect,
+    ) {
+        panic!("WorkWorld::build_at_effect requires successful BUILD_AT preflight")
+    }
+
+    /// Execute the exact `Wall::do_construct(owner)` transaction reached by a ready builder.
+    /// This includes mandatory blocked-site, start/disband, progress, and activation hosts,
+    /// but not the caller's post-return BUILD_AT retirement/tail, which remains local here.
+    fn build_at_construct(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+    ) -> BuildAtConstructResult {
+        panic!("WorkWorld::build_at_construct requires successful BUILD_AT preflight")
+    }
+
     /// Acquire all cross-object facts used by `Unit::do_group_attack`. The default is
     /// unavailable and must leave the actor byte-for-byte unchanged.
     fn group_attack_preflight(
@@ -1803,7 +1879,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Unimplemented,   //  3 EXPLORE_TO      Unit::do_explore_to 0x005F24A0
     ArmStatus::Implemented,     //  4 FLEE_TO         Unit::do_move -- SAME ARM as MOVE_TO
     ArmStatus::FaithfullyEmpty, //  5 PATROL          no case label; falls to the default
-    ArmStatus::Unimplemented,   //  6 BUILD_AT        Unit::do_build 0x005EEBF0
+    ArmStatus::Implemented,     //  6 BUILD_AT        Unit::do_build 0x005EEBF0
     ArmStatus::Implemented,     //  7 GATHER          Unit::do_gather 0x005EF2A0
     ArmStatus::Implemented,     //  8 BOARD_SHIP      Unit::do_board 0x005ED1F0
     ArmStatus::Implemented,     //  9 AWAIT_BOARD     Unit::do_await_board 0x005ED040
@@ -2763,6 +2839,142 @@ pub fn do_attack_to<W: WorkWorld>(
     }
 }
 
+#[inline]
+fn build_at_preflight_matches_actor(
+    actor: &UnitWork,
+    order: &OrderRec,
+    input: &BuildAtPreflightInput,
+) -> bool {
+    input.builder
+        == (ObjectKey {
+            who: i32::from(actor.who),
+            o: i32::from(actor.o),
+            uid: actor.uid,
+        })
+        && input.target_order
+            == (ObjectKey {
+                who: order.target_who,
+                o: order.target_o,
+                uid: order.target_uid,
+            })
+        && input.order_flags == order.flags
+        && input.builder_x == actor.body.x
+        && input.builder_y == actor.body.y
+        && input.builder_angle == actor.body.angle
+        && input.unit_decoy == (actor.unit_masks & 1 != 0)
+        // A true next-action result includes the external virtual-validity query; false is
+        // allowed with a queued but invalid action, but true requires a physical next node.
+        && (!input.has_next_action_after_retire || actor.orders.len() > 1)
+}
+
+#[inline]
+fn retire_build_at(actor: &mut UnitWork, cov: &mut DispatchCoverage) {
+    kill_current_order(actor, KillReason::Completed);
+    cov.completed += 1;
+}
+
+/// `Unit::do_build(UnitOrder*)` `0x005EEBF0` (1,711 bytes), arm 6.
+///
+/// The external snapshot is converted through [`construction_builder::preflight`], which
+/// preserves direct `do_build`'s deliberate `(who,o)`-only Wall validation (no UID check),
+/// Farm footprint exception, animation/facing-before-DECOY order, and group-flag reswarm.
+/// Every fallible capability is acquired before the first mutation. After that point the
+/// host operations are infallible and retail-ordered:
+///
+/// - invalid/active: bare-kill first, then expose the next action to the required tail;
+/// - reswarm: bare-kill, then temporary one-member Group + `action_swarm_around(FIRST)`;
+/// - ready: animation, optional facing, then exact `Wall::do_construct`;
+/// - completed: activation returns, bare-kill, then completion reassignment.
+pub fn do_build_at<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::BuildAt {
+        return ArmResult::MalformedOrder;
+    }
+    let input = match world.build_at_preflight(&*actor, &order) {
+        Ok(input) => input,
+        Err(BuildAtHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(BuildAtHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    if !build_at_preflight_matches_actor(actor, &order, &input) {
+        return ArmResult::MalformedOrder;
+    }
+
+    match construction_builder::preflight(input) {
+        PreflightPlan::RetireInvalid { then } => {
+            retire_build_at(actor, cov);
+            if then == AfterInvalidTarget::BuildDone {
+                world.build_at_effect(
+                    actor,
+                    &order,
+                    BuildAtEffect::FinishTail {
+                        reason: BuilderFinish::InvalidTarget,
+                    },
+                );
+            }
+            ArmResult::Retired(KillReason::Completed)
+        }
+        PreflightPlan::RetireActive => {
+            retire_build_at(actor, cov);
+            world.build_at_effect(
+                actor,
+                &order,
+                BuildAtEffect::FinishTail {
+                    reason: BuilderFinish::TargetAlreadyActive,
+                },
+            );
+            ArmResult::Retired(KillReason::Completed)
+        }
+        PreflightPlan::Reswarm {
+            preserve_group_flag,
+        } => {
+            retire_build_at(actor, cov);
+            world.build_at_effect(
+                actor,
+                &order,
+                BuildAtEffect::Reswarm {
+                    preserve_group_flag,
+                },
+            );
+            ArmResult::Working
+        }
+        PreflightPlan::AnimateFace {
+            animation,
+            set_angle,
+            contribute,
+        } => {
+            world.build_at_effect(actor, &order, BuildAtEffect::SetAnimation { animation });
+            if let Some(angle) = set_angle {
+                world.build_at_effect(actor, &order, BuildAtEffect::SetAngle { angle });
+            }
+            if !contribute {
+                return ArmResult::Working;
+            }
+            match world.build_at_construct(actor, &order) {
+                BuildAtConstructResult::SiteRejected
+                | BuildAtConstructResult::Progressed { .. } => ArmResult::Working,
+                BuildAtConstructResult::Completed { .. } => {
+                    // `Build::activate(0,1,1)` has already returned at this boundary.
+                    retire_build_at(actor, cov);
+                    world.build_at_effect(
+                        actor,
+                        &order,
+                        BuildAtEffect::FinishTail {
+                            reason: BuilderFinish::SiteCompleted,
+                        },
+                    );
+                    ArmResult::Retired(KillReason::Completed)
+                }
+            }
+        }
+    }
+}
+
 /// `Unit::do_group_attack_to(GroupMoveOrder*)` `0x005E74E0` (192 bytes), arm 21.
 ///
 /// The shipped wrapper has four observable stages:
@@ -3387,6 +3599,7 @@ pub fn do_job<W: WorkWorld>(
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::AttackTo => do_attack_to(u, w, pf, cov),
+        OrderIndex::BuildAt => do_build_at(u, w, cov),
         OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
         OrderIndex::GroupAttack => do_group_attack(u, w, pf, cov),
         OrderIndex::GroupAttackTo => do_group_attack_to(u, w, pf, cov),
@@ -3788,6 +4001,11 @@ mod tests {
         attack_to_post: AttackToPostMove,
         attack_to_events: Vec<&'static str>,
         attack_to_target: Option<(i32, i32, u16)>,
+        build_at_preflight: Option<Result<BuildAtPreflightInput, BuildAtHostError>>,
+        build_at_effects: Vec<BuildAtEffect>,
+        build_at_events: Vec<&'static str>,
+        build_at_effect_fronts: Vec<Option<OrderIndex>>,
+        build_at_construct: BuildAtConstructResult,
         scrambled: Vec<i16>,
     }
 
@@ -3823,6 +4041,14 @@ mod tests {
                 attack_to_post: AttackToPostMove::HoldForArmy,
                 attack_to_events: vec![],
                 attack_to_target: None,
+                build_at_preflight: None,
+                build_at_effects: vec![],
+                build_at_events: vec![],
+                build_at_effect_fronts: vec![],
+                build_at_construct: BuildAtConstructResult::Progressed {
+                    credited: 1,
+                    started_this_call: false,
+                },
                 scrambled: vec![],
             }
         }
@@ -3976,6 +4202,47 @@ mod tests {
                 actor.orders.push_front(OrderRec::attack(who, o, uid));
             }
         }
+        fn build_at_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<BuildAtPreflightInput, BuildAtHostError> {
+            self.build_at_events.push("preflight");
+            self.build_at_preflight
+                .unwrap_or(Err(BuildAtHostError::Unavailable))
+        }
+        fn build_at_effect(
+            &mut self,
+            actor: &mut UnitWork,
+            order: &OrderRec,
+            effect: BuildAtEffect,
+        ) {
+            self.build_at_effect_fronts
+                .push(actor.orders.front().map(|current| current.kind));
+            self.build_at_effects.push(effect);
+            match effect {
+                BuildAtEffect::SetAnimation { .. } => {
+                    self.build_at_events.push("animation");
+                }
+                BuildAtEffect::SetAngle { angle } => {
+                    self.build_at_events.push("set_angle");
+                    actor.body.angle = angle;
+                    actor.lead_guy.angle = angle;
+                }
+                BuildAtEffect::Reswarm { .. } => {
+                    self.build_at_events.push("reswarm");
+                    actor.orders.push_front(order.clone());
+                    update_action(actor);
+                }
+                BuildAtEffect::FinishTail { .. } => {
+                    self.build_at_events.push("finish_tail");
+                }
+            }
+        }
+        fn build_at_construct(&mut self, _: &mut UnitWork, _: &OrderRec) -> BuildAtConstructResult {
+            self.build_at_events.push("construct");
+            self.build_at_construct
+        }
         fn group_attack_preflight(
             &mut self,
             _: &UnitWork,
@@ -4076,7 +4343,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_fourteen_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_fifteen_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -4089,9 +4356,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Thirteen implemented, including ATTACK_TO, all three recovered grouped order
+        // Fourteen implemented, including BUILD_AT, ATTACK_TO, all three recovered grouped
         // executors, both boarding arms, and both live patrols; PATROL is faithfully empty.
-        assert_eq!((implemented, empty, absent), (13, 1, 14));
+        assert_eq!((implemented, empty, absent), (14, 1, 13));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -4518,6 +4785,274 @@ mod tests {
         assert_eq!(arrived.orders.len(), 1);
         assert_eq!(arrived.orders.front().unwrap().x, 300);
         assert_eq!(w.attack_to_events, vec!["preflight"]);
+    }
+
+    fn build_at_order() -> OrderRec {
+        let mut order = OrderRec::of_kind(OrderIndex::BuildAt);
+        order.target_who = 2;
+        order.target_o = 2_001;
+        order.target_uid = 20;
+        order
+    }
+
+    fn build_at_ready_input(actor: &UnitWork, order: &OrderRec) -> BuildAtPreflightInput {
+        BuildAtPreflightInput {
+            builder: ObjectKey {
+                who: i32::from(actor.who),
+                o: i32::from(actor.o),
+                uid: actor.uid,
+            },
+            target_order: ObjectKey {
+                who: order.target_who,
+                o: order.target_o,
+                uid: order.target_uid,
+            },
+            target_is_valid_wall: true,
+            target_is_active: false,
+            has_next_action_after_retire: actor.orders.len() > 1,
+            adjacent: true,
+            builder_tile_is_covered: false,
+            target_is_farm: false,
+            order_flags: order.flags,
+            builder_x: actor.body.x,
+            builder_y: actor.body.y,
+            target_x: actor.body.x + 100,
+            target_y: actor.body.y,
+            builder_angle: actor.body.angle,
+            unit_decoy: actor.unit_masks & 1 != 0,
+        }
+    }
+
+    #[test]
+    fn build_at_missing_or_incoherent_host_is_zero_mutation() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.body.angle = 123;
+        actor.orders.push_back(build_at_order());
+        let before_body = actor.body;
+        let before_orders = actor.orders.clone();
+        let before_masks = actor.unit_masks;
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(actor.orders, before_orders);
+        assert_eq!(actor.body.x, before_body.x);
+        assert_eq!(actor.body.y, before_body.y);
+        assert_eq!(actor.body.angle, before_body.angle);
+        assert_eq!(actor.unit_masks, before_masks);
+        assert_eq!(w.build_at_events, vec!["preflight"]);
+
+        let order = actor.orders.front().unwrap().clone();
+        let mut incoherent = build_at_ready_input(&actor, &order);
+        incoherent.builder.uid ^= 1;
+        w.build_at_preflight = Some(Ok(incoherent));
+        w.build_at_events.clear();
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::MalformedOrder
+        );
+        assert_eq!(actor.orders, before_orders);
+        assert_eq!(actor.body.angle, before_body.angle);
+        assert_eq!(actor.unit_masks, before_masks);
+        assert_eq!(w.build_at_events, vec!["preflight"]);
+    }
+
+    #[test]
+    fn build_at_ready_animates_faces_then_credits_site_without_retiring() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.body.angle = 123;
+        actor.lead_guy.angle = 123;
+        actor.orders.push_back(build_at_order());
+        let order = actor.orders.front().unwrap().clone();
+        w.build_at_preflight = Some(Ok(build_at_ready_input(&actor, &order)));
+        w.build_at_construct = BuildAtConstructResult::Progressed {
+            credited: 7,
+            started_this_call: true,
+        };
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(actor.orders.front().unwrap().kind, OrderIndex::BuildAt);
+        assert_eq!(actor.body.angle, crate::trig::find_angle(100, 0));
+        assert_eq!(
+            w.build_at_effects,
+            vec![
+                BuildAtEffect::SetAnimation {
+                    animation: construction_builder::CHAR_BUILD
+                },
+                BuildAtEffect::SetAngle {
+                    angle: crate::trig::find_angle(100, 0)
+                }
+            ]
+        );
+        assert_eq!(
+            w.build_at_events,
+            vec!["preflight", "animation", "set_angle", "construct"]
+        );
+        assert_eq!(cov.completed, 0);
+    }
+
+    #[test]
+    fn build_at_decoy_still_animates_and_faces_before_suppressing_work() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.body.angle = 123;
+        actor.unit_masks |= 1;
+        actor.orders.push_back(build_at_order());
+        let order = actor.orders.front().unwrap().clone();
+        w.build_at_preflight = Some(Ok(build_at_ready_input(&actor, &order)));
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.build_at_events,
+            vec!["preflight", "animation", "set_angle"]
+        );
+        assert_eq!(actor.orders.front().unwrap().kind, OrderIndex::BuildAt);
+        assert_eq!(cov.completed, 0);
+    }
+
+    #[test]
+    fn build_at_reswarm_bare_kills_before_reinstalling_with_group_flag() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        let mut order = build_at_order();
+        order.flags |= ORDER_GROUP;
+        actor.orders.push_back(order.clone());
+        let mut input = build_at_ready_input(&actor, &order);
+        input.adjacent = false;
+        w.build_at_preflight = Some(Ok(input));
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.build_at_effects,
+            vec![BuildAtEffect::Reswarm {
+                preserve_group_flag: true
+            }]
+        );
+        assert_eq!(w.build_at_effect_fronts, vec![None]);
+        assert_eq!(actor.orders.front().unwrap().kind, OrderIndex::BuildAt);
+        assert_ne!(actor.orders.front().unwrap().flags & ORDER_GROUP, 0);
+        assert_eq!(cov.completed, 1);
+    }
+
+    #[test]
+    fn build_at_completion_retires_after_activation_before_finish_tail() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(build_at_order());
+        actor.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
+        let order = actor.orders.front().unwrap().clone();
+        w.build_at_preflight = Some(Ok(build_at_ready_input(&actor, &order)));
+        w.build_at_construct = BuildAtConstructResult::Completed {
+            credited: 9,
+            started_this_call: false,
+        };
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Retired(KillReason::Completed)
+        );
+        assert_eq!(actor.orders.front().unwrap().kind, OrderIndex::Guard);
+        assert_eq!(
+            w.build_at_effects.last(),
+            Some(&BuildAtEffect::FinishTail {
+                reason: BuilderFinish::SiteCompleted
+            })
+        );
+        assert_eq!(
+            w.build_at_effect_fronts.last(),
+            Some(&Some(OrderIndex::Guard)),
+            "completion tail must observe the newly exposed action"
+        );
+        assert_eq!(
+            w.build_at_events,
+            vec![
+                "preflight",
+                "animation",
+                "set_angle",
+                "construct",
+                "finish_tail"
+            ]
+        );
+        assert_eq!(cov.completed, 1);
+    }
+
+    #[test]
+    fn build_at_invalid_target_bare_kills_before_build_done_tail() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(build_at_order());
+        let order = actor.orders.front().unwrap().clone();
+        let mut input = build_at_ready_input(&actor, &order);
+        input.target_is_valid_wall = false;
+        w.build_at_preflight = Some(Ok(input));
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Retired(KillReason::Completed)
+        );
+        assert!(actor.orders.is_empty());
+        assert_eq!(
+            w.build_at_effects,
+            vec![BuildAtEffect::FinishTail {
+                reason: BuilderFinish::InvalidTarget
+            }]
+        );
+        assert_eq!(w.build_at_effect_fronts, vec![None]);
+        assert_eq!(w.build_at_events, vec!["preflight", "finish_tail"]);
+        assert_eq!(cov.completed, 1);
+    }
+
+    #[test]
+    fn build_at_active_target_retires_before_check_build_order_tail() {
+        let mut w = TestWorld::open(16);
+        let mut cov = DispatchCoverage::default();
+        let mut actor = UnitWork::at(2, 4, 100, 200);
+        actor.uid = 10;
+        actor.orders.push_back(build_at_order());
+        actor.orders.push_back(OrderRec::of_kind(OrderIndex::Guard));
+        let order = actor.orders.front().unwrap().clone();
+        let mut input = build_at_ready_input(&actor, &order);
+        input.target_is_active = true;
+        w.build_at_preflight = Some(Ok(input));
+
+        assert_eq!(
+            do_build_at(&mut actor, &mut w, &mut cov),
+            ArmResult::Retired(KillReason::Completed)
+        );
+        assert_eq!(actor.orders.front().unwrap().kind, OrderIndex::Guard);
+        assert_eq!(
+            w.build_at_effects,
+            vec![BuildAtEffect::FinishTail {
+                reason: BuilderFinish::TargetAlreadyActive
+            }]
+        );
+        assert_eq!(w.build_at_effect_fronts, vec![Some(OrderIndex::Guard)]);
+        assert_eq!(w.build_at_events, vec!["preflight", "finish_tail"]);
+        assert_eq!(cov.completed, 1);
     }
 
     #[test]
@@ -5689,11 +6224,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 14 unimplemented arms, each hit once. The smoke actors take all three grouped
+        // 13 unimplemented arms, each hit once. The smoke actors take all three grouped
         // executors' exact ungrouped conversion; grouped actors without a snapshot fail
         // closed at the mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 14);
-        assert!((cov.covered_fraction() - 14.0 / 28.0).abs() < 1e-12);
+        assert_eq!(cov.unimplemented, 13);
+        assert!((cov.covered_fraction() - 15.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]
