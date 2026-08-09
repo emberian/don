@@ -418,6 +418,65 @@ pub mod patrol {
     pub fn queued(b: &[u8]) -> i8 { i8_at(b, 9) }
 }
 
+/// `GatherCommand` (0x13), 9 bytes.
+pub mod gather {
+    use super::*;
+    /// field `ox`: `int` at byte 1, 4 byte(s).
+    #[inline]
+    pub fn ox(b: &[u8]) -> i32 { i32_at(b, 1) }
+    /// field `queued`: `QueuePos` at byte 5, 4 byte(s).
+    #[inline]
+    pub fn queued(b: &[u8]) -> i32 { i32_at(b, 5) }
+}
+
+/// `QueueUpCommand` (0x18), 9 bytes.
+pub mod queue_up {
+    use super::*;
+    /// field `type`: `int` at byte 1, 4 byte(s).
+    #[inline]
+    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 1) }
+    /// field `num`: `int` at byte 5, 4 byte(s).
+    #[inline]
+    pub fn num(b: &[u8]) -> i32 { i32_at(b, 5) }
+}
+
+/// `BuildCommand` (0x19), 25 bytes.
+pub mod build {
+    use super::*;
+    /// field `x`: `int` at byte 1, 4 byte(s).
+    #[inline]
+    pub fn x(b: &[u8]) -> i32 { i32_at(b, 1) }
+    /// field `y`: `int` at byte 5, 4 byte(s).
+    #[inline]
+    pub fn y(b: &[u8]) -> i32 { i32_at(b, 5) }
+    /// field `x2`: `int` at byte 9, 4 byte(s).
+    #[inline]
+    pub fn x2(b: &[u8]) -> i32 { i32_at(b, 9) }
+    /// field `y2`: `int` at byte 13, 4 byte(s).
+    #[inline]
+    pub fn y2(b: &[u8]) -> i32 { i32_at(b, 13) }
+    /// field `type`: `int` at byte 17, 4 byte(s).
+    #[inline]
+    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 17) }
+}
+
+/// `UnqueueCommand` (0x30), 15 bytes.
+pub mod unqueue {
+    use super::*;
+    /// field `who`: `int` at byte 1, 4 byte(s).
+    #[inline]
+    pub fn who(b: &[u8]) -> i32 { i32_at(b, 1) }
+    /// field `o`: `int` at byte 5, 4 byte(s).
+    #[inline]
+    pub fn o(b: &[u8]) -> i32 { i32_at(b, 5) }
+    /// field `type`: `int` at byte 9, 4 byte(s).
+    #[inline]
+    pub fn type_(b: &[u8]) -> i32 { i32_at(b, 9) }
+    /// field `uid`: `short` at byte 13, 2 byte(s).
+    #[inline]
+    pub fn uid(b: &[u8]) -> i16 { i16_at(b, 13) }
+}
+
 /// `GroupCommand` (0x00) — selection. Variable length: `num` u8, `who` i8, then `num`
 /// 2-byte object indices. Hand-written because it is the one command whose length depends
 /// on its contents; the entry width comes from the PDB type record

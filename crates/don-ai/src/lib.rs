@@ -39,6 +39,7 @@
 
 pub mod abi;
 pub mod api;
+pub mod arena;
 pub mod economic;
 pub mod game;
 pub mod library;

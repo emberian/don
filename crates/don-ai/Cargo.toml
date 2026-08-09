@@ -9,7 +9,14 @@ description = "Transcription of the shipped Rise of Nations production AI: the B
 # The derived economy (`Leader::do_gather` / `Player::UpdateCommerceCaps`) lives
 # in don-sim's `mechanics`. `game.rs` calls it rather than re-deriving it.
 don-sim = { path = "../don-sim" }
+# The arena speaks `don-env`'s action heads directly rather than describing them, so a
+# trained policy is a drop-in and a test can prove the mapping round-trips.
+don-env = { path = "../don-env" }
 
 [[bin]]
 name = "ai-match"
 path = "src/bin/ai_match.rs"
+
+[[bin]]
+name = "arena"
+path = "src/bin/arena.rs"

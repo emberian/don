@@ -221,7 +221,15 @@ fn i8_at(b: &[u8], off: usize) -> i8 {
 }
 
 ${(() => {
-  const want = { 0x07: ['to_x', 'to_y', 'queued', 'form'], 0x04: ['ox', 'whom', 'queued'], 0x0a: ['to_x', 'to_y', 'queued'] };
+  const want = {
+    0x07: ['to_x', 'to_y', 'queued', 'form'], 0x04: ['ox', 'whom', 'queued'],
+    0x0a: ['to_x', 'to_y', 'queued'],
+    // The four the *playable* client adds (web/wasm/src/game.rs honours each of these).
+    0x13: ['ox', 'queued'],                  // GatherCommand   — send a worker to a node
+    0x18: ['type', 'num'],                   // QueueUpCommand  — train/research at a producer
+    0x19: ['x', 'y', 'x2', 'y2', 'type'],    // BuildCommand    — place a building
+    0x30: ['who', 'o', 'type', 'uid'],       // UnqueueCommand  — cancel a queued item
+  };
   const out = [];
   for (const [opStr, names] of Object.entries(want)) {
     const c = table.find((x) => x.op === Number(opStr));
@@ -233,9 +241,15 @@ ${names.map((n) => {
       const f = c.fields.find((x) => x.name === n);
       const rd = f.bytes === 4 ? 'i32_at' : f.bytes === 2 ? 'i16_at' : 'i8_at';
       const ty = f.bytes === 4 ? 'i32' : f.bytes === 2 ? 'i16' : 'i8';
+      // Engine field names are C identifiers and a few collide with Rust keywords
+      // (`type`, `ref`, `move`). Suffix an underscore rather than renaming, so the
+      // generated name still reads as the engine's field.
+      const RUST_KEYWORDS = new Set(['type', 'ref', 'move', 'box', 'match', 'fn', 'mod', 'if',
+        'else', 'loop', 'where', 'use', 'as', 'in', 'let', 'self', 'super', 'crate']);
+      const fname = RUST_KEYWORDS.has(f.name) ? `${f.name}_` : f.name;
       return `    /// field \`${f.name}\`: \`${f.type}\` at byte ${f.off}, ${f.bytes} byte(s).
     #[inline]
-    pub fn ${f.name}(b: &[u8]) -> ${ty} { ${rd}(b, ${f.off}) }`;
+    pub fn ${fname}(b: &[u8]) -> ${ty} { ${rd}(b, ${f.off}) }`;
     }).join('\n')}
 }`);
   }

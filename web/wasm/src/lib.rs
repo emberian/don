@@ -39,6 +39,8 @@
 //! steady-state loop allocates nothing, so views stay valid. JS still revalidates on the
 //! buffer identity — see `public/js/wasm.js`.
 
+pub mod game;
+pub mod game_abi;
 pub mod gamedata;
 pub mod real;
 pub mod wire_gen;
