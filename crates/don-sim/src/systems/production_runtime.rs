@@ -394,6 +394,29 @@ impl LiveProductionRuntime {
             .all(|&preq| prerequisite_held(&leader.tech, preq))
     }
 
+    /// Exact `UnitData::is_plane` answer for an installed live Unit type.
+    ///
+    /// The retail predicate is `domain == 2 && !(unit_flags & 0x20)`. The installed
+    /// production profile already makes the domain half explicit: [`LiveUnitPlacement::HostedAir`]
+    /// is the Air-domain cohort, while the other admitted Unit cohorts are ground units.
+    /// An unsupported or absent profile returns `None`; terminal cleanup must not guess that
+    /// an unknown aircraft is a ground unit and leave it alive.
+    pub fn installed_unit_is_plane(&self, type_index: i32) -> Option<bool> {
+        let facts = self.facts(type_index)?;
+        if facts.class != LiveTypeClass::Unit {
+            return None;
+        }
+        match facts.unit_placement {
+            LiveUnitPlacement::HostedAir => {
+                Some(facts.unit_flags & UNIT_PLACEMENT_FLAG_HELICOPTER == 0)
+            }
+            LiveUnitPlacement::OrdinaryGround
+            | LiveUnitPlacement::UniversityScholar
+            | LiveUnitPlacement::AircraftCarrier => Some(false),
+            LiveUnitPlacement::Unsupported => None,
+        }
+    }
+
     /// Execute the concrete Build-state half of terminal `Build::clean_queue(0)` for one
     /// owner.
     ///
@@ -1905,6 +1928,11 @@ pub fn process_sim_build_queue(
                 .clean_terminal_build_queues(&mut host.sim.builds, owner);
         }
     }
+    // `Leader::gain_tech` can synchronously resolve Tech Race here, defeating every
+    // opponent after the normal step-12 victory flush has already run. Retail completes
+    // those Unit-band effects before returning from the gain transaction; use the same
+    // preflighted adapter with the runtime currently lent out of `Sim`.
+    host.sim.flush_defeat_unit_cleanup(host.runtime);
     let queue = queue_result?;
     if let Some(error) = callback_error {
         return Err(error);
@@ -2222,7 +2250,10 @@ mod tests {
         assert_eq!(receipt.queue.slots[1].slot, 0);
         assert!(matches!(
             receipt.queue.slots[1].transaction,
-            QueueTransaction::FinishBlocked { type_index: 600, .. }
+            QueueTransaction::FinishBlocked {
+                type_index: 600,
+                ..
+            }
         ));
         assert!(runtime.leaders[0].tech.tech.get(winning_age));
         assert!(!runtime.leaders[0].tech.tech.get(outer_research));
@@ -2900,6 +2931,25 @@ mod tests {
         assert!(!runtime.leader_has_prerequisites(1, 0x2b9));
         assert!(!runtime.leader_has_prerequisites(0, 0x2ba));
         assert!(!runtime.leader_has_prerequisites(NUM_LEADERS, 0x2b9));
+    }
+
+    #[test]
+    fn installed_plane_query_preserves_the_air_domain_and_helicopter_split() {
+        let mut runtime = LiveProductionRuntime::default();
+        runtime.install_type(LiveProductionType::ordinary_unit(100, 1, 1));
+        runtime.install_type(LiveProductionType::hosted_air_unit(101, 1, 1));
+        let mut helicopter = LiveProductionType::hosted_air_unit(102, 1, 1);
+        helicopter.unit_flags |= UNIT_PLACEMENT_FLAG_HELICOPTER;
+        runtime.install_type(helicopter);
+        let mut opaque = LiveProductionType::ordinary_unit(103, 1, 1);
+        opaque.unit_placement = LiveUnitPlacement::Unsupported;
+        runtime.install_type(opaque);
+
+        assert_eq!(runtime.installed_unit_is_plane(100), Some(false));
+        assert_eq!(runtime.installed_unit_is_plane(101), Some(true));
+        assert_eq!(runtime.installed_unit_is_plane(102), Some(false));
+        assert_eq!(runtime.installed_unit_is_plane(103), None);
+        assert_eq!(runtime.installed_unit_is_plane(104), None);
     }
 
     #[test]

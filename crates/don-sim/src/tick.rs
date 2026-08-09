@@ -58,8 +58,8 @@ use crate::order::{Order, OrderIndex};
 use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
-    ammo, borders_fog, casters_animals, combat, economy, groups_guys, leaders, movement,
-    movement_driver, movement_live, production, victory_score, walls, wonders,
+    ammo, borders_fog, casters_animals, combat, defeat_cleanup, economy, groups_guys, leaders,
+    movement, movement_driver, movement_live, production, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -718,6 +718,9 @@ pub struct Sim {
     pub wonder_world: Option<Box<dyn wonders::WonderWorld + Send>>,
     /// Last fail-closed Wonder supply error. Cleared after a successful supply pass.
     pub wonder_error: Option<wonders::WonderError>,
+    /// Last fail-closed defeated-player Unit sweep error. The owner request remains armed
+    /// until its installed type/path facts can be preflighted as one transaction.
+    pub defeat_cleanup_error: Option<defeat_cleanup::DefeatCleanupError>,
     pub cannon_time: CannonTimeState,
 
     // ---- step 12: fog, borders, groups ------------------------------------------------
@@ -798,6 +801,7 @@ impl Sim {
             wonders: wonders::Wonders::new(),
             wonder_world: None,
             wonder_error: None,
+            defeat_cleanup_error: None,
             cannon_time: CannonTimeState::default(),
             map,
             road_scan: crate::systems::roads::RoadScanState::default(),
@@ -1435,9 +1439,113 @@ impl Sim {
 
     // -- step 11 ----------------------------------------------------------------------
 
-    /// Apply the concrete no-refund `Build::clean_queue(0)` sweeps requested by terminal
-    /// leader transitions. Requests accumulate in the victory lane because both step 11
-    /// and step 12 can resolve a match; this is the sole bridge into Sim-owned Build rows.
+    /// Apply `Leader::defeat`'s Unit-band sweep after preflighting the complete owner band.
+    pub(crate) fn clean_defeated_unit_band(
+        &mut self,
+        runtime: &production::runtime::LiveProductionRuntime,
+        owner: usize,
+    ) -> Result<defeat_cleanup::DefeatCleanupReceipt, defeat_cleanup::DefeatCleanupError> {
+        use defeat_cleanup::{DefeatCleanupError as Error, DefeatedUnitAction as Action};
+
+        // Resolve every fallible type/path fact before touching a live row. Retail's type
+        // pointers are total; the Sim equivalent must fail the whole owner sweep closed
+        // rather than clear half a defeated army and guess at the first unknown aircraft.
+        let object_rows = self.world.objects.slot(owner).band(Band::Unit).to_vec();
+        let mut plan = Vec::with_capacity(object_rows.len());
+        let mut invalid_skipped = 0usize;
+        for (object_id, row) in object_rows.iter().copied().enumerate() {
+            let row = row as usize;
+            if self.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+                invalid_skipped += 1;
+                continue;
+            }
+            let Some(&type_index) = self.unit_type.get(row) else {
+                return Err(Error::MissingUnitType { owner, object_id });
+            };
+            let Some(is_plane) = runtime.installed_unit_is_plane(type_index) else {
+                return Err(Error::UnsupportedUnitType {
+                    owner,
+                    object_id,
+                    type_index,
+                });
+            };
+            let action = defeat_cleanup::plan_defeated_unit(true, is_plane)
+                .expect("active Unit always receives a defeat action");
+            if action == Action::CloseOrders && self.paths.get(row).is_none() {
+                return Err(Error::MissingPathState { owner, object_id });
+            }
+            plan.push((row, action));
+        }
+
+        let mut receipt = defeat_cleanup::DefeatCleanupReceipt {
+            owner,
+            slots_visited: object_rows.len(),
+            invalid_skipped,
+            ..Default::default()
+        };
+        for (row, action) in plan {
+            match action {
+                Action::DiePlane => {
+                    // The existing live death transaction supplies `Unit::die`'s active-bit,
+                    // aircraft-wreck and DeathObj effects. Passing current hits lands exactly
+                    // on zero, matching the unconditional terminal call.
+                    let hits = self.world.units.myhits()[row];
+                    self.apply_damage(row, hits.max(0));
+                    receipt.planes_killed += 1;
+                }
+                Action::CloseOrders => {
+                    // `Unit::clear_orders` `0x005E3860`: clear its own facing-move latch,
+                    // close every order, drop the partial path, then recompute the empty
+                    // action endpoint from the Unit's current position/facing.
+                    self.world.orders_mut(row).clear();
+                    self.paths[row].clear();
+                    let masks = self.world.units.get_unit_masks(row) & !0x0400_0000;
+                    self.world.units.set_unit_masks(row, masks);
+                    let x = self.world.units.x_internal()[row];
+                    let y = self.world.units.y_internal()[row];
+                    let angle = self.world.units.angle()[row];
+                    self.world.units.orders_x_mut()[row] = x;
+                    self.world.units.orders_y_mut()[row] = y;
+                    self.world.units.dest_angle_mut()[row] = angle;
+                    receipt.orders_closed += 1;
+                }
+            }
+            let masks = self.world.units.get_unit_masks(row) & !defeat_cleanup::DEFEAT_UNIT_MASK;
+            self.world.units.set_unit_masks(row, masks);
+            receipt.unit_masks_cleared += 1;
+        }
+        Ok(receipt)
+    }
+
+    /// Drain only the defeated-player Unit half of a terminal transition against an
+    /// explicit installed type store. Step 14 temporarily lends production runtime state
+    /// out of `Sim`, so its synchronous Tech Race resolution calls this same adapter with
+    /// that live store rather than observing `Sim`'s temporary default placeholder.
+    pub(crate) fn flush_defeat_unit_cleanup(
+        &mut self,
+        runtime: &production::runtime::LiveProductionRuntime,
+    ) {
+        let unit_owners = self.vic_leaders.take_defeat_unit_cleanup();
+        let mut first_error = None;
+        for owner in 0..NUM_LEADERS {
+            let owner_bit = 1u8 << owner;
+            if unit_owners & owner_bit == 0 {
+                continue;
+            }
+            match self.clean_defeated_unit_band(runtime, owner) {
+                Ok(_) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    self.vic_leaders.defer_defeat_unit_cleanup(owner_bit);
+                }
+            }
+        }
+        self.defeat_cleanup_error = first_error;
+    }
+
+    /// Apply the concrete Build and defeated-Unit sweeps requested by terminal leader
+    /// transitions. Requests accumulate because steps 11, 12, and the step-14 Tech Race
+    /// callback can resolve leaders before the object stores are drained.
     fn flush_terminal_queue_cleanup(&mut self) {
         let owners = self.vic_leaders.take_terminal_queue_cleanup();
         for owner in 0..NUM_LEADERS {
@@ -1446,6 +1554,10 @@ impl Sim {
                     .clean_terminal_build_queues(&mut self.builds, owner);
             }
         }
+
+        let runtime = std::mem::take(&mut self.production_runtime);
+        self.flush_defeat_unit_cleanup(&runtime);
+        self.production_runtime = runtime;
     }
 
     /// `Leaders::strategy_all` `0x006ED430` — `check_explore`, `plan_strategy`,
@@ -3420,6 +3532,129 @@ mod tests {
     }
 
     #[test]
+    fn defeated_owner_kills_planes_closes_ground_orders_and_clears_the_army_mask() {
+        let mut sim = Sim::new(13, 8);
+        sim.activate(0);
+        sim.activate(1);
+        let ground_type = 100;
+        let plane_type = 101;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::ordinary_unit(ground_type, 1, 1),
+        );
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::hosted_air_unit(plane_type, 1, 1),
+        );
+
+        let ground = sim.spawn_unit(0, ground_type, 111, 222, 4).unwrap();
+        let plane = sim.spawn_unit(0, plane_type, 333, 444, 4).unwrap();
+        let survivor = sim.spawn_unit(1, ground_type, 555, 666, 4).unwrap();
+        let ground_row = sim.world.row_of(ground).unwrap();
+        let plane_row = sim.world.row_of(plane).unwrap();
+        let survivor_row = sim.world.row_of(survivor).unwrap();
+        let plane_o = sim.world.units.o()[plane_row] as i32;
+
+        for row in [ground_row, plane_row, survivor_row] {
+            sim.world
+                .orders_mut(row)
+                .replace(Order::move_to(900, 901, 48));
+            sim.paths[row].push(movement::PathData::default());
+            sim.world
+                .units
+                .set_unit_masks(row, defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000 | 0x20);
+        }
+
+        sim.vic_leaders.defeat(
+            &mut sim.vic_match,
+            0,
+            victory_score::DefeatType::Resign,
+            -1,
+            0,
+        );
+        sim.flush_terminal_queue_cleanup();
+
+        assert_eq!(sim.defeat_cleanup_error, None);
+        assert_ne!(sim.world.units.get_flags(ground_row) & OBJ_FLAG_ACTIVE, 0);
+        assert_eq!(sim.world.units.get_flags(plane_row) & OBJ_FLAG_ACTIVE, 0);
+        assert_ne!(sim.world.units.get_flags(survivor_row) & OBJ_FLAG_ACTIVE, 0);
+        assert!(sim.world.orders(ground_row).is_empty());
+        assert!(sim.paths[ground_row].is_empty());
+        assert_eq!(
+            sim.world.units.get_unit_masks(ground_row)
+                & (defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000),
+            0
+        );
+        assert_eq!(
+            sim.world.units.get_unit_masks(plane_row) & defeat_cleanup::DEFEAT_UNIT_MASK,
+            0
+        );
+        assert_eq!(sim.world.orders(survivor_row).len(), 1);
+        assert_eq!(sim.paths[survivor_row].len(), 1);
+        assert_ne!(
+            sim.world.units.get_unit_masks(survivor_row) & defeat_cleanup::DEFEAT_UNIT_MASK,
+            0
+        );
+        assert!(sim
+            .deaths
+            .slots
+            .iter()
+            .any(|death| { death.valid != 0 && death.who == 0 && death.o == plane_o }));
+        assert_eq!(sim.vic_leaders.take_defeat_unit_cleanup(), 0);
+    }
+
+    #[test]
+    fn defeated_owner_preflight_keeps_every_unit_untouched_on_an_unknown_type() {
+        let mut sim = Sim::new(14, 8);
+        sim.activate(0);
+        sim.activate(1);
+        let known_type = 110;
+        let unknown_type = 111;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::ordinary_unit(known_type, 1, 1),
+        );
+        let known = sim.spawn_unit(0, known_type, 10, 20, 4).unwrap();
+        let unknown = sim.spawn_unit(0, unknown_type, 30, 40, 4).unwrap();
+        let known_row = sim.world.row_of(known).unwrap();
+        let unknown_row = sim.world.row_of(unknown).unwrap();
+        for row in [known_row, unknown_row] {
+            sim.world
+                .orders_mut(row)
+                .replace(Order::move_to(100, 200, 48));
+            sim.paths[row].push(movement::PathData::default());
+            sim.world
+                .units
+                .set_unit_masks(row, defeat_cleanup::DEFEAT_UNIT_MASK | 0x0400_0000);
+        }
+
+        sim.vic_leaders.defeat(
+            &mut sim.vic_match,
+            0,
+            victory_score::DefeatType::Resign,
+            -1,
+            0,
+        );
+        sim.flush_terminal_queue_cleanup();
+
+        assert_eq!(
+            sim.defeat_cleanup_error,
+            Some(defeat_cleanup::DefeatCleanupError::UnsupportedUnitType {
+                owner: 0,
+                object_id: 1,
+                type_index: unknown_type,
+            })
+        );
+        for row in [known_row, unknown_row] {
+            assert_eq!(sim.world.orders(row).len(), 1);
+            assert_eq!(sim.paths[row].len(), 1);
+            assert_ne!(
+                sim.world.units.get_unit_masks(row) & defeat_cleanup::DEFEAT_UNIT_MASK,
+                0
+            );
+            assert_ne!(sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE, 0);
+        }
+        assert_eq!(sim.vic_leaders.take_defeat_unit_cleanup(), 1);
+    }
+
+    #[test]
     fn step14_research_completion_reaches_tech_race_and_cleans_before_return() {
         let mut sim = Sim::new(14, 8);
         sim.activate(0);
@@ -3450,6 +3685,15 @@ mod tests {
         );
         sim.production_runtime
             .install_type(production::runtime::LiveProductionType::research(age, 1));
+        let opponent_plane_type = 120;
+        sim.production_runtime.install_type(
+            production::runtime::LiveProductionType::hosted_air_unit(opponent_plane_type, 1, 1),
+        );
+        let opponent_plane = sim.spawn_unit(1, opponent_plane_type, 700, 800, 4).unwrap();
+        let opponent_plane_row = sim.world.row_of(opponent_plane).unwrap();
+        sim.world
+            .units
+            .set_unit_masks(opponent_plane_row, defeat_cleanup::DEFEAT_UNIT_MASK | 0x80);
 
         sim.do_frame();
 
@@ -3463,6 +3707,16 @@ mod tests {
         assert_eq!(sim.builds[row].queue.queued, 0);
         assert_eq!(sim.builds[row].queue.entries[0].elapsed, 0);
         assert_eq!(sim.vic_leaders.take_terminal_queue_cleanup(), 0);
+        assert_eq!(sim.vic_leaders.take_defeat_unit_cleanup(), 0);
+        assert_eq!(
+            sim.world.units.get_flags(opponent_plane_row) & OBJ_FLAG_ACTIVE,
+            0,
+            "step-14 Tech Race must finish the defeated Unit sweep before returning"
+        );
+        assert_eq!(
+            sim.world.units.get_unit_masks(opponent_plane_row) & defeat_cleanup::DEFEAT_UNIT_MASK,
+            0
+        );
     }
 
     #[test]

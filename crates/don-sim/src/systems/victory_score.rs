@@ -35,7 +35,7 @@
 //! | `0x00592aa0` | `Game::defeat_all` | [`Leaders::defeat_all`] |
 //! | `0x00730ef0` | `GameDaemon::process_victory` | [`Leaders::process_victory`] |
 //! | `0x006ec9b0` | `Leader::victory(int,int)` | [`Leaders::victory`] |
-//! | `0x006ecb00` | `Leader::defeat(int,int,int)` | [`Leaders::defeat`] (state only) |
+//! | `0x006ecb00` | `Leader::defeat(int,int,int)` | [`Leaders::defeat`] + live cleanup request |
 //! | `0x006b8a20` | `Leader::process_elimination` | [`Leaders::process_elimination`] |
 //! | `0x006eba50` | `LeaderData::get_diplo` | [`Leaders::get_diplo`] |
 //! | `0x006ebaa0` | `LeaderData::is_enemy` | [`Leaders::is_enemy`] |
@@ -976,6 +976,10 @@ pub struct Leaders {
     /// cleared at the head of `process_victory`: step 11 and step 12 may both resolve
     /// leaders before the live object adapter gets a chance to drain the requests.
     terminal_queue_cleanup: u8,
+    /// Owners whose live Unit band must receive the deterministic defeated-player
+    /// cleanup at `0x006ECC1C..0x006ECCAF`. This is separate from production cleanup:
+    /// victory closes Build queues too, but only defeat kills planes / closes Unit orders.
+    defeat_unit_cleanup: u8,
 }
 
 impl Leaders {
@@ -991,6 +995,7 @@ impl Leaders {
             types,
             events: Vec::new(),
             terminal_queue_cleanup: 0,
+            defeat_unit_cleanup: 0,
         }
     }
 
@@ -1009,6 +1014,28 @@ impl Leaders {
     fn request_terminal_queue_cleanup(&mut self, who: usize) {
         debug_assert!(who < NUM_LEADERS);
         self.terminal_queue_cleanup |= 1u8 << who;
+    }
+
+    /// Drain the owner mask for `Leader::defeat`'s concrete Unit-band transaction.
+    ///
+    /// Requests deliberately accumulate independently of Build cleanup. Recursive enemy
+    /// defeats can happen inside one victory call, and the live object adapter must see
+    /// every owner exactly once even if a later defeated-player callback re-enters the
+    /// terminal state machine.
+    pub fn take_defeat_unit_cleanup(&mut self) -> u8 {
+        std::mem::take(&mut self.defeat_unit_cleanup)
+    }
+
+    #[inline]
+    fn request_defeat_unit_cleanup(&mut self, who: usize) {
+        debug_assert!(who < NUM_LEADERS);
+        self.defeat_unit_cleanup |= 1u8 << who;
+    }
+
+    /// Restore requests which the live adapter could not preflight yet. Kept crate-local:
+    /// only the deterministic object bridge may defer a terminal sweep.
+    pub(crate) fn defer_defeat_unit_cleanup(&mut self, owners: u8) {
+        self.defeat_unit_cleanup |= owners;
     }
 
     // -- diplomacy -----------------------------------------------------------
@@ -1457,9 +1484,10 @@ impl Leaders {
     }
 
     /// `Leader::defeat(int defeat_type, int arg, int instant)` @ `0x006ECB00`,
-    /// state part. Retail first cleans the player's production queues and later razes
-    /// the player's objects (the latter remains in the objects lane). It then calls
-    /// `Game::check_victory`; that terminal transition is executable here.
+    /// state part. Retail first cleans the player's production queues, then kills owned
+    /// true planes and closes every other live Unit's orders. The concrete object mutation
+    /// is requested here and executed by the live adapter before the tick continues. It
+    /// then calls `Game::check_victory`; that terminal transition is executable here.
     pub fn defeat(&mut self, m: &mut Match, who: usize, dt: DefeatType, by: i32, instant: i32) {
         self.slots[who].defeated_by = by;
         if self.slots[who].flag(leader_flag::DEFEATED) {
@@ -1479,6 +1507,7 @@ impl Leaders {
         self.slots[who].defeat_type = dt as i32;
         self.slots[who].num_queued.fill(0);
         self.request_terminal_queue_cleanup(who);
+        self.request_defeat_unit_cleanup(who);
         self.events.push(MatchEvent::Defeat {
             who,
             defeat_type: dt,
@@ -2208,6 +2237,8 @@ mod tests {
             .all(|leader| leader.num_queued.iter().all(|queued| *queued == 0)));
         assert_eq!(ls.take_terminal_queue_cleanup(), 0b0000_1111);
         assert_eq!(ls.take_terminal_queue_cleanup(), 0);
+        assert_eq!(ls.take_defeat_unit_cleanup(), 0b0000_1100);
+        assert_eq!(ls.take_defeat_unit_cleanup(), 0);
         assert!(m.sem(game_sem::GAME_OVER));
         assert!(m.sem(game_sem::VICTORY_RESOLVED));
     }
@@ -2297,6 +2328,7 @@ mod tests {
         assert!(!ls.slots[0].is_active());
         assert!(ls.slots[0].flag(leader_flag::DEFEATED));
         assert_eq!(ls.take_terminal_queue_cleanup(), 1);
+        assert_eq!(ls.take_defeat_unit_cleanup(), 1);
     }
 
     #[test]

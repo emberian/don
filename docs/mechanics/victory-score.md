@@ -559,7 +559,11 @@ leader_flags2 |= LEADER_UNIT_AI_OFF
 game.musical_chairs = game.frame                # 0x006ECB94
 defeat_type = dt
 clean_queue(0) on every live owned Build
-... then raze every object the player owns (objects lane) ...
+Armies::leader_defeated(me)                     # stop every valid standing Army
+for every valid Unit owned by me:
+    if UnitData::is_plane(): Unit::die(0, -1, 0.0)
+    else:                    Unit::clear_orders()
+    unit_masks &= ~0x40000
 if GAME_OVER is not set: Game::check_victory()
 ```
 
@@ -571,6 +575,14 @@ prefix, decrement positive per-type queued counters, set logical `queued` to zer
 clear `REPEAT_QUEUE`, while leaving allocated records and resources intact. The mask is
 not cleared by the step-12 victory sweep, so a step-11 resolution cannot be lost before
 the object store is flushed.
+
+Defeat has a second accumulated owner mask for the Unit-band transaction. The live adapter
+preflights every installed type and path sidecar before mutating the first row, kills true
+planes through the existing Unit death/DeathObj transaction, and applies `clear_orders`'s
+order/path/facing-latch net state to all other valid Units. Unknown type facts fail the whole
+owner sweep closed and leave its request armed. See `docs/mechanics/defeat-cleanup.md`.
+The step-14 Tech Race callback drains the same mask synchronously because its defeated-player
+transaction occurs after the ordinary step-12 flush.
 
 The World Government bypass is likewise no longer intended as a manually injected test
 fact. `LiveProductionRuntime::leader_has_prerequisites(owner, 0x2B9)` resolves the
@@ -644,8 +656,9 @@ lane-local regression hash until a full `LeaderData` layout exists.
 * `LeaderData::type_avail`, `has_tech`, `researching`, `get_economic` and
   `find_capital` are modelled as **plain input fields**, not ported. `type_avail`
   (`0x006E33A0`) is 1,091 bytes of prerequisite logic and belongs to the tech lane.
-* `Leader::defeat` here does the flags/stamps only; razing the defeated player's
-  objects is the objects lane.
+* `Leader::defeat`'s Build and Unit traversals are live. The remaining deterministic
+  continuation is `Armies::leader_defeated`: `Army::stop` is identified, but its complete
+  standing-army/Group state transaction is not yet connected to this owner sweep.
 * `get_team_terr` has a `team_style == 7` / frame-0 branch I collapsed to the
   common `is_ally` path; that branch only fires in the neutral-player game style.
 * `Game::check_victory`'s early section counts connected human players and has a
