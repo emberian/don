@@ -1366,8 +1366,9 @@ pub trait QueueCompletionHost {
     fn train_time(&mut self, type_index: i32) -> i32;
     /// The type-tree / player-availability classification used to select the accelerator.
     fn classify(&mut self, type_index: i32) -> QueueKind;
-    /// `Build::finished(type)` `0x00628490`. The queue entry has already been saturated to
-    /// its total, exactly as at `0x0061EBC1..0x0061EBCD`. Return false when population,
+    /// `Build::finished(type)` `0x00628490`. The ordinary branch has already saturated the
+    /// queue entry to its total (`0x0061EBC1..0x0061EBCD`); the parallel-producer branch
+    /// deliberately retains the previously completed value. Return false when population,
     /// support, placement, or another world gate prevents completion this frame.
     fn finished(&mut self, type_index: i32, queue: &BuildQueue, slot: usize) -> bool;
     /// The store-dirty write at `0x006208A8..0x006208B1`, before `unqueue` touches the
@@ -1380,6 +1381,20 @@ pub trait QueueCompletionHost {
     /// the pre-unqueue repeat latch was set. The host must perform payment and queue
     /// mutation. Return true on retail's non-zero success result.
     fn repeat_unit(&mut self, build: &mut BuildData, type_index: i32) -> bool;
+}
+
+/// Mandatory routing boundary for `Build::do_queue`'s parallel-producer recursion.
+///
+/// Retail asks the producer's type tree whether it is type `0x1B3`, then asks the
+/// owning leader for the current parallel-slot limit. Both queries happen separately
+/// in every recursive frame, after that frame has prepared its local queue step but
+/// before the step is applied. Keeping them as callbacks preserves that observable
+/// order without pretending that type/leader state belongs to `BuildData`.
+pub trait QueueRoutingHost: QueueCompletionHost {
+    /// The producer-side `is(0x1B3)` query in `Build::do_queue`.
+    fn is_parallel_producer(&mut self, build: &BuildData, slot: usize) -> bool;
+    /// The leader-owned parallel-slot limit (`LeaderData::get_building_cities`).
+    fn parallel_slot_limit(&mut self, build: &BuildData, slot: usize) -> usize;
 }
 
 /// Fail-closed violations of the normal retail queue invariant.
@@ -1409,25 +1424,36 @@ pub enum QueueTransaction {
     },
 }
 
-/// Execute the ordinary local, single-slot body of `Build::do_queue` (`0x0061E410`) through
-/// successful `Build::unqueue(slot, 0)` (`0x006207C0`). [measured]
-///
-/// This function deliberately starts *after* the two routing decisions that need the
-/// owning object graph: a multi-slot producer recurses into `slot + 1` first, and a Library
-/// can forward an overflow slot to the player's primary Library. The caller must resolve
-/// those two decisions before entering this local transaction.
-///
-/// The allocated `entries` vector is not shortened on completion. Retail's
-/// `BuildQueue::un_queue` memmoves the remaining logical suffix but leaves `num` and the
-/// last physical record intact; that stale record is checksum-visible because the queue
-/// walker uses allocated length. `Vec::remove` would therefore desynchronise immediately.
-pub fn execute_local_queue_slot<H: QueueCompletionHost>(
-    build: &mut BuildData,
+/// One applied frame in a routed queue transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoutedQueueSlot {
+    /// The slot as seen by this recursive `Build::do_queue` frame.
+    pub slot: usize,
+    /// The local transaction applied after all eligible higher slots.
+    pub transaction: QueueTransaction,
+}
+
+/// Applied transactions in retail mutation order: deepest eligible slot first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutedQueueTransaction {
+    pub slots: Vec<RoutedQueueSlot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedQueueTransaction {
+    type_index: i32,
+    total: i32,
+    kind: QueueKind,
+    step: QueueStep,
+}
+
+fn prepare_local_queue_slot<H: QueueCompletionHost>(
+    build: &BuildData,
     slot: usize,
     ai_speed: i32,
     rules: &ProdRules,
     host: &mut H,
-) -> Result<Option<QueueTransaction>, QueueTransactionError> {
+) -> Result<Option<PreparedQueueTransaction>, QueueTransactionError> {
     let queued = build.queue.queued as usize;
     if queued == 0 {
         return Ok(None);
@@ -1446,7 +1472,7 @@ pub fn execute_local_queue_slot<H: QueueCompletionHost>(
     }
     let total = host.train_time(type_index);
     let kind = host.classify(type_index);
-    let mut step = queue_step(
+    let step = queue_step(
         build.queue.queued,
         slot,
         allocated,
@@ -1458,18 +1484,54 @@ pub fn execute_local_queue_slot<H: QueueCompletionHost>(
     )
     .expect("non-empty queue was checked above");
 
-    if !step.done {
-        build.queue.entries[slot].elapsed = step.elapsed;
-        return Ok(Some(QueueTransaction::Advanced { type_index, step }));
+    Ok(Some(PreparedQueueTransaction {
+        type_index,
+        total,
+        kind,
+        step,
+    }))
+}
+
+fn apply_prepared_local_queue_slot<H: QueueCompletionHost>(
+    build: &mut BuildData,
+    slot: usize,
+    prepared: PreparedQueueTransaction,
+    commit_total_before_finish: bool,
+    host: &mut H,
+) -> Result<QueueTransaction, QueueTransactionError> {
+    // A higher recursive frame may have completed and compacted its own suffix, but it
+    // cannot remove this lower slot. Recheck that invariant before touching storage so a
+    // host callback that violated it cannot turn into an out-of-bounds mutation.
+    let queued = build.queue.queued as usize;
+    let allocated = build.queue.num();
+    if queued > allocated {
+        return Err(QueueTransactionError::LogicalLengthExceedsAllocation { queued, allocated });
+    }
+    if slot >= queued {
+        return Err(QueueTransactionError::SlotOutsideLogicalQueue { slot, queued });
     }
 
-    // The ordinary branch writes the total (not the wrapped `prog + rate` candidate)
-    // before invoking Build::finished; this distinction is observable if stale progress
-    // or a modded accelerator overflows.
-    step.elapsed = total;
-    build.queue.entries[slot].elapsed = step.elapsed;
+    let PreparedQueueTransaction {
+        type_index,
+        total,
+        kind,
+        mut step,
+    } = prepared;
+
+    if !step.done {
+        build.queue.entries[slot].elapsed = step.elapsed;
+        return Ok(QueueTransaction::Advanced { type_index, step });
+    }
+
+    // Only the ordinary branch writes the total before Build::finished. The parallel
+    // branch at 0x0061ED7E returns from recursion and enters finished directly, retaining
+    // a stale over-total value if one is present.
+    if commit_total_before_finish {
+        step.elapsed = total;
+        build.queue.entries[slot].elapsed = step.elapsed;
+    }
     if !host.finished(type_index, &build.queue, slot) {
-        return Ok(Some(QueueTransaction::FinishBlocked { type_index, step }));
+        return Ok(QueueTransaction::FinishBlocked { type_index, step });
     }
 
     let repeat_attempted = kind == QueueKind::Unit && (build.build_masks & mask::REPEAT_QUEUE) != 0;
@@ -1498,12 +1560,86 @@ pub fn execute_local_queue_slot<H: QueueCompletionHost>(
         false
     };
 
-    Ok(Some(QueueTransaction::Completed {
+    Ok(QueueTransaction::Completed {
         type_index,
         step,
         repeat_attempted,
         repeat_succeeded,
-    }))
+    })
+}
+
+/// Execute the ordinary local, single-slot body of `Build::do_queue` (`0x0061E410`) through
+/// successful `Build::unqueue(slot, 0)` (`0x006207C0`). [measured]
+///
+/// This function deliberately starts *after* the two routing decisions that need the
+/// owning object graph: a multi-slot producer recurses into `slot + 1` first, and a Library
+/// can forward an overflow slot to the player's primary Library. The caller must resolve
+/// those two decisions before entering this local transaction.
+///
+/// The allocated `entries` vector is not shortened on completion. Retail's
+/// `BuildQueue::un_queue` memmoves the remaining logical suffix but leaves `num` and the
+/// last physical record intact; that stale record is checksum-visible because the queue
+/// walker uses allocated length. `Vec::remove` would therefore desynchronise immediately.
+pub fn execute_local_queue_slot<H: QueueCompletionHost>(
+    build: &mut BuildData,
+    slot: usize,
+    ai_speed: i32,
+    rules: &ProdRules,
+    host: &mut H,
+) -> Result<Option<QueueTransaction>, QueueTransactionError> {
+    let Some(prepared) = prepare_local_queue_slot(build, slot, ai_speed, rules, host)? else {
+        return Ok(None);
+    };
+    apply_prepared_local_queue_slot(build, slot, prepared, true, host).map(Some)
+}
+
+/// Execute `Build::do_queue`'s local multi-slot recursion (`0x0061E410`). [measured]
+///
+/// Each frame prepares its own type, train time, classification, and queue step first;
+/// only then does it query the producer and leader routing state and recurse into
+/// `slot + 1`. The deeper frame is applied before the saved outer frame. This is not
+/// equivalent to a forward loop: callbacks observe outer-first preparation but
+/// deepest-first completion and compaction.
+///
+/// This entry point still begins after non-primary-Library forwarding. That route targets
+/// another building selected by the owning leader and therefore cannot be represented by
+/// this function's single `&mut BuildData`; callers must resolve it before entry.
+pub fn execute_routed_queue_slots<H: QueueRoutingHost>(
+    build: &mut BuildData,
+    start_slot: usize,
+    ai_speed: i32,
+    rules: &ProdRules,
+    host: &mut H,
+) -> Result<RoutedQueueTransaction, QueueTransactionError> {
+    fn recurse<H: QueueRoutingHost>(
+        build: &mut BuildData,
+        slot: usize,
+        ai_speed: i32,
+        rules: &ProdRules,
+        host: &mut H,
+        applied: &mut Vec<RoutedQueueSlot>,
+    ) -> Result<(), QueueTransactionError> {
+        let Some(prepared) = prepare_local_queue_slot(build, slot, ai_speed, rules, host)? else {
+            return Ok(());
+        };
+
+        let parallel = host.is_parallel_producer(build, slot);
+        if parallel {
+            let limit = host.parallel_slot_limit(build, slot);
+            let next = slot + 1;
+            if next < limit && next < build.queue.queued as usize {
+                recurse(build, next, ai_speed, rules, host, applied)?;
+            }
+        }
+
+        let transaction = apply_prepared_local_queue_slot(build, slot, prepared, !parallel, host)?;
+        applied.push(RoutedQueueSlot { slot, transaction });
+        Ok(())
+    }
+
+    let mut result = RoutedQueueTransaction::default();
+    recurse(build, start_slot, ai_speed, rules, host, &mut result.slots)?;
+    Ok(result)
 }
 
 // =======================================================================================
@@ -2847,6 +2983,8 @@ mod tests {
     enum QueueEvent {
         TrainTime(i32),
         Classify(i32),
+        Parallel(usize),
+        ParallelLimit(usize),
         Finished(i32, i32),
         Dirty,
         CompletedUnqueue(i32, i32),
@@ -2858,6 +2996,8 @@ mod tests {
         kind: QueueKind,
         finish_ok: bool,
         repeat_ok: bool,
+        parallel: bool,
+        parallel_limit: usize,
         events: Vec<QueueEvent>,
     }
 
@@ -2868,6 +3008,8 @@ mod tests {
                 kind: QueueKind::Unit,
                 finish_ok: true,
                 repeat_ok: false,
+                parallel: false,
+                parallel_limit: 1,
                 events: Vec::new(),
             }
         }
@@ -2918,6 +3060,18 @@ mod tests {
                 build.queue.queued = 1;
             }
             self.repeat_ok
+        }
+    }
+
+    impl QueueRoutingHost for QueueProbe {
+        fn is_parallel_producer(&mut self, _build: &BuildData, slot: usize) -> bool {
+            self.events.push(QueueEvent::Parallel(slot));
+            self.parallel
+        }
+
+        fn parallel_slot_limit(&mut self, _build: &BuildData, slot: usize) -> usize {
+            self.events.push(QueueEvent::ParallelLimit(slot));
+            self.parallel_limit
         }
     }
 
@@ -3019,6 +3173,8 @@ mod tests {
             kind: QueueKind::Research,
             finish_ok: true,
             repeat_ok: false,
+            parallel: false,
+            parallel_limit: 1,
             events: Vec::new(),
         };
 
@@ -3134,6 +3290,162 @@ mod tests {
             Err(QueueTransactionError::SlotOutsideLogicalQueue { slot: 1, queued: 1 })
         );
         assert!(host.events.is_empty());
+    }
+
+    #[test]
+    fn routed_queue_prepares_outer_first_but_completes_and_compacts_deepest_first() {
+        let rules = ProdRules::shipped();
+        let mut build = BuildData::default();
+        build.queue.queued = 2;
+        build.queue.entries = vec![
+            BuildQueueEntry {
+                elapsed: 1000,
+                type_index: 60,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 1000,
+                type_index: 61,
+                ..BuildQueueEntry::default()
+            },
+        ];
+        let mut host = QueueProbe::unit(1000);
+        host.parallel = true;
+        host.parallel_limit = 2;
+
+        let result = execute_routed_queue_slots(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert_eq!(result.slots.len(), 2);
+        assert_eq!(result.slots[0].slot, 1);
+        assert_eq!(result.slots[1].slot, 0);
+        assert!(matches!(
+            result.slots[0].transaction,
+            QueueTransaction::Completed { type_index: 61, .. }
+        ));
+        assert!(matches!(
+            result.slots[1].transaction,
+            QueueTransaction::Completed { type_index: 60, .. }
+        ));
+        assert_eq!(build.queue.queued, 0);
+        assert_eq!(build.queue.num(), 2, "recursive unqueue keeps allocation");
+        assert_eq!(build.queue.entries[0].type_index, 60);
+        assert_eq!(build.queue.entries[0].elapsed, 0);
+        assert_eq!(build.queue.entries[1].type_index, 61);
+        assert_eq!(build.queue.entries[1].elapsed, 0);
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Parallel(0),
+                QueueEvent::ParallelLimit(0),
+                QueueEvent::TrainTime(61),
+                QueueEvent::Classify(61),
+                QueueEvent::Parallel(1),
+                QueueEvent::ParallelLimit(1),
+                QueueEvent::Finished(61, 1000),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(61, 0),
+                QueueEvent::Finished(60, 1000),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(60, 0),
+            ],
+            "a forward loop or apply-before-recursion changes this callback order"
+        );
+    }
+
+    #[test]
+    fn routed_queue_obeys_the_strict_parallel_limit_and_leaves_the_next_item_unticked() {
+        let rules = ProdRules::shipped();
+        let mut build = BuildData::default();
+        build.queue.queued = 2;
+        build.queue.entries = vec![
+            BuildQueueEntry {
+                elapsed: 1000,
+                type_index: 60,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 17,
+                type_index: 61,
+                ..BuildQueueEntry::default()
+            },
+        ];
+        let mut host = QueueProbe::unit(1000);
+        host.parallel = true;
+        host.parallel_limit = 1;
+
+        let result = execute_routed_queue_slots(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert_eq!(result.slots.len(), 1);
+        assert_eq!(result.slots[0].slot, 0);
+        assert_eq!(build.queue.queued, 1);
+        assert_eq!(build.queue.entries[0].type_index, 61);
+        assert_eq!(build.queue.entries[0].elapsed, 17);
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Parallel(0),
+                QueueEvent::ParallelLimit(0),
+                QueueEvent::Finished(60, 1000),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(60, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_routed_queue_does_not_query_a_parallel_slot_limit() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 0);
+        let mut host = QueueProbe::unit(1000);
+
+        let result = execute_routed_queue_slots(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert_eq!(result.slots.len(), 1);
+        assert!(matches!(
+            result.slots[0].transaction,
+            QueueTransaction::Advanced { type_index: 60, .. }
+        ));
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Parallel(0),
+            ]
+        );
+    }
+
+    #[test]
+    fn parallel_completion_retains_a_stale_over_total_value_until_finished() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 1500);
+        let mut host = QueueProbe::unit(1000);
+        host.parallel = true;
+        host.parallel_limit = 1;
+
+        let result = execute_routed_queue_slots(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert!(matches!(
+            result.slots[0].transaction,
+            QueueTransaction::Completed { type_index: 60, .. }
+        ));
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Parallel(0),
+                QueueEvent::ParallelLimit(0),
+                QueueEvent::Finished(60, 1500),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(60, 0),
+            ],
+            "the ordinary branch's saturation store must not leak into 0x1B3 routing"
+        );
     }
 
     #[test]
