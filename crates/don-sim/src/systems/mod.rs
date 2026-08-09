@@ -50,6 +50,11 @@ pub mod construction_builder;
 /// Exact placement, start, rejection/refund, activation, and farm-spawn transactions
 /// behind construction's mandatory world-store boundary.
 pub mod construction_lifecycle;
+/// Source-backed `UnitType::find_nearby_spot`, exact bidirectional containment splice, and
+/// the ordinary-gather release invariant (preserve its on-map collision stamp). Scholar
+/// placement requires both the retail bitmap and ordered-collision host; an ordinary worker
+/// modeled as seated is rejected rather than teleported.
+pub mod containment;
 pub mod economy;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
