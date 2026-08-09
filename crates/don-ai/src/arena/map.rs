@@ -69,8 +69,16 @@ pub struct Spatial {
 
 impl Spatial {
     pub fn load(rules_xml: &Path) -> Result<Spatial, String> {
-        let text = std::fs::read_to_string(rules_xml)
-            .map_err(|e| format!("{}: {e}", rules_xml.display()))?;
+        let bytes =
+            std::fs::read(rules_xml).map_err(|e| format!("{}: {e}", rules_xml.display()))?;
+        Self::from_rules_xml(&bytes)
+    }
+
+    /// Parse the five retained installed-rule radii from bytes already admitted by an
+    /// installed-data provider. This keeps executable gather hosts from accepting a
+    /// caller-supplied Camp/Mine radius detached from their retained `rules.xml`.
+    pub fn from_rules_xml(bytes: &[u8]) -> Result<Spatial, String> {
+        let text = std::str::from_utf8(bytes).map_err(|error| format!("rules.xml: {error}"))?;
         let pick = |tag: &str| -> Result<i32, String> {
             let needle = format!("<{tag} value=\"");
             let i = text

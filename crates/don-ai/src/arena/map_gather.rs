@@ -9,11 +9,14 @@
 
 use std::sync::Arc;
 
+use don_sim::systems::gather_terrain::GatherTerrainDiplomacy;
 use don_sim::systems::gather_terrain::{
     GatherTerrainMaterialization, GatherTerrainMaterializationError, GatherTerrainSourceStamp,
-    GatherTerrainWorldIdentity, MaterializedCliffObject, MaterializedMountainObject,
+    GatherTerrainWorldIdentity, MaterializedCliffObject, MaterializedGatherHost,
+    MaterializedMountainObject,
 };
-use don_sim::systems::map_terrain::TILES_PER_WCELL;
+use don_sim::systems::gathering::GatherCapacityRules;
+use don_sim::systems::map_terrain::{World, TILES_PER_WCELL};
 
 use super::Map;
 
@@ -53,6 +56,24 @@ impl RetainedGatherTerrainSources {
 
     pub fn materialization(&self) -> &GatherTerrainMaterialization {
         &self.materialization
+    }
+
+    /// Construct the shared executable terrain host over the synchronized WData/TData
+    /// owner.  [`MaterializedGatherHost::new`] rechecks shape and seed here; retaining a
+    /// source catalog is not permission to run it against a merely similar Arena map.
+    pub fn executable_host<'a, D: GatherTerrainDiplomacy + ?Sized>(
+        &'a self,
+        world: &'a World,
+        diplomacy: &'a D,
+    ) -> Result<MaterializedGatherHost<'a, D>, GatherTerrainMaterializationError> {
+        MaterializedGatherHost::new(world, &self.materialization, diplomacy)
+    }
+
+    /// Capacity constants are admitted only because materialization already bound these
+    /// bytes to the exact supported `rules.xml` SHA-256.  This is the shared recovered
+    /// rules block, not an Arena building-capacity table.
+    pub fn capacity_rules(&self) -> GatherCapacityRules {
+        GatherCapacityRules::shipped()
     }
 }
 
