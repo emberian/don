@@ -2,7 +2,7 @@
 name = "donscan"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 description = "Native Windows heap scanner: types a live riseofnations.exe heap by vtable pointer."
 
 # Windows-only. Excluded from the root workspace (see ../../Cargo.toml) because it

@@ -2,7 +2,7 @@
 name = "netsys-shim"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 description = "Drop-in replacement CrossplayNetLib.dll: implements the 65-slot NetSys vtable over a transport we control."
 
 # Windows i686 only — it must be loadable by riseofnations.exe, which is PE32

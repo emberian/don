@@ -22,7 +22,7 @@ exclude = ["crates/oracle", "crates/donscan", "crates/netsys-shim"]
 
 [workspace.package]
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [profile.release]
 opt-level = 3

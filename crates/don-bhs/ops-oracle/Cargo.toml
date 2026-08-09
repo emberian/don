@@ -2,6 +2,7 @@
 name = "bhs-ops-oracle"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 description = "Differentially test don_bhs::ops against retail's own ScriptType::do_operator, under Linux/i686."
 
 # Its own workspace root: 32-bit-x86 only, so it must never join the repo workspace

@@ -1,314 +1,314 @@
-# README-LLM
+# README-LLM — orientation for agents
 
-Orientation for an agent landing on this repo cold. `README.md` is Ember's, human-written;
-this file is ours. Read this first, then `docs/CHARTER.md`, then whatever your task touches.
+Read this file completely before changing the repository. Then read
+[`docs/CHARTER.md`](docs/CHARTER.md) and the documentation for the subsystem you touch.
+[`README.md`](README.md) is the human-facing project overview;
+[`GOAL.md`](GOAL.md) is the execution board, but its measured snapshot can lag the current
+tree and generated records.
 
-## Repository workflow — one permanent branch
+## Mission
 
-**This repository works directly on `dev`, its GitHub default branch. Never create, switch,
-rename, or delete branches, and never create a Git worktree.** In particular, do not create
-`codex/*`, recovery, feature, or agent-specific branches. Every agent stays on the already
-checked-out `dev` branch and preserves unrelated shared-tree changes. If the checkout is ever
-not on `dev`, stop and ask Ember rather than changing branches. This is a deliberate permanent
-workflow rule; `main` is not used here.
+Descent of Nations (DoN) is becoming three things at once:
 
-## What this is
+1. **An independent, complete, enjoyable successor to _Rise of Nations_.** It must eventually
+   be good enough to give an expert human a serious, non-cheating game—not merely expose a
+   mechanics library.
+2. **A defensible fidelity implementation.** Retail behavior is reconstructed from the
+   supported executable, shipped data, live process, and replay state checksums.
+3. **A high-throughput RL and evaluation platform.** Batched simulation, full parameter-level
+   action masks, deterministic parallelism, self-play, league evaluation, and an eventual
+   RoNEval suite are first-class product requirements.
 
-**Descent of Nations** — a deterministic, batch-parallel Rust reimplementation of the
-*Rise of Nations: Extended Edition* simulation, derived from the binary rather than from
-community documentation, bit-exact wherever we can prove it, built to become an RL
-environment capable of training a strong self-play agent.
+Improved mode may exceed retail. Fidelity mode stays as its reference. Do not let work on one
+of these collapse attention onto it at the expense of the other two.
 
-## The one rule
+## Repository workflow: one permanent branch
 
-**Ground truth is the binary, the shipped data files, or the live process. Nothing else.**
+**Work directly on `dev`, the permanent GitHub default branch. Never create, switch, rename,
+or delete branches, and never create a Git worktree.** Do not create `codex/*`, recovery,
+feature, or agent branches. If the checkout is not already on `dev`, stop and tell Ember;
+do not “repair” it by switching.
 
-Community documentation (RoN Heaven, the Fandom wiki, Vanshilar, MHLoppy) is a
-*cross-check only* and is never the source of a value we implement. Before writing any
-constant or formula, say where it came from — an address, a file and line under
-`ron-data/`, or a live read. If the honest answer is "a wiki says so", **stop and go
-derive it**. This is not fussiness; the whole project fails quietly if folklore gets in,
-because folklore is plausible, compiles fine, and is wrong in ways tests written from the
-same folklore will never catch.
+The working tree is shared by every active agent:
 
-Corollaries, each of which was paid for:
+- preserve unrelated modifications;
+- never use `git stash`, destructive reset, checkout-based restoration, or broad cleanup;
+- stage named files or exact hunks—never `git add -A` while lanes are active;
+- agents report their file sets and validation; the root/orchestrator commits coherent
+  tranches and pushes `dev`;
+- temporary compile failures can be another lane’s in-flight API migration. Identify the
+  owner before editing around it.
 
-- **Mark every claim `[measured]` or `[reported]`.** Measured means *you* verified it here.
-  Reported means you read it and have not checked. Never silently promote one to the other.
-- **Capture, do not calculate.** Never hand-compute an expected value for a test. Take it
-  from the binary via the oracle. (A hand-computed `-47` where retail returns `-247` is why
-  this rule exists.)
-- **Decompiled C is a hypothesis, never a derivation.** Ghidra silently reorders integer
-  and floating-point operations on 32-bit MSVC float code — wrong in exactly the dimension
-  this project cares about. Get *structure* from Ghidra; get *values* from behaviour.
-- **Fidelity tiers.** A = proven over the whole input domain by SMT. B = differentially
-  tested against retail, **always** with sample count and input distribution — this is
-  testing, *not* verification. C = behaviourally faithful, divergence measured. We hold no
-  formal semantics of Rust or x86, so nothing here is "verified" in the proof-assistant
-  sense. Never write *verified*, *proven*, or *refinement* about a differential test.
+History is a work log, not a reliquary: make useful thematic commits promptly. Do not hold a
+large dirty tree for an elaborate “perfect” strategy.
 
-## Machine topology — three machines, three jobs
+## The methodology law
 
-| machine | is | used for |
-|---|---|---|
-| **this Mac** | arm64, 12 cores, 96 GB | Ghidra, capstone, the Rust workspace, orchestration. **Cannot execute 32-bit x86 at all** (Rosetta is x86-64 only). |
-| **hbox** (`ssh hbox`) | x86_64 Ubuntu, 24 cores, 123 GB | The **oracle** — executes retail machine code. The only machine that can. **Co-tenant with another agent's HOL build**: always `nice -n 15 taskset -c 0-3`, never install packages, never run unbounded parallel builds. |
-| **Parallels VM "Windows 11"** | ARM64 Windows, x86 emulation | The **live game**. Runtime state, memory reads, replays. Ember plays here. |
+**Ground truth is the supported binary, shipped game data, or measured live-process behavior.
+Community documentation is a source of hypotheses only.**
 
-## Toolchain, with exact invocations
+Before introducing a constant, branch, formula, state transition, or layout, identify its
+source:
 
-**Ghidra** 12.1.2 (Homebrew). Project at `re/ghidra`, program `riseofnations.exe`,
-47,177 functions.
+- an executable address and instruction evidence;
+- a PDB name/layout plus behavioral evidence for semantics;
+- a path and line in extracted shipped data; or
+- a recorded retail observation/oracle sample.
 
-```sh
-/opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless \
-  /Users/ember/dev/don/re/ghidra ron -process riseofnations.exe -noanalysis \
-  -scriptPath /Users/ember/dev/don/re/scripts -postScript <Script>.java <args>
+If the real source is “the wiki says so,” “RoN usually works this way,” or “this model is
+reasonable,” stop and derive it. Plausible substitutions are more dangerous than visible
+missing behavior because they compile, train policies, and silently become the new game.
+
+### Fidelity tiers
+
+- **Tier A — proven equivalent:** whole-domain SMT/bitvector equivalence to lifted semantics;
+  state the model boundary.
+- **Tier B — differentially tested:** Rust and actual shipped machine code agree over a named
+  generated domain. Always report sample count, distribution, and exclusions. This is testing,
+  not formal verification.
+- **Tier C — behaviorally faithful:** matches observed behavior with a stated evidence and
+  divergence boundary.
+
+Never call an ordinary test, decompilation, PDB lookup, or finite differential run “verified”
+or “proven.” Capture expectations from retail; do not hand-calculate fixtures and then test
+the transcription against itself. Mutation-test differential harnesses so a one-bit error is
+known to fail.
+
+### Fidelity, improved behavior, and drift
+
+The authoritative policy is `crates/don-sim/src/deviations.rs`; prose lives in
+[`docs/tracks/dual-mode.md`](docs/tracks/dual-mode.md) and
+[`docs/tracks/deviations.md`](docs/tracks/deviations.md).
+
+- A **Fix** is an explicit, reversible improved-mode behavior with a real execution seam.
+- **Drift** is a reachable approximation or incomplete model. It is not a feature or a mode;
+  it blocks readiness for every product surface it can reach.
+- **ResearchOnly** code may support bounded experiments but is not evidence about the game,
+  replay fidelity, or a releasable RL surface.
+
+Do not deliberately simplify fidelity mode. For DoN proper, meet retail’s sophistication and
+then exceed it deliberately in improved mode.
+
+## Current measured snapshot
+
+Snapshot date: 2026-08-08. Prefer the generated records and commands below if they disagree
+with prose.
+
+| Gate/surface | Current authoritative state |
+|---|---|
+| Retail differential suite | `schema/oracle-regression.json`: 16/16 cases, 17,223,055 trials, zero mismatches/skips/crashes/errors after the full-state `Guy::turn_towards` case. |
+| Replay corpus | `schema/replay-validation.json`: 61 files, 585,152 turns, 488,557 structurally valid checksum packets; dynamic world reconstruction remains unmodelled, so current checksum agreement is not whole-game fidelity. |
+| Improved-mode seams | The seven default fixes are wired through real economy/production/border/BHS paths and covered by the fidelity gate. |
+| Product readiness | `tools/product-readiness.sh` intentionally refuses with two registered blockers: `env-patrol-execution` and `arena-model-simplifications`. Do not turn them into waivers. |
+| RL surface | Builds, imports, resets, steps, masks, and exposes zero-copy observations through native/Gymnasium/PettingZoo APIs. The last published partial-dynamics report reaches 98,505 env-steps/s at 1,024 worlds; remeasure before quoting it as current. |
+| Playable browser | Native/wasm integration smoke, real command codecs, WebGPU/WebGL2/Canvas2D rendering, and deterministic digest paths exist. The UI labels itself an integration build because whole-game model gaps remain. |
+| Live retail control | Main-thread pause/move commands and frame-by-frame movement trajectories are live-proven. Hook generations upgrade in place without restarting the game and restore the exact overwritten bytes on STOP. |
+| RoNtoy | Read-only live capture, fail-closed host, browser coach, recording/replay, and native overlay are working. |
+| BHS/content | Compiler, decoder, VM, aggregate execution, builtin registry, and content/mod resolution exist; unsupported semantics fail closed. |
+
+Passing Rust tests does not upgrade the fidelity tier. A port can be compiled, unit-tested,
+called, checksummed, and retail-matched at five different levels; report which one is true.
+
+## The product data flow
+
+The intended architecture is one shared game, not separate demo implementations:
+
+```text
+retail command schema / human click / policy action
+                    ↓
+          command decoder and queue semantics
+                    ↓
+      retail-order dispatcher + deterministic systems
+                    ↓
+          one authoritative world/tick implementation
+          ↙              ↓                 ↘
+ replay checksum     batched RL          playable client
+ validation          observations        and strong AI
 ```
 
-⚠ **Single-writer lock.** Do not run this concurrently with other lanes. If you need
-Ghidra while others are working, `cp -r re/ghidra /tmp/gh-<yourlane>` and use the copy.
+The replay harness, RL environment, arena AI, and browser must converge on that command and
+world path. A straight-line environment movement model, a frontend-only economy, or an arena
+watchdog can be useful research scaffolding, but it cannot become the product path.
 
-**Prefer the bulk-decompiled corpus** at `re/decomp-all/<EA>.c` — one C file per function
-plus `MANIFEST.jsonl`. Grep it before decompiling anything; it is far cheaper. It skips
-functions over 8192 bytes, and the manifest records every skip.
+Retail lockstep supplies the whole-system reference: recorded command packages plus fifteen
+simulation-state checksum channels. The checksum walker shares the engine’s `DataWalk`
+interface with save/load state. Dynamic replay agreement requires deterministic reconstruction
+of the initial map, players, objects, RNG streams, and container histories; `.rcx` does not
+contain a complete initial save image.
 
-**Capstone** for disassembly — no locks, always safe:
+## Repository map
+
+### Authoritative product crates
+
+- `crates/don-sim` — state, retail tick, mechanics, orders, walkers, RNG, deviations policy.
+- `crates/don-replay` — `.rcx` parser, command streams, sim bridge, checksum scoreboard.
+- `crates/don-env` — batched RL world, action masks, observations/reward, Python API.
+- `crates/don-ai` — BHS/economic compatibility and the observation-driven playable arena AI.
+- `crates/don-rules` — shipped rules parsing and generated field offsets.
+- `crates/don-content` — shipped/local/Workshop content resolution and overlays.
+- `crates/don-bhs`, `crates/don-bhs-cc` — BHS VM and source compiler.
+- `crates/don-net` — lockstep session/transport and headless retail-network work.
+- `crates/don-gpu` — measured batch/GPU kernels with CPU parity gates.
+
+### User-facing surfaces and instruments
+
+- `web` — playable integration client, one-world spectator, cluster renderer, replay UI.
+- `tools/rontoy-host`, `tools/rontoy-overlay`, `web/public/rontoy.html` — live coach.
+- `tools/retail-control` — reversible retail command ingress and trajectory recorder.
+- `crates/donscan` — Windows live-process reader; excluded from the arm64 workspace.
+- `crates/netsys-shim` — i686 retail-loaded network shim; excluded from the workspace.
+- `crates/oracle` — i686 executable oracle; excluded from the arm64 workspace.
+
+### Evidence
+
+- `schema/` — generated command/layout tables, oracle/replay records, PDB extracts.
+- `docs/provenance-ledger.md` — mechanic-by-mechanic provenance and fidelity tier.
+- `docs/mechanics/` and `docs/derivation/` — recovered behavior and audit reports.
+- `re/decomp-all/` — bulk decompiler corpus; use for control-flow orientation.
+- `ron-bin/`, `ron-data/`, `schema/live/` — local proprietary inputs/captures, gitignored.
+
+## Normal gates
+
+Run the narrow gate while iterating and the broad gate before handing off a shared-structure
+change.
 
 ```sh
-cd /Users/ember/dev/don/ron-bin && uv run --quiet --with capstone --with pefile python - <<'EOF'
-import pefile
-from capstone import *
-pe = pefile.PE("riseofnations.exe")
-txt = [s for s in pe.sections if s.Name.rstrip(b"\x00") == b".text"][0]
-base = pe.OPTIONAL_HEADER.ImageBase + txt.VirtualAddress
-data = txt.get_data()
-md = Cs(CS_ARCH_X86, CS_MODE_32)
-for i in md.disasm(data[0x644130-base:0x644130-base+200], 0x644130):
-    print(hex(i.address), i.mnemonic, i.op_str)
-EOF
+cargo check --workspace
+cargo test --workspace --all-targets
+cargo test -p don-sim --lib
+cargo test -p don-env
 ```
 
-**The oracle** — calls retail functions with controlled inputs, fork-isolated so a faulting
-probe reports a signal instead of killing the run:
+Evidence and release gates:
 
 ```sh
-ssh hbox
-cd ~/don-oracle
-nice -n 15 taskset -c 0-3 cargo build --target i686-unknown-linux-musl -q
-./target/i686-unknown-linux-musl/debug/oracle selftest      # hand-written code; proves the harness
-./target/i686-unknown-linux-musl/debug/oracle difftest 500000
-./target/i686-unknown-linux-musl/debug/oracle vectors       # capture test expectations
-./target/i686-unknown-linux-musl/debug/oracle call <va-hex> [args]
-./target/i686-unknown-linux-musl/debug/oracle sweep islands.jsonl sweep.jsonl
+tools/oracle-regress.sh --status   # inspect current record without running hbox
+tools/oracle-regress.sh            # sync/build/run every registered i686 case
+tools/replay-validate.sh           # regenerate corpus scoreboard
+tools/product-readiness.sh         # expected to refuse while product drift remains
 ```
 
-Source is `crates/oracle/src/main.rs`, mirrored at `hbox:~/don-oracle/crates/oracle/src/`.
-Edit local → `scp` → rebuild → run. It is **excluded from the workspace** because it cannot
-build on arm64, so `cargo test` at the repo root never touches it — *a green `cargo test`
-is evidence about the Rust crates only, never about a fidelity claim*.
-
-**Re-run every Tier-B claim, from the Mac, with one command:**
+Web and RL commands:
 
 ```sh
-tools/oracle-regress.sh              # sync → hbox, build i686, run all 12 cases, fetch JSON
-tools/oracle-regress.sh --status     # age + contents of the last record; runs nothing
-tools/ledger-from-measurements.py    # ledger evidence rows, generated from the measurements
+node web/tools/pack-gamedata.mjs
+node web/tools/pack-playdata.mjs
+web/build.sh
+node web/serve.mjs 8787
+node web/tools/play-smoke.mjs --json web/play-results.json
+
+python3 crates/don-env/gen/gen_spec.py
+bash python/build.sh
+PYTHONPATH=python python3 python/smoke_test.py --envs 256
 ```
 
-12 registered differential cases, 16.2 M trials, ~59 s. Exit 0 only if every case *ran*
-**and** agreed; 1 mismatch/crash, 2 something skipped, 3 harness failure, 4 hbox
-unreachable. A case that cannot run is SKIPPED and is never green — vacuous green is the
-failure mode the whole harness exists to prevent. Adding a case is data in
-`crates/oracle/src/registry.rs`; last record in `schema/oracle-regression.json`; the design,
-the mutation test that proves it bites, and the honest gap list are in
-`docs/tooling/oracle-regression.md`.
+Generated benchmark result files, live captures, compiled DLLs, and extracted game data are
+not source. Respect existing ignore rules; commit a stable schema artifact only when its
+provenance and reproducibility are documented.
 
-⚠ `oracle difftest` / `oracle combat` are **superseded**: their models are copies typed into
-`main.rs`, so they test the copy, not `don-sim`. Use `regress`.
+## Machine topology
 
-**The live process.** Read memory with `OpenProcess` + `ReadProcessMemory` via P/Invoke in
-guest PowerShell:
+| Machine | Role |
+|---|---|
+| This Mac (arm64, 12 cores, 96 GB) | Rust workspace, orchestration, Ghidra/Capstone, web/browser work. It cannot execute 32-bit x86. |
+| `hbox` (x86_64 Linux) | Maps and executes the 32-bit retail code for differential cases. It is a co-tenant: use `nice -n 15 taskset -c 0-3`; never install packages or launch unbounded builds. |
+| Parallels VM `Windows 11` (ARM64 Windows, x86 emulation) | Supported retail game, live memory, RoNtoy, reversible command ingress. |
 
-```sh
-prlctl exec "Windows 11" powershell.exe -EncodedCommand <base64 of UTF-16LE script>
-```
+### Reverse-engineering tools
 
-Then **write results to a guest file and stream that out** — inline base64 return times out.
+The exact supported executable is PE32/i386, SHA-256
+`30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`, image base
+`0x00400000`. Runtime addresses are preferred VA plus the ASLR delta.
 
-**For file transfer, use the SHARED FOLDER, not certutil.** Guest `\\Mac\deos` maps to host
-`/Users/ember/dev/breadstuffs`, read-write, and moves 57 MB in seconds. `prlctl exec` runs
-as SYSTEM so the `Z:` drive letter is invisible, but the UNC path works. The
-`certutil -encode` + `type` hop in `docs/binary-ground-truth.md` is the slow fallback; it
-was used all day only because an early check of `\\Mac\Home` failed and absence was wrongly
-concluded from it.
-
-## Gotchas, each paid for in real debugging
-
-- **`prlctl exec` runs as SYSTEM.** `%USERPROFILE%` is `C:\WINDOWS\system32\config\systemprofile`.
-  User paths must be explicit: `C:\Users\ember\...`.
-- **Windows randomises ASLR per *boot*, not per process.** All instances of the exe share an
-  image base within a session, so addresses are stable across probes. Rebase every static VA
-  by `runtime_base - 0x400000`.
-- **`certutil -encode` does not reliably overwrite.** Use a fresh temp filename per file and
-  **always hash-verify**. A silently duplicated binary was caught only by hashing.
-- **Never scan large memory in a PowerShell loop.** It is orders of magnitude too slow. Put
-  the loop in compiled C# via `Add-Type`, add a cheap range prefilter before any hash lookup,
-  or use a native binary.
-- **NEVER conclude absence from a narrow or truncated listing.** This cost the project a
-  full day, three times over: `head -5` hid `rise.pdb`; `dir /b *.pdb` hid `rise_z.map`;
-  one failed `\\Mac\Home` probe hid the working shared folder. Enumerate fully, then
-  conclude.
-- **Fork isolation without a timeout only handles crashes, not hangs.** A probe that never
-  returns wedges the run forever and looks exactly like a shell timeout.
-- **A differential test whose model is an inline copy tests the copy.** Point every case at
-  the shipped function, and mutation-test the harness to prove it bites.
-- **Do not `git stash`** — the tree is shared with parallel lanes. Lanes must not commit;
-  the orchestrator commits. Never `git add -A` while lanes are live.
-- **`schema/islands.jsonl` is not a complete function list** — Ghidra left gaps, and two
-  combat-critical functions sit in them.
-- **Ghidra decompiler timeouts are real** — `Constants::log_data` `0x00570170` is 63,382 bytes
-  and exceeds a 600 s budget. Extract at the instruction level instead.
-- **Following a rule-name string leads to the LOGGER, not the loader.** The UTF-16 rule names
-  in `.rdata` are xref'd only from the `*::log_data(Log*)` functions. The real loaders
-  (`Constants::init` `0x00569a90`, `UnitType::init` `0x0061ab50`) fetch names from the runtime
-  `StringTable` at `[0x00C06378]` and touch no literal. This cost a day; see
-  `docs/derivation/PDB-RECONCILIATION.md` §2.
-
-## The shipped PDB — read this before doing any RE
-
-**`ron-bin/sbl/rise.pdb` is the private PDB for our exact binary.** 57 MB, CodeView GUID
-`{51D4F219-61C6-4F84-9D5B-C3361B0D291F}` age 1, identical to the exe's debug directory.
-37,138 publics, 22,752 procedures with real names, code sizes and C++ signatures, plus full
-type info. (Any doc claiming the game ships no PDB is stale — it sat in `sbl\` all along and
-an early recon command truncated the listing that would have shown it.)
+The shipped private PDB is `ron-bin/sbl/rise.pdb` and matches this executable. It contains
+names, signatures, code sizes, and type layouts. It does **not** establish behavior.
 
 ```sh
-python3 tools/pdb/lookup.py 644130 a1d110       # VA -> real symbol + signature
-python3 tools/pdb/lookup.py --name 'PathFinder::'   # search names
+python3 tools/pdb/lookup.py 644130 a1d110
+python3 tools/pdb/lookup.py --name 'PathFinder::'
 cd ron-bin && uv run --quiet --with pefile python ../tools/pdb/callers.py 57fa60
 cd ron-bin && uv run --quiet --with pefile python ../tools/pdb/xref.py --str flank_bonus
-/opt/homebrew/opt/llvm/bin/llvm-pdbutil dump --types ron-bin/sbl/rise.pdb   # struct layouts
 ```
 
-Pre-extracted: `schema/rise-symbols.tsv` (publics), `schema/rise-procs.tsv` (procedures with
-sizes — the one that resolves an arbitrary VA), `schema/pdb-types.json`,
-`schema/command-structs.txt`, `re/symtab.json`, `re/docaddrs.tsv`.
+Prefer `re/decomp-all/<EA>.c` before opening Ghidra. Decompiled C is a control-flow map; use
+Capstone for instruction-order/rounding questions and the oracle/live game for values. The
+Ghidra project has a single-writer lock; copy `re/ghidra` to a lane-specific temporary path
+if another process may be using it.
 
-**It gives names, types, sizes and line info. It does not give semantics and it raises no
-fidelity tier.** Finding the right function is not the same as understanding it; values still
-come from the oracle. Never write "confirmed by the PDB" about a behavioural claim.
+Run the oracle through `tools/oracle-regress.sh`, not legacy inline model commands. A case
+must call the code shipped by DoN and the mapped retail function; a copied Rust-like model in
+the harness proves nothing about the crate.
 
-## Established ground truth (do not re-derive)
+### Live process safety
 
-`riseofnations.exe` sha256 `30478a44…625079`, **PE32 i386**, image base `0x00400000`, a
-**2024-06-20 MSVC-14 rebuild** of the 2003 code, unpacked, RTTI intact. `patriots.exe` is
-only the MFC launcher.
+`prlctl exec` runs as SYSTEM; user paths must be explicit. Rebase every static address. Use
+bounded native readers rather than large PowerShell memory loops. Hash the target before any
+injection.
 
-- **Float**: SSE binary32, not x87 (~23.7 K scalar SSE vs ~560 x87). The eight precise CRT
-  imports are seven non-IEEE transcendental hazards
-  (`_libm_sse2_{acos,asin,atan,cos,pow,sin,tan}_precise`) plus `_sqrt_precise`, which is
-  IEEE-exact and safe. **`ObjectData::get_damage` and the road A\* contain no floating
-  point at all** (not a whole-sim claim — see `docs/derivation/AUDIT.md` §3.2).
-- **RNG**: LCG `s ← s·1664525 + 1013904223` [measured, in `Random::get`]. `float Random::get()`
-  `0x00a39cf0`, `int Random::get(int,int)` `0x00a39d70`, `Random::reseed` `0x00a39d30` (an
-  XOR-swap: installs the new seed, **returns the old one**), free `random(int,int)`
-  `0x00a39d40`. 414 call sites, ≥7 streams.
-  ⚠ **Corrected**: the pathfinder does **not** have its own RNG. `[0x00C06184]` is
-  `GameAccess::game_random`, a static *reference* to the `Random` object `game_random` at
-  `0x00E37A8C` — **the main simulation stream** (307 sites in 118 functions): map generation,
-  units, animals, AI leaders, the BHS script API, and every RNG-using `PathFinder` routine.
-  `0x00EB697C` is `internal_random`, a *different* stream (92 sites in 31 functions) —
-  mostly `Surf`/`Scene`/`Particle`/`GraphicPieces`, **but its single largest consumer is
-  `Leader::diplomacy` with 18 sites**, so do not assume it is cosmetic; treat "is
-  `internal_random` sim-critical?" as open. Sound draws (`SoundGlobal::random` `0x00E85F0C`,
-  `SoundType::random` `0x00E87D3C`) are cosmetic and correctly do not perturb `game_random`.
-  RNG state rides its **own** lockstep channel, not the checksum:
-  `CommandPackage::process_check_random(CheckRandomCommand*)` `0x00946020` +
-  `CommandPackage::random_seeds` `0x00CC02C8`.
-- **RULES**: `[0x00C061E4]` and `[0x00C061F0]` **alias the same object** (live-read; the PDB
-  says why — they are `GameAccessConst::constantsc` and `GameAccess::constants`, the
-  const/non-const reference pair to the one `Constants` singleton).
-- **Damage**: `ObjectData::get_damage` `0x00644130`,
-  `int __thiscall (int, int, unsigned long, int, int, int*) const`, pure integer. Attack
-  stored **×10**; rescale `(D+5)/10`; armor subtracted **mid-chain** at step 22 of 31; floor
-  of 1 **conditional**. The community formula is wrong in structure.
-- **Pathfinding**: pure-integer 8-connected grid A\* with an ordered-tree open list.
-  ⚠ **Everything we measured is `PathFinder::astar_caravan_road` `0x00685990`, the caravan/road
-  search.** The general pathfinder is `PathFinder::astar_path` `0x00683770` ←
-  `find_upath`/`find_wpath`/`find_tpath`, with `PathFinder::calc_cost` `0x00684E50`, and it is
-  **unread**; there is also `PathFinder::astar_river` `0x00686690`. What transfers:
-  pure-integer (0 FP instructions in the entire `PathFinder` class — the 20 SSE ops across
-  9,063 instructions are struct moves) and the 8-way rotation tie-break. What does **not**:
-  *"draws RNG once per edge relaxation"* — `calc_cost` makes **zero** RNG calls; the 192-unit
-  fixed step (the general search is parameterised 48/192/768); the 3,200-node budget; and the
-  eight cost constants, which are read only by `calc_road_cost`.
-- **Checksum**: `CheckSums::check_all` `0x00936560`, `CommandPackage::process_check_sums`
-  `0x009459d0`, `adler32` `0x00a46830`. `CheckSum`/`SaveGame`/`LoadGame` are siblings of one
-  `DataWalk` interface (`walk_data(DataWalk*)` / `walk_function` / `walk_test`), so
-  **sim-critical state ≡ save-game state**. Note `log_data(Log*)` is a *different* visitor
-  interface and does not carry this property.
-- **Rule tokenizer**: `String::fraction(int scale) const` `0x00a1d110` (we had called it
-  `RString::AsScaled`) — `(_wtoi(s) * scale) / _wtoi(strchr(s,'/')+1)`, denominator 0 → 0,
-  no '/' → denominator 1. `scale` is a per-field compile-time constant pushed by the caller;
-  the **complete** scale universe across the 40 fraction constants is
-  **{256 ×24, 192 ×11, 100 ×5}** [measured, `Constants::init` call sites].
-- **Balance table**: `Balance combat_table` `0x00C12BF0`; the array is
-  `Balance::final_balance_table` at **`0x00C12BF4`**, and the PDB type record says
-  `short[493][493]` — 486,098 bytes, exactly as derived. The old `0x00C06AFC` figure is a
-  **bias-folded base** (`0x00C12BF4 − 0x00C06AFC = 49,400 = 2 × (50 × 493 + 50)`, unit ids
-  start at 50); capturing at it is 49,400 bytes early and is where the "unexplained
-  negatives" came from.
-- **Replays**: `.rcx` is a **plain gzip stream from offset 0** (this refutes the reported
-  10-byte-header claim). Payload opens with a UTF-16 version string carrying the build date.
-- **`0x00846450` is `Doober::get_num`** and it is **dead code** — correctly derived, zero
-  direct callers *and* zero address-taken references in `.text`, *not* the RNG. A `Doober` is
-  **terrain clutter/scenery**, not a resource pile (`Doober::draw`, `add_cover_doober`,
-  `BuildType::init_doober_mask`); resource nodes are `Good`/`GoodType`.
-- **The descriptor "type tag" is the name's string length**, not a type tag. That is why the
-  unit-encoding hypothesis was refuted.
+Retail commands must execute on the retail main thread. `tools/retail-control` detours the
+sole `TurnControl::do_frame` call only after exact byte/image gates; STOP restores those five
+bytes and byte-checks the result. Loaded DLL images are immutable generations—upgrade to a
+new basename/directory rather than overwriting or reinjecting one path. Never call retail
+simulation APIs from an injector worker thread.
 
-## Artifacts
+## Established facts that prevent recurring mistakes
 
-| path | what |
-|---|---|
-| `schema/bindings.json` | 1,224 rule-name → struct-offset bindings across 112 `log_data` visitors (field offsets are sound; these are not loaders) |
-| `schema/islands.jsonl` | every function classified by reachability (ISLAND 2,135 / DATA_ONLY 711 / SELF_CALL 42,748 / WRITES_GLOBAL 970) |
-| `schema/vtables.json` | **1,777 RTTI vtable addresses → class names.** The key to typed live-heap crawling: every C++ object starts with its vtable pointer |
-| `docs/derivation/rules-constants.json` | 719 constants with offsets, parsers, scales |
-| `crates/don-rules/src/offsets.rs` | 1,223 generated offset constants |
-| `docs/derivation/*.md` | per-subsystem derivation reports + `AUDIT*.md` |
-| `docs/provenance-ledger.md` | every implemented mechanic, its source, tier, evidence |
+- The supported executable is an unpacked 2024 MSVC rebuild of the original code; RTTI and
+  the matching private PDB are present.
+- Simulation float math is predominantly SSE binary32. Ghidra can reorder 32-bit MSVC float
+  and integer expressions; instruction order matters.
+- Normal simulation cadence is 67 ms. A lockstep network turn can contain multiple frames.
+- The main LCG is `s = s*1664525 + 1013904223`; there are multiple RNG streams. Pathfinder
+  failure paths share the main simulation stream—do not invent a private path RNG.
+- Object coordinates in retail object state are XOR-obfuscated with `0x00063637`; GuyData
+  coordinates are not. Order coordinates are raw.
+- `Array<T>` capacity and growth metadata can be walked/checksummed. Logical element equality
+  alone is insufficient for fidelity.
+- `Objects::process_all` rotates owner order by frame. A fixed owner loop diverges.
+- The 493×493 signed balance matrix begins at preferred VA `0x00C12BF4`.
+- General pathfinding and caravan-road pathfinding are different functions. Results derived
+  from `astar_caravan_road` do not automatically apply to `astar_path`.
+- `Constants::log_data` is a logger, not the rules loader. `Constants::init` is the loader.
+- BHS runtime state is sim-critical and participates in lockstep checksum walking; the VM and
+  builtin boundary are not optional compatibility extras.
 
-Gitignored as copyrighted game content: `ron-bin/`, `ron-data/`, `re/ghidra/`,
-`re/decomp-all/`, `schema/live/`.
+The maintained versions and provenance live in
+[`docs/binary-ground-truth.md`](docs/binary-ground-truth.md) and
+[`docs/provenance-ledger.md`](docs/provenance-ledger.md). Update those rather than growing a
+second folklore list here.
 
-## Crates
+## Broad execution priorities
 
-- **`don-rules`** — rule-value tokenizer + generated offsets. `String::fraction` numeric
-  conversion is recovered and covered by captured retail vectors and the shipped corpus.
-- **`don-pe`** — PE32 reader/mapper; applies 315,865 relocations. First half of the oracle.
-- **`don-sim`** — PDB-generated SoA state, retail-ordered tick skeleton, derived mechanics,
-  and many subsystem ports. Most `systems/*.rs` modules are compiled but not yet driven by
-  the tick; read `GOAL.md` before calling a port implemented end to end.
-- **`don-replay`** — `.rcx` command decoder, generated checksum walkers, and the replay
-  validation scoreboard. This is the primary integration gate.
-- **`don-net`** — command wire format, lockstep session, TCP transport, and replacement
-  netcode-shim work. Our peers connect; a retail internet join is not complete.
-- **`don-ai`** — shipped economic-script/runtime work plus a deterministic AI-vs-AI harness.
-- **`don-env`** — PyO3/Gymnasium/PettingZoo-facing batched RL surface over partial dynamics.
-- **`don-gpu`** — wgpu flow fields and batch-order prototypes with CPU/GPU parity tests.
-- **`donscan`** — Windows live-process scanner; excluded from the arm64 workspace build.
-- **`oracle`** — 32-bit only, excluded from the workspace, runs on hbox.
+Maintain parallel pressure across the full destination:
 
-## Where to look next
+1. **Independent game:** deterministic map/start generation, full command/order/tick systems,
+   complete ages/economy/combat/diplomacy/naval/air/victory, save/load, content, audio/art/UI,
+   and a polished playable loop.
+2. **Fidelity/replay:** reconstruct non-empty initial replay worlds, walk real state in all
+   channels, and reduce first divergence with retail differential cases.
+3. **RL/RoNEval:** replace every accepted-no-effect verb with real dynamics, retain exact
+   parameter masks, benchmark reset/step/observe/mask/reward, and build deterministic leagues
+   and scenario/evaluation packs.
+4. **AI:** reproduce shipped BHS behavior as a baseline, then build stronger observation-only
+   scripted/search/learned players with no privileged state or economic bonuses.
+5. **Playable/web:** make the independent edition pleasant to control and understand while
+   retaining the high-density cluster/replay/spectator paths.
+6. **Live retail:** expand safe observation/command trajectories into a supervised computer
+   player and differential laboratory; keep RoNtoy useful to a human meanwhile.
+7. **BHS/mod ecosystem:** run shipped scripts and real Workshop/local mods faithfully, with
+   explicit strict/improved policy for retail quirks.
 
-`GOAL.md` is the live execution board. `docs/RECOVERY.md` maps the interrupted Claude
-session to the files it left behind. `docs/provenance-ledger.md` §"Not yet derived" is the
-honest list of what must not be implemented from folklore.
+Do not replace this breadth with endless micro-validation, but do not call a wide prototype
+complete because its narrow tests are green. Each wave ends with owned files, exact gates,
+coherent commits, and a refreshed blocker list.
 
-The native heap scanner and damage-hook DLL now exist and have run against retail. The
-highest-leverage work is integration: load real initial replay state, make the generated
-SoA→PDB-image bridge non-empty, wire derived systems into the tick, and move the replay
-scoreboard from trivial matches to bytes-walked matches. The exact order and acceptance gates
-are in `GOAL.md`.
+## Licensing and proprietary inputs
+
+DoN source is GPL-3.0-or-later unless a file/subdirectory says otherwise. Preserve notices
+and add SPDX identifiers to new source where practical.
+
+Microsoft/Big Huge Games binaries, data, art, audio, PDBs, live captures, and derived packs
+are not covered by DoN’s license and must not be committed or redistributed. A public release
+must use extraction from a legally owned game and/or independently licensed replacement
+assets. Never “clean up” ignore rules in a way that stages `ron-bin/`, `ron-data/`,
+`schema/live/`, or compiled injected DLLs.

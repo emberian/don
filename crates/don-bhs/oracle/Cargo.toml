@@ -2,6 +2,7 @@
 name = "bhs-oracle"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 description = "Drive Rise of Nations' own BHS script compiler out of the retail image, under Linux/i686."
 
 # Its own workspace root: this crate is 32-bit-x86 only and must never be pulled into the
