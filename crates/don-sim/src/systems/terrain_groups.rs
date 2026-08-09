@@ -750,6 +750,75 @@ impl TerrainGroups {
         inputs: &[PlaceAllGroupInput],
         mut host: impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
+        self.place_all_with_group_inputs_preview(
+            world,
+            regions,
+            random,
+            mountains,
+            progress,
+            place_players,
+            helping,
+            inputs,
+            None,
+            &mut host,
+        )
+    }
+
+    /// Extends [`Self::place_all_with_group_inputs`] across the common
+    /// `TerrainGroups::add_doobers` call at `0x006a8ef2` after every selected
+    /// player/region arm completes.
+    ///
+    /// Both doober passes inspect the post-placement preview world. Their
+    /// `Doober::add_doober` effects are surfaced as ordered host events, while
+    /// caller-owned world, groups, mountains and RNG remain transactional at
+    /// the following map-style/treeification boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_group_and_doober_inputs(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        rules: DooberTilesetRules,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_with_group_inputs_preview(
+            world,
+            regions,
+            random,
+            mountains,
+            progress,
+            place_players,
+            helping,
+            inputs,
+            Some(rules),
+            &mut host,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn place_all_with_group_inputs_preview(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        inputs: &[PlaceAllGroupInput],
+        doober_rules: Option<DooberTilesetRules>,
+        host: &mut impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        if let Some(rules) = doober_rules {
+            validate_bush_fringe_inputs(world, rules).map_err(PlaceAllError::InvalidBushFringe)?;
+            validate_mountain_rock_fringe_inputs(world, rules)
+                .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+        }
         let mut preview_random = *random;
         let mut preview_mountains = mountains.clone();
         let mountain_randomization = preview_mountains.randomize_mountains(&mut preview_random);
@@ -762,7 +831,7 @@ impl TerrainGroups {
                 &mut preview_random,
                 progress,
                 place_players,
-                &mut host,
+                &mut *host,
             )
             .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?;
 
@@ -784,6 +853,8 @@ impl TerrainGroups {
         let mut region_group_drop = None;
         let mut region_group_continuation = None;
         let mut region_pattern = None;
+        let mut bush_fringe = None;
+        let mut mountain_rock_fringe = None;
 
         loop {
             let expected = match next {
@@ -835,7 +906,7 @@ impl TerrainGroups {
                         &mut preview_mountains,
                         prepared,
                         externals,
-                        &mut host,
+                        &mut *host,
                     )?;
                     player_calls.extend(execution.calls.iter().cloned());
                     player_group_mountain_retries
@@ -854,7 +925,7 @@ impl TerrainGroups {
                                 place_players,
                                 group_index + 1,
                                 &mut placement_preparation,
-                                &mut host,
+                                &mut *host,
                             )
                             .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
                         }
@@ -922,7 +993,7 @@ impl TerrainGroups {
                                 place_players,
                                 group_index + 1,
                                 &mut placement_preparation,
-                                &mut host,
+                                &mut *host,
                             )
                             .map_err(PlaceAllError::InvalidTerrainPlacementPreparation)?
                         }
@@ -937,13 +1008,35 @@ impl TerrainGroups {
             input_cursor += 1;
         }
 
+        if next == TerrainPlacementBoundary::AddDoobers {
+            if let Some(rules) = doober_rules {
+                let receipt = plan_bush_fringe_with_host(
+                    &preview_world,
+                    rules,
+                    &mut preview_random,
+                    |placement| host(PlaceAllHostEvent::AddBushDoober { placement }),
+                )
+                .map_err(PlaceAllError::InvalidBushFringe)?;
+                bush_fringe = Some(receipt);
+                let receipt = plan_mountain_rock_fringe_with_host(
+                    &preview_world,
+                    rules,
+                    &mut preview_random,
+                    |placement| host(PlaceAllHostEvent::AddMountainRockDoober { placement }),
+                )
+                .map_err(PlaceAllError::InvalidMountainRockFringe)?;
+                mountain_rock_fringe = Some(receipt);
+                next = TerrainPlacementBoundary::TreeifyMountainsMapStyle;
+            }
+        }
+
         Err(PlaceAllError::GameplayPlacementUnavailable {
             preview: PlaceAllPreviewReceipt {
                 mountain_randomization,
                 group_selection,
                 placement_preparation,
-                bush_fringe: None,
-                mountain_rock_fringe: None,
+                bush_fringe,
+                mountain_rock_fringe,
                 treeify_mountains: None,
                 region_group_prefix,
                 region_group_drop,

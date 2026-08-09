@@ -464,9 +464,14 @@ across later patterns 1--3, additionally carrying the returned helping-score tab
 heterogeneous adapter supplies one group-indexed union row per selected arm, so player and
 region families can alternate without coalescing their incompatible external receipts. An
 omitted row stops at the already-prepared placement kernel; a row whose index or arm kind
-conflicts fails closed before that kernel. Once every selected group completes, this adapter's
-exact residual is the common `add_doobers` call at `0x006a8ef2`; composing its tileset/object
-inputs into the same public transaction is downstream.
+conflicts fails closed before that kernel. Once every selected group completes, the composed
+adapter now crosses the common `add_doobers` call at `0x006a8ef2`: both exact passes inspect
+the World preview left by the heterogeneous player/region sequence, advance the same preview
+RNG, and surface every `Doober::add_doober("bush", ...)` call as an ordered host receipt after
+the final group pump. Both tileset-rule domains are preflighted before any group draw or host
+call, so a later mountain-rock validation failure cannot leak earlier bush effects. The exact
+residual is now the `GameInfo::map_style` read and `treeify_mountains` gate at `0x006a8ef7`;
+caller-owned World, terrain groups, mountain lists and RNG remain unchanged at that boundary.
 
 ### 7.2 Executable world-generation oracle boundary
 
