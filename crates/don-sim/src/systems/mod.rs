@@ -124,8 +124,11 @@ pub mod regions;
 /// [`combat`], [`crate::mechanics`] and [`crate::trig`].
 pub mod target;
 pub mod tech_cities;
-/// Exact `TerrainGroups::fill_fertile` worldgen pass plus the instruction-pinned,
-/// fail-closed `place_all` boundary at the missing Mountains RNG/list state.
+/// Exact first (bush-fringe) pass of `TerrainGroups::add_doobers`, through the
+/// second pass's external doober-occupancy query.
+pub mod terrain_doobers;
+/// Exact `TerrainGroups::fill_fertile`, mountain/list RNG, grouped selection,
+/// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
