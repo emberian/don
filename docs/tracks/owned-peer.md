@@ -43,7 +43,8 @@ For the current Parallels VM (`10.211.55.6`), launch the owned client on the Mac
 
 ```sh
 cargo run --quiet --manifest-path tools/owned-peer/Cargo.toml -- \
-  --retail-connect 10.211.55.6:31337 --id 2 --turns 10 --timeout-secs 300
+  --retail-connect 10.211.55.6:31337 --id 2 --turns 10 --timeout-secs 300 \
+  --evidence owned-retail-run.donlstp
 ```
 
 The command is deliberately bounded: it exits after ten checksum-bearing retail turns or
@@ -75,6 +76,37 @@ a client-supplied relayed-frame marker instead of accepting a forged origin.
 The first package is fail-closed: if its key cannot be recovered, use `--game-key`; if it has no
 checksum command, the client stops instead of skipping the stamp or fabricating a reply.
 
+`--evidence PATH` is opt-in and never changes the reactive safety boundary. The peer still emits no
+game package until retail supplies the first authoritative stamp and checksum. After each accepted
+host package it records those exact payload bytes, records the successfully sent slot-1 reply,
+observes the configured turn deadline, and commits only when both packages are present. The first
+roster becomes the initial setup epoch with `(slot, unique_id)` members. The final orderly
+`IPT_DESTROYPLAYER` becomes a drop epoch.
+
+The output is the shared `DONLSTP\0` v1 format decoded by
+`don_net::PersistedLockstepTranscript`. Before publication, the peer replays every action through
+`LockstepRunner`, requires the canonical outcome/desync JSON to equal the live recorder, then
+requires decode/re-encode byte equality. Publication creates a synchronized temporary file beside
+the destination and atomically links it into place. An existing destination is never replaced; a
+failed or partial run produces no destination artifact. The format remains bounded to 8 MiB,
+65,536 actions, 4 MiB of outcome JSON, and 512 bytes per command payload.
+
+To exercise one explicit same-ID reconnect inside a longer bounded run, pass a completed-turn
+boundary smaller than `--turns`:
+
+```sh
+cargo run --quiet --manifest-path tools/owned-peer/Cargo.toml -- \
+  --retail-connect 10.211.55.6:31337 --id 2 --turns 10 --timeout-secs 300 \
+  --reconnect-after 5 --evidence owned-retail-reconnect.donlstp
+```
+
+At turn 5 the peer sends the exact five-byte destroy record, records a host-only drop epoch,
+reconnects with the same owned ID, waits for a fresh authoritative roster/readiness transition,
+records the reconnect epoch, and only then resumes reactive packages. The option is active-mode
+only and must satisfy `1 <= N < --turns`. Passive evidence is limited to one observed turn because
+passive mode deliberately emits no slot-1 package with which to commit and advance the lockstep
+stamp.
+
 Multiplayer command packages are XORed and have a deterministic 0/1-byte pad after each
 command. If `--game-key` is omitted, the client recovers a wire-compatible key by validating
 candidate XOR keys and all 256 relevant pad seeds against the complete 82-opcode decoder and
@@ -104,7 +136,10 @@ The repository test suite includes a mock-retail host over a real TCP socket. Th
 the new mode observes `PlayerJoined` before `ReadyChanged(true)`, reaches an authoritative slot-1
 roster, crosses all-ready, stays game-silent for multiple polls, automatically recovers the first
 package transform, and returns an exactly decodable client checksum package for the identical
-first stamp while preserving the original synthetic harness.
+first stamp while preserving the original synthetic harness. The same run now atomically persists
+one initial epoch, eight exact packages across four committed stamps, four deadline observations,
+two orderly drop epochs, and one same-ID reconnect epoch; the test decodes and replays that file,
+checks its binary/outcome hashes, requires byte-exact re-encoding, then removes the test artifact.
 
 ## Retail start and packet-loop boundary
 

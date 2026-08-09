@@ -7,9 +7,15 @@ use don_net::obfuscate::{rank_xor_keys, xor_payload};
 use don_net::session::{Event, Role, Session};
 use don_net::setup::{GameConnectionData, PlayerSlotPod};
 use don_net::transport::{Dest, TcpTransport, Transport};
-use don_net::{decode_commands, encode_commands, CheckSums, Command, Obfuscation};
+use don_net::{
+    decode_commands, encode_commands, CheckSums, Command, EpochCause, EpochMember, LockstepRunner,
+    LockstepStatus, Obfuscation, PersistedLockstepTranscript, ReplayAction, TurnPackage,
+};
 use std::collections::BTreeSet;
 use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -39,6 +45,8 @@ struct RetailOptions {
     timeout_secs: u64,
     game_key: Option<u32>,
     passive: bool,
+    evidence: Option<PathBuf>,
+    reconnect_after: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +81,23 @@ struct RetailReport {
     orderly_disconnect_sent: bool,
     transcript_hash: u64,
     game_key: u32,
+    reconnects: u32,
+    evidence: Option<EvidenceReport>,
+}
+
+#[derive(Debug)]
+struct EvidenceReport {
+    path: PathBuf,
+    bytes: usize,
+    binary_fnv1a64: u64,
+    outcome_fnv1a64: u64,
+}
+
+struct EvidenceCapture {
+    runner: LockstepRunner,
+    actions: Vec<ReplayAction>,
+    game_key: u32,
+    timeout_ms: u64,
 }
 
 #[derive(Debug)]
@@ -118,7 +143,7 @@ fn main() {
         },
         Mode::Retail(options) => match run_retail(&options) {
             Ok(report) => println!(
-                "{{\"schema\":\"don.owned-peer.retail.v1\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"orderly_disconnect_sent\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                "{{\"schema\":\"don.owned-peer.retail.v2\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"orderly_disconnect_sent\":{},\"reconnects\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"evidence\":{},\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
                 report.local_id,
                 report.host_id,
                 report.local_slot,
@@ -127,9 +152,11 @@ fn main() {
                 report.checksum_turns,
                 report.packages_sent,
                 report.orderly_disconnect_sent,
+                report.reconnects,
                 if options.passive { "passive" } else { "mirror-retail-checksum" },
                 report.game_key,
                 report.transcript_hash,
+                json_evidence(report.evidence.as_ref()),
             ),
             Err(e) => fail(&e),
         },
@@ -155,6 +182,8 @@ where
     let mut timeout_secs = DEFAULT_RETAIL_TIMEOUT_SECS;
     let mut game_key = None;
     let mut passive = false;
+    let mut evidence = None;
+    let mut reconnect_after = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--turns" => {
@@ -183,9 +212,21 @@ where
                 game_key = Some(parse_u32(&raw)?);
             }
             "--passive" => passive = true,
+            "--evidence" => {
+                evidence = Some(PathBuf::from(
+                    args.next().ok_or("--evidence requires a path")?,
+                ));
+            }
+            "--reconnect-after" => {
+                let raw = args.next().ok_or("--reconnect-after requires a value")?;
+                reconnect_after = Some(
+                    raw.parse::<u32>()
+                        .map_err(|_| format!("invalid --reconnect-after value: {raw}"))?,
+                );
+            }
             "-h" | "--help" => {
                 println!(
-                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint as Ai; it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package for each observed retail turn. --passive reports traffic without returning turn packages."
+                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive] [--evidence PATH] [--reconnect-after N]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint as Ai; it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package only after each observed retail turn. --passive reports traffic without returning turn packages. --evidence atomically creates a bounded canonical DONLSTP file. --reconnect-after performs one orderly same-ID reconnect after N completed turns and requires N < --turns."
                 );
                 return Ok(None);
             }
@@ -208,6 +249,23 @@ where
             if id == 0 {
                 return Err("--id must be non-zero".into());
             }
+            if evidence
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            {
+                return Err("--evidence path must not be empty".into());
+            }
+            if evidence.is_some() && passive && turns != 1 {
+                return Err("passive --evidence requires --turns 1 because no slot-1 package is emitted to complete and advance a turn".into());
+            }
+            if passive && reconnect_after.is_some() {
+                return Err("--reconnect-after requires active checksum replies".into());
+            }
+            if let Some(after) = reconnect_after {
+                if after == 0 || after >= turns {
+                    return Err("--reconnect-after must be in 1..--turns".into());
+                }
+            }
             Ok(Some(Mode::Retail(RetailOptions {
                 addr,
                 id,
@@ -215,11 +273,21 @@ where
                 timeout_secs,
                 game_key,
                 passive,
+                evidence,
+                reconnect_after,
             })))
         }
         None => {
-            if id != CLIENT_ID || game_key.is_some() || passive {
-                return Err("--id, --game-key, and --passive require --retail-connect".into());
+            if id != CLIENT_ID
+                || game_key.is_some()
+                || passive
+                || evidence.is_some()
+                || reconnect_after.is_some()
+            {
+                return Err(
+                    "--id, --game-key, --passive, --evidence, and --reconnect-after require --retail-connect"
+                        .into(),
+                );
             }
             Ok(Some(Mode::Synthetic { turns }))
         }
@@ -233,6 +301,187 @@ fn parse_u32(raw: &str) -> Result<u32, String> {
         .map(|digits| (digits, 16))
         .unwrap_or((raw, 10));
     u32::from_str_radix(digits, radix).map_err(|_| format!("invalid u32 value: {raw}"))
+}
+
+impl EvidenceCapture {
+    fn new(
+        game_key: u32,
+        timeout_ms: u64,
+        at_ms: u64,
+        first_stamp: u32,
+        host_id: i32,
+        local_id: i32,
+    ) -> Result<Self, String> {
+        let members = retail_members(host_id, local_id);
+        let runner = LockstepRunner::new(
+            game_key,
+            members.iter().map(|member| member.play),
+            first_stamp,
+            at_ms,
+            timeout_ms,
+        )
+        .map_err(|error| format!("initialize canonical evidence: {error}"))?;
+        Ok(Self {
+            runner,
+            actions: vec![ReplayAction::Initial {
+                at_ms,
+                first_stamp,
+                members,
+            }],
+            game_key,
+            timeout_ms,
+        })
+    }
+
+    fn submit(&mut self, at_ms: u64, package: TurnPackage) -> Result<(), String> {
+        self.runner
+            .submit(package.clone(), at_ms)
+            .map_err(|error| format!("record canonical package: {error}"))?;
+        self.actions.push(ReplayAction::Package { at_ms, package });
+        Ok(())
+    }
+
+    fn observe_and_commit(&mut self, at_ms: u64) -> Result<(), String> {
+        let status = self.runner.status(at_ms);
+        self.actions.push(ReplayAction::ObserveDeadline { at_ms });
+        if !matches!(status, LockstepStatus::Ready { .. }) {
+            return Err(format!(
+                "canonical turn was not ready after the exact host and owned-peer packages: {status:?}"
+            ));
+        }
+        self.runner
+            .commit_ready(at_ms)
+            .map_err(|error| format!("commit canonical turn: {error}"))?;
+        self.actions.push(ReplayAction::Commit { at_ms });
+        Ok(())
+    }
+
+    fn begin_epoch(
+        &mut self,
+        at_ms: u64,
+        cause: EpochCause,
+        members: Vec<EpochMember>,
+    ) -> Result<(), String> {
+        self.runner
+            .begin_epoch(members.iter().map(|member| member.play), cause, at_ms)
+            .map_err(|error| format!("record canonical {cause:?} epoch: {error}"))?;
+        self.actions.push(ReplayAction::Epoch {
+            at_ms,
+            cause,
+            members,
+        });
+        Ok(())
+    }
+
+    fn finish(self, path: &Path) -> Result<EvidenceReport, String> {
+        let live_json = self.runner.export_json();
+        let transcript =
+            PersistedLockstepTranscript::record(self.game_key, self.timeout_ms, self.actions)
+                .map_err(|error| format!("finalize canonical evidence: {error}"))?;
+        if transcript.outcome_json() != live_json {
+            return Err("canonical evidence replay diverged from the live recorder".into());
+        }
+        let bytes = transcript
+            .encode()
+            .map_err(|error| format!("encode canonical evidence: {error}"))?;
+        let decoded = PersistedLockstepTranscript::decode(&bytes)
+            .map_err(|error| format!("self-decode canonical evidence: {error}"))?;
+        let replayed = decoded
+            .replay()
+            .map_err(|error| format!("self-replay canonical evidence: {error}"))?;
+        let reencoded = decoded
+            .encode()
+            .map_err(|error| format!("re-encode canonical evidence: {error}"))?;
+        if replayed.outcome_json != live_json || reencoded != bytes {
+            return Err("canonical evidence failed deterministic decode/re-encode/replay".into());
+        }
+        atomic_create(path, &bytes)?;
+        Ok(EvidenceReport {
+            path: path.to_path_buf(),
+            bytes: bytes.len(),
+            binary_fnv1a64: decoded
+                .binary_fnv1a64()
+                .map_err(|error| format!("hash canonical evidence: {error}"))?,
+            outcome_fnv1a64: decoded.outcome_fnv1a64(),
+        })
+    }
+}
+
+fn retail_members(host_id: i32, local_id: i32) -> Vec<EpochMember> {
+    vec![
+        EpochMember {
+            play: 0,
+            unique_id: host_id,
+        },
+        EpochMember {
+            play: 1,
+            unique_id: local_id,
+        },
+    ]
+}
+
+fn atomic_create(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("evidence path must not be empty".into());
+    }
+    if path.exists() {
+        return Err(format!(
+            "refusing to replace existing evidence file {}",
+            path.display()
+        ));
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("evidence path has no UTF-8 file name: {}", path.display()))?;
+    let mut last_collision = None;
+    for nonce in 0..100u32 {
+        let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "create evidence temporary file {}: {error}",
+                    temp.display()
+                ));
+            }
+        };
+        let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temp);
+            return Err(format!(
+                "write evidence temporary file {}: {error}",
+                temp.display()
+            ));
+        }
+        if let Err(error) = fs::hard_link(&temp, path) {
+            let _ = fs::remove_file(&temp);
+            return Err(format!(
+                "atomically publish evidence {} without replacing an existing file: {error}",
+                path.display()
+            ));
+        }
+        fs::remove_file(&temp).map_err(|error| {
+            format!(
+                "remove evidence temporary link {} after publication: {error}",
+                temp.display()
+            )
+        })?;
+        return Ok(());
+    }
+    Err(format!(
+        "could not allocate evidence temporary file beside {}: {}",
+        path.display(),
+        last_collision
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "too many collisions".into())
+    ))
 }
 
 fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
@@ -254,6 +503,10 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
     let mut game_key = options.game_key;
     let mut key_samples = Vec::<Vec<u8>>::new();
     let mut seen_packages = BTreeSet::<(i32, u32, i8)>::new();
+    let mut initial_roster_at_ms = None;
+    let mut evidence_capture = None::<EvidenceCapture>;
+    let mut reconnect_pending = false;
+    let mut reconnects = 0u32;
 
     println!(
         "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"connected\",\"peer_name\":\"Ai\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
@@ -267,9 +520,26 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             .map_err(|e| format!("retail session poll: {e}"))?;
 
         if let Some((host, slot)) = authoritative_retail_roster(&session, options.id)? {
+            if host_id != 0 && host_id != host {
+                return Err(format!(
+                    "authoritative host identity changed across setup epochs: {host_id} -> {host}"
+                ));
+            }
             host_id = host;
             local_slot = slot;
             if !roster_announced {
+                let roster_ms = now();
+                initial_roster_at_ms.get_or_insert(roster_ms);
+                if reconnect_pending {
+                    if let Some(capture) = &mut evidence_capture {
+                        capture.begin_epoch(
+                            roster_ms,
+                            EpochCause::Reconnect,
+                            retail_members(host_id, options.id),
+                        )?;
+                    }
+                    reconnect_pending = false;
+                }
                 println!(
                     "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"roster\",\"host_id\":{},\"host_slot\":0,\"local_id\":{},\"local_slot\":{},\"members\":2,\"peer_name\":\"Ai\"}}",
                     host_id, options.id, local_slot,
@@ -296,6 +566,7 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
         }
 
         let events = session.drain_events();
+        let mut reconnect_requested = false;
         for event in events {
             let Event::Game { from, msg } = event else {
                 continue;
@@ -366,6 +637,29 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 .checksum_bytes
                 .as_deref()
                 .ok_or("decoded checksum lost its command bytes")?;
+            let package_ms = now();
+            if options.evidence.is_some() && evidence_capture.is_none() {
+                evidence_capture = Some(EvidenceCapture::new(
+                    key,
+                    options.timeout_secs.saturating_mul(1_000),
+                    initial_roster_at_ms.ok_or(
+                        "authoritative package arrived before a recorded setup roster epoch",
+                    )?,
+                    stamp,
+                    host_id,
+                    options.id,
+                )?);
+            }
+            if let Some(capture) = &mut evidence_capture {
+                capture.submit(
+                    package_ms,
+                    TurnPackage {
+                        stamp,
+                        play,
+                        payload: payload.to_vec(),
+                    },
+                )?;
+            }
             checksum_turns = checksum_turns.saturating_add(1);
             hash_bytes(&mut transcript_hash, &stamp.to_le_bytes());
             hash_bytes(&mut transcript_hash, &[play as u8]);
@@ -386,6 +680,18 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                     .send_command_package(stamp, local_slot as i8, &reply)
                     .map_err(|e| format!("send checksum-only package for turn {stamp}: {e}"))?;
                 packages_sent = packages_sent.saturating_add(1);
+                if let Some(capture) = &mut evidence_capture {
+                    let reply_ms = now();
+                    capture.submit(
+                        reply_ms,
+                        TurnPackage {
+                            stamp,
+                            play: local_slot as i8,
+                            payload: reply.clone(),
+                        },
+                    )?;
+                    capture.observe_and_commit(reply_ms)?;
+                }
                 println!(
                     "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-sent\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"policy\":\"mirror-retail-checksum\",\"simulation_equivalence_claimed\":false}}",
                     stamp,
@@ -393,25 +699,87 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                     reply.len(),
                 );
             }
+            if options.reconnect_after == Some(checksum_turns) && reconnects == 0 {
+                reconnect_requested = true;
+                break;
+            }
+        }
+
+        if reconnect_requested {
+            send_orderly_destroy(&mut session, options.id)?;
+            let drop_ms = now();
+            if let Some(capture) = &mut evidence_capture {
+                capture.begin_epoch(
+                    drop_ms,
+                    EpochCause::Drop,
+                    vec![EpochMember {
+                        play: 0,
+                        unique_id: host_id,
+                    }],
+                )?;
+            }
+            println!(
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"disconnect-sent\",\"local_id\":{},\"packet\":\"IPT_DESTROYPLAYER\",\"bytes\":5,\"reason\":\"bounded-reconnect\"}}",
+                options.id,
+            );
+            let remaining = deadline
+                .checked_sub(start.elapsed())
+                .ok_or("retail-connect deadline expired before bounded reconnect")?;
+            let transport = bounded_join(options.id, options.addr.clone(), remaining)?;
+            session = Session::new(transport, Role::Client, PEER_NAME);
+            roster_announced = false;
+            ready_sent = false;
+            all_ready_observed = false;
+            local_slot = usize::MAX;
+            reconnect_pending = true;
+            reconnects += 1;
+            println!(
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"reconnected\",\"peer_name\":\"Ai\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+                options.id,
+                json_escape(&options.addr),
+            );
+            continue;
         }
 
         let enough =
             checksum_turns >= options.turns && (options.passive || packages_sent >= options.turns);
         if enough {
-            let mut destroy = Vec::new();
-            InternalPacket::DestroyPlayer {
-                unique_id: options.id,
+            send_orderly_destroy(&mut session, options.id)?;
+            let drop_ms = now();
+            if let Some(capture) = &mut evidence_capture {
+                capture.begin_epoch(
+                    drop_ms,
+                    EpochCause::Drop,
+                    vec![EpochMember {
+                        play: 0,
+                        unique_id: host_id,
+                    }],
+                )?;
             }
-            .encode(&mut destroy);
-            session
-                .transport
-                .send(Dest::All, &destroy)
-                .map_err(|e| format!("send orderly destroy-player: {e}"))?;
             println!(
                 "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"disconnect-sent\",\"local_id\":{},\"packet\":\"IPT_DESTROYPLAYER\",\"bytes\":{}}}",
                 options.id,
-                destroy.len(),
+                5,
             );
+            let evidence = match (&options.evidence, evidence_capture) {
+                (Some(path), Some(capture)) => {
+                    let report = capture.finish(path)?;
+                    println!(
+                        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"evidence-written\",\"path\":\"{}\",\"bytes\":{},\"binary_fnv1a64\":\"{:016x}\",\"outcome_fnv1a64\":\"{:016x}\"}}",
+                        json_escape(&report.path.display().to_string()),
+                        report.bytes,
+                        report.binary_fnv1a64,
+                        report.outcome_fnv1a64,
+                    );
+                    Some(report)
+                }
+                (Some(_), None) => {
+                    return Err(
+                        "evidence was requested but no authoritative package was recorded".into(),
+                    )
+                }
+                (None, _) => None,
+            };
             return Ok(RetailReport {
                 local_id: options.id,
                 host_id,
@@ -423,6 +791,8 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
                 orderly_disconnect_sent: true,
                 transcript_hash,
                 game_key: game_key.expect("checksum traffic requires a key"),
+                reconnects,
+                evidence,
             });
         }
         if start.elapsed() >= deadline {
@@ -452,6 +822,24 @@ fn bounded_join(id: i32, addr: String, timeout: Duration) -> Result<TcpTransport
     rx.recv_timeout(timeout)
         .map_err(|_| format!("connect to replacement CrossplayNetLib at {rendered}: timeout"))?
         .map_err(|e| format!("connect to replacement CrossplayNetLib at {rendered}: {e}"))
+}
+
+fn send_orderly_destroy(session: &mut Session<TcpTransport>, local_id: i32) -> Result<(), String> {
+    let mut destroy = Vec::new();
+    InternalPacket::DestroyPlayer {
+        unique_id: local_id,
+    }
+    .encode(&mut destroy);
+    if destroy.len() != 5 {
+        return Err(format!(
+            "orderly destroy-player encoded to {} bytes, expected 5",
+            destroy.len()
+        ));
+    }
+    session
+        .transport
+        .send(Dest::All, &destroy)
+        .map_err(|error| format!("send orderly destroy-player: {error}"))
 }
 
 fn authoritative_retail_roster(
@@ -606,6 +994,19 @@ fn json_checksum_array(sums: &CheckSums) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!("[{body}]")
+}
+
+fn json_evidence(report: Option<&EvidenceReport>) -> String {
+    match report {
+        Some(report) => format!(
+            "{{\"schema\":\"don.lockstep-evidence.v1\",\"path\":\"{}\",\"bytes\":{},\"binary_fnv1a64\":\"{:016x}\",\"outcome_fnv1a64\":\"{:016x}\"}}",
+            json_escape(&report.path.display().to_string()),
+            report.bytes,
+            report.binary_fnv1a64,
+            report.outcome_fnv1a64,
+        ),
+        None => "null".into(),
+    }
 }
 
 fn run(turns: u32) -> Result<(ShapeProof, PeerReport, PeerReport), String> {
@@ -991,6 +1392,8 @@ mod tests {
             timeout_secs: 5,
             game_key: None,
             passive: false,
+            evidence: None,
+            reconnect_after: None,
         }
     }
 
@@ -1050,8 +1453,68 @@ mod tests {
                 timeout_secs: 9,
                 game_key: Some(0x123456),
                 passive: false,
+                evidence: None,
+                reconnect_after: None,
             }))
         );
+        assert_eq!(
+            parse_args(
+                [
+                    "--retail-connect",
+                    "127.0.0.1:31337",
+                    "--turns",
+                    "2",
+                    "--evidence",
+                    "run.donlstp",
+                    "--reconnect-after",
+                    "1",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap(),
+            Some(Mode::Retail(RetailOptions {
+                addr: "127.0.0.1:31337".into(),
+                id: CLIENT_ID,
+                turns: 2,
+                timeout_secs: DEFAULT_RETAIL_TIMEOUT_SECS,
+                game_key: None,
+                passive: false,
+                evidence: Some(PathBuf::from("run.donlstp")),
+                reconnect_after: Some(1),
+            }))
+        );
+        assert!(parse_args(
+            [
+                "--retail-connect",
+                "127.0.0.1:31337",
+                "--turns",
+                "2",
+                "--passive",
+                "--evidence",
+                "run.donlstp",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn atomic_evidence_publish_never_replaces_an_existing_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "don-owned-peer-no-clobber-{}-{nonce}.donlstp",
+            std::process::id(),
+        ));
+        fs::write(&path, b"existing").unwrap();
+        let error = atomic_create(&path, b"replacement").unwrap_err();
+        assert!(error.contains("refusing to replace"));
+        assert_eq!(fs::read(&path).unwrap(), b"existing");
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1076,7 +1539,15 @@ mod tests {
         let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
         let addr = host_transport.local_addr().unwrap();
         let mut options = retail_options(addr.to_string());
-        options.turns = 3;
+        options.turns = 4;
+        options.reconnect_after = Some(3);
+        let evidence_path = std::env::temp_dir().join(format!(
+            "don-owned-peer-{}-{}.donlstp",
+            std::process::id(),
+            addr.port()
+        ));
+        assert!(!evidence_path.exists());
+        options.evidence = Some(evidence_path.clone());
         let peer = std::thread::spawn(move || run_retail(&options));
         let mut host = Session::new(host_transport, Role::Host, PEER_NAME);
         let start = Instant::now();
@@ -1166,15 +1637,6 @@ mod tests {
             assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
         }
 
-        let report = peer.join().unwrap().unwrap();
-        assert_eq!(report.host_id, HOST_ID);
-        assert_eq!(report.local_slot, 1);
-        assert!(report.all_ready_observed);
-        assert_eq!(report.packages_seen, 3);
-        assert_eq!(report.checksum_turns, 3);
-        assert_eq!(report.packages_sent, 3);
-        assert!(report.orderly_disconnect_sent);
-
         let mut left = first_peer_left;
         while !left {
             host.poll(now(), Duration::from_millis(5)).unwrap();
@@ -1186,8 +1648,6 @@ mod tests {
         // The exact IPT_DESTROYPLAYER transition permits the same owned ID to
         // reconnect. A socket drop without that packet is not promoted to a
         // protocol guarantee here; it remains timeout-driven in Session.
-        let reconnect_options = retail_options(addr.to_string());
-        let rejoined = std::thread::spawn(move || run_retail(&reconnect_options));
         let mut host_ready_republished = false;
         while !roster_is_authoritative(&host) || !host.all_ready() {
             host.poll(now(), Duration::from_millis(5)).unwrap();
@@ -1215,9 +1675,77 @@ mod tests {
         let client = packages.iter().find(|package| package.play == 1).unwrap();
         let decoded = decode_traffic(&client.payload, key).unwrap();
         assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
-        let rejoin_report = rejoined.join().unwrap().unwrap();
-        assert_eq!(rejoin_report.local_slot, 1);
-        assert_eq!(rejoin_report.packages_sent, 1);
-        assert!(rejoin_report.orderly_disconnect_sent);
+        let report = peer.join().unwrap().unwrap();
+        assert_eq!(report.host_id, HOST_ID);
+        assert_eq!(report.local_slot, 1);
+        assert!(report.all_ready_observed);
+        assert_eq!(report.packages_seen, 4);
+        assert_eq!(report.checksum_turns, 4);
+        assert_eq!(report.packages_sent, 4);
+        assert_eq!(report.reconnects, 1);
+        assert!(report.orderly_disconnect_sent);
+
+        let evidence_report = report.evidence.unwrap();
+        assert_eq!(evidence_report.path, evidence_path);
+        let bytes = fs::read(&evidence_path).unwrap();
+        assert_eq!(bytes.len(), evidence_report.bytes);
+        let transcript = PersistedLockstepTranscript::decode(&bytes).unwrap();
+        assert_eq!(transcript.encode().unwrap(), bytes);
+        assert_eq!(
+            transcript.binary_fnv1a64().unwrap(),
+            evidence_report.binary_fnv1a64
+        );
+        assert_eq!(
+            transcript.outcome_fnv1a64(),
+            evidence_report.outcome_fnv1a64
+        );
+        assert_eq!(transcript.replay().unwrap().next_stamp, 27);
+        assert_eq!(
+            transcript
+                .actions()
+                .iter()
+                .filter(|action| matches!(action, ReplayAction::Package { .. }))
+                .count(),
+            8
+        );
+        assert_eq!(
+            transcript
+                .actions()
+                .iter()
+                .filter(|action| matches!(action, ReplayAction::ObserveDeadline { .. }))
+                .count(),
+            4
+        );
+        assert_eq!(
+            transcript
+                .actions()
+                .iter()
+                .filter(|action| matches!(action, ReplayAction::Commit { .. }))
+                .count(),
+            4
+        );
+        assert!(transcript.actions().iter().any(|action| matches!(
+            action,
+            ReplayAction::Epoch {
+                cause: EpochCause::Reconnect,
+                members,
+                ..
+            } if members == &retail_members(HOST_ID, CLIENT_ID)
+        )));
+        assert_eq!(
+            transcript
+                .actions()
+                .iter()
+                .filter(|action| matches!(
+                    action,
+                    ReplayAction::Epoch {
+                        cause: EpochCause::Drop,
+                        ..
+                    }
+                ))
+                .count(),
+            2
+        );
+        fs::remove_file(&evidence_path).unwrap();
     }
 }
