@@ -3,10 +3,12 @@ use don_net::lobby::{
     attributes_to_game, attributes_to_player, game_to_attributes, player_to_attributes,
 };
 use don_net::msg::NetMsg;
-use don_net::session::{Role, Session};
+use don_net::obfuscate::{rank_xor_keys, xor_payload};
+use don_net::session::{Event, Role, Session};
 use don_net::setup::{GameConnectionData, PlayerSlotPod};
 use don_net::transport::TcpTransport;
-use don_net::{CheckSums, Command};
+use don_net::{decode_commands, encode_commands, CheckSums, Command, Obfuscation};
+use std::collections::BTreeSet;
 use std::env;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -20,7 +22,24 @@ const CHECKSUM_OPCODE: u8 = 0x39;
 const CHECKSUM_CHANNELS: usize = 15;
 const CHECKSUM_WORDS: usize = 16;
 const COMMAND_PACKAGE_WIRE_LEN: usize = 8 + CheckSums::WIRE_LEN;
-const BLOCKER: &str = "a real retail second member requires a distinct authenticated PlayFab entity backed by a distinct Steam auth ticket/account; CrossPlayService::P2PStartConnection (0x1001dc60) and CreateLocalPlayerLoopback (0x1001e350) are shipped no-ops";
+const DEFAULT_RETAIL_TIMEOUT_SECS: u64 = 120;
+const MAX_RETAIL_TIMEOUT_SECS: u64 = 3_600;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Mode {
+    Synthetic { turns: u32 },
+    Retail(RetailOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetailOptions {
+    addr: String,
+    id: i32,
+    turns: u32,
+    timeout_secs: u64,
+    game_key: Option<u32>,
+    passive: bool,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ShapeProof {
@@ -42,17 +61,39 @@ struct PeerReport {
     turns: u32,
 }
 
+#[derive(Debug)]
+struct RetailReport {
+    local_id: i32,
+    host_id: i32,
+    local_slot: usize,
+    all_ready_observed: bool,
+    packages_seen: u32,
+    checksum_turns: u32,
+    packages_sent: u32,
+    transcript_hash: u64,
+    game_key: u32,
+}
+
+#[derive(Debug)]
+struct DecodedTraffic {
+    command_count: usize,
+    opcodes: Vec<u8>,
+    checksum: Option<CheckSums>,
+    checksum_bytes: Option<Vec<u8>>,
+}
+
 fn main() {
-    let turns = match parse_turns(env::args().skip(1)) {
-        Ok(Some(turns)) => turns,
+    let mode = match parse_args(env::args().skip(1)) {
+        Ok(Some(mode)) => mode,
         Ok(None) => return,
         Err(e) => fail(&e),
     };
 
-    match run(turns) {
-        Ok((shape, host, client)) => {
+    match mode {
+        Mode::Synthetic { turns } => match run(turns) {
+            Ok((shape, host, client)) => {
             println!(
-                "{{\"schema\":\"don.owned-peer.v1\",\"status\":\"pass\",\"transport\":\"tcp-loopback\",\"peers\":2,\"peer_name\":\"Ai\",\"turns\":{},\"setup\":{{\"transport\":\"offline PlayFab lobby-attribute roundtrip\",\"game_record_bytes\":{},\"game_attribute_keys\":{},\"player_attribute_keys\":{}}},\"packet_shapes\":{{\"add_player_bytes\":{},\"player_list_bytes\":{},\"ready_flag_bytes\":{},\"command_package_bytes\":{},\"checksum_command_bytes\":{}}},\"checks\":{{\"authoritative_roster\":true,\"all_ready_both_peers\":true,\"one_package_per_peer_per_turn\":true,\"checksum_opcode\":\"0x39\",\"checksum_total_relation\":true,\"checksum_adler32_values\":true,\"peer_turn_hash_equal\":true}},\"turn_hash\":\"{:016x}\",\"retail_friend_slot_occupied\":false,\"credential_material\":\"none\",\"direct_join_blocker\":\"{}\"}}",
+                "{{\"schema\":\"don.owned-peer.v2\",\"status\":\"pass\",\"mode\":\"synthetic\",\"transport\":\"tcp-loopback\",\"peers\":2,\"peer_name\":\"Ai\",\"turns\":{},\"setup\":{{\"transport\":\"offline PlayFab lobby-attribute roundtrip\",\"game_record_bytes\":{},\"game_attribute_keys\":{},\"player_attribute_keys\":{}}},\"packet_shapes\":{{\"add_player_bytes\":{},\"player_list_bytes\":{},\"ready_flag_bytes\":{},\"command_package_bytes\":{},\"checksum_command_bytes\":{}}},\"checks\":{{\"authoritative_roster\":true,\"all_ready_both_peers\":true,\"one_package_per_peer_per_turn\":true,\"checksum_opcode\":\"0x39\",\"checksum_total_relation\":true,\"checksum_adler32_values\":true,\"peer_turn_hash_equal\":true}},\"turn_hash\":\"{:016x}\",\"retail_friend_slot_occupied\":false,\"credential_material\":\"none\"}}",
                 turns,
                 shape.game_record_bytes,
                 shape.game_attribute_keys,
@@ -63,7 +104,6 @@ fn main() {
                 shape.command_package_bytes,
                 CheckSums::WIRE_LEN,
                 host.checksum_hash,
-                BLOCKER
             );
             let _ = (host.role, host.local_id, host.roster_ids, host.turns);
             let _ = (
@@ -72,25 +112,47 @@ fn main() {
                 client.roster_ids,
                 client.turns,
             );
-        }
-        Err(e) => fail(&e),
+            }
+            Err(e) => fail(&e),
+        },
+        Mode::Retail(options) => match run_retail(&options) {
+            Ok(report) => println!(
+                "{{\"schema\":\"don.owned-peer.retail.v1\",\"status\":\"pass\",\"mode\":\"retail-connect\",\"transport\":\"replacement-crossplaynetlib-tcp\",\"peer_name\":\"Ai\",\"local_id\":{},\"host_id\":{},\"local_slot\":{},\"all_ready_observed\":{},\"packages_seen\":{},\"checksum_turns\":{},\"packages_sent\":{},\"reply_policy\":\"{}\",\"compatible_game_key\":\"0x{:08x}\",\"transcript_hash\":\"{:016x}\",\"credential_material\":\"none\",\"simulation_equivalence_claimed\":false}}",
+                report.local_id,
+                report.host_id,
+                report.local_slot,
+                report.all_ready_observed,
+                report.packages_seen,
+                report.checksum_turns,
+                report.packages_sent,
+                if options.passive { "passive" } else { "mirror-retail-checksum" },
+                report.game_key,
+                report.transcript_hash,
+            ),
+            Err(e) => fail(&e),
+        },
     }
 }
 
 fn fail(message: &str) -> ! {
     let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     eprintln!(
-        "{{\"schema\":\"don.owned-peer.v1\",\"status\":\"fail\",\"error\":\"{}\",\"retail_friend_slot_occupied\":false,\"credential_material\":\"none\"}}",
+        "{{\"schema\":\"don.owned-peer.v2\",\"status\":\"fail\",\"error\":\"{}\",\"credential_material\":\"none\"}}",
         escaped
     );
     std::process::exit(1)
 }
 
-fn parse_turns<I>(mut args: I) -> Result<Option<u32>, String>
+fn parse_args<I>(mut args: I) -> Result<Option<Mode>, String>
 where
     I: Iterator<Item = String>,
 {
     let mut turns = DEFAULT_TURNS;
+    let mut retail_addr = None;
+    let mut id = CLIENT_ID;
+    let mut timeout_secs = DEFAULT_RETAIL_TIMEOUT_SECS;
+    let mut game_key = None;
+    let mut passive = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--turns" => {
@@ -99,8 +161,30 @@ where
                     .parse::<u32>()
                     .map_err(|_| format!("invalid --turns value: {raw}"))?;
             }
+            "--retail-connect" => {
+                retail_addr = Some(args.next().ok_or("--retail-connect requires HOST:PORT")?);
+            }
+            "--id" => {
+                let raw = args.next().ok_or("--id requires a value")?;
+                id = raw
+                    .parse::<i32>()
+                    .map_err(|_| format!("invalid --id value: {raw}"))?;
+            }
+            "--timeout-secs" => {
+                let raw = args.next().ok_or("--timeout-secs requires a value")?;
+                timeout_secs = raw
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid --timeout-secs value: {raw}"))?;
+            }
+            "--game-key" => {
+                let raw = args.next().ok_or("--game-key requires a value")?;
+                game_key = Some(parse_u32(&raw)?);
+            }
+            "--passive" => passive = true,
             "-h" | "--help" => {
-                println!("Usage: don-owned-peer [--turns N]\n\nRuns two owned Ai peers over TCP loopback without contacting or modifying retail.");
+                println!(
+                    "Usage:\n  don-owned-peer [--turns N]\n  don-owned-peer --retail-connect HOST:PORT [--id N] [--turns N] [--timeout-secs N] [--game-key 0xG] [--passive]\n\nWithout --retail-connect, runs the two-owned-peer TCP loopback acceptance. Retail mode directly joins only the supplied replacement-CrossplayNetLib TCP endpoint as Ai; it carries no authentication material. By default it recovers the multiplayer package key and returns a checksum-only package for each observed retail turn. --passive reports traffic without returning turn packages."
+                );
                 return Ok(None);
             }
             other => return Err(format!("unknown argument: {other}")),
@@ -109,7 +193,407 @@ where
     if !(1..=MAX_TURNS).contains(&turns) {
         return Err(format!("--turns must be in 1..={MAX_TURNS}"));
     }
-    Ok(Some(turns))
+    if !(1..=MAX_RETAIL_TIMEOUT_SECS).contains(&timeout_secs) {
+        return Err(format!(
+            "--timeout-secs must be in 1..={MAX_RETAIL_TIMEOUT_SECS}"
+        ));
+    }
+    match retail_addr {
+        Some(addr) => {
+            if addr.trim().is_empty() || !addr.contains(':') {
+                return Err("--retail-connect must be HOST:PORT".into());
+            }
+            if id == 0 {
+                return Err("--id must be non-zero".into());
+            }
+            Ok(Some(Mode::Retail(RetailOptions {
+                addr,
+                id,
+                turns,
+                timeout_secs,
+                game_key,
+                passive,
+            })))
+        }
+        None => {
+            if id != CLIENT_ID || game_key.is_some() || passive {
+                return Err("--id, --game-key, and --passive require --retail-connect".into());
+            }
+            Ok(Some(Mode::Synthetic { turns }))
+        }
+    }
+}
+
+fn parse_u32(raw: &str) -> Result<u32, String> {
+    let (digits, radix) = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .map(|digits| (digits, 16))
+        .unwrap_or((raw, 10));
+    u32::from_str_radix(digits, radix).map_err(|_| format!("invalid u32 value: {raw}"))
+}
+
+fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
+    prove_shapes()?;
+    let start = Instant::now();
+    let deadline = Duration::from_secs(options.timeout_secs);
+    let transport = bounded_join(options.id, options.addr.clone(), deadline)?;
+    let mut session = Session::new(transport, Role::Client, PEER_NAME);
+    let now = || start.elapsed().as_millis() as u64;
+    let mut roster_announced = false;
+    let mut ready_sent = false;
+    let mut all_ready_observed = false;
+    let mut host_id = 0;
+    let mut local_slot = usize::MAX;
+    let mut packages_seen = 0u32;
+    let mut checksum_turns = 0u32;
+    let mut packages_sent = 0u32;
+    let mut transcript_hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut game_key = options.game_key;
+    let mut key_samples = Vec::<Vec<u8>>::new();
+    let mut seen_packages = BTreeSet::<(i32, u32, i8)>::new();
+
+    println!(
+        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"connected\",\"peer_name\":\"Ai\",\"local_id\":{},\"endpoint\":\"{}\",\"credential_material\":\"none\"}}",
+        options.id,
+        json_escape(&options.addr),
+    );
+
+    loop {
+        session
+            .poll(now(), Duration::from_millis(10))
+            .map_err(|e| format!("retail session poll: {e}"))?;
+
+        if let Some((host, slot)) = authoritative_retail_roster(&session, options.id)? {
+            host_id = host;
+            local_slot = slot;
+            if !roster_announced {
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"roster\",\"host_id\":{},\"host_slot\":0,\"local_id\":{},\"local_slot\":{},\"members\":2,\"peer_name\":\"Ai\"}}",
+                    host_id, options.id, local_slot,
+                );
+                roster_announced = true;
+            }
+            if !ready_sent {
+                session
+                    .send_ready_flag(true)
+                    .map_err(|e| format!("send retail ready flag: {e}"))?;
+                ready_sent = true;
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"ready-sent\",\"local_id\":{},\"ready\":true}}",
+                    options.id,
+                );
+            }
+        }
+
+        if session.all_ready() && roster_announced && !all_ready_observed {
+            all_ready_observed = true;
+            println!(
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"all-ready\",\"members\":2}}"
+            );
+        }
+
+        let events = session.drain_events();
+        for event in events {
+            let Event::Game { from, msg } = event else {
+                continue;
+            };
+            if host_id == 0 || from != host_id {
+                return Err(format!(
+                    "refusing game traffic from non-host peer {from}; expected owned retail host {host_id}"
+                ));
+            }
+            let framed = msg
+                .decode()
+                .map_err(|e| format!("decode retail game packet from {from}: {e}"))?;
+            let NetMsg::CommandPackage {
+                stamp,
+                play,
+                payload,
+            } = framed.msg
+            else {
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"game-message\",\"from\":{},\"id\":{},\"bytes\":{}}}",
+                    from,
+                    framed.ty.id,
+                    msg.bytes.len(),
+                );
+                continue;
+            };
+            if play != 0 {
+                return Err(format!(
+                    "retail host {from} sent command package for unexpected slot {play}"
+                ));
+            }
+            if !seen_packages.insert((from, stamp, play)) {
+                continue;
+            }
+            packages_seen = packages_seen.saturating_add(1);
+            key_samples.push(payload.to_vec());
+            if key_samples.len() > 8 {
+                key_samples.remove(0);
+            }
+            if game_key.is_none() {
+                game_key = recover_game_key(&key_samples);
+                if let Some(key) = game_key {
+                    println!(
+                        "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"game-key-recovered\",\"compatible_game_key\":\"0x{key:08x}\",\"xor_key\":\"0x{:04x}\"}}",
+                        Obfuscation::xor_key(key),
+                    );
+                }
+            }
+
+            let Some(key) = game_key else {
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-raw\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"checksum_decoded\":false}}",
+                    stamp,
+                    play,
+                    payload.len(),
+                );
+                continue;
+            };
+            let traffic = decode_traffic(payload, key)
+                .map_err(|e| format!("decode retail turn {stamp} with key 0x{key:08x}: {e}"))?;
+            let Some(sums) = traffic.checksum else {
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"commands\":{},\"opcodes\":{},\"checksum_decoded\":false}}",
+                    stamp,
+                    play,
+                    payload.len(),
+                    traffic.command_count,
+                    json_u8_array(&traffic.opcodes),
+                );
+                continue;
+            };
+            let checksum_bytes = traffic
+                .checksum_bytes
+                .as_deref()
+                .ok_or("decoded checksum lost its command bytes")?;
+            checksum_turns = checksum_turns.saturating_add(1);
+            hash_bytes(&mut transcript_hash, &stamp.to_le_bytes());
+            hash_bytes(&mut transcript_hash, &[play as u8]);
+            hash_bytes(&mut transcript_hash, checksum_bytes);
+            println!(
+                "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"commands\":{},\"opcodes\":{},\"checksum_decoded\":true,\"checksums\":{}}}",
+                stamp,
+                play,
+                payload.len(),
+                traffic.command_count,
+                json_u8_array(&traffic.opcodes),
+                json_checksum_array(&sums),
+            );
+
+            if !options.passive {
+                let reply = encode_checksum_only(checksum_bytes, key)?;
+                session
+                    .send_command_package(stamp, local_slot as i8, &reply)
+                    .map_err(|e| format!("send checksum-only package for turn {stamp}: {e}"))?;
+                packages_sent = packages_sent.saturating_add(1);
+                println!(
+                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-sent\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"policy\":\"mirror-retail-checksum\",\"simulation_equivalence_claimed\":false}}",
+                    stamp,
+                    local_slot,
+                    reply.len(),
+                );
+            }
+        }
+
+        let enough =
+            checksum_turns >= options.turns && (options.passive || packages_sent >= options.turns);
+        if enough {
+            return Ok(RetailReport {
+                local_id: options.id,
+                host_id,
+                local_slot,
+                all_ready_observed,
+                packages_seen,
+                checksum_turns,
+                packages_sent,
+                transcript_hash,
+                game_key: game_key.expect("checksum traffic requires a key"),
+            });
+        }
+        if start.elapsed() >= deadline {
+            return Err(format!(
+                "retail-connect timeout after {}s: roster={} ready_sent={} all_ready={} packages_seen={} checksum_turns={} packages_sent={} key={}",
+                options.timeout_secs,
+                roster_announced,
+                ready_sent,
+                all_ready_observed,
+                packages_seen,
+                checksum_turns,
+                packages_sent,
+                game_key
+                    .map(|key| format!("0x{key:08x}"))
+                    .unwrap_or_else(|| "unrecovered (supply --game-key)".into()),
+            ));
+        }
+    }
+}
+
+fn bounded_join(id: i32, addr: String, timeout: Duration) -> Result<TcpTransport, String> {
+    let rendered = addr.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = tx.send(TcpTransport::join(id, addr.as_str()));
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| format!("connect to replacement CrossplayNetLib at {rendered}: timeout"))?
+        .map_err(|e| format!("connect to replacement CrossplayNetLib at {rendered}: {e}"))
+}
+
+fn authoritative_retail_roster(
+    session: &Session<TcpTransport>,
+    local_id: i32,
+) -> Result<Option<(i32, usize)>, String> {
+    let players = session.players();
+    if players.len() > 2 {
+        return Err(format!(
+            "refusing roster with {} members; retail-connect is scoped to one owned host and this owned peer",
+            players.len()
+        ));
+    }
+    if players.len() != 2 {
+        return Ok(None);
+    }
+    let Some(local) = players.iter().find(|player| player.is_local) else {
+        return Err("authoritative roster has no local member".into());
+    };
+    let Some(host) = players
+        .iter()
+        .find(|player| player.is_host && !player.is_local)
+    else {
+        return Ok(None);
+    };
+    if local.unique_id != local_id || local.slot != 1 || host.slot != 0 {
+        return Ok(None);
+    }
+    if local.name != PEER_NAME || host.name != PEER_NAME {
+        return Err(format!(
+            "retail roster name mismatch: host={:?} local={:?}; expected both Ai",
+            host.name, local.name
+        ));
+    }
+    if host.unique_id == 0 || host.unique_id == local_id {
+        return Err(format!(
+            "retail host id {} is invalid for local id {local_id}",
+            host.unique_id
+        ));
+    }
+    Ok(Some((host.unique_id, local.slot)))
+}
+
+fn decode_traffic(payload: &[u8], game_key: u32) -> Result<DecodedTraffic, String> {
+    let mut plain = payload.to_vec();
+    xor_payload(&mut plain, Obfuscation::xor_key(game_key));
+    let mut obfuscation = Obfuscation::with_seed(game_key);
+    let commands = decode_commands(&plain, &mut obfuscation).map_err(|e| e.to_string())?;
+    let mut checksum = None;
+    let mut checksum_bytes = None;
+    let opcodes = commands.iter().map(|command| command.opcode).collect();
+    for command in &commands {
+        if command.opcode != CHECKSUM_OPCODE {
+            continue;
+        }
+        validate_checksum_command(command.bytes)?;
+        if checksum.is_some() {
+            return Err("command package carries more than one checksum command".into());
+        }
+        checksum = CheckSums::decode(command);
+        checksum_bytes = Some(command.bytes.to_vec());
+    }
+    Ok(DecodedTraffic {
+        command_count: commands.len(),
+        opcodes,
+        checksum,
+        checksum_bytes,
+    })
+}
+
+fn recover_game_key(payloads: &[Vec<u8>]) -> Option<u32> {
+    if payloads.is_empty() {
+        return None;
+    }
+    let refs: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+    let mut candidates = Vec::<u16>::new();
+    let mut seen = BTreeSet::<u16>::new();
+    let mut add = |key: u16| {
+        if seen.insert(key) {
+            candidates.push(key);
+        }
+    };
+
+    // Zero-heavy command structs make the real XOR key a frequent ciphertext
+    // word. Keep the frequency order because this normally succeeds first.
+    for key in rank_xor_keys(refs.iter().copied(), usize::MAX) {
+        add(key);
+    }
+    // A sparse checksum-only package need not contain a zero word. Its first
+    // ciphertext word still reveals the key once we enumerate the first
+    // command opcode and its adjacent byte.
+    if let Some(first) = payloads.first().filter(|p| p.len() >= 2) {
+        let cipher = u16::from_le_bytes([first[0], first[1]]);
+        for opcode in [0x4a_u8, 0x48, 0x4f, CHECKSUM_OPCODE, 0x01, 0x00] {
+            for adjacent in 0u16..=255 {
+                add(cipher ^ ((adjacent << 8) | u16::from(opcode)));
+            }
+        }
+    }
+
+    for xor_key in candidates {
+        for low in 0u32..=255 {
+            let game_key = (u32::from(xor_key) << 8) | low;
+            let decoded: Option<Vec<DecodedTraffic>> = payloads
+                .iter()
+                .map(|payload| decode_traffic(payload, game_key).ok())
+                .collect();
+            let Some(decoded) = decoded else { continue };
+            if decoded.iter().any(|traffic| traffic.checksum.is_some()) {
+                return Some(game_key);
+            }
+        }
+    }
+    None
+}
+
+fn encode_checksum_only(checksum_bytes: &[u8], game_key: u32) -> Result<Vec<u8>, String> {
+    validate_checksum_command(checksum_bytes)?;
+    let command = Command {
+        opcode: CHECKSUM_OPCODE,
+        bytes: checksum_bytes,
+    };
+    let mut payload = Vec::new();
+    let mut obfuscation = Obfuscation::with_seed(game_key);
+    encode_commands(&[command], &mut obfuscation, &mut payload);
+    xor_payload(&mut payload, Obfuscation::xor_key(game_key));
+    Ok(payload)
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn json_u8_array(values: &[u8]) -> String {
+    let body = values
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{body}]")
+}
+
+fn json_checksum_array(sums: &CheckSums) -> String {
+    let body = sums
+        .0
+        .iter()
+        .map(|value| format!("\"0x{value:08x}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{body}]")
 }
 
 fn run(turns: u32) -> Result<(ShapeProof, PeerReport, PeerReport), String> {
@@ -487,6 +971,17 @@ fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
 mod tests {
     use super::*;
 
+    fn retail_options(addr: String) -> RetailOptions {
+        RetailOptions {
+            addr,
+            id: CLIENT_ID,
+            turns: 1,
+            timeout_secs: 5,
+            game_key: None,
+            passive: false,
+        }
+    }
+
     #[test]
     fn checksum_is_exact_shape_and_total() {
         let a = checksum_command(7);
@@ -512,5 +1007,101 @@ mod tests {
         let (_, host, client) = run(3).unwrap();
         assert_eq!(host.checksum_hash, client.checksum_hash);
         assert_ne!(host.checksum_hash, 0);
+    }
+
+    #[test]
+    fn cli_preserves_synthetic_mode_and_adds_bounded_retail_mode() {
+        assert_eq!(
+            parse_args(["--turns", "3"].into_iter().map(str::to_owned)).unwrap(),
+            Some(Mode::Synthetic { turns: 3 })
+        );
+        assert_eq!(
+            parse_args(
+                [
+                    "--retail-connect",
+                    "127.0.0.1:31337",
+                    "--turns",
+                    "2",
+                    "--timeout-secs",
+                    "9",
+                    "--game-key",
+                    "0x123456",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap(),
+            Some(Mode::Retail(RetailOptions {
+                addr: "127.0.0.1:31337".into(),
+                id: CLIENT_ID,
+                turns: 2,
+                timeout_secs: 9,
+                game_key: Some(0x123456),
+                passive: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn multiplayer_key_is_recovered_and_checksum_reencoded() {
+        let key = 0x00a1_b2c3;
+        let checksum = checksum_command(17);
+        let payload = encode_checksum_only(&checksum, key).unwrap();
+        let recovered = recover_game_key(&[payload.clone()]).expect("recover package key");
+        let decoded = decode_traffic(&payload, recovered).unwrap();
+        assert_eq!(decoded.command_count, 1);
+        assert_eq!(decoded.opcodes, [CHECKSUM_OPCODE]);
+        assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
+        assert_eq!(
+            encode_checksum_only(&checksum, recovered).unwrap(),
+            payload,
+            "a compatible recovered key must reproduce the exact wire payload"
+        );
+    }
+
+    #[test]
+    fn retail_connect_mode_joins_readies_and_returns_checksum_turn() {
+        let host_transport = TcpTransport::host(HOST_ID, "127.0.0.1:0").unwrap();
+        let addr = host_transport.local_addr().unwrap();
+        let options = retail_options(addr.to_string());
+        let peer = std::thread::spawn(move || run_retail(&options));
+        let mut host = Session::new(host_transport, Role::Host, PEER_NAME);
+        let start = Instant::now();
+        let now = || start.elapsed().as_millis() as u64;
+
+        while !roster_is_authoritative(&host) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(3));
+        }
+        host.send_ready_flag(true).unwrap();
+        while !host.all_ready() {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(3));
+        }
+
+        let key = 0x005a_c33d;
+        let checksum = checksum_command(23);
+        let host_payload = encode_checksum_only(&checksum, key).unwrap();
+        host.send_command_package(23, 0, &host_payload).unwrap();
+        while !host.turn_ready(23) {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            host.drain_events();
+            assert!(start.elapsed() < Duration::from_secs(4));
+        }
+        let packages = host.take_turn(23);
+        assert_eq!(packages.len(), 2);
+        let client = packages.iter().find(|package| package.play == 1).unwrap();
+        let decoded = decode_traffic(&client.payload, key).unwrap();
+        assert_eq!(decoded.checksum_bytes.as_deref(), Some(checksum.as_slice()));
+
+        let report = peer.join().unwrap().unwrap();
+        assert_eq!(report.host_id, HOST_ID);
+        assert_eq!(report.local_slot, 1);
+        assert!(report.all_ready_observed);
+        assert_eq!(report.packages_seen, 1);
+        assert_eq!(report.checksum_turns, 1);
+        assert_eq!(report.packages_sent, 1);
     }
 }
