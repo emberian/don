@@ -65,6 +65,8 @@ pub mod construction_lifecycle;
 /// placement requires both the retail bitmap and ordered-collision host; an ordinary worker
 /// modeled as seated is rejected rather than teleported.
 pub mod containment;
+/// Exact `DeathObj::inc_time` corpse-clock transaction and fail-closed live host seam.
+pub mod death_inctime;
 /// Exact defeated-player Unit-band dispatch: true planes die, other valid units close
 /// orders, and both branches clear `unit_masks & 0x40000`.
 pub mod defeat_cleanup;
