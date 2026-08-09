@@ -333,6 +333,35 @@ impl TargetWorld {
         ObjRef::new((list.len() - 1) as i16, who)
     }
 
+    /// Install an object at its retail `(o, who)` address and link it at the head of its
+    /// `WData` cell.
+    ///
+    /// Arena and replay hosts generally already have object ids; allocating another dense
+    /// id with [`Self::push`] would destroy `Objects::list[o]` identity.  Missing lower
+    /// slots are filled with dead tombstones, just like holes in retail's per-player object
+    /// arrays.  A live slot is never silently replaced because doing so would leave its old
+    /// intrusive link in the world.
+    pub fn place_at(&mut self, r: ObjRef, mut row: TargetRow) -> bool {
+        if r.o < 0 || r.who < 0 || r.who as usize >= self.objects.len() {
+            return false;
+        }
+        let list = &mut self.objects[r.who as usize];
+        let slot = r.o as usize;
+        if list.len() <= slot {
+            list.resize(slot + 1, TargetRow::default());
+        }
+        if list[slot].is_alive() {
+            return false;
+        }
+        row.down = NO_LINK;
+        row.down_who = NO_LINK;
+        row.near_o = NO_LINK;
+        row.near_who = NO_LINK;
+        list[slot] = row;
+        self.link(r);
+        true
+    }
+
     /// The cell an object currently occupies, from its own coordinates.
     #[inline]
     pub fn cell_of_ref(&self, r: ObjRef) -> Option<usize> {
@@ -342,12 +371,10 @@ impl TargetWorld {
 
     /// Thread an object onto the head of its cell's list.
     ///
-    /// **Insertion order is not derived.** What `find_nearby_target` establishes is the
-    /// *traversal*: head at `WData +0x08/+0x0A`, next at `ObjectData +0x2C/+0x2E`, walked
-    /// until the index goes negative (`0x00649364`, `0x006498A4`). Which end the engine
-    /// links a new object onto — `Object::add_to_world`'s job — this lane did not read, and
-    /// it matters, because it decides which of several equal-scoring candidates wins.
-    /// Recorded as an open question rather than guessed; head-insertion is our choice.
+    /// `Object::add_to_world` `0x0064D8C0` inserts at the head: the old
+    /// `WData +0x08/+0x0A` pair becomes this row's `ObjectData +0x2C/+0x2E`, then the cell
+    /// head becomes `r`.  This order is sim-critical because equal target scores retain the
+    /// first candidate visited.
     pub fn link(&mut self, r: ObjRef) {
         let Some(cell) = self.cell_of_ref(r) else {
             return;
@@ -359,6 +386,99 @@ impl TargetWorld {
         }
         self.cells[cell].down = r.o;
         self.cells[cell].down_who = r.who;
+    }
+
+    /// Move an already-linked object, reproducing `Object::set_new_location`'s spatial
+    /// phase: remove from the old chain before changing coordinates, then add at the head
+    /// of the new cell.  Movement within one cell only changes coordinates and preserves
+    /// chain order.
+    pub fn relocate(&mut self, r: ObjRef, x: i32, y: i32) -> bool {
+        let Some(old_row) = self.row(r).copied() else {
+            return false;
+        };
+        if !old_row.is_alive() {
+            return false;
+        }
+        let old = (cell_of(old_row.x), cell_of(old_row.y));
+        let new = (cell_of(x), cell_of(y));
+        if old == new {
+            let row = self.row_mut(r).expect("row was resolved above");
+            row.x = x;
+            row.y = y;
+            return true;
+        }
+        if !self.unlink_from_cell(r, old.0, old.1) {
+            return false;
+        }
+        {
+            let row = self.row_mut(r).expect("row was resolved above");
+            row.x = x;
+            row.y = y;
+        }
+        self.link(r);
+        true
+    }
+
+    /// Remove an object from its spatial chain and mark the slot dead.  The slot remains a
+    /// tombstone so later `(o, who)` addresses do not shift.
+    pub fn remove(&mut self, r: ObjRef) -> bool {
+        let Some(row) = self.row(r).copied() else {
+            return false;
+        };
+        if !row.is_alive() || !self.unlink_from_cell(r, cell_of(row.x), cell_of(row.y)) {
+            return false;
+        }
+        let row = self.row_mut(r).expect("row was resolved above");
+        row.flags8 &= !1;
+        row.down = NO_LINK;
+        row.down_who = NO_LINK;
+        true
+    }
+
+    fn unlink_from_cell(&mut self, r: ObjRef, cx: i32, cy: i32) -> bool {
+        let Some(cell) = self.cell_index(cx, cy) else {
+            // Off-map objects are not present in a WData chain.
+            if let Some(row) = self.row_mut(r) {
+                row.down = NO_LINK;
+                row.down_who = NO_LINK;
+                return true;
+            }
+            return false;
+        };
+        let head = ObjRef::new(self.cells[cell].down, self.cells[cell].down_who);
+        if head == r {
+            let row = *self.row(r).expect("linked row must exist");
+            self.cells[cell].down = row.down;
+            self.cells[cell].down_who = row.down_who;
+            let row = self.row_mut(r).expect("linked row must exist");
+            row.down = NO_LINK;
+            row.down_who = NO_LINK;
+            return true;
+        }
+
+        let mut cur = head;
+        let budget: usize = self.objects.iter().map(Vec::len).sum::<usize>() + 1;
+        for _ in 0..budget {
+            let Some(row) = self.row(cur).copied() else {
+                break;
+            };
+            let next = ObjRef::new(row.down, row.down_who);
+            if next == r {
+                let victim = *self.row(r).expect("linked row must exist");
+                let pred = self.row_mut(cur).expect("predecessor must exist");
+                pred.down = victim.down;
+                pred.down_who = victim.down_who;
+                let victim = self.row_mut(r).expect("linked row must exist");
+                victim.down = NO_LINK;
+                victim.down_who = NO_LINK;
+                return true;
+            }
+            if !next.is_some() {
+                break;
+            }
+            cur = next;
+        }
+        false
     }
 
     /// Walk one cell's chain in retail order, collecting `(o, who)` pairs.
@@ -1125,7 +1245,242 @@ where
 }
 
 // ===========================================================================================
-// 6. `attack_dir`, settled
+// 6. `Unit::think_attack` -> `find_new_target`: executable host contract
+// ===========================================================================================
+
+/// Is an idle unit's ordinary attack-think slice due this frame?
+///
+/// `Unit::think` `0x005F6E40` gates `think_attack` with
+/// `(Game::frame + ObjectData::o) & 0x1F == 0` once the unit is in its normal idle-think
+/// state (`0x005F6FC2..0x005F6FE8`).  The object slot, not owner, spawn frame, or an RNG
+/// draw, phases the work.  Non-negative retail frames and object slots make this identical
+/// to modulo 32; wrapping arithmetic states the machine operation for long-running hosts.
+#[inline]
+pub fn retarget_due(frame: i32, object_slot: i16) -> bool {
+    frame.wrapping_add(object_slot as i32) & 0x1f == 0
+}
+
+/// Is the checksummed `ObjectData::targeted` crowding byte due to decay?
+///
+/// `Unit::process` `0x006114E8` and `Wall::process` `0x0064047A` use the same phased
+/// `(frame + o) & 0x0F` gate.  On the due frame retail divides the signed byte by four,
+/// truncating toward zero.
+#[inline]
+pub fn targeted_decay_due(frame: i32, object_slot: i16) -> bool {
+    frame.wrapping_add(object_slot as i32) & 0x0f == 0
+}
+
+/// Apply the retail target-crowding decay for one on-map object process slice.
+pub fn decay_targeted(world: &mut TargetWorld, frame: i32, object: ObjRef) -> bool {
+    if !targeted_decay_due(frame, object.o) {
+        return false;
+    }
+    let Some(row) = world.row_mut(object) else {
+        return false;
+    };
+    row.targeted /= 4;
+    true
+}
+
+/// The fixed and dynamic unit fields read while `find_new_target` chooses its response
+/// radius and ranks candidates.
+///
+/// This represents the ordinary `find_new_target(out_who, 0)` path: it calls
+/// `find_melee_target(-1, out_who, 0, 1, 0)`, which means an automatic response range,
+/// order creation enabled, no special filter mask, and no facing-cone rejection.  The
+/// caller creates its own attack job from the returned target; this module owns selection,
+/// not an arena's order representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoTargetQuery {
+    pub searcher: ObjRef,
+    /// `GameAccess::game + 0x550`.
+    pub frame: i32,
+    /// `this->max_range()` in tiles.
+    pub max_range_tiles: i32,
+    /// `this->min_range()` in tiles.
+    pub min_range_tiles: i32,
+    /// `UnitData +0xB1`, normally 0 aggressive, 1 defensive, 2 default, 3 hold-ground.
+    pub stance: i32,
+    /// `UnitData +0x68`.
+    pub unit_masks: u32,
+    /// `this->has_objmask(0x80000000)`, the anti-air reach bonus in the cell budget.
+    pub has_objmask_high: bool,
+    /// Shipped `Rules::unit_respond_range`.
+    pub unit_respond_range: i32,
+    /// Shipped `Rules::unit_defensive_respond_range`.
+    pub unit_defensive_respond_range: i32,
+    /// `find_nearby_target`'s `local_40`: false for AI-flagged leaders, otherwise enabled
+    /// only when the two retail global suppressors are clear.  This selects
+    /// `compare_target`'s alternate valuation mode; it is distinct from facing mode.
+    pub compare_mode: bool,
+    /// The current targeted order's `(o, who)` when one exists.  Ordinary idle acquisition
+    /// supplies `None`; retaining this input also covers the same retail search reached
+    /// while an order is being reconsidered.
+    pub last_order_target: Option<ObjRef>,
+}
+
+/// Candidate facts the engine obtains through object/type virtuals and path/region state.
+///
+/// There are deliberately no defaults.  A host must answer both remaining gate groups and
+/// supply every [`CompareTargetInput`] field instead of getting a permissive zero-filled
+/// nearest-enemy substitute by accident.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoTargetCandidate {
+    /// All `ObjectData::valid_target_const` `0x006472C0` gates *other than* alive,
+    /// diplomacy and `is_seen`, which [`AutoTargetAdapter`] and the spatial walker enforce:
+    /// on-map/domain compatibility, targetability masks, and land/sea/air restrictions.
+    pub valid_target_const: bool,
+    /// `Object::check_target` `0x00649E00`: region/path reachability, territory admission,
+    /// and `poor_target`.  The distance ceiling is enforced by [`find_auto_target`].
+    pub check_target: bool,
+    /// The path-check flag that `check_target` returns to `compare_target` after its
+    /// in-range/path arms (`local_64` at `0x00649612`).
+    pub check_path: bool,
+    /// Target footprint subtracted by `ObjectData::attack_dist`: unit block radius + 24,
+    /// or `max(building x_size, y_size) * 96`.  Cargo/garrison indirection must already be
+    /// resolved by the adapter.
+    pub target_footprint: i32,
+    /// The virtual/type/dynamic fields used by the exact priority arithmetic.
+    pub compare: CompareTargetInput,
+}
+
+/// Read-only object-side contract for ordinary automatic target acquisition.
+///
+/// `is_seen` is intentionally a mandatory gate.  Retail dispatches the candidate's
+/// `UnitData::is_seen` / `BuildData::is_seen` virtual from
+/// `ObjectData::valid_target_const`; a host may reproduce remembered-object bits as well as
+/// current fog, but it may not silently expose every live enemy.  The candidate callback is
+/// reached only after alive, hostility, and visibility pass.
+pub trait AutoTargetAdapter {
+    /// `LeaderData::is_enemy` `0x006EBAA0`, after effective-owner resolution if the host
+    /// supports shared control.
+    fn is_enemy(&self, observer_who: i16, candidate_who: i16) -> bool;
+
+    /// Candidate virtual `is_seen(observer_who, 0)`.
+    fn is_seen(&self, observer_who: i16, candidate: ObjRef) -> bool;
+
+    /// Resolve the remaining candidate gates and priority inputs.
+    fn candidate(
+        &self,
+        searcher: ObjRef,
+        candidate: ObjRef,
+        searcher_row: TargetRow,
+        candidate_row: TargetRow,
+    ) -> Option<AutoTargetCandidate>;
+}
+
+/// One ordinary automatic-acquisition slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoTargetStep {
+    /// The unit's phased 32-frame think slice is not due.
+    Deferred,
+    /// A retail search ran, whether or not it found a target.
+    Searched {
+        /// Exact response ceiling in world units.
+        max_dist: i32,
+        /// Exact number of 768-unit spiral rings visited at most.
+        rings: i32,
+        result: AcquireResult,
+    },
+}
+
+/// Execute ordinary idle-unit target acquisition without a global or nearest-hostile scan.
+///
+/// The order is retail's: cadence gate; `find_melee_target` response radius; spiral cells;
+/// each cell's intrusive object chain; alive/diplomacy/visibility/target-validity/check
+/// gates; edge distance ceiling; `compare_target`; distance, target-crowding and prior-order
+/// weighting; first strictly-greater score wins; stop after the eleventh scored unit.
+///
+/// This function accepts no [`crate::rng::Random`].  Capstone and decompilation show no RNG
+/// call anywhere in `Unit::think_attack`, `find_new_target`, `find_melee_target`,
+/// `Object::find_nearby_target`, `valid_target`, `check_target`, or `compare_target`; chain
+/// order is the deterministic tie-breaker.
+pub fn find_auto_target<A: AutoTargetAdapter>(
+    world: &mut TargetWorld,
+    circle: &CircleTable,
+    query: AutoTargetQuery,
+    adapter: &A,
+) -> AutoTargetStep {
+    if !retarget_due(query.frame, query.searcher.o) {
+        return AutoTargetStep::Deferred;
+    }
+    let max_dist = respond_range(
+        query.max_range_tiles,
+        query.stance,
+        query.unit_masks & 0x40000 != 0,
+        query.unit_respond_range,
+        query.unit_defensive_respond_range,
+    );
+    let rings = ring_budget(max_dist, false, query.has_objmask_high, query.stance == 3);
+    let searcher = query.searcher;
+    let observer_who = searcher.who;
+    let result = find_nearby_target(world, circle, searcher, rings, |w, target, _| {
+        if !adapter.is_enemy(observer_who, target.who) || !adapter.is_seen(observer_who, target) {
+            return None;
+        }
+        let searcher_row = *w.row(searcher)?;
+        let target_row = *w.row(target)?;
+        let facts = adapter.candidate(searcher, target, searcher_row, target_row)?;
+        if !facts.valid_target_const || !facts.check_target {
+            return None;
+        }
+        let dist = attack_dist(
+            searcher_row.x,
+            searcher_row.y,
+            target_row.x,
+            target_row.y,
+            facts.target_footprint,
+        );
+        if dist > max_dist {
+            return None;
+        }
+
+        let mut compare = facts.compare;
+        // These values come from the indexed rows/query and cannot legitimately disagree
+        // with an adapter's virtual/type expansion.
+        compare.check_path = facts.check_path;
+        compare.mode = query.compare_mode;
+        compare.a_is_unit = true;
+        compare.a_stance_is_3 = query.stance == 3;
+        compare.a_unit_mask_0x40000 = query.unit_masks & 0x40000 != 0;
+        compare.a_has_objmask_high = query.has_objmask_high;
+        compare.t_ref = target;
+        compare.t_alive = target_row.is_alive();
+        compare.t_is_building = target_row.is_building;
+        compare.t_is_wonder = target_row.is_wonder;
+        compare.t_is_city_centre = target_row.is_city_centre();
+        compare.t_is_damaged = target_row.damage != 0;
+        compare.t_full = target_row.full as i32;
+
+        Some(Candidate {
+            who: target,
+            priority: compare_target(&compare),
+            attack_dist: dist,
+            weights: CandidateWeights {
+                a_is_unit: true,
+                min_range_units: query.min_range_tiles.wrapping_mul(TILE_UNITS),
+                max_range_units: query.max_range_tiles.wrapping_mul(TILE_UNITS),
+                targeted: target_row.targeted as i32,
+                is_last_order_target: query.last_order_target == Some(target),
+                // `find_new_target`'s filter is zero and its find-nearby facing-mode
+                // parameter is zero on this path.
+                demote_non_unit: false,
+                demote_non_building: false,
+                mode: false,
+                facing_delta: 0,
+            },
+            is_unit: target_row.is_unit,
+        })
+    });
+    AutoTargetStep::Searched {
+        max_dist,
+        rings,
+        result,
+    }
+}
+
+// ===========================================================================================
+// 7. `attack_dir`, settled
 // ===========================================================================================
 
 /// `attack_dir` — the third argument of `Object::do_damage` `0x0064A480`, and the value the
@@ -1479,6 +1834,52 @@ mod tests {
         assert_eq!(w.cell_index(3, 3), Some(15));
     }
 
+    #[test]
+    fn place_at_preserves_retail_addresses_and_head_order() {
+        let mut w = TargetWorld::new(4, 4);
+        let older = ObjRef::new(7, 1);
+        let newer = ObjRef::new(3, 2);
+        assert!(w.place_at(older, unit_row(100, 100)));
+        assert!(w.place_at(newer, unit_row(200, 200)));
+        assert_eq!(
+            w.cell_chain(w.cell_index(0, 0).unwrap()),
+            vec![newer, older],
+            "Object::add_to_world inserts the newest object at the WData head"
+        );
+        assert!(
+            w.row(ObjRef::new(6, 1)).is_some(),
+            "sparse slots are tombstones"
+        );
+        assert!(!w.row(ObjRef::new(6, 1)).unwrap().is_alive());
+        assert!(
+            !w.place_at(older, unit_row(300, 300)),
+            "live slots cannot be replaced"
+        );
+    }
+
+    #[test]
+    fn relocate_preserves_order_inside_a_cell_and_heads_a_new_cell() {
+        let mut w = TargetWorld::new(4, 4);
+        let a = ObjRef::new(0, 0);
+        let b = ObjRef::new(1, 0);
+        assert!(w.place_at(a, unit_row(100, 100)));
+        assert!(w.place_at(b, unit_row(200, 200)));
+        let c0 = w.cell_index(0, 0).unwrap();
+        assert_eq!(w.cell_chain(c0), vec![b, a]);
+        assert!(w.relocate(a, 300, 300));
+        assert_eq!(
+            w.cell_chain(c0),
+            vec![b, a],
+            "same-WData moves do not relink"
+        );
+        assert!(w.relocate(a, CELL_UNITS + 20, 100));
+        assert_eq!(w.cell_chain(c0), vec![b]);
+        assert_eq!(w.cell_chain(w.cell_index(1, 0).unwrap()), vec![a]);
+        assert!(w.remove(b));
+        assert!(w.cell_chain(c0).is_empty());
+        assert!(!w.row(b).unwrap().is_alive());
+    }
+
     // -------- ring budget and respond range --------
 
     #[test]
@@ -1501,6 +1902,29 @@ mod tests {
         assert_eq!(respond_range(10, 2, false, 6, 4), 11 * 192);
         // The 0x40000 mask doubles the rule floor.
         assert_eq!(respond_range(0, 2, true, 6, 4), 6 * 0x180);
+    }
+
+    #[test]
+    fn target_work_is_phased_by_object_slot_without_rng() {
+        assert!(retarget_due(25, 7));
+        assert!(!retarget_due(24, 7));
+        assert!(retarget_due(57, 7));
+        assert!(targeted_decay_due(9, 7));
+        assert!(!targeted_decay_due(10, 7));
+
+        let mut w = TargetWorld::new(2, 2);
+        let target = ObjRef::new(7, 1);
+        let mut row = unit_row(100, 100);
+        row.targeted = 15;
+        assert!(w.place_at(target, row));
+        assert!(decay_targeted(&mut w, 9, target));
+        assert_eq!(
+            w.row(target).unwrap().targeted,
+            3,
+            "signed byte division truncates"
+        );
+        assert!(!decay_targeted(&mut w, 10, target));
+        assert_eq!(w.row(target).unwrap().targeted, 3);
     }
 
     // -------- rank_candidate --------
@@ -1768,6 +2192,124 @@ mod tests {
     }
 
     // -------- the search --------
+
+    #[derive(Clone, Copy)]
+    struct TestAutoAdapter {
+        hidden: ObjRef,
+        invalid: ObjRef,
+    }
+
+    impl AutoTargetAdapter for TestAutoAdapter {
+        fn is_enemy(&self, observer_who: i16, candidate_who: i16) -> bool {
+            observer_who != candidate_who
+        }
+
+        fn is_seen(&self, _observer_who: i16, candidate: ObjRef) -> bool {
+            candidate != self.hidden
+        }
+
+        fn candidate(
+            &self,
+            _searcher: ObjRef,
+            candidate: ObjRef,
+            _searcher_row: TargetRow,
+            _candidate_row: TargetRow,
+        ) -> Option<AutoTargetCandidate> {
+            Some(AutoTargetCandidate {
+                valid_target_const: candidate != self.invalid,
+                check_target: true,
+                check_path: false,
+                target_footprint: 0,
+                compare: CompareTargetInput {
+                    // Enough separation that the high-value rows also exercise priority,
+                    // not merely chain order or distance.
+                    t_type_value: if candidate.o >= 8 { 1_000_000 } else { 1_000 },
+                    estimated_damage: 1,
+                    ..CompareTargetInput::default()
+                },
+            })
+        }
+    }
+
+    fn auto_query(searcher: ObjRef, frame: i32) -> AutoTargetQuery {
+        AutoTargetQuery {
+            searcher,
+            frame,
+            max_range_tiles: 1,
+            min_range_tiles: 0,
+            stance: 2,
+            unit_masks: 0,
+            has_objmask_high: false,
+            unit_respond_range: 6,
+            unit_defensive_respond_range: 4,
+            compare_mode: false,
+            last_order_target: None,
+        }
+    }
+
+    #[test]
+    fn auto_target_enforces_cadence_hostility_visibility_and_virtual_gates() {
+        let mut w = TargetWorld::new(8, 8);
+        let me = ObjRef::new(0, 0);
+        let ally = ObjRef::new(1, 0);
+        let hidden = ObjRef::new(8, 1);
+        let invalid = ObjRef::new(9, 1);
+        let admitted = ObjRef::new(3, 1);
+        let far = ObjRef::new(10, 1);
+        assert!(w.place_at(me, unit_row(400, 400)));
+        assert!(w.place_at(ally, unit_row(450, 400)));
+        assert!(w.place_at(hidden, unit_row(500, 400)));
+        assert!(w.place_at(invalid, unit_row(550, 400)));
+        assert!(w.place_at(admitted, unit_row(700, 400)));
+        assert!(w.place_at(far, unit_row(4000, 400)));
+        let adapter = TestAutoAdapter { hidden, invalid };
+        let circle = spiral();
+
+        assert_eq!(
+            find_auto_target(&mut w, &circle, auto_query(me, 1), &adapter),
+            AutoTargetStep::Deferred
+        );
+        let AutoTargetStep::Searched {
+            max_dist,
+            rings,
+            result,
+        } = find_auto_target(&mut w, &circle, auto_query(me, 0), &adapter)
+        else {
+            panic!("frame zero/object zero must be due");
+        };
+        assert_eq!(max_dist, 6 * TILE_UNITS);
+        assert_eq!(rings, 2);
+        assert_eq!(result.best, Some(admitted));
+        assert_eq!(w.row(admitted).unwrap().targeted, 1);
+        assert_eq!(w.row(hidden).unwrap().targeted, 0);
+        assert_eq!(w.row(invalid).unwrap().targeted, 0);
+        assert_eq!(w.row(far).unwrap().targeted, 0);
+    }
+
+    #[test]
+    fn auto_target_ties_follow_wdata_head_order() {
+        let mut w = TargetWorld::new(4, 4);
+        let me = ObjRef::new(0, 0);
+        let older = ObjRef::new(1, 1);
+        let newer = ObjRef::new(2, 1);
+        assert!(w.place_at(me, unit_row(100, 100)));
+        assert!(w.place_at(older, unit_row(500, 100)));
+        assert!(w.place_at(newer, unit_row(500, 100)));
+        let adapter = TestAutoAdapter {
+            hidden: ObjRef::NONE,
+            invalid: ObjRef::NONE,
+        };
+        let AutoTargetStep::Searched { result, .. } =
+            find_auto_target(&mut w, &spiral(), auto_query(me, 0), &adapter)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            result.best,
+            Some(newer),
+            "strictly-greater replacement keeps the first equal score"
+        );
+    }
 
     /// Admit every object of a *different* player, priority from the caller.
     ///
