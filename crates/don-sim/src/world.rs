@@ -216,6 +216,148 @@ pub struct World {
     coverage: Coverage,
 }
 
+/// The pointer-free, checksum-relevant portion of [`World`] owned by save/load.
+///
+/// `row_of_handle`, the object registry, traversal scratch, and coverage are deliberately
+/// absent. They are derived state: import validates the serialized permutation and engine
+/// `(who, o)` addresses, then rebuilds those stores before replacing the live world.
+#[derive(Clone)]
+pub(crate) struct WorldSaveState {
+    pub units: UnitCols,
+    pub unit_orders: Vec<OrderList>,
+    pub unit_type_id: Vec<i32>,
+    pub move_step_x: Vec<i32>,
+    pub move_step_y: Vec<i32>,
+    pub handle_of_row: Vec<u32>,
+    pub generation: Vec<u32>,
+    pub active_slots: [bool; OWNER_SLOTS],
+    pub live: u32,
+    pub capacity: u32,
+    pub frame: i32,
+    pub seconds: i32,
+    pub random_state: i32,
+}
+
+/// A structural load failure. No variant is recoverable by filling in guessed state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum WorldSaveError {
+    Capacity,
+    Length(&'static str),
+    HandlePermutation,
+    Owner { row: usize, owner: u8 },
+    ObjectIndex { row: usize, index: i16 },
+    DuplicateObjectIndex { owner: usize, index: usize },
+    RegistryMismatch,
+    UnsupportedObjectBand,
+}
+
+impl std::fmt::Display for WorldSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Capacity => f.write_str("world capacity/live count is invalid"),
+            Self::Length(name) => write!(f, "world save length mismatch: {name}"),
+            Self::HandlePermutation => f.write_str("world handle ids are not a permutation"),
+            Self::Owner { row, owner } => write!(f, "unit row {row} has invalid owner {owner}"),
+            Self::ObjectIndex { row, index } => {
+                write!(f, "unit row {row} has invalid object index {index}")
+            }
+            Self::DuplicateObjectIndex { owner, index } => {
+                write!(f, "owner {owner} has duplicate object index {index}")
+            }
+            Self::RegistryMismatch => f.write_str("world object registry disagrees with unit rows"),
+            Self::UnsupportedObjectBand => {
+                f.write_str("world save adapter only owns the unit object band")
+            }
+        }
+    }
+}
+
+impl WorldSaveState {
+    fn validate_and_rebuild(&self) -> Result<(ObjectRegistry, Vec<u32>), WorldSaveError> {
+        let cap = self.capacity as usize;
+        let live = self.live as usize;
+        if cap > MAX_UNITS || live > cap {
+            return Err(WorldSaveError::Capacity);
+        }
+        if self.units.capacity() != cap || self.units.len() != live {
+            return Err(WorldSaveError::Length("unit columns"));
+        }
+        for (name, len, expected) in [
+            ("order lists", self.unit_orders.len(), live),
+            ("unit type ids", self.unit_type_id.len(), live),
+            ("move step x", self.move_step_x.len(), live),
+            ("move step y", self.move_step_y.len(), live),
+            ("handle permutation", self.handle_of_row.len(), cap),
+            ("handle generations", self.generation.len(), cap),
+        ] {
+            if len != expected {
+                return Err(WorldSaveError::Length(name));
+            }
+        }
+
+        let mut seen_handles = vec![false; cap];
+        for &id in &self.handle_of_row {
+            let id = id as usize;
+            if id >= cap || std::mem::replace(&mut seen_handles[id], true) {
+                return Err(WorldSaveError::HandlePermutation);
+            }
+        }
+
+        let mut rows_by_owner: [Vec<Option<u32>>; OWNER_SLOTS] =
+            std::array::from_fn(|_| Vec::new());
+        for row in 0..live {
+            let owner = self.units.get_who(row);
+            if owner as usize >= OWNER_SLOTS {
+                return Err(WorldSaveError::Owner { row, owner });
+            }
+            let object_index = self.units.o()[row];
+            if object_index < 0 {
+                return Err(WorldSaveError::ObjectIndex {
+                    row,
+                    index: object_index,
+                });
+            }
+            let object_index = object_index as usize;
+            let entries = &mut rows_by_owner[owner as usize];
+            if object_index >= live {
+                return Err(WorldSaveError::ObjectIndex {
+                    row,
+                    index: self.units.o()[row],
+                });
+            }
+            if entries.len() <= object_index {
+                entries.resize(object_index + 1, None);
+            }
+            if entries[object_index].replace(row as u32).is_some() {
+                return Err(WorldSaveError::DuplicateObjectIndex {
+                    owner: owner as usize,
+                    index: object_index,
+                });
+            }
+        }
+
+        let mut objects = ObjectRegistry::new();
+        for (owner, entries) in rows_by_owner.iter().enumerate() {
+            if entries.iter().any(Option::is_none) {
+                return Err(WorldSaveError::RegistryMismatch);
+            }
+            for (index, row) in entries.iter().enumerate() {
+                let inserted = objects.insert(owner, Band::Unit, row.unwrap());
+                if inserted as usize != index {
+                    return Err(WorldSaveError::RegistryMismatch);
+                }
+            }
+            objects.set_active(owner, self.active_slots[owner]);
+        }
+
+        let mut row_of_handle = vec![NO_ROW; cap];
+        for (row, &id) in self.handle_of_row.iter().take(live).enumerate() {
+            row_of_handle[id as usize] = row as u32;
+        }
+        Ok((objects, row_of_handle))
+    }
+}
+
 impl World {
     /// A world provisioned to [`MAX_UNITS`].
     pub fn new(seed: u64) -> World {
@@ -257,6 +399,81 @@ impl World {
     #[inline]
     pub fn capacity(&self) -> u32 {
         self.capacity
+    }
+
+    /// Export the save-owned state after proving that all private/derived stores agree.
+    ///
+    /// Buildings and walls are owned by [`crate::tick::Sim`], not by this adapter. A
+    /// caller must serialize them in the same transaction or (as the first save tranche
+    /// does) refuse them before reaching this method.
+    pub(crate) fn export_save_state(&self) -> Result<WorldSaveState, WorldSaveError> {
+        for owner in 0..OWNER_SLOTS {
+            if !self.objects.slot(owner).band(Band::Build).is_empty()
+                || !self.objects.slot(owner).band(Band::Wall).is_empty()
+            {
+                return Err(WorldSaveError::UnsupportedObjectBand);
+            }
+        }
+        let state = WorldSaveState {
+            units: self.units.clone(),
+            unit_orders: self.unit_orders.clone(),
+            unit_type_id: self.unit_type_id.clone(),
+            move_step_x: self.move_step_x.clone(),
+            move_step_y: self.move_step_y.clone(),
+            handle_of_row: self.handle_of_row.clone(),
+            generation: self.generation.clone(),
+            active_slots: std::array::from_fn(|i| self.objects.is_active(i)),
+            live: self.live,
+            capacity: self.capacity,
+            frame: self.frame,
+            seconds: self.seconds,
+            random_state: self.random.state(),
+        };
+        let (rebuilt, _) = state.validate_and_rebuild()?;
+        for owner in 0..OWNER_SLOTS {
+            if rebuilt.is_active(owner) != self.objects.is_active(owner)
+                || rebuilt.slot(owner).band(Band::Unit) != self.objects.slot(owner).band(Band::Unit)
+            {
+                return Err(WorldSaveError::RegistryMismatch);
+            }
+        }
+        if self.objects.total_objects() != self.live as usize {
+            return Err(WorldSaveError::RegistryMismatch);
+        }
+        Ok(state)
+    }
+
+    /// Atomically replace the save-owned state.
+    ///
+    /// Validation and all allocations occur before `self` is touched. On error the
+    /// original world therefore remains byte-for-byte usable by the caller.
+    pub(crate) fn import_save_state(
+        &mut self,
+        state: WorldSaveState,
+    ) -> Result<(), WorldSaveError> {
+        let (objects, row_of_handle) = state.validate_and_rebuild()?;
+        let replacement = World {
+            units: state.units,
+            unit_orders: state.unit_orders,
+            unit_type_id: state.unit_type_id,
+            move_step_x: state.move_step_x,
+            move_step_y: state.move_step_y,
+            objects,
+            traversal_buf: Vec::with_capacity(state.live as usize + 16),
+            handle_of_row: state.handle_of_row,
+            row_of_handle,
+            generation: state.generation,
+            live: state.live,
+            capacity: state.capacity,
+            frame: state.frame,
+            seconds: state.seconds,
+            random: Random::new(state.random_state),
+            item_runtime: None,
+            rules: self.rules.clone(),
+            coverage: Coverage::default(),
+        };
+        *self = replacement;
+        Ok(())
     }
 
     #[inline]
@@ -1416,5 +1633,37 @@ mod tests {
         // The attacker is now recharging, so the next frame applies nothing.
         w.step();
         assert_eq!(w.coverage().damage_applied, 1);
+    }
+
+    #[test]
+    fn malformed_save_import_is_rejected_without_mutating_the_world() {
+        let mut w = World::with_capacity(8, 0x1234);
+        let a = w.spawn_typed(2, 17).unwrap();
+        let b = w.spawn_typed(2, 19).unwrap();
+        w.issue(a, Order::move_to(100, 200, 9));
+        w.issue(b, Order::attack(2, 0));
+        let before_digest = w.digest();
+        let before_rng = w.random.state();
+        let before_handles = w.all_handle_ids().to_vec();
+
+        let mut corrupt = w.export_save_state().unwrap();
+        corrupt.handle_of_row[1] = corrupt.handle_of_row[0];
+        assert_eq!(
+            w.import_save_state(corrupt),
+            Err(WorldSaveError::HandlePermutation)
+        );
+        assert_eq!(w.digest(), before_digest);
+        assert_eq!(w.random.state(), before_rng);
+        assert_eq!(w.all_handle_ids(), before_handles);
+
+        let mut corrupt = w.export_save_state().unwrap();
+        corrupt.units.o_mut()[1] = 0;
+        assert!(matches!(
+            w.import_save_state(corrupt),
+            Err(WorldSaveError::DuplicateObjectIndex { .. })
+        ));
+        assert_eq!(w.digest(), before_digest);
+        assert_eq!(w.random.state(), before_rng);
+        assert_eq!(w.all_handle_ids(), before_handles);
     }
 }

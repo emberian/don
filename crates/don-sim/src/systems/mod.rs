@@ -118,6 +118,10 @@ pub mod production;
 /// Exact post-coastline `Regions::clear_all` / `find_all` worldgen stage, including
 /// component floods, overflow aggregation, coasts, ranks and coordinate rebuilds.
 pub mod regions;
+/// Retail `ChunkHeader`-exact, fail-closed deterministic save/load for the currently
+/// authoritative seed/frame/RNG, terrain, unit/object/order/path, and leader-economy state.
+/// It is explicitly not a partial `.svx` writer: unsupported live subsystems are refused.
+pub mod save_load;
 /// Added by `assembly:target-selection`. `Object::find_nearby_target` `0x00648DA0`,
 /// `Object::compare_target` `0x0064E5C0` and the `World::wdata` acquisition grid — the
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
@@ -131,6 +135,7 @@ pub mod terrain_drop_tile;
 /// Exact `TerrainGroups::fill_fertile`, mountain/list RNG, grouped selection,
 /// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
+pub mod terrain_region_continuation;
 pub mod terrain_region_placement;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
