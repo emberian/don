@@ -454,11 +454,15 @@ private script RNG.
 
 `don-sim::script_runtime::ScenarioHost` is now mandatory for every step-4 execution.
 The normal source compiler produces a `Program`, the chunk loader produces the same
-`Program`, and `ScriptRuntime` runs either producer against that live host. Fifty-six
+`Program`, and `ScriptRuntime` runs either producer against that live host. Sixty
 `ScenarioFuncSet` registrations have exact executable bodies:
 
 | index | builtin | recovered state/action |
 |---:|---|---|
+| 67 | `set_explored(who,x,y,radius)` | strict f32 disc stamp into all five live fog/exploration planes (`0x009e44b0`) |
+| 68 | `set_explored(who)` | active Leader's `see_all` flag at `0x800`; presentation invalidation omitted (`0x009e46f0`) |
+| 74 | `show_all_map_enable` | active Leader's `see_all` flag set; presentation invalidation omitted (`0x009e4a30`) |
+| 75 | `show_all_map_disable` | active Leader's `see_all` flag cleared; presentation invalidation omitted (`0x009e4a90`) |
 | 77 | `set_timer` | `Game::seconds + duration`; replace by case-insensitive name; 100-entry pre-replacement cap |
 | 78 | `stop_timer` | remove by case-insensitive name; return 1 or -1 |
 | 79 | `timer_expired` | compare against `Game::seconds`; expired checks consume the timer |
@@ -516,10 +520,36 @@ The normal source compiler produces a `Program`, the chunk loader produces the s
 | 707 | `have_peace` | directed diplomacy slot is peace or alliance (`0x009fcfc0`) |
 | 708 | `have_war` | directed diplomacy slot equals war (`0x009fd040`) |
 
-The current 363-file census contains 8,060 calls to those fifty-six registrations. Together
+The current 363-file census contains 8,102 calls to those sixty registrations. Together
 with the 791 calls already covered by utility builtins, the strict runtime now handles
-8,851 of 39,957 measured shipped-corpus call sites (**22.15%**, up from **1.98%**).
+8,893 of 39,957 measured shipped-corpus call sites (**22.26%**, up from **1.98%**).
 That is reachability coverage, not a claim that any complete retail scenario runs yet.
+
+The authoritative fog-effect cohort contributes 42 shipped calls at global builtin indices
+#67, #68, #74, and #75. The overloaded name is not one registration: the compiler resolves
+exact arity and emits global #67 for the four-argument disc (13 calls in nine files), versus
+global #68 for the one-argument whole-map reveal (15 calls in twelve files). Enable #74 adds
+8 calls and disable #75 adds 6. `set_explored(who,x,y,radius)` validates tile coordinates,
+a non-negative radius, and an explicit player's two active bits before mutating. Its retail
+walk is x-major, then y, with x's clipped upper bound inclusive and y's exclusive; a tile is
+stamped only when `sqrtf(dx*dx + dy*dy) < float(radius)`. Each tile becomes
+`FCoord(tile_x >> 1, tile_y >> 1)`, and `World::set_seen(..., detect=1)` writes `seen`,
+`seen3`, `seen2`, `WData::was_seen`, then `wcoord_seen`. An all-player request visits
+in-game Leader slots 0 through 7 in order inside each selected tile; it intentionally uses
+only the one-bit in-game gate, while an explicit player requires both bits. The three
+whole-map handlers mutate `FogLeader::see_all`; their additional retail redraw/cache writes
+are presentation-only and do not enter simulation state. Ordinary-source and loaded-chunk
+tests execute both overloads and toggle #75/#74/#75 across successive seconds while checking
+the exact fifteen-cell explicit-player disc, a four-cell all-player disc that includes an
+in-game/non-processing slot, and their nine derived WCoord cells.
+
+Adjacent fog registrations remain precise blockers rather than approximate handlers. Global
+#72 `set_seen` derives a building footprint from absent per-type
+`ObjectTypeData::{x_size,y_size}` facts. Zero-call #76 `get_percent_explored` calls
+`WorldData::was_seen`, which can consult the owning region's `LeaderData::reg_cities` and
+`reg_forts`; those per-player 64-entry arrays have no authoritative `Sim` owner. #69 reveal
+buildings and #70/#71 reveal-point storage likewise own additional scenario/presentation
+state. None is synthesized from the nearby fog planes.
 
 The victory-option cohort contributes 156 shipped calls: 150 `get_time_limit` calls and one
 call each to the Economic, Musical Chairs, Score, Tech Race, Territory, and Wonder mode
@@ -637,7 +667,7 @@ sentinels, signed integer truncation, the two-bit active gate, and both ends of 
 array.
 
 The formal `scenario_runtime` closure row remains **required/incomplete**. The remaining
-799 scenario registrations are still hard failures; notably `get_difficulty` lacks an
+795 scenario registrations are still hard failures; notably `get_difficulty` lacks an
 authoritative game/scenario difficulty owner and `num_cities` lacks the live
 `LeaderData::city_num` field. They are not synthesized from nearby state.
 

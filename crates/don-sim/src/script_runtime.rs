@@ -491,6 +491,93 @@ impl Sim {
         (self.step8.leaders[who].flags & leaders::flag::PROCESS != 0).then_some(who)
     }
 
+    /// `ScenarioFuncSet::set_explored(who,x,y,radius)` `0x009e44b0`.
+    ///
+    /// The rectangular walk is asymmetric in retail: x includes its clipped upper
+    /// bound while y excludes it. Each surviving tile is then filtered through a
+    /// strict f32 Euclidean-radius comparison and converted to FCoord by `>> 1`.
+    fn script_set_explored(&mut self, who: i32, x: i32, y: i32, radius: i32) -> i32 {
+        let who = who.wrapping_sub(1);
+        let tile_xs = self.map.world.tile_xs;
+        let tile_ys = self.map.world.tile_ys;
+        if x < 0 || y < 0 || x >= tile_xs || y >= tile_ys || radius < 0 {
+            return -1;
+        }
+        if who >= 0 {
+            let Some(flags) = self
+                .step8
+                .leaders
+                .get(who as usize)
+                .map(|leader| leader.flags)
+            else {
+                return -1;
+            };
+            if flags & (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+                != (leaders::flag::IN_GAME | leaders::flag::PROCESS)
+            {
+                return -1;
+            }
+        }
+
+        let x_start = x.wrapping_sub(radius).max(0);
+        let y_start = y.wrapping_sub(radius).max(0);
+        let x_sum = x.wrapping_add(radius);
+        let y_sum = y.wrapping_add(radius);
+        let x_end = if x_sum >= tile_xs {
+            tile_xs.wrapping_sub(1)
+        } else {
+            x_sum
+        };
+        let y_end = if y_sum >= tile_ys {
+            tile_ys.wrapping_sub(1)
+        } else {
+            y_sum
+        };
+        let radius = radius as f32;
+
+        let mut tile_x = x_start;
+        while tile_x <= x_end {
+            let mut tile_y = y_start;
+            while tile_y < y_end {
+                let dx = tile_x.wrapping_sub(x) as f32;
+                let dy = tile_y.wrapping_sub(y) as f32;
+                let distance = (dx * dx + dy * dy).sqrt();
+                if distance < radius {
+                    let fog_x = tile_x >> 1;
+                    let fog_y = tile_y >> 1;
+                    if who < 0 {
+                        // The all-player branch uses the weaker one-bit in-game gate and
+                        // stamps player slots in ascending order for every selected tile.
+                        for player in 0..self.map.fog.leaders.len() {
+                            if self.step8.leaders[player].flags & leaders::flag::IN_GAME != 0 {
+                                let map = &mut self.map;
+                                map.fog
+                                    .set_seen(&mut map.world, fog_x, fog_y, player as i32, true);
+                            }
+                        }
+                    } else {
+                        let map = &mut self.map;
+                        map.fog.set_seen(&mut map.world, fog_x, fog_y, who, true);
+                    }
+                }
+                tile_y += 1;
+            }
+            tile_x += 1;
+        }
+        1
+    }
+
+    /// The simulation-visible body shared by `set_explored(who)` `0x009e46f0` and
+    /// `show_all_map_{enable,disable}` `0x009e4a30` / `0x009e4a90`. Their remaining
+    /// writes only invalidate presentation caches.
+    fn script_set_show_all(&mut self, who: i32, enabled: bool) -> i32 {
+        let Some(who) = self.active_script_leader(who) else {
+            return -1;
+        };
+        self.map.fog.leaders[who].see_all = enabled;
+        1
+    }
+
     fn script_object(&self, who: usize, o: i32) -> Option<ScriptObject> {
         if who >= crate::objects::OWNER_SLOTS || o < 0 {
             return None;
@@ -949,6 +1036,19 @@ impl ScenarioHost for Sim {
 
     fn call_scenario(&mut self, decl: &BuiltinDecl, args: &[Value]) -> HostResult {
         match decl.index {
+            // The fog-effect cohort uses global builtin indices. The compiler resolves
+            // the two `set_explored` overloads by exact arity: #67 is the disc stamp;
+            // #68 is the whole-map reveal bit also written by #74.
+            67 => Ok(Value::Int(self.script_set_explored(
+                args[0].as_int(),
+                args[1].as_int(),
+                args[2].as_int(),
+                args[3].as_int(),
+            ))),
+            68 | 74 => Ok(Value::Int(self.script_set_show_all(args[0].as_int(), true))),
+            75 => Ok(Value::Int(
+                self.script_set_show_all(args[0].as_int(), false),
+            )),
             // `map_is_land` `0x009e4d90`: bounds against tile dimensions, then
             // `(low_byte(tdata[y * tile_xs + x]) & 0x30) != 0x20`.
             83 => {

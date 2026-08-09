@@ -1,0 +1,15 @@
+int scenario fog_effects_tick()
+{
+    if (time_sec() == 0) {
+        set_explored(1, 5, 6, 4);
+        set_explored(0, 14, 14, 2);
+        set_explored(1);
+    } else if (time_sec() == 1) {
+        show_all_map_disable(1);
+    } else if (time_sec() == 2) {
+        show_all_map_enable(1);
+    } else {
+        show_all_map_disable(1);
+    }
+    return 1;
+}

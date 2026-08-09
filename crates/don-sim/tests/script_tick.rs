@@ -491,6 +491,130 @@ fn retail_chunk_executes_the_same_world_and_clock_handlers() {
     );
 }
 
+const SCRIPT_EXPLORED_FOG_CELLS: &[(i32, i32)] = &[
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (3, 1),
+    (3, 2),
+    (3, 3),
+    (3, 4),
+    (4, 2),
+    (4, 3),
+    (4, 4),
+];
+
+const SCRIPT_EXPLORED_WORLD_CELLS: &[(i32, i32)] = &[
+    (0, 0),
+    (0, 1),
+    (0, 2),
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (2, 1),
+    (2, 2),
+];
+
+const SCRIPT_ALL_PLAYER_FOG_CELLS: &[(i32, i32)] = &[(6, 6), (6, 7), (7, 6), (7, 7)];
+
+fn configure_fog_effect_state(sim: &mut Sim) {
+    sim.activate(0);
+    sim.activate(1);
+    // The all-player #67 arm must include an in-game slot whose PROCESS bit is clear.
+    sim.step8.leaders[1].flags &= !leaders::flag::PROCESS;
+    // Scenario handlers validate the instruction-derived Leader flags. Keeping the
+    // later-step facade inactive makes step 12 vacuous, so the test can inspect all
+    // five planes immediately after the step-4 mutation instead of only seen2.
+    sim.leaders[0].active = false;
+    sim.leaders[1].active = false;
+}
+
+fn assert_script_explored_disc(sim: &Sim) {
+    let world = &sim.map.world;
+    for fog_y in 0..world.fog_ys {
+        for fog_x in 0..world.fog_xs {
+            let expected = if SCRIPT_ALL_PLAYER_FOG_CELLS.contains(&(fog_x, fog_y)) {
+                0b11
+            } else {
+                SCRIPT_EXPLORED_FOG_CELLS.contains(&(fog_x, fog_y)) as u8
+            };
+            let index = world.f_index(fog_x, fog_y);
+            assert_eq!(world.seen[index], expected, "seen at ({fog_x},{fog_y})");
+            assert_eq!(world.seen2[index], expected, "seen2 at ({fog_x},{fog_y})");
+            assert_eq!(world.seen3[index], expected, "seen3 at ({fog_x},{fog_y})");
+        }
+    }
+    for world_y in 0..world.ys {
+        for world_x in 0..world.xs {
+            let expected = if (world_x, world_y) == (3, 3) {
+                0b11
+            } else {
+                SCRIPT_EXPLORED_WORLD_CELLS.contains(&(world_x, world_y)) as u8
+            };
+            let index = world.w_index(world_x, world_y);
+            assert_eq!(
+                world.wdata[index].was_seen, expected,
+                "WData::was_seen at ({world_x},{world_y})"
+            );
+            assert_eq!(
+                world.wcoord_seen[index], expected,
+                "wcoord_seen at ({world_x},{world_y})"
+            );
+        }
+    }
+}
+
+fn execute_fog_effect_sequence(sim: &mut Sim, scripts: &mut ScriptRuntime) {
+    for (seconds, expected_show_all) in [(0, true), (1, false), (2, true), (3, false)] {
+        sim.world.seconds = seconds;
+        let trace = sim.do_frame_with_scripts(scripts).unwrap();
+        assert_eq!(trace.steps[4], StepRun::Executed);
+        assert!(trace.work[4] > 0);
+        assert_eq!(
+            sim.map.fog.leaders[0].see_all, expected_show_all,
+            "whole-map mutation at second {seconds}"
+        );
+        assert_script_explored_disc(sim);
+    }
+}
+
+#[test]
+fn ordinary_source_executes_authoritative_fog_effects() {
+    let program = compile_source_fixture("scenario_fog_effects.bhs");
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "fog_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8136, 8);
+    configure_fog_effect_state(&mut sim);
+
+    execute_fog_effect_sequence(&mut sim, &mut scripts);
+}
+
+#[test]
+fn retail_chunk_executes_the_same_authoritative_fog_effects() {
+    let compiled = compile_source_fixture("scenario_fog_effects.bhs");
+    let program = loaded_scalar_program(compiled);
+    assert!(program.walk_meta().is_some());
+    let mut scripts = ScriptRuntime::new(
+        program,
+        Some(ScriptBinding::new(0, "fog_effects_tick")),
+        None,
+    )
+    .unwrap();
+    let mut sim = Sim::new(0x8137, 8);
+    configure_fog_effect_state(&mut sim);
+
+    execute_fog_effect_sequence(&mut sim, &mut scripts);
+}
+
 fn expected_victory_option_reads(victory: victory_score::Victory, time_limit: i32) -> [i32; 6] {
     use victory_score::Victory;
 
