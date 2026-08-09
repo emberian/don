@@ -61,7 +61,7 @@ cannon-time window, or resolved-victory latch supplies work.
 | 11 | `Leaders::strategy_all` `0x006ED430` | complete 93-byte dispatcher; exact `(flags&3)==3` slot gate and call order; full `check_explore` phase/recount body; `victory_score::compute_score`; semaphore-gated `check_victory`, including the zero-active-leader tail | `plan_strategy`, `diplomacy` AI bodies |
 | 12 | `GameDaemon::process_all` `0x00732700` | `victory_score::process_victory`; `map_terrain::World::clear_seen` + `borders_fog::update_seen` per object; `economy::calc_markets` (**on the sim RNG stream**); `borders_fog::check_borders`; `groups_guys::Groups::process` | `calc_danger`, `process_coll_blocks` |
 | 13 | `Armies::process_all` `0x006F3B00` | complete eight-owner/16-slot dispatcher; exact three-part leader gate and hurry consumption; 128/256-frame phasing; normalize, retirement, human-order, merge, retarget and status-dispatch prefix | valid armies need the complete Group/Unit/City/type host; muster/defend/march/form/transport and specialist AI bodies remain named |
-| 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | `Guy::process`, `suffer_attrition`, `process_supply`, `detect_unit_collision`, `needs_transport`, wildlife spawn, anti-air dud roll |
+| 14 | `Objects::process_all` `0x0065DCE0` | the `(frame+i)%10` rotation; `Unit::work`→`do_job` arms 0/1/4/5/6/10; `movement::move_step`; the side-effecting `detect_unit_collision`→`resolve_unit_collision` transaction for completely installed live sources; generated collision identity/counters and order destination/detour/wait/retry persistence; atomic WData-anchor/Guy-stamp relocation; `mechanics::damage` + `combat::recharge_frames`; `production::do_construct`; `walls::WallState::process`; `casters_animals::process_herd` at `frame%64` | automatic live collision-source population; formation-producing multi-Guy relocation; boat collision; per-unit repath-host parking; `Guy::process`, `suffer_attrition`, `process_supply`, `needs_transport`, wildlife spawn, anti-air dud roll |
 | 15 | `Objects::inc_time` `0x0065DB70` | `ammo::ammo_inc_time` over the pool in slot order, `hit_target`/`check_hit`, `ammo_do_damage_single` | `Unit::inc_time` (the other half) |
 | 17 | `Leaders::end_process_all` `0x006ED070` | complete eight-slot dispatcher; matching Player warning-bit cleanup; exact 450-frame feedback limiter and stamp-before-cap compare | localized message/audio are emitted as inspectable presentation events |
 | 19 | `Leader::process_event_frame` `0x006EC180` | complete eight-slot dispatcher; exact 50-frame unsigned-rate smoothing; sequential hostile-score combat-mood selection; lopsided-battle threshold, cooldown and sentinel writes | JukeBox mood requests and achievement notifications are emitted as inspectable presentation events |
@@ -69,10 +69,10 @@ cannon-time window, or resolved-victory latch supplies work.
 | 22 | `Roads::scan_and_kill_stray_roads` `0x008956A0` | complete cursor/budget dispatcher; exact nine-tile cache population; full bad-road and straggled-road cleanup; direct candidate release and terrain clear | a live road without its renderer-owned `RoadElementCandidate` is preserved and charged |
 | 23 | `frame % 15 → seconds++` | the counter | — |
 
-Fourteen modules are now reached from the tick: `ammo`, `armies`, `borders_fog`, `casters_animals`,
-`combat`, `economy`, `groups_guys`, `leaders`, `map_terrain`, `movement`, `production`,
-`roads`, `victory_score`, `walls`, plus crate-level `mechanics`, `objects`, `order`, `rng`, `trig`,
-`balance` and the new
+Seventeen modules are now reached from the tick: `ammo`, `armies`, `borders_fog`,
+`casters_animals`, `collision`, `combat`, `economy`, `groups_guys`, `leaders`, `map_terrain`,
+`movement`, `movement_driver`, `movement_live`, `production`, `roads`, `victory_score`, `walls`,
+plus crate-level `mechanics`, `objects`, `order`, `rng`, `trig`, `balance` and the new
 shared `checksum`. Still isolated: `air`, `items`, `naval`, `tech_cities`.
 
 ## 3. The ordering facts the driver is obliged to honour, and how each is enforced
@@ -156,10 +156,11 @@ Tests: 9 in `tick::tests`, all green.
   doc comment that it is not a `check_all`; note also that `CheckSums::check_all` returns the
   *fifteenth* channel, not the sum (COVERAGE.md §1.1).
 * **Stand-ins, each a named `Gap` rather than a silent guess.** `terrain_z` is flat zero, so
-  arcs never clip into a hillside early. `unit_collides` answers "never" because
-  `Unit::detect_unit_collision` `0x00617060` is unported — which also weakens
-  `PathFinder::valid_ucoord`, since collision is part of A\* validity. `needs_transport`
-  answers 0. `turn_rate` is passed as `i32::MAX` because the real arm reads `Unit+0xA1/+0x8C/
+  arcs never clip into a hillside early. Installed ordinary one-Guy movement executes the live
+  detector/resolver transaction; a missing source, moving formation, boat, or repath request
+  fails closed and is charged. Setup pathfinding and the legacy attack-chase view still lack
+  collision-aware A\* validity. `needs_transport` answers 0. `turn_rate` is passed as
+  `i32::MAX` because the real arm reads `Unit+0xA1/+0x8C/
   +0xA2` through `0x005DE340` and is unmodelled, so the movement arm reduces to its
   translation half.
 * **The scenario in the binary is setup, not derivation.** Placement, LOS values, who builds

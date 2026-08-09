@@ -102,6 +102,9 @@ pub mod movement;
 /// Typed, fail-closed transaction joining `Unit::move_step`'s event sequence to the recovered
 /// unit collision detector/resolver, including actor-store, pathfinder and RNG writeback.
 pub mod movement_driver;
+/// Authoritative generated-column/ObjectRegistry/Guy-stamp adapter which makes the recovered
+/// movement collision transaction reachable from the executable tick without empty-map defaults.
+pub mod movement_live;
 /// Recovered from an interrupted lane and audited as Tier-C naval primitives and guardrail
 /// proxies. It is intentionally not a retail-complete naval executor; see
 /// `docs/mechanics/naval.md`.
@@ -134,6 +137,9 @@ pub mod save_load;
 /// half of combat that chooses what `crate::mechanics::damage` is pointed at. Depends on
 /// [`combat`], [`crate::mechanics`] and [`crate::trig`].
 pub mod target;
+/// Exact, host-fact-checked plans for targeted order executors recovered independently of
+/// the shared order dispatcher integration.
+pub mod targeted_order_plans;
 pub mod tech_cities;
 /// Exact first (bush-fringe) pass of `TerrainGroups::add_doobers`, through the
 /// second pass's external doober-occupancy query.

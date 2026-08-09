@@ -59,7 +59,7 @@ use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, combat, economy, groups_guys, leaders, movement,
-    production, victory_score, walls, wonders,
+    movement_driver, movement_live, production, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -135,7 +135,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 14 Unit::suffer_attrition - borders_fog::step_attrition exists but needs supply/territory state this driver does not build",
     "step 14 Unit::process_supply unit.cpp:29845 - uncited",
     "step 14 Guy::process 0x005E0230 / Guy::move 0x005D9240 - groups_guys::GuyData exists; per-guy bodies are not populated",
-    "step 14 Unit::detect_unit_collision 0x00617060 - unported; the UnitWorld view answers 'never collides'",
+    "step 14 Unit::detect_unit_collision 0x00617060 - detector/resolver/driver execute when every live unit supplies authoritative type/Guy/order/spatial facts; missing sources and repath suspension fail closed",
     "step 14 Ammo::init anti-air dud roll - unported; it draws game_random 1-2 times per launch, so every launch shifts the stream",
     "step 14 UnitData::needs_transport 0x00609920 - unported; the UnitWorld view answers 0",
     "step 14 Objects::process_all wildlife spawn (frame%32) - draws game_random an unknown number of times; drawing wrongly is worse than not drawing",
@@ -468,10 +468,10 @@ impl MapState {
 
 /// The `UnitWorld` view `movement.rs` searches and steps over.
 ///
-/// Three of its seven queries are stand-ins and each is a named [`Gap`]: `unit_collides`
-/// (`Unit::detect_unit_collision` `0x00617060` is unported), `needs_transport`
-/// (`0x00609920`), and `invalid_loc`, which retail evaluates per tile and this maps onto
-/// the WCoord `blocked` byte the terrain lane owns.
+/// This compatibility view remains for setup pathfinding and the not-yet-migrated attack chase.
+/// Live `MOVE_TO`/`FLEE_TO` integration uses [`movement_live::InstalledMoveWorld`] and the typed
+/// collision driver instead. `needs_transport` is still a named gap; this view's boolean
+/// `unit_collides` answer is never authoritative for an installed movement actor.
 struct MapView<'a> {
     map: &'a MapState,
 }
@@ -748,6 +748,8 @@ pub struct Sim {
     pub paths: Vec<movement::PathStack>,
     pub path_unit: Vec<movement::PathUnit>,
     pub pathfinder: movement::PathFinder,
+    /// Authoritative generated-column/ObjectRegistry/Guy-stamp collision store.
+    pub movement_collision: movement_live::LiveCollisionRuntime,
 
     // ---- step 15: projectiles and corpses ---------------------------------------------
     pub ammo: ammo::AmmoPool,
@@ -813,6 +815,7 @@ impl Sim {
             paths: Vec::new(),
             path_unit: Vec::new(),
             pathfinder: movement::PathFinder::new(),
+            movement_collision: movement_live::LiveCollisionRuntime::new(),
             ammo: ammo::AmmoPool::new(),
             shots: vec![AmmoShot::default(); ammo::AMMO_POOL_SLOTS],
             deaths: combat::DeathRing::with_capacity(64),
@@ -874,7 +877,20 @@ impl Sim {
             self.crash_units.push(None);
         }
         self.unit_type[row] = type_id;
+        self.movement_collision
+            .ensure_rows(self.world.live_count() as usize);
         Some(h)
+    }
+
+    /// Attach the exact non-column movement/collision facts for one live unit. Installation is
+    /// atomic: validation precedes WData linking and Guy footprint stamps.
+    pub fn install_movement_collision_source(
+        &mut self,
+        h: Handle,
+        source: movement_live::LiveCollisionSource,
+    ) -> Result<usize, movement_live::LiveCollisionFault> {
+        self.movement_collision
+            .install(&mut self.world, &mut self.map.world, h, source)
     }
 
     /// Attach an exact PDB Guy array and owner `get_gpiece` result to a live unit row.
@@ -1858,9 +1874,9 @@ impl Sim {
 
     /// `Unit::do_move` `0x005F7B30` -> `Unit::move_step` `0x005FAF30`.
     ///
-    /// The integrator is the ported one in [`crate::systems::movement`], driven off the
-    /// unit's own `Stack<PathData>`, rather than the straight-line placeholder in
-    /// `World::do_move`.
+    /// The integrator is the ported one in [`crate::systems::movement`], driven off the unit's
+    /// own `Stack<PathData>` and the side-effecting collision transaction. Movement without a
+    /// complete live collision source holds position and increments the named gap.
     fn do_move(&mut self, row: usize) {
         let Some(ord) = self.world.orders(row).current().copied() else {
             return;
@@ -1882,16 +1898,101 @@ impl Sim {
             angle: self.world.units.angle()[row],
             stuck_budget: 0,
         };
-        // Field borrows are disjoint: the view reads `map`, the step writes `paths`.
-        let mut view = MapView { map: &self.map };
+        let rows = self.world.live_count() as usize;
+        self.movement_collision.snapshot_paths(&self.paths, rows);
+        self.movement_collision.begin_frame(self.world.frame);
+        if self
+            .movement_collision
+            .preflight(&self.world, &self.map.world, &self.paths)
+            .and_then(|_| self.movement_collision.actor_ready(&self.world, row))
+            .is_err()
+        {
+            self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+            return;
+        }
+
+        let invalid_tiles = self
+            .movement_collision
+            .source(row)
+            .expect("preflight proved movement source")
+            .invalid_tiles
+            .clone();
+        let actor = movement_live::actor_ref(&self.world, row);
+        let mut session = movement_driver::CollisionSession::new(actor);
+        let mut check = std::mem::take(&mut self.movement_collision.check);
+        // LiveCollisionStore mutably borrows the generated World columns. Bridge the one-word
+        // Random state through a local object so collision RNG remains the same sim stream.
+        let mut rng = crate::rng::Random::new(self.world.random.state());
+        let mut path_host = movement_live::InstalledPathHost::new(row, &invalid_tiles);
+        let mut move_world = movement_live::InstalledMoveWorld {
+            tiles_w: self.map.world.tile_xs,
+            tiles_h: self.map.world.tile_ys,
+            wcells_w: self.map.world.xs,
+            invalid_tiles: &invalid_tiles,
+        };
+        let mut profile = movement::MoveTurnProfile {
+            type_turn_speed: i32::MAX as u32,
+            ..movement::MoveTurnProfile::default()
+        };
+        let mut driver_rejected = false;
+        let terrain = &mut self.map.world;
+        let runtime = &mut self.movement_collision;
+        let world = &mut self.world;
         let path = &mut self.paths[row];
-        // `turn_rate` reads Unit+0xA1/+0x8C/+0xA2 through 0x005DE340 and is unmodelled;
-        // a full turn per frame makes the arm reduce to the translation half.
-        let outcome = movement::move_step(&mut view, &mut body, path, target, speed, i32::MAX);
+        let mut store = movement_live::LiveCollisionStore::new(
+            world,
+            &mut runtime.sources,
+            &mut runtime.order_state,
+            &runtime.path_top_flags,
+            &self.step8,
+            &self.vic_leaders,
+            &mut runtime.repath_budget,
+        );
+        let mut commit = |terrain: &mut TerrainWorld,
+                          store: &mut movement_live::LiveCollisionStore<'_>,
+                          write: movement_driver::ActorCommit| {
+            movement_live::commit_actor(terrain, store, write);
+        };
+        // `turn_rate` still lacks the live Guy/constant composition in this compact Sim. Keep
+        // the prior full-turn input; collision, persistence, spatial links and stamps are real.
+        let outcome = movement::move_step_profile_with_collision(
+            &mut move_world,
+            &mut body,
+            path,
+            target,
+            speed,
+            i32::MAX,
+            &mut profile,
+            |_move_world, event| {
+                let result = session.handle(
+                    terrain,
+                    &mut check,
+                    &mut store,
+                    &mut rng,
+                    &mut path_host,
+                    &mut commit,
+                    event,
+                );
+                driver_rejected |= matches!(
+                    result.decision,
+                    movement_driver::DriverDecision::Rejected(_)
+                );
+                result.reply
+            },
+        );
+        let store_fault_before_body = store.take_fault();
+        if store_fault_before_body.is_none() && !driver_rejected {
+            movement_live::commit_body(terrain, &mut store, actor, &body);
+        }
+        let store_fault = store_fault_before_body.or_else(|| store.take_fault());
+        let path_fault = path_host.take_fault();
+        drop(store);
+        world.random.reseed(rng.state());
+        runtime.check = check;
         self.cover.unit_move_step += 1;
-        self.world.units.x_internal_mut()[row] = body.x.rem_euclid(MAP_SPAN);
-        self.world.units.y_internal_mut()[row] = body.y.rem_euclid(MAP_SPAN);
-        self.world.units.angle_mut()[row] = body.angle;
+        if driver_rejected || store_fault.is_some() || path_fault.is_some() {
+            self.cover.gaps[Gap::UnitDetectCollision.index()] += 1;
+        }
         self.world.units.set_idle(row, 0);
         if matches!(outcome, movement::MoveStep::Arrived) && self.paths[row].is_empty() {
             self.world.orders_mut(row).kill_current();
@@ -2786,6 +2887,132 @@ mod tests {
             ..Default::default()
         });
         sim
+    }
+
+    fn movement_source(x: i32, y: i32) -> movement_live::LiveCollisionSource {
+        movement_live::LiveCollisionSource {
+            domain: crate::systems::collision::DOMAIN_LAND,
+            block_radius: 1,
+            big_radius: 48,
+            push_size: 0,
+            push_circles: 0,
+            unit_flags: 0,
+            unit_flags2: 0,
+            attack_value: 0,
+            spell_id: -1,
+            unpacking: false,
+            captain: false,
+            moving: true,
+            searching: false,
+            action: OrderIndex::MoveTo as i32,
+            invalid_tiles: Vec::new(),
+            guys: vec![movement_live::LiveCollisionGuy {
+                x,
+                y,
+                angle: 0,
+                block_radius: 1,
+            }],
+        }
+    }
+
+    fn prepare_direct_move(sim: &mut Sim, row: usize, target: (i32, i32), speed: i16) {
+        sim.world.units.myspeed_mut()[row] = speed;
+        let start = (
+            sim.world.units.x_internal()[row],
+            sim.world.units.y_internal()[row],
+        );
+        sim.world.units.angle_mut()[row] =
+            crate::trig::find_angle(target.0 - start.0, target.1 - start.1);
+        sim.world
+            .orders_mut(row)
+            .replace(Order::move_to(target.0, target.1, 0));
+        sim.paths[row].clear();
+        sim.paths[row].push(movement::PathData {
+            to_x: target.0,
+            to_y: target.1,
+            tolerance: 0,
+            flags: movement::PathData::FLAG_MORE,
+        });
+    }
+
+    #[test]
+    fn movement_collision_without_authoritative_source_holds_and_charges_gap() {
+        let mut sim = Sim::new(0x71, 3);
+        sim.activate(0);
+        let h = sim.spawn_unit(0, 1, 360, 504, 1).unwrap();
+        let row = sim.world.row_of(h).unwrap();
+        prepare_direct_move(&mut sim, row, (504, 504), 144);
+        sim.do_move(row);
+        assert_eq!(
+            (
+                sim.world.units.x_internal()[row],
+                sim.world.units.y_internal()[row]
+            ),
+            (360, 504)
+        );
+        assert_eq!(sim.cover.gaps[Gap::UnitDetectCollision.index()], 1);
+        assert_eq!(sim.cover.unit_move_step, 0);
+    }
+
+    #[test]
+    fn movement_collision_installed_clear_move_relocates_anchor_and_guy_stamp() {
+        let mut sim = Sim::new(0x72, 3);
+        sim.activate(0);
+        let h = sim.spawn_unit(0, 1, 360, 504, 1).unwrap();
+        let row = sim.world.row_of(h).unwrap();
+        sim.install_movement_collision_source(h, movement_source(360, 504))
+            .unwrap();
+        prepare_direct_move(&mut sim, row, (504, 504), 144);
+        sim.do_move(row);
+
+        assert_eq!(
+            (
+                sim.world.units.x_internal()[row],
+                sim.world.units.y_internal()[row]
+            ),
+            (504, 504)
+        );
+        let source = sim.movement_collision.source(row).unwrap();
+        assert_eq!((source.guys[0].x, source.guys[0].y), (504, 504));
+        assert_eq!(sim.cover.gaps[Gap::UnitDetectCollision.index()], 0);
+        assert_eq!(sim.cover.unit_move_step, 1);
+    }
+
+    #[test]
+    fn movement_collision_installed_blocker_persists_detour_order_state() {
+        let mut sim = Sim::new(0x73, 3);
+        sim.activate(0);
+        let actor = sim.spawn_unit(0, 1, 360, 504, 1).unwrap();
+        let blocker = sim.spawn_unit(0, 1, 600, 504, 1).unwrap();
+        let actor_row = sim.world.row_of(actor).unwrap();
+        sim.install_movement_collision_source(actor, movement_source(360, 504))
+            .unwrap();
+        let mut blocker_source = movement_source(600, 504);
+        blocker_source.action = OrderIndex::None as i32;
+        blocker_source.moving = false;
+        sim.install_movement_collision_source(blocker, blocker_source)
+            .unwrap();
+        prepare_direct_move(&mut sim, actor_row, (504, 504), 144);
+        sim.do_move(actor_row);
+
+        assert_eq!(
+            (
+                sim.world.units.x_internal()[actor_row],
+                sim.world.units.y_internal()[actor_row]
+            ),
+            (360, 504),
+            "the blocked proposed step never becomes a translation"
+        );
+        assert_eq!(sim.world.units.collide_who()[actor_row], 0);
+        assert_eq!(sim.world.units.collide_o()[actor_row], 1);
+        assert!(
+            sim.movement_collision.order_state[actor_row]
+                .detour
+                .is_some(),
+            "resolver persisted the first clear local detour"
+        );
+        assert_eq!(sim.cover.gaps[Gap::UnitDetectCollision.index()], 0);
+        assert_eq!(sim.cover.unit_move_step, 1);
     }
 
     #[test]

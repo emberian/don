@@ -223,11 +223,11 @@ row) to the executable `OrderQueue`, and a test runs a `World`-shaped `OrderList
 driver and gets it back one order shorter. So the order layer is one call away.
 
 What is missing is the **world adapter**: `WorkWorld` extends `movement::UnitWorld`, which needs
-`invalid_loc`, `unit_collides`, `tregion` and `needs_transport`. `World` implements none of
-them — they are terrain and collision, i.e. `map_terrain.rs` and the unported
-`Unit::detect_unit_collision` `0x00617060`. Until something can answer "may this unit stand on
-this tile", the driver cannot be pointed at a real world, and that is a different lane's
-foundation rather than a gap in this one.
+`invalid_loc`, `unit_collides`, `tregion` and `needs_transport`. Bare `World` implements none of
+them — they are terrain and collision. `Sim` now has the authoritative generated-column/Guy-stamp
+adapter for the recovered `Unit::detect_unit_collision` transaction, but this WorkWorld bridge and
+collision-aware setup pathfinding remain unwired. Until that combined host can answer "may this
+unit stand on this tile", the order dispatcher cannot replace the compact tick switch wholesale.
 
 The `WorkWorld` trait also needs three game answers this lane deliberately does not invent:
 `target(who, o)` (object lookup), `attack(...)` (the `crate::mechanics::damage` pipeline, which

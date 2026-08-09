@@ -39,9 +39,10 @@ actor commit ordering, and zero RNG consumption.  A separate repath case pins UC
 snap writeback and the exact `quick` flag.
 
 This is the exact collision transaction seam, not the whole 4,582-byte `Unit::do_move` wrapper.
-Transport/coarse-route legs remain in the order-dispatch gap ledger.  The production tick still
-needs an adapter from its object columns and collision bitmap to `CollUnits`, `ActorCommit`, and
-`CollisionPathHost`; until that adapter exists, this module must not be counted as a live tick
-call.  The special captain/blocker virtual prefix which precedes the resolver's recovered
-detour/wait/repath arms remains in the collision lane's own gap ledger; the driver neither skips
-it by claim nor invents its effects.
+Transport/coarse-route legs remain in the order-dispatch gap ledger. The production tick now
+reaches this driver through `movement_live`: it resolves object identity against the generated
+columns and registry, persists collision/order mutations, and relocates WData anchors and Guy
+stamps atomically. Missing sources, moving multi-Guy formations, boats, and repath requests fail
+closed at typed boundaries; see `docs/mechanics/movement-live.md`. The special captain/blocker
+virtual prefix which precedes the resolver's recovered detour/wait/repath arms remains in the
+collision lane's own gap ledger; the driver neither skips it by claim nor invents its effects.
