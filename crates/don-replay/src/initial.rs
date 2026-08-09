@@ -10,6 +10,7 @@
 //! projected through its exact checksum-only traversal.
 
 use crate::checksum::adler32;
+use crate::map_style::MapStyleStaticData;
 use crate::rules_channel::{
     BALANCE_BYTES, RETAIL_AFTER_BALANCE, RETAIL_AFTER_CONSTANTS, RETAIL_AFTER_TRIBES,
     RETAIL_AFTER_TYPES, RETAIL_WALKED_BYTES, RULES_BLOCK_BYTES, RULES_DUPLICATE_OFFSET,
@@ -386,6 +387,14 @@ pub enum InitialItemBoundary {
     /// The normal supported path reaches the external content boundary. The
     /// ordinal is exact; its ordered catalog entry and XML are not in `.rcx`.
     MapStyleContentUnavailable { map_style: u8 },
+    /// The catalog entry, default XML, selected XML, exact terrain/goody
+    /// expressions and known direct RNG sites are admitted. Producing the
+    /// WData/regions/starts on which those placements operate now requires the
+    /// concrete style's `make_continents` path and its branch-dependent draws.
+    MapContinentGenerationUnavailable {
+        map_style: u8,
+        make_continents_va: u32,
+    },
 }
 
 impl InitialItemBoundary {
@@ -396,6 +405,7 @@ impl InitialItemBoundary {
             Self::PriorSeedState { .. } => "prior_seed_state",
             Self::StaticRulesUnavailable => "static_rules",
             Self::MapStyleContentUnavailable { .. } => "map_style_content",
+            Self::MapContinentGenerationUnavailable { .. } => "map_continent_generation",
         }
     }
 }
@@ -411,12 +421,22 @@ impl InitialItemBoundary {
 pub struct InitialItemReconstruction {
     pub inputs: InitialWorldgenInputs,
     pub rules: Option<InitialRules>,
+    /// Independently catalog-validated local install data. `None` is distinct
+    /// from an initialized style whose `GOODIES` section is genuinely empty.
+    pub style: Option<MapStyleStaticData>,
     pub boundary: InitialItemBoundary,
 }
 
 /// Result of trying to attach initial items to the replay-derived terrain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitialItemReconstructionError {
+    StyleSelectorMismatch {
+        replay_map_style: u8,
+        static_map_style: u8,
+    },
+    StyleIdentityMismatch {
+        map_style: u8,
+    },
     MapPrefixMismatch {
         expected_xs: i32,
         expected_ys: i32,
@@ -453,6 +473,7 @@ impl InitialItemReconstruction {
         if !matches!(
             self.boundary,
             InitialItemBoundary::MapStyleContentUnavailable { .. }
+                | InitialItemBoundary::MapContinentGenerationUnavailable { .. }
         ) {
             return Err(InitialItemReconstructionError::Blocked(self.boundary));
         }
@@ -532,8 +553,51 @@ impl InitialState {
         InitialItemReconstruction {
             inputs,
             rules: self.rules,
+            style: None,
             boundary,
         }
+    }
+
+    /// Advance the reconstruction through the selected static content.
+    ///
+    /// The supplied style has already validated all 23 catalog keys and parsed
+    /// both default and selected XML. The replay ordinal is checked again here
+    /// so callers cannot accidentally attach a valid-but-wrong map style.
+    pub fn reconstruct_items_with_style(
+        &self,
+        style: MapStyleStaticData,
+    ) -> Result<InitialItemReconstruction, InitialItemReconstructionError> {
+        let mut plan = self.reconstruct_items();
+        if !matches!(
+            plan.boundary,
+            InitialItemBoundary::MapStyleContentUnavailable { .. }
+        ) {
+            return Ok(plan);
+        }
+        if style.identity.ordinal != plan.inputs.map_style {
+            return Err(InitialItemReconstructionError::StyleSelectorMismatch {
+                replay_map_style: plan.inputs.map_style,
+                static_map_style: style.identity.ordinal,
+            });
+        }
+        if crate::map_style::SHIPPED_MAP_STYLE_CATALOG.get(plan.inputs.map_style as usize)
+            != Some(&style.identity)
+        {
+            return Err(InitialItemReconstructionError::StyleIdentityMismatch {
+                map_style: plan.inputs.map_style,
+            });
+        }
+        let make_continents_va = style.identity.make_continents_va.ok_or(
+            InitialItemReconstructionError::StyleIdentityMismatch {
+                map_style: plan.inputs.map_style,
+            },
+        )?;
+        plan.boundary = InitialItemBoundary::MapContinentGenerationUnavailable {
+            map_style: plan.inputs.map_style,
+            make_continents_va,
+        };
+        plan.style = Some(style);
+        Ok(plan)
     }
 
     /// Apply only prefix-proven setup to the sim's exact world checksum owner.

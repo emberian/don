@@ -49,6 +49,7 @@ pub mod checksum;
 pub mod harness;
 pub mod image;
 pub mod initial;
+pub mod map_style;
 pub mod replay;
 pub mod report;
 pub mod rules_channel;
@@ -68,6 +69,10 @@ pub use initial::{
     InitialGame, InitialGameInfo, InitialItemBoundary, InitialItemReconstruction,
     InitialItemReconstructionError, InitialPlayer, InitialState, InitialWorld,
     InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans,
+};
+pub use map_style::{
+    MapGenerationStage, MapStyleIdentity, MapStyleLoadError, MapStyleStaticData,
+    StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE, SHIPPED_MAP_STYLE_CATALOG,
 };
 pub use replay::{corpus, Replay};
 pub use state::SimState;

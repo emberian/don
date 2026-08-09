@@ -19,6 +19,7 @@
 //!   prevents a future desynced recording from being attributed to our sim.
 
 use crate::checksum::{Channel, Channels, CHANNELS, CHANNEL_NAMES, NUM_CHANNELS, NUM_WALKED};
+use crate::map_style::MapStyleStaticData;
 use crate::replay::Replay;
 use crate::state::SimState;
 use crate::wire::{classify, CommandClass, CommandView, Order};
@@ -103,6 +104,22 @@ pub struct RunResult {
     pub initial_teams: Vec<u8>,
     /// First boundary reached by the executable initial-item reconstruction.
     pub initial_item_boundary: crate::initial::InitialItemBoundary,
+    /// Catalog-validated concrete style identity, when the lawful local static
+    /// data was present beside the replay corpus.
+    pub initial_item_style_key: Option<String>,
+    pub initial_item_style_filename: Option<String>,
+    pub initial_item_default_terrain_groups: usize,
+    pub initial_item_selected_terrain_groups: usize,
+    pub initial_item_selected_terrain_groups_present: bool,
+    pub initial_item_effective_terrain_groups: usize,
+    pub initial_item_default_goodies: usize,
+    pub initial_item_selected_goodies: usize,
+    pub initial_item_selected_goodies_present: bool,
+    pub initial_item_effective_goodies: usize,
+    /// Proven top-level direct RNG call sites. This is not the dynamic draw
+    /// count; indirect callees and retry loops remain the next generator work.
+    pub initial_item_known_direct_rng_sites: Vec<u32>,
+    pub initial_item_style_error: Option<String>,
     /// Distinct `.rcx` bytes carrying the known scalar worldgen tuple.
     pub initial_item_scalar_source_bytes: usize,
     pub initial_rules_offset: Option<usize>,
@@ -267,6 +284,8 @@ pub struct WorldSim {
     /// Result of executing that prefix against `initial_world`. A blocked plan
     /// must leave the item channel uninstalled.
     pub initial_item_error: Option<crate::initial::InitialItemReconstructionError>,
+    /// Why local static content could not advance the plan, if it could not.
+    pub initial_item_style_error: Option<String>,
     /// Exact checksum-visible static state projected from the replay's own
     /// SaveGame Rules section. Unlike `initial_world`, this slice is complete:
     /// all 997,846 visited bytes are present and independently checkpointed.
@@ -290,6 +309,7 @@ impl WorldSim {
             initial_world: None,
             initial_items: None,
             initial_item_error: None,
+            initial_item_style_error: None,
             initial_rules: None,
         }
     }
@@ -299,7 +319,9 @@ impl WorldSim {
     pub fn from_replay(rep: &Replay) -> WorldSim {
         let mut s = WorldSim::new();
         s.initial_world = rep.initial.reconstruct_world();
-        s.initial_items = Some(rep.initial.reconstruct_items());
+        let (items, style_error) = initial_items_for_replay(rep);
+        s.initial_items = Some(items);
+        s.initial_item_style_error = style_error;
         s.initial_rules = rep.initial.rules;
         if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
             s.initial_item_error = items.apply(&mut s.world, &mut map.world).err();
@@ -368,7 +390,8 @@ impl Simulation for WorldSim {
 
 /// Run one recording through a simulation and produce the divergence profile.
 pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32) -> RunResult {
-    let initial_items = rep.initial.reconstruct_items();
+    let (initial_items, initial_item_style_error) = initial_items_for_replay(rep);
+    let style = initial_items.style.as_ref();
     let mut res = RunResult {
         file: rep
             .path
@@ -384,6 +407,23 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_active_players: rep.initial.active_players().count(),
         initial_teams: rep.initial.active_players().map(|p| p.team).collect(),
         initial_item_boundary: initial_items.boundary,
+        initial_item_style_key: style.map(|s| s.identity.key.to_owned()),
+        initial_item_style_filename: style.and_then(|s| s.identity.filename).map(str::to_owned),
+        initial_item_default_terrain_groups: style.map_or(0, |s| s.default_terrain_groups.len()),
+        initial_item_selected_terrain_groups: style.map_or(0, |s| s.selected_terrain_groups.len()),
+        initial_item_selected_terrain_groups_present: style
+            .is_some_and(|s| s.selected_terrain_groups_section_present),
+        initial_item_effective_terrain_groups: style
+            .map_or(0, |s| s.effective_terrain_groups().len()),
+        initial_item_default_goodies: style.map_or(0, |s| s.default_goodies.len()),
+        initial_item_selected_goodies: style.map_or(0, |s| s.selected_goodies.len()),
+        initial_item_selected_goodies_present: style
+            .is_some_and(|s| s.selected_goodies_section_present),
+        initial_item_effective_goodies: style.map_or(0, |s| s.effective_goodies().len()),
+        initial_item_known_direct_rng_sites: style
+            .map(MapStyleStaticData::known_direct_rng_sites)
+            .unwrap_or_default(),
+        initial_item_style_error,
         initial_item_scalar_source_bytes: initial_items.scalar_source_bytes(),
         initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
         initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),
@@ -504,6 +544,33 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
     res
 }
 
+fn initial_items_for_replay(
+    rep: &Replay,
+) -> (crate::initial::InitialItemReconstruction, Option<String>) {
+    use crate::map_style::{ron_data_root_for_replay, MapStyleStaticData};
+
+    let base = rep.initial.reconstruct_items();
+    if !matches!(
+        base.boundary,
+        crate::initial::InitialItemBoundary::MapStyleContentUnavailable { .. }
+    ) {
+        return (base, None);
+    }
+    let Some(root) = ron_data_root_for_replay(&rep.path) else {
+        return (
+            base,
+            Some("replay path has no owning ron-data/rules.xml ancestor".into()),
+        );
+    };
+    match MapStyleStaticData::load_from_ron_data(&root, base.inputs.map_style) {
+        Ok(style) => match rep.initial.reconstruct_items_with_style(style) {
+            Ok(plan) => (plan, None),
+            Err(e) => (base, Some(format!("static-style admission failed: {e:?}"))),
+        },
+        Err(e) => (base, Some(e.to_string())),
+    }
+}
+
 fn compare<S: Simulation>(
     res: &mut RunResult,
     alive: &mut [bool; NUM_CHANNELS],
@@ -618,6 +685,23 @@ pub fn format_table(r: &RunResult) -> String {
         r.initial_item_boundary.name(),
         r.initial_item_scalar_source_bytes,
     ));
+    if let Some(key) = &r.initial_item_style_key {
+        s.push_str(&format!(
+            "  map style {key} ({}) admitted: terrain groups default/selected/effective {}/{}/{}, goodies {}/{}/{}, selected sections present {}/{}, {} known direct RNG sites\n",
+            r.initial_item_style_filename.as_deref().unwrap_or("unresolved"),
+            r.initial_item_default_terrain_groups,
+            r.initial_item_selected_terrain_groups,
+            r.initial_item_effective_terrain_groups,
+            r.initial_item_default_goodies,
+            r.initial_item_selected_goodies,
+            r.initial_item_effective_goodies,
+            r.initial_item_selected_terrain_groups_present,
+            r.initial_item_selected_goodies_present,
+            r.initial_item_known_direct_rng_sites.len(),
+        ));
+    } else if let Some(error) = &r.initial_item_style_error {
+        s.push_str(&format!("  map style static data unavailable: {error}\n"));
+    }
     if let Some(checksum) = r.initial_rules_checksum {
         s.push_str(&format!(
             "  replay Rules @ {:#x}: {} serialized bytes -> {} checksum-visible bytes, {:08x}\n",

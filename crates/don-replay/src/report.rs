@@ -189,8 +189,40 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .map(|v| format!("\"{}\"", esc(v)))
                 .unwrap_or_else(|| "null".into())
         ));
+        let style_json = if let Some(key) = &r.initial_item_style_key {
+            let sites = r
+                .initial_item_known_direct_rng_sites
+                .iter()
+                .map(|va| format!("\"0x{va:08x}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{{ \"key\": \"{}\", \"filename\": {}, \"terrain_groups\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"goodies\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"known_direct_rng_sites\": [{}], \"dynamic_draw_count\": null }}",
+                esc(key),
+                r.initial_item_style_filename
+                    .as_ref()
+                    .map(|v| format!("\"{}\"", esc(v)))
+                    .unwrap_or_else(|| "null".into()),
+                r.initial_item_default_terrain_groups,
+                r.initial_item_selected_terrain_groups,
+                r.initial_item_selected_terrain_groups_present,
+                r.initial_item_effective_terrain_groups,
+                r.initial_item_default_goodies,
+                r.initial_item_selected_goodies,
+                r.initial_item_selected_goodies_present,
+                r.initial_item_effective_goodies,
+                sites,
+            )
+        } else {
+            "null".into()
+        };
+        let style_error = r
+            .initial_item_style_error
+            .as_ref()
+            .map(|v| format!("\"{}\"", esc(v)))
+            .unwrap_or_else(|| "null".into());
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"static_style\": {}, \"static_style_error\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -200,6 +232,8 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.initial_teams,
             r.initial_item_boundary.name(),
             r.initial_item_scalar_source_bytes,
+            style_json,
+            style_error,
             r.initial_rules_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_rules_serialized_bytes,
             r.initial_rules_walked_bytes,
