@@ -40,6 +40,8 @@
 pub mod balance;
 pub mod balance_path;
 pub mod batch;
+/// Opaque production owner joining one Sim, BHS runtime, and synchronized type provenance.
+pub mod bhs_session;
 pub mod checksum;
 /// Added by the `command-bridge` lane. The command→order bridge:
 /// `CommandPackage::process_*` -> `Group::action_*` -> `Unit::add_*_order`. Depends only

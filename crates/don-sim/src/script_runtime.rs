@@ -258,6 +258,7 @@ pub struct ScriptRuntime {
     game: Option<ScriptBinding>,
     general_powers: Option<ScriptBinding>,
     type_builtins: Option<TypeBuiltinRuntime>,
+    started: bool,
     output: Vec<ScriptOutput>,
     timers: ScriptTimers,
     calls: u64,
@@ -281,6 +282,7 @@ impl ScriptRuntime {
             game,
             general_powers,
             type_builtins: None,
+            started: false,
             output: Vec::new(),
             timers: ScriptTimers::default(),
             calls: 0,
@@ -302,6 +304,14 @@ impl ScriptRuntime {
 
     pub fn bytecodes(&self) -> u64 {
         self.bytecodes
+    }
+
+    /// Whether this runtime has entered retail step 4 at least once.
+    ///
+    /// The latch is set before either binding runs, so a failed first script cannot later be
+    /// presented to [`crate::bhs_session::BhsSession`] as an untouched setup runtime.
+    pub fn has_started(&self) -> bool {
+        self.started
     }
 
     /// Install the one synchronized rules/mod owner used by the recovered type builtins.
@@ -360,6 +370,7 @@ impl ScriptRuntime {
         &mut self,
         host: &mut H,
     ) -> Result<ScriptFrameRun, ScriptRunError> {
+        self.started = true;
         let frame = host.script_frame();
         let mut work = ScriptFrameRun::default();
         if let Some(binding) = self.game.clone() {

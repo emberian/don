@@ -1,7 +1,8 @@
 # BHS authoritative type-owner factory
 
-Status: source-complete producer and fail-closed proof pack; the raw rules composer, canonical
-session ownership, channel 13, and DoNSave persistence remain red. Implementation:
+Status: source-complete producer and fail-closed proof pack; the raw rules composer, channel 13,
+and DoNSave persistence remain red. Canonical opaque ownership is now landed in
+`crates/don-sim/src/bhs_session.rs`. Implementation:
 `crates/don-sim/src/systems/bhs_type_factory.rs`. Frozen tests:
 `crates/don-sim/tests/bhs_type_factory.rs`.
 
@@ -88,22 +89,22 @@ Only after every row is admitted does the factory capture `TypeBackup::capture_p
 recaptured after a BHS mutation. The proof pack mutates a produced Unit, invokes registration
 286's owner path, and freezes restoration to the post-composition pristine values.
 
-## Frozen integration seam and honest boundary
+## Landed integration seam and honest boundary
 
-`systems::bhs_type_factory` is the only shared-module addition. Production setup should:
+Production setup now has one fail-closed path:
 
 1. complete one ordered base-rules plus mod-overlay composition;
 2. materialize all 806 rows, canonical non-strict relations, 24 tribe keys, and eight live Leader
    mask records from that same composition;
-3. hash the manifest and each component, then call `produce_type_builtin_state` once;
-4. retain both returned parts in one session owner and install the state before the first script
-   frame.
+3. hash the manifest and each component, then pass the witnessed input to `BhsSession::new`;
+4. let that opaque constructor call `produce_type_builtin_state`, retain both returned parts, and
+   install the state before exposing the first script-frame entry point.
 
-No raw XML parser, session install, save format, or checksum walk is claimed here. In particular,
-the existing `ScriptRuntime::install_type_builtins` can accept only the state, so calling it while
-discarding `TypeBuiltinProvenance` would violate this factory contract. The next integration must
-place both under one opaque session/Sim owner, make channel 13 consume the same live rows, and
-serialize the mutable state while using the retained provenance to reconstruct immutable backups.
+No raw XML parser, save format, or checksum walk is claimed here. The existing
+`ScriptRuntime::install_type_builtins` can accept only the state and remains a low-level
+compatibility API; `BhsSession::new` rejects a runtime already populated through it rather than
+pairing that state after the fact with a possibly unrelated witness. The opaque session exposes no
+`Sim` escape and keeps save/channel-13 admission red until those complete projections exist.
 
 Immediate executed shipped-call coverage therefore remains zero. Once the synchronized composer
 and session seam use this producer, the already-routed 1,614 BHS calls can consume one exact owner
@@ -120,5 +121,5 @@ validation is limited to `git diff --check` plus direct inspection of the source
 Root convergence passed the focused factory in both independent profiles on 2026-08-09 as part
 of hbox `bhs-factory-special-state-20260809T222235Z-65491-19369-3437590ed646` and persvati
 release `bhs-factory-special-state-release-20260809T222236Z-65494-7499-3437590ed646`.
-Both exited 0 with 6/6 factory tests. This validates construction/refusal behavior, not the still
-missing synchronized session installation.
+Both exited 0 with 6/6 factory tests. This validates factory construction/refusal behavior, not
+the newer source-only session ownership seam or a synchronized production composition.

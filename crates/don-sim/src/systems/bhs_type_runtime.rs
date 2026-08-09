@@ -4,7 +4,7 @@
 //! not copy a rule projection into the script VM: it verifies the shipped declaration identity,
 //! executes the owner method, and publishes a revision-bound receipt.  Save and checksum
 //! admission methods remain explicit and reject the external owner until their complete
-//! projections exist.  Global enforcement still requires Sim/session ownership.
+//! projections exist.  [`crate::bhs_session::BhsSession`] supplies the opaque production owner.
 
 use don_bhs::{builtin, BuiltinDecl, ScriptTy, Value};
 
