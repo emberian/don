@@ -91,13 +91,13 @@ then exceed it deliberately in improved mode.
 
 ## Current measured snapshot
 
-Snapshot date: 2026-08-08. Prefer the generated records and commands below if they disagree
+Snapshot date: 2026-08-09. Prefer the generated records and commands below if they disagree
 with prose.
 
 | Gate/surface | Current authoritative state |
 |---|---|
-| Retail differential suite | `schema/oracle-regression.json`: 22/22 cases, 18,622,556 trials, zero mismatches/skips/crashes/errors after adding full-state turning, map-seed/start-coordinate writers, radial/fairness calculations, and regional start placement. |
-| Replay corpus | `schema/replay-validation.json`: 61 files, 585,152 turns, 488,557 structurally valid checksum packets; dynamic world reconstruction remains unmodelled, so current checksum agreement is not whole-game fidelity. |
+| Retail differential suite | `schema/oracle-regression.json`: 23/23 cases, 18,722,565 trials, zero mismatches/skips/crashes/errors after adding full-state turning, map-seed/start-coordinate writers, radial/fairness calculations, regional start placement, and lake fixing. |
+| Replay corpus | 61 files, 585,152 turns, 488,557 structurally valid checksum packets; replay-carried static Rules independently match 222,938/222,938 turns, while dynamic world reconstruction still diverges immediately and whole-game fidelity remains open. |
 | Improved-mode seams | The seven default fixes are wired through real economy/production/border/BHS paths and covered by the fidelity gate. |
 | Product readiness | `tools/product-readiness.sh` intentionally refuses on literal registered subsystem blockers, including RL air physics/unit-search/building-search and independently gated Arena transactions. Do not turn them into waivers. |
 | RL surface | Builds, imports, resets, steps, masks, and exposes zero-copy observations through native/Gymnasium/PettingZoo APIs. The last published partial-dynamics report reaches 98,505 env-steps/s at 1,024 worlds; remeasure before quoting it as current. |

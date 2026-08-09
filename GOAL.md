@@ -25,7 +25,7 @@ Snapshot date: 2026-08-09. Generated records override prose if the tree advances
 | Surface | State | Evidence |
 |---|---|---|
 | Retail differential oracle | green | `schema/oracle-regression.json`: 23/23 cases, 18,722,565 trials, zero mismatches/skips/crashes/errors; includes full-state turning, map/start writers, radial/fairness calculations, and regional start placement |
-| Replay corpus | structurally green, substantive first divergence | 61 recordings, 585,152 turns, 488,557 valid checksum packets; exact prefix setup drives a non-empty `world` walk on all 222,938 comparisons, but missing terrain/start generation diverges on the first checksummed turn and every current agreement remains trivial/unmodelled |
+| Replay corpus | one substantive channel green; dynamic world diverges | 61 recordings, 585,152 turns, 488,557 valid checksum packets; replay-carried static Rules are independently projected and match 222,938/222,938 checksum turns non-trivially, while the non-empty `world` walk still diverges on the first checksummed turn because terrain/start generation is missing |
 | Simulation | broad and actively integrating | retail tick/order foundations plus economy, production, combat, movement/A*, collision/boats, spatial chains, groups/guys, cities, borders/fog, air, naval, walls, items, animation events, RNG, walkers |
 | Product readiness | intentionally red | default improved seams are wired; current reachable drift is tracked by `tools/product-readiness.sh`, not waived |
 | RL environment | working over incomplete dynamics | native/Gymnasium/VectorEnv/PettingZoo APIs, derived action taxonomy, exact parameter masks, zero-copy observations, deterministic batch stepping; an exhaustive 806-TypeIndex contract plus a 128-step eight-world rollout now reports zero accepted-no-effect and zero illegal advertised actions |
@@ -79,8 +79,8 @@ has an obvious test.
 - Populate the generated PDB-shaped bridge in retail object/container order, including
   capacities and growth metadata where walked.
 - Apply decoded commands through the same path used by the game, RL environment, and browser.
-- Turn at least one channel from structurally/trivially green into non-empty agreement, then
-  record and reduce its first divergence.
+- Use the now-substantive static `rules` channel as the admission baseline, then turn a dynamic
+  channel into non-empty agreement and record and reduce its first divergence.
 - Close every RNG stream consumer as its owning system becomes reachable.
 
 The scoreboard is:

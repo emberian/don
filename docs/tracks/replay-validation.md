@@ -25,21 +25,26 @@ Over the whole corpus — 61 files, 21 with checksums, **585,152 turns**,
 | `deaths` | **5,734** | 82,943 / 222,938 | 82,943 | 0 |
 | `ammo` | **3,696** | 106,634 / 222,938 | 106,634 | 0 |
 | `items` | 0 | 107,882 / 222,938 | 107,882 | 0 |
+| **`rules`** | **25,442** | **222,938 / 222,938** | **0** | **222,938** |
 | **`world`** | 0 | 0 / 222,938 | 0 | **222,938** |
 | every other channel | 0 | 0 / 222,938 | 0 | 0 |
 
 `survived` = consecutive agreeing turns from the recording's first checksummed
-turn. **The honest headline is 25,442 turns on `walls`, and it is a weak
-number**: `walls` was empty in every recorded game, and adler-32 over nothing is
-1 on both sides. `trivial` counts exactly that case, and it remains 100 % of our
-agreements. The scoreboard is no longer wholly empty, however: every one of the
-222,938 `world` comparisons now walks a real prefix-derived world channel.
+turn. **The honest headline is now 25,442 substantive turns on `rules`.** The
+replay's static Rules SaveGame section is independently parsed and projected through the
+retail checksum traversal; all 222,938 comparisons walk 997,846 bytes and agree. The
+scoreboard now has 445,876 substantive comparisons: `rules` agrees throughout, while every
+`world` comparison walks real prefix-derived state and exposes the first dynamic divergence.
+
+The previous 25,442-turn `walls` headline remains a weak empty-state result: `walls` was
+empty in every recorded game, and adler-32 over nothing is 1 on both sides. `trivial` counts
+exactly that case.
 
 `ammo` and `deaths` still measure absent producers, not mechanics: they read 1
 until retail creates the first projectile or corpse. Their measured deadlines
 remain useful, but those matches are explicitly labelled `unmodelled`.
 
-`units`, `builds`, `leaders`, `cities`, `goods`, `rules`,
+`units`, `builds`, `leaders`, `cities`, `goods`,
 `scenario_data`, `script_run_time`, `groups`, `guys` diverge on the **first**
 checksummed turn, because those are non-empty from game start and we hold none
 of them. `world` also diverges on the first checksummed turn, for a better
@@ -48,7 +53,15 @@ through the exact `World::walk_data` traversal. Only 52–76 of those bytes are
 currently sourced from the prefix; generated terrain, resources, start arrays,
 fog and collision remain explicitly unsourced.
 
-### Initial-world slice now on the scoreboard
+### Replay-carried Rules and initial-world slices now on the scoreboard
+
+Supported recordings carry an exact 1,024,221-byte static Rules SaveGame section immediately
+before the command stream. The parser independently projects the checksum-visible portions in
+retail order—806 Types, Constants, Balance, and 24 Tribes—while skipping tags and save-only
+strings. Admission requires the measured intermediate checksums `0x72e0c3b6`, `0x50625668`,
+and `0x56daabc1`, the final `0x12ba3104`, and exactly 997,846 walked bytes. All 21
+checksum-bearing recordings pass; mutations in any component or section tag fail closed. This
+proves replay-carried static Rules fidelity, not an independent rules loader or dynamic world.
 
 `Replay::open` structurally parses the complete recording prefix through
 `game.info.save_name`, inferring the v15/v16 `GameInfo` mod tail by the PDB
@@ -268,10 +281,11 @@ count changes in either direction.
   has 107,882 matches corpus-wide and 0 survival: the channel returns to 1
   mid-game when the item list empties, and our permanently-empty model
   coincidentally agrees. Only `survived` is a progress metric.
-- **Every current agreement is still `trivial`, but the scoreboard is not.**
-  The `world` producer walks bytes on all 222,938 comparisons and disagrees on
-  the first checksummed turn. The remaining 520,397 agreements are all absent
-  channels matching retail's empty state and are not evidence about mechanics.
+- **Static Rules agreement is substantive; other agreement is still mostly empty-state.**
+  The `rules` producer independently walks 997,846 replay-carried bytes on all 222,938
+  comparisons and agrees. The `world` producer also walks bytes on every comparison but
+  disagrees on the first checksummed turn. The remaining empty-channel agreements are not
+  evidence about mechanics.
 - **The checksum phase is a parameter, not a finding.** The sender builds its
   package during `PROCESS_TURN` and appends the tuple to the same package that
   carries that turn's new commands, but lockstep executes a turn's commands some
@@ -307,16 +321,12 @@ count changes in either direction.
   offset. `WalkOutcome` counts every op it could not execute
   (`ops_unresolved`, `ops_global`, `ops_virtual`, `ops_sub_unknown`,
   `ops_out_of_range`) so a partial walk can never be mistaken for a complete one.
-- **`SimBridge` produces two real channels, not a full initial save.** `units`
+- **`SimBridge` produces three real channels, not a full initial save.** `units`
   images generated PDB columns. `world` executes `map_terrain::World::walk_data`
   directly because its dynamic arrays cannot be represented by a 372-byte flat
-  image. The prefix proves dimensions and seed, not generated contents; their
-  walked zeros are counted as unsourced and the channel is expected to diverge.
-- **`cargo test --workspace --exclude don-net --exclude don-ai` currently has 4
-  failures in `don-sim::trig`** (`sin_table`, `find_angle`, the index-255 wrap).
-  Those are a concurrent lane's in-flight module; this lane touched no shared
-  crate except adding `crates/don-replay` to the workspace members list.
-  `cargo test -p don-replay` is 22/22 green.
+  image. `rules` uses the separately admitted replay-carried static projection. The prefix
+  proves world dimensions and seed, not generated contents; their walked zeros are counted as
+  unsourced and the channel is expected to diverge.
 
 ---
 
@@ -326,12 +336,9 @@ count changes in either direction.
    its exact generation tuple and exact checksum owner. The first divergence is
    therefore localized to the missing `Map::make` body/start-placement writers,
    rather than hidden behind an empty channel.
-2. **`rules` first — it is one 32-bit word.** `Game::walk_rules_data`
-   (`0x00589550`) over the loaded `Constants` must produce `0x12ba3104`. It is
-   static, so it needs no simulation at all, and it validates the entire loaded
-   rule set's sim-critical bytes *and* their traversal order in one comparison.
-   `checksum::SHIPPED_RULES_CHANNEL` is already the target and the corpus test
-   already asserts retail's side of it.
+2. **Use the admitted `rules` projection to build an independent rules loader.** The replay
+   channel proves the serialized bytes and traversal, but a standalone game still must load
+   the same state from user-owned inputs without depending on a recording.
 3. **Then `deaths` and `ammo`**, because their divergence turn (847 / 1,584 in
    the 2025 game) is the first place a real mechanic has to be right, and both
    channels start from a state we already reproduce.
@@ -366,6 +373,7 @@ count changes in either direction.
 | Cross-player checksum tuples are **identical when joined on `CommandPackage::group`**; the 21 known disagreements are a `stamp`-join artifact | `crates/don-replay`, corpus | **C [measured]** | 265,619/265,619 identical by group; 265,910/265,931 by stamp, and **21 of 21** by-stamp disagreements compare packages from different turns; 8 stamp buckets mix turns |
 | All 488,557 recorded `CheckSumsCommand` packets satisfy `word16 == Σ(words 1..15)` and are adler-32-shaped | `crates/don-replay/src/replay.rs`, corpus | **C [measured]** | 488,557/488,557 both tests; ≈2⁻³² false-positive rate per packet |
 | `rules` channel = `0x12ba3104` in every recording that carries checksums | corpus | **C [measured]** | constant within and across all 21 checksummed files, two engine builds |
+| Replay-carried Rules independently project the retail checksum traversal | `crates/don-replay`, corpus | **C [measured]** | 1,024,221 serialized bytes admitted by three intermediate checkpoints plus final `0x12ba3104`; 997,846 bytes walked; 222,938/222,938 non-trivial matches |
 | A multiplayer lockstep turn spans **2, 4, 6 or 8 simulation frames**, per recording | `stamp`/`group` deltas | **C [measured]** | current corpus distribution: 1 / 6 / 37 / 16 files; the solo recording measures 1.0; 6.0 for the 00.2024.06.20 recording |
 | Prefix-derived world reconstruction enters the checksum scoreboard | `tools/replay-validate.sh` | **C [measured]** | all 61 initial prefixes parsed; 222,938/222,938 `world` comparisons non-trivial; first divergence is the first checksummed turn; 280,968–780,168 bytes walked by map size, with generated bytes explicitly unsourced |
 
