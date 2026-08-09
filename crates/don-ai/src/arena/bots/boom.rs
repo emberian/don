@@ -74,11 +74,10 @@ pub fn builder_for_except(obs: &Obs, tx: i32, ty: i32, skip: &[EntId]) -> Option
         if skip.contains(&m.id) {
             continue;
         }
-        if matches!(m.job, Job::Gather { .. }) {
-            // MODEL 3 co-locates a seated body with its gather building/collision anchor,
-            // even at a one-seat Farm. Until exact LandData seating/unseat exists, no
-            // Gather worker is a physically supported construction candidate. Strong
-            // bots retain explicit idle builders instead.
+        if matches!(
+            m.job,
+            Job::Work { .. } | Job::MoveTo { .. } | Job::Attack { .. }
+        ) {
             continue;
         }
         let outbound = travel_frames((m.tx - tx).abs().max((m.ty - ty).abs()), moves);
@@ -296,30 +295,9 @@ pub fn place(obs: &Obs, type_id: i32, out: &mut Vec<Cmd>) -> bool {
 /// second, and the world then rejects it — a real race, and the arena counts it (see
 /// `World::rejects`), but there is no reason to generate it.
 pub fn place_except(obs: &Obs, type_id: i32, skip: &[EntId], out: &mut Vec<Cmd>) -> bool {
-    let Some(t) = obs.ty(type_id) else {
+    let Some((x, y)) = building_site(obs, type_id) else {
         return false;
     };
-    if !legal(obs, type_id) || !obs.can_pay(&t.cost) {
-        return false;
-    }
-    let Some(cap) = capital(obs) else {
-        return false;
-    };
-    // Do not stack two orders for the same building on the same tick.
-    if obs.mine.iter().any(|m| m.type_id == type_id && !m.complete) && type_id != obs.world.ids.farm
-    {
-        return false;
-    }
-    let site = if type_id == obs.world.ids.camp || type_id == obs.world.ids.mine {
-        best_gather_site(obs, type_id, cap.tx, cap.ty, 24)
-    } else if type_id == obs.world.ids.small_city {
-        // A second city goes as far from the first as the build radius allows while
-        // staying on our side of the map.
-        city_site(obs)
-    } else {
-        site_near(obs, type_id, cap.tx, cap.ty, 18)
-    };
-    let Some((x, y)) = site else { return false };
     match builder_for_except(obs, x, y, skip) {
         Some(w) => {
             out.push(Cmd::Build {
@@ -331,6 +309,62 @@ pub fn place_except(obs: &Obs, type_id: i32, skip: &[EntId], out: &mut Vec<Cmd>)
             true
         }
         None => false,
+    }
+}
+
+/// Place through a caller-owned policy reserve rather than re-ranking every citizen.
+///
+/// Marshal keeps one stable, ordinarily employed citizen out of economic construction.
+/// Strategic construction may directly retask that on-map Gather body, while active
+/// Work/Move/Attack jobs are never overwritten.
+pub fn place_with_reserved_builder(
+    obs: &Obs,
+    type_id: i32,
+    worker: EntId,
+    out: &mut Vec<Cmd>,
+) -> bool {
+    if !obs.mine.iter().any(|ent| {
+        ent.id == worker
+            && ent.type_id == obs.ids().citizen
+            && matches!(ent.job, Job::Idle | Job::Gather { .. })
+    }) {
+        return false;
+    }
+    let Some((x, y)) = building_site(obs, type_id) else {
+        return false;
+    };
+    out.push(Cmd::Build {
+        worker,
+        type_id,
+        tx: x,
+        ty: y,
+    });
+    true
+}
+
+fn building_site(obs: &Obs, type_id: i32) -> Option<(i32, i32)> {
+    let Some(t) = obs.ty(type_id) else {
+        return None;
+    };
+    if !legal(obs, type_id) || !obs.can_pay(&t.cost) {
+        return None;
+    }
+    let Some(cap) = capital(obs) else {
+        return None;
+    };
+    // Do not stack two orders for the same building on the same tick.
+    if obs.mine.iter().any(|m| m.type_id == type_id && !m.complete) && type_id != obs.world.ids.farm
+    {
+        return None;
+    }
+    if type_id == obs.world.ids.camp || type_id == obs.world.ids.mine {
+        best_gather_site(obs, type_id, cap.tx, cap.ty, 24)
+    } else if type_id == obs.world.ids.small_city {
+        // A second city goes as far from the first as the build radius allows while
+        // staying on our side of the map.
+        city_site(obs)
+    } else {
+        site_near(obs, type_id, cap.tx, cap.ty, 18)
     }
 }
 
@@ -517,9 +551,9 @@ mod builder_tests {
 
     #[test]
     fn travel_estimator_exposes_when_nearby_reseating_would_win() {
-        // Once MODEL 3 can physically unseat Gather workers, this proves the estimator can
-        // compare travel plus one decision/re-seat trip in one unit (frames). Until then,
-        // `builder_for_except` deliberately excludes those unsupported bodies above.
+        // Ordinary Farm/Camp/Mine Gather workers remain on-map at their live anchor. The
+        // estimator can therefore compare outbound travel plus the decision/re-seat cost
+        // in one unit (frames), without an unseat teleport or fabricated offset.
         for moves in [6, 12, 24, 48] {
             let far_idle = travel_frames(80, moves);
             let near_gatherer =
@@ -533,5 +567,74 @@ mod builder_tests {
         let idle = travel_frames(4, 24);
         let gatherer = travel_frames(4, 24) + crate::arena::world::FPS + travel_frames(4, 24);
         assert!(idle < gatherer);
+    }
+
+    #[test]
+    fn live_nearby_gather_body_can_be_selected_over_a_far_idle_worker() {
+        use crate::arena::match_run::{load_world, MatchConfig};
+
+        let Some(mut world) = load_world(&MatchConfig::default()).ok() else {
+            return;
+        };
+        let citizens: Vec<usize> = world
+            .ents
+            .iter()
+            .enumerate()
+            .filter_map(|(index, ent)| {
+                (ent.who == 0 && ent.type_id == world.ids.citizen).then_some(index)
+            })
+            .collect();
+        let Some(farm) = world
+            .ents
+            .iter()
+            .find(|ent| ent.who == 0 && ent.type_id == world.ids.farm)
+            .map(|ent| ent.id)
+        else {
+            return;
+        };
+        if citizens.len() < 3 {
+            return;
+        }
+        let far_idle = citizens[0];
+        let near_gather = citizens[1];
+        let skipped = world.ents[citizens[2]].id;
+        let tile = don_sim::systems::combat::RANGE_UNITS_PER_TILE;
+        world.ents[far_idle].x = 5 * tile + tile / 2;
+        world.ents[far_idle].y = 5 * tile + tile / 2;
+        world.ents[far_idle].job = Job::Idle;
+        world.ents[near_gather].x = 47 * tile + tile / 2;
+        world.ents[near_gather].y = 48 * tile + tile / 2;
+        world.ents[near_gather].job = Job::Gather { target: farm };
+        world.ents[near_gather].assigned_to = farm;
+        world.ents[citizens[2]].job = Job::Work { target: farm };
+        let expected = world.ents[near_gather].id;
+        let reserved = world.ents[far_idle].id;
+
+        let obs = Obs::of(&world, 0);
+        assert_eq!(builder_for_except(&obs, 48, 48, &[skipped]), Some(expected));
+        let mut commands = Vec::new();
+        assert!(place_with_reserved_builder(
+            &obs,
+            obs.ids().farm,
+            expected,
+            &mut commands,
+        ));
+        assert!(place_with_reserved_builder(
+            &obs,
+            obs.ids().farm,
+            reserved,
+            &mut commands,
+        ));
+        assert!(!place_with_reserved_builder(
+            &obs,
+            obs.ids().farm,
+            skipped,
+            &mut commands,
+        ));
+        assert!(matches!(
+            commands.as_slice(),
+            [Cmd::Build { worker: first, .. }, Cmd::Build { worker: second, .. }]
+                if *first == expected && *second == reserved
+        ));
     }
 }

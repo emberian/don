@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use super::boom::{place_except, CapFirst};
+use super::boom::{place_except, place_with_reserved_builder, CapFirst};
 use super::*;
 use crate::arena::cmd::{Cmd, EntId};
 use crate::arena::obs::Obs;
@@ -123,7 +123,9 @@ pub struct Marshal {
     /// What we build, recomputed when the enemy's composition changes.
     pick: Option<i32>,
     pub pushes: u32,
-    /// Citizens kept unseated so MODEL 3 never has to detach a co-located gather body.
+    /// A stable citizen exempted from economic construction and scouting, but not from
+    /// ordinary employment. Keeping the reserve Gathering earns resources and prevents
+    /// idle auto-acquisition; strategic construction may retask its on-map Gather body.
     builders: Vec<EntId>,
 }
 
@@ -358,10 +360,9 @@ impl Bot for Marshal {
         }
         self.military(obs, out);
         self.army_control(obs, out);
-        // Whatever is left over goes to work. Doing this last means a citizen pulled for
-        // a build site this tick is not immediately re-seated -- and the scout is exempt,
-        // or it would be put back on a farm the tick after every waypoint.
-        let mut skip = self.builders.clone();
+        // Protect every actor already commanded in this batch and the scout. The stable
+        // strategic reserve is deliberately eligible for ordinary employment.
+        let mut skip: Vec<EntId> = out.iter().map(Cmd::actor).collect();
         skip.extend(self.scout);
         employ_except(obs, &skip, out);
     }
@@ -376,9 +377,9 @@ impl Marshal {
             let next = obs
                 .mine
                 .iter()
-                .filter(|m| m.type_id == citizen)
+                .filter(|m| m.type_id == citizen && matches!(m.job, Job::Idle))
                 .filter(|m| !self.builders.contains(&m.id) && Some(m.id) != self.scout)
-                .min_by_key(|m| (!m.idle, m.id));
+                .min_by_key(|m| m.id);
             let Some(next) = next else { break };
             self.builders.push(next.id);
         }
@@ -410,13 +411,6 @@ impl Marshal {
     /// of War` (the Barracks prerequisite) and a Barracks.
     fn economy(&mut self, obs: &Obs, out: &mut Vec<Cmd>) {
         let i = obs.world.ids;
-        let locked = self.econ.food_locked(obs);
-        let skip: Vec<EntId> = self.scout.into_iter().collect();
-        let place = |ty: i32, out: &mut Vec<Cmd>| place_except(obs, ty, &skip, out);
-
-        // Library order: the two ceiling techs, then war, then the age. `The Art of War`
-        // is 120 food and gates every military building; it goes in front of the age
-        // because an age with no army is a boom that loses.
         let want = next_tech(
             obs,
             &[
@@ -427,6 +421,31 @@ impl Marshal {
                 i.written_word,
             ],
         );
+        // CapFirst knows to bank for the age, but Marshal inserts Art of War ahead of it.
+        // Once Art is the current prerequisite, stop spending its food on citizens, Farms,
+        // or a second city until the Library completes it.
+        let locked = self.econ.food_locked(obs) || want == Some(i.art_of_war);
+        let place = |ty: i32, out: &mut Vec<Cmd>| {
+            if ty == i.barracks || ty == i.tower {
+                self.builders
+                    .iter()
+                    .copied()
+                    .find(|&worker| {
+                        obs.mine.iter().any(|ent| {
+                            ent.id == worker && matches!(ent.job, Job::Idle | Job::Gather { .. })
+                        })
+                    })
+                    .is_some_and(|worker| place_with_reserved_builder(obs, ty, worker, out))
+            } else {
+                let mut skip = self.builders.clone();
+                skip.extend(self.scout);
+                place_except(obs, ty, &skip, out)
+            }
+        };
+
+        // Library order: the two ceiling techs, then war, then the age. `The Art of War`
+        // is 120 food and gates every military building; it goes in front of the age
+        // because an age with no army is a boom that loses.
         if let Some(t) = want {
             queue_at(obs, t, 1, out);
         }
@@ -437,12 +456,15 @@ impl Marshal {
         let food_gap = useful_slots(obs, 0) - seats(obs, 0);
         let wood_gap = useful_slots(obs, 1) - seats(obs, 1);
         let mut wants: Vec<i32> = Vec::new();
+        // Once war is researched, production comes before another static defence. The
+        // reserve is never yanked off active Work, so ordering replaces the old accidental
+        // Work-order overwrite with an explicit military policy.
+        if obs.has_tech(i.art_of_war) && obs.count_with_queued(i.barracks) < 1 {
+            wants.push(i.barracks);
+        }
         if self.level.fortify && self.mode == Mode::Defending && obs.count_with_queued(i.tower) < 2
         {
             wants.push(i.tower);
-        }
-        if obs.has_tech(i.art_of_war) && obs.count_with_queued(i.barracks) < 1 {
-            wants.push(i.barracks);
         }
         if wood_gap > 0 && obs.count_with_queued(i.camp) < 4 {
             wants.push(i.camp);
@@ -501,6 +523,8 @@ impl Marshal {
                     .mine
                     .iter()
                     .filter(|m| m.type_id == cit)
+                    .filter(|m| !self.builders.contains(&m.id))
+                    .filter(|m| !out.iter().any(|command| command.actor() == m.id))
                     .max_by_key(|m| (m.tx - cap.tx).abs().max((m.ty - cap.ty).abs()))
                 else {
                     return;
@@ -816,6 +840,21 @@ mod integration {
             w.step();
         }
         Some((w, a))
+    }
+
+    #[test]
+    fn scout_selection_never_steals_the_reserved_builder() {
+        let Some(w) = load_world(&MatchConfig::default()).ok() else {
+            return;
+        };
+        let mut marshal = Marshal::new(Level::MARSHAL);
+        let mut commands = Vec::new();
+        marshal.act(&Obs::of(&w, 0), &mut commands);
+        let reserved = *marshal.builders.first().expect("initial citizen reserve");
+        assert_ne!(marshal.scout, Some(reserved));
+        assert!(!commands
+            .iter()
+            .any(|command| matches!(command, Cmd::Move { unit, .. } if *unit == reserved)));
     }
 
     /// Scouting has to actually find the enemy, or every downstream decision is blind.
