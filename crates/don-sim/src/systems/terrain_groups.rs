@@ -13,12 +13,16 @@
 
 use super::map_terrain::{land, tflag, wflag, World};
 use super::mountains::{MountainRandomizeReceipt, Mountains};
-use super::regions::WCoordList;
+use super::regions::{Regions, WCoordList};
 use super::terrain_doobers::{
     plan_bush_fringe_with_host, plan_mountain_rock_fringe_with_host, validate_bush_fringe_inputs,
     validate_mountain_rock_fringe_inputs, BushDooberPlacement, BushFringeError, BushFringeReceipt,
     DooberTilesetRules, MountainRockDooberPlacement, MountainRockFringeError,
     MountainRockFringeReceipt,
+};
+use super::terrain_region_placement::{
+    PlaceRegionGroupCall, PlaceRegionGroupPrefixError, PlaceRegionGroupPrefixOutcome,
+    PlaceRegionGroupPrefixReceipt, RegionDropTileInvocation, RegionHelpingState,
 };
 use crate::rng::Random;
 
@@ -141,6 +145,25 @@ pub struct PlaceAllPreviewReceipt {
     pub bush_fringe: Option<BushFringeReceipt>,
     pub mountain_rock_fringe: Option<MountainRockFringeReceipt>,
     pub treeify_mountains: Option<TreeifyMountainsGateReceipt>,
+    /// Present when a resolved unit-catalog/region-selection receipt advances
+    /// the selected pattern arm through `place_region_group`'s entry search.
+    pub region_group_prefix: Option<PlaceRegionGroupPrefixReceipt>,
+}
+
+/// Outputs of the still-upstream unit-catalog and region-selection block in
+/// `place_all`, sufficient to enter `TerrainGroup::place_region_group` exactly.
+///
+/// The block can consume RNG while selecting/rotating catalog entries. Supplying
+/// its resulting state explicitly prevents the composed adapter from pretending
+/// those draws do not exist.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRegionGroupPlacement {
+    pub group_index: usize,
+    pub clump_index: usize,
+    pub region_id: usize,
+    pub land_subtype: i32,
+    pub rng_state_at_call: i32,
+    pub helping: Option<RegionHelpingState>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -264,6 +287,14 @@ pub enum TerrainPlacementBoundary {
     /// Patterns 1--3 first inspect the unit-type catalog and then call
     /// `place_region_group` (`0x006a2f60`).
     UnitTypeCatalogAndRegionPlacementKernel { group_index: usize, pattern: i32 },
+    /// The region candidate search completed; this is the first state-changing
+    /// call in `TerrainGroup::place_region_group`.
+    RegionGroupDropTileMutationKernel {
+        invocation: RegionDropTileInvocation,
+    },
+    /// No candidate survived the exact search. Retail next returns zero to the
+    /// enclosing per-clump/catalog continuation in `place_all`.
+    RegionGroupPostSearchControl { group_index: usize },
     /// All selected groups were branch-skipped; retail next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
@@ -283,6 +314,11 @@ pub enum PlaceAllError {
     InvalidBushFringe(BushFringeError),
     InvalidMountainRockFringe(MountainRockFringeError),
     InvalidTreeifyMountains(TreeifyMountainsError),
+    InvalidRegionGroupPrefix(PlaceRegionGroupPrefixError),
+    InvalidResolvedRegionGroupPlacement {
+        group_index: usize,
+        clump_index: usize,
+    },
     /// The exact randomization, selection, host-event order, and clump-size
     /// preparation prefix completed.  `boundary` is the first missing gameplay
     /// input/kernel on the path selected by the group data and call flags.
@@ -385,6 +421,7 @@ impl TerrainGroups {
             place_players,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -414,6 +451,7 @@ impl TerrainGroups {
             place_players,
             Some(rules),
             None,
+            None,
             &mut host,
         )
     }
@@ -440,6 +478,40 @@ impl TerrainGroups {
             place_players,
             Some(rules),
             Some(map_style),
+            None,
+            &mut host,
+        )
+    }
+
+    /// Composes `place_all` through the exact deterministic entry search of
+    /// `TerrainGroup::place_region_group` (`0x006a2f60`).
+    ///
+    /// `resolved` is an explicit receipt from the immediate upstream
+    /// unit-catalog/region-selection block, which is not yet implemented. Its RNG
+    /// state is installed only on the transaction's preview RNG. Consequently no
+    /// group, world, mountain-list, or caller RNG mutation escapes at the next
+    /// `drop_tile` boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_resolved_region_group(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        resolved: ResolvedRegionGroupPlacement,
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_preview(
+            world,
+            random,
+            mountains,
+            progress,
+            place_players,
+            None,
+            None,
+            Some((regions, resolved)),
             &mut host,
         )
     }
@@ -581,6 +653,7 @@ impl TerrainGroups {
         place_players: i32,
         doober_rules: Option<DooberTilesetRules>,
         map_style: Option<u8>,
+        resolved_region_group: Option<(&Regions, ResolvedRegionGroupPlacement)>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
         if let Some(rules) = doober_rules {
@@ -609,7 +682,68 @@ impl TerrainGroups {
         let mut bush_fringe = None;
         let mut mountain_rock_fringe = None;
         let mut treeify_mountains = None;
-        let boundary = if boundary == TerrainPlacementBoundary::AddDoobers {
+        let mut region_group_prefix = None;
+        let boundary = if let Some((regions, resolved)) = resolved_region_group {
+            let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
+                group_index,
+                ..
+            } = boundary
+            else {
+                return Err(PlaceAllError::InvalidResolvedRegionGroupPlacement {
+                    group_index: resolved.group_index,
+                    clump_index: resolved.clump_index,
+                });
+            };
+            let Some(prepared) = placement_preparation
+                .prepared_groups
+                .iter()
+                .find(|prepared| prepared.group_index == group_index)
+            else {
+                return Err(PlaceAllError::InvalidResolvedRegionGroupPlacement {
+                    group_index: resolved.group_index,
+                    clump_index: resolved.clump_index,
+                });
+            };
+            if resolved.group_index != group_index
+                || resolved.clump_index >= prepared.primary_sizes.len()
+            {
+                return Err(PlaceAllError::InvalidResolvedRegionGroupPlacement {
+                    group_index: resolved.group_index,
+                    clump_index: resolved.clump_index,
+                });
+            }
+
+            // The unresolved catalog block owns every intervening draw. Resume
+            // from its explicit call-site receipt rather than the pre-catalog RNG.
+            preview_random.reseed(resolved.rng_state_at_call);
+            let call = PlaceRegionGroupCall {
+                target_tiles: prepared.primary_sizes[resolved.clump_index],
+                region_id: resolved.region_id,
+                land_subtype: resolved.land_subtype,
+                oil_deposits: prepared.secondary_sizes[resolved.clump_index],
+                place_players,
+                group_index,
+            };
+            let receipt = self.groups[group_index]
+                .plan_place_region_group_prefix(
+                    world,
+                    regions,
+                    &mut preview_random,
+                    call,
+                    resolved.helping,
+                )
+                .map_err(PlaceAllError::InvalidRegionGroupPrefix)?;
+            let next = match receipt.outcome {
+                PlaceRegionGroupPrefixOutcome::DropTile(invocation) => {
+                    TerrainPlacementBoundary::RegionGroupDropTileMutationKernel { invocation }
+                }
+                PlaceRegionGroupPrefixOutcome::Exhausted => {
+                    TerrainPlacementBoundary::RegionGroupPostSearchControl { group_index }
+                }
+            };
+            region_group_prefix = Some(receipt);
+            next
+        } else if boundary == TerrainPlacementBoundary::AddDoobers {
             if let Some(rules) = doober_rules {
                 let receipt =
                     plan_bush_fringe_with_host(world, rules, &mut preview_random, |placement| {
@@ -654,6 +788,7 @@ impl TerrainGroups {
                 bush_fringe,
                 mountain_rock_fringe,
                 treeify_mountains,
+                region_group_prefix,
             },
             boundary,
         })

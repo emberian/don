@@ -130,6 +130,7 @@ pub mod terrain_doobers;
 /// Exact `TerrainGroups::fill_fertile`, mountain/list RNG, grouped selection,
 /// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
+pub mod terrain_region_placement;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and
 /// event-execution paths.
