@@ -64,7 +64,11 @@ mod wire_gen;
 pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
-pub use initial::{InitialGame, InitialGameInfo, InitialPlayer, InitialState, InitialWorld};
+pub use initial::{
+    InitialGame, InitialGameInfo, InitialItemBoundary, InitialItemReconstruction,
+    InitialItemReconstructionError, InitialPlayer, InitialState, InitialWorld,
+    InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans,
+};
 pub use replay::{corpus, Replay};
 pub use state::SimState;
 pub use walk::{walk_class, WalkOp, WalkOutcome, WalkSpec};

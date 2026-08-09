@@ -190,7 +190,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"items\": {{ \"status\": \"blocked\", \"boundary\": \"{}\", \"scalar_source_bytes\": {}, \"absent_replay_fields\": {{ \"selected_map_style\": 0, \"terrain_group_tables\": 0, \"generated_item_candidates\": 0, \"post_worldgen_rng\": 0 }} }}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -198,6 +198,8 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.initial_map_edge.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_active_players,
             r.initial_teams,
+            r.initial_item_boundary.name(),
+            r.initial_item_scalar_source_bytes,
             r.initial_rules_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_rules_serialized_bytes,
             r.initial_rules_walked_bytes,

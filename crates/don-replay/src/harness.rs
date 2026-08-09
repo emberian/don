@@ -101,6 +101,10 @@ pub struct RunResult {
     pub initial_map_edge: Option<i32>,
     pub initial_active_players: usize,
     pub initial_teams: Vec<u8>,
+    /// First boundary reached by the executable initial-item reconstruction.
+    pub initial_item_boundary: crate::initial::InitialItemBoundary,
+    /// Distinct `.rcx` bytes carrying the known scalar worldgen tuple.
+    pub initial_item_scalar_source_bytes: usize,
     pub initial_rules_offset: Option<usize>,
     pub initial_rules_serialized_bytes: usize,
     pub initial_rules_walked_bytes: u64,
@@ -258,6 +262,11 @@ pub struct WorldSim {
     /// present until their retail generator is ported; its checksum report
     /// carries that unsourced byte count explicitly.
     pub initial_world: Option<crate::initial::InitialWorld>,
+    /// Exact replay-carried prefix and first absent input for initial goodies.
+    pub initial_items: Option<crate::initial::InitialItemReconstruction>,
+    /// Result of executing that prefix against `initial_world`. A blocked plan
+    /// must leave the item channel uninstalled.
+    pub initial_item_error: Option<crate::initial::InitialItemReconstructionError>,
     /// Exact checksum-visible static state projected from the replay's own
     /// SaveGame Rules section. Unlike `initial_world`, this slice is complete:
     /// all 997,846 visited bytes are present and independently checkpointed.
@@ -279,6 +288,8 @@ impl WorldSim {
             frames: 0,
             seed_units: 0,
             initial_world: None,
+            initial_items: None,
+            initial_item_error: None,
             initial_rules: None,
         }
     }
@@ -288,7 +299,11 @@ impl WorldSim {
     pub fn from_replay(rep: &Replay) -> WorldSim {
         let mut s = WorldSim::new();
         s.initial_world = rep.initial.reconstruct_world();
+        s.initial_items = Some(rep.initial.reconstruct_items());
         s.initial_rules = rep.initial.rules;
+        if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
+            s.initial_item_error = items.apply(&mut s.world, &mut map.world).err();
+        }
         s.populate_state();
         s
     }
@@ -353,6 +368,7 @@ impl Simulation for WorldSim {
 
 /// Run one recording through a simulation and produce the divergence profile.
 pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32) -> RunResult {
+    let initial_items = rep.initial.reconstruct_items();
     let mut res = RunResult {
         file: rep
             .path
@@ -367,6 +383,8 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_map_edge: rep.initial.info.settings.map_edge_world_cells(),
         initial_active_players: rep.initial.active_players().count(),
         initial_teams: rep.initial.active_players().map(|p| p.team).collect(),
+        initial_item_boundary: initial_items.boundary,
+        initial_item_scalar_source_bytes: initial_items.scalar_source_bytes(),
         initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
         initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),
         initial_rules_walked_bytes: rep.initial.rules.map_or(0, |r| r.walked_bytes),
@@ -594,6 +612,11 @@ pub fn format_table(r: &RunResult) -> String {
             .unwrap_or_else(|| "unresolved".into()),
         r.initial_active_players,
         r.initial_teams,
+    ));
+    s.push_str(&format!(
+        "  initial items blocked at {}  ({} exact scalar source bytes; replay bytes for style/tables/candidates/post-RNG: 0/0/0/0)\n",
+        r.initial_item_boundary.name(),
+        r.initial_item_scalar_source_bytes,
     ));
     if let Some(checksum) = r.initial_rules_checksum {
         s.push_str(&format!(

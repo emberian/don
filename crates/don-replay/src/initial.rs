@@ -54,6 +54,47 @@ const RULES_SEARCH_BYTES: usize = 256 * 1024;
 /// Standard-map reference (`0x005944f0`), pinning both the unit and the order.
 pub const MAP_SIZE_WORLD_EDGES: [i32; 7] = [40, 50, 60, 70, 80, 90, 100];
 
+/// A byte range in the decompressed `.rcx` payload which proves one input.
+///
+/// Keeping these offsets with the parsed values makes the reconstruction
+/// boundary mutation-sensitive: a caller can identify the exact replay bytes
+/// which supplied the world-generation tuple instead of trusting a copied
+/// summary of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayByteSpan {
+    pub offset: usize,
+    pub bytes: usize,
+}
+
+impl ReplayByteSpan {
+    fn new(offset: usize, bytes: usize) -> Self {
+        Self { offset, bytes }
+    }
+
+    pub fn end(self) -> usize {
+        self.offset.saturating_add(self.bytes)
+    }
+}
+
+/// Exact source locations for the replay-varying `Map::make` inputs.
+///
+/// The six scalar fields are the reproducibility tuple recovered from
+/// `Map::make`: seed, map style, map size, player count, game rules, and
+/// starting-town selector. Player gates/bodies are retained as well because
+/// the later start-placement path enumerates the eight setup records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorldgenSourceSpans {
+    pub seed: ReplayByteSpan,
+    pub map_style: ReplayByteSpan,
+    pub map_size: ReplayByteSpan,
+    pub players: ReplayByteSpan,
+    pub game_rules: ReplayByteSpan,
+    pub starting_town: ReplayByteSpan,
+    pub scenario_type: ReplayByteSpan,
+    pub player_flags: [ReplayByteSpan; 8],
+    pub player_bodies: [Option<ReplayByteSpan>; 8],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameSettings {
     pub team_style: u8,
@@ -230,6 +271,8 @@ pub struct InitialState {
     pub game: InitialGame,
     pub save_name: String,
     pub bytes_walked: usize,
+    /// Exact decompressed-payload locations of the procedural world inputs.
+    pub worldgen_sources: WorldgenSourceSpans,
     /// Static rules recovered from the replay's own SaveGame section.
     ///
     /// `None` is fail-closed: conquest/custom recordings may omit this section,
@@ -270,6 +313,165 @@ pub struct InitialWorld {
     pub sourced_walked_bytes: u64,
 }
 
+/// Replay-carried, replay-varying inputs needed by the procedural map path.
+///
+/// This is deliberately not called a generated map. It is the exact tuple
+/// which selects and seeds that map, plus the active player setup consumed by
+/// start placement. Static map-style/tileset content is external to `.rcx`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InitialWorldgenInputs {
+    pub seed: u32,
+    pub map_style: u8,
+    pub map_size: u8,
+    pub map_edge_world_cells: Option<i32>,
+    pub players: u8,
+    pub game_rules: u8,
+    pub starting_town: u8,
+    pub scenario_type: u8,
+    pub active_slots: Vec<u8>,
+    pub active_who: Vec<u8>,
+    pub active_teams: Vec<u8>,
+    pub sources: WorldgenSourceSpans,
+}
+
+/// Inputs required by initial goody placement for which a recording supplies
+/// no serialized field at all.
+///
+/// `replay_bytes` is zero for every entry, not an unknown byte count: ordinary
+/// `.rcx` setup stores selectors and a seed, then expects retail to regenerate
+/// these runtime objects from installed static content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AbsentReplayItemInput {
+    pub name: &'static str,
+    pub replay_bytes: usize,
+    pub required_source: &'static str,
+}
+
+pub const ABSENT_REPLAY_ITEM_INPUTS: [AbsentReplayItemInput; 4] = [
+    AbsentReplayItemInput {
+        name: "selected_map_style",
+        replay_bytes: 0,
+        required_source: "ordered shipped map-style catalog and selected mapstyles/*.xml",
+    },
+    AbsentReplayItemInput {
+        name: "terrain_group_tables",
+        replay_bytes: 0,
+        required_source: "resolved tileset, TerrainGroups, fractal, and partition data",
+    },
+    AbsentReplayItemInput {
+        name: "generated_item_candidates",
+        replay_bytes: 0,
+        required_source: "generated WData/regions/starts/heights and goody placement schedule",
+    },
+    AbsentReplayItemInput {
+        name: "post_worldgen_rng",
+        replay_bytes: 0,
+        required_source: "main Random state after all preceding map-generation draws",
+    },
+];
+
+/// First fail-closed boundary reached while reconstructing initial items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialItemBoundary {
+    /// Scenario setup may carry custom dimensions/state outside the procedural
+    /// selector tuple. No generated scenario snapshot is present in `.rcx`.
+    CustomScenarioState { scenario_type: u8 },
+    /// The selector does not index the shipped seven-entry map-size table.
+    UnknownMapSize { map_size: u8 },
+    /// `Map::make` preserves prior RNG/world seed state for signed-negative
+    /// arguments; that prior state is not serialized by replay setup.
+    PriorSeedState { seed: u32 },
+    /// The replay's exact static Rules section could not be admitted.
+    StaticRulesUnavailable,
+    /// The normal supported path reaches the external content boundary. The
+    /// ordinal is exact; its ordered catalog entry and XML are not in `.rcx`.
+    MapStyleContentUnavailable { map_style: u8 },
+}
+
+impl InitialItemBoundary {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CustomScenarioState { .. } => "custom_scenario_state",
+            Self::UnknownMapSize { .. } => "unknown_map_size",
+            Self::PriorSeedState { .. } => "prior_seed_state",
+            Self::StaticRulesUnavailable => "static_rules",
+            Self::MapStyleContentUnavailable { .. } => "map_style_content",
+        }
+    }
+}
+
+/// Executable prefix of initial item reconstruction.
+///
+/// A plan proves every replay-carried scalar and identifies the first input
+/// which prevents `World::configure_items`/`place_goody` from being called.
+/// The harness stores and executes this plan; a blocked plan never installs an
+/// empty registry, because that would turn an absent producer into a false
+/// channel-10 agreement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InitialItemReconstruction {
+    pub inputs: InitialWorldgenInputs,
+    pub rules: Option<InitialRules>,
+    pub boundary: InitialItemBoundary,
+}
+
+/// Result of trying to attach initial items to the replay-derived terrain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialItemReconstructionError {
+    MapPrefixMismatch {
+        expected_xs: i32,
+        expected_ys: i32,
+        actual_xs: i32,
+        actual_ys: i32,
+        expected_seed: i32,
+        actual_seed: i32,
+    },
+    Blocked(InitialItemBoundary),
+}
+
+impl InitialItemReconstruction {
+    /// Number of distinct replay bytes which directly carry the scalar tuple
+    /// (4-byte seed plus six one-byte selectors/gates).
+    pub const fn scalar_source_bytes(&self) -> usize {
+        10
+    }
+
+    pub fn absent_replay_inputs(&self) -> &'static [AbsentReplayItemInput] {
+        &ABSENT_REPLAY_ITEM_INPUTS
+    }
+
+    /// Execute the admitted prefix against the exact terrain owner.
+    ///
+    /// Until the selected map-style content and upstream generator are wired,
+    /// success is intentionally impossible. The important executable contract
+    /// is that a shape/seed mismatch is distinguished from the named content
+    /// boundary and neither path mutates `sim` or installs its item runtime.
+    pub fn apply(
+        &self,
+        _sim: &mut don_sim::World,
+        map: &mut World,
+    ) -> Result<(), InitialItemReconstructionError> {
+        if !matches!(
+            self.boundary,
+            InitialItemBoundary::MapStyleContentUnavailable { .. }
+        ) {
+            return Err(InitialItemReconstructionError::Blocked(self.boundary));
+        }
+        let expected_edge = self.inputs.map_edge_world_cells.unwrap_or(0);
+        let expected_seed = self.inputs.seed as i32;
+        if (map.xs, map.ys, map.seed) != (expected_edge, expected_edge, expected_seed) {
+            return Err(InitialItemReconstructionError::MapPrefixMismatch {
+                expected_xs: expected_edge,
+                expected_ys: expected_edge,
+                actual_xs: map.xs,
+                actual_ys: map.ys,
+                expected_seed,
+                actual_seed: map.seed,
+            });
+        }
+        Err(InitialItemReconstructionError::Blocked(self.boundary))
+    }
+}
+
 impl InitialWorld {
     pub fn unsourced_walked_bytes(&self) -> u64 {
         self.checksum
@@ -281,6 +483,57 @@ impl InitialWorld {
 impl InitialState {
     pub fn active_players(&self) -> impl Iterator<Item = &InitialPlayer> {
         self.info.players.iter().filter(|p| p.present)
+    }
+
+    /// Project the exact replay-varying tuple consumed by procedural world
+    /// generation, retaining the source byte locations for mutation tests and
+    /// diagnostics.
+    pub fn worldgen_inputs(&self) -> InitialWorldgenInputs {
+        InitialWorldgenInputs {
+            seed: self.info.seed,
+            map_style: self.info.settings.map_style,
+            map_size: self.info.settings.map_size,
+            map_edge_world_cells: self.info.settings.map_edge_world_cells(),
+            players: self.info.settings.players,
+            game_rules: self.info.settings.game_rules,
+            starting_town: self.info.settings.starting_town,
+            scenario_type: self.info.settings.scenario_type,
+            active_slots: self.active_players().map(|p| p.slot).collect(),
+            active_who: self.active_players().map(|p| p.who).collect(),
+            active_teams: self.active_players().map(|p| p.team).collect(),
+            sources: self.worldgen_sources,
+        }
+    }
+
+    /// Build the executable initial-item reconstruction prefix.
+    ///
+    /// Ordinary shipped recordings reach `MapStyleContentUnavailable`: their
+    /// selector tuple and static Rules bytes are exact, but `.rcx` contains no
+    /// selected map-style/tileset runtime data and no generated-map snapshot.
+    pub fn reconstruct_items(&self) -> InitialItemReconstruction {
+        let inputs = self.worldgen_inputs();
+        let boundary = if inputs.scenario_type != 0 {
+            InitialItemBoundary::CustomScenarioState {
+                scenario_type: inputs.scenario_type,
+            }
+        } else if inputs.map_edge_world_cells.is_none() {
+            InitialItemBoundary::UnknownMapSize {
+                map_size: inputs.map_size,
+            }
+        } else if (inputs.seed as i32) < 0 {
+            InitialItemBoundary::PriorSeedState { seed: inputs.seed }
+        } else if self.rules.is_none() {
+            InitialItemBoundary::StaticRulesUnavailable
+        } else {
+            InitialItemBoundary::MapStyleContentUnavailable {
+                map_style: inputs.map_style,
+            }
+        };
+        InitialItemReconstruction {
+            inputs,
+            rules: self.rules,
+            boundary,
+        }
     }
 
     /// Apply only prefix-proven setup to the sim's exact world checksum owner.
@@ -705,11 +958,13 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
     r.tag(TAG_GAME_INFO, "GameInfo")?;
     let version_string = r.string()?;
     let version = r.u32()?;
+    let seed_source = ReplayByteSpan::new(r.p, 4);
     let seed = r.u32()?;
     let checksum_deep = r.i32()?;
     let checksum_window_size = r.i32()?;
     let checksum_failure_threshold = r.i32()?;
     let flags = r.u32()?;
+    let settings_offset = r.p;
     let settings = GameSettings::from_bytes(
         r.take(30)?
             .try_into()
@@ -717,13 +972,17 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
     );
 
     let mut players = Vec::with_capacity(8);
+    let mut player_flags = [ReplayByteSpan::new(0, 0); 8];
+    let mut player_bodies = [None; 8];
     for slot in 0..8u8 {
         r.tag(TAG_PLAYER, "Player")?;
+        player_flags[slot as usize] = ReplayByteSpan::new(r.p, 2);
         let flags = r.u16()?;
         if flags & 1 == 0 {
             players.push(InitialPlayer::absent(slot, flags));
             continue;
         }
+        player_bodies[slot as usize] = Some(ReplayByteSpan::new(r.p, 0x39));
         let body = r.take(0x39)?;
         let mut counters_and_frames = [0u32; 12];
         for (i, v) in counters_and_frames.iter_mut().enumerate() {
@@ -816,6 +1075,17 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
         },
         save_name,
         bytes_walked,
+        worldgen_sources: WorldgenSourceSpans {
+            seed: seed_source,
+            map_style: ReplayByteSpan::new(settings_offset + 1, 1),
+            map_size: ReplayByteSpan::new(settings_offset + 2, 1),
+            players: ReplayByteSpan::new(settings_offset + 3, 1),
+            game_rules: ReplayByteSpan::new(settings_offset + 6, 1),
+            starting_town: ReplayByteSpan::new(settings_offset + 8, 1),
+            scenario_type: ReplayByteSpan::new(settings_offset + 27, 1),
+            player_flags,
+            player_bodies,
+        },
         rules,
     })
 }
@@ -928,6 +1198,83 @@ mod tests {
         assert!(w.checksum.bytes > w.sourced_walked_bytes);
         assert!(w.unsourced_walked_bytes() > 100_000);
         assert_ne!(w.checksum.full, 1);
+    }
+
+    #[test]
+    fn item_prefix_retains_exact_source_bytes_and_is_mutation_sensitive() {
+        let b = fixture(16);
+        let s = parse_initial_state(&b).unwrap();
+        let inputs = s.worldgen_inputs();
+        let spans = inputs.sources;
+
+        assert_eq!(
+            &b[spans.seed.offset..spans.seed.end()],
+            &0x1234_5678u32.to_le_bytes()
+        );
+        assert_eq!(b[spans.map_style.offset], 12);
+        assert_eq!(b[spans.map_size.offset], 3);
+        assert_eq!(b[spans.players.offset], 2);
+        assert_eq!(spans.player_flags[0].bytes, 2);
+        assert_eq!(spans.player_bodies[0].unwrap().bytes, 0x39);
+        assert_eq!(spans.player_bodies[7], None);
+        assert_eq!(inputs.active_slots, [0, 1]);
+        assert_eq!(inputs.active_who, [0, 1]);
+        assert_eq!(inputs.active_teams, [1, 2]);
+
+        let mut mutant = b;
+        mutant[spans.map_style.offset] ^= 1;
+        let changed = parse_initial_state(&mutant).unwrap().worldgen_inputs();
+        assert_eq!(changed.map_style, inputs.map_style ^ 1);
+        assert_eq!(changed.sources.map_style, spans.map_style);
+        assert_eq!(changed.seed, inputs.seed);
+    }
+
+    #[test]
+    fn admitted_item_prefix_fails_closed_before_installing_an_empty_channel() {
+        let mut s = parse_initial_state(&fixture(16)).unwrap();
+        // Unit fixtures omit the megabyte shipped Rules body. Supplying the
+        // already independently admitted descriptor lets this test exercise
+        // the next, map-style-content boundary without weakening that parser.
+        s.rules = Some(InitialRules {
+            serialized_offset: s.bytes_walked,
+            serialized_bytes: SHIPPED_RULES_SERIALIZED_BYTES,
+            walked_bytes: RETAIL_WALKED_BYTES,
+            checksum: SHIPPED_RULES_CHANNEL,
+            after_types: RETAIL_AFTER_TYPES,
+            after_constants: RETAIL_AFTER_CONSTANTS,
+            after_balance: RETAIL_AFTER_BALANCE,
+        });
+        let plan = s.reconstruct_items();
+        assert_eq!(
+            plan.boundary,
+            InitialItemBoundary::MapStyleContentUnavailable { map_style: 12 }
+        );
+        assert_eq!(plan.scalar_source_bytes(), 10);
+        assert!(plan
+            .absent_replay_inputs()
+            .iter()
+            .all(|input| input.replay_bytes == 0));
+
+        let mut initial = s.reconstruct_world().unwrap();
+        let mut sim = don_sim::World::with_capacity(16, 1);
+        assert_eq!(
+            plan.apply(&mut sim, &mut initial.world),
+            Err(InitialItemReconstructionError::Blocked(plan.boundary))
+        );
+        assert_eq!(
+            sim.items_channel(),
+            Err(don_sim::item_runtime::ItemRuntimeError::Unavailable)
+        );
+
+        initial.world.xs += 1;
+        assert!(matches!(
+            plan.apply(&mut sim, &mut initial.world),
+            Err(InitialItemReconstructionError::MapPrefixMismatch { .. })
+        ));
+        assert_eq!(
+            sim.items_channel(),
+            Err(don_sim::item_runtime::ItemRuntimeError::Unavailable)
+        );
     }
 
     #[test]
