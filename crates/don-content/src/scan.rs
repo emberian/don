@@ -94,6 +94,39 @@ fn find_windows_dir(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> 
     Ok(Some(at))
 }
 
+/// Resolve one file with Windows' case-insensitive filename semantics, rejecting a pair such
+/// as `info.xml` + `INFO.XML` that cannot coexist in the retail filesystem.
+pub fn find_windows_file(root: &Path, wanted: &str) -> io::Result<Option<PathBuf>> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut matches = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(wanted)
+        {
+            matches.push(entry.path());
+        }
+    }
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} contains multiple files matching Windows filename {wanted:?}",
+                root.display()
+            ),
+        )),
+    }
+}
+
 fn collect(
     dir: &Path,
     prefix: &str,
@@ -246,6 +279,34 @@ mod tests {
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
         } else {
             assert!(result.is_ok());
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn windows_file_lookup_finds_case_variants_and_rejects_ambiguity() {
+        let root = tmpdir("file-case");
+        fs::write(root.join("INFO.XML"), b"x").unwrap();
+        assert_eq!(
+            find_windows_file(&root, "info.xml").unwrap(),
+            Some(root.join("INFO.XML"))
+        );
+        fs::write(root.join("info.xml"), b"y").unwrap();
+        let distinct = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("info.xml")
+            })
+            .count()
+            > 1;
+        if distinct {
+            assert_eq!(
+                find_windows_file(&root, "info.xml").unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
         }
         fs::remove_dir_all(&root).unwrap();
     }

@@ -7,3 +7,4 @@ description = "Retail-compatible content/mod resolution plus the Descent of Nati
 
 [dependencies]
 don-rules = { path = "../don-rules" }
+quick-xml = "0.38"

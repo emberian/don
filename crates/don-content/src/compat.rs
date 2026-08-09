@@ -173,8 +173,14 @@ pub static SUPPORT: &[SupportRule] = &[
     SupportRule {
         category: Some(ModCategory::Root),
         ext: "info.xml",
-        support: Support::ResolvedOnly,
-        reason: "dropdown-mod metadata is detected by filename; its XML is not parsed",
+        support: Support::Parsed,
+        reason: "dropdown metadata and measured structural gates are parsed; retail checksum generation and runtime reload are not reproduced",
+    },
+    SupportRule {
+        category: Some(ModCategory::Root),
+        ext: "don-overlay.xml",
+        support: Support::Parsed,
+        reason: "DoN overlay schema is parsed and composed against don-rules; the composed block is not yet registered into the sim bootstrap",
     },
     SupportRule {
         category: Some(ModCategory::Root),

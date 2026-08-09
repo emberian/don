@@ -1,0 +1,6 @@
+<INFO>
+  <FILE name="Workshop Choice" version="1" description="Explicit Workshop directory fixture" size="256" checksum="31"/>
+  <FILES complete="1" checksum="37">
+    <FILE path="data/rules.xml" size="28" directory="0"/>
+  </FILES>
+</INFO>

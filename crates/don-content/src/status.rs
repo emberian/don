@@ -155,6 +155,28 @@ pub fn parse(text: &str) -> Vec<StatusRow> {
     text.lines().filter_map(StatusRow::parse).collect()
 }
 
+/// The same retail-compatible parse, plus the lines a human should inspect. Retail silently
+/// skips malformed rows; the workflow preserves that behavior while refusing to hide it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParseReport {
+    pub rows: Vec<StatusRow>,
+    /// One-based line number and source text. Blank lines and the measured header are not
+    /// findings; every other non-row line is.
+    pub ignored: Vec<(usize, String)>,
+}
+
+pub fn parse_report(text: &str) -> ParseReport {
+    let mut out = ParseReport::default();
+    for (i, line) in text.lines().enumerate() {
+        if let Some(row) = StatusRow::parse(line) {
+            out.rows.push(row);
+        } else if !line.trim().is_empty() && !line.trim_start().starts_with("ID") {
+            out.ignored.push((i + 1, line.to_string()));
+        }
+    }
+    out
+}
+
 /// Render a whole file from a stack, in list order.
 pub fn render(stack: &ContentStack) -> String {
     let mut out = header_line();
@@ -256,6 +278,9 @@ mod tests {
         let rows = parse(&text);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "Good");
+        let detail = parse_report(&text);
+        assert_eq!(detail.rows, rows);
+        assert_eq!(detail.ignored, vec![(2, "garbage garbage".to_string())]);
     }
 
     #[test]

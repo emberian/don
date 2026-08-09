@@ -9,32 +9,39 @@ guest. Nothing here comes from community documentation. Nothing here is *verifie
 
 ## What a human can now do that they could not before
 
-1. **Point a tool at a folder of Rise of Nations mods and inspect the recovered loader
-   model** — which files each mod claims, which categories, which Steam Workshop tags the
-   recovered table assigns, and, per file, whether Descent of Nations can consume it. The
-   strict command rejects unresolved runtime behavior instead of presenting a synthetic scan
-   as live-retail certification:
+1. **Build a fail-closed activation plan from local mods and already-installed Workshop
+   directories** — which files each package claims, what `mod-status.txt` actually ordered,
+   which dropdown is selected, which files collide, and whether order came from evidence or
+   merely from the host filesystem. Workshop display names and directories are explicit; the
+   tool never invents Steam discovery or precedence:
 
    ```sh
    cargo run -p don-content --bin don-content -- scan  '/path/to/My Games/Rise of Nations/mods'
    cargo run -p don-content --bin don-content -- check '/path/to/My Games/Rise of Nations/mods'
-   cargo run -p don-content --bin don-content -- probe '/path/to/mods' data/rules.xml mapstyles/greatlakes.xml
+   cargo run -p don-content --bin don-content -- explain '/path/to/mods' \
+     --workshop 'Display Name=/installed/ugc/1234' --dropdown 'Display Name' \
+     --order 'Display Name,Local Rebalance' data/rules.xml mapstyles/greatlakes.xml
+   cargo run -p don-content --bin don-content -- overlay '/path/to/don-overlay.xml'
    cargo run -p don-content --bin don-content -- rules
    ```
 
-   `probe` answers the question that actually matters when a mod misbehaves — *which file
-   won?* — with retail's own precedence rule, not a guess.
+   `explain` answers the question that actually matters when a mod misbehaves — *which file
+   won, and why was every other package skipped?* If two packages are eligible and neither a
+   complete unique status order nor a complete user order exists, the answer is `UNRESOLVED`
+   and the command fails. `probe` remains an alias.
 
 2. **Know, precisely and citably, what a mod is allowed to replace.** The full 12-category
    table, the per-category recursion flags, the extension whitelist per category, and the
    21-name veto list are now data in the repo, generated from the binary by
    `crates/don-content/gen/gen_tables.py` rather than typed in.
 
-3. **Change one rule constant without shipping a whole `rules.xml`.** Retail cannot express
-   that; `don_content::overlay` can, with the field name checked against `don-rules`' 717
-   binder sites, the array arity checked, the value produced by the derived tokenizer rather
-   than by hand, and a per-write audit trail. A fidelity-mode stack refuses every deviating
-   layer by construction and can assert byte-identity to the shipped block.
+3. **Ship and preflight one-rule changes without replacing `rules.xml`.** Retail cannot
+   express that; `don-overlay.xml` can. It has a versioned XML schema, rejects unknown
+   elements/attributes, duplicate targets, unknown fields and bad indices, sends textual
+   values through the recovered per-field tokenizer, composes against the shipped block, and
+   prints a per-write audit. It is explicitly an improved-mode artifact and cannot claim
+   fidelity. Runtime registration of the composed block remains open, so compatibility calls
+   it `parsed`, never `consumed`.
 
 4. **Answer Ember's compatibility question without pretending that path resolution is
    execution.** For any mod, `don-content` reports `N of M files consumed`, names the missing
@@ -295,6 +302,28 @@ ruleset at runtime: `GameMod::closeExistingData` `0x005AA170` frees the type arr
 — we can restart the world — but it is the reason the engine's rule state is torn down as a
 unit and not patched in place.
 
+The metadata vocabulary and structural gates are now measured, not inferred. On 2026-08-09,
+with the supported process paused at PID 12324, the live `StringTable` behind static pointer
+`0x00C06378` yielded the exact keys used by `GameMod::init`:
+
+| role | key |
+|---|---|
+| document / sections | `\info.xml`, `INFO`, `FILES`, `FILE` |
+| file-list state | `complete`, `checksum`, `path`, `directory` |
+| direct metadata `FILE` | `name`, `version`, `size`, `checksum`, `description` |
+
+The decompiled branches establish these results:
+
+* no `INFO` or no direct metadata `FILE` returns `0x20`;
+* no `FILES` calls `GameMod::generate_file_list` `0x005A9030` and reopens the result;
+* `FILES complete="0"` returns `0x20`; a missing value uses the getter's `-1` default;
+* missing metadata strings/integers use empty/`-1` defaults rather than rejecting.
+
+`don_content::info` implements that structural preflight with a real XML parser. It never
+calls the generator: the exact per-file checksum function is still unknown, so scan/check
+reports “retail would generate FILES” and activation stays blocked instead of rewriting the
+author's package with an approximation.
+
 ### 1.9 Multiplayer: the engine already treats mods as sim-critical
 
 `GameMod::compute_checksum` `0x005A94A0` sums a per-file checksum over
@@ -372,11 +401,15 @@ friends. That is the obvious next lane and it is not done.
 
 ## 3. Can a retail mod load into our engine unmodified?
 
-**Core path resolution: reproduced. End-to-end mod loading: not certified.** The resolver rule
-is small and is reproduced from the engine's tables and disassembly. Discovery still depends
-on filesystem enumeration and on `SkipForbiddenFiles`, whose internal filter has not been
-traced, and no real Workshop package has yet been exercised. Nothing about resolving an
-already-present directory needs Steam; subscribing and certifying a real package are separate.
+**Core path resolution: reproduced. Activation planning: fail-closed. End-to-end mod loading:
+not certified.** The resolver rule is small and is reproduced from the engine's tables and
+disassembly. Discovery still depends on filesystem enumeration and on `SkipForbiddenFiles`,
+whose internal attribute filter has not been traced, and no real Workshop package has yet been
+exercised. `workflow::ActivationPlan` therefore treats a one-package stack and disjoint active
+file sets as order-independent; accepts a complete, unique installed-package status order;
+accepts a complete user-authored independent-edition order; and refuses every unresolved file
+collision. An installed Workshop directory is accepted only with its explicit display name and
+path. Nothing about resolving that directory needs Steam; subscribing and certifying it do.
 
 **Content consumption: per file, not per mod.** That is the honest framing, and `don-content`
 reports it as a number. Current classification:
@@ -388,7 +421,8 @@ reports it as a number. Current classification:
 | `replays\*.rcx` | **consumed** | `don-replay` decodes `.rcx` |
 | `data\*.bhs`, `ai\scripts\*.bhs` | **parsed** | `don-bhs` / `don-bhs-cc` front end exists; `RunTimeEnv::run_script` `0x0043D0E0` is not driven by our tick |
 | `mapstyles\*.xml` | resolved-only, **rejected** | neither the XML parser nor map-generation consumer is wired |
-| `info.xml` | resolved-only, **rejected** | dropdown status is detected by filename; the metadata XML is not parsed |
+| `info.xml` | parsed, **rejected until runtime wiring** | measured `INFO`/`FILE`/`FILES` gates and metadata are checked; checksum generation and ruleset reload remain unported |
+| `don-overlay.xml` | parsed, **rejected until runtime wiring** | versioned independent-edition schema composes against the shipped Rules block with a full audit |
 | `tribes\*.{4,7,9,…}` | resolved-only | needs the `StringTable` at `[0x00C06378]` |
 | `scenario\*` | resolved-only | `ScenarioData::walk_data` `0x00997AD0` has no runtime producer |
 | `*.txt` at root, `.dtd`, `.sps`, `.xsd`, `.bho` | resolved-only | unread, schema-only, or a precompiled form we compile from source instead |
@@ -537,13 +571,16 @@ Recorded so they are visible rather than discovered.
 | `crates/don-content/src/vfs.rs` | retail discovery, classification, precedence; `ContentStack::resolve` |
 | `crates/don-content/src/scan.rs` | directory → `ModPackage`, honouring per-category recursion |
 | `crates/don-content/src/status.rs` | `mod-status.txt` reader/writer in retail's fixed-width format |
+| `crates/don-content/src/info.rs` | measured dropdown metadata/gate parser; no approximate manifest writer |
+| `crates/don-content/src/workflow.rs` | local + explicit Workshop discovery, order provenance, activation, collision/explain trace |
 | `crates/don-content/src/overlay.rs` | the five-layer stack, validation, fidelity lock, audit |
+| `crates/don-content/src/overlay_file.rs` | versioned `don-overlay.xml` parser and composition preflight |
 | `crates/don-content/src/extend.rs` | `TypeSpace`, `BalanceOverlay`, `HookPoint` |
 | `crates/don-content/src/compat.rs` | per-file support table and report |
 | `crates/don-content/src/generated.rs` | tables captured from the binary — do not edit |
 | `crates/don-content/gen/gen_tables.py` | the generator; re-run it, do not hand-edit |
-| `crates/don-content/src/bin/don-content.rs` | `scan` / `probe` / `rules` |
-| `crates/don-content/tests/shipped_layout.rs` | cross-checks against the shipped tree and the retail install |
+| `crates/don-content/src/bin/don-content.rs` | `scan` / `check` / `explain` / `overlay` / `rules` |
+| `crates/don-content/tests/{shipped_layout,workflow_fixtures}.rs` | shipped/live cross-checks plus committed synthetic activation trees |
 
 Regenerate the tables:
 

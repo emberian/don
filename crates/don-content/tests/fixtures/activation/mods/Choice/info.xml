@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<INFO>
+  <FILE name="Choice" version="1" description="Synthetic dropdown fixture" size="128" checksum="17"/>
+  <FILES complete="1" checksum="23">
+    <FILE path="data/rules.xml" size="25" directory="0"/>
+  </FILES>
+</INFO>

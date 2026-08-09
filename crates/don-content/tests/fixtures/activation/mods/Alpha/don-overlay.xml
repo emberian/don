@@ -1,0 +1,3 @@
+<DON_OVERLAY version="1">
+  <PATCH field="peasant_rate" value="1.25" note="synthetic fixture: alpha balance layer"/>
+</DON_OVERLAY>
