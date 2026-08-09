@@ -46,6 +46,7 @@
 
 pub mod check_all;
 pub mod checksum;
+pub mod continent;
 pub mod harness;
 pub mod image;
 pub mod initial;
@@ -64,6 +65,10 @@ mod wire_gen;
 
 pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
+pub use continent::{
+    execute_continent_prefix, ContinentError, ContinentReceipt, ContinentStop, LandDistanceCall,
+    RegionSeedCall,
+};
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use initial::{
     InitialGame, InitialGameInfo, InitialItemBoundary, InitialItemReconstruction,

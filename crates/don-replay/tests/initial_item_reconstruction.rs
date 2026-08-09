@@ -132,11 +132,25 @@ fn supported_replay_admits_mediterranean_content_and_reaches_the_generator_bound
     );
 
     let sim = WorldSim::from_replay(&rep);
-    assert_eq!(sim.initial_items.as_ref(), Some(&plan));
+    let executed = sim.initial_items.as_ref().unwrap();
+    assert_eq!(executed.inputs, plan.inputs);
+    assert_eq!(executed.style, plan.style);
+    assert_eq!(
+        executed.boundary.name(),
+        "map_region_seed",
+        "continent execution error: {:?}",
+        sim.initial_item_error
+    );
+    let continent = sim
+        .initial_continent
+        .as_ref()
+        .expect("Mediterranean must execute to its first make_region call");
+    assert_eq!(continent.map_style, 12);
+    assert_eq!(continent.direct_rng_sites.len(), 5);
     assert_eq!(sim.initial_item_style_error, None);
     assert_eq!(
         sim.initial_item_error,
-        Some(InitialItemReconstructionError::Blocked(plan.boundary))
+        Some(InitialItemReconstructionError::Blocked(executed.boundary))
     );
     assert_eq!(
         sim.world.items_channel(),
@@ -204,7 +218,16 @@ fn checksum_bearing_east_indies_replay_closes_the_last_corpus_style_hole() {
     );
     let sim = WorldSim::from_replay(&rep);
     assert_eq!(sim.initial_item_style_error, None);
-    assert_eq!(sim.initial_items.as_ref().unwrap().boundary, plan.boundary);
+    assert_eq!(
+        sim.initial_items.as_ref().unwrap().boundary.name(),
+        "map_region_seed",
+        "continent execution error: {:?}",
+        sim.initial_item_error
+    );
+    let continent = sim.initial_continent.as_ref().unwrap();
+    assert_eq!(continent.map_style, 18);
+    assert_eq!(continent.starts_added, 1);
+    assert_ne!(sim.initial_items.as_ref().unwrap().boundary, plan.boundary);
     assert_eq!(
         sim.world.items_channel(),
         Err(ItemRuntimeError::Unavailable)

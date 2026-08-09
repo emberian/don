@@ -119,6 +119,10 @@ pub struct RunResult {
     /// Proven top-level direct RNG call sites. This is not the dynamic draw
     /// count; indirect callees and retry loops remain the next generator work.
     pub initial_item_known_direct_rng_sites: Vec<u32>,
+    /// Executed style prefix and exact RNG state at its first unavailable
+    /// primitive. Unlike the static site inventory, this is a dynamic draw
+    /// schedule for the replay's concrete branch.
+    pub initial_continent: Option<crate::continent::ContinentReceipt>,
     pub initial_item_style_error: Option<String>,
     /// Distinct `.rcx` bytes carrying the known scalar worldgen tuple.
     pub initial_item_scalar_source_bytes: usize,
@@ -281,6 +285,9 @@ pub struct WorldSim {
     pub initial_world: Option<crate::initial::InitialWorld>,
     /// Exact replay-carried prefix and first absent input for initial goodies.
     pub initial_items: Option<crate::initial::InitialItemReconstruction>,
+    /// Executed continent-prefix receipt, including exact RNG state and the
+    /// first unported geometry call.
+    pub initial_continent: Option<crate::continent::ContinentReceipt>,
     /// Result of executing that prefix against `initial_world`. A blocked plan
     /// must leave the item channel uninstalled.
     pub initial_item_error: Option<crate::initial::InitialItemReconstructionError>,
@@ -308,6 +315,7 @@ impl WorldSim {
             seed_units: 0,
             initial_world: None,
             initial_items: None,
+            initial_continent: None,
             initial_item_error: None,
             initial_item_style_error: None,
             initial_rules: None,
@@ -319,12 +327,17 @@ impl WorldSim {
     pub fn from_replay(rep: &Replay) -> WorldSim {
         let mut s = WorldSim::new();
         s.initial_world = rep.initial.reconstruct_world();
-        let (items, style_error) = initial_items_for_replay(rep);
+        let (items, style_error, continent, execution_error) =
+            initial_items_for_replay(rep, s.initial_world.as_mut());
         s.initial_items = Some(items);
+        s.initial_continent = continent;
         s.initial_item_style_error = style_error;
         s.initial_rules = rep.initial.rules;
-        if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
-            s.initial_item_error = items.apply(&mut s.world, &mut map.world).err();
+        s.initial_item_error = execution_error;
+        if s.initial_item_error.is_none() {
+            if let (Some(items), Some(map)) = (&s.initial_items, &mut s.initial_world) {
+                s.initial_item_error = items.apply(&mut s.world, &mut map.world).err();
+            }
         }
         s.populate_state();
         s
@@ -390,7 +403,9 @@ impl Simulation for WorldSim {
 
 /// Run one recording through a simulation and produce the divergence profile.
 pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32) -> RunResult {
-    let (initial_items, initial_item_style_error) = initial_items_for_replay(rep);
+    let mut report_world = rep.initial.reconstruct_world();
+    let (initial_items, initial_item_style_error, initial_continent, _execution_error) =
+        initial_items_for_replay(rep, report_world.as_mut());
     let style = initial_items.style.as_ref();
     let mut res = RunResult {
         file: rep
@@ -423,6 +438,7 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_item_known_direct_rng_sites: style
             .map(MapStyleStaticData::known_direct_rng_sites)
             .unwrap_or_default(),
+        initial_continent,
         initial_item_style_error,
         initial_item_scalar_source_bytes: initial_items.scalar_source_bytes(),
         initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
@@ -546,7 +562,13 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
 
 fn initial_items_for_replay(
     rep: &Replay,
-) -> (crate::initial::InitialItemReconstruction, Option<String>) {
+    mut map: Option<&mut crate::initial::InitialWorld>,
+) -> (
+    crate::initial::InitialItemReconstruction,
+    Option<String>,
+    Option<crate::continent::ContinentReceipt>,
+    Option<crate::initial::InitialItemReconstructionError>,
+) {
     use crate::map_style::{ron_data_root_for_replay, MapStyleStaticData};
 
     let base = rep.initial.reconstruct_items();
@@ -554,20 +576,40 @@ fn initial_items_for_replay(
         base.boundary,
         crate::initial::InitialItemBoundary::MapStyleContentUnavailable { .. }
     ) {
-        return (base, None);
+        return (base, None, None, None);
     }
     let Some(root) = ron_data_root_for_replay(&rep.path) else {
         return (
             base,
             Some("replay path has no owning ron-data/rules.xml ancestor".into()),
+            None,
+            None,
         );
     };
     match MapStyleStaticData::load_from_ron_data(&root, base.inputs.map_style) {
         Ok(style) => match rep.initial.reconstruct_items_with_style(style) {
-            Ok(plan) => (plan, None),
-            Err(e) => (base, Some(format!("static-style admission failed: {e:?}"))),
+            Ok(mut plan) => {
+                let mut receipt = None;
+                let mut execution_error = None;
+                if let Some(map) = map.as_deref_mut() {
+                    match plan.advance_continent_prefix(&mut map.world) {
+                        Ok(done) => {
+                            map.checksum = map.world.checksum_sections();
+                            receipt = Some(done);
+                        }
+                        Err(error) => execution_error = Some(error),
+                    }
+                }
+                (plan, None, receipt, execution_error)
+            }
+            Err(e) => (
+                base,
+                Some(format!("static-style admission failed: {e:?}")),
+                None,
+                None,
+            ),
         },
-        Err(e) => (base, Some(e.to_string())),
+        Err(e) => (base, Some(e.to_string()), None, None),
     }
 }
 

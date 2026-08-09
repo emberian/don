@@ -395,6 +395,22 @@ pub enum InitialItemBoundary {
         map_style: u8,
         make_continents_va: u32,
     },
+    /// The style prefix reached a concrete, unported geometry helper. The
+    /// boundary string is stable report vocabulary, while the two addresses
+    /// distinguish the virtual dispatch from its first unavailable callee.
+    MapContinentPrimitiveUnavailable {
+        boundary: &'static str,
+        map_style: u8,
+        make_continents_va: u32,
+        primitive_va: u32,
+    },
+    /// The style virtual completed. The common Map::make region/coast sequence
+    /// is now the first unexecuted stage.
+    MapPostContinentUnavailable {
+        map_style: u8,
+        make_continents_va: u32,
+        next_va: u32,
+    },
 }
 
 impl InitialItemBoundary {
@@ -406,6 +422,8 @@ impl InitialItemBoundary {
             Self::StaticRulesUnavailable => "static_rules",
             Self::MapStyleContentUnavailable { .. } => "map_style_content",
             Self::MapContinentGenerationUnavailable { .. } => "map_continent_generation",
+            Self::MapContinentPrimitiveUnavailable { boundary, .. } => boundary,
+            Self::MapPostContinentUnavailable { .. } => "map_post_continent_regions",
         }
     }
 }
@@ -428,7 +446,7 @@ pub struct InitialItemReconstruction {
 }
 
 /// Result of trying to attach initial items to the replay-derived terrain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InitialItemReconstructionError {
     StyleSelectorMismatch {
         replay_map_style: u8,
@@ -445,6 +463,7 @@ pub enum InitialItemReconstructionError {
         expected_seed: i32,
         actual_seed: i32,
     },
+    ContinentPrefix(crate::continent::ContinentError),
     Blocked(InitialItemBoundary),
 }
 
@@ -474,6 +493,8 @@ impl InitialItemReconstruction {
             self.boundary,
             InitialItemBoundary::MapStyleContentUnavailable { .. }
                 | InitialItemBoundary::MapContinentGenerationUnavailable { .. }
+                | InitialItemBoundary::MapContinentPrimitiveUnavailable { .. }
+                | InitialItemBoundary::MapPostContinentUnavailable { .. }
         ) {
             return Err(InitialItemReconstructionError::Blocked(self.boundary));
         }
@@ -490,6 +511,62 @@ impl InitialItemReconstruction {
             });
         }
         Err(InitialItemReconstructionError::Blocked(self.boundary))
+    }
+
+    /// Execute the admitted style virtual up to its first unported primitive,
+    /// then replace the generic continent boundary with that exact stop.
+    pub fn advance_continent_prefix(
+        &mut self,
+        map: &mut World,
+    ) -> Result<crate::continent::ContinentReceipt, InitialItemReconstructionError> {
+        if !matches!(
+            self.boundary,
+            InitialItemBoundary::MapContinentGenerationUnavailable { .. }
+        ) {
+            return Err(InitialItemReconstructionError::Blocked(self.boundary));
+        }
+        let style =
+            self.style
+                .as_ref()
+                .ok_or(InitialItemReconstructionError::StyleIdentityMismatch {
+                    map_style: self.inputs.map_style,
+                })?;
+        let receipt = crate::continent::execute_continent_prefix(&self.inputs, style, map)
+            .map_err(InitialItemReconstructionError::ContinentPrefix)?;
+        self.boundary = match &receipt.stop {
+            crate::continent::ContinentStop::HookComplete { next_va } => {
+                InitialItemBoundary::MapPostContinentUnavailable {
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    next_va: *next_va,
+                }
+            }
+            crate::continent::ContinentStop::MakeRegion { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_region_seed",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+            crate::continent::ContinentStop::LandDistance { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_land_distance",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+            crate::continent::ContinentStop::FillCont { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_team_continent_partition",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+        };
+        Ok(receipt)
     }
 }
 

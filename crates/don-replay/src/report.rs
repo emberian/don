@@ -196,8 +196,39 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .map(|va| format!("\"0x{va:08x}\""))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let executed_sites = r
+                .initial_continent
+                .as_ref()
+                .map(|receipt| {
+                    receipt
+                        .direct_rng_sites
+                        .iter()
+                        .map(|va| format!("\"0x{va:08x}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let dynamic_draw_count = r
+                .initial_continent
+                .as_ref()
+                .map(|receipt| receipt.direct_rng_sites.len().to_string())
+                .unwrap_or_else(|| "null".into());
+            let rng_state = r
+                .initial_continent
+                .as_ref()
+                .map(|receipt| {
+                    format!(
+                        "{{ \"initial\": \"0x{:08x}\", \"orientation\": {}, \"at_boundary\": \"0x{:08x}\", \"retry_attempt\": {}, \"starts_added\": {} }}",
+                        receipt.rng_initial as u32,
+                        receipt.orientation,
+                        receipt.rng_final as u32,
+                        receipt.retry_attempt,
+                        receipt.starts_added,
+                    )
+                })
+                .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"key\": \"{}\", \"filename\": {}, \"terrain_groups\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"goodies\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"known_direct_rng_sites\": [{}], \"dynamic_draw_count\": null }}",
+                "{{ \"key\": \"{}\", \"filename\": {}, \"terrain_groups\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"goodies\": {{ \"default\": {}, \"selected\": {}, \"selected_section_present\": {}, \"effective\": {} }}, \"known_direct_rng_sites\": [{}], \"executed_direct_rng_sites\": [{}], \"dynamic_draw_count\": {}, \"continent_rng\": {} }}",
                 esc(key),
                 r.initial_item_style_filename
                     .as_ref()
@@ -212,6 +243,9 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 r.initial_item_selected_goodies_present,
                 r.initial_item_effective_goodies,
                 sites,
+                executed_sites,
+                dynamic_draw_count,
+                rng_state,
             )
         } else {
             "null".into()
