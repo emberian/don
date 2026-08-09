@@ -267,10 +267,12 @@ the group-patrol path. The agreement test drives the bridge, checks all four rou
 branches, and exercises the env mask/application path with shipped type records. A second
 agreement test covers the recovered patrol exceptions: ground `QUEUE_FIRST` replaces,
 compatible `QUEUE_LAST` extends the active dynamic waypoint arrays, the true-plane
-installer replaces on every incompatible case, and the executors retain their order while
-inserting `ATTACK_TO` / `STRAFE` at the front. The remaining readiness blocker is the
-adjacent EnvWorld air host (`Unit::do_air_physics` and opportunistic target searches), not
-command routing or queue identity.
+installer replaces on every incompatible case, and the recovered executors retain their
+order while inserting `ATTACK_TO` / `STRAFE` at the front. Ordinary EnvWorld frames now
+leave AIR_PATROL stationary; only the mandatory, no-default `AirPatrolHost` may cross the
+post-physics transition. The three remaining readiness blockers are the adjacent
+`Unit::do_air_physics`, mod-16 air/bomber search, and mod-32 building search hosts—not
+command routing, queue identity, or a silent straight-line/empty-search substitute.
 
 **(c) Opcode 34 `HOTKEY` is not a selection command.** `don-env` classifies it as SELECTION
 alongside opcode 0. Measured, only opcode 0 writes `CommandPackage::group`;

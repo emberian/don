@@ -1321,9 +1321,7 @@ pub trait WorkWorld: UnitWorld {
         _search_x: i32,
         _search_y: i32,
         _search: AirPatrolSearch,
-    ) -> Option<AirPatrolTarget> {
-        None
-    }
+    ) -> Option<AirPatrolTarget>;
 
     /// The mod-32 `ObjectsData::find_building_at(..., SearchIndexBH(3), actor.who, 0, 0)`
     /// boundary, including the building type's owner-target bit in the returned record.
@@ -1333,9 +1331,7 @@ pub trait WorkWorld: UnitWorld {
         _order: &AirPatrolOrder,
         _waypoint_x: i32,
         _waypoint_y: i32,
-    ) -> Option<AirPatrolTarget> {
-        None
-    }
+    ) -> Option<AirPatrolTarget>;
 
     /// `Group::action_move_to(x,y,QUEUE_FIRST,0,0,ATTACK_TO,0,-1,-1,0)` from the grouped
     /// arm of `Unit::do_patrol`.

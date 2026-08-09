@@ -311,10 +311,82 @@ fn env_patrol_routing_uses_retail_is_plane() {
 #[test]
 fn env_patrol_queue_and_executor_preserve_retail_transitions() {
     use don_env::spec::EnvConfig;
-    use don_env::state::{EnvWorld, Rules};
+    use don_env::state::{AirPatrolHost, AirPatrolHostError, EnvWorld, Rules};
     use don_sim::command::QueuePos;
     use don_sim::order::OrderIndex;
-    use don_sim::systems::order_dispatch::PatrolPayload;
+    use don_sim::systems::order_dispatch::{AirPatrolSearch, PatrolPayload};
+    use don_sim::systems::patrol::{AirPatrolOrder, AirPatrolTarget};
+
+    struct ExplicitTestAirframe {
+        ready: bool,
+    }
+
+    impl AirPatrolHost for ExplicitTestAirframe {
+        fn preflight(&mut self, _world: &EnvWorld) -> Result<(), AirPatrolHostError> {
+            if self.ready {
+                Ok(())
+            } else {
+                Err(AirPatrolHostError::Unavailable(
+                    don_env::state::AirPatrolHostBoundary::AirPhysics,
+                ))
+            }
+        }
+
+        fn think_bird(
+            &mut self,
+            _world: &mut EnvWorld,
+            _row: usize,
+            _order: &mut AirPatrolOrder,
+        ) -> Result<(), AirPatrolHostError> {
+            Ok(())
+        }
+
+        fn do_air_physics(
+            &mut self,
+            world: &mut EnvWorld,
+            row: usize,
+            _order: &mut AirPatrolOrder,
+            target_x: i32,
+            target_y: i32,
+        ) -> Result<bool, AirPatrolHostError> {
+            // This is an explicit test double, not a production movement fallback.
+            world.sim.set_pos(row, target_x, target_y);
+            Ok(true)
+        }
+
+        fn actor_is_type(
+            &mut self,
+            _world: &EnvWorld,
+            _row: usize,
+            _type_id: i32,
+            _strict: bool,
+        ) -> Result<bool, AirPatrolHostError> {
+            Ok(false)
+        }
+
+        fn find_unit_target(
+            &mut self,
+            _world: &EnvWorld,
+            _row: usize,
+            _order: &AirPatrolOrder,
+            _search_x: i32,
+            _search_y: i32,
+            _search: AirPatrolSearch,
+        ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError> {
+            Ok(None)
+        }
+
+        fn find_building_target(
+            &mut self,
+            _world: &EnvWorld,
+            _row: usize,
+            _order: &AirPatrolOrder,
+            _search_x: i32,
+            _search_y: i32,
+        ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError> {
+            Ok(None)
+        }
+    }
 
     let (rules, caps_real, _) = Rules::load(None, None);
     if !caps_real {
@@ -368,13 +440,41 @@ fn env_patrol_queue_and_executor_preserve_retail_transitions() {
     };
     assert_eq!(route.points.len(), 2);
 
+    let before = (w.sim.pos_x()[arow], w.sim.pos_y()[arow]);
     w.frame();
     let PatrolPayload::Air(route) = &w.orders[arow].front().unwrap().patrol_payload else {
         unreachable!()
     };
     assert_eq!(
+        route.points.waypoint, 0,
+        "AIR_PATROL must not advance through the straight-line movement scaffold"
+    );
+    assert_eq!((w.sim.pos_x()[arow], w.sim.pos_y()[arow]), before);
+    assert!(
+        w.unimplemented.unit[g::uv::PATROL] > 0,
+        "the unavailable air host must remain observable"
+    );
+
+    let frame_before_preflight = w.sim.frame;
+    assert_eq!(
+        w.frame_with_air_patrol_host(&mut ExplicitTestAirframe { ready: false }),
+        Err(AirPatrolHostError::Unavailable(
+            don_env::state::AirPatrolHostBoundary::AirPhysics,
+        ))
+    );
+    assert_eq!(
+        w.sim.frame, frame_before_preflight,
+        "preflight must reject before the owner-slot scheduler mutates the frame"
+    );
+
+    w.frame_with_air_patrol_host(&mut ExplicitTestAirframe { ready: true })
+        .unwrap();
+    let PatrolPayload::Air(route) = &w.orders[arow].front().unwrap().patrol_payload else {
+        unreachable!()
+    };
+    assert_eq!(
         route.points.waypoint, 1,
-        "post-physics AIR_PATROL advances to its queued waypoint"
+        "the recovered post-physics transition advances only behind an explicit host"
     );
 }
 

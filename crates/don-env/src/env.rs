@@ -234,7 +234,7 @@ impl VecEnv {
         ];
         let scaffold = [
             "movement: straight-line integer approach, NOT Unit::move_step / PathFinder::astar_path",
-            "patrol: exact AIR_PATROL/GROUP_PATROL dynamic queue ownership and executor transitions are wired; Unit::do_air_physics and patrol target-search remain explicit host gaps",
+            "patrol: exact AIR_PATROL/GROUP_PATROL queue and local transitions are wired; AIR_PATROL is stationary unless a mandatory host supplies Unit::do_air_physics plus the mod-16/mod-32 target searches",
             "pathfinding: absent",
             "gathering / economy rates: absent, base_rate is always 0",
             "build queue timing: absent, QueueUp and Build complete instantly",

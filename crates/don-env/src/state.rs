@@ -19,10 +19,13 @@ use crate::typecaps::{TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE};
 use don_sim::command::QueuePos;
 use don_sim::order::OrderIndex;
 use don_sim::systems::order_dispatch::{
-    install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, PatrolPayload,
-    UnitWork,
+    install_air_patrol, install_group_patrol, AirPatrolSearch, OrderQueue, OrderRec, PatrolInstall,
+    PatrolPayload, UnitWork,
 };
-use don_sim::systems::patrol::{self, AirPatrolAction, AirPatrolAfterPhysics, GroundPatrolAction};
+use don_sim::systems::patrol::{
+    self, AirPatrolAction, AirPatrolAfterPhysics, AirPatrolOrder, AirPatrolTarget,
+    GroundPatrolAction,
+};
 use don_sim::world::SUBTILE;
 use don_sim::{Handle, World};
 use std::sync::Arc;
@@ -237,6 +240,85 @@ impl PlayerState {
 pub struct Unimplemented {
     pub unit: Vec<u64>,
     pub player: Vec<u64>,
+}
+
+/// One adjacent retail boundary required before an AIR_PATROL executor can advance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPatrolHostBoundary {
+    AirPhysics,
+    UnitTargetSearch,
+    BuildingTargetSearch,
+    AnimalThinkBird,
+    TypeIdentity,
+}
+
+/// Fail-closed error from an Arena-independent RL air-patrol host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPatrolHostError {
+    /// The host has not recovered this retail transaction.
+    Unavailable(AirPatrolHostBoundary),
+    /// A supposedly available host rejected incoherent runtime state.
+    InvalidState(&'static str),
+}
+
+/// Exact host seam around `Unit::do_air_patrol`'s recovered order transition.
+///
+/// There are intentionally no default methods. In particular, a host cannot inherit
+/// straight-line physics or an always-empty target search and call the executor complete.
+/// The ordinary [`EnvWorld::frame`] supplies no host and leaves AIR_PATROL stationary;
+/// [`EnvWorld::frame_with_air_patrol_host`] is the only advancing entrypoint.
+pub trait AirPatrolHost {
+    /// Validate all host capabilities before the owner-slot scheduler mutates the frame.
+    fn preflight(&mut self, world: &EnvWorld) -> Result<(), AirPatrolHostError>;
+
+    /// Animal virtual override at the head of `Unit::do_air_patrol`.
+    fn think_bird(
+        &mut self,
+        world: &mut EnvWorld,
+        row: usize,
+        order: &mut AirPatrolOrder,
+    ) -> Result<(), AirPatrolHostError>;
+
+    /// Complete `Unit::do_air_physics` transaction. The host mutates every live airframe
+    /// field it owns in `world`; `false` stops the patrol executor for this frame.
+    fn do_air_physics(
+        &mut self,
+        world: &mut EnvWorld,
+        row: usize,
+        order: &mut AirPatrolOrder,
+        target_x: i32,
+        target_y: i32,
+    ) -> Result<bool, AirPatrolHostError>;
+
+    /// Retail virtual type query, including upgrade-line membership.
+    fn actor_is_type(
+        &mut self,
+        world: &EnvWorld,
+        row: usize,
+        type_id: i32,
+        strict: bool,
+    ) -> Result<bool, AirPatrolHostError>;
+
+    /// Complete mod-16 air/bomber primary search and option-controlled fallback.
+    fn find_unit_target(
+        &mut self,
+        world: &EnvWorld,
+        row: usize,
+        order: &AirPatrolOrder,
+        search_x: i32,
+        search_y: i32,
+        search: AirPatrolSearch,
+    ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError>;
+
+    /// Complete mod-32 building spatial scan and owner-target-bit query.
+    fn find_building_target(
+        &mut self,
+        world: &EnvWorld,
+        row: usize,
+        order: &AirPatrolOrder,
+        search_x: i32,
+        search_y: i32,
+    ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError>;
 }
 
 /// One environment instance.
@@ -688,18 +770,41 @@ impl EnvWorld {
     /// scheduler diverges inside one tick, so the rotation is reproduced here even though
     /// the per-object work below is scaffolding.
     pub fn frame(&mut self) {
+        self.frame_inner(None)
+            .expect("a frame without an air-patrol host cannot call one");
+    }
+
+    /// Advance one frame with every AIR_PATROL host transaction explicit. Preflight runs
+    /// before the scheduler, so a known missing boundary cannot partially mutate a frame.
+    pub fn frame_with_air_patrol_host(
+        &mut self,
+        host: &mut dyn AirPatrolHost,
+    ) -> Result<(), AirPatrolHostError> {
+        host.preflight(self)?;
+        self.frame_inner(Some(host))
+    }
+
+    fn frame_inner(
+        &mut self,
+        mut air_host: Option<&mut dyn AirPatrolHost>,
+    ) -> Result<(), AirPatrolHostError> {
         let f = self.sim.frame as usize;
         for i in 0..g::NUM_OWNER_SLOTS {
             let slot = ((f + i) % g::NUM_OWNER_SLOTS) as u8;
-            self.process_slot(slot);
+            self.process_slot(slot, &mut air_host)?;
         }
         don_sim::simd::tick_down(self.sim.cooldown_mut());
         self.sim.frame += 1;
         self.reap();
         self.recompute_scores();
+        Ok(())
     }
 
-    fn process_slot(&mut self, slot: u8) {
+    fn process_slot(
+        &mut self,
+        slot: u8,
+        air_host: &mut Option<&mut dyn AirPatrolHost>,
+    ) -> Result<(), AirPatrolHostError> {
         let n = self.sim.live_count() as usize;
         for row in 0..n {
             if self.sim.owner()[row] != slot as i8 {
@@ -711,10 +816,19 @@ impl EnvWorld {
                 }
                 x if x == g::OrderIndex::Attack as u8 => self.advance_attack(row),
                 x if x == g::OrderIndex::GroupPatrol as u8 => self.advance_group_patrol(row),
-                x if x == g::OrderIndex::AirPatrol as u8 => self.advance_air_patrol(row),
+                x if x == g::OrderIndex::AirPatrol as u8 => {
+                    if let Some(host) = air_host.as_deref_mut() {
+                        self.advance_air_patrol(row, host)?;
+                    } else {
+                        // Fail closed: retain the exact order body without crossing the
+                        // environment's explicitly approximate straight-line mover.
+                        self.unimplemented.unit[g::uv::PATROL] += 1;
+                    }
+                }
                 _ => {}
             }
         }
+        Ok(())
     }
 
     /// `Unit::do_patrol` for the ungrouped environment actor. The executor advances the
@@ -764,31 +878,83 @@ impl EnvWorld {
         self.sync_order_from_queue(row);
     }
 
-    /// Execute the derived AIR_PATROL state machine around EnvWorld's explicit airframe
-    /// boundary. Waypoint ownership, cursor advancement, final-waypoint retirement, and
-    /// inserted STRAFE queue position are the retail transitions. The adjacent airframe
-    /// and target-search systems remain separately reported scaffolding.
-    fn advance_air_patrol(&mut self, row: usize) {
+    /// Execute the derived AIR_PATROL transition only after a mandatory exact host has
+    /// supplied the adjacent physics, type and target-search transactions.
+    fn advance_air_patrol(
+        &mut self,
+        row: usize,
+        host: &mut dyn AirPatrolHost,
+    ) -> Result<(), AirPatrolHostError> {
         self.orders[row].reset();
         let Some(front) = self.orders[row].front() else {
             self.order[row] = OrderIndex::None as u8;
-            return;
+            return Ok(());
         };
         let PatrolPayload::Air(mut air) = front.patrol_payload.clone() else {
             self.unimplemented.unit[g::uv::PATROL] += 1;
-            return;
+            return Ok(());
         };
+
+        host.think_bird(self, row, &mut air)?;
         let list_len = self.orders[row].len();
         let is_animal = (don_sim::balance_path::ANIMAL_FIRST..=don_sim::balance_path::ANIMAL_LAST)
             .contains(&(self.type_index[row] as i32));
+        let home = if air.air.oxx >= 0 && air.air.whose >= 0 {
+            (0..self.sim.live_count() as usize)
+                .find(|&candidate| {
+                    self.sim.owner()[candidate] as i32 == air.air.whose
+                        && self.sim.units.o()[candidate] as i32 == air.air.oxx
+                })
+                .map(|candidate| (self.sim.pos_x()[candidate], self.sim.pos_y()[candidate]))
+        } else {
+            None
+        };
         let target =
-            patrol::air_patrol_target(&mut air, is_animal, None, self.subtile_w, self.subtile_h);
+            patrol::air_patrol_target(&mut air, is_animal, home, self.subtile_w, self.subtile_h);
+        if !host.do_air_physics(self, row, &mut air, target.0, target.1)? {
+            if let Some(front) = self.orders[row].front_mut() {
+                front.patrol_payload = PatrolPayload::Air(air);
+            }
+            self.sync_order_from_queue(row);
+            return Ok(());
+        }
 
-        // Explicit host boundary: this is the environment's existing movement subsystem,
-        // not a replacement patrol rule. The patrol transition is evaluated only after
-        // that subsystem has integrated the aircraft for the frame.
-        if target.0 >= 0 && target.1 >= 0 {
-            self.advance_towards(row, target.0, target.1);
+        let phase = (self.sim.units.o()[row] as i32).wrapping_add(self.sim.frame);
+        let fighter_bomber = host.actor_is_type(self, row, 0x134, false)?;
+        let relative_scan_point = |point: (i32, i32)| {
+            if fighter_bomber {
+                if let Some((hx, hy)) = home {
+                    return (
+                        point
+                            .0
+                            .wrapping_add(hx)
+                            .clamp(0, self.subtile_w.saturating_sub(1)),
+                        point
+                            .1
+                            .wrapping_add(hy)
+                            .clamp(0, self.subtile_h.saturating_sub(1)),
+                    );
+                }
+            }
+            point
+        };
+        let mut unit_target = None;
+        if !is_animal && air.air.returning == 0 && phase % 16 == 0 {
+            let n = air.points.len();
+            let (sx, sy) = relative_scan_point((air.points.x[n - 1], air.points.y[n - 1]));
+            let search = if host.actor_is_type(self, row, 0x130, false)? {
+                AirPatrolSearch::BomberFirst
+            } else {
+                AirPatrolSearch::AirFirst
+            };
+            unit_target = host.find_unit_target(self, row, &air, sx, sy, search)?;
+        }
+
+        let mut building_target = None;
+        if !is_animal && phase % 32 == 0 {
+            let cursor = air.points.clamp_air_cursor();
+            let (sx, sy) = relative_scan_point((air.points.x[cursor], air.points.y[cursor]));
+            building_target = host.find_building_target(self, row, &air, sx, sy)?;
         }
 
         let input = AirPatrolAfterPhysics {
@@ -799,8 +965,8 @@ impl EnvWorld {
             is_animal,
             spell_time: self.spell_time[row],
             order_list_len: list_len,
-            unit_target: None,
-            building_target: None,
+            unit_target,
+            building_target,
         };
         let action = patrol::step_air_patrol_after_physics(&mut air, target, &input);
         if let Some(front) = self.orders[row].front_mut() {
@@ -820,6 +986,7 @@ impl EnvWorld {
             }
             AirPatrolAction::Continue => self.sync_order_from_queue(row),
         }
+        Ok(())
     }
 
     /// Straight-line integer approach to the destination at the type's `MOVES` rate.

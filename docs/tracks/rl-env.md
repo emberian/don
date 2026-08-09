@@ -227,11 +227,11 @@ The env prints this itself (`env.provenance()`); repeated here so it is not only
   `PathFinder::astar_path` `0x00683770`, which is unread.
 * **patrol airframe host** — commands install the exact `AIR_PATROL` (17) or
   `GROUP_PATROL` (22) order into a dynamic queue with the recovered patrol-specific
-  `QUEUE_FIRST`/`QUEUE_LAST` rules. Both frame transitions execute; ground patrol inserts
-  its exact `ATTACK_TO` node ahead of itself. The remaining gap is adjacent to the air
-  executor: `Unit::do_air_physics` and the mod-16/mod-32 target searches are not ported,
-  so the air transition currently crosses the environment's labelled movement scaffold
-  and receives no opportunistic target.
+  `QUEUE_FIRST`/`QUEUE_LAST` rules. Ground patrol executes and inserts its exact `ATTACK_TO`
+  node ahead of itself. AIR_PATROL's local transition is available only through the
+  fail-closed `AirPatrolHost`: ordinary frames preserve the order and aircraft position.
+  `Unit::do_air_physics` and the mod-16/mod-32 target searches are not ported, so no
+  straight-line movement or always-empty target-search substitute executes.
 * **pathfinding, gathering, economy rates, build-queue timing, tech tree, terrain, map
   generation, real fog** — absent. `QueueUp` and `Build` complete instantly with cost and
   pop enforced from the shipped tables; the timing would otherwise be invented.

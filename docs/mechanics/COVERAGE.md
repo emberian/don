@@ -236,14 +236,15 @@ The env's action space is the **command** layer, not the order layer:
 the 82 `CommandTypes` opcodes. Auditing `apply_unit` / `apply_player` in
 `crates/don-env/src/action.rs`, the arms with real dynamics are:
 
-* unit (13 of 33 with downstream dynamics): `MOVE_TO`, `MOVE_NEAR`, `ATTACK`,
+* unit (12 of 33 with downstream dynamics): `MOVE_TO`, `MOVE_NEAR`, `ATTACK`,
   `SIEGE_ATTACK`, `SWARM_AROUND` (the three attacks collapse to one attack), `HALT`,
-  `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`, `PATROL`, `LAUNCH_PATROL`. The two
-  patrol verbs use a dynamic queue and execute recovered waypoint/front-insertion state;
-  the AIR_PATROL airframe and target-search callbacks remain incomplete host systems.
+  `STANCE`, `FORM`, `DISBAND`, `QUEUE_UP`, `BUILD`, `PATROL`. Ground `PATROL` uses a
+  dynamic queue and executes the recovered waypoint/front-insertion state. Plane `PATROL`
+  and `LAUNCH_PATROL` retain exact AIR_PATROL orders but remain stationary unless the
+  separate mandatory airframe/target-search host is supplied.
 * player (4 of 16): `TREATY`, `DECLARE`, `TRIBUTE`, `RESIGN`.
 
-**17 of 49 verbs = 34.7 % of the verb space currently carries downstream dynamics.** The
+**16 of 49 verbs = 32.7 % of the verb space currently carries downstream dynamics.** The
 other 32 fall to the `_ =>` arm that increments `accepted_no_effect`. The *observed* rate of
 `accepted_no_effect` is instead the share of applied actions under a masked sampler, and
 masking suppresses many unimplemented verbs before they are ever emitted (you cannot
@@ -257,12 +258,12 @@ arm is also absent — `REPAIR`→`do_repair`,
 a world callback, and `systems::gathering` now supplies exact shared occupancy/rate state,
 but the RL command host has not yet wired target selection or the terrain-capacity evaluator.
 
-The former routing, queue, and stationary-order divergences are closed. `PATROL` installs
+The former routing, queue, and order-class divergences are closed. `PATROL` installs
 `GROUP_PATROL` (22) for ground units and helicopters and delegates true planes to
 `AIR_PATROL` (17); `LAUNCH_PATROL` installs `AIR_PATROL` only for true planes.
-`OrderIndex::PATROL` (5) stays the dead arm. The registered RL readiness blocker now names
-the remaining adjacent air host: retail `Unit::do_air_physics` and opportunistic target
-search are not yet EnvWorld systems.
+`OrderIndex::PATROL` (5) stays the dead arm. Three registered RL readiness blockers now
+name the literal adjacent hosts: retail `Unit::do_air_physics`, the mod-16 air/bomber
+search, and the mod-32 building search are not yet EnvWorld systems.
 
 **Better metric for the RL lane:** `accepted_no_effect` measures the *command* surface.
 The dispatcher figure is 7 implemented plus 1 faithfully empty of 28 `do_job` arms. The
