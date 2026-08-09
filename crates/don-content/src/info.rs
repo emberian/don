@@ -63,6 +63,8 @@ pub struct DropdownInfo {
     pub checksum: Option<i64>,
     pub files_complete: Option<i64>,
     pub files_checksum: Option<i64>,
+    /// `GameMod::generate_file_list` stores the wrapping sum of entry sizes on `FILES`.
+    pub files_size: Option<i64>,
     pub manifest: Vec<ManifestEntry>,
     pub gate: RetailInfoGate,
     /// Non-fatal quality findings. Retail defaults missing strings to empty and integers to
@@ -223,6 +225,7 @@ fn visit(
         *saw_files = true;
         out.files_complete = optional_i64(&attrs, "complete", "FILES.complete")?;
         out.files_checksum = optional_i64(&attrs, "checksum", "FILES.checksum")?;
+        out.files_size = optional_i64(&attrs, "size", "FILES.size")?;
     } else if stack.len() == 2 && stack[1].as_slice() == b"FILES" && tag == b"FILE" {
         out.manifest.push(ManifestEntry {
             path: attrs.get("path").cloned().unwrap_or_default(),
@@ -295,7 +298,7 @@ mod tests {
         let x = r#"<?xml version="1.0"?>
 <INFO>
   <FILE name="Clockwork" version="2" description="Measured metadata" size="4096" checksum="17"/>
-  <FILES complete="1" checksum="99">
+  <FILES complete="1" checksum="99" size="12">
     <FILE path="data/rules.xml" size="12" directory="0"/>
   </FILES>
 </INFO>"#;
@@ -303,6 +306,7 @@ mod tests {
         assert_eq!(i.gate, RetailInfoGate::Accepts);
         assert_eq!(i.name, "Clockwork");
         assert_eq!(i.files_checksum, Some(99));
+        assert_eq!(i.files_size, Some(12));
         assert_eq!(i.manifest[0].path, "data/rules.xml");
         assert!(i.warnings.is_empty());
     }

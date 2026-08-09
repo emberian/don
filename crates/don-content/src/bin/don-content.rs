@@ -4,6 +4,8 @@
 //! don-content scan    <mods-dir> [activation options]
 //! don-content check   <mods-dir> [activation options]
 //! don-content explain <mods-dir> [activation options] <content-path>...
+//! don-content manifest <mod-root>
+//! don-content reload-check <mods-dir> [activation options] [--mode fidelity|improved]
 //! don-content overlay <don-overlay.xml>
 //! don-content rules
 //! ```
@@ -20,7 +22,10 @@ use std::process::ExitCode;
 use don_content::compat::{report, Support};
 use don_content::generated::{CATEGORY_INFO, FORBIDDEN_MAPSTYLES, TAG_LINKS};
 use don_content::info::RetailInfoGate;
+use don_content::manifest::generate as generate_manifest;
+use don_content::overlay::Mode;
 use don_content::overlay_file::read_overlay;
+use don_content::runtime::{RuleRegistry, RuleSource};
 use don_content::scan::populated_categories;
 use don_content::vfs::ALL_CATEGORIES;
 use don_content::workflow::{
@@ -34,6 +39,8 @@ fn main() -> ExitCode {
         Some("scan") => with_plan(&args[1..], false, cmd_scan),
         Some("check") => with_plan(&args[1..], false, cmd_check),
         Some("explain") | Some("probe") => with_plan(&args[1..], true, cmd_explain),
+        Some("manifest") if args.len() == 2 => cmd_manifest(Path::new(&args[1])),
+        Some("reload-check") => with_reload(&args[1..]),
         Some("overlay") if args.len() == 2 => cmd_overlay(Path::new(&args[1])),
         Some("rules") if args.len() == 1 => cmd_rules(),
         _ => {
@@ -48,6 +55,8 @@ fn usage() -> &'static str {
      don-content scan    <mods-dir> [--status PATH] [--workshop NAME=PATH]... [--dropdown NAME] [--order NAME,NAME,...]\n  \
      don-content check   <mods-dir> [same activation options]\n  \
      don-content explain <mods-dir> [same activation options] <content-path>...\n  \
+     don-content manifest <mod-root>\n  \
+     don-content reload-check <mods-dir> [same activation options] [--mode fidelity|improved]\n  \
      don-content overlay <don-overlay.xml>\n  \
      don-content rules\n\n  \
      Workshop directories and order are explicit because no installed retail corpus proves them.\n  \
@@ -209,6 +218,7 @@ fn cmd_scan(plan: &ActivationPlan, _: &[String]) -> ExitCode {
             );
         }
         print_info(inspect);
+        print_manifest(inspect);
         print_overlay(inspect);
         let r = report(m);
         let (consumed, total) = r.consumed_fraction();
@@ -276,6 +286,20 @@ fn print_overlay(inspect: &PackageInspection) {
     }
 }
 
+fn print_manifest(inspect: &PackageInspection) {
+    match &inspect.manifest {
+        Artifact::Absent => {}
+        Artifact::Invalid(e) => println!("    manifest/checksum: INVALID — {e}"),
+        Artifact::Valid(manifest) => println!(
+            "    manifest/checksum: {} canonical entries, {} XML file(s), size {}, checksum {}",
+            manifest.entries.len(),
+            manifest.checksummed_files.len(),
+            manifest.total_size,
+            manifest.checksum
+        ),
+    }
+}
+
 fn cmd_check(plan: &ActivationPlan, _: &[String]) -> ExitCode {
     if plan.stack.mods().is_empty() {
         eprintln!("REJECT: no mod packages found");
@@ -290,10 +314,7 @@ fn cmd_check(plan: &ActivationPlan, _: &[String]) -> ExitCode {
         if let Artifact::Valid(info) = &inspect.info {
             match info.gate {
                 RetailInfoGate::Accepts => {}
-                RetailInfoGate::WouldGenerateManifest => failures.push(format!(
-                    "{} info.xml relies on unported retail manifest/checksum generation",
-                    m.name
-                )),
+                RetailInfoGate::WouldGenerateManifest => {}
                 RetailInfoGate::RejectsIncompleteManifest => {
                     failures.push(format!("{} info.xml has FILES complete=0", m.name))
                 }
@@ -301,6 +322,9 @@ fn cmd_check(plan: &ActivationPlan, _: &[String]) -> ExitCode {
         }
         if let Artifact::Invalid(e) = &inspect.overlay {
             failures.push(format!("{} don-overlay.xml: {e}", m.name));
+        }
+        if let Artifact::Invalid(e) = &inspect.manifest {
+            failures.push(format!("{} manifest/checksum: {e}", m.name));
         }
         let r = report(m);
         if !r.fully_consumed() {
@@ -318,6 +342,15 @@ fn cmd_check(plan: &ActivationPlan, _: &[String]) -> ExitCode {
                 failures.push(format!("{}: mapstyles/{f} is vetoed by retail", m.name));
             }
         }
+    }
+    let registry = RuleRegistry::new(Mode::Improved);
+    if let Err(error) = registry.prepare(plan, Mode::Improved) {
+        failures.extend(
+            error
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| format!("runtime reload: {diagnostic}")),
+        );
     }
     failures.sort();
     failures.dedup();
@@ -414,6 +447,127 @@ fn cmd_overlay(path: &Path) -> ExitCode {
             a.layer.name()
         );
     }
+    ExitCode::SUCCESS
+}
+
+fn cmd_manifest(root: &Path) -> ExitCode {
+    let manifest = match generate_manifest(root) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("REJECT {}: {error}", root.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "retail entry set: {} canonical entries, total size {}",
+        manifest.entries.len(),
+        manifest.total_size
+    );
+    println!(
+        "retail XML checksum: {} from {} file(s)",
+        manifest.checksum,
+        manifest.checksummed_files.len()
+    );
+    for file in &manifest.checksummed_files {
+        println!("  {:>10}  {:>10}  {}", file.checksum, file.size, file.path);
+    }
+    println!(
+        "note: FILE order below is canonical edition order; retail `_wfindfirst` order is not portable"
+    );
+    print!("\n{}", manifest.canonical_files_xml());
+    ExitCode::SUCCESS
+}
+
+fn with_reload(args: &[String]) -> ExitCode {
+    let mut filtered = Vec::new();
+    let mut mode = Mode::Improved;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--mode" {
+            i += 1;
+            mode = match args.get(i).map(String::as_str) {
+                Some("fidelity") => Mode::Fidelity,
+                Some("improved") => Mode::Improved,
+                _ => {
+                    eprintln!("--mode requires fidelity or improved");
+                    return ExitCode::from(2);
+                }
+            };
+        } else {
+            filtered.push(args[i].clone());
+        }
+        i += 1;
+    }
+    let (request, unexpected) = match parse_activation(&filtered, false) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}\n\n{}", usage());
+            return ExitCode::from(2);
+        }
+    };
+    debug_assert!(unexpected.is_empty());
+    let plan = match build_plan(&request) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("cannot build activation plan: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut registry = RuleRegistry::new(mode);
+    let prepared = match registry.prepare(&plan, mode) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            println!("RELOAD BLOCKED:");
+            for diagnostic in error.diagnostics {
+                println!("  {diagnostic}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    let candidate = prepared.candidate();
+    println!("prepared generation {}", candidate.generation());
+    match candidate.source() {
+        RuleSource::Shipped => println!("rules source: shipped extracted table"),
+        RuleSource::Content {
+            package,
+            path,
+            retail_xml_checksum,
+        } => println!(
+            "rules source: {package} -> {}; retail XML checksum {retail_xml_checksum}",
+            path.display()
+        ),
+    }
+    println!(
+        "{} package identity record(s), {} changed rule value(s), {} overlay conflict(s), {} rule-loader diagnostic(s)",
+        candidate.packages().len(),
+        candidate.audit().len(),
+        candidate.conflicts().len(),
+        candidate.rule_diagnostics().len()
+    );
+    for diagnostic in candidate.rule_diagnostics() {
+        println!("  rules: {diagnostic}");
+    }
+    for conflict in candidate.conflicts() {
+        let writers: Vec<&str> = conflict
+            .writers
+            .iter()
+            .map(|writer| writer.package.as_str())
+            .collect();
+        println!(
+            "  {}[{}]: {} -> winner {}",
+            conflict.field,
+            conflict.index,
+            writers.join(" / "),
+            conflict.winner
+        );
+    }
+    let committed = registry
+        .commit(prepared)
+        .expect("fresh prepared generation");
+    println!(
+        "transactional registry swap: PASS (generation {})",
+        committed.generation()
+    );
     ExitCode::SUCCESS
 }
 

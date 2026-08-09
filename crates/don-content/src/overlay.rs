@@ -46,7 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use don_rules::rules::{Parser, RuleField, FIELDS, RULES_DWORDS};
+use don_rules::rules::{RuleField, FIELDS, RULES_DWORDS};
 use don_rules::Rules;
 
 /// Which layer a write came from. Ordering is precedence: higher wins.
@@ -125,13 +125,8 @@ impl Patch {
     /// tokenizer we derived, not by hand arithmetic.
     pub fn from_text(field: &str, index: u16, text: &str) -> Result<Patch, OverlayError> {
         let f = lookup(field).ok_or_else(|| OverlayError::UnknownField(field.to_string()))?;
-        let value = match f.parser {
-            Parser::Wtoi => don_rules::wtoi(text),
-            Parser::Scaled(scale) => don_rules::as_scaled(text, scale),
-            Parser::Unclassified => {
-                return Err(OverlayError::UnclassifiedParser(field.to_string()))
-            }
-        };
+        let value = don_rules::apply_parser(text, f.parser)
+            .ok_or_else(|| OverlayError::UnclassifiedParser(field.to_string()))?;
         Ok(Patch {
             field: f.name.to_string(),
             index,
@@ -460,16 +455,23 @@ mod tests {
     fn from_text_goes_through_the_derived_tokenizer() {
         // `unit_formation_spacing` is a Scaled(192) field [measured, Constants::init].
         let f = lookup("unit_formation_spacing").unwrap();
-        assert!(matches!(f.parser, Parser::Scaled(192)));
+        assert!(matches!(f.parser, don_rules::Parser::Scaled(192)));
         let p = Patch::from_text("unit_formation_spacing", 0, "3/4").unwrap();
         assert_eq!(p.value, don_rules::as_scaled("3/4", 192));
         // and a wtoi field is not silently scaled
         let w = FIELDS
             .iter()
-            .find(|f| matches!(f.parser, Parser::Wtoi))
+            .find(|f| matches!(f.parser, don_rules::Parser::Wtoi))
             .unwrap();
         let q = Patch::from_text(w.name, 0, "17").unwrap();
         assert_eq!(q.value, 17);
+
+        // The two non-generic loader transforms are instruction-level recoveries, and the
+        // overlay path must not fall back to `_wtoi` merely because they are unusual.
+        let block = Patch::from_text("unit_block_radius", 0, "1 UCoord").unwrap();
+        assert_eq!(block.value, 48);
+        let entrench = Patch::from_text("americans_marine_entrench", 0, "5 seconds").unwrap();
+        assert_eq!(entrench.value, 7);
     }
 
     #[test]

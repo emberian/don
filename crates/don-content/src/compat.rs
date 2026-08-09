@@ -12,8 +12,8 @@
 //!    Workshop is a *delivery* mechanism that ends with a directory on disk, and
 //!    `ModManager::buildModPackages` `0x00A221F0` then treats that directory exactly like a
 //!    local one. Subscribing needs Steam; loading does not.
-//! 2. **Consumption.** A mod ships bytes for a subsystem. We have a model of the shipped
-//!    `rules.xml` result, but no external XML loader; `art/foo.bh3` likewise has no renderer.
+//! 2. **Consumption.** A mod ships bytes for a subsystem. `data/rules.xml` now has a strict
+//!    extractor-backed loader and transactional registry; `art/foo.bh3` still has no renderer.
 //!
 //! So this module does not answer yes/no. It takes a mod's declared file list and reports,
 //! per file, which of those two halves it clears. That is the number worth quoting — "N of M
@@ -77,8 +77,8 @@ pub static SUPPORT: &[SupportRule] = &[
     SupportRule {
         category: Some(ModCategory::Data),
         ext: "rules.xml",
-        support: Support::ResolvedOnly,
-        reason: "don-rules models the shipped Constants block, but no external XML-to-Rules loader is wired",
+        support: Support::Consumed,
+        reason: "strict extractor-backed XML-to-Rules preparation plus atomic runtime registration is wired",
     },
     SupportRule {
         category: Some(ModCategory::Data),
@@ -173,14 +173,14 @@ pub static SUPPORT: &[SupportRule] = &[
     SupportRule {
         category: Some(ModCategory::Root),
         ext: "info.xml",
-        support: Support::Parsed,
-        reason: "dropdown metadata and measured structural gates are parsed; retail checksum generation and runtime reload are not reproduced",
+        support: Support::Consumed,
+        reason: "dropdown metadata, measured gates, reproducible manifest identity, and transactional activation are wired",
     },
     SupportRule {
         category: Some(ModCategory::Root),
         ext: "don-overlay.xml",
-        support: Support::Parsed,
-        reason: "DoN overlay schema is parsed and composed against don-rules; the composed block is not yet registered into the sim bootstrap",
+        support: Support::Consumed,
+        reason: "DoN overlay schema is checked, composed, conflict-reported, and registered in an immutable runtime snapshot",
     },
     SupportRule {
         category: Some(ModCategory::Root),
@@ -282,14 +282,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn data_xml_is_rejected_until_an_external_loader_is_wired() {
+    fn rules_xml_is_consumed_while_arbitrary_data_xml_remains_rejected() {
         let mut m = ModPackage::new("Rebalance", "Rebalance");
         m.declare_path("data/rules.xml");
         m.declare_path("data/unitrules.xml");
         let r = report(&m);
         assert!(!r.fully_consumed());
-        assert_eq!(r.consumed_fraction(), (0, 2));
-        assert_eq!(r.count(Support::ResolvedOnly), 2);
+        assert_eq!(r.consumed_fraction(), (1, 2));
+        assert_eq!(r.count(Support::Consumed), 1);
+        assert_eq!(r.count(Support::ResolvedOnly), 1);
     }
 
     #[test]
@@ -310,9 +311,9 @@ mod tests {
         m.declare_path("art/thing.bha");
         m.declare_path("sounds/boom.wav");
         let r = report(&m);
-        assert_eq!(r.count(Support::Consumed), 0);
+        assert_eq!(r.count(Support::Consumed), 1);
         assert_eq!(r.count(Support::Parsed), 1);
-        assert_eq!(r.count(Support::ResolvedOnly), 1);
+        assert_eq!(r.count(Support::ResolvedOnly), 0);
         assert_eq!(r.count(Support::OutOfScope), 2);
     }
 

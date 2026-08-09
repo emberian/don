@@ -17,6 +17,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::info::{read_info, DropdownInfo, RetailInfoGate};
+use crate::manifest::{compare_declared, generate as generate_manifest, RetailManifest};
 use crate::overlay_file::{read_overlay, OverlayFile};
 use crate::scan::{find_windows_file, scan_mod_dir, scan_mods_root};
 use crate::status::{self, ParseReport};
@@ -100,6 +101,8 @@ pub struct PackageInspection {
     pub root: PathBuf,
     pub origin: PackageOrigin,
     pub info: Artifact<DropdownInfo>,
+    /// Current package entry set and XML checksum, regenerated without mutating `info.xml`.
+    pub manifest: Artifact<RetailManifest>,
     pub overlay: Artifact<OverlayFile>,
 }
 
@@ -365,11 +368,16 @@ pub fn build_plan(request: &ActivationRequest) -> Result<ActivationPlan, Workflo
         );
         let (root, origin) = roots.get(&key).expect("identity checked").clone();
         let info = inspect_info(m, &root)?;
+        let manifest = match generate_manifest(&root) {
+            Ok(manifest) => Artifact::Valid(manifest),
+            Err(e) => Artifact::Invalid(e.to_string()),
+        };
         let overlay = inspect_overlay(m, &root)?;
         packages.push(PackageInspection {
             root,
             origin,
             info,
+            manifest,
             overlay,
         });
     }
@@ -451,16 +459,29 @@ impl ActivationPlan {
                 Artifact::Invalid(e) => out.push(format!("{} info.xml: {e}", m.name)),
                 Artifact::Valid(info) if m.is_dropdown_mod() => match info.gate {
                     RetailInfoGate::Accepts => {}
-                    RetailInfoGate::WouldGenerateManifest => out.push(format!(
-                        "{} info.xml needs retail FILES generation; exact checksum generation is unported",
-                        m.name
-                    )),
+                    RetailInfoGate::WouldGenerateManifest => {}
                     RetailInfoGate::RejectsIncompleteManifest => out.push(format!(
                         "{} info.xml is incomplete (FILES complete=0)",
                         m.name
                     )),
                 },
                 _ => {}
+            }
+            if let Artifact::Invalid(e) = &self.packages[i].manifest {
+                out.push(format!("{} manifest/checksum: {e}", m.name));
+            }
+            if let (Artifact::Valid(info), Artifact::Valid(manifest)) =
+                (&self.packages[i].info, &self.packages[i].manifest)
+            {
+                if info.gate == RetailInfoGate::Accepts {
+                    out.extend(
+                        compare_declared(info, manifest)
+                            .into_iter()
+                            .map(|difference| {
+                                format!("{} stored FILES snapshot: {difference}", m.name)
+                            }),
+                    );
+                }
             }
             if let Artifact::Invalid(e) = &self.packages[i].overlay {
                 out.push(format!("{} don-overlay.xml: {e}", m.name));
@@ -730,10 +751,10 @@ mod tests {
     fn dropdown_activation_is_explicit_and_preflighted() {
         let root = tmpdir("dropdown");
         fs::create_dir_all(root.join("Choice").join("data")).unwrap();
-        fs::write(root.join("Choice/data/rules.xml"), b"x").unwrap();
+        fs::write(root.join("Choice/data/rules.xml"), b"<ROOT/>").unwrap();
         fs::write(
             root.join("Choice/info.xml"),
-            br#"<INFO><FILE name="Choice" version="1" description="x" size="1" checksum="2"/><FILES complete="1" checksum="2"/></INFO>"#,
+            br#"<INFO><FILE name="Choice" version="1" description="x" size="1" checksum="2"/></INFO>"#,
         )
         .unwrap();
         let plan = build_plan(&ActivationRequest::new(&root)).unwrap();
@@ -745,7 +766,10 @@ mod tests {
         req.active_dropdown = Some("Choice".into());
         let plan = build_plan(&req).unwrap();
         assert!(plan.activation_blockers().is_empty());
-        assert!(matches!(plan.packages[0].info, Artifact::Valid(_)));
+        assert!(matches!(
+            plan.packages[0].info,
+            Artifact::Valid(ref i) if i.gate == RetailInfoGate::WouldGenerateManifest
+        ));
         fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -14,12 +14,16 @@
 //! * [`status`] — `mod-status.txt`, the on-disk enable/priority state, in retail's own
 //!   fixed-width format.
 //! * [`info`] — dropdown `info.xml` structural preflight, using the keys and gates recovered
-//!   from `GameMod::init`; checksum generation remains fail-closed.
+//!   from `GameMod::init`.
+//! * [`manifest`] — `GameMod::generate_file_list`, the seed-zero four-byte checksum path,
+//!   and a stable independent-edition serialisation of the retail entry set.
 //! * [`workflow`] — local plus explicitly named Workshop directories, activation, order
 //!   provenance, collision tracing, and a refusal to bless uncertified host enumeration.
 //! * [`overlay`] — our addition: named, validated, field-level rule patches with an explicit
 //!   layer order and a fidelity-mode lock.
 //! * [`overlay_file`] — the checked `don-overlay.xml` artifact for independent-edition mods.
+//! * [`runtime`] — strict whole-file rule loading and an immutable, generation-checked
+//!   prepare/commit boundary for new simulation worlds.
 //! * [`extend`] — the surface beyond retail: extension type ids above the closed
 //!   `enum TypeIndex` space, a sparse balance overlay over the captured 493x493 matrix, and
 //!   the enumerated hook points.
@@ -45,8 +49,10 @@ pub mod compat;
 pub mod extend;
 pub mod generated;
 pub mod info;
+pub mod manifest;
 pub mod overlay;
 pub mod overlay_file;
+pub mod runtime;
 pub mod scan;
 pub mod status;
 pub mod vfs;
@@ -55,8 +61,10 @@ pub mod workflow;
 pub use compat::{report as compat_report, CompatReport, Support};
 pub use extend::{BalanceOverlay, HookPoint, TypeId, TypeSpace};
 pub use info::{read_info, DropdownInfo, InfoError, RetailInfoGate};
+pub use manifest::{generate as generate_manifest, ManifestError, RetailManifest};
 pub use overlay::{Layer, Mode, OverlayError, Patch, RuleStack};
 pub use overlay_file::{read_overlay, OverlayFile, OverlayFileError};
+pub use runtime::{PreparedReload, RuleRegistry, RuntimeSnapshot};
 pub use vfs::{
     classify, is_map_forbidden, ContentStack, ModCategory, ModPackage, Resolved, StorageLocation,
     WorkshopTag,
