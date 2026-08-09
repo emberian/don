@@ -80,6 +80,12 @@ fn main() {
                     ..Default::default()
                 }),
                 type_los: Some(4),
+                armor_inputs: Some(don_sim::systems::leaders::UnitArmorInputs {
+                    type_armor: 2,
+                    special_family_32_33: false,
+                    ..Default::default()
+                }),
+                o_down: None,
                 ..Default::default()
             };
             24

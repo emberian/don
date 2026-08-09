@@ -71,7 +71,8 @@
 //!   `WallData::is_active`, `+0xE8` is `UnitData::is_captain`, and the base implementations
 //!   at `+0x15C/+0x160` are `Object::update_hits/update_los`. The building band overrides
 //!   the latter pair with the much larger `Wall::update_hits/update_los`; those overrides,
-//!   plus the direct `Unit::update_speed/update_armor` calls, remain explicit gaps.
+//!   `Unit::update_speed` and automatic population of the armor type/tribe gate package
+//!   remain explicit gaps.
 //!
 //! # Two facts about `Leader::calc_anti_attrition` worth stating out loud
 //!
@@ -310,6 +311,12 @@ pub struct Step8Rules {
     pub mongol_attrition: i32,
     /// `RULES + 0x95C` = 2396, `TITANIUM_ATTRITION`, shipped 50.
     pub titanium_attrition: i32,
+    /// `RULES + 0x960` = 2400, `CATTLE_CITIZEN_ARMOR`, shipped 1. Added by
+    /// `Unit::update_armor` to type families `0x32/0x33` while rare bit 31 is held.
+    pub cattle_citizen_armor: i32,
+    /// `RULES + 0x8B8` = 2232, `DUTCH_ATTACK_BONUS`, shipped 1. Despite the historical
+    /// name, `ObjectData::armor` also adds it once per age to qualifying Dutch units.
+    pub dutch_attack_bonus: i32,
 }
 
 /// Byte offsets of every [`Step8Rules`] field, so [`Step8Rules::from_block`] and a
@@ -323,7 +330,9 @@ pub mod rule_offsets {
     pub const LIBERTY_ATTRITION: usize = 1316;
     pub const RUSSIAN_ATTRITION: usize = 1868;
     pub const MONGOL_ATTRITION: usize = 2032;
+    pub const DUTCH_ATTACK_BONUS: usize = 2232;
     pub const TITANIUM_ATTRITION: usize = 2396;
+    pub const CATTLE_CITIZEN_ARMOR: usize = 2400;
     pub const CTW_ATTRITION: usize = 2572;
 }
 
@@ -347,6 +356,8 @@ impl Step8Rules {
             liberty_attrition: 100,
             mongol_attrition: 50,
             titanium_attrition: 50,
+            cattle_citizen_armor: 1,
+            dutch_attack_bonus: 1,
         }
     }
 
@@ -364,6 +375,8 @@ impl Step8Rules {
             liberty_attrition: 0,
             mongol_attrition: 0,
             titanium_attrition: 0,
+            cattle_citizen_armor: 0,
+            dutch_attack_bonus: 0,
         }
     }
 
@@ -390,6 +403,8 @@ impl Step8Rules {
             liberty_attrition: at(rule_offsets::LIBERTY_ATTRITION),
             mongol_attrition: at(rule_offsets::MONGOL_ATTRITION),
             titanium_attrition: at(rule_offsets::TITANIUM_ATTRITION),
+            cattle_citizen_armor: at(rule_offsets::CATTLE_CITIZEN_ARMOR),
+            dutch_attack_bonus: at(rule_offsets::DUTCH_ATTACK_BONUS),
         }
     }
 }
@@ -734,6 +749,30 @@ pub struct ObjectHitInputs {
     pub owner_policy: u8,
 }
 
+/// Object/type query answers consumed by `ObjectData::armor` `0x00647DB0`.
+///
+/// This is the same boundary style as [`AttritionGates`]: the body and branch order are
+/// recovered here, while type predicates and tribe membership come from their owning
+/// tables rather than being guessed by the scheduler.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UnitArmorInputs {
+    /// `ObjectTypeData::armor` at `type + 0x214`.
+    pub type_armor: i32,
+    /// `LeaderData::has_tribe_bonus(0x16)`.
+    pub dutch: bool,
+    /// Vtable `+0x18`, the first Dutch armor eligibility gate.
+    pub dutch_armor_eligible: bool,
+    /// `this->ptype->type`, compared with `0x3D`, `0x3E`, and decimal `400`.
+    pub type_id: i32,
+    pub caravan: bool,
+    pub supply: bool,
+    /// `Game::get_patch_version()`; versions above 8 apply the government-hero exclusion.
+    pub patch_version: i32,
+    pub gov_hero: bool,
+    /// `this->ptype->type` is `0x32` or `0x33`.
+    pub special_family_32_33: bool,
+}
+
 /// One entry of an `Objects` band, as the two stat passes observe it through the vtable.
 ///
 /// `hit_inputs` and `type_los` are resolved type-table inputs, not invented answers. `None`
@@ -759,6 +798,16 @@ pub struct StatObject {
     pub myhits: i32,
     /// `ObjectData::mylos` (`+0x3C`), written by `Object::update_los`.
     pub mylos: i8,
+    /// Type/tribe gate package consumed by the exact `ObjectData::armor()` body.
+    pub armor_inputs: Option<UnitArmorInputs>,
+    /// Resolved `UnitData::o_down` (`+0x90`). Retail stores a signed object index and uses
+    /// every negative value as the end sentinel; `None` is that sentinel here.
+    pub o_down: Option<usize>,
+    /// `UnitData::myarmor` (`+0x9C`).
+    pub myarmor: i16,
+    /// Per-pass write marker, reset by the tick adapter before dispatch. Unlike the call
+    /// counters this must not persist, or a clean frame would replay an old derivation.
+    pub armor_written: bool,
     /// How many times `vtbl + 0x160` was invoked on this object.
     pub v160_calls: u32,
     /// How many times `vtbl + 0x15C` was invoked on this object.
@@ -773,6 +822,8 @@ pub struct StatObject {
     pub object_hits_updates: u32,
     /// Resolved base `Object::update_los` calls that wrote `mylos`.
     pub object_los_updates: u32,
+    /// Resolved `Unit::update_armor` calls (one per captain, not per propagated member).
+    pub unit_armor_updates: u32,
 }
 
 /// What one stat pass did, so "it ran" is a number instead of an assertion.
@@ -785,6 +836,7 @@ pub struct StatPassCounts {
     pub armor_updates: u32,
     pub object_hits_updates: u32,
     pub object_los_updates: u32,
+    pub unit_armor_updates: u32,
     /// Calls whose body or global type-table input remains unavailable.
     pub unresolved_calls: u32,
 }
@@ -798,6 +850,7 @@ impl StatPassCounts {
         self.armor_updates += other.armor_updates;
         self.object_hits_updates += other.object_hits_updates;
         self.object_los_updates += other.object_los_updates;
+        self.unit_armor_updates += other.unit_armor_updates;
         self.unresolved_calls += other.unresolved_calls;
     }
 }
@@ -833,6 +886,74 @@ pub fn object_update_los(o: &mut StatObject) -> Option<i32> {
     o.mylos = if o.owner_in_game { base } else { 0 };
     o.object_los_updates = o.object_los_updates.wrapping_add(1);
     Some(o.mylos as i32)
+}
+
+/// `ObjectData::armor()` `0x00647DB0` (215 bytes), including the Dutch merchant/caravan/
+/// wagon age bonus. Every early return is retained in retail order.
+pub fn object_data_armor(input: &UnitArmorInputs, leader: &Leader, rules: &Step8Rules) -> i32 {
+    let base = input.type_armor;
+    if !input.dutch || rules.dutch_attack_bonus == 0 || !input.dutch_armor_eligible {
+        return base;
+    }
+    if input.type_id != 0x3d
+        && input.type_id != 0x3e
+        && input.type_id != 400
+        && !input.caravan
+        && !input.supply
+    {
+        return base;
+    }
+    if input.patch_version > 8 && input.gov_hero {
+        return base;
+    }
+    leader
+        .econ
+        .age
+        .wrapping_mul(rules.dutch_attack_bonus)
+        .wrapping_add(base)
+}
+
+/// `Unit::update_armor` `0x006054C0`, as reached by `Leader::calc_unit_stats` after its
+/// `UnitData::is_captain` guard.
+///
+/// The function stores a signed 16-bit armor value on the captain, then follows `o_down`
+/// and copies it to every subordinate. Retail's standalone entry first climbs `o_up` until
+/// it reaches a captain; the caller here has already performed the exact captain test, so
+/// this is the complete executed suffix from `0x00605510` through `0x006055AF`.
+pub fn unit_update_armor(
+    units: &mut [StatObject],
+    captain: usize,
+    leader: &Leader,
+    rules: &Step8Rules,
+) -> Option<i32> {
+    let input = units.get(captain)?.armor_inputs?;
+    let mut armor = object_data_armor(&input, leader, rules);
+    if input.special_family_32_33 && (leader.rare_effective.get(31) || leader.rare_b.get(31)) {
+        armor = armor.wrapping_add(rules.cattle_citizen_armor);
+    }
+    let stored = armor as i16;
+
+    let first_down = {
+        let u = &mut units[captain];
+        u.myarmor = stored;
+        u.armor_written = true;
+        u.unit_armor_updates = u.unit_armor_updates.wrapping_add(1);
+        u.o_down
+    };
+
+    let mut next = first_down;
+    let mut remaining = units.len();
+    while let Some(index) = next {
+        if remaining == 0 {
+            return None;
+        }
+        remaining -= 1;
+        let u = units.get_mut(index)?;
+        u.myarmor = stored;
+        u.armor_written = true;
+        next = u.o_down;
+    }
+    Some(stored as i32)
 }
 
 /// The two `Objects` bands `Leader::calc_wall_stats` walks, and the unit band
@@ -938,7 +1059,8 @@ pub fn calc_unit_stats(
     calc_anti_attrition(leader, rules, gates);
 
     let mut c = StatPassCounts::default();
-    for u in objs.units.iter_mut() {
+    for i in 0..objs.units.len() {
+        let u = &mut objs.units[i];
         c.visited += 1;
         if !u.active {
             continue;
@@ -961,8 +1083,13 @@ pub fn calc_unit_stats(
             u.armor_updates += 1;
             c.speed_updates += 1;
             c.armor_updates += 1;
-            // Direct calls after the two resolved virtuals. Their large bodies remain red.
-            c.unresolved_calls += 2;
+            // Unit::update_speed remains red. Unit::update_armor is the next direct call.
+            c.unresolved_calls += 1;
+            if unit_update_armor(&mut objs.units, i, leader, rules).is_some() {
+                c.unit_armor_updates += 1;
+            } else {
+                c.unresolved_calls += 1;
+            }
         }
     }
     c
@@ -1465,6 +1592,12 @@ mod tests {
                 ..Default::default()
             }),
             type_los: Some(4),
+            armor_inputs: Some(UnitArmorInputs {
+                type_armor: 5,
+                special_family_32_33: false,
+                ..Default::default()
+            }),
+            o_down: None,
             ..Default::default()
         }];
 
@@ -1485,8 +1618,10 @@ mod tests {
         assert_eq!(t.unit_pass[0].armor_updates, 1);
         assert_eq!(t.unit_pass[0].object_hits_updates, 1);
         assert_eq!(t.unit_pass[0].object_los_updates, 1);
+        assert_eq!(t.unit_pass[0].unit_armor_updates, 1);
         assert_eq!(d.env.leaders[0].objects.units[0].myhits, 200);
         assert_eq!(d.env.leaders[0].objects.units[0].mylos, 4);
+        assert_eq!(d.env.leaders[0].objects.units[0].myarmor, 5);
 
         // Steady state: no change, no passes. Edge-triggered, not level-triggered.
         let t = d.frame();
@@ -1538,6 +1673,74 @@ mod tests {
         o.owner_in_game = true;
         assert_eq!(object_update_los(&mut o), Some(7));
         assert_eq!(o.mylos, 7);
+    }
+
+    #[test]
+    fn unit_armor_applies_cattle_bonus_and_propagates_down_the_captain_chain() {
+        let mut leader = Leader::new(0);
+        leader.rare_effective.set(31, true);
+        let rules = Step8Rules::shipped();
+        let mut units = vec![
+            StatObject {
+                captain: true,
+                armor_inputs: Some(UnitArmorInputs {
+                    type_armor: 12,
+                    special_family_32_33: true,
+                    ..Default::default()
+                }),
+                o_down: Some(1),
+                ..Default::default()
+            },
+            StatObject {
+                o_down: Some(2),
+                ..Default::default()
+            },
+            StatObject {
+                o_down: None,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(unit_update_armor(&mut units, 0, &leader, &rules), Some(13));
+        assert_eq!(units.iter().map(|u| u.myarmor).collect::<Vec<_>>(), [13; 3]);
+        assert!(units.iter().all(|u| u.armor_written));
+        assert_eq!(units[0].unit_armor_updates, 1);
+        assert_eq!(units[1].unit_armor_updates, 0);
+
+        // Mutation pin: without rare bit 31, the same resolved ObjectData armor passes
+        // through unchanged, while propagation remains identical.
+        leader.rare_effective.set(31, false);
+        for u in units.iter_mut() {
+            u.armor_written = false;
+        }
+        assert_eq!(unit_update_armor(&mut units, 0, &leader, &rules), Some(12));
+        assert_eq!(units.iter().map(|u| u.myarmor).collect::<Vec<_>>(), [12; 3]);
+    }
+
+    #[test]
+    fn object_armor_dutch_age_bonus_keeps_all_retail_early_returns() {
+        let mut leader = Leader::new(0);
+        leader.econ.age = 5;
+        let rules = Step8Rules::shipped();
+        let mut input = UnitArmorInputs {
+            type_armor: 3,
+            dutch: true,
+            dutch_armor_eligible: true,
+            type_id: 0x3d,
+            patch_version: 8,
+            ..Default::default()
+        };
+        assert_eq!(object_data_armor(&input, &leader, &rules), 8);
+
+        // Mutation pins the post-patch government-hero exclusion.
+        input.patch_version = 9;
+        input.gov_hero = true;
+        assert_eq!(object_data_armor(&input, &leader, &rules), 3);
+        input.gov_hero = false;
+        input.type_id = 7;
+        assert_eq!(object_data_armor(&input, &leader, &rules), 3);
+        input.caravan = true;
+        assert_eq!(object_data_armor(&input, &leader, &rules), 8);
     }
 
     /// An externally-set dirty bit is honoured and consumed, which is how any other
@@ -2001,11 +2204,15 @@ mod tests {
         block[rule_offsets::ATTRITION_IMPROVED / 4] = 1;
         block[rule_offsets::ATTRITION_IMPROVED / 4 + 3] = 8;
         block[rule_offsets::TITANIUM_ATTRITION / 4] = 50;
+        block[rule_offsets::CATTLE_CITIZEN_ARMOR / 4] = 1;
+        block[rule_offsets::DUTCH_ATTACK_BONUS / 4] = 1;
         let r = Step8Rules::from_block(&block);
         assert_eq!(r.timer_refresh_ratio, 5);
         assert_eq!(r.attrition_improved[0], 1);
         assert_eq!(r.attrition_improved[3], 8);
         assert_eq!(r.titanium_attrition, 50);
+        assert_eq!(r.cattle_citizen_armor, 1);
+        assert_eq!(r.dutch_attack_bonus, 1);
         // A short block zero-extends rather than panicking.
         assert_eq!(Step8Rules::from_block(&[]).timer_refresh_ratio, 0);
     }
@@ -2027,6 +2234,8 @@ mod tests {
         block[rule_offsets::RUSSIAN_ATTRITION / 4] = s.russian_attrition;
         block[rule_offsets::MONGOL_ATTRITION / 4] = s.mongol_attrition;
         block[rule_offsets::TITANIUM_ATTRITION / 4] = s.titanium_attrition;
+        block[rule_offsets::CATTLE_CITIZEN_ARMOR / 4] = s.cattle_citizen_armor;
+        block[rule_offsets::DUTCH_ATTACK_BONUS / 4] = s.dutch_attack_bonus;
         block[rule_offsets::CTW_ATTRITION / 4] = s.ctw_attrition;
         assert_eq!(Step8Rules::from_block(&block), s);
     }

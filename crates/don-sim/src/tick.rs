@@ -123,7 +123,7 @@ impl Gap {
 pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 4  RunTimeEnv::run_script 0x0043D0E0 - runtime is wired; unrecovered ScenarioFuncSet builtins fail the tick closed",
     "step 8  calc_wall_stats - +0x4c and plain-wall +0x15c/+0x160 execute; Wall override pair and update_construct_time remain",
-    "step 8  calc_unit_stats - +0xe8/+0x15c/+0x160 execute; direct Unit::update_speed/update_armor remain",
+    "step 8  calc_unit_stats - +0xe8/+0x15c/+0x160, ObjectData::armor, and Unit::update_armor suffix execute; Unit::update_speed and automatic armor gate population remain",
     "step 8  Leader::process_taunt 0x006b8cc0 - exact table dispatch executes; AI-chat body absent",
     "step 11 Leader::check_explore leaders.cpp:26413 - uncited",
     "step 11 Leader::plan_strategy leaders.cpp:26880 (11 KB) - uncited",
@@ -1125,6 +1125,10 @@ impl Sim {
                 view.owner_in_game = self.step8.leaders[who].flags & leaders::flag::IN_GAME != 0;
                 view.myhits = self.world.units.myhits()[row];
                 view.mylos = self.world.units.mylos()[row];
+                let down = self.world.units.o_down()[row];
+                view.o_down = (down >= 0).then_some(down as usize);
+                view.myarmor = self.world.units.myarmor()[row];
+                view.armor_written = false;
             }
 
             let build_rows = slot.band(Band::Build);
@@ -1179,6 +1183,9 @@ impl Sim {
                     if view.active && view.type_los.is_some() {
                         self.world.units.mylos_mut()[row] = view.mylos;
                     }
+                    if view.armor_written {
+                        self.world.units.myarmor_mut()[row] = view.myarmor;
+                    }
                 }
             }
             if trace.wall_stats_ran[who] {
@@ -1200,7 +1207,7 @@ impl Sim {
     /// `flags & 2` gate, per-frame resets, hostile scan, gather, edge-triggered wall/unit
     /// stat traversals, elimination, grace timers, taunt-table dispatch, and tail-bit clear.
     /// The base Object virtual bodies execute when their type rows are present. The Wall
-    /// override pair, construction-time update, direct unit speed/armor derivations, and
+    /// override pair, construction-time update, unit speed, armor gate population, and
     /// `Leader::process_taunt` AI-chat body remain call-site-counted gaps.
     fn leaders_process_all(&mut self) -> (StepRun, u32) {
         let frame = self.world.frame;
@@ -1254,7 +1261,7 @@ impl Sim {
 
         // Charge only genuinely unresolved calls. The four slot addresses are resolved;
         // plain Object hit/LOS bodies run when their type rows are supplied, while the
-        // building overrides and direct unit speed/armor derivations remain explicit.
+        // building overrides, unit speed, and armor gate population remain explicit.
         self.cover.gaps[Gap::LeaderCalcWallStats.index()] += trace
             .wall_pass
             .iter()

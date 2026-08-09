@@ -23,6 +23,7 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     let unit_row = sim.world.row_of(unit).unwrap();
     // UnitData::is_captain is exactly the high bit of `o_up` (+0x8E).
     sim.world.units.o_up_mut()[unit_row] = -1;
+    sim.world.units.o_down_mut()[unit_row] = -1;
     sim.spawn_build(
         0,
         production::BuildData {
@@ -46,6 +47,11 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
             ..Default::default()
         }),
         type_los: Some(7),
+        armor_inputs: Some(leaders::UnitArmorInputs {
+            type_armor: 15,
+            special_family_32_33: false,
+            ..Default::default()
+        }),
         ..Default::default()
     }];
     sim.step8_env.leaders[0].objects.band_2000 = vec![leaders::StatObject {
@@ -78,18 +84,20 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.leader_taunt_dispatches, 0);
     assert_eq!(sim.world.units.myhits()[unit_row], 333);
     assert_eq!(sim.world.units.mylos()[unit_row], 7);
+    assert_eq!(sim.world.units.myarmor()[unit_row], 15);
     assert_eq!(sim.walls[0].myhits, 444);
     assert_eq!(sim.walls[0].mylos, 9);
-    // Only the building's Wall override pair and the unit's direct speed/armor bodies
-    // remain red; all four virtual slots themselves executed.
+    // Only the building's Wall override pair and the unit's direct speed body remain red;
+    // all four virtual slots and Unit::update_armor itself executed.
     assert_eq!(sim.cover.gaps[Gap::LeaderCalcWallStats.index()], 2);
-    assert_eq!(sim.cover.gaps[Gap::LeaderCalcUnitStats.index()], 2);
+    assert_eq!(sim.cover.gaps[Gap::LeaderCalcUnitStats.index()], 1);
 
     // The exact taunt-table scan reads the pre-increment frame. Step 20 made it 1.
     // Change the derived fields between passes: cumulative counters must not replay the
     // old edge-triggered result on an ordinary frame where neither dirty bit was armed.
     sim.world.units.myhits_mut()[unit_row] = 555;
     sim.world.units.mylos_mut()[unit_row] = 5;
+    sim.world.units.myarmor_mut()[unit_row] = 55;
     sim.walls[0].myhits = 666;
     sim.walls[0].mylos = 6;
     sim.step8.leaders[0].taunt_frame[2] = 1;
@@ -100,6 +108,7 @@ fn real_tick_executes_the_recovered_step8_dispatcher() {
     assert_eq!(sim.cover.gaps[Gap::LeaderProcessTaunt.index()], 1);
     assert_eq!(sim.world.units.myhits()[unit_row], 555);
     assert_eq!(sim.world.units.mylos()[unit_row], 5);
+    assert_eq!(sim.world.units.myarmor()[unit_row], 55);
     assert_eq!(sim.walls[0].myhits, 666);
     assert_eq!(sim.walls[0].mylos, 6);
 }

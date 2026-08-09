@@ -26,7 +26,7 @@ Concretely, these execute today and did not this morning:
 | the diplomacy / hostile scan | `0x006ED2E0`..`0x006ED321` | absent | ported |
 | `Leader::gather`'s `BitMask<44>` union | `0x006CE35F`..`0x006CE3D0` | absent | ported — **this is what arms the stat passes** |
 | `Leader::calc_wall_stats` | `0x006CF7C0` | named `Gap::LeaderCalcWallStats` | traversal plus `is_active` and plain-wall base hit/LOS bodies execute; building overrides remain |
-| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal plus `is_captain` and base hit/LOS bodies execute; direct speed/armor remain |
+| `Leader::calc_unit_stats` | `0x006CF970` | named `Gap::LeaderCalcUnitStats` | traversal, `is_captain`, base hit/LOS, `ObjectData::armor`, and `Unit::update_armor` suffix execute; speed and armor gate population remain |
 | `Leader::calc_attrition` | `0x006CDEA0` | uncited by any Rust file | **ported whole** |
 | `Leader::calc_anti_attrition` | `0x006CDCC0` | uncited by any Rust file | **ported whole** |
 | the three grace timers | `0x006ED35F`..`0x006ED3CE` | absent | ported |
@@ -359,8 +359,13 @@ Corrections, two sentences each:
   `Object::update_los` (42 bytes). Those base bodies now write real Unit/Wall state when
   their global type-table inputs are supplied. The building band overrides the last pair
   with `Wall::update_hits/update_los`; those overrides, `Wall::update_construct_time`, and
-  direct `Unit::update_speed/update_armor` remain red. The first wall-stat loop fetches its
-  guard through vtable `+0xAC`, the second through `+0xB0`; that asymmetry remains recorded.
+  `Unit::update_speed` and automatic armor type/tribe gate population remain red. The
+  215-byte `ObjectData::armor` body executes the Dutch per-age branch and its post-patch
+  government-hero exclusion; the 249-byte `Unit::update_armor` suffix executes its rare-31
+  `CATTLE_CITIZEN_ARMOR` addition and propagates the signed 16-bit result through the
+  captain's `o_down` chain. The first
+  wall-stat loop fetches its guard through vtable `+0xAC`, the second through `+0xB0`;
+  that asymmetry remains recorded.
 * **`Game::retake_capital` `0x00594530` is read but not ported here.** Its rescale is
   `max(1, (world[0] * RETAKE_CAPITAL + S/2) / S)` with `S = [[0x00E7FCA8] + 0x144]`, then
   `(leader[0x41C] * that) >> 8` with a toward-zero bias, and a CTW branch behind
