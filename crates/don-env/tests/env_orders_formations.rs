@@ -76,4 +76,39 @@ fn product_env_form_uses_runtime_type_facts_and_installs_group_move() {
         .expect("selection is interned");
     assert_eq!(group.form, Formation::Line as i32);
     assert_eq!(group.order_num, 1);
+
+    let before: Vec<_> = rows
+        .iter()
+        .map(|&row| (world.sim.pos_x()[row], world.sim.pos_y()[row]))
+        .collect();
+    world.frame();
+    for (&row, old) in rows.iter().zip(before) {
+        assert_ne!(
+            (world.sim.pos_x()[row], world.sim.pos_y()[row]),
+            old,
+            "FORM's installed GROUP_MOVE must execute while its leader/group/order facts are live"
+        );
+        assert_eq!(
+            world.orders[row].front().map(|order| order.kind),
+            Some(OrderIndex::GroupMove),
+            "the distant formation destination must remain queued after one frame"
+        );
+    }
+
+    for _ in 0..2_048 {
+        if rows.iter().all(|&row| world.orders[row].is_empty()) {
+            break;
+        }
+        world.frame();
+    }
+    for ((&row, _), destination) in rows.iter().zip(objects.iter()).zip(expected_destinations) {
+        assert!(
+            world.orders[row].is_empty(),
+            "FORM movement must retire after reaching its installed member destination"
+        );
+        assert_eq!(
+            (world.sim.pos_x()[row], world.sim.pos_y()[row]),
+            destination
+        );
+    }
 }

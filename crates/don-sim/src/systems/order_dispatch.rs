@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 19 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 18 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -1308,6 +1308,84 @@ pub struct BoardingAction {
     pub target: crate::systems::naval::TargetRef,
 }
 
+/// Why a grouped movement executor could not acquire its external group snapshot.
+///
+/// `Unit::do_group_move` reads the global `Groups` pool, the formation leader's live
+/// object/order/path, terrain-region tables, and target/action state before it changes the
+/// actor. None of those facts live in [`UnitWork`]. A host must therefore provide one
+/// coherent preflight result; absence is an ordinary fail-closed result, not permission to
+/// approximate the formation with a plain move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupMoveHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// The mutation-ready follower frame produced by the external half of
+/// `Unit::do_group_move` `0x005E79A0`.
+///
+/// Retail builds this path from the leader's current position/path and the member's
+/// `GroupData::curr_x/curr_y` entry, then validates the destination against terrain before
+/// calling `Unit::move_step`. The path is supplied whole so a host cannot publish a
+/// destination without also publishing the stack state from the same snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupMoveFollowerStep {
+    pub path: PathStack,
+    pub dest_x: i32,
+    pub dest_y: i32,
+    pub in_group: i32,
+    pub speed: i32,
+}
+
+/// One coherent, read-only decision for the next `GROUP_MOVE` frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupMovePlan {
+    /// The actor matches `GroupOrder::{whose,oxx}`. The boolean is the mod-32 close-target
+    /// check which calls `Group::kill_group_move(id)` before `Unit::do_move`.
+    Leader { kill_group_before_move: bool },
+    /// The follower/leader relationship became invalid while the actor is still more than
+    /// `0x5ff` Coord away: call `Group::refresh_group_order` and return.
+    Refresh,
+    /// Convert this group order to its ordinary `MOVE_TO`/`ATTACK_TO` counterpart.
+    Ungroup,
+    /// Retail's in-range attack action kills only this actor's current group move.
+    KillCurrent,
+    /// The target gates resolve to `Group::action_attack`.
+    ActionAttack,
+    /// An authoritative leader/formation/path snapshot reached `Unit::move_step`.
+    Step(GroupMoveFollowerStep),
+    /// A measured return branch (for example, the large-angle follower under `0x30`
+    /// Coord) which keeps the order unchanged for this frame.
+    Hold,
+}
+
+/// Infallible external effects reached after a successful [`GroupMovePlan`] preflight.
+///
+/// A host may mutate the actor as part of the real cross-unit/group operation (notably
+/// `kill_group_move`, `refresh_group_order`, and `action_attack`). These callbacks cannot
+/// reject: all fallible acquisition must happen in `group_move_preflight`, before the core
+/// touches `UnitWork`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupMoveEffect {
+    KillGroupMove { id: i32 },
+    RefreshGroupOrder { id: i32 },
+    UpdatePositions,
+    ActionAttack,
+    DistributeAttack,
+}
+
+/// What the post-movement target/order gates require. The call is made only after a
+/// successful preflight, so it is deliberately infallible. The combined final variant is
+/// the leader's measured `kill_group_move` then `distribute_attack` sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupMovePostStep {
+    Continue,
+    KillCurrent,
+    Ungroup,
+    ActionAttack,
+    KillGroupAndDistribute,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1381,6 +1459,41 @@ pub trait WorkWorld: UnitWorld {
     /// The trailing contained-aircraft predicate and singleton `Group::action_scramble`.
     fn patrol_inside_is_scramblable(&self, actor_who: u8, inside_o: i16) -> bool;
     fn patrol_scramble_inside(&mut self, actor: &mut UnitWork, inside_o: i16);
+
+    /// Acquire every external fact needed by `Unit::do_group_move` as one snapshot. The
+    /// default is deliberately unavailable: a generic movement world does not secretly
+    /// become a formation world.
+    fn group_move_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<GroupMovePlan, GroupMoveHostError> {
+        Err(GroupMoveHostError::Unavailable)
+    }
+
+    /// Apply a cross-unit/group effect after successful preflight. Hosts that ever return
+    /// `Ok` from [`WorkWorld::group_move_preflight`] must implement this callback.
+    fn group_move_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _effect: GroupMoveEffect,
+    ) {
+        panic!("WorkWorld::group_move_effect is required after GROUP_MOVE preflight")
+    }
+
+    /// Resolve the target/order gates after a raw-zero leader `do_move` or follower
+    /// `move_step`. Hosts that can reach either path must implement this callback. It may
+    /// consult the newly moved actor but may not fail or roll back the already integrated
+    /// step.
+    fn group_move_post_step(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+        _result: ArmResult,
+    ) -> GroupMovePostStep {
+        panic!("WorkWorld::group_move_post_step is required for GROUP_MOVE follower steps")
+    }
 
     /// `Unit::set_anim(a, b, c)` at the head of both boarding executors. The shipped arms
     /// always pass `(0, 0, 1)` before any rendezvous or target probe. Animation state is not
@@ -1506,7 +1619,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Unimplemented,   // 16 STRAFE          Unit::do_strafe 0x005EAB00
     ArmStatus::Implemented,     // 17 AIR_PATROL      Unit::do_air_patrol 0x005EA620
     ArmStatus::Unimplemented,   // 18 CHANGE_FORM     Unit::do_form_change 0x005E8670
-    ArmStatus::Unimplemented,   // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
+    ArmStatus::Implemented,     // 19 GROUP_MOVE      Unit::do_group_move 0x005E79A0
     ArmStatus::Unimplemented,   // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
     ArmStatus::Unimplemented,   // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
@@ -1731,6 +1844,9 @@ pub enum ArmResult {
     Retired(KillReason),
     /// The arm dispatched but has no ported body.
     NotPorted,
+    /// The arm is ported, but its required cross-object host snapshot was unavailable.
+    /// No local mutation has occurred when this is returned.
+    HostUnavailable,
     /// The arm ran and deliberately did nothing (retail's default case).
     Empty,
     /// A shot resolved; payload is the damage.
@@ -1971,119 +2087,19 @@ fn apply_move_path_outcome<W: WorkWorld>(
     }
 }
 
-pub fn do_move<W: WorkWorld>(
+/// The shared `Unit::move_step` integration tail used by ordinary and grouped movement.
+/// The boolean is retail `move_step`'s raw integer truth value: grouped movement runs its
+/// target/order epilogue only on the zero returns. `MoveStep::Blocked` and
+/// `MoveStep::InvalidTerrain` are the two recovered zero-return shapes; the other exits
+/// return one.
+fn integrate_move_step<W: WorkWorld>(
     u: &mut UnitWork,
     w: &mut W,
     pf: &mut PathFinder,
-    cov: &mut DispatchCoverage,
-) -> ArmResult {
-    let Some(ord) = update_order(u) else {
-        return ArmResult::NoOrder;
-    };
-
-    // `UnitData::openlist` is serviced at `0x005F7BDD`, before MoveOrder::timer and the rest
-    // of `do_move`. `find_upath_restore` continues the same trees with its smaller per-frame
-    // budget; it does not restart from the unit's new position. [measured]
-    if u.parked_search {
-        let outcome = find_path(pf, w, u, ord.x, ord.y, 0);
-        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
-            return done;
-        }
-    }
-
-    // 1. the timer.
-    if ord.timer > 0 {
-        if ord.timer == 1 {
-            kill_current_order(u, KillReason::Completed);
-            cov.completed += 1;
-            return ArmResult::Retired(KillReason::Completed);
-        }
-        if let Some(c) = u.orders.front_mut() {
-            c.timer -= 1;
-        }
-        return ArmResult::Working;
-    }
-
-    // `MoveOrder::retry` at +0x1C is checked before any new route work. While non-zero the
-    // unit does nothing; reaching zero adds three to `attempts` (+0x20). The following arm
-    // decrements a non-zero `attempts` once per call. [measured `0x005F82C1..0x005F83BB`]
-    if ord.retry != 0 {
-        if let Some(c) = u.orders.front_mut() {
-            c.retry = c.retry.wrapping_sub(1);
-            if c.retry == 0 {
-                c.attempts = c.attempts.wrapping_add(3);
-            }
-        }
-        return ArmResult::Working;
-    }
-    if ord.attempts != 0 {
-        if let Some(c) = u.orders.front_mut() {
-            c.attempts = c.attempts.wrapping_sub(1);
-        }
-    }
-
-    // `MoveOrder::x/y` (+4/+8) remain the ultimate order destination. `dest_x/dest_y`
-    // (+0x2c/+0x30) are the current path/collision step and may be overwritten by
-    // `resolve_unit_collision::set_order_detour`. Retail's order-arrival test starts from
-    // `piVar4[1]/[2]`, so completing a detour must never complete the whole move.
-    let dest = (ord.x, ord.y);
-    let dx = dest.0 - u.body.x;
-    let dy = dest.1 - u.body.y;
-
-    // 2. arrival.
-    if vector_dist(dx, dy) <= u.tolerance {
-        if let Some(c) = u.orders.front_mut() {
-            c.dest = 0;
-        }
-        let popped = u.path.pop();
-        let more = popped.is_none_or(|r| (r.flags & PathData::FLAG_MORE) != 0);
-        if !more {
-            // Waypoint reached but the path continues.
-            return ArmResult::Working;
-        }
-        if let Some(c) = u.orders.front_mut() {
-            c.flags &= !ORDER_PATHED;
-        }
-        u.unit_masks &= !masks::ARRIVED_FACING;
-        kill_current_order(u, KillReason::Completed);
-        cov.completed += 1;
-        u.idle = 1;
-        return ArmResult::Retired(KillReason::Completed);
-    }
-
-    // 3. pathing.
-    //
-    // Only search when the destination is more than one unit cell away. `find_upath`'s own
-    // trivial arm is `|dqx - qx| + |dqy - qy| < 2` [measured `0x00683250`], so a search
-    // inside one cell can only return the unit's own position — and a `do_move` that
-    // re-searched every frame from inside the goal cell would never converge on a
-    // `tolerance` finer than 48. The final leg is therefore a direct walk to the order's
-    // destination, which is also what retail's straight-line probe produces.
-    let far = vector_dist(dx, dy) > movement::UCELL;
-    if far && (u.unit_masks & masks::PATH_EXHAUSTED) == 0 {
-        let outcome = find_path(pf, w, u, dest.0, dest.1, 0);
-        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
-            return done;
-        }
-    }
-
-    // `MoveOrder+0x18` at `0x005F8C88`: every non-zero pause is decremented and holds the
-    // unit for this frame. The extra retail branches only choose animation/idle side effects;
-    // all of them return before `move_step`. Collision resolution writes this field.
-    if ord.pause != 0 {
-        if let Some(c) = u.orders.front_mut() {
-            c.pause = c.pause.wrapping_sub(1);
-        }
-        return ArmResult::Working;
-    }
-
-    // 5. integration.
-    let target = u
-        .path
-        .peek()
-        .map(|r| (r.to_x, r.to_y))
-        .unwrap_or((dest.0, dest.1));
-    let speed = u.myspeed.max(1) as i32;
+    target: (i32, i32),
+    speed: i32,
+) -> (ArmResult, bool) {
+    let speed = speed.max(1);
     let mut turn_env = u.guy_env;
     turn_env.unit_speed = speed;
     turn_env.unit_mask_turn_scale2 =
@@ -2122,20 +2138,367 @@ pub fn do_move<W: WorkWorld>(
     }
     u.path = path;
     match step {
-        MoveStep::TurnedOnly => ArmResult::Turned,
-        MoveStep::Moved => ArmResult::Moved,
-        MoveStep::Blocked => ArmResult::Blocked,
-        MoveStep::Arrived => ArmResult::Working,
+        MoveStep::TurnedOnly => (ArmResult::Turned, true),
+        MoveStep::Moved => (ArmResult::Moved, true),
+        MoveStep::Blocked => (ArmResult::Blocked, false),
+        MoveStep::Arrived => (ArmResult::Working, true),
         MoveStep::InvalidTerrain => {
-            // `0x005FB76E`: an invalid terrain transition clears UnitData mask bit 8 before
-            // returning. The next `do_move` therefore rebuilds the route; retaining the old
-            // bit/path here produced a permanent retry of the same invalid waypoint.
+            // `0x005FB76E`: this is one of `move_step`'s zero returns and clears bit 8.
             u.unit_masks &= !masks::PATH_EXHAUSTED;
-            ArmResult::Blocked
+            (ArmResult::Blocked, false)
         }
-        // The four out-of-bounds exits at `0x005FB4E8..0x005FB52F` return without clearing
-        // bit 8, unlike the later invalid-terrain exit.
-        MoveStep::Refused => ArmResult::Blocked,
+        // The four out-of-bounds exits return one and retain bit 8.
+        MoveStep::Refused => (ArmResult::Blocked, true),
+    }
+}
+
+fn do_move_raw<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> (ArmResult, bool) {
+    let Some(ord) = update_order(u) else {
+        return (ArmResult::NoOrder, false);
+    };
+
+    // `UnitData::openlist` is serviced at `0x005F7BDD`, before MoveOrder::timer and the rest
+    // of `do_move`. `find_upath_restore` continues the same trees with its smaller per-frame
+    // budget; it does not restart from the unit's new position. [measured]
+    if u.parked_search {
+        let outcome = find_path(pf, w, u, ord.x, ord.y, 0);
+        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
+            let raw_nonzero = matches!(done, ArmResult::Working);
+            return (done, raw_nonzero);
+        }
+    }
+
+    // 1. the timer.
+    if ord.timer > 0 {
+        if ord.timer == 1 {
+            kill_current_order(u, KillReason::Completed);
+            cov.completed += 1;
+            return (ArmResult::Retired(KillReason::Completed), false);
+        }
+        if let Some(c) = u.orders.front_mut() {
+            c.timer -= 1;
+        }
+        return (ArmResult::Working, true);
+    }
+
+    // `MoveOrder::retry` at +0x1C is checked before any new route work. While non-zero the
+    // unit does nothing; reaching zero adds three to `attempts` (+0x20). The following arm
+    // decrements a non-zero `attempts` once per call. [measured `0x005F82C1..0x005F83BB`]
+    if ord.retry != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.retry = c.retry.wrapping_sub(1);
+            if c.retry == 0 {
+                c.attempts = c.attempts.wrapping_add(3);
+            }
+        }
+        return (ArmResult::Working, true);
+    }
+    if ord.attempts != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.attempts = c.attempts.wrapping_sub(1);
+        }
+    }
+
+    // `MoveOrder::x/y` (+4/+8) remain the ultimate order destination. `dest_x/dest_y`
+    // (+0x2c/+0x30) are the current path/collision step and may be overwritten by
+    // `resolve_unit_collision::set_order_detour`. Retail's order-arrival test starts from
+    // `piVar4[1]/[2]`, so completing a detour must never complete the whole move.
+    let dest = (ord.x, ord.y);
+    let dx = dest.0 - u.body.x;
+    let dy = dest.1 - u.body.y;
+
+    // 2. arrival.
+    if vector_dist(dx, dy) <= u.tolerance {
+        if let Some(c) = u.orders.front_mut() {
+            c.dest = 0;
+        }
+        let popped = u.path.pop();
+        let more = popped.is_none_or(|r| (r.flags & PathData::FLAG_MORE) != 0);
+        if !more {
+            // Waypoint reached but the path continues.
+            return (ArmResult::Working, true);
+        }
+        if let Some(c) = u.orders.front_mut() {
+            c.flags &= !ORDER_PATHED;
+        }
+        u.unit_masks &= !masks::ARRIVED_FACING;
+        kill_current_order(u, KillReason::Completed);
+        cov.completed += 1;
+        u.idle = 1;
+        return (ArmResult::Retired(KillReason::Completed), false);
+    }
+
+    // 3. pathing.
+    //
+    // Only search when the destination is more than one unit cell away. `find_upath`'s own
+    // trivial arm is `|dqx - qx| + |dqy - qy| < 2` [measured `0x00683250`], so a search
+    // inside one cell can only return the unit's own position — and a `do_move` that
+    // re-searched every frame from inside the goal cell would never converge on a
+    // `tolerance` finer than 48. The final leg is therefore a direct walk to the order's
+    // destination, which is also what retail's straight-line probe produces.
+    let far = vector_dist(dx, dy) > movement::UCELL;
+    if far && (u.unit_masks & masks::PATH_EXHAUSTED) == 0 {
+        let outcome = find_path(pf, w, u, dest.0, dest.1, 0);
+        if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
+            let raw_nonzero = matches!(done, ArmResult::Working);
+            return (done, raw_nonzero);
+        }
+    }
+
+    // `MoveOrder+0x18` at `0x005F8C88`: every non-zero pause is decremented and holds the
+    // unit for this frame. The extra retail branches only choose animation/idle side effects;
+    // all of them return before `move_step`. Collision resolution writes this field.
+    if ord.pause != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.pause = c.pause.wrapping_sub(1);
+        }
+        return (ArmResult::Working, true);
+    }
+
+    // 5. integration.
+    let target = u
+        .path
+        .peek()
+        .map(|r| (r.to_x, r.to_y))
+        .unwrap_or((dest.0, dest.1));
+    let speed = u.myspeed.max(1) as i32;
+    integrate_move_step(u, w, pf, target, speed)
+}
+
+pub fn do_move<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    do_move_raw(u, w, pf, cov).0
+}
+
+#[inline]
+fn same_group_order(u: &UnitWork, original: &OrderRec) -> bool {
+    u.orders.front().is_some_and(|current| {
+        current.kind == original.kind && current.group_id == original.group_id
+    })
+}
+
+/// `Unit::ungroup_move_order(id, 0)` `0x005FD140`, reduced to the executing captain.
+///
+/// Retail walks non-captain/subordinate objects as well; those objects are not represented
+/// by one [`UnitWork`] and remain part of the group host's cross-object transaction. For the
+/// executing node the conversion is exact: `GROUP_MOVE -> MOVE_TO`,
+/// `GROUP_ATTACK_TO -> ATTACK_TO`, the leader alone retains flag bit zero, `dest` is cleared,
+/// `orig_{x,y}` take the ultimate destination, and a follower drops its current path.
+fn ungroup_current_move(u: &mut UnitWork, group_id: i32) -> bool {
+    let Some(current) = u.orders.front().cloned() else {
+        return false;
+    };
+    if current.group_id != group_id {
+        return false;
+    }
+    let kind = match current.kind {
+        OrderIndex::GroupMove => OrderIndex::MoveTo,
+        OrderIndex::GroupAttackTo => OrderIndex::AttackTo,
+        _ => return false,
+    };
+    let is_leader = current.group_oxx == i32::from(u.o) && current.group_whose == i32::from(u.who);
+    let mut ordinary = current;
+    ordinary.kind = kind;
+    if !is_leader {
+        ordinary.flags &= !ORDER_PATHED;
+    }
+    ordinary.dest = 0;
+    ordinary.orig_x = ordinary.x;
+    ordinary.orig_y = ordinary.y;
+    ordinary.group_oxx = -1;
+    ordinary.group_whose = -1;
+    ordinary.group_id = -1;
+    ordinary.group_form_id = 0;
+    ordinary.group_angle = 0;
+    ordinary.in_group = 0;
+    *u.orders.front_mut().expect("front was cloned above") = ordinary;
+    if !is_leader {
+        clear_partial_path(u);
+    }
+    update_action(u);
+    true
+}
+
+fn apply_group_move_post<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    cov: &mut DispatchCoverage,
+    order: &OrderRec,
+    result: ArmResult,
+    post: GroupMovePostStep,
+) -> ArmResult {
+    match post {
+        GroupMovePostStep::Continue => result,
+        GroupMovePostStep::KillCurrent => {
+            kill_current_order(u, KillReason::Completed);
+            cov.completed += 1;
+            ArmResult::Retired(KillReason::Completed)
+        }
+        GroupMovePostStep::Ungroup => {
+            if ungroup_current_move(u, order.group_id) {
+                ArmResult::Working
+            } else {
+                ArmResult::MalformedOrder
+            }
+        }
+        GroupMovePostStep::ActionAttack => {
+            w.group_move_effect(u, order, GroupMoveEffect::ActionAttack);
+            ArmResult::Working
+        }
+        GroupMovePostStep::KillGroupAndDistribute => {
+            w.group_move_effect(
+                u,
+                order,
+                GroupMoveEffect::KillGroupMove { id: order.group_id },
+            );
+            w.group_move_effect(u, order, GroupMoveEffect::DistributeAttack);
+            ArmResult::Working
+        }
+    }
+}
+
+/// `Unit::do_group_move(GroupMoveOrder*)` `0x005E79A0` (3,275 bytes), arm 19.
+///
+/// The unit-local instruction order is ported here; the global `Groups`/object/terrain half
+/// is an explicit transaction on [`WorkWorld`]:
+///
+/// 1. an ungrouped actor converts the current node through `ungroup_move_order`;
+/// 2. every grouped actor acquires one coherent external snapshot before local mutation;
+/// 3. the leader performs the close-target group kill or delegates to [`do_move`], then
+///    publishes `Group::update_positions` only while the same order remains current;
+/// 4. a follower applies the snapshot's formation path/order fields, resets tolerance, and
+///    calls the same recovered `move_step` integration as ordinary movement;
+/// 5. only `move_step`'s raw zero exits run the post-step target/order gate.
+///
+/// Missing group facts return [`ArmResult::HostUnavailable`] with byte-for-byte unchanged
+/// actor state. Callbacks after successful preflight are infallible by contract, preventing
+/// a half-applied local/group transaction.
+pub fn do_group_move<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = update_order(u) else {
+        return ArmResult::NoOrder;
+    };
+    if !matches!(
+        order.kind,
+        OrderIndex::GroupMove | OrderIndex::GroupAttackTo
+    ) {
+        return ArmResult::MalformedOrder;
+    }
+
+    // `0x005E79C1`: this arm is the sole branch which needs no external group lookup.
+    if u.group < 0 {
+        return if ungroup_current_move(u, order.group_id) {
+            ArmResult::Working
+        } else {
+            ArmResult::MalformedOrder
+        };
+    }
+
+    // Mandatory and mutation-free. A callback may validate the group slot/id, leader order,
+    // member index, terrain regions, destination, speed, and target gates from one lockstep
+    // snapshot; it may not publish effects yet.
+    let plan = match w.group_move_preflight(&*u, &order) {
+        Ok(plan) => plan,
+        Err(GroupMoveHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(GroupMoveHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+
+    let is_leader = order.group_oxx == i32::from(u.o) && order.group_whose == i32::from(u.who);
+    match plan {
+        GroupMovePlan::Leader {
+            kill_group_before_move,
+        } => {
+            if !is_leader {
+                return ArmResult::MalformedOrder;
+            }
+            if kill_group_before_move {
+                w.group_move_effect(
+                    u,
+                    &order,
+                    GroupMoveEffect::KillGroupMove { id: order.group_id },
+                );
+                return ArmResult::Working;
+            }
+            let (result, raw_nonzero) = do_move_raw(u, w, pf, cov);
+            if same_group_order(u, &order) {
+                if raw_nonzero {
+                    w.group_move_effect(u, &order, GroupMoveEffect::UpdatePositions);
+                } else {
+                    let post = w.group_move_post_step(&*u, &order, result);
+                    return apply_group_move_post(u, w, cov, &order, result, post);
+                }
+            }
+            result
+        }
+        GroupMovePlan::Refresh => {
+            if is_leader {
+                return ArmResult::MalformedOrder;
+            }
+            w.group_move_effect(
+                u,
+                &order,
+                GroupMoveEffect::RefreshGroupOrder { id: order.group_id },
+            );
+            ArmResult::Working
+        }
+        GroupMovePlan::Ungroup => {
+            if ungroup_current_move(u, order.group_id) {
+                ArmResult::Working
+            } else {
+                ArmResult::MalformedOrder
+            }
+        }
+        GroupMovePlan::KillCurrent => {
+            kill_current_order(u, KillReason::Completed);
+            cov.completed += 1;
+            ArmResult::Retired(KillReason::Completed)
+        }
+        GroupMovePlan::ActionAttack => {
+            w.group_move_effect(u, &order, GroupMoveEffect::ActionAttack);
+            ArmResult::Working
+        }
+        GroupMovePlan::Hold => ArmResult::Working,
+        GroupMovePlan::Step(step) => {
+            if is_leader || step.speed <= 0 {
+                return ArmResult::MalformedOrder;
+            }
+            if !same_group_order(u, &order) {
+                return ArmResult::MalformedOrder;
+            }
+            // All potentially failing validation happened above. Publish the recovered
+            // follower mutations together immediately before move_step.
+            u.path = step.path;
+            u.tolerance = 0;
+            let current = u
+                .orders
+                .front_mut()
+                .expect("same_group_order verified a live front node");
+            current.dest = 1;
+            current.dest_x = step.dest_x;
+            current.dest_y = step.dest_y;
+            current.in_group = step.in_group;
+
+            let (result, raw_nonzero) =
+                integrate_move_step(u, w, pf, (step.dest_x, step.dest_y), step.speed);
+            if raw_nonzero || !same_group_order(u, &order) {
+                return result;
+            }
+            let post = w.group_move_post_step(&*u, &order, result);
+            apply_group_move_post(u, w, cov, &order, result, post)
+        }
     }
 }
 
@@ -2438,7 +2801,7 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
 /// `Unit::do_job(enum OrderIndex, class UnitOrder*)` `0x00617A10`, the 28-entry jump table at
 /// `0x00617B94`. [measured — the `switch` has 27 case labels; `PATROL` (5) has none.]
 ///
-/// Every arm is present. The 19 without a ported body dispatch, are counted, and return
+/// Every arm is present. Arms without a ported body dispatch, are counted, and return
 /// [`ArmResult::NotPorted`] rather than pretending to act.
 pub fn do_job<W: WorkWorld>(
     u: &mut UnitWork,
@@ -2457,6 +2820,7 @@ pub fn do_job<W: WorkWorld>(
         }
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
+        OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
         OrderIndex::BoardShip => do_board(u, w, cov),
@@ -2839,6 +3203,9 @@ mod tests {
         building_target: Option<AirPatrolTarget>,
         last_air_destination: Option<(i32, i32)>,
         group_moves: Vec<GroupMoveRequest>,
+        group_plan: Result<GroupMovePlan, GroupMoveHostError>,
+        group_effects: Vec<GroupMoveEffect>,
+        group_post: GroupMovePostStep,
         scrambled: Vec<i16>,
     }
 
@@ -2858,6 +3225,9 @@ mod tests {
                 building_target: None,
                 last_air_destination: None,
                 group_moves: vec![],
+                group_plan: Err(GroupMoveHostError::Unavailable),
+                group_effects: vec![],
+                group_post: GroupMovePostStep::Continue,
                 scrambled: vec![],
             }
         }
@@ -2955,6 +3325,24 @@ mod tests {
         fn patrol_scramble_inside(&mut self, _: &mut UnitWork, inside_o: i16) {
             self.scrambled.push(inside_o);
         }
+        fn group_move_preflight(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+        ) -> Result<GroupMovePlan, GroupMoveHostError> {
+            self.group_plan.clone()
+        }
+        fn group_move_effect(&mut self, _: &mut UnitWork, _: &OrderRec, effect: GroupMoveEffect) {
+            self.group_effects.push(effect);
+        }
+        fn group_move_post_step(
+            &mut self,
+            _: &UnitWork,
+            _: &OrderRec,
+            _: ArmResult,
+        ) -> GroupMovePostStep {
+            self.group_post
+        }
         fn boarding_set_anim(&mut self, _: &mut UnitWork, _: i32, _: i32, _: i32) {}
         fn board_check_meet_ship(
             &mut self,
@@ -3032,7 +3420,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_ten_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_eleven_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -3045,9 +3433,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Nine implemented, including both boarding arms and the two live patrols; PATROL
-        // remains faithfully empty.
-        assert_eq!((implemented, empty, absent), (9, 1, 18));
+        // Ten implemented, including GROUP_MOVE, both boarding arms and the two live
+        // patrols; PATROL remains faithfully empty.
+        assert_eq!((implemented, empty, absent), (10, 1, 17));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -3480,6 +3868,193 @@ mod tests {
         assert_eq!(r.result, ArmResult::Gathered(3));
     }
 
+    // -- do_group_move ----------------------------------------------------
+
+    fn group_move_order(actor_who: u8, leader_o: i16, id: i32, x: i32, y: i32) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::GroupMove,
+            flags: ORDER_GROUP | ORDER_PATHED,
+            x,
+            y,
+            dest_x: x,
+            dest_y: y,
+            group_oxx: i32::from(leader_o),
+            group_whose: i32::from(actor_who),
+            group_id: id,
+            ..OrderRec::default()
+        }
+    }
+
+    #[test]
+    fn group_move_missing_host_is_a_zero_mutation_transaction() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.safe = 41;
+        u.tolerance = 17;
+        u.unit_masks = 0x1234_5678;
+        u.path.push(PathData {
+            to_x: 111,
+            to_y: 222,
+            tolerance: 9,
+            flags: PathData::FLAG_MORE,
+        });
+        u.orders
+            .push_back(group_move_order(u.who, u.o, 91, 900, 700));
+        let before_body = u.body;
+        let before_orders = u.orders.clone();
+        let before_path = u.path.clone();
+
+        assert_eq!(
+            do_group_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::HostUnavailable
+        );
+        assert_eq!(
+            (u.body.x, u.body.y, u.body.angle, u.body.stuck_budget),
+            (
+                before_body.x,
+                before_body.y,
+                before_body.angle,
+                before_body.stuck_budget
+            )
+        );
+        assert_eq!(u.orders, before_orders);
+        assert_eq!(u.path, before_path);
+        assert_eq!((u.group, u.safe, u.tolerance), (3, 41, 17));
+        assert_eq!(u.unit_masks, 0x1234_5678);
+        assert!(w.group_effects.is_empty());
+    }
+
+    #[test]
+    fn ungrouped_group_move_becomes_an_ordinary_move_without_a_host() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = -1;
+        let mut order = group_move_order(u.who, 3, 91, 900, 700);
+        order.dest = 1;
+        order.orig_x = -1;
+        order.orig_y = -1;
+        u.orders.push_back(order);
+        u.path.push(PathData {
+            to_x: 333,
+            to_y: 444,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+
+        assert_eq!(
+            do_group_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        let ordinary = u.orders.front().unwrap();
+        assert_eq!(ordinary.kind, OrderIndex::MoveTo);
+        assert_eq!(ordinary.flags, ORDER_GROUP);
+        assert_eq!(ordinary.dest, 0);
+        assert_eq!((ordinary.orig_x, ordinary.orig_y), (900, 700));
+        assert_eq!(ordinary.group_id, -1);
+        assert!(
+            u.path.is_empty(),
+            "a follower conversion kills its old path"
+        );
+    }
+
+    #[test]
+    fn group_move_leader_delegates_to_move_then_updates_positions() {
+        let mut w = TestWorld::open(16);
+        w.group_plan = Ok(GroupMovePlan::Leader {
+            kill_group_before_move: false,
+        });
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 100, 200);
+        u.group = 3;
+        u.tolerance = 0;
+        u.body.angle = movement::find_angle(100, 0);
+        u.orders
+            .push_back(group_move_order(u.who, u.o, 91, 200, 200));
+
+        let result = do_group_move(&mut u, &mut w, &mut pf, &mut cov);
+        assert!(matches!(result, ArmResult::Moved | ArmResult::Turned));
+        assert_eq!(w.group_effects, vec![GroupMoveEffect::UpdatePositions]);
+        assert_eq!(u.orders.front().unwrap().group_id, 91);
+    }
+
+    #[test]
+    fn group_move_leader_raw_zero_runs_kill_then_distribute_in_order() {
+        let mut w = TestWorld::open(16);
+        w.blocked.push((1, 0));
+        w.group_plan = Ok(GroupMovePlan::Leader {
+            kill_group_before_move: false,
+        });
+        w.group_post = GroupMovePostStep::KillGroupAndDistribute;
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 7, 180, 24);
+        u.group = 3;
+        u.tolerance = 0;
+        u.body.angle = 0x4000_0000;
+        u.unit_masks |= masks::PATH_EXHAUSTED;
+        u.path.push(PathData {
+            to_x: 220,
+            to_y: 24,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.orders
+            .push_back(group_move_order(u.who, u.o, 91, 600, 24));
+
+        assert_eq!(
+            do_group_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(
+            w.group_effects,
+            vec![
+                GroupMoveEffect::KillGroupMove { id: 91 },
+                GroupMoveEffect::DistributeAttack
+            ]
+        );
+    }
+
+    #[test]
+    fn group_move_follower_publishes_one_snapshot_before_move_step() {
+        let mut w = TestWorld::open(16);
+        let mut path = PathStack::new();
+        path.push(PathData {
+            to_x: 200,
+            to_y: 200,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        w.group_plan = Ok(GroupMovePlan::Step(GroupMoveFollowerStep {
+            path: path.clone(),
+            dest_x: 200,
+            dest_y: 200,
+            in_group: 1,
+            speed: 24,
+        }));
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(2, 8, 100, 200);
+        u.group = 3;
+        u.tolerance = 77;
+        u.body.angle = movement::find_angle(100, 0);
+        u.orders.push_back(group_move_order(u.who, 7, 91, 900, 700));
+
+        let result = do_group_move(&mut u, &mut w, &mut pf, &mut cov);
+        assert!(matches!(result, ArmResult::Moved | ArmResult::Turned));
+        let current = u.orders.front().unwrap();
+        assert_eq!((current.dest_x, current.dest_y), (200, 200));
+        assert_eq!(current.in_group, 1);
+        assert_eq!(u.tolerance, 0);
+        assert!(u.body.x >= 100);
+        assert!(w.group_effects.is_empty());
+    }
+
     #[test]
     fn safe_countdown_has_retails_byte_wrap_semantics() {
         let mut w = TestWorld::open(16);
@@ -3805,9 +4380,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 18 unimplemented arms, each hit once. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 18);
-        assert!((cov.covered_fraction() - 10.0 / 28.0).abs() < 1e-12);
+        // 17 unimplemented arms, each hit once. This smoke actor takes GROUP_MOVE's exact
+        // ungrouped conversion; grouped actors without a snapshot fail closed at the
+        // mandatory host seam. Both boarding and both live patrol arms run.
+        assert_eq!(cov.unimplemented, 17);
+        assert!((cov.covered_fraction() - 11.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]
