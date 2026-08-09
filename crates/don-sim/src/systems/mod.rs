@@ -95,6 +95,9 @@ pub mod items;
 /// re-port `Leader::process_elimination`, which `victory_score` already owns.
 pub mod leaders;
 pub mod map_terrain;
+/// Exact `Mountains::randomize_mountains` three-list RNG/cursor transaction and
+/// the return-then-advance `get_range` primitive used by terrain placement.
+pub mod mountains;
 pub mod movement;
 /// Recovered from an interrupted lane and audited as Tier-C naval primitives and guardrail
 /// proxies. It is intentionally not a retail-complete naval executor; see

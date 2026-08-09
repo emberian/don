@@ -5,6 +5,7 @@
 
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, wflag, World};
+use don_sim::systems::mountains::{MountainRangeEntry, MountainRangeList, Mountains};
 use don_sim::systems::terrain_groups::{
     FertilityFractal, FillFertileError, PlaceAllError, TerrainGroup, TerrainGroups,
 };
@@ -169,7 +170,7 @@ fn skipped_nonfertile_cells_do_not_require_fractal_storage() {
 }
 
 #[test]
-fn place_all_stops_before_the_unresolved_mountains_rng_and_list_mutation() {
+fn place_all_composes_mountain_randomization_then_fails_closed_at_group_selection() {
     let mut world = filled_world(2, 2, land::FERTILE);
     let before_world = world.wdata.clone();
     let mut groups = TerrainGroups {
@@ -182,14 +183,32 @@ fn place_all_stops_before_the_unresolved_mountains_rng_and_list_mutation() {
         ..TerrainGroups::default()
     };
     let before_groups = groups.clone();
+    let mut mountains = Mountains {
+        small_ranges: MountainRangeList::new(vec![
+            MountainRangeEntry::new(1, 0),
+            MountainRangeEntry::new(2, 0),
+        ]),
+        medium_ranges: MountainRangeList::new(vec![MountainRangeEntry::new(3, 0)]),
+        large_ranges: MountainRangeList::new(vec![
+            MountainRangeEntry::new(4, 0),
+            MountainRangeEntry::new(5, 0),
+            MountainRangeEntry::new(6, 0),
+        ]),
+    };
+    let before_mountains = mountains.clone();
     let mut random = Random::new(0x1234_5678);
     let before_random = random.state();
 
-    assert_eq!(
-        groups.place_all(&mut world, &mut random, 1, 1),
-        Err(PlaceAllError::MountainsRandomizerUnavailable)
-    );
+    let error = groups
+        .place_all(&mut world, &mut random, &mut mountains, 1, 1)
+        .unwrap_err();
+    let PlaceAllError::TerrainGroupSelectionUnavailable {
+        mountain_randomization,
+    } = error;
+    assert_eq!(mountain_randomization.draws, 2);
+    assert_ne!(mountain_randomization.rng_state_after, before_random);
     assert_eq!(random.state(), before_random);
+    assert_eq!(mountains, before_mountains);
     assert_eq!(world.wdata, before_world);
     assert_eq!(groups, before_groups);
 }

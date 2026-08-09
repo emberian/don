@@ -12,6 +12,7 @@
 //! a fractal generator or tileset frequencies.
 
 use super::map_terrain::World;
+use super::mountains::{MountainRandomizeReceipt, Mountains};
 use super::regions::WCoordList;
 use crate::rng::Random;
 
@@ -93,10 +94,12 @@ pub struct FillFertileReceipt {
 /// First unresolved deterministic dependency in `TerrainGroups::place_all`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PlaceAllError {
-    /// Callsite `0x006a7330`, target `Mountains::randomize_mountains`
-    /// `0x0089ca70`.  The callback advances the main RNG zero to three times based
-    /// on three external linked lists, then mutates their cursors.
-    MountainsRandomizerUnavailable,
+    /// Mountain randomization at callsite `0x006a7330` has completed on the
+    /// fail-closed preview state.  The next unsupported deterministic stage is
+    /// the group chance/clump-selection loop beginning at `0x006a741e`.
+    TerrainGroupSelectionUnavailable {
+        mountain_randomization: MountainRandomizeReceipt,
+    },
 }
 
 impl TerrainGroups {
@@ -147,22 +150,25 @@ impl TerrainGroups {
 
     /// Fail-closed prefix of `TerrainGroups::place_all` `0x006a70d0`.
     ///
-    /// Before the first terrain-group selection draw, retail calls
-    /// `Mountains::randomize_mountains` at `0x006a7330`.  That function consumes
-    /// zero to three draws from the main RNG according to external mountain-range
-    /// lists and rotates three shared list cursors.  Those lists are not yet part
-    /// of the supported simulation state, so executing later group chance, clump,
-    /// player, or region placement logic would start from an unproven RNG state.
-    /// This boundary therefore returns before touching the caller's world, group
-    /// state, or RNG.
+    /// Before the first terrain-group selection draw, retail calls the now-exact
+    /// `Mountains::randomize_mountains` at `0x006a7330`.  It is executed here on a
+    /// preview clone, proving the composed call and its RNG order while retaining
+    /// the module's fail-closed contract: until the following selection loop is
+    /// recovered, no partial world, group, mountain-list, or RNG mutation escapes.
     pub fn place_all(
         &mut self,
         _world: &mut World,
-        _random: &mut Random,
+        random: &mut Random,
+        mountains: &mut Mountains,
         _progress: i32,
         _place_players: i32,
     ) -> Result<i32, PlaceAllError> {
-        Err(PlaceAllError::MountainsRandomizerUnavailable)
+        let mut preview_random = *random;
+        let mut preview_mountains = mountains.clone();
+        let mountain_randomization = preview_mountains.randomize_mountains(&mut preview_random);
+        Err(PlaceAllError::TerrainGroupSelectionUnavailable {
+            mountain_randomization,
+        })
     }
 
     fn validate_fractal_accesses(&self, world: &World) -> Result<(), FillFertileError> {
