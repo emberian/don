@@ -250,6 +250,16 @@ try {
       commandHistoryRecords: document.querySelectorAll('#command-history-list .command-record').length,
       commandHistorySummary: document.getElementById('command-history-summary')?.textContent ?? '',
       commandFeedbackBoundary: document.getElementById('command-history')?.textContent ?? '',
+      settingsProtocol: window.don.settings.snapshot().protocol,
+      settingsBindings: document.querySelectorAll('#settings-bindings .binding-row').length,
+      settingsStatusLive: document.getElementById('settings-status')?.getAttribute('aria-live') ?? '',
+      settingsRenderer: document.getElementById('settings-renderer')?.value ?? '',
+      settingsFps: document.getElementById('settings-fps')?.value ?? '',
+      settingsActions: ['settings-export', 'settings-import', 'settings-reset']
+        .every(id => !!document.getElementById(id)),
+      settingsUnavailableDisabled: [...document.querySelectorAll('#settings .settings-boundary button')]
+        .every(button => button.disabled),
+      settingsBoundary: document.getElementById('settings')?.textContent ?? '',
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -324,6 +334,13 @@ try {
       out.ui.commandHistoryRecords > 0 && out.ui.commandHistorySummary.includes('pending') &&
       out.ui.commandFeedbackBoundary.includes('ABI cannot') &&
       out.ui.commandFeedbackBoundary.includes('batch is labelled')],
+    ['browser settings expose visual, performance, persistence, and remappable input controls',
+      out.ui.settingsProtocol === 'don.browser-settings.v1' && out.ui.settingsBindings === 9 &&
+      out.ui.settingsStatusLive === 'polite' && out.ui.settingsRenderer === (BACKEND ?? 'auto') &&
+      out.ui.settingsFps === '0' && out.ui.settingsActions],
+    ['audio and native profile settings stay disabled at absent ABI boundaries',
+      out.ui.settingsUnavailableDisabled && out.ui.settingsBoundary.includes('no mixer/audio ABI') &&
+      out.ui.settingsBoundary.includes('no native profile/settings bridge')],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -353,6 +370,9 @@ try {
     const groupControls = [...document.querySelectorAll('#group-slots button, #group-actions button')]
       .map(button => button.getBoundingClientRect().height);
     const commands = document.getElementById('command-history').getBoundingClientRect();
+    const settings = document.getElementById('settings').getBoundingClientRect();
+    const settingsControls = [...document.querySelectorAll('#settings-actions button, .binding-row button')]
+      .map(button => button.getBoundingClientRect().height);
     return {
       viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
       sideBelowStage: side.top >= stage.bottom - 1,
@@ -364,6 +384,7 @@ try {
         getComputedStyle(document.getElementById('coverage')).display !== 'none',
       groupPanel: [groups.left, groups.right], groupControlHeights: groupControls,
       commandPanel: [commands.left, commands.right],
+      settingsPanel: [settings.left, settings.right], settingsControlHeights: settingsControls,
     };
   })()`);
   for (const [name, ok] of [
@@ -383,11 +404,196 @@ try {
       out.narrow.groupPanel[0] >= 0 && out.narrow.groupPanel[1] <= out.narrow.viewport[0] &&
       out.narrow.commandPanel[0] >= 0 && out.narrow.commandPanel[1] <= out.narrow.viewport[0] &&
       out.narrow.groupControlHeights.every(height => height >= 40)],
+    ['narrow settings remain in-page with touch-sized binding and persistence controls',
+      out.narrow.settingsPanel[0] >= 0 && out.narrow.settingsPanel[1] <= out.narrow.viewport[0] &&
+      out.narrow.settingsControlHeights.every(height => height >= 40)],
     ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }
   await c.send('Emulation.clearDeviceMetricsOverride');
+  await sleep(250);
+
+  // Settings must be live, collision-checked, persisted, and reloadable. Drive the actual
+  // form controls (including key-capture), prove visual FPS throttling leaves simulation
+  // advancing, reject conflicting/reserved imports without mutation, reload the page from
+  // localStorage, then reset so all later gameplay checks run on repository defaults.
+  out.settings = await c.eval(`(() => {
+    const d = window.don;
+    d.replay.play();
+    const setSelect = (id, value) => {
+      const control = document.getElementById(id);
+      control.value = value;
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    setSelect('settings-scale', '1.15');
+    setSelect('settings-palette', 'okabe-ito');
+    const contrast = document.getElementById('settings-contrast');
+    contrast.checked = true;
+    contrast.dispatchEvent(new Event('change', { bubbles: true }));
+    const motion = document.getElementById('settings-motion');
+    motion.checked = true;
+    motion.dispatchEvent(new Event('change', { bubbles: true }));
+    setSelect('settings-fps', '20');
+    document.querySelector('[data-binding="pause"]').click();
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true, code: 'KeyO', key: 'o',
+    }));
+    const afterCapture = d.settings.snapshot();
+    d.replay.play();
+    d.key('KeyP');
+    const oldBindingInactive = !d.state.paused;
+    d.key('KeyO');
+    const newBindingActive = d.state.paused;
+    d.replay.play();
+    const exported = d.settings.export();
+    const stable = d.settings.export();
+    let conflictRefused = false, reservedRefused = false, malformedRefused = false;
+    try {
+      const conflict = JSON.parse(exported);
+      conflict.input.bindings.halt = conflict.input.bindings.pause;
+      d.settings.import(conflict);
+    } catch { conflictRefused = true; }
+    try {
+      const reserved = JSON.parse(exported);
+      reserved.input.bindings.build = 'KeyW';
+      d.settings.import(reserved);
+    } catch { reservedRefused = true; }
+    try { d.settings.import('{"protocol":"wrong"}'); }
+    catch { malformedRefused = true; }
+    const invalidPreserved = d.settings.export() === stable;
+    d.settings.reset();
+    const imported = d.settings.import(exported);
+    const stored = JSON.parse(localStorage.getItem(imported.storageKey));
+    const root = document.documentElement;
+    return JSON.stringify({
+      afterCapture, imported, stored, exported,
+      conflictRefused, reservedRefused, malformedRefused, invalidPreserved,
+      oldBindingInactive, newBindingActive,
+      css: {
+        contrast: root.dataset.contrast,
+        motion: root.dataset.reducedMotion,
+        palette: root.dataset.ownerPalette,
+        scale: getComputedStyle(document.getElementById('side')).zoom,
+      },
+      rendererPalette: d.state.gfx.ownerPalette.slice(),
+      sessionBackend: new URL(d.session.url()).searchParams.get('backend'),
+      frameBeforeCapWait: d.state.mod.frame,
+      settingsStatus: document.getElementById('settings-status').textContent,
+      disabledBoundaries: [...document.querySelectorAll('#settings .settings-boundary button')]
+        .every(button => button.disabled),
+    });
+  })()`).then(JSON.parse);
+  await sleep(1400);
+  out.settings.cap = await c.eval(`(() => ({
+    fps: window.don.state.fps,
+    frame: window.don.state.mod.frame,
+    cap: window.don.settings.snapshot().performance.fpsCap,
+  }))()`);
+  for (const [name, ok] of [
+    ['visual settings apply live to contrast, reduced motion, owner palette, and UI scale',
+      out.settings.css.contrast === 'high' && out.settings.css.motion === 'true' &&
+      out.settings.css.palette === 'okabe-ito' && Number(out.settings.css.scale) === 1.15 &&
+      out.settings.rendererPalette[0] === '#0072b2'],
+    ['key capture remaps pause and removes the old binding',
+      out.settings.afterCapture.input.bindings.pause === 'KeyO' &&
+      out.settings.oldBindingInactive && out.settings.newBindingActive],
+    ['conflicting, fixed-camera, and malformed imports are refused without mutation',
+      out.settings.conflictRefused && out.settings.reservedRefused && out.settings.malformedRefused &&
+      out.settings.invalidPreserved],
+    ['settings export/reset/import round-trips the versioned browser profile',
+      out.settings.imported.protocol === 'don.browser-settings.v1' &&
+      out.settings.stored.visual.ownerPalette === 'okabe-ito' &&
+      out.settings.stored.input.bindings.pause === 'KeyO'],
+    ['renderer preference is encoded through the real backend URL seam',
+      out.settings.imported.performance.renderer === (BACKEND ?? 'auto') &&
+      out.settings.imported.activeRenderer === out.boot.backend &&
+      out.settings.sessionBackend === (BACKEND ?? null)],
+    ['the visual FPS cap throttles drawing while simulation time keeps advancing',
+      out.settings.cap.cap === 20 && out.settings.cap.fps >= 15 && out.settings.cap.fps <= 25 &&
+      out.settings.cap.frame >= out.settings.frameBeforeCapWait + 12],
+    ['audio/native settings remain disabled and persistence is announced',
+      out.settings.disabledBoundaries && out.settings.settingsStatus.includes('saved')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // Persist a 30 FPS profile, reload the actual page, and wait for a genuinely new JS realm.
+  await c.eval(`(() => {
+    const next = JSON.parse(window.don.settings.export());
+    next.performance.fpsCap = 30;
+    window.don.settings.apply(next);
+    return performance.timeOrigin;
+  })()`);
+  const oldTimeOrigin = await c.eval('performance.timeOrigin');
+  await c.send('Page.reload');
+  let settingsReloaded = false;
+  for (let i = 0; i < 100; i++) {
+    await sleep(100);
+    try {
+      settingsReloaded = await c.eval(`performance.timeOrigin !== ${oldTimeOrigin} &&
+        !!(window.don && window.don.ready && window.don.ready())`);
+    } catch {}
+    if (settingsReloaded) break;
+  }
+  if (!settingsReloaded) throw new Error('settings persistence reload never became ready');
+  out.settings.persisted = await c.eval(`(() => {
+    const d = window.don, snapshot = d.settings.snapshot();
+    d.replay.play();
+    d.key('KeyO');
+    const remapSurvived = d.state.paused;
+    d.replay.play();
+    return {
+      snapshot, remapSurvived,
+      root: {
+        contrast: document.documentElement.dataset.contrast,
+        motion: document.documentElement.dataset.reducedMotion,
+        palette: document.documentElement.dataset.ownerPalette,
+        scale: getComputedStyle(document.getElementById('side')).zoom,
+      },
+      urlBackend: new URL(location.href).searchParams.get('backend'),
+    };
+  })()`);
+  for (const [name, ok] of [
+    ['visual, input, and performance settings survive a real page reload',
+      out.settings.persisted.snapshot.visual.ownerPalette === 'okabe-ito' &&
+      out.settings.persisted.snapshot.visual.highContrast &&
+      out.settings.persisted.snapshot.visual.reducedMotion &&
+      out.settings.persisted.snapshot.performance.fpsCap === 30 &&
+      out.settings.persisted.remapSurvived],
+    ['the persisted profile is reflected in the reloaded DOM and renderer URL',
+      out.settings.persisted.root.contrast === 'high' &&
+      out.settings.persisted.root.motion === 'true' &&
+      out.settings.persisted.root.palette === 'okabe-ito' &&
+      Number(out.settings.persisted.root.scale) === 1.15 &&
+      out.settings.persisted.urlBackend === (BACKEND ?? null)],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+  out.settings.reset = await c.eval(`(() => {
+    const d = window.don, reset = d.settings.reset();
+    d.replay.play();
+    d.key('KeyP');
+    const defaultPauseWorks = d.state.paused;
+    d.replay.play();
+    return {
+      reset, defaultPauseWorks,
+      stored: JSON.parse(localStorage.getItem(reset.storageKey)),
+      palette: d.state.gfx.ownerPalette.slice(),
+    };
+  })()`);
+  for (const [name, ok] of [
+    ['reset restores and persists repository defaults for subsequent play',
+      out.settings.reset.reset.visual.ownerPalette === 'standard' &&
+      out.settings.reset.reset.visual.uiScale === 1 &&
+      out.settings.reset.reset.performance.fpsCap === 0 &&
+      out.settings.reset.reset.input.bindings.pause === 'KeyP' &&
+      out.settings.reset.defaultPauseWorks &&
+      out.settings.reset.stored.visual.ownerPalette === 'standard' &&
+      out.settings.reset.palette[0] === '#5c9eff'],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
   await sleep(250);
 
   // A playable page needs a reproducible session boundary, not a hard-coded seed that can

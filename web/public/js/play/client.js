@@ -27,7 +27,30 @@ const INCOME_MODES = Object.freeze([
   Object.freeze({ value: 1, slug: 'uncapped-experiment', label: 'DoN uncapped experiment' }),
 ]);
 const QUEUE_CAPACITY = 8; // game_object_info exposes queue_n plus q0..q7.
-const OWNER_COLOURS = Object.freeze(['#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47']);
+const SETTINGS_PROTOCOL = 'don.browser-settings.v1';
+const SETTINGS_STORAGE_KEY = 'don.browser-settings.v1';
+const OWNER_PALETTES = Object.freeze({
+  standard: Object.freeze([
+    '#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47', '#cc80f2', '#59d9e0', '#f28ccb', '#bfbfbf',
+  ]),
+  'okabe-ito': Object.freeze([
+    '#0072b2', '#d55e00', '#009e73', '#e69f00', '#cc79a7', '#56b4e9', '#f0e442', '#f4f4f4',
+  ]),
+  'high-separation': Object.freeze([
+    '#4477aa', '#ee6677', '#228833', '#ccbb44', '#aa3377', '#66ccee', '#ee8866', '#eeeeee',
+  ]),
+});
+const BINDING_ACTIONS = Object.freeze([
+  Object.freeze({ id: 'pause', label: 'pause / resume', fallback: 'KeyP' }),
+  Object.freeze({ id: 'home', label: 'camera home', fallback: 'Home' }),
+  Object.freeze({ id: 'focusSelection', label: 'focus selection', fallback: 'KeyF' }),
+  Object.freeze({ id: 'halt', label: 'halt selection', fallback: 'KeyH' }),
+  Object.freeze({ id: 'build', label: 'build catalog', fallback: 'KeyB' }),
+  Object.freeze({ id: 'train', label: 'train catalog', fallback: 'Shift+KeyT' }),
+  Object.freeze({ id: 'research', label: 'research catalog', fallback: 'Shift+KeyR' }),
+  Object.freeze({ id: 'idle', label: 'next idle worker', fallback: 'Period' }),
+  Object.freeze({ id: 'selectAll', label: 'select all units', fallback: 'Primary+KeyA' }),
+]);
 const JOURNAL_PROTOCOL = 'don.command-journal.v1';
 const MAX_JOURNAL_FRAMES = 1000000; // about 18.6 hours at the recovered 67 ms tick.
 const MAX_JOURNAL_EVENTS = 50000;
@@ -61,6 +84,9 @@ const state = {
   rendererErrorCount: 0,
   paletteNotice: '',
   cameraSource: 'home',
+  settings: null,
+  bindingCapture: null,
+  settingsStatus: 'loading browser settings',
   replay: {
     events: [], baseline: null, headFrame: 0,
     applying: false, playback: false, restoring: false,
@@ -79,6 +105,12 @@ const state = {
 async function boot() {
   const canvas = $('gl');
   const params = new URLSearchParams(location.search);
+  const loadedSettings = loadBrowserSettings();
+  const requestedBackend = params.get('backend');
+  if (['webgpu', 'canvas2d'].includes(requestedBackend)) {
+    loadedSettings.performance.renderer = requestedBackend;
+  }
+  applyBrowserSettings(loadedSettings, { persist: false, announce: false });
 
   const mod = await GameModule.load('./wasm/don_web.wasm');
   state.mod = mod;
@@ -112,7 +144,10 @@ async function boot() {
   badge('pdata', mod.hasPlayData ? 'costs + 312 edges: live' : 'play tables: MISSING',
     mod.hasPlayData ? 'on' : 'bad');
 
-  state.gfx = await makeRenderer(canvas, params.get('backend'));
+  const rendererPreference = state.settings.performance.renderer === 'auto'
+    ? null : state.settings.performance.renderer;
+  state.gfx = await makeRenderer(canvas, rendererPreference);
+  state.gfx.setOwnerPalette(ownerColours());
   badge('be', state.gfx.kind, state.gfx.kind === 'webgpu' ? 'on' : 'off');
   resize();
   state.gfx.provision(mod.tiles, mod.x.game_capacity(mod.g));
@@ -124,6 +159,7 @@ async function boot() {
   // the renderer's live canvas, not the now-detached element captured at boot.
   wireInput($('gl'));
   wirePanels();
+  initializeSettingsPanel();
   initializeSessionPanel();
   initializeObjectivesPanel();
   initializeControlGroupsPanel();
@@ -147,6 +183,347 @@ async function fetchJson(url) {
     if (!r.ok) return null;
     return await r.json();
   } catch { return null; }
+}
+
+function defaultBrowserSettings() {
+  return {
+    protocol: SETTINGS_PROTOCOL,
+    visual: {
+      uiScale: 1,
+      ownerPalette: 'standard',
+      highContrast: false,
+      reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    },
+    performance: { renderer: 'auto', fpsCap: 0 },
+    input: {
+      bindings: Object.fromEntries(BINDING_ACTIONS.map((action) => [action.id, action.fallback])),
+    },
+  };
+}
+
+function canonicalBinding(value) {
+  const parts = String(value).split('+').filter(Boolean);
+  const code = parts.pop();
+  if (!code || !/^[A-Za-z][A-Za-z0-9]{1,30}$/.test(code)) {
+    throw new Error(`invalid binding code ${JSON.stringify(value)}`);
+  }
+  const modifiers = new Set();
+  for (const part of parts) {
+    const normalized = part === 'Ctrl' || part === 'Meta' ? 'Primary' : part;
+    if (!['Primary', 'Alt', 'Shift'].includes(normalized) || modifiers.has(normalized)) {
+      throw new Error(`invalid binding modifier in ${JSON.stringify(value)}`);
+    }
+    modifiers.add(normalized);
+  }
+  return [...['Primary', 'Alt', 'Shift'].filter((modifier) => modifiers.has(modifier)), code].join('+');
+}
+
+function bindingConflictsWithFixedInput(binding) {
+  const parts = binding.split('+');
+  const code = parts.at(-1);
+  const unmodified = parts.length === 1;
+  if (/^Digit[1-9]$/.test(code)) return 'control groups reserve Digit1..Digit9 with modifiers';
+  if (['Escape', 'Space', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+    'Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'].includes(code)) return `${code} is a fixed map/runtime control`;
+  if (unmodified && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(code)) {
+    return `${code} is reserved for camera movement`;
+  }
+  if (unmodified && /^Key[QWERTYUI]$/.test(code)) return `${code} is reserved for palette slots`;
+  return '';
+}
+
+function normalizeBrowserSettings(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('settings root must be an object');
+  if (input.protocol !== SETTINGS_PROTOCOL) throw new Error(`unsupported settings protocol ${JSON.stringify(input.protocol)}`);
+  const visual = input.visual;
+  const performanceSettings = input.performance;
+  const bindingsInput = input.input?.bindings;
+  if (!visual || !performanceSettings || !bindingsInput || typeof bindingsInput !== 'object') {
+    throw new Error('settings visual, performance, and input.bindings sections are required');
+  }
+  const uiScale = Number(visual.uiScale);
+  if (![0.9, 1, 1.15, 1.3].includes(uiScale)) throw new Error('UI scale is unsupported');
+  if (!OWNER_PALETTES[visual.ownerPalette]) throw new Error('owner palette is unsupported');
+  if (typeof visual.highContrast !== 'boolean' || typeof visual.reducedMotion !== 'boolean') {
+    throw new Error('contrast and reduced-motion settings must be boolean');
+  }
+  const renderer = String(performanceSettings.renderer);
+  if (!['auto', 'webgpu', 'canvas2d'].includes(renderer)) throw new Error('renderer preference is unsupported');
+  const fpsCap = Number(performanceSettings.fpsCap);
+  if (![0, 20, 30, 60].includes(fpsCap)) throw new Error('visual FPS cap is unsupported');
+  const bindings = {};
+  const used = new Map();
+  for (const action of BINDING_ACTIONS) {
+    const binding = canonicalBinding(bindingsInput[action.id]);
+    const fixedConflict = bindingConflictsWithFixedInput(binding);
+    if (fixedConflict) throw new Error(`${action.label}: ${fixedConflict}`);
+    if (used.has(binding)) throw new Error(`${action.label} conflicts with ${used.get(binding)} at ${binding}`);
+    used.set(binding, action.label);
+    bindings[action.id] = binding;
+  }
+  return {
+    protocol: SETTINGS_PROTOCOL,
+    visual: {
+      uiScale, ownerPalette: visual.ownerPalette,
+      highContrast: visual.highContrast, reducedMotion: visual.reducedMotion,
+    },
+    performance: { renderer, fpsCap },
+    input: { bindings },
+  };
+}
+
+function loadBrowserSettings() {
+  try {
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!stored) return normalizeBrowserSettings(defaultBrowserSettings());
+    if (new TextEncoder().encode(stored).length > 65536) throw new Error('stored settings exceed 64 KiB');
+    return normalizeBrowserSettings(JSON.parse(stored));
+  } catch (error) {
+    state.settingsStatus = `stored settings refused; defaults loaded: ${error.message}`;
+    return normalizeBrowserSettings(defaultBrowserSettings());
+  }
+}
+
+function ownerColours() {
+  return OWNER_PALETTES[state.settings?.visual.ownerPalette ?? 'standard'];
+}
+
+function settingsClone() {
+  return JSON.parse(JSON.stringify(state.settings));
+}
+
+function persistBrowserSettings() {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(state.settings));
+    return true;
+  } catch (error) {
+    state.settingsStatus = `settings applied for this tab but persistence failed: ${error.message}`;
+    return false;
+  }
+}
+
+function applyBrowserSettings(input, { persist = true, announce = true, status = '' } = {}) {
+  const settings = normalizeBrowserSettings(input);
+  state.settings = settings;
+  const root = document.documentElement;
+  root.dataset.contrast = settings.visual.highContrast ? 'high' : 'standard';
+  root.dataset.reducedMotion = String(settings.visual.reducedMotion);
+  root.dataset.ownerPalette = settings.visual.ownerPalette;
+  root.style.setProperty('--ui-scale', String(settings.visual.uiScale));
+  if (settings.visual.reducedMotion && typeof pings !== 'undefined') pings.length = 0;
+  if (state.gfx?.setOwnerPalette) state.gfx.setOwnerPalette(ownerColours());
+  if (persist) persistBrowserSettings();
+  if (state.mod) syncSessionUrl();
+  syncSettingsControls();
+  if (state.mod && $('owner-legend')?.childElementCount) renderObjectivesPanel();
+  if (state.gfx) { resize(); clampCam(); }
+  state.settingsStatus = status ||
+    `saved in this browser · ${settings.visual.ownerPalette} palette · ` +
+    `${settings.performance.fpsCap || 'display'} FPS · renderer ${settings.performance.renderer}`;
+  renderSettingsStatus();
+  if (announce) say('browser settings applied', 'ok');
+  return settingsSnapshot();
+}
+
+function mutateBrowserSettings(mutator, status = '') {
+  const next = settingsClone();
+  mutator(next);
+  return applyBrowserSettings(next, { status });
+}
+
+function formatBinding(binding) {
+  return binding
+    .replace('Primary+', navigator.platform.includes('Mac') ? '⌘+' : 'Ctrl+')
+    .replace(/Key([A-Z])/g, '$1')
+    .replace(/Digit([0-9])/g, '$1');
+}
+
+function chordFromEvent(event) {
+  const modifiers = [];
+  if (event.ctrlKey || event.metaKey) modifiers.push('Primary');
+  if (event.altKey) modifiers.push('Alt');
+  if (event.shiftKey) modifiers.push('Shift');
+  return canonicalBinding([...modifiers, event.code].join('+'));
+}
+
+function bindingActionForEvent(event) {
+  let chord;
+  try { chord = chordFromEvent(event); } catch { return null; }
+  return BINDING_ACTIONS.find((action) => state.settings.input.bindings[action.id] === chord) ?? null;
+}
+
+function runBoundAction(action) {
+  switch (action.id) {
+    case 'pause': setPaused(!state.paused); break;
+    case 'home': focusPlayerStart(state.who, 'bound home action'); break;
+    case 'focusSelection': jumpToSelection(); break;
+    case 'halt': logPacket('HALT', state.mod.halt(state.who)); break;
+    case 'build': openCatalog('build'); break;
+    case 'train': openCatalog('train'); break;
+    case 'research': openCatalog('research'); break;
+    case 'idle': cycleIdleWorker(); break;
+    case 'selectAll': selectAllUnits(); break;
+    default: return false;
+  }
+  return true;
+}
+
+function settingsSnapshot() {
+  return Object.freeze({
+    ...settingsClone(),
+    activeRenderer: state.gfx?.kind ?? 'booting',
+    storageKey: SETTINGS_STORAGE_KEY,
+    status: state.settingsStatus,
+  });
+}
+
+function exportBrowserSettings() {
+  return `${JSON.stringify(state.settings, null, 2)}\n`;
+}
+
+function importBrowserSettings(input) {
+  let parsed;
+  try {
+    if (typeof input === 'string' && new TextEncoder().encode(input).length > 65536) {
+      throw new Error('settings JSON exceeds 64 KiB');
+    }
+    parsed = typeof input === 'string' ? JSON.parse(input) : input;
+  } catch (error) {
+    throw new Error(`settings import refused: ${error.message}`);
+  }
+  return applyBrowserSettings(parsed, { status: 'imported and saved; renderer changes require reload' });
+}
+
+function resetBrowserSettings() {
+  return applyBrowserSettings(defaultBrowserSettings(), { status: 'browser settings reset to defaults' });
+}
+
+function syncSettingsControls() {
+  if (!$('settings') || !state.settings) return;
+  $('settings-scale').value = String(state.settings.visual.uiScale);
+  $('settings-palette').value = state.settings.visual.ownerPalette;
+  $('settings-contrast').checked = state.settings.visual.highContrast;
+  $('settings-motion').checked = state.settings.visual.reducedMotion;
+  $('settings-renderer').value = state.settings.performance.renderer;
+  $('settings-fps').value = String(state.settings.performance.fpsCap);
+  const binding = (id) => formatBinding(state.settings.input.bindings[id]);
+  $('halt').textContent = `halt (${binding('halt')})`;
+  $('cmd-halt').lastElementChild.textContent = binding('halt');
+  $('cmd-pause').lastElementChild.textContent = binding('pause');
+  $('cmd-build').lastElementChild.textContent = binding('build');
+  $('tab-build').querySelector('.ck').textContent = binding('build');
+  $('tab-train').querySelector('.ck').textContent = binding('train');
+  $('tab-research').querySelector('.ck').textContent = binding('research');
+  setPaused(state.paused, false);
+  renderSettingsBindings();
+}
+
+function renderSettingsBindings() {
+  const host = $('settings-bindings');
+  if (!host || !state.settings) return;
+  if (!host.childElementCount) {
+    for (const action of BINDING_ACTIONS) {
+      const row = document.createElement('div');
+      row.className = 'binding-row';
+      const label = document.createElement('span');
+      label.textContent = action.label;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.binding = action.id;
+      button.addEventListener('click', () => {
+        state.bindingCapture = action.id;
+        state.settingsStatus = `press a non-reserved key chord for ${action.label}; Escape cancels`;
+        renderSettingsBindings();
+        renderSettingsStatus();
+      });
+      row.append(label, button);
+      host.appendChild(row);
+    }
+  }
+  for (const button of host.querySelectorAll('button[data-binding]')) {
+    const listening = button.dataset.binding === state.bindingCapture;
+    button.classList.toggle('listening', listening);
+    button.textContent = listening ? 'press keys…' : formatBinding(state.settings.input.bindings[button.dataset.binding]);
+  }
+}
+
+function renderSettingsStatus() {
+  if (!$('settings-status') || !state.settings) return;
+  const active = state.gfx?.kind ?? 'booting';
+  const requested = state.settings.performance.renderer;
+  let rendererNote = '';
+  if (requested !== 'auto' && active !== 'booting' && requested !== active) {
+    const attempted = new URL(location.href).searchParams.get('backend') === requested;
+    rendererNote = attempted
+      ? ` · requested ${requested}; active ${active} fallback`
+      : ` · reload required for ${requested}`;
+  }
+  $('settings-status').textContent = `${state.settingsStatus} · active ${active}${rendererNote}`;
+}
+
+function captureBinding(event) {
+  if (!state.bindingCapture) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.code === 'Escape') {
+    state.bindingCapture = null;
+    state.settingsStatus = 'binding change cancelled';
+    renderSettingsBindings();
+    renderSettingsStatus();
+    return;
+  }
+  const action = BINDING_ACTIONS.find((candidate) => candidate.id === state.bindingCapture);
+  try {
+    const binding = chordFromEvent(event);
+    const next = settingsClone();
+    next.input.bindings[action.id] = binding;
+    applyBrowserSettings(next, { status: `${action.label} bound to ${formatBinding(binding)}` });
+    state.bindingCapture = null;
+  } catch (error) {
+    state.settingsStatus = `binding refused: ${error.message}`;
+  }
+  renderSettingsBindings();
+  renderSettingsStatus();
+}
+
+function downloadBrowserSettings() {
+  const blob = new Blob([exportBrowserSettings()], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'don-browser-settings.json';
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function initializeSettingsPanel() {
+  $('settings-scale').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.visual.uiScale = Number(event.target.value); }));
+  $('settings-palette').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.visual.ownerPalette = event.target.value; }));
+  $('settings-contrast').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.visual.highContrast = event.target.checked; }));
+  $('settings-motion').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.visual.reducedMotion = event.target.checked; }));
+  $('settings-renderer').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.performance.renderer = event.target.value; },
+      'renderer preference saved; apply and reload to recreate the canvas backend'));
+  $('settings-fps').addEventListener('change', (event) =>
+    mutateBrowserSettings((settings) => { settings.performance.fpsCap = Number(event.target.value); }));
+  $('settings-renderer-apply').addEventListener('click', () => location.assign(sessionUrl().href));
+  $('settings-export').addEventListener('click', downloadBrowserSettings);
+  $('settings-import').addEventListener('click', () => $('settings-file').click());
+  $('settings-reset').addEventListener('click', resetBrowserSettings);
+  $('settings-file').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try { importBrowserSettings(await file.text()); say('browser settings imported', 'ok'); }
+    catch (error) { state.settingsStatus = error.message; renderSettingsStatus(); say(error.message, 'warn'); }
+  });
+  window.addEventListener('keydown', captureBinding, true);
+  syncSettingsControls();
+  renderSettingsStatus();
 }
 
 function parseSessionSeed(value) {
@@ -541,26 +918,12 @@ function initializeControlGroupsPanel() {
 function onKeyDown(e) {
   const tag = e.target && e.target.tagName;
   if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tag) || e.target?.isContentEditable) return;
+  const bound = bindingActionForEvent(e);
+  if (bound && runBoundAction(bound)) {
+    e.preventDefault();
+    return;
+  }
   keys.add(e.code);
-  const m = state.mod;
-
-  // Palette modes have dedicated shortcuts without stealing the unmodified QWERTYUI
-  // action row. The buttons provide the identical touch path.
-  if (e.code === 'KeyB' && !e.shiftKey) {
-    openCatalog('build');
-    e.preventDefault();
-    return;
-  }
-  if (e.code === 'KeyT' && e.shiftKey) {
-    openCatalog('train');
-    e.preventDefault();
-    return;
-  }
-  if (e.code === 'KeyR' && e.shiftKey) {
-    openCatalog('research');
-    e.preventDefault();
-    return;
-  }
 
   // Control groups live over exact currently-exported object IDs. Membership edits do not
   // fabricate engine commands; recall goes through the same GroupCommand as mouse selection.
@@ -580,12 +943,6 @@ function onKeyDown(e) {
 
   switch (e.code) {
     case 'Escape': cancelTargeting(); break;
-    case 'KeyH': logPacket('HALT', m.halt(state.who)); break;
-    case 'KeyF': jumpToSelection(); break;
-    case 'Home': focusPlayerStart(state.who, 'Home key'); break;
-    case 'KeyP': case 'Pause': setPaused(!state.paused); break;
-    case 'Period': cycleIdleWorker(); break;
-    case 'KeyA': if (e.ctrlKey || e.metaKey) { selectAllUnits(); e.preventDefault(); } break;
     case 'Equal': case 'NumpadAdd': setSpeed(state.speed * 2); break;
     case 'Minus': case 'NumpadSubtract': setSpeed(state.speed / 2); break;
     default: break;
@@ -906,6 +1263,7 @@ function resetClientForWorld(seed, paused, cameraSource) {
   pings.length = 0;
   acc = 0;
   last = performance.now();
+  visualLast = 0;
   state.gfx.provision(state.mod.tiles, state.mod.x.game_capacity(state.mod.g));
   const [sx, sy] = state.mod.startOf(state.who);
   centreOn(sx, sy);
@@ -947,7 +1305,6 @@ function switchPlayer(player) {
 
 function sessionUrl() {
   const current = new URL(location.href);
-  const backend = current.searchParams.get('backend');
   const url = new URL(current.href);
   url.search = '';
   url.hash = '';
@@ -963,7 +1320,9 @@ function sessionUrl() {
   url.searchParams.set('income', INCOME_MODES[state.sessionIncomeMode].slug);
   url.searchParams.set('population', String(POPULATION_LIMITS[state.sessionPopSetting]));
   url.searchParams.set('victory', 'unavailable');
-  if (backend) url.searchParams.set('backend', backend);
+  if (state.settings.performance.renderer !== 'auto') {
+    url.searchParams.set('backend', state.settings.performance.renderer);
+  }
   return url;
 }
 
@@ -1032,6 +1391,7 @@ function renderSessionSummary() {
 }
 
 function initializeObjectivesPanel() {
+  const colours = ownerColours();
   const legend = $('owner-legend');
   const players = $('world-players');
   legend.replaceChildren();
@@ -1041,7 +1401,7 @@ function initializeObjectivesPanel() {
     key.className = 'owner-key';
     const swatch = document.createElement('span');
     swatch.className = 'owner-swatch';
-    swatch.style.background = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    swatch.style.background = colours[p % colours.length];
     const label = document.createElement('span');
     label.id = `owner-key-${p}`;
     key.append(swatch, label);
@@ -1052,7 +1412,7 @@ function initializeObjectivesPanel() {
     row.dataset.player = String(p);
     const owner = document.createElement('div');
     owner.className = 'owner-id';
-    owner.style.color = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    owner.style.color = colours[p % colours.length];
     owner.textContent = `P${p}`;
     const exported = document.createElement('div');
     exported.className = 'owner-state';
@@ -1134,6 +1494,7 @@ function renderObjectivesPanel() {
   if (!$('objectives') || !state.mod) return;
   const snapshot = exportedWorldSnapshot();
   const camera = cameraSnapshot();
+  const colours = ownerColours();
   $('objective-time').textContent =
     `frame ${snapshot.frame.toLocaleString()} · elapsed ${snapshot.elapsedSeconds.toFixed(1)} s`;
   $('objective-state').textContent = 'unavailable — no victory/endgame host';
@@ -1143,8 +1504,12 @@ function renderObjectivesPanel() {
     const relation = owner.player === state.who ? 'you' : 'relation unavailable';
     const key = $(`owner-key-${owner.player}`);
     if (key) key.textContent = `P${owner.player} ${relation}`;
+    const swatch = key?.previousElementSibling;
+    if (swatch) swatch.style.background = colours[owner.player % colours.length];
     const row = document.querySelector(`.world-player[data-player="${owner.player}"]`);
     if (row) row.classList.toggle('you', owner.player === state.who);
+    const ownerId = row?.querySelector('.owner-id');
+    if (ownerId) ownerId.style.color = colours[owner.player % colours.length];
     const stateEl = $(`owner-state-${owner.player}`);
     if (stateEl) {
       const objectWord = owner.objects === 1 ? 'object' : 'objects';
@@ -1853,7 +2218,9 @@ function openCatalog(which) {
     : which === 'train' ? $('tab-train') : $('tab-build');
   tab.click();
   if (matchMedia('(max-width:700px)').matches) {
-    $('side').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('side').scrollIntoView({
+      behavior: state.settings.visual.reducedMotion ? 'auto' : 'smooth', block: 'start',
+    });
   }
 }
 
@@ -1865,7 +2232,10 @@ function zoomCentre(factor) {
 function setPaused(paused, announce = true) {
   state.paused = paused;
   const el = $('pause');
-  if (el) el.textContent = paused ? 'resume (P)' : 'pause (P)';
+  if (el) {
+    const binding = state.settings ? formatBinding(state.settings.input.bindings.pause) : 'P';
+    el.textContent = `${paused ? 'resume' : 'pause'} (${binding})`;
+  }
   const dock = $('cmd-pause');
   if (dock) {
     dock.firstElementChild.textContent = paused ? 'resume' : 'pause';
@@ -2251,7 +2621,8 @@ function renderHud() {
     `${state.fps.toFixed(0)} fps   ${m.live} objects   frame ${m.frame} ` +
     `(${(m.frame * TICK_MS / 1000).toFixed(0)} s)   ` +
     `step ${state.stepMs.toFixed(2)} ms   upload ${state.uploadMs.toFixed(2)} ms   ` +
-    `x${state.speed}${state.paused ? '  PAUSED' : ''}`;
+    `x${state.speed}   visual ${state.settings.performance.fpsCap || 'display'} fps cap` +
+    `${state.paused ? '  PAUSED' : ''}`;
 
   renderSelection();
   refreshPaletteAvailability();
@@ -2372,7 +2743,10 @@ function renderCoverage() {
 // ---------------------------------------------------------------------------------------
 
 const pings = [];
-function ping(w, colour) { pings.push({ x: w[0], y: w[1], t: performance.now(), colour }); }
+function ping(w, colour) {
+  if (state.settings.visual.reducedMotion) return;
+  pings.push({ x: w[0], y: w[1], t: performance.now(), colour });
+}
 
 function drawOverlay() {
   const c = $('ov');
@@ -2491,10 +2865,11 @@ function drawMinimap() {
   const v = m.views();
   const live = m.live;
   const s = c.width / m.span;
+  const colours = ownerColours();
   for (let i = 0; i < live; i++) {
     const tag = v.tag[i];
     if ((tag & 0x80000000) === 0) continue;
-    g.fillStyle = OWNER_COLOURS[(tag & 0xf) % OWNER_COLOURS.length];
+    g.fillStyle = colours[(tag & 0xf) % colours.length];
     const b = (tag >>> 29) & 1;
     g.fillRect(v.x[i] * s - (b ? 1.5 : 0.5), v.y[i] * s - (b ? 1.5 : 0.5), b ? 3 : 1.5, b ? 3 : 1.5);
   }
@@ -2505,10 +2880,10 @@ function drawMinimap() {
   for (let p = 0; p < m.playerCount; p++) {
     const [x, y] = m.startOf(p);
     const sx = x * s, sy = y * s;
-    g.strokeStyle = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    g.strokeStyle = colours[p % colours.length];
     g.lineWidth = p === state.who ? 2 : 1;
     g.strokeRect(sx - 4, sy - 4, 8, 8);
-    g.fillStyle = OWNER_COLOURS[p % OWNER_COLOURS.length];
+    g.fillStyle = colours[p % colours.length];
     g.fillText(`P${p}`, sx, sy - 7);
   }
   g.textAlign = 'start';
@@ -2542,13 +2917,11 @@ function resize() {
   }
 }
 
-let acc = 0, last = performance.now(), fpsAcc = 0, fpsN = 0, hudAt = 0;
+let acc = 0, last = performance.now(), visualLast = 0, fpsAcc = 0, fpsN = 0, hudAt = 0;
 
 function frame(now) {
   const dt = Math.min(now - last, 200);
   last = now;
-  fpsAcc += dt; fpsN++;
-  if (fpsAcc > 400) { state.fps = 1000 * fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
 
   const m = state.mod;
 
@@ -2579,6 +2952,19 @@ function frame(now) {
     while (acc >= TICK_MS && steps < 16) { advanceSimulationFrame(); acc -= TICK_MS; steps++; }
     if (steps) state.stepMs = (performance.now() - t0) / steps;
   }
+
+  // This cap throttles only visual uploads/draws. Input, camera movement, and the recovered
+  // 67 ms simulation clock above continue on every animation callback.
+  const fpsCap = state.settings.performance.fpsCap;
+  const visualInterval = fpsCap ? 1000 / fpsCap : 0;
+  if (visualLast && visualInterval && now - visualLast < visualInterval - 1) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  const visualDt = visualLast ? now - visualLast : dt;
+  visualLast = now;
+  fpsAcc += visualDt; fpsN++;
+  if (fpsAcc > 400) { state.fps = 1000 * fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
 
   if (state.terrainVersion !== m.terrainVersion) {
     state.terrainVersion = m.terrainVersion;
@@ -2662,6 +3048,16 @@ window.don = {
   commands: {
     snapshot: () => commandFeedbackSnapshot(),
   },
+  settings: {
+    snapshot: () => settingsSnapshot(),
+    export: () => exportBrowserSettings(),
+    import: (input) => importBrowserSettings(input),
+    apply: (input) => applyBrowserSettings(input),
+    reset: () => resetBrowserSettings(),
+    reloadStored: () => applyBrowserSettings(loadBrowserSettings(), {
+      persist: false, status: 'reloaded persisted browser settings',
+    }),
+  },
   replay: {
     snapshot: () => replaySnapshot(),
     export: () => exportReplayJournal(),
@@ -2703,6 +3099,7 @@ window.don = {
     sessionSetup: sessionDescriptor(),
     objectives: exportedWorldSnapshot(), camera: cameraSnapshot(), replay: replaySnapshot(),
     controlGroups: controlGroupsSnapshot(), commands: commandFeedbackSnapshot(),
+    settings: settingsSnapshot(),
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),

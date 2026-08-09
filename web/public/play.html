@@ -9,7 +9,12 @@
   :root {
     --bg:#080a0e; --panel:#11141b; --line:#232733; --ink:#e7e9f0; --dim:#8b93a6;
     --accent:#5ab7ff; --warn:#ffb454; --bad:#ff6b5b; --good:#6ee7a8;
+    --ui-scale:1;
     --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  html[data-contrast="high"] {
+    --bg:#000; --panel:#080808; --line:#aeb8ca; --ink:#fff; --dim:#d2d8e2;
+    --accent:#66ccff; --warn:#ffd166; --bad:#ff7070; --good:#77f2a8;
   }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
@@ -73,7 +78,7 @@
 
   /* ---- side panel ---- */
   #side { background:var(--panel); border-left:1px solid var(--line); overflow-y:auto;
-    padding:10px; display:flex; flex-direction:column; gap:10px; }
+    padding:10px; display:flex; flex-direction:column; gap:10px; zoom:var(--ui-scale); }
   h1 { font-size:12px; margin:0; letter-spacing:.04em; text-transform:uppercase; color:var(--dim); }
   .badges { display:flex; flex-wrap:wrap; gap:4px; }
   .badge { display:inline-block; padding:1px 5px; border-radius:4px; font:9.5px var(--mono);
@@ -212,6 +217,21 @@
   .command-record[data-status="partial"] .command-state { color:var(--bad); }
   .command-record[data-status="drained"] .command-state { color:var(--accent); }
   .command-detail { margin-top:2px; color:var(--dim); overflow-wrap:anywhere; user-select:text; }
+  #settings-bindings { display:grid; gap:3px; margin:6px 0; }
+  .binding-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; align-items:center;
+    color:var(--dim); font:9.5px var(--mono); }
+  .binding-row button { min-width:112px; }
+  .binding-row button.listening { border-color:var(--warn); color:var(--warn); }
+  #settings-actions { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  #settings-status { margin-top:6px; padding:5px 6px; border-left:2px solid var(--accent);
+    background:#0d1118; color:var(--dim); font:9.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  #settings-file { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .settings-boundary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center;
+    gap:6px; margin-top:4px; color:var(--dim); font:9px/1.35 var(--mono); }
+  html[data-reduced-motion="true"] *, html[data-reduced-motion="true"] *::before,
+  html[data-reduced-motion="true"] *::after { scroll-behavior:auto!important;
+    animation-duration:.001ms!important; animation-iteration-count:1!important;
+    transition-duration:.001ms!important; }
 
   @media (max-width:900px) {
     #app { grid-template-columns:minmax(400px,1fr) 290px; }
@@ -241,6 +261,7 @@
     .world-player button { min-height:42px; }
     .replay-controls button { min-height:42px; }
     .group-slot,#group-actions button { min-height:42px; }
+    #settings-actions button,.binding-row button { min-height:42px; }
     #dock-state { display:none; }
     #coverage { top:54px; right:6px; bottom:auto; max-width:190px; padding:4px 6px;
       overflow:hidden; border-radius:5px; background:rgba(8,10,14,.68); font-size:9px; }
@@ -285,6 +306,54 @@
       <span class="badge off">integration build</span>
     </div>
     <div id="readiness-head" class="status-note">Loading compiled readiness registry…</div>
+
+    <fieldset id="settings">
+      <legend>settings &amp; accessibility</legend>
+      <div class="setup-heading">visual</div>
+      <label>UI scale
+        <select id="settings-scale">
+          <option value="0.9">90%</option><option value="1" selected>100%</option>
+          <option value="1.15">115%</option><option value="1.3">130%</option>
+        </select>
+      </label>
+      <label>owner palette
+        <select id="settings-palette">
+          <option value="standard">standard</option>
+          <option value="okabe-ito">Okabe–Ito colorblind-safe</option>
+          <option value="high-separation">high-separation colorblind-safe</option>
+        </select>
+      </label>
+      <label>high contrast <input id="settings-contrast" type="checkbox"></label>
+      <label>reduced motion <input id="settings-motion" type="checkbox"></label>
+
+      <div class="setup-heading">performance</div>
+      <label>renderer
+        <select id="settings-renderer">
+          <option value="auto">automatic WebGPU/fallback</option>
+          <option value="webgpu">prefer WebGPU</option>
+          <option value="canvas2d">Canvas 2D</option>
+        </select>
+      </label>
+      <button id="settings-renderer-apply" type="button">apply renderer &amp; reload</button>
+      <label>visual FPS cap
+        <select id="settings-fps">
+          <option value="0">display refresh</option><option value="60">60</option>
+          <option value="30">30</option><option value="20">20</option>
+        </select>
+      </label>
+
+      <div class="setup-heading">remappable commands</div>
+      <div id="settings-bindings" aria-label="Keyboard bindings"></div>
+      <div id="settings-actions">
+        <button id="settings-export" type="button">export</button>
+        <button id="settings-import" type="button">import</button>
+        <button id="settings-reset" type="button">reset defaults</button>
+        <input id="settings-file" type="file" accept="application/json,.json">
+      </div>
+      <div id="settings-status" role="status" aria-live="polite">loading browser settings…</div>
+      <div class="settings-boundary"><span>Audio settings unavailable: no mixer/audio ABI is attached.</span><button type="button" disabled title="Unavailable: no audio mixer ABI">audio</button></div>
+      <div class="settings-boundary"><span>Native retail settings unavailable: no native profile/settings bridge is exported.</span><button type="button" disabled title="Unavailable: no native settings bridge">native profile</button></div>
+    </fieldset>
 
     <fieldset id="session">
       <legend>new game setup</legend>
@@ -509,7 +578,7 @@
     <fieldset>
       <legend>runtime</legend>
       <label>speed <input id="speed" type="range" min="0.25" max="8" step="0.25" value="1" style="width:150px"></label>
-      <div style="display:flex;gap:4px"><button id="pause">pause (P)</button><button id="halt">halt (H)</button></div>
+      <div style="display:flex;gap:4px"><button id="pause">pause</button><button id="halt">halt</button></div>
     </fieldset>
 
     <fieldset>
@@ -523,10 +592,10 @@
         <b>Ctrl+1..9</b> replace group &middot; <b>Ctrl+Shift+1..9</b> add &middot;
         <b>Alt+1..9</b> remove &middot; <b>1..9</b> recall &middot;
         <b>same key twice</b> jump to it &middot; <b>.</b> next idle worker<br>
-        <b>right click</b> move / attack / gather &middot; <b>B</b> build &middot;
-        <b>Shift+T</b> train &middot; <b>Shift+R</b> research &middot;
+        <b>right click</b> move / attack / gather &middot; build/train/research use the
+        remappable bindings above &middot;
         <b>Q W E R T Y U I</b> palette slots &middot; <b>Esc</b> cancel &middot;
-        <b>H</b> halt &middot; <b>P</b> pause &middot; <b>+ -</b> speed<br>
+        halt/pause/focus/idle are remappable &middot; <b>+ -</b> speed<br>
         <b>touch</b> tap to select &middot; drag the map to pan &middot; use the command dock to
         choose move, attack, or gather targets
       </div>

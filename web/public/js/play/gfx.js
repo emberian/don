@@ -26,6 +26,7 @@ struct Cam {
   vp   : vec2f,   // viewport in device pixels
   tiles: f32,     // map extent in tiles
   sub  : f32,     // subtiles per tile
+  owners: array<vec4f, 8>,
 };
 @group(0) @binding(0) var<uniform> cam : Cam;
 @group(0) @binding(1) var terrain : texture_2d<u32>;
@@ -88,16 +89,6 @@ struct ObjOut {
   @location(2) st : vec4f,   // hp, selected, building, construction
 };
 
-const OWNER_COLOR = array<vec3f, 8>(
-  vec3f(0.36, 0.62, 1.00),   // 0 blue
-  vec3f(1.00, 0.36, 0.30),   // 1 red
-  vec3f(0.42, 0.85, 0.48),   // 2 green
-  vec3f(1.00, 0.75, 0.28),   // 3 amber
-  vec3f(0.80, 0.50, 0.95),   // 4 violet
-  vec3f(0.35, 0.85, 0.88),   // 5 cyan
-  vec3f(0.95, 0.55, 0.80),   // 6 pink
-  vec3f(0.75, 0.75, 0.75));  // 7 grey
-
 @vertex
 fn vs_obj(@builtin(vertex_index) vi : u32,
           @location(0) px : i32, @location(1) py : i32, @location(2) tag : u32) -> ObjOut {
@@ -126,7 +117,7 @@ fn vs_obj(@builtin(vertex_index) vi : u32,
   o.pos = vec4f(toNdc(world), 0.0, 1.0);
   o.uv = c;
 
-  var base = OWNER_COLOR[owner & 7u];
+  var base = cam.owners[owner & 7u].rgb;
   // Type hue is the low byte of the real type_id: two different units of one player are
   // visibly different without inventing a sprite for each of 364 types.
   let tint = fract(hue / 37.0) * 0.30 - 0.15;
@@ -168,11 +159,43 @@ fn fs_obj(i : ObjOut) -> @location(0) vec4f {
 }
 `;
 
-/** Uniform block, 8 floats. */
-const UNIFORM_FLOATS = 8;
+const DEFAULT_OWNER_PALETTE = Object.freeze([
+  '#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47', '#cc80f2', '#59d9e0', '#f28ccb', '#bfbfbf',
+]);
+
+/** Camera block (8 floats) plus eight aligned RGBA owner colours. */
+const UNIFORM_FLOATS = 40;
+
+function normalizedPalette(colours) {
+  const source = Array.isArray(colours) && colours.length >= 8 ? colours : DEFAULT_OWNER_PALETTE;
+  return source.slice(0, 8).map((colour, index) => {
+    const match = /^#([0-9a-f]{6})$/i.exec(String(colour));
+    if (!match) throw new Error(`owner colour ${index} must be #RRGGBB`);
+    return `#${match[1].toLowerCase()}`;
+  });
+}
+
+function uniformData(cam, width, height, colours) {
+  const values = new Float32Array(UNIFORM_FLOATS);
+  values[0] = cam.x; values[1] = cam.y; values[2] = cam.px; values[3] = cam.span;
+  values[4] = width; values[5] = height; values[6] = cam.tiles; values[7] = cam.sub;
+  for (let i = 0; i < 8; i++) {
+    const hex = colours[i].slice(1);
+    values[8 + i * 4] = Number.parseInt(hex.slice(0, 2), 16) / 255;
+    values[9 + i * 4] = Number.parseInt(hex.slice(2, 4), 16) / 255;
+    values[10 + i * 4] = Number.parseInt(hex.slice(4, 6), 16) / 255;
+    values[11 + i * 4] = 1;
+  }
+  return values;
+}
 
 export class WebGPURenderer {
-  constructor(canvas) { this.canvas = canvas; this.kind = 'webgpu'; this.errors = []; }
+  constructor(canvas) {
+    this.canvas = canvas; this.kind = 'webgpu'; this.errors = [];
+    this.ownerPalette = normalizedPalette();
+  }
+
+  setOwnerPalette(colours) { this.ownerPalette = normalizedPalette(colours); }
 
   async init() {
     if (!navigator.gpu) throw new Error('navigator.gpu is absent');
@@ -301,9 +324,7 @@ export class WebGPURenderer {
       d.queue.writeBuffer(this.by, 0, v.y.buffer, v.y.byteOffset, n * 4);
       d.queue.writeBuffer(this.bt, 0, v.tag.buffer, v.tag.byteOffset, n * 4);
     }
-    const u = new Float32Array(UNIFORM_FLOATS);
-    u[0] = cam.x; u[1] = cam.y; u[2] = cam.px; u[3] = cam.span;
-    u[4] = vp[0]; u[5] = vp[1]; u[6] = cam.tiles; u[7] = cam.sub;
+    const u = uniformData(cam, vp[0], vp[1], this.ownerPalette);
     d.queue.writeBuffer(this.uniform, 0, u);
     const upload = performance.now() - t0;
 
@@ -353,9 +374,7 @@ export class WebGPURenderer {
     const buf = d.createBuffer({
       size: bpr * size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
-    const u = new Float32Array(UNIFORM_FLOATS);
-    u[0] = cam.x; u[1] = cam.y; u[2] = cam.px; u[3] = cam.span;
-    u[4] = size; u[5] = size; u[6] = cam.tiles; u[7] = cam.sub;
+    const u = uniformData(cam, size, size, this.ownerPalette);
     d.queue.writeBuffer(this.uniform, 0, u);
     if (n > 0) {
       d.queue.writeBuffer(this.bx, 0, v.x.buffer, v.x.byteOffset, n * 4);
@@ -406,7 +425,11 @@ export class WebGPURenderer {
  * a playable client, and it says which one is running rather than pretending.
  */
 export class Canvas2DRenderer {
-  constructor(canvas) { this.canvas = canvas; this.kind = 'canvas2d'; this.errors = []; }
+  constructor(canvas) {
+    this.canvas = canvas; this.kind = 'canvas2d'; this.errors = [];
+    this.ownerPalette = normalizedPalette();
+  }
+  setOwnerPalette(colours) { this.ownerPalette = normalizedPalette(colours); }
   async init() {
     this.g = this.canvas.getContext('2d');
     if (!this.g) throw new Error('no 2d context');
@@ -449,7 +472,6 @@ export class Canvas2DRenderer {
     const s = cam.px * cam.sub; // pixels per tile
     g.drawImage(this.terrainCanvas, -cam.x * cam.px, -cam.y * cam.px, cam.tiles * s,
       cam.tiles * s);
-    const OWNER = ['#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47', '#cc80f2', '#59d9e0'];
     for (let i = 0; i < n; i++) {
       const tag = v.tag[i];
       if ((tag & 0x80000000) === 0) continue;
@@ -457,7 +479,7 @@ export class Canvas2DRenderer {
       if (sx < -40 || sy < -40 || sx > vp[0] + 40 || sy > vp[1] + 40) continue;
       const isB = (tag >>> 29) & 1, size = (tag >>> 24) & 0xf;
       const hp = ((tag >>> 16) & 0xff) / 255;
-      g.fillStyle = OWNER[(tag & 0xf) % OWNER.length];
+      g.fillStyle = this.ownerPalette[(tag & 0xf) % this.ownerPalette.length];
       g.globalAlpha = 0.35 + 0.65 * hp;
       if (isB) {
         const h = size * 0.5 * cam.sub * cam.px;
