@@ -82,6 +82,18 @@ pub static SUPPORT: &[SupportRule] = &[
     },
     SupportRule {
         category: Some(ModCategory::Data),
+        ext: "translated_strings.xml",
+        support: Support::Parsed,
+        reason: "strict ordinal StringTable loader and translated-only language-change registry are wired; the frontend does not retain the snapshot yet",
+    },
+    SupportRule {
+        category: Some(ModCategory::Data),
+        ext: "internal_strings.xml",
+        support: Support::ResolvedOnly,
+        reason: "retail loads the internal table while packages are disabled and never reloads it after activation",
+    },
+    SupportRule {
+        category: Some(ModCategory::Data),
         ext: ".xml",
         support: Support::ResolvedOnly,
         reason: "no end-to-end loader applies arbitrary data XML; unit/type/tech/building binders are not implemented",
@@ -132,7 +144,7 @@ pub static SUPPORT: &[SupportRule] = &[
         category: Some(ModCategory::Tribes),
         ext: "",
         support: Support::ResolvedOnly,
-        reason: "localised nation text (.4/.7/.9/.10/.12/.16/.17/.18); needs the StringTable at [0x00C06378]",
+        reason: "localized tribe XML requires Tribes::init 0x006EF410 / Tribe::parse 0x006F0560; numeric suffixing is not a StringTable consumer",
     },
     SupportRule {
         category: Some(ModCategory::Scenario),
@@ -259,13 +271,13 @@ pub fn report(m: &ModPackage) -> CompatReport {
             if cat == ModCategory::MapStyles && crate::vfs::is_map_forbidden(name) {
                 vetoed.push(name.clone());
             }
-            let rule = classify_support(cat, name);
-            *by_support.entry(rule.support).or_insert(0) += 1;
+            let (support, reason) = contextual_support(m, cat, name);
+            *by_support.entry(support).or_insert(0) += 1;
             files.push(FileVerdict {
                 category: cat,
                 filename: name.clone(),
-                support: rule.support,
-                reason: rule.reason,
+                support,
+                reason,
             });
         }
     }
@@ -275,6 +287,60 @@ pub fn report(m: &ModPackage) -> CompatReport {
         by_support,
         vetoed_by_retail: vetoed,
     }
+}
+
+fn contextual_support(
+    package: &ModPackage,
+    category: ModCategory,
+    filename: &str,
+) -> (Support, &'static str) {
+    if category == ModCategory::Data {
+        let filename = filename.to_ascii_lowercase();
+        if localized_string_base(&filename) == Some("translated_strings.xml") {
+            if package.has_asset(ModCategory::Data, "translated_strings.xml") {
+                return (
+                    Support::Parsed,
+                    "selected only beside this package's unsuffixed translated_strings.xml winner; strict ordinal identity is checked before translated-only registration",
+                );
+            }
+            return (
+                Support::ResolvedOnly,
+                "localized sibling is inert unless the same package wins unsuffixed translated_strings.xml",
+            );
+        }
+        if localized_string_base(&filename) == Some("internal_strings.xml") {
+            return (
+                Support::ResolvedOnly,
+                "internal strings load before packages are enabled and are never reloaded",
+            );
+        }
+        if legacy_string_base(&filename).is_some() {
+            return (
+                Support::ResolvedOnly,
+                "the install contains this legacy suffix, but the current five-value retail language enum cannot select it",
+            );
+        }
+    }
+    let rule = classify_support(category, filename);
+    (rule.support, rule.reason)
+}
+
+fn localized_string_base(filename: &str) -> Option<&'static str> {
+    string_variant_base(filename, &[".7", ".10", ".12", ".16"])
+}
+
+fn legacy_string_base(filename: &str) -> Option<&'static str> {
+    string_variant_base(filename, &[".4", ".9", ".17", ".18"])
+}
+
+fn string_variant_base(filename: &str, suffixes: &[&str]) -> Option<&'static str> {
+    ["translated_strings.xml", "internal_strings.xml"]
+        .into_iter()
+        .find(|base| {
+            filename
+                .strip_prefix(base)
+                .is_some_and(|suffix| suffixes.contains(&suffix))
+        })
 }
 
 #[cfg(test)]
@@ -324,5 +390,38 @@ mod tests {
         m.declare_path("mapstyles/brandnew.xml");
         let r = report(&m);
         assert_eq!(r.vetoed_by_retail, vec!["default.xml".to_string()]);
+    }
+
+    #[test]
+    fn string_variants_are_contextual_and_internal_mod_files_stay_inert() {
+        let mut complete = ModPackage::new("Words", "Words");
+        complete.declare_path("data/translated_strings.xml");
+        complete.declare_path("data/translated_strings.xml.7");
+        complete.declare_path("data/internal_strings.xml");
+        complete.declare_path("data/internal_strings.xml.7");
+        let complete_report = report(&complete);
+        assert_eq!(complete_report.count(Support::Parsed), 2);
+        assert_eq!(complete_report.count(Support::ResolvedOnly), 2);
+
+        let mut suffix_only = ModPackage::new("Suffix", "Suffix");
+        suffix_only.declare_path("data/translated_strings.xml.7");
+        suffix_only.declare_path("data/translated_strings.xml.4");
+        let suffix_report = report(&suffix_only);
+        assert_eq!(suffix_report.count(Support::Parsed), 0);
+        assert_eq!(suffix_report.count(Support::ResolvedOnly), 2);
+        assert!(suffix_report
+            .files
+            .iter()
+            .find(|file| file.filename.ends_with(".7"))
+            .unwrap()
+            .reason
+            .contains("unsuffixed"));
+        assert!(suffix_report
+            .files
+            .iter()
+            .find(|file| file.filename.ends_with(".4"))
+            .unwrap()
+            .reason
+            .contains("five-value"));
     }
 }

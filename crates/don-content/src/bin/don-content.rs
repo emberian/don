@@ -6,6 +6,7 @@
 //! don-content explain <mods-dir> [activation options] <content-path>...
 //! don-content manifest <mod-root>
 //! don-content reload-check <mods-dir> [activation options] [--mode fidelity|improved]
+//! don-content strings-check <mods-dir> [activation options] --shipped-data PATH --language CODE
 //! don-content overlay <don-overlay.xml>
 //! don-content rules
 //! ```
@@ -27,6 +28,9 @@ use don_content::overlay::Mode;
 use don_content::overlay_file::read_overlay;
 use don_content::runtime::{RuleRegistry, RuleSource};
 use don_content::scan::populated_categories;
+use don_content::string_table::{
+    RetailLanguage, StringTableOwner, StringTableRegistry, StringTableSource,
+};
 use don_content::vfs::ALL_CATEGORIES;
 use don_content::workflow::{
     build_plan, ActivationPlan, ActivationRequest, Artifact, PackageInspection, ResolutionOutcome,
@@ -41,6 +45,7 @@ fn main() -> ExitCode {
         Some("explain") | Some("probe") => with_plan(&args[1..], true, cmd_explain),
         Some("manifest") if args.len() == 2 => cmd_manifest(Path::new(&args[1])),
         Some("reload-check") => with_reload(&args[1..]),
+        Some("strings-check") => with_strings(&args[1..]),
         Some("overlay") if args.len() == 2 => cmd_overlay(Path::new(&args[1])),
         Some("rules") if args.len() == 1 => cmd_rules(),
         _ => {
@@ -57,6 +62,7 @@ fn usage() -> &'static str {
      don-content explain <mods-dir> [same activation options] <content-path>...\n  \
      don-content manifest <mod-root>\n  \
      don-content reload-check <mods-dir> [same activation options] [--mode fidelity|improved]\n  \
+     don-content strings-check <mods-dir> [same activation options] --shipped-data PATH --language DE|EN|ES|FR|IT\n  \
      don-content overlay <don-overlay.xml>\n  \
      don-content rules\n\n  \
      Workshop directories and order are explicit because no installed retail corpus proves them.\n  \
@@ -569,6 +575,139 @@ fn with_reload(args: &[String]) -> ExitCode {
         committed.generation()
     );
     ExitCode::SUCCESS
+}
+
+fn with_strings(args: &[String]) -> ExitCode {
+    let mut filtered = Vec::new();
+    let mut shipped_data = None;
+    let mut language = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--shipped-data" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    eprintln!("--shipped-data requires PATH");
+                    return ExitCode::from(2);
+                };
+                shipped_data = Some(PathBuf::from(path));
+            }
+            "--language" => {
+                i += 1;
+                let Some(code) = args.get(i) else {
+                    eprintln!("--language requires DE, EN, ES, FR, or IT");
+                    return ExitCode::from(2);
+                };
+                language = RetailLanguage::from_code(code);
+                if language.is_none() {
+                    eprintln!(
+                        "unsupported retail language {code:?}; this binary exposes only DE, EN, ES, FR, IT"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+            _ => filtered.push(args[i].clone()),
+        }
+        i += 1;
+    }
+    let Some(shipped_data) = shipped_data else {
+        eprintln!("strings-check requires --shipped-data PATH (the retail Data directory)");
+        return ExitCode::from(2);
+    };
+    let Some(language) = language else {
+        eprintln!("strings-check requires --language DE|EN|ES|FR|IT");
+        return ExitCode::from(2);
+    };
+    let (request, unexpected) = match parse_activation(&filtered, false) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}\n\n{}", usage());
+            return ExitCode::from(2);
+        }
+    };
+    debug_assert!(unexpected.is_empty());
+    let plan = match build_plan(&request) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("cannot build activation plan: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut registry = StringTableRegistry::new();
+    let startup = match registry.prepare_startup(&shipped_data, language) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            println!("STRINGTABLE STARTUP BLOCKED:");
+            for diagnostic in error.diagnostics {
+                println!("  {diagnostic}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    let startup = registry
+        .commit(startup)
+        .expect("fresh startup StringTable generation");
+    println!(
+        "startup generation {} ({language}): shipped-only, matching Main::init_string_tables before mod-status enablement",
+        startup.generation()
+    );
+    print_string_source(
+        "translated",
+        startup.translated_source(),
+        startup.translated().len(),
+    );
+    print_string_source(
+        "internal",
+        startup.internal_source(),
+        startup.internal().len(),
+    );
+
+    let changed = match registry.prepare_language_change(&plan, &shipped_data, language) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            println!("LANGUAGE CHANGE BLOCKED:");
+            for diagnostic in error.diagnostics {
+                println!("  {diagnostic}");
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    let changed = registry
+        .commit(changed)
+        .expect("fresh translated StringTable generation");
+    println!(
+        "language-change generation {}: translated-only swap; internal generation retained",
+        changed.generation()
+    );
+    print_string_source(
+        "translated",
+        changed.translated_source(),
+        changed.translated().len(),
+    );
+    print_string_source(
+        "internal",
+        changed.internal_source(),
+        changed.internal().len(),
+    );
+    println!("ordinal count/hash identity: PASS");
+    ExitCode::SUCCESS
+}
+
+fn print_string_source(label: &str, source: &StringTableSource, entries: usize) {
+    let owner = match &source.owner {
+        StringTableOwner::Shipped => "shipped".to_string(),
+        StringTableOwner::Mod { package } => format!("mod {package:?}"),
+    };
+    println!(
+        "  {label}: {entries} entries, {owner}, {}{}; retail checksum {}",
+        source.selected_path.display(),
+        if source.localized {
+            " (localized sibling)"
+        } else {
+            " (base fallback)"
+        },
+        source.retail_checksum
+    );
 }
 
 fn cmd_rules() -> ExitCode {

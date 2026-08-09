@@ -24,6 +24,8 @@
 //! * [`overlay_file`] — the checked `don-overlay.xml` artifact for independent-edition mods.
 //! * [`runtime`] — strict whole-file rule loading and an immutable, generation-checked
 //!   prepare/commit boundary for new simulation worlds.
+//! * [`string_table`] — retail ordinal strings, exact owner-first localization, and the
+//!   shipped-startup/translated-only language-change transaction boundary.
 //! * [`extend`] — the surface beyond retail: extension type ids above the closed
 //!   `enum TypeIndex` space, a sparse balance overlay over the captured 493x493 matrix, and
 //!   the enumerated hook points.
@@ -55,6 +57,7 @@ pub mod overlay_file;
 pub mod runtime;
 pub mod scan;
 pub mod status;
+pub mod string_table;
 pub mod vfs;
 pub mod workflow;
 
@@ -65,6 +68,10 @@ pub use manifest::{generate as generate_manifest, ManifestError, RetailManifest}
 pub use overlay::{Layer, Mode, OverlayError, Patch, RuleStack};
 pub use overlay_file::{read_overlay, OverlayFile, OverlayFileError};
 pub use runtime::{PreparedReload, RuleRegistry, RuntimeSnapshot};
+pub use string_table::{
+    PreparedStringTables, RetailLanguage, RetailStringTable, StringCommitError, StringPrepareError,
+    StringTableRegistry, StringTablesSnapshot,
+};
 pub use vfs::{
     classify, is_map_forbidden, ContentStack, ModCategory, ModPackage, Resolved, StorageLocation,
     WorkshopTag,

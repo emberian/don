@@ -57,7 +57,7 @@ pub fn scan_mod_dir(
 /// On a case-sensitive development host, choosing arbitrarily between both `data/` and
 /// `Data/` would invent behavior that cannot exist on the retail filesystem, so ambiguity is
 /// rejected.
-fn find_windows_dir(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> {
+pub(crate) fn find_windows_dir(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> {
     let mut at = root.to_path_buf();
     for wanted in relative.split('/') {
         let entries = match std::fs::read_dir(&at) {

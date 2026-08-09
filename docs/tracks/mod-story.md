@@ -422,6 +422,74 @@ whole match. This is the new-world registration boundary; the existing `don-sim`
 does not yet retain the snapshot, and DoN does not claim to hot-mutate a running world like
 retail's global `closeExistingData`/`initExistingData` sequence.
 
+### 2.5 StringTable and owner-first localized XML
+
+Numeric extensions are a generic `XML::init` mechanism, **not** a StringTable file format.
+`XML::init` `0x00A279E0` resolves the unsuffixed path through `prepend_content_dir` first,
+appends `LocalizationManager::GetLanguageSuffix` `0x00A42830` to that already-selected
+physical file, and probes the sibling. If it is absent, it falls back to the same owner's
+base. It never resolves the suffix independently, so a package with only
+`translated_strings.xml.7` cannot steal the shipped `translated_strings.xml` owner.
+
+The current PDB enum and the two pointer tables at `0x00B1CA54` / `0x00B1CA80` are closed:
+
+| enum | code | suffix |
+|---:|---|---|
+| 0 | `DE` | `.7` |
+| 1 | `EN` | *(empty)* |
+| 2 | `ES` | `.10` |
+| 3 | `FR` | `.12` |
+| 4 | `IT` | `.16` |
+
+The live Extended Edition install also contains `.4`, `.9`, `.17`, and `.18`, but this
+five-value binary cannot select them. DoN rejects those suffixes as unsupported rather than
+inventing language names. The wider installed corpus is 142 XML stems times eight suffixes;
+only one stem, `translated_strings.xml`, belongs to the translated StringTable. Every other
+stem still needs its own XML binder and consumer.
+
+`StringTable::init` `0x00A28520` has only three callers. Startup loads
+`translated_strings.xml` and `internal_strings.xml`; `OptionsWinPlayer::change_language`
+`0x00832A30` later reloads translated strings only. Although mod packages have been scanned
+before startup, their `enabled` and dropdown-active bytes are still zero until
+`readModStatus`, so both startup tables come from shipped `Data`. The internal table is never
+reloaded after activation.
+
+The measured XML shape is positional:
+
+```xml
+<ROOT internal="0|1" xml:space="preserve">
+  <STRING hash="signed-i32" needed="0|1">text</STRING>
+</ROOT>
+```
+
+The binder enumerates `STRING` in document order and copies full text, including leading and
+trailing whitespace and empty entries. Runtime identity is the ordinal into a 20-byte
+`String` array, not the declared hash; `hash` and `needed` are ignored by retail. Live shipped
+measurements are 7,630 internal entries and 4,178 entries in English plus each selectable
+localized translated table. The selectable translated files have the same declared-hash
+sequence at every ordinal. Encodings are mixed across the wider suffix corpus: plain UTF-8,
+UTF-8 BOM, and UTF-16LE BOM all occur.
+
+`StringTableRegistry` reproduces the lifecycle but improves the unsafe mutation boundary.
+`prepare_startup` decodes and validates both shipped tables off-side. A later
+`prepare_language_change` resolves only the translated base through the active plan, probes a
+suffix only beside that winner, retains the existing internal `Arc`, and requires the same
+entry count and declared hash at every ordinal. Unknown structure, nested markup, unsupported
+encoding, mismatched table kind, short indeterminate-checksum files, and ordinal drift all
+fail before `commit`; a stale candidate is rejected without changing the active pointer.
+
+Run the complete preflight against an installed retail `Data` directory with:
+
+```sh
+cargo run -p don-content -- strings-check <mods-dir> \
+  --shipped-data '/path/to/Rise of Nations/Data' --language DE
+```
+
+The command reports startup and language-change owners separately, the selected base or
+localized sibling, entry counts, and exact retail four-byte file checksums. Loading the
+snapshot into the frontend is still a separate integration boundary, so compatibility labels
+translated StringTable files **parsed**, not consumed.
+
 ---
 
 ## 3. Can a retail mod load into our engine unmodified?
@@ -442,13 +510,15 @@ reports it as a number. Current classification:
 | what the mod ships | verdict | why |
 |---|---|---|
 | `data\rules.xml` | **consumed** | strict extractor-backed whole-file loader, recovered per-field transforms, immutable transactional registry |
+| `data\translated_strings.xml` plus selectable same-owner suffix | **parsed** | strict ordinal loader and transactional translated-only language change are wired; frontend retention is not |
+| `data\internal_strings.xml` from a mod | resolved-only, **rejected** | its sole load happens before packages are enabled and it never reloads |
 | other `data\*.xml` | resolved-only, **rejected** | unit/type/tech/building XML binders and consumers are not implemented |
 | `replays\*.rcx` | **consumed** | `don-replay` decodes `.rcx` |
 | `data\*.bhs`, `ai\scripts\*.bhs` | **parsed** | `don-bhs` / `don-bhs-cc` front end exists; `RunTimeEnv::run_script` `0x0043D0E0` is not driven by our tick |
 | `mapstyles\*.xml` | resolved-only, **rejected** | neither the XML parser nor map-generation consumer is wired |
 | `info.xml` | **consumed** | measured gates plus reproducible manifest/checksum identity participate in activation |
 | `don-overlay.xml` | **consumed** | checked schema composes with conflict/audit records into the prepared runtime snapshot |
-| `tribes\*.{4,7,9,…}` | resolved-only | needs the `StringTable` at `[0x00C06378]` |
+| `tribes\*.{4,7,9,…}` | resolved-only | needs `Tribes::init` / `Tribe::parse`; numeric suffixing does not make it a StringTable |
 | `scenario\*` | resolved-only | `ScenarioData::walk_data` `0x00997AD0` has no runtime producer |
 | `*.txt` at root, `.dtd`, `.sps`, `.xsd`, `.bho` | resolved-only | unread, schema-only, or a precompiled form we compile from source instead |
 | `art\*`, `terrain art\*`, `sounds\*` | out of scope | no renderer, no audio |
@@ -465,11 +535,13 @@ reports it as a number. Current classification:
 
 1. **`.bhs` execution** (biggest, and already a live lane). Gates AI-script mods, scenario mods,
    and — because `script_run_time` is checksum channel 15 — any *validation* of a scripted game.
-2. **The `StringTable`.** Everything with a numeric extension, plus the mod's own display names.
-   Cheap, and it unlocks tribe/localisation mods, which are a large share of the Workshop.
-3. **`unitrules.xml` / `techrules.xml` / `buildingrules.xml` binding tables.** Whole-file
+2. **Frontend retention of the translated `StringTable` snapshot.** The exact loader and
+   language-change transaction exist; UI text lookup still reads another source.
+3. **Each owning localized XML binder, including tribes.** Numeric suffix resolution is now
+   exact, but it does not parse the 140 non-StringTable localized stems.
+4. **`unitrules.xml` / `techrules.xml` / `buildingrules.xml` binding tables.** Whole-file
    `rules.xml` is wired; the other data families still resolve and then land nowhere.
-4. **Steam UGC subscription**, only if we want to *download* mods rather than read a folder.
+5. **Steam UGC subscription**, only if we want to *download* mods rather than read a folder.
    Not on the critical path.
 
 **The one structural caveat, and it is not a shim problem:** in fidelity mode a mod is part of
@@ -607,11 +679,12 @@ Recorded so they are visible rather than discovered.
 | `crates/don-content/src/overlay.rs` | the five-layer stack, validation, fidelity lock, audit |
 | `crates/don-content/src/overlay_file.rs` | versioned `don-overlay.xml` parser and composition preflight |
 | `crates/don-content/src/runtime.rs` | strict whole-file Rules loader and transactional immutable registry |
+| `crates/don-content/src/string_table.rs` | exact language table, BOM-aware ordinal parser, owner-first suffix selection, transactional startup/language-change registry |
 | `crates/don-content/src/extend.rs` | `TypeSpace`, `BalanceOverlay`, `HookPoint` |
 | `crates/don-content/src/compat.rs` | per-file support table and report |
 | `crates/don-content/src/generated.rs` | tables captured from the binary — do not edit |
 | `crates/don-content/gen/gen_tables.py` | the generator; re-run it, do not hand-edit |
-| `crates/don-content/src/bin/don-content.rs` | `scan` / `check` / `explain` / `manifest` / `reload-check` / `overlay` / `rules` |
+| `crates/don-content/src/bin/don-content.rs` | `scan` / `check` / `explain` / `manifest` / `reload-check` / `strings-check` / `overlay` / `rules` |
 | `crates/don-content/tests/{shipped_layout,workflow_fixtures}.rs` | shipped/live cross-checks plus committed synthetic activation trees |
 
 Regenerate the tables:
