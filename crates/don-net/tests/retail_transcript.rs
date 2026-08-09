@@ -6,7 +6,10 @@ use don_net::msg::NetMsg;
 use don_net::obfuscate::xor_payload;
 use don_net::session::{Event, Role, Session, TurnPackage};
 use don_net::transport::TcpTransport;
-use don_net::{decode_retail_checksum_package, encode_commands, CheckSums, Command, Obfuscation};
+use don_net::{
+    decode_retail_checksum_package, encode_commands, CheckSums, Command, EpochCause,
+    LockstepRunner, LockstepStatus, Obfuscation,
+};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -200,6 +203,15 @@ fn retail_transcript_crosses_lockstep_remove_and_reconnect_epochs() {
         .unwrap();
     assert!(joined < ready);
 
+    let mut lockstep = LockstepRunner::new(
+        GAME_KEY,
+        [0, 1],
+        TRANSCRIPT[0].0,
+        start.elapsed().as_millis() as u64,
+        2_000,
+    )
+    .unwrap();
+
     for (stamp, words) in TRANSCRIPT {
         let payload = retail_payload(words);
         let mut exact_wire = Vec::new();
@@ -219,6 +231,20 @@ fn retail_transcript_crosses_lockstep_remove_and_reconnect_epochs() {
         assert_eq!(packages.len(), 2);
         assert_retail_package(&packages[0], stamp, 0, words);
         assert_retail_package(&packages[1], stamp, 1, words);
+        for package in packages {
+            lockstep
+                .submit(package, start.elapsed().as_millis() as u64)
+                .unwrap();
+        }
+        assert!(matches!(
+            lockstep.status(start.elapsed().as_millis() as u64),
+            LockstepStatus::Ready { stamp: ready, .. } if ready == stamp
+        ));
+        let evidence = lockstep
+            .commit_ready(start.elapsed().as_millis() as u64)
+            .unwrap();
+        assert_eq!(evidence.stamp, stamp);
+        assert!(evidence.checksums_agree());
     }
     let (client_joined, client_ready) = first.join().unwrap();
     assert!(client_joined < client_ready);
@@ -227,6 +253,9 @@ fn retail_transcript_crosses_lockstep_remove_and_reconnect_epochs() {
         assert!(start.elapsed() < Duration::from_secs(9));
     }
     assert_eq!(host.players().len(), 1);
+    lockstep
+        .begin_epoch([0], EpochCause::Drop, start.elapsed().as_millis() as u64)
+        .unwrap();
 
     // Same owned id, new membership epoch. Resetting announced_to on the
     // destroy packet makes the host publish AddPlayer then its current ready
@@ -253,6 +282,13 @@ fn retail_transcript_crosses_lockstep_remove_and_reconnect_epochs() {
         })
         .unwrap();
     assert!(joined < ready);
+    lockstep
+        .begin_epoch(
+            [0, 1],
+            EpochCause::Reconnect,
+            start.elapsed().as_millis() as u64,
+        )
+        .unwrap();
 
     let payload = retail_payload(TRANSCRIPT[0].1);
     host.send_command_package(26, 0, &payload).unwrap();
@@ -263,6 +299,23 @@ fn retail_transcript_crosses_lockstep_remove_and_reconnect_epochs() {
     let packages = host.take_turn(26);
     assert_retail_package(&packages[0], 26, 0, TRANSCRIPT[0].1);
     assert_retail_package(&packages[1], 26, 1, TRANSCRIPT[0].1);
+    for package in packages {
+        lockstep
+            .submit(package, start.elapsed().as_millis() as u64)
+            .unwrap();
+    }
+    assert!(lockstep
+        .commit_ready(start.elapsed().as_millis() as u64)
+        .unwrap()
+        .checksums_agree());
+    assert_eq!(lockstep.expected_stamp(), 27);
+    let transcript = lockstep.export_json();
+    assert!(transcript.contains("\"stamp\":23"));
+    assert!(transcript.contains("\"stamp\":26"));
+    assert!(transcript.contains("\"cause\":\"drop\""));
+    assert!(transcript.contains("\"cause\":\"reconnect\""));
+    assert!(!transcript.contains("\"type\":\"timeout\""));
+    assert_eq!(lockstep.transcript_fnv1a64(), 0x438b_c8d3_1e90_3ea7);
     let (client_joined, client_ready) = reconnect.join().unwrap();
     assert!(client_joined < client_ready);
 }

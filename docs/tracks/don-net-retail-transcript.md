@@ -48,3 +48,43 @@ The test uses real loopback TCP sockets and asserts:
 
 No authentication material, lobby identifier, Steam ticket, or network endpoint outside
 `127.0.0.1` is used.
+
+## Shared lockstep runner
+
+`don_net::LockstepRunner` now owns the evidence boundary above `Session` and below simulation.
+It accepts the `TurnPackage` values taken from a session, applies the shared retail checksum
+decoder, and advances exactly one authoritative stamp only after every slot in the current epoch
+has submitted one package. It does not decode or execute non-checksum simulation commands.
+
+The runner provides these fail-closed rules:
+
+- participant slots are sorted, unique, and limited to `0..7`;
+- stale or future stamps, packages from slots outside the current epoch, and conflicting duplicate
+  packages are refused without changing the clock;
+- an exact duplicate package is idempotent;
+- the lowest participating slot is the checksum reference, and every differing channel/slot pair
+  is retained as `ChecksumDifference` evidence in deterministic channel order;
+- each turn has a caller-clock deadline; reaching it records one `TurnTimeoutEvidence` with the
+  exact received and missing slots, and late packages remain refused until an explicit membership
+  epoch begins;
+- a drop epoch may retain packages already received from surviving slots, while a reconnect epoch
+  adds the returning slot without resetting the authoritative stamp;
+- only `commit_ready` advances the stamp, and overflow is refused.
+
+`LockstepRunner::export_json` emits canonical `don.lockstep-transcript.v1` JSON: chronological epoch,
+timeout, and turn records; sorted slots; payload byte counts and FNV-1a hashes; all sixteen checksum
+words; and named channel-level desync evidence. `transcript_fnv1a64` hashes those exact JSON bytes.
+The adversarial unit transcript is pinned to `f4cbbb493b3a6d3e`. The real TCP transcript covering
+stamps 23–25, drop/reconnect, and stamp 26 is pinned to `438bc8d31e903ea7`.
+
+Run both boundaries with:
+
+```sh
+cargo test --manifest-path crates/don-net/Cargo.toml \
+  lockstep::tests::authority_desync_timeout_drop_and_reconnect_are_evidentiary
+cargo test --manifest-path crates/don-net/Cargo.toml --test retail_transcript
+```
+
+Timeout is evidence, not an invented retail drop vote. The caller must supply an authoritative
+membership change before the runner removes a missing slot. Likewise, checksum differences prove
+package disagreement but do not claim that a simulation state has been independently reproduced.

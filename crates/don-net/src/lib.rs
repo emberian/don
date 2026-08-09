@@ -32,6 +32,7 @@
 
 pub mod internal;
 pub mod lobby;
+pub mod lockstep;
 pub mod msg;
 pub mod obfuscate;
 pub mod opcodes;
@@ -42,6 +43,10 @@ pub mod stream;
 pub mod transport;
 
 pub use internal::{InternalError, InternalPacket};
+pub use lockstep::{
+    ChecksumDifference, EpochCause, LockstepError, LockstepEvidence, LockstepRunner,
+    LockstepStatus, PackageEvidence, SubmitOutcome, TurnEvidence, TurnTimeoutEvidence,
+};
 pub use msg::{Framed, MsgType, NetMsg};
 pub use obfuscate::{Obfuscation, PadRandom};
 pub use opcodes::{COMMAND_NAMES, COMMAND_SIZES, COMMAND_STRUCTS};
