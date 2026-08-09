@@ -53,6 +53,7 @@ pub mod harness;
 pub mod image;
 pub mod initial;
 pub mod map_style;
+pub mod place_all_boundary;
 pub mod player_land;
 pub mod pools;
 pub mod post_continent;
@@ -93,6 +94,11 @@ pub use initial::{
 pub use map_style::{
     MapGenerationStage, MapStyleIdentity, MapStyleLoadError, MapStyleStaticData,
     StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE, SHIPPED_MAP_STYLE_CATALOG,
+};
+pub use place_all_boundary::{
+    execute_replay_place_all, ReplayPlaceAllError, ReplayPlaceAllFacts, ReplayPlaceAllHostFacts,
+    ReplayPlaceAllPlayerFacts, ReplayPlaceAllReceipt, ReplayPlaceAllRuntime,
+    ReplayPlaceAllTDataFacts, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA,
 };
 pub use player_land::{
     execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
