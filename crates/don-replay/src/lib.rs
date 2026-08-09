@@ -54,6 +54,7 @@ pub mod image;
 pub mod initial;
 pub mod map_style;
 pub mod place_all_boundary;
+pub mod place_all_facts;
 pub mod player_land;
 pub mod pools;
 pub mod post_continent;
@@ -99,6 +100,12 @@ pub use place_all_boundary::{
     execute_replay_place_all, ReplayPlaceAllError, ReplayPlaceAllFacts, ReplayPlaceAllHostFacts,
     ReplayPlaceAllPlayerFacts, ReplayPlaceAllReceipt, ReplayPlaceAllRuntime,
     ReplayPlaceAllTDataFacts, TERRAIN_GROUPS_PLACE_ALL_RETURN_VA,
+};
+pub use place_all_facts::{
+    resolve_place_all_prerequisites, resolve_terrain_group_catalog, CapturedHelpingFacts,
+    PlaceAllFactKind, PlaceAllLiveCaptureEvidence, PlaceAllLiveFacts,
+    PlaceAllPrerequisiteError, PlaceAllPrerequisiteResolution, PreparedReplayPlaceAll,
+    TerrainGroupCatalogError, TerrainGroupCatalogReceipt, UnavailablePlaceAllFact,
 };
 pub use player_land::{
     execute_check_player_land, CheckPlayerLandCall, CheckPlayerLandError, CheckPlayerLandReceipt,
