@@ -61,6 +61,7 @@ pub extern "C" fn get_netsys_object_ptr(
     _localised_strings: *mut c_void,
     _internal_strings: *mut c_void,
 ) -> *mut NetSysBase {
+    netsys::trace_once("export.get_netsys_object_ptr");
     netsys::create()
 }
 
@@ -74,12 +75,14 @@ pub extern "C" fn get_netsys_object_ptr(
 /// `bool CrossplayNetLib::is_connected_to_network()` — `__cdecl`.
 #[no_mangle]
 pub extern "C" fn shim_is_connected_to_network() -> bool {
+    netsys::trace_once("export.is_connected_to_network");
     netsys::connected()
 }
 
 /// `void CrossplayNetLib::set_network_connection_state(bool)` — `__cdecl`.
 #[no_mangle]
 pub extern "C" fn shim_set_network_connection_state(state: bool) {
+    netsys::trace_once("export.set_network_connection_state");
     netsys::set_connected(state);
 }
 
@@ -90,6 +93,10 @@ pub extern "C" fn shim_set_network_connection_state(state: bool) {
 /// broadcasts the 2-byte packet.
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_send_ready_flag(this: *mut NetSysBase, ready: bool) {
+    netsys::trace_once("export.send_ready_flag");
+    if netsys::is_load_only(this) {
+        return;
+    }
     netsys::with(this, |s| {
         let _ = s.send_ready_flag(ready);
     });
@@ -98,6 +105,10 @@ pub unsafe extern "thiscall" fn shim_send_ready_flag(this: *mut NetSysBase, read
 /// `void CrossplayNetLibSys::reset_ready_flags()` — `__thiscall`.
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_reset_ready_flags(this: *mut NetSysBase) {
+    netsys::trace_once("export.reset_ready_flags");
+    if netsys::is_load_only(this) {
+        return;
+    }
     netsys::with(this, |s| {
         let _ = s.reset_ready_flags();
     });
@@ -109,6 +120,7 @@ pub unsafe extern "thiscall" fn shim_reset_ready_flags(this: *mut NetSysBase) {
 /// DLL — so the answer comes from our own role.
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_IsHost(this: *mut NetSysBase, _member: *const c_void) -> bool {
+    netsys::trace_once("export.IsHost");
     netsys::with(this, |s| s.role == don_net::session::Role::Host).unwrap_or(false)
 }
 
@@ -119,6 +131,7 @@ pub unsafe extern "thiscall" fn shim_OnPlayerJoined(
     _member: *const c_void,
     _name: *const c_void,
 ) {
+    netsys::trace_once("export.OnPlayerJoined");
     // Membership is discovered from IPT_ADDPLAYER on our own transport, not
     // from a lobby callback. Nothing to do, and nothing may fault.
 }
@@ -129,6 +142,7 @@ pub unsafe extern "thiscall" fn shim_OnPlayerLeft_member(
     _this: *mut NetSysBase,
     _member: *const c_void,
 ) {
+    netsys::trace_once("export.OnPlayerLeft.member");
 }
 
 /// `void CrossplayNetLibSys::OnPlayerLeft(const CrossplayNetLibPlayer*)` — the
@@ -138,27 +152,46 @@ pub unsafe extern "thiscall" fn shim_OnPlayerLeft_player(
     _this: *mut NetSysBase,
     _player: *const c_void,
 ) {
+    netsys::trace_once("export.OnPlayerLeft.player");
 }
 
 /// `void CrossplayNetLibSys::OnHostUpdated(const std::wstring&)`
 #[no_mangle]
-pub unsafe extern "thiscall" fn shim_OnHostUpdated(_this: *mut NetSysBase, _id: *const c_void) {}
+pub unsafe extern "thiscall" fn shim_OnHostUpdated(_this: *mut NetSysBase, _id: *const c_void) {
+    netsys::trace_once("export.OnHostUpdated");
+}
 
 /// `void CrossplayNetLibSys::set_p2p_callbacks(function<...>, function<...>, function<...>)`
 ///
-/// Three `std::function`s by value, so the caller has already constructed them
-/// on the stack and expects the callee to own and destroy them. We take them
-/// and never call them — our transport raises no P2P channel events. Leaking
-/// three `std::function`s once per session is the deliberate trade: calling
-/// their destructors would mean reimplementing MSVC's `_Func_base` vtable
-/// protocol, and one leak of a few dozen bytes at startup is not worth it.
+/// Three 40-byte `std::function`s by value. The shipped callee at
+/// `0x10017420` consumes 120 stack bytes and destroys each target through its
+/// `_Func_base` vtable `+0x10`, passing whether the target is outside the
+/// inline object. We reproduce that ownership transfer exactly while never
+/// invoking the callbacks: this transport raises its own session events.
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_set_p2p_callbacks(
     _this: *mut NetSysBase,
-    _opened: *mut c_void,
-    _closed: *mut c_void,
-    _failed: *mut c_void,
+    mut opened: MsvcFunction40,
+    mut closed: MsvcFunction40,
+    mut failed: MsvcFunction40,
 ) {
+    netsys::trace_once("export.set_p2p_callbacks");
+    destroy_msvc_function(&mut opened);
+    destroy_msvc_function(&mut closed);
+    destroy_msvc_function(&mut failed);
+}
+
+unsafe fn destroy_msvc_function(function: &mut MsvcFunction40) {
+    let target = function.target;
+    if target.is_null() {
+        return;
+    }
+    let object_base = function as *mut MsvcFunction40 as *mut c_void;
+    let vtable = *(target as *const *const *const c_void);
+    let destructor: unsafe extern "thiscall" fn(*mut c_void, bool) =
+        core::mem::transmute(*vtable.add(4));
+    destructor(target, target != object_base);
+    function.target = core::ptr::null_mut();
 }
 
 #[cfg(test)]
@@ -174,5 +207,14 @@ mod tests {
     #[test]
     fn netsys_base_matches_the_pdb_layout() {
         assert_eq!(core::mem::size_of::<NetSysBase>(), 88);
+    }
+
+    #[test]
+    fn msvc_boundary_objects_match_the_pdb_and_callee_layouts() {
+        assert_eq!(core::mem::size_of::<MsvcWstring>(), 24);
+        assert_eq!(core::mem::offset_of!(MsvcWstring, len), 0x10);
+        assert_eq!(core::mem::offset_of!(MsvcWstring, capacity), 0x14);
+        assert_eq!(core::mem::size_of::<MsvcFunction40>(), 40);
+        assert_eq!(core::mem::offset_of!(MsvcFunction40, target), 0x24);
     }
 }

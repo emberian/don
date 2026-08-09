@@ -16,7 +16,12 @@ cd /Users/ember/dev/don/crates/netsys-shim
 XWIN_ARCH=x86 cargo xwin build --release
 # -> target/i686-pc-windows-msvc/release/CrossplayNetLib.dll   (PE32 i386 DLL)
 
-uv run --with pefile python check-exports.py    # export-table parity gate
+uv run --with pefile --with capstone python check-exports.py
+# -> name + ordinal parity, PE32/i386/DLL identity, callback ret 0x78
+
+# Compile focused unit tests for the retail target. They cannot execute on the
+# arm64 host; the layout assertions also run during the DLL build above.
+XWIN_ARCH=x86 cargo xwin test --no-run
 ```
 
 `XWIN_ARCH=x86` is required the first time: `cargo-xwin`'s cache is per
@@ -38,6 +43,15 @@ There is no UI to hang settings off, so they come from the environment:
 | `DON_NET_ADDR` | address to dial when joining | `127.0.0.1:31337` |
 | `DON_NET_ID` | our unique id, an `i32` | process id |
 | `DON_NET_NAME` | player name | `donnet` |
+| `DON_NET_LOAD_ONLY` | `1` binds only `127.0.0.1:0`, refuses session/send/get operations, and enables the diagnostic log | unset |
+| `DON_NET_TRACE` | explicit diagnostic log path; calls are logged once and flushed synchronously | `%TEMP%\don-netsys-shim-<pid>.log` in load-only mode |
+
+`DON_NET_LOAD_ONLY=1` is the first-retail-load configuration. It returns a
+fully formed `NetSys`, allowing the loader and multiplayer manager to exercise
+the ABI, but returns measured `LIBERR_NOT_AVAILABLE` (26) from host/join and
+refuses send/get. The log records the factory plus each export and each
+`NetSys`/`NetPlayer` vtable slot on first use, so a menu-only run establishes
+the real retail call frontier without entering a lobby or match.
 
 ## The two ABI facts that make this possible
 
@@ -76,25 +90,27 @@ make the DLL self-describing under `dumpbin /exports`.
 | claim | evidence |
 |---|---|
 | 11 exports match the shipped DLL exactly, PE32 i386 DLL | `check-exports.py`, PASS |
-| vtable is 65 slots / 260 bytes, `NetSysBase` is 88 bytes | compile-time `const _: () = assert!(...)` in `abi.rs` |
+| shipped names occupy the exact ordinals 1..11; the callback export emits `ret 0x78` | `check-exports.py`, PASS |
+| vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | compile-time assertions in `abi.rs` |
+| `NetPlayer::{get_id,get_platform_id,get_platform}` return a complete MSVC `wstring` by value | shipped `get_id` `0x10027220`: return object `size=0` at `+0x10`, `capacity=7` at `+0x14`, NUL at `+0`; focused cross-target tests |
+| receive copies cannot exceed the retail destination | `rise.pdb` `NetDaemon::data` type `0x8912`: `unsigned char[2048]` at `+8`; caller `0x00950F30`; shipped copier `0x10013550` |
+| three by-value callbacks are consumed and destroyed with the shipped ABI | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78` |
 | the session/transport underneath works between two processes | `don-net`'s `tcp_session` test and the `donnet-peer` binary |
 | **the retail game loads this DLL and reaches a match** | **untested.** Needs the Parallels VM. |
 
 The last row is the honest gap. Nothing here has been run inside
-`riseofnations.exe`. The known risks, in the order they would bite:
+`riseofnations.exe`. The three previously stated ABI risks are now resolved
+from the shipped PDB/caller/callee instructions, but that is not live-load
+evidence. The next exercise is load-only, with `DON_NET_LOAD_ONLY=1`, and must
+inspect the flushed trace before enabling transport.
 
-1. `NetSys::get` copies into a `NetDaemon`-owned buffer whose extent we have
-   not measured; we cap deliveries at 1024 bytes, above the largest real
-   message (`NetMsg_SyncDirInfo`, 529), but the cap is a guess at safety, not a
-   measurement of the buffer.
-2. `NetPlayer::get_id` must return a `std::wstring` **by value**. We hand back
-   the caller's own return slot untouched, which reads as an empty string only
-   if the caller zero-initialised it. This is the most likely first crash.
-3. `set_p2p_callbacks` takes three `std::function`s by value and we never run
-   their destructors — a deliberate small leak, but it also means we never
-   inspect them.
-4. Game setup and readiness do **not** flow through `NetSys` at all in this
-   build; they are PlayFab lobby attributes driven by `MultiplayerManager`
-   (see `don_net::lobby`). Replacing this DLL alone therefore gets the *turn
-   channel* under our control but leaves lobby/setup unserved. Getting two
-   instances all the way into a match needs the lobby path stubbed too.
+The architectural blocker remains: game setup and readiness do **not** flow
+through `NetSys` in this build; they are PlayFab lobby attributes driven by
+`MultiplayerManager` (see `don_net::lobby`). Replacing this DLL alone gets the
+turn channel under our control but leaves lobby/setup unserved. Getting two
+retail instances into a match still requires the lobby path.
+
+The Rust cdylib exposes ten `shim_*` alias targets in addition to the exact
+shipped name/ordinal surface. They are not imported by retail. The parity gate
+reports them explicitly instead of pretending the export table is byte-for-byte
+identical.
