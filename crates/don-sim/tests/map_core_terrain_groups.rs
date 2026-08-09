@@ -170,11 +170,12 @@ fn skipped_nonfertile_cells_do_not_require_fractal_storage() {
 }
 
 #[test]
-fn place_all_composes_mountain_randomization_then_fails_closed_at_group_selection() {
+fn place_all_composes_selection_then_fails_closed_at_network_pump() {
     let mut world = filled_world(2, 2, land::FERTILE);
     let before_world = world.wdata.clone();
     let mut groups = TerrainGroups {
         groups: vec![TerrainGroup {
+            group_type: 4,
             chance: 100,
             min_clumps: 2,
             max_clumps: 5,
@@ -202,11 +203,18 @@ fn place_all_composes_mountain_randomization_then_fails_closed_at_group_selectio
     let error = groups
         .place_all(&mut world, &mut random, &mut mountains, 1, 1)
         .unwrap_err();
-    let PlaceAllError::TerrainGroupSelectionUnavailable {
-        mountain_randomization,
-    } = error;
-    assert_eq!(mountain_randomization.draws, 2);
-    assert_ne!(mountain_randomization.rng_state_after, before_random);
+    let PlaceAllError::NetDaemonProcessAllUnavailable { preview } = error else {
+        panic!("unexpected place_all boundary: {error:?}");
+    };
+    assert_eq!(preview.mountain_randomization.draws, 2);
+    assert_ne!(
+        preview.mountain_randomization.rng_state_after,
+        before_random
+    );
+    assert_eq!(preview.group_selection.chance_draws, 1);
+    assert_eq!(preview.group_selection.clump_draws, 1);
+    assert_eq!(preview.group_selection.groups.len(), 1);
+    assert!(preview.group_selection.groups[0].selected);
     assert_eq!(random.state(), before_random);
     assert_eq!(mountains, before_mountains);
     assert_eq!(world.wdata, before_world);

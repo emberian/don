@@ -91,14 +91,55 @@ pub struct FillFertileReceipt {
     pub fertile_cells: i32,
 }
 
-/// First unresolved deterministic dependency in `TerrainGroups::place_all`.
+/// One row of the two zero-filled native temporary arrays used by `place_all`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerrainGroupSelection {
+    pub selected: bool,
+    /// Zero for rejected groups; otherwise the fixed or randomly selected clumps.
+    pub clumps: i32,
+}
+
+/// Deterministic result through `0x006a7615`, immediately before the placement
+/// pass resets its group index and reaches `NetDaemon::process_all`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerrainGroupSelectionReceipt {
+    pub groups: Vec<TerrainGroupSelection>,
+    /// Accumulators at `0x00cbe460` before retail normalizes them in place.
+    pub raw_clumps_by_type: [i32; 5],
+    /// The same five globals after `0x006a75c0`--`0x006a75e9`.
+    pub normalized_clumps_by_type: [i32; 5],
+    pub chance_draws: u32,
+    pub clump_draws: u32,
+    pub rng_state_after: i32,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TerrainGroupSelectionError {
+    /// Native indexes a five-element table with `TerrainGroup::type - 4`.
+    UnsupportedGroupType { group_index: usize, group_type: i32 },
+    /// Native's inclusive `(max - min) + 1` divisor must fit positive `i32`.
+    InvalidClumpSpan {
+        group_index: usize,
+        min_clumps: i32,
+        max_clumps: i32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceAllPreviewReceipt {
+    pub mountain_randomization: MountainRandomizeReceipt,
+    pub group_selection: TerrainGroupSelectionReceipt,
+}
+
+/// First unresolved dependency in `TerrainGroups::place_all`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaceAllError {
-    /// Mountain randomization at callsite `0x006a7330` has completed on the
-    /// fail-closed preview state.  The next unsupported deterministic stage is
-    /// the group chance/clump-selection loop beginning at `0x006a741e`.
-    TerrainGroupSelectionUnavailable {
-        mountain_randomization: MountainRandomizeReceipt,
+    InvalidTerrainGroupSelection(TerrainGroupSelectionError),
+    /// The exact randomization, selection, and five-type normalization prefix
+    /// completed on preview state.  Retail next pumps the network daemon at
+    /// callsite `0x006a7645`, before it starts placing the first group.
+    NetDaemonProcessAllUnavailable {
+        preview: PlaceAllPreviewReceipt,
     },
 }
 
@@ -150,11 +191,12 @@ impl TerrainGroups {
 
     /// Fail-closed prefix of `TerrainGroups::place_all` `0x006a70d0`.
     ///
-    /// Before the first terrain-group selection draw, retail calls the now-exact
-    /// `Mountains::randomize_mountains` at `0x006a7330`.  It is executed here on a
-    /// preview clone, proving the composed call and its RNG order while retaining
-    /// the module's fail-closed contract: until the following selection loop is
-    /// recovered, no partial world, group, mountain-list, or RNG mutation escapes.
+    /// Before the first terrain-group selection draw, retail randomizes mountains
+    /// at `0x006a7330`, then executes [`Self::select_groups`] and normalizes five
+    /// type accumulators.  The prefix is executed on preview clones, proving its
+    /// composed RNG order while retaining the fail-closed contract: until the
+    /// network/placement pass is recovered, no partial world, group, mountain-list,
+    /// or RNG mutation escapes.
     pub fn place_all(
         &mut self,
         _world: &mut World,
@@ -166,9 +208,123 @@ impl TerrainGroups {
         let mut preview_random = *random;
         let mut preview_mountains = mountains.clone();
         let mountain_randomization = preview_mountains.randomize_mountains(&mut preview_random);
-        Err(PlaceAllError::TerrainGroupSelectionUnavailable {
-            mountain_randomization,
+        let group_selection = self
+            .select_groups(&mut preview_random)
+            .map_err(PlaceAllError::InvalidTerrainGroupSelection)?;
+        Err(PlaceAllError::NetDaemonProcessAllUnavailable {
+            preview: PlaceAllPreviewReceipt {
+                mountain_randomization,
+                group_selection,
+            },
         })
+    }
+
+    /// Exact terrain-group chance/clump-selection transaction from
+    /// `0x006a7445` through the five-type normalization ending at `0x006a7615`.
+    ///
+    /// A zero `grouping` always starts a new percentile draw.  Adjacent groups
+    /// with the same nonzero `grouping` carry the signed remainder and the prior
+    /// selected flag.  The short-circuit when that remainder is already negative
+    /// is observable: it can reject without subtracting the current chance.
+    /// Selected groups draw an inclusive clump count only when `min < max`.
+    /// Structural validation precedes the first draw, so errors are transactional.
+    pub fn select_groups(
+        &self,
+        random: &mut Random,
+    ) -> Result<TerrainGroupSelectionReceipt, TerrainGroupSelectionError> {
+        self.validate_selection_inputs()?;
+
+        let mut selections = vec![TerrainGroupSelection::default(); self.groups.len()];
+        let mut raw_clumps_by_type = [0i32; 5];
+        let mut last_grouping = -10i32;
+        let mut remaining_percentile = 0i32;
+        let mut previous_selected = false;
+        let mut chance_draws = 0u32;
+        let mut clump_draws = 0u32;
+
+        for (index, group) in self.groups.iter().enumerate() {
+            if group.grouping == 0 || group.grouping != last_grouping {
+                remaining_percentile = random.get(0, 0xffff) % 100;
+                chance_draws += 1;
+                last_grouping = group.grouping;
+                previous_selected = false;
+            }
+
+            let reject_without_subtraction =
+                remaining_percentile < 0 && (group.chance != 0 || !previous_selected);
+            let rejected = if reject_without_subtraction {
+                true
+            } else {
+                remaining_percentile = remaining_percentile.wrapping_sub(group.chance);
+                remaining_percentile >= 0
+            };
+
+            if rejected {
+                previous_selected = false;
+                continue;
+            }
+
+            previous_selected = true;
+            let mut clumps = group.min_clumps;
+            if group.min_clumps < group.max_clumps {
+                let span = group
+                    .max_clumps
+                    .wrapping_sub(group.min_clumps)
+                    .wrapping_add(1);
+                clumps = (random.get(0, 0xffff) % span).wrapping_add(group.min_clumps);
+                clump_draws += 1;
+            }
+            selections[index] = TerrainGroupSelection {
+                selected: true,
+                clumps,
+            };
+            let type_index = (group.group_type - 4) as usize;
+            raw_clumps_by_type[type_index] = raw_clumps_by_type[type_index].wrapping_add(clumps);
+        }
+
+        let normalized_clumps_by_type = raw_clumps_by_type.map(|total| {
+            if total < 2 {
+                i32::MAX
+            } else {
+                let half = total >> 1;
+                if half & 1 != 0 {
+                    half - 1
+                } else {
+                    half
+                }
+            }
+        });
+
+        Ok(TerrainGroupSelectionReceipt {
+            groups: selections,
+            raw_clumps_by_type,
+            normalized_clumps_by_type,
+            chance_draws,
+            clump_draws,
+            rng_state_after: random.state(),
+        })
+    }
+
+    fn validate_selection_inputs(&self) -> Result<(), TerrainGroupSelectionError> {
+        for (group_index, group) in self.groups.iter().enumerate() {
+            if !(4..=8).contains(&group.group_type) {
+                return Err(TerrainGroupSelectionError::UnsupportedGroupType {
+                    group_index,
+                    group_type: group.group_type,
+                });
+            }
+            if group.min_clumps < group.max_clumps {
+                let span = i64::from(group.max_clumps) - i64::from(group.min_clumps) + 1;
+                if span > i64::from(i32::MAX) {
+                    return Err(TerrainGroupSelectionError::InvalidClumpSpan {
+                        group_index,
+                        min_clumps: group.min_clumps,
+                        max_clumps: group.max_clumps,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_fractal_accesses(&self, world: &World) -> Result<(), FillFertileError> {
