@@ -1409,12 +1409,139 @@ pub enum UnitCompletionResult {
     CapacityBlocked,
 }
 
+/// Leader flag set by the ordinary-building arm of `Build::finished` immediately after
+/// `Wall::mask_me(1, 0)`. [measured, `0x0062871F`]
+pub const LEADER_BUILDING_COMPLETED_FLAG: u32 = 0x0800_0000;
+
+/// Applied ordinary-building completion effects from `Build::finished`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildingCompletionTransaction {
+    pub type_index: i32,
+    /// Value queried before `Wall::set_type` changes the completed building.
+    pub old_city_pop_value: i32,
+    /// The captured-building tail is selected by `ObjectData::flags & 0x20` after the
+    /// type/mask/leader-flag stores. `None` means retail returned at that point.
+    pub captured: Option<CapturedBuildingCompletion>,
+}
+
+/// Population/border tail applied only for a captured completed building.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CapturedBuildingCompletion {
+    /// Post-`City::find_buildings` query used for `LeaderData::pop`.
+    pub leader_city_pop_value: i32,
+    pub leader_population_delta: i32,
+    /// Retail resolves the city and queries its value again for `Game::world_pop`.
+    pub world_city_pop_value: i32,
+    pub world_population_delta: i32,
+    /// Signed tile-region index when retail's exact `region < 64` branch is taken.
+    pub region_index: Option<i32>,
+    /// Retail calls `CityData::get_pop_value` again inside the valid-region arm.
+    pub region_city_pop_value: Option<i32>,
+    /// Truncated 16-bit delta added to `LeaderData::reg_pop[region]`.
+    pub region_population_delta: Option<i16>,
+}
+
+/// Mandatory object/city/world boundary for the ordinary-building arm of
+/// `Build::finished` (`0x006286D6..0x00628838`).
+///
+/// None of retail's calls in this arm is checked for failure, so this boundary is
+/// deliberately infallible: there is no rollback point. Implementations must commit each
+/// callback before returning, in the order driven by [`execute_building_completion`].
+pub trait BuildingCompletionHost {
+    /// `CityData::get_pop_value` (`0x00738450`). Called once before the type change, once
+    /// each for leader and world population after `City::find_buildings`, and a fourth
+    /// time only when the signed region index is below 64.
+    fn city_pop_value(&mut self, build: &BuildData) -> i32;
+    /// Producer vtable `+0x84`: `Wall::set_type(type, 0)`.
+    fn set_building_type(&mut self, build: &BuildData, type_index: i32, secondary: i32);
+    /// `Wall::mask_me(1, 0)` (`0x00642FC0`).
+    fn mask_building(&mut self, build: &BuildData, mask: i32, regen_roads: i32);
+    /// `LeaderData::flags |= 0x08000000`.
+    fn mark_leader_building_completed(&mut self, build: &BuildData, flag: u32);
+    /// `City::find_buildings` (`0x007384C0`).
+    fn find_city_buildings(&mut self, build: &BuildData);
+    /// Add the supplied wrapping delta to `LeaderData::pop` (`+0x95C`).
+    fn adjust_leader_population(&mut self, build: &BuildData, delta: i32);
+    /// Add the supplied wrapping delta to `Game::world_pop` (`+0x6CC`).
+    fn adjust_world_population(&mut self, delta: i32);
+    /// Region byte selected from the producer coordinate's world tile.
+    fn building_region_index(&mut self, build: &BuildData) -> i32;
+    /// Add the supplied 16-bit delta to `LeaderData::reg_pop[region]` (`+0xE62`).
+    fn adjust_region_population(&mut self, build: &BuildData, region: i32, delta: i16);
+    /// `Leader::calc_pop_cap` (`0x006DC490`).
+    fn calc_population_cap(&mut self, build: &BuildData);
+    /// `Region::fix_borders` (`0x00680F60`).
+    fn fix_region_borders(&mut self);
+}
+
+/// Execute the ordinary-building arm of `Build::finished`. [measured]
+///
+/// Retail reads the old city value even when the producer is not captured. It then commits
+/// `set_type -> mask_me -> leader flag` before consulting the captured bit. The captured
+/// tail commits `find_buildings -> leader pop -> world pop -> optional region pop ->
+/// calc_pop_cap -> fix_borders`. There are no conditional return values and hence no
+/// rollback; a fallible host would invent a state retail cannot produce.
+pub fn execute_building_completion<H: BuildingCompletionHost>(
+    build: &BuildData,
+    type_index: i32,
+    host: &mut H,
+) -> BuildingCompletionTransaction {
+    let old_city_pop_value = host.city_pop_value(build);
+    host.set_building_type(build, type_index, 0);
+    host.mask_building(build, 1, 0);
+    host.mark_leader_building_completed(build, LEADER_BUILDING_COMPLETED_FLAG);
+
+    if build.flags & flag::CAPTURED == 0 {
+        return BuildingCompletionTransaction {
+            type_index,
+            old_city_pop_value,
+            captured: None,
+        };
+    }
+
+    host.find_city_buildings(build);
+    let leader_city_pop_value = host.city_pop_value(build);
+    let leader_population_delta = leader_city_pop_value.wrapping_sub(old_city_pop_value);
+    host.adjust_leader_population(build, leader_population_delta);
+
+    let world_city_pop_value = host.city_pop_value(build);
+    let world_population_delta = world_city_pop_value.wrapping_sub(old_city_pop_value);
+    host.adjust_world_population(world_population_delta);
+
+    let raw_region = host.building_region_index(build);
+    let (region_index, region_city_pop_value, region_population_delta) = if raw_region < 64 {
+        let region_pop_value = host.city_pop_value(build);
+        let region_delta = (region_pop_value as i16).wrapping_sub(old_city_pop_value as i16);
+        host.adjust_region_population(build, raw_region, region_delta);
+        (Some(raw_region), Some(region_pop_value), Some(region_delta))
+    } else {
+        (None, None, None)
+    };
+
+    host.calc_population_cap(build);
+    host.fix_region_borders();
+
+    BuildingCompletionTransaction {
+        type_index,
+        old_city_pop_value,
+        captured: Some(CapturedBuildingCompletion {
+            leader_city_pop_value,
+            leader_population_delta,
+            world_city_pop_value,
+            world_population_delta,
+            region_index,
+            region_city_pop_value,
+            region_population_delta,
+        }),
+    }
+}
+
 /// Exact top-level effect selected by `Build::finished(type)` (`0x00628490`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FinishedEffectTransaction {
     Unit(UnitCompletionResult),
     SpellCast,
-    BuildingCompleted,
+    BuildingCompleted(BuildingCompletionTransaction),
     TechGained {
         type_index: i32,
         was_new: bool,
@@ -1440,7 +1567,7 @@ impl FinishedEffectTransaction {
 /// false unit-availability or spell-ownership test falls through to the later classes.
 /// [`TechSetHost::gained_tech`] owns the 15,001-byte `Leader::gain_tech` one-shot body;
 /// [`TechState`] owns the checksum-visible bit and counter mutation that precedes it.
-pub trait FinishedEffectHost: TechSetHost {
+pub trait FinishedEffectHost: TechSetHost + BuildingCompletionHost {
     fn is_unit_type(&mut self, type_index: i32) -> bool;
     fn can_make_unit(&mut self, type_index: i32) -> bool;
     fn train_unit(&mut self, build: &BuildData, type_index: i32) -> UnitCompletionResult;
@@ -1453,10 +1580,6 @@ pub trait FinishedEffectHost: TechSetHost {
     /// `BuildTypeData::flags +0x2C0 & 4`: set means this queued building-shaped type
     /// falls through to `Leader::gain_tech` instead of changing the producer's type.
     fn building_completion_gains_tech(&mut self, type_index: i32) -> bool;
-    /// The ordered `CityData::get_pop_value -> Wall::set_type -> Wall::mask_me -> leader
-    /// flag/city/pop-cap/border` building-completion transaction.
-    fn complete_building(&mut self, build: &BuildData, type_index: i32);
-
     /// Producer `is(0x1B6)` query, made only after the tech gain transaction.
     fn producer_is_capitol(&mut self, build: &BuildData) -> bool;
     /// `LeaderData::get_gov_hero(0)` after a Capitol completes a tech.
@@ -1492,8 +1615,8 @@ pub fn execute_finished_effect<H: FinishedEffectHost>(
     }
 
     if host.is_build_type(type_index) && !host.building_completion_gains_tech(type_index) {
-        host.complete_building(build, type_index);
-        return FinishedEffectTransaction::BuildingCompleted;
+        let transaction = execute_building_completion(build, type_index, host);
+        return FinishedEffectTransaction::BuildingCompleted(transaction);
     }
 
     let was_new = !tech.tech.get(type_index);
@@ -3401,7 +3524,17 @@ mod tests {
         CastSpell(i32),
         IsBuild(i32),
         BuildingGainsTech(i32),
-        CompleteBuilding(i32),
+        CityPopValue(i32),
+        SetBuildingType(i32, i32),
+        MaskBuilding(i32, i32),
+        MarkLeaderBuildingCompleted(u32),
+        FindCityBuildings,
+        AdjustLeaderPopulation(i32),
+        AdjustWorldPopulation(i32),
+        BuildingRegionIndex(i32),
+        AdjustRegionPopulation(i32, i16),
+        CalcPopulationCap,
+        FixRegionBorders,
         GainedTech {
             type_index: i32,
             held: bool,
@@ -3422,6 +3555,8 @@ mod tests {
         owned_spells: Vec<i32>,
         build_types: Vec<i32>,
         tech_build_types: Vec<i32>,
+        city_pop_values: Vec<i32>,
+        region_index: i32,
         capitol: bool,
         government_hero: Option<i32>,
         events: Vec<FinishedEvent>,
@@ -3437,6 +3572,8 @@ mod tests {
                 owned_spells: vec![630],
                 build_types: vec![414, 415],
                 tech_build_types: vec![415],
+                city_pop_values: vec![1],
+                region_index: 64,
                 capitol: false,
                 government_hero: Some(77),
                 events: Vec::new(),
@@ -3480,6 +3617,62 @@ mod tests {
         }
     }
 
+    impl BuildingCompletionHost for FinishedProbe {
+        fn city_pop_value(&mut self, _build: &BuildData) -> i32 {
+            let value = self.city_pop_values.remove(0);
+            self.events.push(FinishedEvent::CityPopValue(value));
+            value
+        }
+
+        fn set_building_type(&mut self, _build: &BuildData, type_index: i32, secondary: i32) {
+            self.events
+                .push(FinishedEvent::SetBuildingType(type_index, secondary));
+        }
+
+        fn mask_building(&mut self, _build: &BuildData, mask: i32, regen_roads: i32) {
+            self.events
+                .push(FinishedEvent::MaskBuilding(mask, regen_roads));
+        }
+
+        fn mark_leader_building_completed(&mut self, _build: &BuildData, flag: u32) {
+            self.events
+                .push(FinishedEvent::MarkLeaderBuildingCompleted(flag));
+        }
+
+        fn find_city_buildings(&mut self, _build: &BuildData) {
+            self.events.push(FinishedEvent::FindCityBuildings);
+        }
+
+        fn adjust_leader_population(&mut self, _build: &BuildData, delta: i32) {
+            self.events
+                .push(FinishedEvent::AdjustLeaderPopulation(delta));
+        }
+
+        fn adjust_world_population(&mut self, delta: i32) {
+            self.events
+                .push(FinishedEvent::AdjustWorldPopulation(delta));
+        }
+
+        fn building_region_index(&mut self, _build: &BuildData) -> i32 {
+            self.events
+                .push(FinishedEvent::BuildingRegionIndex(self.region_index));
+            self.region_index
+        }
+
+        fn adjust_region_population(&mut self, _build: &BuildData, region: i32, delta: i16) {
+            self.events
+                .push(FinishedEvent::AdjustRegionPopulation(region, delta));
+        }
+
+        fn calc_population_cap(&mut self, _build: &BuildData) {
+            self.events.push(FinishedEvent::CalcPopulationCap);
+        }
+
+        fn fix_region_borders(&mut self) {
+            self.events.push(FinishedEvent::FixRegionBorders);
+        }
+    }
+
     impl FinishedEffectHost for FinishedProbe {
         fn is_unit_type(&mut self, type_index: i32) -> bool {
             self.events.push(FinishedEvent::IsUnit(type_index));
@@ -3519,11 +3712,6 @@ mod tests {
             self.events
                 .push(FinishedEvent::BuildingGainsTech(type_index));
             self.tech_build_types.contains(&type_index)
-        }
-
-        fn complete_building(&mut self, _build: &BuildData, type_index: i32) {
-            self.events
-                .push(FinishedEvent::CompleteBuilding(type_index));
         }
 
         fn producer_is_capitol(&mut self, _build: &BuildData) -> bool {
@@ -3712,6 +3900,83 @@ mod tests {
     }
 
     #[test]
+    fn captured_building_completion_commits_population_and_border_tail_in_retail_order() {
+        let mut build = active_city_build(3);
+        build.flags |= flag::CAPTURED;
+        let mut host = FinishedProbe {
+            city_pop_values: vec![1, 3, 4, 5],
+            region_index: 7,
+            ..FinishedProbe::default()
+        };
+
+        let transaction = execute_building_completion(&build, 414, &mut host);
+        assert_eq!(
+            transaction,
+            BuildingCompletionTransaction {
+                type_index: 414,
+                old_city_pop_value: 1,
+                captured: Some(CapturedBuildingCompletion {
+                    leader_city_pop_value: 3,
+                    leader_population_delta: 2,
+                    world_city_pop_value: 4,
+                    world_population_delta: 3,
+                    region_index: Some(7),
+                    region_city_pop_value: Some(5),
+                    region_population_delta: Some(4),
+                }),
+            }
+        );
+        assert!(host.city_pop_values.is_empty());
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::CityPopValue(1),
+                FinishedEvent::SetBuildingType(414, 0),
+                FinishedEvent::MaskBuilding(1, 0),
+                FinishedEvent::MarkLeaderBuildingCompleted(LEADER_BUILDING_COMPLETED_FLAG),
+                FinishedEvent::FindCityBuildings,
+                FinishedEvent::CityPopValue(3),
+                FinishedEvent::AdjustLeaderPopulation(2),
+                FinishedEvent::CityPopValue(4),
+                FinishedEvent::AdjustWorldPopulation(3),
+                FinishedEvent::BuildingRegionIndex(7),
+                FinishedEvent::CityPopValue(5),
+                FinishedEvent::AdjustRegionPopulation(7, 4),
+                FinishedEvent::CalcPopulationCap,
+                FinishedEvent::FixRegionBorders,
+            ]
+        );
+
+        // The comparison is signed and strict. Region 64 skips only the fourth city query
+        // and 16-bit region store; pop-cap and border recalculation still commit.
+        host.events.clear();
+        host.city_pop_values = vec![10, 12, 13];
+        host.region_index = 64;
+        let no_region = execute_building_completion(&build, 415, &mut host);
+        assert_eq!(
+            no_region.captured,
+            Some(CapturedBuildingCompletion {
+                leader_city_pop_value: 12,
+                leader_population_delta: 2,
+                world_city_pop_value: 13,
+                world_population_delta: 3,
+                region_index: None,
+                region_city_pop_value: None,
+                region_population_delta: None,
+            })
+        );
+        assert!(host.city_pop_values.is_empty());
+        assert_eq!(
+            &host.events[host.events.len() - 3..],
+            &[
+                FinishedEvent::BuildingRegionIndex(64),
+                FinishedEvent::CalcPopulationCap,
+                FinishedEvent::FixRegionBorders,
+            ]
+        );
+    }
+
+    #[test]
     fn finished_effect_router_preserves_branch_priority_and_single_tech_mutation_order() {
         let build = active_city_build(2);
         let mut tech = TechState::default();
@@ -3764,7 +4029,14 @@ mod tests {
 
         host.events.clear();
         let building = execute_finished_effect(&mut tech, &build, 414, &mut host);
-        assert_eq!(building, FinishedEffectTransaction::BuildingCompleted);
+        assert_eq!(
+            building,
+            FinishedEffectTransaction::BuildingCompleted(BuildingCompletionTransaction {
+                type_index: 414,
+                old_city_pop_value: 1,
+                captured: None,
+            })
+        );
         assert_eq!(
             host.events,
             vec![
@@ -3772,7 +4044,10 @@ mod tests {
                 FinishedEvent::IsSpell(414),
                 FinishedEvent::IsBuild(414),
                 FinishedEvent::BuildingGainsTech(414),
-                FinishedEvent::CompleteBuilding(414),
+                FinishedEvent::CityPopValue(1),
+                FinishedEvent::SetBuildingType(414, 0),
+                FinishedEvent::MaskBuilding(1, 0),
+                FinishedEvent::MarkLeaderBuildingCompleted(LEADER_BUILDING_COMPLETED_FLAG),
             ]
         );
 

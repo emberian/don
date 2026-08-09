@@ -2,7 +2,7 @@
 
 **Lane:** `mech:production` · **Checksum channel served:** `check_builds` (channel 2 of 15,
 `CheckSums::check_builds` `0x00937290`, checksums.cpp:646) · **Module:**
-`crates/don-sim/src/systems/production.rs` (79 focused tests, all green).
+`crates/don-sim/src/systems/production.rs` (80 focused tests, all green).
 
 ---
 
@@ -28,7 +28,7 @@ oracle run would have to cover.
 | Under-construction collapse | `Object::take_damage` `0x00652020` | `under_construction_collapses` |
 | Hit points while razing (float!) | `BuildData::hits` `0x0062E740` | `build_hits` |
 | Training/production queue tick | `Build::do_queue` `0x0061E410` | `queue_step`, `QueueKind`, `execute_local_queue_slot`, `execute_routed_queue_slots` |
-| Queue completion effect routing | `Build::finished` `0x00628490`; `Leader::gain_tech` `0x006DCB60` | `execute_finished_effect`, `FinishedEffectHost`, `TechState::gain` |
+| Queue completion effect routing | `Build::finished` `0x00628490`; `Leader::gain_tech` `0x006DCB60` | `execute_finished_effect`, `execute_building_completion`, `FinishedEffectHost`, `TechState::gain` |
 | Library queue aggregation / forwarded unqueue | `BuildData::get_queue` `0x0062D280`, `Build::unqueue` `0x006207C0`, `LeaderData::get_first_library` `0x006DB6C0` | `BuildPool::{first_library_object,library_queue_type,execute_library_unqueue}` |
 | `JOB_EXTRA_TIME` ramp + 3× cap | `ObjectData::train_time` `0x006508C0` | `train_time_ramp` |
 | Age penalty + difficulty scale | same, tail | `train_time_age_penalty`, `train_time_finalize` |
@@ -47,7 +47,7 @@ oracle run would have to cover.
 | Channel iteration | `CheckSums::check_builds` `0x00937290` | `BuildPool::check_builds` |
 | adler32 / `CheckSum::walk_function` | `0x00A46830` / `0x00936FF0` | `adler32`, `CheckSum` |
 
-**Verification method.** 79 focused unit tests through the wired `don-sim` crate. They are behavioural
+**Verification method.** 80 focused unit tests through the wired `don-sim` crate. They are behavioural
 assertions on the *derived* arithmetic, not captured retail vectors: they prove the port
 matches what I read out of the instruction stream, and they pin the six places where a
 plausible-looking reimplementation diverges (§3). They are **not** evidence of fidelity to
@@ -415,10 +415,13 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
 - **`Build::activate` `0x00623E20` (13,088 B) and `Build::close` `0x00628980` (3,510 B)** —
   completion and destruction bookkeeping. I ported the *trigger* for both
   (`construct_time <= job_counter`; the collapse rule) and `Build::finished` now routes an
-  ordinary building completion into a mandatory ordered world transaction. The
-  `CityData::get_pop_value -> Wall::set_type -> Wall::mask_me -> leader flag -> optional
-  city/pop-cap/border` body is still the `complete_building` host boundary. `Build::close`
-  begins with `Build::clean_queue`, i.e. the queue is refunded on destruction. The plunder,
+  ordinary queued building completion through the complete ordered transaction:
+  `old city pop -> Wall::set_type(type,0) -> Wall::mask_me(1,0) -> leader flag -> optional
+  captured city/population/region/pop-cap/border tail`. The object/city/world stores are
+  mandatory leaf callbacks because those owners do not live in `BuildData`; none is
+  fallible because retail has no rollback branch here. `Build::activate`'s much larger
+  initial-construction transaction is still not ported. `Build::close` begins with
+  `Build::clean_queue`, i.e. the queue is refunded on destruction. The plunder,
   city-membership and road-unmasking side effects are not ported.
 - **Upgrades.** The brief asked for "upgrades and their cost formula". I found the surface —
   `ObjectType::load_upgrade` `0x006615B0`, `ObjectTypeData::upgrade_level` `0x00661090`,
@@ -471,9 +474,12 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
    `BitMask<806>::set` call at `0x006DCFAB`, before its one-shot effects, and contains no
    call to `Leader::set_age` or `Leader::set_epoch`. A completed age or epoch therefore
    grants exactly that one type and does not run either bulk ladder/revalidation tail.
-   Unit spawn, spell casting, ordinary building activation, the remainder of the
-   15,001-byte `gain_tech` body, and the Capitol hero train/upgrade remain mandatory host
-   callbacks because they allocate or mutate world objects this module does not own.
+   The ordinary building arm now drives every callback itself in disassembly order,
+   including the distinct leader/world/region population queries and wrapping deltas;
+   those callbacks remain mandatory because their objects live outside `BuildData`.
+   Unit spawn, spell casting, the remainder of the 15,001-byte `gain_tech` body, and the
+   Capitol hero train/upgrade remain mandatory host callbacks because they allocate or
+   mutate world objects this module does not own.
 7. **`Object::must_walk` `0x00647930`** is an input to the walk. Getting it wrong changes
    which windows are hashed, so it must be settled by whoever owns `Object`.
 
@@ -490,13 +496,14 @@ globals, which is the shape the existing oracle already handles.
 ## 7. Wiring
 
 The module is exported through `systems::production` and participates in the normal crate
-gate. The current focused gate is **79 passed, 0 failed**. `production::adler32` already
+gate. The current focused gate is **80 passed, 0 failed**. `production::adler32` already
 re-exports the crate's shared checksum implementation.
 
 The remaining wiring is deliberately at typed world boundaries, not module visibility:
-queue completion now owns top-level effect selection and tech mutation but still needs the
-spawn/cast/building/one-shot world owners, parallel production needs the live leader slot
-limit, and Library aggregation needs city assimilation, type-tree, stockpile, and
-queued-counter hosts. `production::train_time_ramp` also supersedes
+queue completion now owns top-level effect selection, tech mutation, and ordinary-building
+callback order but still needs the spawn/cast/building-leaf/one-shot world owners, parallel
+production needs the live leader slot limit, and Library aggregation needs city
+assimilation, type-tree, stockpile, and queued-counter hosts. `production::train_time_ramp`
+also supersedes
 `mechanics::ramped_rate` (§3.5); the latter should be retired when its remaining callers
 move to the production API.
