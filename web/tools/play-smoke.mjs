@@ -186,6 +186,16 @@ try {
     pause.click();
     const pauseLabel = pause.textContent;
     pause.click();
+    const replayPlay = document.getElementById('replay-play');
+    replayPlay.click();
+    const replayPauseWorked = window.don.state.paused && replayPlay.textContent.includes('resume');
+    replayPlay.click();
+    const replaySpeed = document.getElementById('replay-speed');
+    replaySpeed.value = '2';
+    replaySpeed.dispatchEvent(new Event('change', { bubbles: true }));
+    const replaySpeedWorked = window.don.state.speed === 2 && document.getElementById('speed').value === '2';
+    replaySpeed.value = '1';
+    replaySpeed.dispatchEvent(new Event('change', { bubbles: true }));
     return JSON.stringify({
       initialCatalog, initialCatalogDisabled, filteredCatalog, buildButtonEnabled,
       futureBuildDisabled, keyboardTrain, keyboardResearch, researchHasEnabledAge,
@@ -222,6 +232,17 @@ try {
       ownerStates: [...document.querySelectorAll('#world-players .owner-state')]
         .map(node => node.textContent),
       minimapLabel: document.getElementById('mini')?.getAttribute('aria-label') ?? '',
+      replayProtocol: window.don.replay.snapshot().protocol,
+      replayStatus: document.getElementById('replay-status')?.textContent ?? '',
+      replayStatusLive: document.getElementById('replay-status')?.getAttribute('aria-live') ?? '',
+      replayControls: document.querySelectorAll('#replay .replay-controls button').length,
+      replayTimeline: document.getElementById('replay-timeline')?.getAttribute('aria-label') ?? '',
+      replayJournalActionsEnabled: ['replay-export', 'replay-import']
+        .every(id => !document.getElementById(id)?.disabled),
+      replayUnavailableDisabled: [...document.querySelectorAll('#replay-capabilities button')]
+        .every(button => button.disabled),
+      replayCapabilities: document.getElementById('replay-capabilities')?.textContent ?? '',
+      replayPauseWorked, replaySpeedWorked,
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -275,6 +296,16 @@ try {
     ['the real minimap exposes every owner without inventing teams',
       out.ui.ownerLegend === 4 && out.ui.ownerRows === 4 &&
       out.ui.minimapLabel.includes('All exported owners are visible')],
+    ['the command journal exposes playback, timeline, import, and export controls',
+      out.ui.replayProtocol === 'don.command-journal.v1' && out.ui.replayControls >= 5 &&
+      out.ui.replayTimeline.includes('Command journal frame') && out.ui.replayJournalActionsEnabled &&
+      out.ui.replayPauseWorked && out.ui.replaySpeedWorked],
+    ['journal feedback is announced and does not claim to be a native save',
+      out.ui.replayStatusLive === 'polite' && out.ui.replayStatus.includes('not a native save-state')],
+    ['unsupported native save/load and retail replay actions stay disabled with reasons',
+      out.ui.replayUnavailableDisabled && out.ui.replayCapabilities.includes('no state serializer') &&
+      out.ui.replayCapabilities.includes('no state deserializer') &&
+      out.ui.replayCapabilities.includes('no retail replay playback bridge')],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -297,13 +328,17 @@ try {
     const palette = document.querySelector('#palette button').getBoundingClientRect();
     const objectives = document.getElementById('objectives').getBoundingClientRect();
     const focus = document.querySelector('#world-players button').getBoundingClientRect();
+    const replay = document.getElementById('replay').getBoundingClientRect();
+    const replayControls = [...document.querySelectorAll('#replay .replay-controls button')]
+      .map(button => button.getBoundingClientRect().height);
     return {
       viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
       sideBelowStage: side.top >= stage.bottom - 1,
       dockInsideViewport: dock.left >= 0 && dock.right <= innerWidth,
       dockScrollable: document.getElementById('command-dock').scrollWidth >= dock.width,
       touchTarget: [first.width, first.height], paletteTouchTargets: [tab.height, palette.height],
-      objectivePanel: [objectives.left, objectives.right], focusTouchHeight: focus.height, coverageVisible:
+      objectivePanel: [objectives.left, objectives.right], focusTouchHeight: focus.height,
+      replayPanel: [replay.left, replay.right], replayControlHeights: replayControls, coverageVisible:
         getComputedStyle(document.getElementById('coverage')).display !== 'none',
     };
   })()`);
@@ -317,6 +352,9 @@ try {
     ['narrow objectives stay in the page and camera buttons are touch-sized',
       out.narrow.objectivePanel[0] >= 0 && out.narrow.objectivePanel[1] <= out.narrow.viewport[0] &&
       out.narrow.focusTouchHeight >= 40],
+    ['narrow replay controls stay in the page and remain touch-sized',
+      out.narrow.replayPanel[0] >= 0 && out.narrow.replayPanel[1] <= out.narrow.viewport[0] &&
+      out.narrow.replayControlHeights.every(height => height >= 40)],
     ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
@@ -396,6 +434,102 @@ try {
     ['a malformed seed preserves the live session', out.session.invalidPreserved],
     ['player perspective switches and returns', out.session.switched === 1 && out.session.returned === 0],
     ['session status returns to player zero', out.session.status.includes('player 0')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // The current ABI cannot serialize the native world, but it can restart deterministically
+  // and accept exact command packets. Prove that the bounded command journal reconstructs
+  // an intermediate tick bit-for-bit, survives export/import, rejects malformed input
+  // without touching the live world, seeks, and resumes beyond its recorded head.
+  out.journal = await c.eval(`(async () => {
+    const d = window.don;
+    d.session.restart('0x1234abcd');
+    d.replay.pause();
+    const m = d.state.mod, views = m.views();
+    let mobile = -1;
+    for (let row = 0; row < m.live; row++) {
+      const tag = views.tag[row];
+      if ((tag & 0x80000000) && (tag & 0xf) === 0 && !((tag >>> 29) & 1)) {
+        mobile = m.idAtRow(row); break;
+      }
+    }
+    const before = m.info(mobile);
+    d.select([mobile]);
+    m.moveTo(0, before.x + m.subtile * 5, before.y);
+    for (let i = 0; i < 2; i++) d.replay.step();
+    const population = document.getElementById('popset');
+    population.value = '3';
+    population.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let i = 0; i < 2; i++) d.replay.step();
+    document.getElementById('replay-step').click();
+    const recorded = d.replay.snapshot();
+    const digestAtExport = m.digest();
+    const journal = d.replay.export();
+    const parsed = JSON.parse(journal);
+    for (let i = 0; i < 7; i++) d.replay.step();
+    const advanced = d.replay.snapshot();
+    const imported = await d.replay.import(journal);
+    const digestAfterImport = m.digest();
+    const stableBeforeMalformed = { frame: m.frame, digest: m.digest() };
+    let malformedRefused = false;
+    try { await d.replay.import('{"protocol":"not-don"}'); }
+    catch { malformedRefused = true; }
+    const stableAfterMalformed = { frame: m.frame, digest: m.digest() };
+    const wrongDigest = JSON.parse(journal);
+    wrongDigest.setup.initialDigest = '0000000000000000';
+    let wrongDigestRefused = false;
+    try { await d.replay.import(JSON.stringify(wrongDigest)); }
+    catch { wrongDigestRefused = true; }
+    const stableAfterWrongDigest = { frame: m.frame, digest: m.digest() };
+    const zero = await d.replay.seek(0);
+    const sought = await d.replay.seek(parsed.headFrame);
+    document.getElementById('replay-step').click();
+    const resumed = d.replay.snapshot();
+    const status = document.getElementById('replay-status').textContent;
+    const time = document.getElementById('replay-time').textContent;
+    population.value = '2';
+    population.dispatchEvent(new Event('change', { bubbles: true }));
+    d.session.restart('0x1234abcd');
+    d.replay.play();
+    return JSON.stringify({
+      mobile, recorded, advanced, imported, digestAtExport, digestAfterImport,
+      malformedRefused, wrongDigestRefused, stableBeforeMalformed, stableAfterMalformed,
+      stableAfterWrongDigest,
+      zero, sought, resumed, status, time,
+      protocol: parsed.protocol, boundary: parsed.boundary,
+      setup: parsed.setup, eventKinds: parsed.events.map(event => event.kind),
+      commandHex: parsed.events.find(event => event.kind === 'command')?.hex ?? '',
+      headFrame: parsed.headFrame, targetFrame: parsed.frame,
+    });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['the journal exports its bounded protocol and deterministic session baseline',
+      out.journal.protocol === 'don.command-journal.v1' &&
+      out.journal.boundary.includes('not a native save') &&
+      out.journal.setup.seed === '0x1234abcd' && out.journal.setup.initialDigest.length === 16],
+    ['the journal records exact wire packets with frame and selection context',
+      out.journal.mobile >= 0 && out.journal.recorded.events >= 2 &&
+      out.journal.eventKinds.filter(kind => kind === 'command').length >= 2 &&
+      out.journal.eventKinds.includes('population') &&
+      /^[0-9a-f]+$/.test(out.journal.commandHex)],
+    ['export and import restore the recorded frame and digest bit-for-bit',
+      out.journal.targetFrame === out.journal.recorded.frame &&
+      out.journal.imported.frame === out.journal.recorded.frame &&
+      out.journal.digestAfterImport === out.journal.digestAtExport],
+    ['the live world can advance beyond an exported snapshot before restoration',
+      out.journal.advanced.frame > out.journal.recorded.frame &&
+      out.journal.advanced.digest !== out.journal.digestAtExport],
+    ['a malformed journal is fail-closed without mutating the restored world',
+      out.journal.malformedRefused && out.journal.wrongDigestRefused &&
+      JSON.stringify(out.journal.stableAfterMalformed) === JSON.stringify(out.journal.stableBeforeMalformed) &&
+      JSON.stringify(out.journal.stableAfterWrongDigest) === JSON.stringify(out.journal.stableBeforeMalformed)],
+    ['timeline seek reconstructs frame zero and the exact exported head',
+      out.journal.zero.frame === 0 && out.journal.sought.frame === out.journal.headFrame &&
+      out.journal.sought.digest === out.journal.digestAtExport],
+    ['step from a restored head resumes simulation and returns to recording',
+      out.journal.resumed.frame === out.journal.headFrame + 1 && !out.journal.resumed.playback &&
+      out.journal.status.includes('recording resumed') && out.journal.time.includes('head')],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

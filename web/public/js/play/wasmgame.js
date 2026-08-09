@@ -37,6 +37,7 @@ export class GameModule {
     this.playerFields = this.x.game_player_fields();
     this.gapCount = this.x.game_gap_count();
     this._submitted = 0;
+    this._commandObserver = null;
     this._readiness = this._loadReadiness();
   }
 
@@ -223,6 +224,11 @@ export class GameModule {
     };
   }
 
+  /** Observe accepted browser-to-Wasm packets without changing the command ABI. */
+  observeCommands(observer) {
+    this._commandObserver = typeof observer === 'function' ? observer : null;
+  }
+
   // ---- commands ------------------------------------------------------------------------
 
   /**
@@ -234,6 +240,13 @@ export class GameModule {
     v.cmd.set(bytes, 0);
     this.x.game_submit(this.g, who, bytes.length);
     this._submitted++;
+    if (this._commandObserver) {
+      this._commandObserver({
+        frame: this.frame,
+        who: who >>> 0,
+        bytes: new Uint8Array(bytes),
+      });
+    }
     return bytes;
   }
 

@@ -9,7 +9,7 @@
 // something, the wasm side counts it in `game_gaps_ptr` and the coverage panel shows it
 // live, with the reason.
 
-import { GameModule, RES_NAMES, GAP_NAMES, OP, TAG } from './wasmgame.js';
+import { GameModule, RES_NAMES, GAP_NAMES, COMMANDS, OP, TAG } from './wasmgame.js';
 import { makeRenderer } from './gfx.js';
 import { REPLAY_EVIDENCE } from './readiness.gen.js';
 import { decode } from '../wire.gen.js';
@@ -28,6 +28,11 @@ const INCOME_MODES = Object.freeze([
 ]);
 const QUEUE_CAPACITY = 8; // game_object_info exposes queue_n plus q0..q7.
 const OWNER_COLOURS = Object.freeze(['#5c9eff', '#ff5c4d', '#6bd97a', '#ffbf47']);
+const JOURNAL_PROTOCOL = 'don.command-journal.v1';
+const MAX_JOURNAL_FRAMES = 1000000; // about 18.6 hours at the recovered 67 ms tick.
+const MAX_JOURNAL_EVENTS = 50000;
+const MAX_JOURNAL_JSON_BYTES = 16 * 1024 * 1024;
+const MAX_JOURNAL_COMMAND_BYTES = 8 * 1024 * 1024;
 
 const state = {
   mod: null, gfx: null, data: null, play: null,
@@ -54,6 +59,11 @@ const state = {
   rendererErrorCount: 0,
   paletteNotice: '',
   cameraSource: 'home',
+  replay: {
+    events: [], baseline: null, headFrame: 0,
+    applying: false, playback: false, restoring: false,
+    status: 'recording exact browser command packets',
+  },
 };
 
 // ---------------------------------------------------------------------------------------
@@ -110,6 +120,7 @@ async function boot() {
   wirePanels();
   initializeSessionPanel();
   initializeObjectivesPanel();
+  initializeReplayPanel();
   buildPalette();
   renderMenus();
   requestAnimationFrame(frame);
@@ -693,6 +704,16 @@ function restartSessionFromPanel() {
     say(message, 'warn');
     return false;
   }
+  resetClientForWorld(seed, false, `new session: P${state.who}`);
+  startReplayJournal();
+  input.value = formatSeed(seed);
+  syncSessionUrl();
+  say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
+    'seed-dependent map generation remains blocked', 'ok');
+  return true;
+}
+
+function resetClientForWorld(seed, paused, cameraSource) {
   state.sessionSeed = seed;
   state.selection = [];
   state.groups.clear();
@@ -716,19 +737,14 @@ function restartSessionFromPanel() {
   state.gfx.provision(state.mod.tiles, state.mod.x.game_capacity(state.mod.g));
   const [sx, sy] = state.mod.startOf(state.who);
   centreOn(sx, sy);
-  state.cameraSource = `new session: P${state.who}`;
-  setPaused(false, false);
-  input.value = formatSeed(seed);
-  syncSessionUrl();
+  state.cameraSource = cameraSource;
+  setPaused(paused, false);
   renderMenus();
   renderSelection();
   refreshPaletteAvailability();
   renderPaletteFeedback();
   renderSessionStatus();
   renderSessionSummary();
-  say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
-    'seed-dependent map generation remains blocked', 'ok');
-  return true;
 }
 
 function switchPlayer(player) {
@@ -973,6 +989,448 @@ function renderObjectivesPanel() {
     'All exported owners are visible; diplomacy and fog are unavailable.');
 }
 
+// ---------------------------------------------------------------------------------------
+// deterministic browser command journal
+// ---------------------------------------------------------------------------------------
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex) {
+  if (typeof hex !== 'string' || !/^(?:[0-9a-f]{2})+$/i.test(hex)) {
+    throw new Error('journal command hex must contain one or more complete bytes');
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+function replayBaseline() {
+  return Object.freeze({
+    seed: formatSeed(state.sessionSeed),
+    player: state.who,
+    income: INCOME_MODES[state.sessionIncomeMode].slug,
+    population: POPULATION_LIMITS[state.sessionPopSetting],
+    initialDigest: state.sessionInitialDigest,
+  });
+}
+
+function startReplayJournal() {
+  state.replay.events = [];
+  state.replay.baseline = replayBaseline();
+  state.replay.headFrame = state.mod.frame;
+  state.replay.applying = false;
+  state.replay.playback = false;
+  state.replay.restoring = false;
+  state.replay.status = 'recording exact browser command packets from this new-session baseline';
+  state.mod.observeCommands(({ frame: at, who, bytes }) => {
+    if (state.replay.applying) return;
+    recordReplayEvent({
+      frame: at,
+      kind: 'command',
+      who,
+      hex: bytesToHex(bytes),
+      selection: state.selection.slice(),
+    });
+  });
+  renderReplayPanel();
+}
+
+function recordReplayEvent(event) {
+  const frame = state.mod.frame;
+  if (state.replay.playback || frame < state.replay.headFrame) {
+    // A restore leaves the world at a tick boundary before that frame's command packets.
+    // Immediate rule setters at the boundary have already been reconstructed and remain
+    // part of a new branch; queued command packets are the future being replaced.
+    state.replay.events = state.replay.events.filter(
+      (entry) => entry.frame < frame || (entry.frame === frame && entry.kind !== 'command'));
+    state.replay.headFrame = frame;
+    state.replay.playback = false;
+    state.replay.status = `branched at frame ${frame}; later journal packets were discarded`;
+  }
+  state.replay.events.push(Object.freeze({ ...event, frame }));
+  state.replay.headFrame = Math.max(state.replay.headFrame, frame);
+  renderReplayPanel();
+}
+
+function recordReplayRule(kind, value) {
+  if (state.replay.applying || !state.replay.baseline) return;
+  recordReplayEvent({ frame: state.mod.frame, kind, value });
+}
+
+function updateReplayHead() {
+  if (!state.replay.playback && !state.replay.restoring) {
+    state.replay.headFrame = Math.max(state.replay.headFrame, state.mod.frame);
+  }
+}
+
+function replayDocument() {
+  updateReplayHead();
+  return {
+    protocol: JOURNAL_PROTOCOL,
+    boundary: 'tick-boundary deterministic restart plus exact frame-stamped command packets; not a native save',
+    setup: { ...state.replay.baseline },
+    frame: state.mod.frame,
+    headFrame: state.replay.headFrame,
+    events: state.replay.events.map((event) => ({
+      ...event,
+      selection: event.selection ? event.selection.slice() : undefined,
+    })),
+  };
+}
+
+function exportReplayJournal() {
+  const documentValue = replayDocument();
+  if (documentValue.headFrame > MAX_JOURNAL_FRAMES || documentValue.events.length > MAX_JOURNAL_EVENTS) {
+    throw new Error(`journal exceeds the ${MAX_JOURNAL_FRAMES}-frame or ${MAX_JOURNAL_EVENTS}-event bound`);
+  }
+  const text = `${JSON.stringify(documentValue, null, 2)}\n`;
+  if (new TextEncoder().encode(text).length > MAX_JOURNAL_JSON_BYTES) {
+    throw new Error(`journal JSON exceeds ${MAX_JOURNAL_JSON_BYTES} bytes`);
+  }
+  return text;
+}
+
+function normalizeReplayJournal(input) {
+  if (typeof input === 'string' && new TextEncoder().encode(input).length > MAX_JOURNAL_JSON_BYTES) {
+    throw new Error(`journal JSON exceeds ${MAX_JOURNAL_JSON_BYTES} bytes`);
+  }
+  let documentValue;
+  try {
+    documentValue = typeof input === 'string' ? JSON.parse(input) : input;
+  } catch (error) {
+    throw new Error(`journal is not valid JSON: ${error.message}`);
+  }
+  if (!documentValue || typeof documentValue !== 'object' || Array.isArray(documentValue)) {
+    throw new Error('journal root must be an object');
+  }
+  if (documentValue.protocol !== JOURNAL_PROTOCOL) {
+    throw new Error(`unsupported journal protocol ${JSON.stringify(documentValue.protocol)}`);
+  }
+  const setup = documentValue.setup;
+  if (!setup || typeof setup !== 'object' || Array.isArray(setup)) throw new Error('journal setup is missing');
+  const seed = parseSessionSeed(setup.seed);
+  const player = Number(setup.player);
+  if (!Number.isInteger(player) || player < 0 || player >= state.mod.playerCount) {
+    throw new Error('journal player is outside the exported player range');
+  }
+  const incomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income);
+  if (!incomeMode) throw new Error('journal income mode is unsupported');
+  const popIndex = POPULATION_LIMITS.indexOf(Number(setup.population));
+  if (popIndex < 0) throw new Error('journal population limit is unsupported');
+  if (typeof setup.initialDigest !== 'string' || !/^[0-9a-f]{16}$/i.test(setup.initialDigest)) {
+    throw new Error('journal initial digest must be 16 hexadecimal digits');
+  }
+  const headFrame = Number(documentValue.headFrame);
+  const targetFrame = Number(documentValue.frame);
+  if (!Number.isInteger(headFrame) || headFrame < 0 || headFrame > MAX_JOURNAL_FRAMES ||
+      !Number.isInteger(targetFrame) || targetFrame < 0 || targetFrame > headFrame) {
+    throw new Error(`journal frame bounds must satisfy 0 <= frame <= head <= ${MAX_JOURNAL_FRAMES}`);
+  }
+  if (!Array.isArray(documentValue.events) || documentValue.events.length > MAX_JOURNAL_EVENTS) {
+    throw new Error(`journal events must be an array of at most ${MAX_JOURNAL_EVENTS} entries`);
+  }
+  let priorFrame = -1;
+  let commandBytes = 0;
+  const events = documentValue.events.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`journal event ${index} must be an object`);
+    }
+    const frame = Number(entry.frame);
+    if (!Number.isInteger(frame) || frame < priorFrame || frame < 0 || frame > headFrame) {
+      throw new Error(`journal event ${index} has an invalid or out-of-order frame`);
+    }
+    priorFrame = frame;
+    if (entry.kind === 'income') {
+      const mode = INCOME_MODES.find((candidate) => candidate.slug === entry.value);
+      if (!mode) throw new Error(`journal event ${index} has an unsupported income mode`);
+      return Object.freeze({ frame, kind: 'income', value: mode.slug });
+    }
+    if (entry.kind === 'population') {
+      const population = Number(entry.value);
+      if (!POPULATION_LIMITS.includes(population)) {
+        throw new Error(`journal event ${index} has an unsupported population limit`);
+      }
+      return Object.freeze({ frame, kind: 'population', value: population });
+    }
+    if (entry.kind !== 'command') throw new Error(`journal event ${index} has an unknown kind`);
+    const who = Number(entry.who);
+    if (!Number.isInteger(who) || who < 0 || who >= state.mod.playerCount) {
+      throw new Error(`journal event ${index} has an invalid player`);
+    }
+    const bytes = hexToBytes(entry.hex);
+    commandBytes += bytes.length;
+    if (commandBytes > MAX_JOURNAL_COMMAND_BYTES) {
+      throw new Error(`journal command payloads exceed ${MAX_JOURNAL_COMMAND_BYTES} bytes`);
+    }
+    if (bytes.length > state.mod.views().cmd.length) {
+      throw new Error(`journal event ${index} exceeds the exported command buffer`);
+    }
+    let decoded;
+    try { decoded = decode(bytes); } catch (error) {
+      throw new Error(`journal event ${index} is not a supported wire packet: ${error.message}`);
+    }
+    const command = COMMANDS[decoded.op];
+    const expectedBytes = decoded.op === OP.GROUP ? 3 + (decoded.num * 2) : command?.size;
+    if (!command || bytes.length !== expectedBytes) {
+      throw new Error(`journal event ${index} has an unknown opcode or non-canonical packet length`);
+    }
+    if (!Array.isArray(entry.selection) || entry.selection.length > 255 ||
+        entry.selection.some((id) => !Number.isInteger(id) || id < 0 || id > 0x7fffffff)) {
+      throw new Error(`journal event ${index} has an invalid selection snapshot`);
+    }
+    return Object.freeze({
+      frame, kind: 'command', who, hex: bytesToHex(bytes), selection: entry.selection.slice(),
+    });
+  });
+  const normalized = Object.freeze({
+    protocol: JOURNAL_PROTOCOL,
+    setup: Object.freeze({
+      seed: formatSeed(seed), player, income: incomeMode.slug,
+      population: POPULATION_LIMITS[popIndex], initialDigest: setup.initialDigest.toLowerCase(),
+    }),
+    frame: targetFrame,
+    headFrame,
+    events: Object.freeze(events),
+  });
+  const observedDigest = scratchReplayBaselineDigest(normalized.setup);
+  if (observedDigest !== normalized.setup.initialDigest) {
+    throw new Error(
+      `journal baseline digest mismatch: expected ${normalized.setup.initialDigest}, got ${observedDigest}`);
+  }
+  return normalized;
+}
+
+function scratchReplayBaselineDigest(setup) {
+  const x = state.mod.x;
+  const game = x.game_create(parseSessionSeed(setup.seed), 0);
+  if (!game) throw new Error('could not allocate a scratch world to validate the journal baseline');
+  try {
+    x.game_set_income_mode(game, INCOME_MODES.find((mode) => mode.slug === setup.income).value);
+    x.game_set_pop_setting(game, POPULATION_LIMITS.indexOf(setup.population));
+    x.game_step(game, 0);
+    const lo = x.game_digest_lo(game) >>> 0;
+    const hi = x.game_digest_hi(game) >>> 0;
+    return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
+  } finally {
+    x.game_destroy(game);
+    // The scratch allocation can grow linear memory and detach every cached view.
+    state.mod._buf = null;
+  }
+}
+
+function applyReplayEventsAt(frame) {
+  for (const event of state.replay.events) {
+    if (event.frame < frame) continue;
+    if (event.frame > frame) break;
+    if (event.kind === 'command') {
+      state.selection = event.selection.slice();
+      state.mod.submit(event.who, hexToBytes(event.hex));
+    } else if (event.kind === 'income') {
+      state.sessionIncomeMode = INCOME_MODES.find((mode) => mode.slug === event.value).value;
+      state.mod.setIncomeMode(state.sessionIncomeMode);
+    } else if (event.kind === 'population') {
+      state.sessionPopSetting = POPULATION_LIMITS.indexOf(event.value);
+      state.mod.setPopSetting(state.sessionPopSetting);
+    }
+  }
+}
+
+async function restoreReplayFrame(targetFrame) {
+  const target = Number(targetFrame);
+  if (state.replay.restoring) throw new Error('a journal restore is already running');
+  if (!Number.isInteger(target) || target < 0 || target > state.replay.headFrame) {
+    throw new Error(`journal target must be between 0 and ${state.replay.headFrame}`);
+  }
+  const setup = state.replay.baseline;
+  state.replay.restoring = true;
+  state.replay.applying = true;
+  state.replay.playback = false;
+  state.replay.status = `restoring frame ${target} from the deterministic baseline…`;
+  setPaused(true, false);
+  renderReplayPanel();
+  try {
+    state.who = setup.player;
+    state.sessionIncomeMode = INCOME_MODES.find((mode) => mode.slug === setup.income).value;
+    state.sessionPopSetting = POPULATION_LIMITS.indexOf(setup.population);
+    if (!state.mod.restart(parseSessionSeed(setup.seed))) throw new Error('Wasm world restart failed');
+    resetClientForWorld(parseSessionSeed(setup.seed), true, `journal frame ${target}`);
+    if (state.sessionInitialDigest !== setup.initialDigest) {
+      throw new Error(`baseline digest mismatch: expected ${setup.initialDigest}, got ${state.sessionInitialDigest}`);
+    }
+    for (let frame = 0; frame < target; frame++) {
+      applyReplayEventsAt(frame);
+      state.mod.step(1);
+      if (frame && frame % 2048 === 0) await new Promise(requestAnimationFrame);
+    }
+    // Rule setters are immediate and idempotent. Reconstruct them at the selected boundary;
+    // command packets at this same frame stay queued in the journal until play/step.
+    for (const event of state.replay.events) {
+      if (event.frame > target) break;
+      if (event.frame !== target || event.kind === 'command') continue;
+      if (event.kind === 'income') {
+        state.sessionIncomeMode = INCOME_MODES.find((mode) => mode.slug === event.value).value;
+        state.mod.setIncomeMode(state.sessionIncomeMode);
+      } else if (event.kind === 'population') {
+        state.sessionPopSetting = POPULATION_LIMITS.indexOf(event.value);
+        state.mod.setPopSetting(state.sessionPopSetting);
+      }
+    }
+    const lastSelection = [...state.replay.events].reverse().find(
+      (event) => event.kind === 'command' && event.frame <= target);
+    state.selection = lastSelection ? lastSelection.selection.slice() : [];
+    state.replay.playback = true;
+    state.replay.status = target === state.replay.headFrame
+      ? `journal head restored at frame ${target}; resume drains packets recorded at this boundary`
+      : `journal frame ${target} restored; play or step replays exact packets toward head ${state.replay.headFrame}`;
+    $('session-player').value = String(state.who);
+    $('income').value = String(state.sessionIncomeMode);
+    $('popset').value = String(state.sessionPopSetting);
+    $('session-seed').value = setup.seed;
+    syncSessionUrl();
+    renderMenus();
+    renderSelection();
+    renderSessionSummary();
+    return replaySnapshot();
+  } finally {
+    state.replay.applying = false;
+    state.replay.restoring = false;
+    renderReplayPanel();
+  }
+}
+
+async function importReplayJournal(input) {
+  const journal = normalizeReplayJournal(input);
+  const previous = {
+    events: state.replay.events,
+    baseline: state.replay.baseline,
+    headFrame: state.replay.headFrame,
+    status: state.replay.status,
+  };
+  state.replay.events = journal.events.slice();
+  state.replay.baseline = journal.setup;
+  state.replay.headFrame = journal.headFrame;
+  try {
+    const snapshot = await restoreReplayFrame(journal.frame);
+    state.replay.status = `imported ${journal.events.length} events; ${state.replay.status}`;
+    renderReplayPanel();
+    return snapshot;
+  } catch (error) {
+    state.replay.events = previous.events;
+    state.replay.baseline = previous.baseline;
+    state.replay.headFrame = previous.headFrame;
+    state.replay.status = `import refused: ${error.message}`;
+    renderReplayPanel();
+    throw error;
+  }
+}
+
+function advanceSimulationFrame() {
+  if (state.replay.playback) {
+    state.replay.applying = true;
+    try { applyReplayEventsAt(state.mod.frame); } finally { state.replay.applying = false; }
+  }
+  state.mod.step(1);
+  if (state.replay.playback && state.mod.frame > state.replay.headFrame) {
+    state.replay.playback = false;
+    state.replay.headFrame = state.mod.frame;
+    state.replay.status = `journal head passed; recording resumed at frame ${state.mod.frame}`;
+  } else if (!state.replay.playback) {
+    state.replay.headFrame = Math.max(state.replay.headFrame, state.mod.frame);
+  }
+}
+
+function replaySnapshot() {
+  updateReplayHead();
+  return Object.freeze({
+    protocol: JOURNAL_PROTOCOL,
+    frame: state.mod.frame,
+    headFrame: state.replay.headFrame,
+    events: state.replay.events.length,
+    playback: state.replay.playback,
+    paused: state.paused,
+    digest: state.mod.digest(),
+    initialDigest: state.replay.baseline?.initialDigest ?? '',
+    status: state.replay.status,
+  });
+}
+
+function renderReplayPanel() {
+  if (!$('replay') || !state.mod || !state.replay.baseline) return;
+  updateReplayHead();
+  const frame = state.mod.frame;
+  const timeline = $('replay-timeline');
+  timeline.max = String(state.replay.headFrame);
+  timeline.value = String(Math.min(frame, state.replay.headFrame));
+  timeline.disabled = state.replay.restoring;
+  $('replay-frame').textContent = `frame ${frame}`;
+  $('replay-head').textContent = `head ${state.replay.headFrame} · ${state.replay.events.length} events`;
+  $('replay-status').textContent = `${state.replay.status}. This is a command journal, not a native save-state.`;
+  $('replay-play').textContent = state.paused
+    ? (state.replay.playback ? 'play journal' : 'resume') : 'pause';
+  $('replay-step').disabled = state.replay.restoring;
+  $('replay-live').disabled = state.replay.restoring || frame === state.replay.headFrame;
+  $('replay-import').disabled = state.replay.restoring;
+  $('replay-export').disabled = state.replay.restoring;
+  $('replay-speed').value = String(state.speed);
+}
+
+function downloadReplayJournal() {
+  let journal;
+  try { journal = exportReplayJournal(); }
+  catch (error) {
+    state.replay.status = `export refused: ${error.message}`;
+    say(`command journal export refused — ${error.message}`, 'warn');
+    renderReplayPanel();
+    return;
+  }
+  const blob = new Blob([journal], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `don-command-journal-${state.mod.frame}.json`;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  state.replay.status = `exported ${state.replay.events.length} events at frame ${state.mod.frame}`;
+  renderReplayPanel();
+}
+
+function initializeReplayPanel() {
+  startReplayJournal();
+  $('replay-play').addEventListener('click', () => setPaused(!state.paused));
+  $('replay-step').addEventListener('click', () => {
+    setPaused(true, false);
+    const wasPlayback = state.replay.playback;
+    advanceSimulationFrame();
+    if (!wasPlayback || state.replay.playback) state.replay.status = `stepped to frame ${state.mod.frame}`;
+    renderHud();
+  });
+  $('replay-live').addEventListener('click', async () => {
+    try { await restoreReplayFrame(state.replay.headFrame); }
+    catch (error) { say(`journal seek failed — ${error.message}`, 'warn'); }
+  });
+  $('replay-speed').addEventListener('change', (event) => setSpeed(Number(event.target.value)));
+  $('replay-timeline').addEventListener('change', async (event) => {
+    try { await restoreReplayFrame(Number(event.target.value)); }
+    catch (error) { say(`journal seek failed — ${error.message}`, 'warn'); }
+  });
+  $('replay-export').addEventListener('click', downloadReplayJournal);
+  $('replay-import').addEventListener('click', () => $('replay-file').click());
+  $('replay-file').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      await importReplayJournal(await file.text());
+      say(`command journal imported — frame ${state.mod.frame}`, 'ok');
+    } catch (error) {
+      say(`command journal refused — ${error.message}`, 'warn');
+    }
+  });
+  renderReplayPanel();
+}
+
 function wirePanels() {
   for (const id of ['tab-build', 'tab-train', 'tab-research']) {
     $(id).addEventListener('click', () => {
@@ -985,6 +1443,7 @@ function wirePanels() {
   $('income').addEventListener('change', (e) => {
     state.sessionIncomeMode = Number(e.target.value) === 1 ? 1 : 0;
     state.mod.setIncomeMode(state.sessionIncomeMode);
+    recordReplayRule('income', INCOME_MODES[state.sessionIncomeMode].slug);
     syncSessionUrl();
     renderSessionSummary();
     say(`income mode: ${e.target.selectedOptions[0].textContent}`, 'hi');
@@ -992,6 +1451,7 @@ function wirePanels() {
   $('popset').addEventListener('change', (e) => {
     state.sessionPopSetting = clamp(Number(e.target.value) | 0, 0, POPULATION_LIMITS.length - 1);
     state.mod.setPopSetting(state.sessionPopSetting);
+    recordReplayRule('population', POPULATION_LIMITS[state.sessionPopSetting]);
     syncSessionUrl();
     renderSessionSummary();
     say(`population limit: ${POPULATION_LIMITS[state.sessionPopSetting]}`, 'hi');
@@ -1042,12 +1502,18 @@ function setPaused(paused, announce = true) {
   if (announce) {
     say(paused ? 'simulation paused — commands remain queued for the next tick' : 'simulation resumed');
   }
+  renderReplayPanel();
 }
 
 function setSpeed(speed) {
   state.speed = clamp(Number(speed) || 1, 0.25, 8);
   const el = $('speed');
   if (el && Number(el.value) !== state.speed) el.value = String(state.speed);
+  const replaySpeed = $('replay-speed');
+  if (replaySpeed && [...replaySpeed.options].some((option) => Number(option.value) === state.speed)) {
+    replaySpeed.value = String(state.speed);
+  }
+  renderReplayPanel();
 }
 
 /** Complete costed building records. Selection and known prerequisites are applied at render. */
@@ -1419,6 +1885,7 @@ function renderHud() {
   renderPaletteFeedback();
   renderSessionStatus();
   renderObjectivesPanel();
+  renderReplayPanel();
   renderCoverage();
   renderTransport();
 }
@@ -1734,7 +2201,7 @@ function frame(now) {
     acc += dt * state.speed;
     let steps = 0;
     const t0 = performance.now();
-    while (acc >= TICK_MS && steps < 16) { m.step(1); acc -= TICK_MS; steps++; }
+    while (acc >= TICK_MS && steps < 16) { advanceSimulationFrame(); acc -= TICK_MS; steps++; }
     if (steps) state.stepMs = (performance.now() - t0) / steps;
   }
 
@@ -1809,6 +2276,20 @@ window.don = {
     camera: () => cameraSnapshot(),
     focusPlayer: (player) => focusPlayerStart(player, 'automation/player panel'),
   },
+  replay: {
+    snapshot: () => replaySnapshot(),
+    export: () => exportReplayJournal(),
+    import: (journal) => importReplayJournal(journal),
+    seek: (frame) => restoreReplayFrame(frame),
+    step() {
+      setPaused(true, false);
+      advanceSimulationFrame();
+      renderReplayPanel();
+      return replaySnapshot();
+    },
+    play() { setPaused(false, false); return replaySnapshot(); },
+    pause() { setPaused(true, false); return replaySnapshot(); },
+  },
   activate,
   info: (id) => state.mod.info(id),
   player: (p = 0) => state.mod.player(p),
@@ -1833,7 +2314,7 @@ window.don = {
     hasGameData: state.mod.hasGameData, hasPlayData: state.mod.hasPlayData,
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
     sessionSetup: sessionDescriptor(),
-    objectives: exportedWorldSnapshot(), camera: cameraSnapshot(),
+    objectives: exportedWorldSnapshot(), camera: cameraSnapshot(), replay: replaySnapshot(),
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),
