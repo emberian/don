@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import random
 import re
-import shlex
 import socketserver
 import subprocess
 import sys
@@ -68,6 +67,32 @@ def normalize_windows_path(path: str) -> str:
     elif normalized.startswith("\\\\?\\"):
         normalized = normalized[len("\\\\?\\"):]
     return normalized.rstrip("\\").lower()
+
+
+def parse_donject_fields(record: str) -> dict[str, str] | None:
+    """Parse donject's space-separated machine record without unescaping Windows paths."""
+    fields: dict[str, str] = {}
+    cursor = 0
+    token = re.compile(r'([a-z][a-z0-9_]*)=(?:"([^"\r\n]*)"|([^\s"]+))')
+    while cursor < len(record):
+        match = token.match(record, cursor)
+        if not match:
+            return None
+        key = match.group(1)
+        value = match.group(2) if match.group(2) is not None else match.group(3)
+        if key in fields or not value:
+            return None
+        fields[key] = value
+        cursor = match.end()
+        if cursor == len(record):
+            break
+        separator = re.match(r" +", record[cursor:])
+        if not separator:
+            return None
+        cursor += separator.end()
+        if cursor == len(record):
+            return None
+    return fields
 
 
 def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -376,8 +401,6 @@ Write-Output '{PREFLIGHT_JSON_END}'
 
 
 def parse_module_base_output(output: str) -> dict:
-    fields: dict[str, str] = {}
-    errors = []
     records = [line.strip() for line in output.splitlines()
                if line.strip().startswith("protocol=donject.v2 ")]
     if len(records) != 1:
@@ -385,23 +408,8 @@ def parse_module_base_output(output: str) -> dict:
             "status": "error",
             "detail": "module probe did not return exactly one donject.v2 record",
         }
-    try:
-        tokens = shlex.split(records[0])
-    except ValueError:
-        return {"status": "error", "detail": "module probe record has invalid quoting"}
-    for token in tokens:
-        if "=" not in token:
-            errors.append("injector record contains a non-field token")
-            continue
-        key, value = token.split("=", 1)
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value:
-            errors.append("injector record contains an invalid field")
-            continue
-        if key in fields:
-            errors.append(f"duplicate injector field: {key}")
-        else:
-            fields[key] = value
-    if (errors or fields.get("protocol") != "donject.v2" or
+    fields = parse_donject_fields(records[0])
+    if (fields is None or fields.get("protocol") != "donject.v2" or
             fields.get("command") != "base"):
         return {
             "status": "error",
@@ -444,19 +452,9 @@ def parse_module_list_output(output: str) -> dict:
         line = raw.strip()
         if not line.startswith("protocol=donject.v2 "):
             continue
-        try:
-            tokens = shlex.split(line)
-        except ValueError:
-            return {"status": "error", "detail": "module-list record has invalid quoting"}
-        fields: dict[str, str] = {}
-        for token in tokens:
-            if "=" not in token:
-                return {"status": "error", "detail": "module-list record has a bare token"}
-            key, value = token.split("=", 1)
-            if (not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value or
-                    key in fields):
-                return {"status": "error", "detail": "module-list record has invalid fields"}
-            fields[key] = value
+        fields = parse_donject_fields(line)
+        if fields is None:
+            return {"status": "error", "detail": "module-list record has invalid fields"}
         if fields.get("protocol") == "donject.v2" and fields.get("command") == "modules":
             records.append(fields)
     headers = [record for record in records if record.get("status") == "ok"]
@@ -616,16 +614,24 @@ def parse_inject_output(output: str, returncode: int, target_pid: int,
 
 
 def parse_hook_peek_output(output: str) -> dict:
-    header_matches = []
+    header_matches: list[dict[str, str]] = []
     byte_matches = []
     for raw in output.splitlines():
         line = raw.strip()
-        header = re.fullmatch(
-            r"#\s+base=([0-9A-Fa-f]{8})\s+addr=([0-9A-Fa-f]{8})\s+len=5",
-            line,
-        )
-        if header:
-            header_matches.append((int(header.group(1), 16), int(header.group(2), 16)))
+        if line.startswith("# "):
+            fields: dict[str, str] = {}
+            valid = True
+            for token in line[2:].split():
+                if token.count("=") != 1:
+                    valid = False
+                    break
+                key, value = token.split("=", 1)
+                if not key or not value or key in fields:
+                    valid = False
+                    break
+                fields[key] = value
+            if valid:
+                header_matches.append(fields)
             continue
         data = re.fullmatch(
             r"([0-9A-Fa-f]{8}):\s+"
@@ -640,7 +646,42 @@ def parse_hook_peek_output(output: str) -> dict:
             ))
     if len(header_matches) != 1 or len(byte_matches) != 1:
         return {"status": "unreadable", "detail": "ambiguous hook-byte response"}
-    base, address = header_matches[0]
+    header = header_matches[0]
+    required = {
+        "base", "addr", "len", "module", "rva", "deref", "nderef", "off",
+        "root", "pointer_addr", "root_value", "stable",
+    }
+    if set(header) != required or header["module"].lower() != "riseofnations.exe":
+        return {"status": "unreadable", "detail": "hook-byte header identity mismatch"}
+    try:
+        base = int(header["base"], 16)
+        address = int(header["addr"], 16)
+        length = int(header["len"], 16)
+        rva = int(header["rva"], 16)
+        deref = int(header["deref"])
+        nderef = int(header["nderef"])
+        offset = int(header["off"], 16)
+        root = int(header["root"], 16)
+        pointer_addr = int(header["pointer_addr"], 16)
+        root_value = int(header["root_value"], 16)
+        stable = int(header["stable"])
+    except ValueError:
+        return {"status": "unreadable", "detail": "hook-byte header numerics are invalid"}
+    if (
+        base <= 0
+        or length != 5
+        or rva != TURN_CALL_RVA
+        or deref != 0
+        or nderef != 0
+        or offset != 0
+        or root != base + TURN_CALL_RVA
+        or root > 0xFFFFFFFF
+        or pointer_addr != root
+        or root_value != 0
+        or stable != -1
+        or address != root
+    ):
+        return {"status": "unreadable", "detail": "hook-byte header bounds mismatch"}
     byte_address, call = byte_matches[0]
     if address != byte_address or address != base + TURN_CALL_RVA:
         return {"status": "unreadable", "detail": "hook-byte response address mismatch"}
@@ -761,7 +802,8 @@ def controller_inventory(target_pid: int, extra_generation: str | None = None) -
         if row["downloads"]:
             row_issues.append("incomplete DLL download remains on disk")
         if ready["present"]:
-            if values.get("root", "").lower() != row["root"].lower():
+            if normalize_windows_path(values.get("root", "")) != normalize_windows_path(
+                    row["root"]):
                 ready_issues.append("ready root does not match generation root")
             try:
                 ready_pid = int(values.get("pid", ""))
@@ -1155,7 +1197,7 @@ def ready_identity_errors(record: dict, target_pid: int, root: str) -> list[str]
         ready_pid = None
     if ready_pid != target_pid:
         errors.append("ready pid does not match target")
-    if values.get("root", "").lower() != root.lower():
+    if normalize_windows_path(values.get("root", "")) != normalize_windows_path(root):
         errors.append("ready root does not match controller root")
     try:
         base_text = values.get("base", "")

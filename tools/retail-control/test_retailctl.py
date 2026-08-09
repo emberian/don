@@ -240,7 +240,9 @@ class RetailCtlTests(unittest.TestCase):
 
     def test_hook_probe_distinguishes_original_patch_and_unrecognized_bytes(self):
         original = (
-            "# base=00D60000 addr=00EF1686 len=5\n"
+            "# base=00D60000 addr=00EF1686 len=5 module=riseofnations.exe "
+            "rva=191686 deref=0 nderef=0 off=0 root=00EF1686 "
+            "pointer_addr=00EF1686 root_value=00000000 stable=-1\n"
             "00EF1686: E8 45 67 3C 00"
         )
         self.assertEqual(retailctl.parse_hook_peek_output(original)["status"], "original")
@@ -249,7 +251,7 @@ class RetailCtlTests(unittest.TestCase):
         displacement = target - (address + 5)
         patched_bytes = b"\xe8" + displacement.to_bytes(4, "little", signed=True)
         patched = (
-            "# base=00D60000 addr=00EF1686 len=5\n"
+            original.splitlines()[0] + "\n"
             f"00EF1686: {' '.join(f'{byte:02X}' for byte in patched_bytes)}"
         )
         parsed = retailctl.parse_hook_peek_output(patched)
@@ -261,6 +263,10 @@ class RetailCtlTests(unittest.TestCase):
             retailctl.parse_hook_peek_output(original + "\n" + original)["status"],
             "unreadable",
         )
+        inconsistent = original.replace("pointer_addr=00EF1686", "pointer_addr=00EF1687")
+        self.assertEqual(
+            retailctl.parse_hook_peek_output(inconsistent)["status"], "unreadable"
+        )
 
     def test_ready_record_is_bound_to_pid_root_and_exact_rebased_addresses(self):
         root = r"C:\Users\Public\don-retail-control-tactical-v21"
@@ -270,12 +276,31 @@ class RetailCtlTests(unittest.TestCase):
         )
         record = retailctl.parse_ready_record(raw)
         self.assertEqual(retailctl.ready_identity_errors(record, 7804, root), [])
+        canonical_record = retailctl.parse_ready_record(
+            raw.replace(f"root={root}", rf"root=\\?\{root}")
+        )
+        self.assertEqual(
+            retailctl.ready_identity_errors(canonical_record, 7804, root), []
+        )
         self.assertIn(
             "ready pid does not match target",
             retailctl.ready_identity_errors(record, 12324, root),
         )
         torn = retailctl.parse_ready_record(raw + "pid=7804\n")
         self.assertTrue(torn["errors"])
+
+    def test_donject_machine_parser_preserves_canonical_windows_paths(self):
+        path = r"\\?\C:\Users\Public\a generation\controller.dll"
+        fields = retailctl.parse_donject_fields(
+            f'protocol=donject.v2 command=modules module_path="{path}" index=1'
+        )
+        self.assertIsNotNone(fields)
+        self.assertEqual(fields["module_path"], path)
+        self.assertIsNone(
+            retailctl.parse_donject_fields(
+                "protocol=donject.v2 protocol=duplicate command=modules"
+            )
+        )
 
     def test_retail_requests_require_exact_current_hook_ownership(self):
         root = retailctl.generation_root("fresh-v1")
