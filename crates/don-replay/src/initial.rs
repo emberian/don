@@ -488,6 +488,23 @@ pub enum InitialItemReconstructionError {
     Blocked(InitialItemBoundary),
 }
 
+/// Atomic receipt chain for the reconstructed post-placement portion of
+/// `Map::make` through source token `0x1ebe`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapTerrainRepairReceipt {
+    pub check_player_forest: crate::check_player_forest::CheckPlayerForestReceipt,
+    pub nubify_forest: crate::nubify_forest_frontier::NubifyForestReceipt,
+    pub post_nubify_transitions:
+        crate::post_nubify_transition_frontier::PostNubifyTransitionReceipt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MapTerrainRepairError {
+    CheckPlayerForest(crate::check_player_forest::CheckPlayerForestError),
+    NubifyForest(crate::nubify_forest_frontier::NubifyForestError),
+    PostNubifyTransitions(crate::post_nubify_transition_frontier::PostNubifyTransitionError),
+}
+
 impl InitialItemReconstruction {
     /// Number of distinct replay bytes which directly carry the scalar tuple
     /// (4-byte seed plus six one-byte selectors/gates).
@@ -497,6 +514,52 @@ impl InitialItemReconstruction {
 
     pub fn absent_replay_inputs(&self) -> &'static [AbsentReplayItemInput] {
         &ABSENT_REPLAY_ITEM_INPUTS
+    }
+
+    /// Continue the real `Map::make` schedule from a successful `place_all`
+    /// receipt through the post-transition checksum deadline.
+    ///
+    /// World, checksum, and main-RNG handoffs are chained only through typed
+    /// receipts and committed as one replay-side transaction. A late missing
+    /// or stale selected-tileset fact therefore cannot expose the preceding
+    /// forest writes. Observations made by `edge_host` remain outside this
+    /// transaction, as they do for the standalone nubify adapter.
+    pub fn advance_map_make_terrain_repairs<H: crate::nubify_forest_frontier::EdgeOfRegionHost>(
+        &self,
+        map: &mut InitialWorld,
+        place_all: &crate::place_all_boundary::ReplayPlaceAllReceipt,
+        forest_facts: crate::check_player_forest::CheckPlayerForestFacts,
+        edge_host: &mut H,
+        transition_facts: &crate::post_nubify_transition_frontier::TerrainTransitionLiveFacts,
+    ) -> Result<MapTerrainRepairReceipt, MapTerrainRepairError> {
+        let mut staged = map.clone();
+        let check_player_forest = crate::check_player_forest::execute_check_player_forest(
+            self,
+            &mut staged,
+            place_all,
+            forest_facts,
+        )
+        .map_err(MapTerrainRepairError::CheckPlayerForest)?;
+        let nubify_forest = crate::nubify_forest_frontier::execute_nubify_forest_frontier(
+            &mut staged,
+            &check_player_forest,
+            edge_host,
+        )
+        .map_err(MapTerrainRepairError::NubifyForest)?;
+        let post_nubify_transitions =
+            crate::post_nubify_transition_frontier::execute_post_nubify_transitions(
+                &mut staged,
+                &nubify_forest,
+                transition_facts,
+            )
+            .map_err(MapTerrainRepairError::PostNubifyTransitions)?;
+
+        *map = staged;
+        Ok(MapTerrainRepairReceipt {
+            check_player_forest,
+            nubify_forest,
+            post_nubify_transitions,
+        })
     }
 
     /// Execute the admitted prefix against the exact terrain owner.

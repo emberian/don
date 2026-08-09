@@ -54,11 +54,13 @@ pub mod harness;
 pub mod image;
 pub mod initial;
 pub mod map_style;
+pub mod nubify_forest_frontier;
 pub mod place_all_boundary;
 pub mod place_all_facts;
 pub mod player_land;
 pub mod pools;
 pub mod post_continent;
+pub mod post_nubify_transition_frontier;
 pub mod replay;
 pub mod report;
 pub mod rules_channel;
@@ -96,11 +98,17 @@ pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use initial::{
     InitialGame, InitialGameInfo, InitialItemBoundary, InitialItemReconstruction,
     InitialItemReconstructionError, InitialPlayer, InitialState, InitialWorld,
-    InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans,
+    InitialWorldgenInputs, MapTerrainRepairError, MapTerrainRepairReceipt, ReplayByteSpan,
+    WorldgenSourceSpans,
 };
 pub use map_style::{
-    MapGenerationStage, MapStyleIdentity, MapStyleLoadError, MapStyleStaticData,
-    StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE, SHIPPED_MAP_STYLE_CATALOG,
+    MapGenerationCheckpoint, MapGenerationStage, MapStyleIdentity, MapStyleLoadError,
+    MapStyleStaticData, StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE,
+    SHIPPED_MAP_STYLE_CATALOG,
+};
+pub use nubify_forest_frontier::{
+    execute_nubify_forest_frontier, EdgeOfRegionHost, EdgeOfRegionProvenance, EdgeOfRegionReceipt,
+    EdgeOfRegionRequest, NubifyForestError, NubifyForestReceipt,
 };
 pub use place_all_boundary::{
     execute_replay_place_all, ReplayPlaceAllError, ReplayPlaceAllFacts, ReplayPlaceAllHostFacts,
@@ -124,6 +132,10 @@ pub use pools::{
 pub use post_continent::{
     execute_post_continent, PostContinentError, PostContinentReceipt, TerritoryLimits,
     MAP_FIX_DIAG_LAND_VA, MAP_MAKE_COASTLINES_VA, TERRAIN_GROUPS_FILL_FERTILE_VA,
+};
+pub use post_nubify_transition_frontier::{
+    execute_post_nubify_transitions, PostNubifyTransitionError, PostNubifyTransitionReceipt,
+    TerrainTransitionEvidence, TerrainTransitionLiveFacts, TerrainTransitionTuning,
 };
 pub use replay::{corpus, Replay};
 pub use state::SimState;

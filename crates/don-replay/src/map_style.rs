@@ -210,75 +210,131 @@ pub const SHIPPED_MAP_STYLE_CATALOG: [MapStyleIdentity; 23] = [
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MapGenerationCheckpoint {
+    pub call_va: u32,
+    pub source_token: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapGenerationStage {
     pub name: &'static str,
     /// Function entry or `Map::make` call site which pins this stage in order.
     pub evidence_va: Option<u32>,
     pub rng: &'static str,
+    /// The checksum-log deadline immediately after this stage, when one is
+    /// proven. Tokens are caller instrumentation, not replay-source coverage.
+    pub checkpoint: Option<MapGenerationCheckpoint>,
 }
+
+pub const MAP_POST_PLACE_ALL_CHECKPOINT_CALL_VA: u32 = 0x0068_c039;
+pub const MAP_POST_PLACE_ALL_SOURCE_TOKEN: u32 = 0x1eb3;
+pub const MAP_POST_CHECK_PLAYER_FOREST_CHECKPOINT_CALL_VA: u32 = 0x0068_c076;
+pub const MAP_POST_CHECK_PLAYER_FOREST_SOURCE_TOKEN: u32 = 0x1eb5;
+pub const MAP_POST_NUBIFY_FOREST_CHECKPOINT_CALL_VA: u32 = 0x0068_c0b4;
+pub const MAP_POST_NUBIFY_FOREST_SOURCE_TOKEN: u32 = 0x1eb9;
+pub const MAP_POST_TERRAIN_TRANSITIONS_CHECKPOINT_CALL_VA: u32 = 0x0068_c12a;
+pub const MAP_POST_TERRAIN_TRANSITIONS_SOURCE_TOKEN: u32 = 0x1ebe;
 
 /// Proven common ordering in `Map::make`. `rng` distinguishes a known direct
 /// call from stages whose callees consume a branch-dependent number of draws.
-pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 12] = [
+/// The four post-placement checkpoints pin the exact receipt chain without
+/// pretending their source tokens are bytes serialized by a replay.
+pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 14] = [
     MapGenerationStage {
         name: "load_map_data",
         evidence_va: None,
         rng: "XML only",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "select_orientation",
         evidence_va: Some(MAP_MAKE_ORIENTATION_RNG_VA),
         rng: "one direct Random::get when orientation < 0",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "make_continents",
         evidence_va: None,
         rng: "style virtual; branch-dependent",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "make_regions",
         evidence_va: Some(0x0068_0060),
         rng: "none; clear_all/find_all runs before and after coastlines",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "fix_diag_land",
         evidence_va: Some(0x0069_c250),
         rng: "none",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "make_coastlines",
         evidence_va: Some(0x0069_47a0),
         rng: "none",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "fill_fertile",
         evidence_va: Some(0x006a_6f90),
         rng: "none; requires unreconstructed Fractal::frac and partitions",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "terrain_groups_place_all",
         evidence_va: Some(0x0068_c010),
-        rng: "branch-dependent",
+        rng: "branch-dependent; skipped when caller semaphore bit 0x02 is set",
+        checkpoint: Some(MapGenerationCheckpoint {
+            call_va: MAP_POST_PLACE_ALL_CHECKPOINT_CALL_VA,
+            source_token: MAP_POST_PLACE_ALL_SOURCE_TOKEN,
+        }),
     },
     MapGenerationStage {
-        name: "terrain_repairs",
-        evidence_va: None,
-        rng: "indirect calls unresolved",
+        name: "check_player_forest",
+        evidence_va: Some(0x0068_c04d),
+        rng: "none; shares the place_all caller gate",
+        checkpoint: Some(MapGenerationCheckpoint {
+            call_va: MAP_POST_CHECK_PLAYER_FOREST_CHECKPOINT_CALL_VA,
+            source_token: MAP_POST_CHECK_PLAYER_FOREST_SOURCE_TOKEN,
+        }),
+    },
+    MapGenerationStage {
+        name: "nubify_forest",
+        evidence_va: Some(0x0068_c08b),
+        rng: "branch-dependent; exact draws are receipted; shares the caller gate",
+        checkpoint: Some(MapGenerationCheckpoint {
+            call_va: MAP_POST_NUBIFY_FOREST_CHECKPOINT_CALL_VA,
+            source_token: MAP_POST_NUBIFY_FOREST_SOURCE_TOKEN,
+        }),
+    },
+    MapGenerationStage {
+        name: "post_nubify_transitions",
+        evidence_va: Some(0x0068_c101),
+        rng: "three signed base gates, then exact transition draws",
+        checkpoint: Some(MapGenerationCheckpoint {
+            call_va: MAP_POST_TERRAIN_TRANSITIONS_CHECKPOINT_CALL_VA,
+            source_token: MAP_POST_TERRAIN_TRANSITIONS_SOURCE_TOKEN,
+        }),
     },
     MapGenerationStage {
         name: "place_resources",
         evidence_va: Some(MAP_PLACE_RESOURCES_VA),
         rng: "one known direct site plus branch-dependent callees",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "adjust_blocking",
         evidence_va: None,
         rng: "unresolved",
+        checkpoint: None,
     },
     MapGenerationStage {
         name: "compute_values",
         evidence_va: None,
         rng: "unresolved",
+        checkpoint: None,
     },
 ];
 
