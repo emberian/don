@@ -19,7 +19,7 @@ cargo test -p don-sim --lib systems::ammo
 cargo test -p don-sim --test ammo_splash_transaction
 # test result: ok. 2 passed; 0 failed
 cargo test -p don-sim --test ammo_spline_transaction
-# test result: ok. 12 passed; 0 failed
+# test result: ok. 14 passed; 0 failed
 cargo test -p don-sim --test ammo_live_spline_sim
 # test result: ok. 5 passed; 0 failed
 ```
@@ -45,9 +45,9 @@ gate in `systems::air`; it is referenced by the real tick driver.
 | Impact + miss behaviour | `ammo_do_damage_single` | `Ammo::do_damage` `0x00678060` | hit costs 0 draws, miss costs exactly 2 |
 | Splash falloff | `splash_scale`, `splash_ring` | `0x006788E0`–`0x0067892D` | linear from the bounding box; negative skips |
 | Live splash transaction | `ammo_do_damage_splash_execute` | `Ammo::do_damage` `0x00678629`–`0x00678B56` | damage is interleaved with the exact table/down-chain cursor; mutation can change later admissions; projectile closes last |
-| Cruise B-spline transaction | `ammo_init_cruise_spline`, `ammo_step_cruise_spline`, `RetailSpline::walk_checksum` | `0x00913960`, `0x00912F00`, `0x00911820`, `0x00911F60`, `0x009132B0`, spline arm of `0x0067D380` | exact constructed-empty array growth, knots, Cox–de Boor samples, tangent normals, nested checksum walk and indexed flight sample |
+| Cruise B-spline transaction | `ammo_init_cruise_spline`, `ammo_step_cruise_targeted`, `RetailSpline::walk_checksum` | `0x00913960`, `0x00912F00`, `0x00911820`, `0x00911F60`, `0x009132B0`, spline arm of `0x0067D380` | exact constructed-empty array growth, knots, Cox–de Boor samples, tangent normals, strict target envelope, snap/re-entry state, four-frame mirrored retarget, and nested checksum walk |
 | Both nuke B-spline constructors | `ammo_init_nuke_spline_high_arc`, `ammo_init_nuke_spline_terrain` | both arms of `Spline::calc_nuke_spline` `0x00913AD0` | high arc pins all 12 controls/custom knot widths; terrain arm pins truncated query order, flag-tier priority, all-30 knot header, fail-closed host facts, and complete checksum |
-| Live spline ownership and selection | `select_retail_spline_family`, `cruise_spline_inputs`, `AmmoPool::{install_nuke_spline,install_cruise_launch,step_spline_slot,recycle_if_closed,checksum_complete}` | `Ammo::init` `0x0067BBF0`, `Ammo::inc_time` `0x0067D380`, `Recycler<Spline>::pop` `0x00478360`, `CheckSums::check_ammo` `0x009374E0` | graphic flag 8 priority, exact pitch/yaw quaternion order and reach/min-segment gates, nuke object-mask fallback, same-slot ownership, LIFO capacity-preserving reuse, indexed step, close/free, missing-fact fail-close, and nested live checksum |
+| Live spline ownership and selection | `select_retail_spline_family`, `cruise_spline_inputs`, `AmmoPool::{install_nuke_spline,install_cruise_launch,step_cruise_targeted_slot,recycle_if_closed,checksum_complete}` | `Ammo::init` `0x0067BBF0`, `Ammo::inc_time` `0x0067D380`, `Recycler<Spline>::pop` `0x00478360`, `CheckSums::check_ammo` `0x009374E0` | graphic flag 8 priority, exact pitch/yaw quaternion order and reach/min-segment gates, nuke object-mask fallback, same-slot ownership, dynamic endpoint/spline mutation, LIFO capacity-preserving reuse, close/free, missing-fact fail-close, and nested live checksum |
 | `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
 
 **Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
@@ -509,6 +509,19 @@ otherwise unit projectile speed or the non-unit constant 150. Disassembly resolv
 decompile here: the four future vector arguments are pushed before the zero-argument `speed()`
 call and deliberately remain on the stack for the following `Spline::calc_from_dir` call.
 
+The later target-aware spline arm is also executable through
+`AmmoPool::step_cruise_targeted_slot`. After the common time increment it requires a live target
+and `spline_verts.length > cur_time + 1`, truncates the current sample, and compares it against a
+strict horizontal target radius and strict `0xC0` vertical band. A unit's vertical comparison
+uses `guys[0].z`; builds and walls use object `z` and a fixed horizontal radius `0xC0`. Entering
+the envelope writes the truncated sample, sets `total_time = cur_time - 1`, and returns an
+explicit immediate-loop action for the caller's backward jump to the common increment. Outside
+the envelope, only a live unit on a non-zero multiple-of-four frame rebuilds: the truncated
+sample becomes the start, the next raw vertex is mirrored as
+`(next - start) * 2 + start`, the live target becomes the end, the optional control is zero,
+minimum segment length is `200 * unit_move_speed`, then `total_time` takes the new vertex count
+and `cur_time` resets to zero. Other checks leave both ammo endpoint and sidecar unchanged.
+
 ---
 
 ## 7. Honest gaps
@@ -524,12 +537,12 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **The later dynamic cruise retarget/rebuild arm is not yet modeled.** Initial graphic-piece
-   selection, exact orientation input derivation, pool ownership, construction, stepping,
-   release, and checksum walking are live. The remaining spline seam is the branch inside
-   `Ammo::inc_time` (`0x0067D380`) that detects a target leaving the sampled path envelope,
-   mirrors the next spline vertex, rebuilds from the target's current position, copies the new
-   vertex count into `total_time`, and resets `cur_time` to zero. Aircraft crashes are unrelated:
+3. **The exact dynamic cruise transaction still needs its live step-15 adapter.** Initial
+   selection/orientation, pool ownership, construction, target-envelope snap, four-frame
+   rebuild, release, and checksum walking are executable. `objects_inc_time` still calls the
+   older geometry-only `step_spline_slot`; it must supply the live `ObjView`, dispatch
+   `step_cruise_targeted_slot`, and honor `SnappedForImmediateLoop` by re-entering the common
+   `Ammo::inc_time` bookkeeping in the same call. Aircraft crashes are unrelated:
    `Ammo::init_crash` writes an ordinary arc and is executable. `Ammo::init` only ever writes
    `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never set by `init`.
 4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved

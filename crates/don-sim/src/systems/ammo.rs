@@ -64,9 +64,10 @@
 //! * `TRAJ_SPLINE` cruise and nuke paths — `calc_from_dir` / both arms of
 //!   `calc_nuke_spline` → `calc_spline` → `generate_bspline` → `build_normals`, the six nested
 //!   array walks, the slot-aligned pool sidecar/recycler, and indexed flight step are implemented
-//!   below. Live nuke and initial cruise launch are installed through the pool; the remaining
-//!   spline boundary is the dynamic cruise retarget/rebuild arm. Aircraft wrecks actually use
-//!   `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
+//!   below. Live nuke and initial cruise launch are installed through the pool, and the dynamic
+//!   target-envelope/retarget transaction is pool-owned; its remaining boundary is the live
+//!   target lookup/common-loop adapter. Aircraft wrecks actually use `TRAJ_ARC`; their
+//!   [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -1132,6 +1133,119 @@ pub fn ammo_step_cruise_spline(ammo: &mut AmmoWalk, spline: &RetailSpline) -> Op
     Some(point)
 }
 
+/// Result of the target-aware spline arm inside `Ammo::inc_time`
+/// (`0x0067D3E6..0x0067D8C4`). The caller has already performed the common `cur_time++`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CruiseTargetStep {
+    /// Target identity/liveness or the `length > cur_time + 1` sample gate failed.
+    Unavailable,
+    /// The sampled point remains outside the target envelope and this is not a four-frame
+    /// unit retarget. Retail leaves the ammo endpoint and spline completely unchanged.
+    Checked { sample: [i32; 3] },
+    /// The sampled point entered the target envelope. Retail writes it as the endpoint,
+    /// sets `total_time = cur_time - 1`, and jumps back to the top of `Ammo::inc_time` so
+    /// the common increment/arrival path runs immediately in the same call.
+    SnappedForImmediateLoop { sample: [i32; 3] },
+    /// A live unit target was outside the envelope on a non-zero multiple-of-four frame.
+    /// `start` is the truncated current sample; `control` mirrors the next raw vertex about
+    /// it; `end` is the target's current position/lead-Guy height.
+    Rebuilt {
+        start: SplineVec3,
+        control: SplineVec3,
+        end: SplineVec3,
+        vertex_count: u32,
+    },
+}
+
+/// Execute retail's dynamic target-envelope and retarget/rebuild spline transaction after
+/// the common `cur_time++` boundary. No RNG is consumed.
+///
+/// A proximity snap deliberately does not apply the subsequent common increment itself:
+/// [`CruiseTargetStep::SnappedForImmediateLoop`] represents the shipped backward jump to
+/// `0x0067D392`, whose shooter-side bookkeeping belongs to the live `Ammo::inc_time` adapter.
+/// The endpoint/`total_time` state at that jump is nevertheless committed exactly here.
+pub fn ammo_step_cruise_targeted(
+    ammo: &mut AmmoWalk,
+    spline: &mut RetailSpline,
+    target: Option<&ObjView>,
+) -> CruiseTargetStep {
+    if ammo.ox < 0 || ammo.whom < 0 {
+        return CruiseTargetStep::Unavailable;
+    }
+    let Some(target) = target.filter(|target| target.alive) else {
+        return CruiseTargetStep::Unavailable;
+    };
+    let Ok(index) = usize::try_from(ammo.cur_time) else {
+        return CruiseTargetStep::Unavailable;
+    };
+    let Some(next_index) = index.checked_add(1) else {
+        return CruiseTargetStep::Unavailable;
+    };
+    if spline.spline_verts.len() <= next_index {
+        return CruiseTargetStep::Unavailable;
+    }
+
+    let raw = spline.spline_verts[index];
+    let sample = [cvttss2si(raw.x), cvttss2si(raw.y), cvttss2si(raw.z)];
+    let target_z = if target.is_unit {
+        target.guy0_z
+    } else {
+        target.z
+    };
+    let target_radius = if target.is_unit {
+        target.rules.target_size
+    } else {
+        0xC0
+    };
+    let dx = sample[0].wrapping_sub(target.x).wrapping_abs();
+    let dy = sample[1].wrapping_sub(target.y).wrapping_abs();
+    let dz = sample[2].wrapping_sub(target_z).wrapping_abs();
+    if vector_dist(dx, dy) < target_radius && dz < 0xC0 {
+        ammo.ex = sample[0];
+        ammo.ey = sample[1];
+        ammo.ez = sample[2];
+        ammo.total_time = ammo.cur_time.wrapping_sub(1);
+        return CruiseTargetStep::SnappedForImmediateLoop { sample };
+    }
+
+    if ammo.cur_time == 0 || ammo.cur_time & 3 != 0 || !target.is_unit {
+        return CruiseTargetStep::Checked { sample };
+    }
+
+    // `0x0067D76A..0x0067D8AA`: convert the already-truncated current sample back to
+    // floats, mirror the following raw spline vertex around it, then rebuild toward the
+    // live target with a zero optional control and `200 * unit_move_speed` minimum.
+    let start = SplineVec3::new(sample[0] as f32, sample[1] as f32, sample[2] as f32);
+    let next = spline.spline_verts[next_index];
+    let control = SplineVec3::new(
+        (next.x - start.x) * 2.0 + start.x,
+        (next.y - start.y) * 2.0 + start.y,
+        (next.z - start.z) * 2.0 + start.z,
+    );
+    let end = SplineVec3::new(target.x as f32, target.y as f32, target_z as f32);
+
+    // These endpoint writes precede `Spline::calc_from_dir` in the instruction stream.
+    ammo.ex = target.x;
+    ammo.ey = target.y;
+    ammo.ez = target_z;
+    spline.calc_from_dir(
+        (200i32.wrapping_mul(UNIT_MOVE_SPEED)) as f32,
+        start,
+        control,
+        end,
+        SplineVec3::default(),
+    );
+    let vertex_count = spline.spline_verts.len() as u32;
+    ammo.total_time = vertex_count;
+    ammo.cur_time = 0;
+    CruiseTargetStep::Rebuilt {
+        start,
+        control,
+        end,
+        vertex_count,
+    }
+}
+
 // ============================================================================
 // `AmmoData` — the walked state, laid out to match the engine byte-for-byte
 // ============================================================================
@@ -1483,6 +1597,29 @@ impl AmmoPool {
             .and_then(Option::as_ref)
             .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
         Ok(ammo_step_cruise_spline(&mut ammo.w, spline))
+    }
+
+    /// Apply the exact target-aware dynamic cruise arm to one slot-aligned sidecar. This
+    /// API owns every checksummed ammo/spline mutation but deliberately does not fabricate
+    /// the live target lookup or the common-loop bookkeeping after a proximity snap.
+    pub fn step_cruise_targeted_slot(
+        &mut self,
+        slot: usize,
+        target: Option<&ObjView>,
+    ) -> Result<CruiseTargetStep, AmmoSplineChecksumError> {
+        let ammo = self
+            .slots
+            .get_mut(slot)
+            .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+        if !ammo.has_spline {
+            return Ok(CruiseTargetStep::Unavailable);
+        }
+        let spline = self
+            .spline_slots
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+        Ok(ammo_step_cruise_targeted(&mut ammo.w, spline, target))
     }
 
     /// `Ammo::close` plus `Recycler<Spline>::push`, preserving the recycled object's array

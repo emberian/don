@@ -1,9 +1,9 @@
 use don_sim::systems::ammo::{
     ammo_init_cruise_spline, ammo_init_nuke_spline_high_arc, ammo_init_nuke_spline_terrain,
-    ammo_step_cruise_spline, cruise_spline_inputs, select_retail_spline_family, Ammo, AmmoPool,
-    AmmoSplineChecksumError, CruiseLaunchPose, NukeSplineEnv, NukeTerrainSample, ObjView,
-    RetailSpline, RetailSplineFamily, ShooterRules, SplineBuildError, SplineVec3, FLAG_ALIVE,
-    FLAG_FLYING, TRAJ_SPLINE,
+    ammo_step_cruise_spline, ammo_step_cruise_targeted, cruise_spline_inputs,
+    select_retail_spline_family, Ammo, AmmoPool, AmmoSplineChecksumError, CruiseLaunchPose,
+    CruiseTargetStep, NukeSplineEnv, NukeTerrainSample, ObjView, RetailSpline, RetailSplineFamily,
+    ShooterRules, SplineBuildError, SplineVec3, FLAG_ALIVE, FLAG_FLYING, TRAJ_SPLINE,
 };
 use std::cell::RefCell;
 
@@ -561,6 +561,199 @@ fn cruise_step_uses_cur_time_index_and_keeps_the_last_sample_for_impact() {
     let before = (ammo.w.ex, ammo.w.ey, ammo.w.ez);
     assert_eq!(ammo_step_cruise_spline(&mut ammo.w, &spline), None);
     assert_eq!((ammo.w.ex, ammo.w.ey, ammo.w.ez), before);
+}
+
+#[test]
+fn dynamic_cruise_envelope_is_strict_and_uses_the_unit_lead_guy_height() {
+    let (mut ammo, spline) = build();
+    ammo.w.whom = 1;
+    ammo.w.ox = 2;
+    ammo.w.cur_time = 2;
+    let raw = spline.spline_verts[2];
+    let sample = [raw.x as i32, raw.y as i32, raw.z as i32];
+
+    let unit = ObjView {
+        alive: true,
+        is_unit: true,
+        x: sample[0] - 50,
+        y: sample[1],
+        // The dynamic arm ignores the object z for units and reads guys[0].z.
+        z: sample[2],
+        guy0_z: sample[2],
+        rules: ShooterRules {
+            target_size: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let before = ammo.w;
+    let mut path = spline.clone();
+    assert_eq!(
+        ammo_step_cruise_targeted(&mut ammo.w, &mut path, Some(&unit)),
+        CruiseTargetStep::Checked { sample },
+        "horizontal distance equal to target_size is outside the strict envelope"
+    );
+    assert_eq!(ammo.w, before);
+    assert_eq!(path, spline);
+
+    let inside_x = ObjView {
+        x: sample[0] - 49,
+        ..unit
+    };
+    let mut snapped = ammo;
+    let mut snap_path = spline.clone();
+    assert_eq!(
+        ammo_step_cruise_targeted(&mut snapped.w, &mut snap_path, Some(&inside_x)),
+        CruiseTargetStep::SnappedForImmediateLoop { sample }
+    );
+    assert_eq!((snapped.w.ex, snapped.w.ey, snapped.w.ez), sample.into());
+    assert_eq!(snapped.w.total_time, 1);
+    assert_eq!(
+        snapped.w.cur_time, 2,
+        "the returned action owns the re-entry jump"
+    );
+    snapped.w.cur_time = snapped.w.cur_time.wrapping_add(1);
+    assert!(
+        snapped.w.cur_time >= snapped.w.total_time,
+        "retail's immediate common-loop increment reaches arrival"
+    );
+    assert_eq!(snap_path, spline, "a snap never rebuilds the sidecar");
+
+    let z_boundary = ObjView {
+        x: sample[0],
+        guy0_z: sample[2] - 0xC0,
+        ..unit
+    };
+    let mut z_ammo = ammo;
+    let mut z_path = spline.clone();
+    assert_eq!(
+        ammo_step_cruise_targeted(&mut z_ammo.w, &mut z_path, Some(&z_boundary)),
+        CruiseTargetStep::Checked { sample },
+        "vertical distance 0xC0 is outside the strict envelope"
+    );
+    let z_inside = ObjView {
+        guy0_z: sample[2] - 0xBF,
+        ..z_boundary
+    };
+    assert_eq!(
+        ammo_step_cruise_targeted(&mut z_ammo.w, &mut z_path, Some(&z_inside)),
+        CruiseTargetStep::SnappedForImmediateLoop { sample }
+    );
+
+    let dead = ObjView {
+        alive: false,
+        ..inside_x
+    };
+    let mut unavailable = ammo;
+    let unavailable_before = unavailable.w;
+    let mut unavailable_path = spline.clone();
+    assert_eq!(
+        ammo_step_cruise_targeted(&mut unavailable.w, &mut unavailable_path, Some(&dead)),
+        CruiseTargetStep::Unavailable
+    );
+    assert_eq!(unavailable.w, unavailable_before);
+    assert_eq!(unavailable_path, spline);
+}
+
+#[test]
+fn dynamic_cruise_rebuild_mirrors_next_vertex_and_resets_the_slot_transaction() {
+    let mut pool = AmmoPool::new();
+    pool.slots[0].w.flags = FLAG_ALIVE | FLAG_FLYING;
+    pool.slots[0].w.whom = 1;
+    pool.slots[0].w.ox = 2;
+    let (minimum, start, control, end, optional) = path_args();
+    pool.install_cruise_spline(0, minimum, start, control, end, optional)
+        .unwrap();
+    pool.slots[0].w.cur_time = 4;
+    let before = pool.clone();
+    let target = ObjView {
+        alive: true,
+        is_unit: true,
+        x: 10_000,
+        y: 12_000,
+        z: 99,
+        guy0_z: 700,
+        rules: ShooterRules {
+            target_size: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let step = pool.step_cruise_targeted_slot(0, Some(&target)).unwrap();
+    let CruiseTargetStep::Rebuilt {
+        start,
+        control,
+        end,
+        vertex_count,
+    } = step
+    else {
+        panic!("four-frame live-unit retarget must rebuild: {step:?}");
+    };
+    assert_eq!(
+        [
+            start.x.to_bits(),
+            start.y.to_bits(),
+            start.z.to_bits(),
+            control.x.to_bits(),
+            control.y.to_bits(),
+            control.z.to_bits(),
+        ],
+        [
+            0x4385_8000,
+            0x4350_0000,
+            0x43bb_8000,
+            0x43b4_3ec0,
+            0x434a_21c0,
+            0x43ce_4000,
+        ]
+    );
+    assert_eq!(end, SplineVec3::new(10_000.0, 12_000.0, 700.0));
+    assert_eq!(
+        (pool.slots[0].w.ex, pool.slots[0].w.ey, pool.slots[0].w.ez),
+        (10_000, 12_000, 700)
+    );
+    assert_eq!(pool.slots[0].w.cur_time, 0);
+    assert_eq!(pool.slots[0].w.total_time, vertex_count);
+    let rebuilt = pool.spline(0).unwrap();
+    assert_eq!(rebuilt.degree, 2);
+    assert_eq!(rebuilt.control_verts.as_slice(), &[start, control, end]);
+    assert_eq!(pool.checksum_complete().unwrap(), 0x677e_a26e);
+
+    let mut changed = before.clone();
+    let changed_target = ObjView {
+        x: target.x + 1,
+        ..target
+    };
+    assert!(matches!(
+        changed
+            .step_cruise_targeted_slot(0, Some(&changed_target))
+            .unwrap(),
+        CruiseTargetStep::Rebuilt { .. }
+    ));
+    assert_ne!(
+        changed.checksum_complete().unwrap(),
+        pool.checksum_complete().unwrap(),
+        "one endpoint unit changes the rebuilt controls and complete walked checksum"
+    );
+
+    let mut non_unit = before;
+    let building = ObjView {
+        is_unit: false,
+        ..target
+    };
+    let before_checksum = non_unit.checksum_complete().unwrap();
+    assert!(matches!(
+        non_unit
+            .step_cruise_targeted_slot(0, Some(&building))
+            .unwrap(),
+        CruiseTargetStep::Checked { .. }
+    ));
+    assert_eq!(non_unit.checksum_complete().unwrap(), before_checksum);
+
+    pool.close_slot(0);
+    assert!(pool.spline(0).is_none());
+    assert_eq!(pool.recycled_spline_count(), 1);
 }
 
 #[test]
