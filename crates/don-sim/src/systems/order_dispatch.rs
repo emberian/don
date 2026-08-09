@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 13 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 10 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -165,6 +165,10 @@ use crate::systems::movement::{
 use crate::systems::patrol::{
     self, AirPatrolAction, AirPatrolAfterPhysics, AirPatrolOrder, AirPatrolTarget,
     GroundPatrolAction, GroupMoveRequest, GroupPatrolOrder, StrafeOrder,
+};
+use crate::systems::targeted_order_plans::{
+    self, AirAttackGroundFacts, AirAttackGroundOrderState, AttackGroundFacts,
+    AttackGroundOrderState, ExploreToFacts, HostFact, OrderEffect,
 };
 
 // ---------------------------------------------------------------------------
@@ -458,10 +462,25 @@ pub struct OrderRec {
     /// what `Unit::work`'s tail treats as "the target you named is not there any more".
     pub target_uid: u16,
 
+    /// Concrete checksum-visible storage for the coordinate-target order classes. These
+    /// classes are not layout-compatible with `MoveOrder` or `TargetOrder`, so retaining
+    /// only the generic `x/y` union would discard `attack_unit` and the walked `AirOrder`
+    /// base. A mismatched variant is rejected as [`ArmResult::MalformedOrder`].
+    pub targeted_payload: TargetedOrderPayload,
+
     /// Concrete fields carried only by the three order classes patrol creates or executes.
     /// Retail stores these in dynamically-sized class instances; keeping the payload on the
     /// queue node preserves the same per-order ownership and permits routes of any length.
     pub patrol_payload: PatrolPayload,
+}
+
+/// Concrete storage owned by the three coordinate-target executor classes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TargetedOrderPayload {
+    #[default]
+    None,
+    AttackGround(AttackGroundOrderState),
+    AirAttackGround(AirAttackGroundOrderState),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -541,6 +560,7 @@ impl Default for OrderRec {
             target_o: -1,
             target_who: -1,
             target_uid: 0,
+            targeted_payload: TargetedOrderPayload::None,
             patrol_payload: PatrolPayload::None,
         }
     }
@@ -575,6 +595,26 @@ impl OrderRec {
             target_who: who,
             target_o: o,
             target_uid: uid,
+            ..OrderRec::default()
+        }
+    }
+
+    pub fn attack_ground(state: AttackGroundOrderState) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::AttackGround,
+            x: state.att_x,
+            y: state.att_y,
+            targeted_payload: TargetedOrderPayload::AttackGround(state),
+            ..OrderRec::default()
+        }
+    }
+
+    pub fn air_attack_ground(state: AirAttackGroundOrderState) -> OrderRec {
+        OrderRec {
+            kind: OrderIndex::AirAttackGround,
+            x: state.attack.att_x,
+            y: state.attack.att_y,
+            targeted_payload: TargetedOrderPayload::AirAttackGround(state),
             ..OrderRec::default()
         }
     }
@@ -750,6 +790,25 @@ pub fn install_air_patrol(
 impl From<Order> for OrderRec {
     /// Widen a descriptive [`crate::order::Order`]. The retry state machine starts clean.
     fn from(o: Order) -> OrderRec {
+        let attack = AttackGroundOrderState {
+            att_x: o.x,
+            att_y: o.y,
+            accuracy: 0,
+            attack_unit: 0,
+        };
+        let targeted_payload = match o.kind {
+            OrderIndex::AttackGround => TargetedOrderPayload::AttackGround(attack),
+            OrderIndex::AirAttackGround => {
+                TargetedOrderPayload::AirAttackGround(AirAttackGroundOrderState {
+                    attack,
+                    air: crate::systems::air::AirOrderWalk::default(),
+                    total_time: 0,
+                    sx: 0,
+                    sy: 0,
+                })
+            }
+            _ => TargetedOrderPayload::None,
+        };
         OrderRec {
             kind: o.kind,
             flags: o.flags,
@@ -760,6 +819,7 @@ impl From<Order> for OrderRec {
             tolerance: o.tolerance,
             target_o: o.target_o as i32,
             target_who: o.target_who as i32,
+            targeted_payload,
             ..OrderRec::default()
         }
     }
@@ -975,6 +1035,9 @@ pub struct UnitWork {
     pub inside_up: i16,
     /// `UnitData::collide_frame` `+72`.
     pub collide_frame: i32,
+    /// `UnitData::mana_burn` `+150`, immediately before `spell_time`. Bombers add the
+    /// rules-table bombing cost here after releasing an `AIR_ATTACK_GROUND` shot.
+    pub mana_burn: i16,
     /// `UnitData::spell_time` `+152`.
     pub spell_time: i16,
     /// `UnitData::myspeed` `+154`, world units per frame.
@@ -1069,6 +1132,7 @@ impl UnitWork {
             group: -1,
             inside_up: -1,
             collide_frame: i32::MIN / 2,
+            mana_burn: 0,
             spell_time: 0,
             myspeed: 24,
             recharging: 0,
@@ -1552,6 +1616,69 @@ pub enum GroupAttackEffect {
     SetIdleAnim,
 }
 
+/// Why a recovered coordinate-target executor could not acquire its mandatory host seam.
+/// `Unavailable` is a normal fail-closed result; `InvalidState` means the host resolved a
+/// slot/type combination which retail could not have used to construct this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetedOrderHostError {
+    Unavailable,
+    InvalidState(&'static str),
+}
+
+/// Capability receipt acquired before `EXPLORE_TO` is allowed to call `do_move`.
+///
+/// The identity fields make the receipt single-use for this actor/order snapshot. The
+/// post-move pointer and on-map facts are deliberately absent: retail reads both only after
+/// movement, through [`WorkWorld::explore_to_post_move`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExploreToHostReceipt {
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    pub frame: i32,
+    pub order: OrderRec,
+}
+
+/// Infallible post-move reads authorized by [`ExploreToHostReceipt`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExploreToPostMoveReceipt {
+    /// Exact concrete-order pointer identity, not merely another `EXPLORE_TO` kind.
+    pub current_order_is_same: bool,
+    pub actor_is_on_map: bool,
+}
+
+/// One coherent read receipt for `Unit::do_attack_ground`.
+///
+/// [`AttackGroundFacts`] retains [`HostFact`] on branch-conditional reads, so an unused fact
+/// may remain missing while a reached missing fact still fails closed. The duplicated actor
+/// and order fields are checked before the planner can emit its first effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackGroundHostReceipt {
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    pub order: AttackGroundOrderState,
+    pub order_flags: u8,
+    pub facts: AttackGroundFacts,
+}
+
+/// Capability token acquired before the mutating `do_air_physics` call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AirAttackGroundHostReceipt {
+    pub actor_who: u8,
+    pub actor_o: i16,
+    pub actor_uid: u16,
+    pub order: AirAttackGroundOrderState,
+    pub order_flags: u8,
+}
+
+/// Exact actor/order observations returned by the mandatory air-physics host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirAttackGroundPhysicsReceipt {
+    pub order: AirAttackGroundOrderState,
+    pub facts: AirAttackGroundFacts,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1712,6 +1839,72 @@ pub trait WorkWorld: UnitWorld {
     /// and any ATTACK/action node it installs, and is infallible after preflight.
     fn attack_to_find_melee_target(&mut self, _actor: &mut UnitWork, _order: &OrderRec) {
         panic!("WorkWorld::attack_to_find_melee_target requires successful preflight")
+    }
+
+    /// Acquire the single-use capability for `EXPLORE_TO` before movement mutates the actor.
+    /// A successful receipt guarantees that the post-move query and every emitted host effect
+    /// are available for this snapshot.
+    fn explore_to_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<ExploreToHostReceipt, TargetedOrderHostError> {
+        Err(TargetedOrderHostError::Unavailable)
+    }
+
+    /// Perform the two reads retail makes after `do_move`. This cannot reject after a
+    /// successful preflight, because movement cannot be rolled back at this boundary.
+    fn explore_to_post_move(
+        &mut self,
+        _actor: &UnitWork,
+        _order_before_move: &OrderRec,
+        _receipt: &ExploreToHostReceipt,
+    ) -> ExploreToPostMoveReceipt {
+        panic!("WorkWorld::explore_to_post_move requires a successful preflight receipt")
+    }
+
+    /// Acquire every branch-conditional read and every effect capability reachable from the
+    /// current `ATTACK_GROUND` snapshot. Missing reached facts fail before mutation.
+    fn attack_ground_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<AttackGroundHostReceipt, TargetedOrderHostError> {
+        Err(TargetedOrderHostError::Unavailable)
+    }
+
+    /// Acquire the capability token which makes the mutating air-physics call and every
+    /// deterministic tail effect infallible for this `AIR_ATTACK_GROUND` snapshot.
+    fn air_attack_ground_preflight(
+        &mut self,
+        _actor: &UnitWork,
+        _order: &OrderRec,
+    ) -> Result<AirAttackGroundHostReceipt, TargetedOrderHostError> {
+        Err(TargetedOrderHostError::Unavailable)
+    }
+
+    /// `Unit::do_air_physics(order, att_x, att_y)`. The callback updates the supplied walked
+    /// order state and actor, then returns the exact post-physics facts consumed by the local
+    /// planner. It cannot reject after [`WorkWorld::air_attack_ground_preflight`].
+    fn air_attack_ground_physics(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &mut AirAttackGroundOrderState,
+        _receipt: &AirAttackGroundHostReceipt,
+    ) -> AirAttackGroundPhysicsReceipt {
+        panic!("WorkWorld::air_attack_ground_physics requires a successful preflight receipt")
+    }
+
+    /// Apply one non-local effect emitted by the targeted-order planners. Successful typed
+    /// preflight receipts guarantee this callback for every reachable effect. Local queue,
+    /// flag, recharge, and mana stores remain owned by the dispatcher and are never sent here.
+    fn targeted_order_effect(
+        &mut self,
+        _actor: &mut UnitWork,
+        _order: &OrderRec,
+        _effect: OrderEffect,
+    ) {
+        panic!("WorkWorld::targeted_order_effect requires a successful targeted-order receipt")
     }
 
     /// Acquire every external fact and capability which `Unit::do_build` may reach from this
@@ -1876,7 +2069,7 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     //  0 NONE            virtual do_idle
     ArmStatus::Implemented,     //  1 MOVE_TO         Unit::do_move 0x005F7B30
     ArmStatus::Implemented,     //  2 ATTACK_TO       Unit::do_attack_to 0x005F2320
-    ArmStatus::Unimplemented,   //  3 EXPLORE_TO      Unit::do_explore_to 0x005F24A0
+    ArmStatus::Implemented,     //  3 EXPLORE_TO      Unit::do_explore_to 0x005F24A0
     ArmStatus::Implemented,     //  4 FLEE_TO         Unit::do_move -- SAME ARM as MOVE_TO
     ArmStatus::FaithfullyEmpty, //  5 PATROL          no case label; falls to the default
     ArmStatus::Implemented,     //  6 BUILD_AT        Unit::do_build 0x005EEBF0
@@ -1896,8 +2089,8 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::Implemented,     // 20 GROUP_ATTACK    Unit::do_group_attack 0x005E75A0
     ArmStatus::Implemented,     // 21 GROUP_ATTACK_TO Unit::do_group_attack_to 0x005E74E0
     ArmStatus::Implemented,     // 22 GROUP_PATROL    Unit::do_patrol 0x005F1910
-    ArmStatus::Unimplemented,   // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
-    ArmStatus::Unimplemented,   // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
+    ArmStatus::Implemented,     // 23 ATTACK_GROUND   Unit::do_attack_ground 0x005F1410
+    ArmStatus::Implemented,     // 24 AIR_ATK_GROUND  Unit::do_air_attack_ground 0x005EA420
     ArmStatus::Unimplemented,   // 25 SPECIAL_ANIM    Unit::do_spec_anim 0x005E5880
     ArmStatus::Unimplemented,   // 26 GARRISON        Unit::do_garrison 0x005E6B80
     ArmStatus::Unimplemented,   // 27 THINK           Unit::do_think_order 0x005E5BF0
@@ -2840,6 +3033,271 @@ pub fn do_attack_to<W: WorkWorld>(
 }
 
 #[inline]
+fn explore_receipt_matches(
+    actor: &UnitWork,
+    order: &OrderRec,
+    frame: i32,
+    receipt: &ExploreToHostReceipt,
+) -> bool {
+    receipt.actor_who == actor.who
+        && receipt.actor_o == actor.o
+        && receipt.actor_uid == actor.uid
+        && receipt.frame == frame
+        && &receipt.order == order
+}
+
+#[inline]
+fn attack_ground_receipt_matches(
+    actor: &UnitWork,
+    order: &OrderRec,
+    state: AttackGroundOrderState,
+    receipt: &AttackGroundHostReceipt,
+) -> bool {
+    let facts = &receipt.facts;
+    let facing_matches = match &facts.order_facing_target {
+        HostFact::Known(value) => *value == order.has(targeted_order_plans::ORDER_FACING_TARGET),
+        HostFact::Missing(_) => true,
+    };
+    receipt.actor_who == actor.who
+        && receipt.actor_o == actor.o
+        && receipt.actor_uid == actor.uid
+        && receipt.order == state
+        && receipt.order_flags == order.flags
+        && state.att_x == order.x
+        && state.att_y == order.y
+        && facts.actor_owner == i32::from(actor.who)
+        && facts.actor_object == i32::from(actor.o)
+        && facts.actor_angle == actor.body.angle as u32
+        && facts.target_x == order.x
+        && facts.target_y == order.y
+        && facts.attack_unit == state.attack_unit
+        && facts.recharge == actor.recharging
+        && facing_matches
+}
+
+#[inline]
+fn air_attack_ground_receipt_matches(
+    actor: &UnitWork,
+    order: &OrderRec,
+    state: AirAttackGroundOrderState,
+    receipt: &AirAttackGroundHostReceipt,
+) -> bool {
+    receipt.actor_who == actor.who
+        && receipt.actor_o == actor.o
+        && receipt.actor_uid == actor.uid
+        && receipt.order == state
+        && receipt.order_flags == order.flags
+}
+
+/// Apply one ordered tail effect emitted by a coordinate-target planner.
+///
+/// Returns true when a bare `kill_current_order(0)` retired the executor's node. Every
+/// non-local effect goes through the host capability proven by the arm's typed receipt.
+fn apply_targeted_effect<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    order_before: &OrderRec,
+    effect: OrderEffect,
+    cov: &mut DispatchCoverage,
+) -> bool {
+    match effect {
+        OrderEffect::DoMove => {
+            panic!("DoMove is executed by do_explore_to before its post-move plan")
+        }
+        OrderEffect::KillCurrentOrder(reason) => {
+            debug_assert_eq!(reason, 0);
+            kill_current_order(actor, KillReason::Completed);
+            cov.completed += 1;
+            true
+        }
+        OrderEffect::StoreAttackUnit(value) => {
+            let current = actor
+                .orders
+                .front_mut()
+                .expect("ATTACK_GROUND receipt guarantees a current order");
+            let state = match &mut current.targeted_payload {
+                TargetedOrderPayload::AttackGround(state) => state,
+                _ => panic!("ATTACK_GROUND host effect lost its concrete current order"),
+            };
+            state.attack_unit = value;
+            false
+        }
+        OrderEffect::UpdateAction => {
+            update_action(actor);
+            false
+        }
+        OrderEffect::OrObjectFlags(mask) => {
+            actor.unit_masks |= mask;
+            false
+        }
+        OrderEffect::OrOrderFlags(mask) => {
+            actor
+                .orders
+                .front_mut()
+                .expect("targeted-order receipt guarantees a current order")
+                .flags |= mask;
+            false
+        }
+        OrderEffect::StoreRecharge(value) => {
+            actor.recharging = value;
+            false
+        }
+        OrderEffect::AddManaBurn(value) => {
+            actor.mana_burn = actor.mana_burn.wrapping_add(value);
+            false
+        }
+        effect => {
+            world.targeted_order_effect(actor, order_before, effect);
+            false
+        }
+    }
+}
+
+/// `Unit::do_explore_to(MoveOrder*)` `0x005F24A0`, arm 3.
+///
+/// A capability receipt is acquired before `do_move`, so the phased post-move pointer/on-map
+/// reads and `Unit::explore()` effect cannot become unavailable after movement has committed.
+pub fn do_explore_to<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    pf: &mut PathFinder,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::ExploreTo {
+        return ArmResult::MalformedOrder;
+    }
+    let frame = world.frame();
+    let receipt = match world.explore_to_preflight(&*actor, &order) {
+        Ok(receipt) => receipt,
+        Err(TargetedOrderHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(TargetedOrderHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    if !explore_receipt_matches(actor, &order, frame, &receipt) {
+        return ArmResult::MalformedOrder;
+    }
+
+    let move_result = do_move(actor, world, pf, cov);
+    if !targeted_order_plans::explore_scan_due(frame, actor.o) {
+        return move_result;
+    }
+    let post = world.explore_to_post_move(&*actor, &order, &receipt);
+    let effects = targeted_order_plans::plan_explore_to(ExploreToFacts {
+        frame,
+        object_index: actor.o,
+        current_order_is_same: HostFact::known(post.current_order_is_same),
+        actor_is_on_map: HostFact::known(post.actor_is_on_map),
+    })
+    .expect("successful EXPLORE_TO capability supplies both post-move facts");
+    debug_assert_eq!(effects.first(), Some(&OrderEffect::DoMove));
+    for effect in effects.into_iter().skip(1) {
+        apply_targeted_effect(actor, world, &order, effect, cov);
+    }
+    move_result
+}
+
+/// `Unit::do_attack_ground(AttackGroundOrder*)` `0x005F1410`, arm 23.
+/// All reached host reads are resolved before the first ordered effect.
+pub fn do_attack_ground<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order.kind != OrderIndex::AttackGround {
+        return ArmResult::MalformedOrder;
+    }
+    let TargetedOrderPayload::AttackGround(state) = order.targeted_payload else {
+        return ArmResult::MalformedOrder;
+    };
+    let receipt = match world.attack_ground_preflight(&*actor, &order) {
+        Ok(receipt) => receipt,
+        Err(TargetedOrderHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(TargetedOrderHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    if !attack_ground_receipt_matches(actor, &order, state, &receipt) {
+        return ArmResult::MalformedOrder;
+    }
+    let effects = match targeted_order_plans::plan_attack_ground(receipt.facts) {
+        Ok(effects) => effects,
+        Err(_) => return ArmResult::HostUnavailable,
+    };
+    let mut retired = false;
+    for effect in effects {
+        retired |= apply_targeted_effect(actor, world, &order, effect, cov);
+    }
+    if retired {
+        ArmResult::Retired(KillReason::Completed)
+    } else {
+        ArmResult::Working
+    }
+}
+
+/// `Unit::do_air_attack_ground(AirAttackGroundOrder*)` `0x005EA420`, arm 24.
+/// The host token is acquired before mutating air physics; every following fact/effect is
+/// infallible under that token.
+pub fn do_air_attack_ground<W: WorkWorld>(
+    actor: &mut UnitWork,
+    world: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order_before) = actor.orders.front().cloned() else {
+        return ArmResult::NoOrder;
+    };
+    if order_before.kind != OrderIndex::AirAttackGround {
+        return ArmResult::MalformedOrder;
+    }
+    let TargetedOrderPayload::AirAttackGround(mut state) = order_before.targeted_payload else {
+        return ArmResult::MalformedOrder;
+    };
+    let receipt = match world.air_attack_ground_preflight(&*actor, &order_before) {
+        Ok(receipt) => receipt,
+        Err(TargetedOrderHostError::Unavailable) => return ArmResult::HostUnavailable,
+        Err(TargetedOrderHostError::InvalidState(_)) => return ArmResult::MalformedOrder,
+    };
+    if !air_attack_ground_receipt_matches(actor, &order_before, state, &receipt) {
+        return ArmResult::MalformedOrder;
+    }
+
+    let physics = world.air_attack_ground_physics(actor, &mut state, &receipt);
+    assert_eq!(
+        physics.order, state,
+        "AIR_ATTACK_GROUND physics receipt must describe its committed walked order"
+    );
+    assert_eq!(
+        physics.facts.recharge, actor.recharging,
+        "AIR_ATTACK_GROUND physics receipt must describe the committed recharge byte"
+    );
+    assert_eq!(
+        physics.facts.returning, state.air.returning,
+        "AIR_ATTACK_GROUND physics receipt must describe AirOrder::returning"
+    );
+    assert_eq!(
+        physics.facts.actor_angle, actor.body.angle as u32,
+        "AIR_ATTACK_GROUND physics receipt must describe the committed actor angle"
+    );
+    let current = actor
+        .orders
+        .front_mut()
+        .expect("air physics cannot remove the current AIR_ATTACK_GROUND order");
+    assert_eq!(current.kind, OrderIndex::AirAttackGround);
+    current.x = state.attack.att_x;
+    current.y = state.attack.att_y;
+    current.targeted_payload = TargetedOrderPayload::AirAttackGround(state);
+
+    let effects = targeted_order_plans::plan_air_attack_ground(physics.facts)
+        .expect("successful AIR_ATTACK_GROUND capability supplies every reached post-physics fact");
+    for effect in effects {
+        apply_targeted_effect(actor, world, &order_before, effect, cov);
+    }
+    ArmResult::Working
+}
+
+#[inline]
 fn build_at_preflight_matches_actor(
     actor: &UnitWork,
     order: &OrderRec,
@@ -3599,6 +4057,7 @@ pub fn do_job<W: WorkWorld>(
         // Arms 1 and 4 are the same jump-table entry.
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::AttackTo => do_attack_to(u, w, pf, cov),
+        OrderIndex::ExploreTo => do_explore_to(u, w, pf, cov),
         OrderIndex::BuildAt => do_build_at(u, w, cov),
         OrderIndex::GroupMove => do_group_move(u, w, pf, cov),
         OrderIndex::GroupAttack => do_group_attack(u, w, pf, cov),
@@ -3609,6 +4068,8 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::AwaitBoard => do_await_board(u, w, cov),
         OrderIndex::AirPatrol => do_air_patrol(u, w),
         OrderIndex::GroupPatrol => do_group_patrol(u, w),
+        OrderIndex::AttackGround => do_attack_ground(u, w, cov),
+        OrderIndex::AirAttackGround => do_air_attack_ground(u, w, cov),
         // Arm 5 has no case label. Doing nothing here is faithful, not missing.
         OrderIndex::Patrol => ArmResult::Empty,
         _ => {
@@ -3942,9 +4403,10 @@ pub fn check_target_path<W: WorkWorld>(u: &mut UnitWork, w: &W, act: &OrderRec) 
 /// what stands between this module and `World::step`.
 ///
 /// **Lossy in one direction, stated plainly:** [`crate::order::Order`] has no `target_uid`,
-/// no `timer` and no `retry`, so a round trip through it drops the staleness token and the
-/// retry state machine. Keep [`OrderQueue`] as the owning representation and use this only at
-/// the boundary.
+/// no `timer`, no `retry`, and no post-construction coordinate-target scratch state, so a
+/// round trip through it drops those fields. Widening a newly issued ATTACK_GROUND or
+/// AIR_ATTACK_GROUND order does create the correct zero-initialized concrete payload. Keep
+/// [`OrderQueue`] as the owning representation and use this only at the boundary.
 pub fn adopt(list: &crate::order::OrderList) -> OrderQueue {
     let mut q = OrderQueue::new();
     for o in list.iter() {
@@ -4343,7 +4805,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_fifteen_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_eighteen_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -4356,9 +4818,10 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Fourteen implemented, including BUILD_AT, ATTACK_TO, all three recovered grouped
-        // executors, both boarding arms, and both live patrols; PATROL is faithfully empty.
-        assert_eq!((implemented, empty, absent), (14, 1, 13));
+        // Seventeen implemented, including the three coordinate-target executors, BUILD_AT,
+        // ATTACK_TO, all grouped executors, both boarding arms, and both live patrols;
+        // PATROL is faithfully empty.
+        assert_eq!((implemented, empty, absent), (17, 1, 10));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -6224,11 +6687,11 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 13 unimplemented arms, each hit once. The smoke actors take all three grouped
+        // 10 unimplemented arms, each hit once. The smoke actors take all three grouped
         // executors' exact ungrouped conversion; grouped actors without a snapshot fail
         // closed at the mandatory host seam. Both boarding and both live patrol arms run.
-        assert_eq!(cov.unimplemented, 13);
-        assert!((cov.covered_fraction() - 15.0 / 28.0).abs() < 1e-12);
+        assert_eq!(cov.unimplemented, 10);
+        assert!((cov.covered_fraction() - 18.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]
