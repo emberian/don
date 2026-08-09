@@ -20,7 +20,7 @@ line are named.
 | `get_team_score`, `get_mvp_score`, `get_team_terr`, `get_team_economic` | complete |
 | Armageddon clock: threshold formula, score-zeroing, `Game::defeat_all` | complete |
 | Diplomacy: `get_diplo` / `is_ally` / `is_enemy` / `is_peace`, mutual-minimum semantics | complete |
-| Victory conditions: wonder, territory, score, time limit, economic, conquest/last-alliance | complete for the state machine; wonder-point *supply* is another lane's |
+| Victory conditions: wonder, territory, score, time limit, economic, conquest/last-alliance | complete state machine; completed-Wonder value/net supply is tick-wired behind the mandatory `WonderWorld` boundary |
 | Musical chairs cull | implemented, **weakest** part — see §8 |
 | Elimination: capital-loss timer (`ELIMINATION_CAPITAL`) | complete |
 | `Leader::victory` / `Leader::defeat` state transitions, ally propagation | complete |
@@ -611,9 +611,10 @@ lane-local regression hash until a full `LeaderData` layout exists.
   `Game::on_team[8]`, which belong to the setup lane. `Leaders::team_of` is a
   documented stub returning `who`, so per-team culling degenerates to per-player.
   Do not trust this block in a team game until `get_team` is ported.
-* **Wonder points are an input, not an output.** `LeaderData::get_wonder_net`
-  (`0x006EBB10`) and `get_wonder_value` (`0x006EBB90`) are the wonder lane's;
-  `process_victory` takes them as slices.
+* **Wonder points remain explicit inputs to this module.** The completed-Wonder registry,
+  live `get_wonder_value` queries, allied totals, hostile subtraction, and fail-closed tick
+  supply now live in `systems::wonders`; direct `process_victory` callers still provide the
+  two slices. See `docs/mechanics/wonders.md`.
 * `LeaderData::type_avail`, `has_tech`, `researching`, `get_economic` and
   `find_capital` are modelled as **plain input fields**, not ported. `type_avail`
   (`0x006E33A0`) is 1,091 bytes of prerequisite logic and belongs to the tech lane.

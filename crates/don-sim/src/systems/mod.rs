@@ -144,3 +144,7 @@ pub mod victory_score;
 /// obj_end[2] == 3000`); the walker is still exact because `BuildData::walk_data`
 /// (`0x0062F270`) calls `WallData::walk_data` for every building in the `builds` channel.
 pub mod walls;
+/// Completed-Wonder registry reached from `Build::activate`, including exact slot reuse,
+/// timers, close/trim behavior, and the mandatory object/type/game-store bridge that
+/// supplies `victory_score` with live Wonder value/net inputs.
+pub mod wonders;

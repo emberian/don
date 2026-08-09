@@ -59,7 +59,7 @@ use crate::schedule::{StepStatus, DO_FRAME, FRAMES_PER_SECOND};
 use crate::script_runtime::{ScriptRunError, ScriptRuntime};
 use crate::systems::{
     ammo, borders_fog, casters_animals, combat, economy, groups_guys, leaders, movement,
-    production, victory_score, walls,
+    production, victory_score, walls, wonders,
 };
 use crate::world::{Handle, World, MAP_SPAN, OBJ_FLAG_ACTIVE};
 
@@ -106,10 +106,11 @@ pub enum Gap {
     LeadersEndProcessAll,
     LeaderProcessEventFrame,
     RoadsScanStray,
+    WonderValueWorld,
 }
 
 impl Gap {
-    pub const COUNT: usize = Gap::RoadsScanStray as usize + 1;
+    pub const COUNT: usize = Gap::WonderValueWorld as usize + 1;
     #[inline]
     pub fn index(self) -> usize {
         self as usize
@@ -142,6 +143,7 @@ pub const GAP_NOTES: [&str; Gap::COUNT] = [
     "step 17 Leaders::end_process_all 0x006ED070 - uncited",
     "step 19 Leader::process_event_frame 0x006EC180 - uncited",
     "step 22 Roads::scan_and_kill_stray_roads 0x008956A0 - uncited",
+    "step 12 Wonder value/net supply - completed records exist, but a missing/stale object-type world blocks the Wonder victory subpass",
 ];
 
 // =======================================================================================
@@ -289,6 +291,9 @@ pub struct Coverage {
     pub ammo_steps: u64,
     pub ammo_impacts: u64,
     pub ammo_closed: u64,
+    pub crash_spawned: u64,
+    pub crash_ineligible: u64,
+    pub crash_missing_facts: u64,
     pub fog_cells_revealed: u64,
     pub border_tiles: u64,
     pub group_normalises: u64,
@@ -330,6 +335,9 @@ impl Default for Coverage {
             ammo_steps: 0,
             ammo_impacts: 0,
             ammo_closed: 0,
+            crash_spawned: 0,
+            crash_ineligible: 0,
+            crash_missing_facts: 0,
             fog_cells_revealed: 0,
             border_tiles: 0,
             group_normalises: 0,
@@ -616,6 +624,23 @@ pub struct AmmoShot {
     pub damage: i32,
 }
 
+/// Exact live Guy storage and the owning Object virtual result needed by the aircraft-crash
+/// death adapter. This is optional because the current lightweight Sim does not synthesize PDB
+/// Guy bodies; an absent source must suppress the wreck without consuming RNG.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CrashUnitSource {
+    pub guys: groups_guys::UnitGuys,
+    pub gpiece: Option<i32>,
+}
+
+/// Result of attempting the retail `Objects::kill_guy` wreck arm from the live driver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveCrashOutcome {
+    Spawned(usize),
+    Ineligible,
+    MissingFacts,
+}
+
 /// The checksum-relevant-independent state touched by `TurnControl::check_cannon_time`.
 ///
 /// Field order mirrors `TurnControl +0x24..+0x30`: active player, start frame, pending
@@ -686,6 +711,13 @@ pub struct Sim {
     // ---- step 11 / 12: score and victory ----------------------------------------------
     pub vic_match: victory_score::Match,
     pub vic_leaders: victory_score::Leaders,
+    /// Completed-Wonder records called by `Build::activate` and read by Wonder victory.
+    pub wonders: wonders::Wonders,
+    /// Exact object/type/game store for Wonder initialization and live value queries.
+    /// It is optional at construction time, but any active Wonder makes it mandatory.
+    pub wonder_world: Option<Box<dyn wonders::WonderWorld + Send>>,
+    /// Last fail-closed Wonder supply error. Cleared after a successful supply pass.
+    pub wonder_error: Option<wonders::WonderError>,
     pub cannon_time: CannonTimeState,
 
     // ---- step 12: fog, borders, groups ------------------------------------------------
@@ -715,6 +747,13 @@ pub struct Sim {
     pub ammo: ammo::AmmoPool,
     pub shots: Vec<AmmoShot>,
     pub deaths: combat::DeathRing,
+    /// Per-unit exact Guy sources. Rows without a source fail the crash arm closed.
+    pub crash_units: Vec<Option<CrashUnitSource>>,
+    /// PDB type facts used by [`ammo::plan_ammo_crash`].
+    pub crash_type_rules: Vec<ammo::CrashTypeRule>,
+    /// Exact TerrainOut provider. The normal flat-terrain ammo compatibility view is not exact
+    /// enough for a checksum-visible crash constructor, so absence suppresses the transaction.
+    pub crash_env: Option<Box<dyn ammo::CrashEnv + Send>>,
 
     pub cover: Coverage,
     /// Reused every tick: allocating the traversal order was measurably the largest cost
@@ -748,6 +787,9 @@ impl Sim {
             market: economy::MarketState::default(),
             vic_match,
             vic_leaders: victory_score::Leaders::new(types),
+            wonders: wonders::Wonders::new(),
+            wonder_world: None,
+            wonder_error: None,
             cannon_time: CannonTimeState::default(),
             map,
             groups: groups_guys::Groups::default(),
@@ -764,6 +806,9 @@ impl Sim {
             ammo: ammo::AmmoPool::new(),
             shots: vec![AmmoShot::default(); ammo::AMMO_POOL_SLOTS],
             deaths: combat::DeathRing::with_capacity(64),
+            crash_units: Vec::new(),
+            crash_type_rules: Vec::new(),
+            crash_env: None,
             cover: Coverage::default(),
             traversal_buf: Vec::new(),
             seen_buf: Vec::new(),
@@ -781,6 +826,17 @@ impl Sim {
             victory_score::leader_flag::VALID | victory_score::leader_flag::ACTIVE;
         self.world.objects.set_active(who, true);
         self.map.fog.leaders[who].player_mask = 1u8 << who;
+    }
+
+    /// Register the completed-Wonder slice reached at `Build::activate` `0x00625B5B`.
+    /// The object/type/game store is mandatory because `Wonder::init` performs a real
+    /// prerequisite-bit write; an absent store cannot create a local-only record.
+    pub fn init_completed_wonder(&mut self, who: i32, o: i32) -> Result<i16, wonders::WonderError> {
+        let world = self
+            .wonder_world
+            .as_deref_mut()
+            .ok_or(wonders::WonderError::MissingWorld)?;
+        self.wonders.init_wonder(world, who, o)
     }
 
     /// Spawn a unit and give it everything the driven systems read.
@@ -805,9 +861,40 @@ impl Sim {
             self.unit_type.push(0);
             self.paths.push(movement::PathStack::new());
             self.path_unit.push(movement::PathUnit::default());
+            self.crash_units.push(None);
         }
         self.unit_type[row] = type_id;
         Some(h)
+    }
+
+    /// Attach an exact PDB Guy array and owner `get_gpiece` result to a live unit row.
+    pub fn install_crash_unit_source(&mut self, h: Handle, source: CrashUnitSource) -> bool {
+        let Some(row) = self.world.row_of(h) else {
+            return false;
+        };
+        while self.crash_units.len() <= row {
+            self.crash_units.push(None);
+        }
+        self.crash_units[row] = Some(source);
+        true
+    }
+
+    /// Insert or replace the static crash fields for one global PDB type index.
+    pub fn install_crash_type_rule(&mut self, rule: ammo::CrashTypeRule) {
+        if let Some(old) = self
+            .crash_type_rules
+            .iter_mut()
+            .find(|r| r.type_index == rule.type_index)
+        {
+            *old = rule;
+        } else {
+            self.crash_type_rules.push(rule);
+        }
+    }
+
+    /// Install the exact TerrainOut adapter required by crash endpoint construction.
+    pub fn install_crash_env<E: ammo::CrashEnv + Send + 'static>(&mut self, env: E) {
+        self.crash_env = Some(Box::new(env));
     }
 
     /// Register a building in owner `who`'s band 2000.
@@ -1356,11 +1443,39 @@ impl Sim {
             return (StepRun::Vacuous, 0);
         }
 
-        // GameDaemon::process_victory gamedaemon.cpp:585.
+        // GameDaemon::process_victory gamedaemon.cpp:585. Wonder points are queried only
+        // in Standard/SuddenDeath/Wonder modes. With an active registry their object/type
+        // host is mandatory: skipping the whole victory sweep is safer than cancelling a
+        // real countdown with manufactured zeroes while continuing other victory writes.
+        let wonder_mode = matches!(
+            victory_score::Victory::from_u8(self.vic_match.options.victory),
+            Some(
+                victory_score::Victory::Standard
+                    | victory_score::Victory::SuddenDeath
+                    | victory_score::Victory::Wonder
+            )
+        );
         let zeros = [0i32; NUM_LEADERS];
-        self.vic_leaders
-            .process_victory(&mut self.vic_match, &zeros, &zeros);
-        work += 1;
+        let inputs = if wonder_mode && self.wonders.has_active() {
+            match self.wonder_world.as_deref_mut() {
+                Some(world) => self.wonders.victory_inputs(world, &self.vic_leaders),
+                None => Err(wonders::WonderError::MissingWorld),
+            }
+        } else {
+            Ok((zeros, zeros))
+        };
+        match inputs {
+            Ok((wonder_net, wonder_value)) => {
+                self.wonder_error = None;
+                self.vic_leaders
+                    .process_victory(&mut self.vic_match, &wonder_net, &wonder_value);
+                work += 1;
+            }
+            Err(error) => {
+                self.wonder_error = Some(error);
+                self.cover.gaps[Gap::WonderValueWorld.index()] += 1;
+            }
+        }
 
         // calc_danger: no port.
         self.cover.gaps[Gap::GameDaemonCalcDanger.index()] += 1;
@@ -1745,6 +1860,72 @@ impl Sim {
             .set_recharging(row, (rc as u32 & 0xFF) as u8);
     }
 
+    /// `Objects::kill_guy`'s category-8 aircraft-wreck arm, adapted from the exact live facts
+    /// this Sim has been given. Every fallible read and gate completes before ammo/RNG mutation.
+    fn try_spawn_unit_crash(&mut self, row: usize) -> LiveCrashOutcome {
+        let Some(source) = self.crash_units.get(row).and_then(Option::as_ref) else {
+            self.cover.crash_missing_facts += 1;
+            return LiveCrashOutcome::MissingFacts;
+        };
+        if self.world.units.guy_mark().get(row).copied() != Some(1) || source.guys.guy_mark != 1 {
+            // apply_damage currently represents a whole-unit death. It can identify Guy 0
+            // exactly only for the one-live-Guy shape; choosing a casualty in a larger squad
+            // would be an invented kill_guy policy.
+            self.cover.crash_missing_facts += 1;
+            return LiveCrashOutcome::MissingFacts;
+        }
+        let dying_guy = source.guys.guys.first().and_then(Option::as_ref);
+        let Some(&owner_type_index) = self.unit_type.get(row) else {
+            self.cover.crash_missing_facts += 1;
+            return LiveCrashOutcome::MissingFacts;
+        };
+        let owner = ammo::CrashOwnerView {
+            who: self.world.units.get_who(row) as i32,
+            o: self.world.units.o()[row] as i32,
+            type_index: owner_type_index,
+            x: self.world.units.x_internal()[row],
+            y: self.world.units.y_internal()[row],
+            gpiece: source.gpiece,
+            order_type: self
+                .world
+                .orders(row)
+                .current()
+                .map_or(-1, |order| order.kind as i32),
+            lead_guy: source.guys.guys.first().and_then(Option::as_ref),
+        };
+        let crash = match ammo::plan_ammo_crash(dying_guy, owner, &self.crash_type_rules) {
+            Ok(Some(crash)) => crash,
+            Ok(None) => {
+                self.cover.crash_ineligible += 1;
+                return LiveCrashOutcome::Ineligible;
+            }
+            Err(_) => {
+                self.cover.crash_missing_facts += 1;
+                return LiveCrashOutcome::MissingFacts;
+            }
+        };
+        let Some(env) = self.crash_env.as_deref() else {
+            self.cover.crash_missing_facts += 1;
+            return LiveCrashOutcome::MissingFacts;
+        };
+        if env.crash_world_wcells() != (self.map.world.xs, self.map.world.ys) {
+            self.cover.crash_missing_facts += 1;
+            return LiveCrashOutcome::MissingFacts;
+        }
+
+        let mut rng = ammo::Rng(self.world.random.state() as u32);
+        let slot = ammo::ammo_spawn_crash(&mut self.ammo, &crash, env, &mut rng);
+        self.world.random.reseed(rng.0 as i32);
+        if slot >= self.shots.len() {
+            self.shots.resize(slot + 1, AmmoShot::default());
+        }
+        // AmmoShot is a port-only damage sidecar. A recycled ordinary projectile must not
+        // lend its damage to a wreck, whose retail damage is recovered from object/type state.
+        self.shots[slot] = AmmoShot::default();
+        self.cover.crash_spawned += 1;
+        LiveCrashOutcome::Spawned(slot)
+    }
+
     /// Apply damage to a unit row and, on death, file a corpse in the ring.
     fn apply_damage(&mut self, trow: usize, d: i32) {
         self.cover.damage_applied += 1;
@@ -1754,6 +1935,9 @@ impl Sim {
         if hp > 0 {
             return;
         }
+        // Retail's `Objects::kill_guy` constructs the wreck while the Guy and owning Unit are
+        // both still live. Keep this before the active-bit clear / corpse transaction.
+        let _ = self.try_spawn_unit_crash(trow);
         // Clearing the active bit is what stops `Objects::process_all` ticking it;
         // `Objects::kill_object` proper is not ported.
         let f = self.world.units.get_flags(trow);
@@ -2141,6 +2325,9 @@ impl Sim {
             ("Wall::process", c.wall_process),
             ("Ammo::inc_time", c.ammo_steps),
             ("ammo impacts", c.ammo_impacts),
+            ("aircraft wrecks spawned", c.crash_spawned),
+            ("wreck gates rejected", c.crash_ineligible),
+            ("wreck facts unavailable", c.crash_missing_facts),
             ("fog cells newly explored", c.fog_cells_revealed),
             ("territory tiles claimed", c.border_tiles),
             ("Groups::process passes", c.group_normalises),
@@ -2174,6 +2361,141 @@ impl Sim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    };
+
+    struct TickWonderWorld {
+        who: i32,
+        o: i32,
+        value: Arc<AtomicI32>,
+        prerequisite_set: bool,
+    }
+
+    impl wonders::WonderWorld for TickWonderWorld {
+        fn init_facts(
+            &mut self,
+            who: i32,
+            o: i32,
+        ) -> Result<wonders::ReadReceipt<wonders::WonderInitFacts>, wonders::WonderWorldError>
+        {
+            if who != self.who || o != self.o {
+                return Err("unknown completed Wonder".into());
+            }
+            Ok(wonders::ReadReceipt {
+                value: wonders::WonderInitFacts {
+                    who,
+                    o,
+                    frame: 0,
+                    type_index: wonders::WONDER_FIRST,
+                    prerequisite_index: 0x220,
+                    world_xs: 70,
+                    standard_map_xs: 70,
+                    wonder_timer: 4500,
+                    wonder_age: 0,
+                },
+                rng_draws: 0,
+                world_writes: 0,
+            })
+        }
+
+        fn set_prerequisite_complete(
+            &mut self,
+            facts: wonders::WonderInitFacts,
+        ) -> Result<wonders::WonderFlagReceipt, wonders::WonderWorldError> {
+            self.prerequisite_set = true;
+            Ok(wonders::WonderFlagReceipt {
+                who: facts.who,
+                o: facts.o,
+                type_index: facts.type_index,
+                prerequisite_index: facts.prerequisite_index,
+                flag_is_set: self.prerequisite_set,
+                rng_draws: 0,
+                world_writes: 1,
+            })
+        }
+
+        fn wonder_value(
+            &mut self,
+            who: i32,
+            o: i32,
+        ) -> Result<wonders::ReadReceipt<wonders::WonderValue>, wonders::WonderWorldError> {
+            if who != self.who || o != self.o {
+                return Err("stale completed Wonder identity".into());
+            }
+            Ok(wonders::ReadReceipt {
+                value: wonders::WonderValue {
+                    who,
+                    o,
+                    value: self.value.load(Ordering::SeqCst),
+                },
+                rng_draws: 0,
+                world_writes: 0,
+            })
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct CrashTerrain {
+        xs: i32,
+        ys: i32,
+        z: i32,
+    }
+
+    impl ammo::CrashEnv for CrashTerrain {
+        fn crash_world_wcells(&self) -> (i32, i32) {
+            (self.xs, self.ys)
+        }
+
+        fn crash_terrain_z(&self, _x: i32, _y: i32) -> i32 {
+            self.z
+        }
+    }
+
+    fn arm_exact_one_guy_crash(sim: &mut Sim, h: Handle) -> usize {
+        let row = sim.world.row_of(h).expect("live test unit");
+        let who = sim.world.units.get_who(row);
+        let o = sim.world.units.o()[row];
+        let guy = groups_guys::GuyData {
+            ty: 88,
+            x: 2_000,
+            y: 5_000,
+            z: 1_000,
+            angle: 0,
+            bank: 13.75,
+            who: who as i8,
+            o,
+            ..Default::default()
+        };
+        let source = CrashUnitSource {
+            guys: groups_guys::UnitGuys {
+                guys: vec![Some(guy)],
+                size: 1,
+                increment: 0,
+                flags: 0,
+                guy_mark: 1,
+            },
+            gpiece: Some(41),
+        };
+        assert!(sim.install_crash_unit_source(h, source));
+        sim.install_crash_type_rule(ammo::CrashTypeRule {
+            type_index: 88,
+            cat: ammo::CRASH_TYPE_CAT,
+            moves: 100,
+            obj_masks: 0,
+        });
+        sim.install_crash_type_rule(ammo::CrashTypeRule {
+            type_index: 99,
+            cat: 0,
+            moves: 0,
+            obj_masks: 0,
+        });
+        let mut order = Order::default();
+        order.kind = OrderIndex::Strafe;
+        assert!(sim.issue(h, order));
+        row
+    }
 
     /// A small populated world: four players, units, a construction site, walls, herds.
     fn populated(seed: u64) -> Sim {
@@ -2277,6 +2599,76 @@ mod tests {
         let t = sim.do_frame();
         assert!(t.steps[15].ran(), "Objects::inc_time did not run");
         assert!(sim.cover.ammo_steps > 0);
+    }
+
+    #[test]
+    fn live_unit_death_spawns_exact_crash_before_corpse_and_clears_stale_shot_sidecar() {
+        let mut sim = Sim::new(0x1234_5678, 16);
+        sim.activate(2);
+        let h = sim.spawn_unit(2, 99, 2_200, 5_100, 4).unwrap();
+        let row = arm_exact_one_guy_crash(&mut sim, h);
+        sim.world.units.z_internal_mut()[row] = 900;
+        sim.install_crash_env(CrashTerrain {
+            xs: sim.map.world.xs,
+            ys: sim.map.world.ys,
+            z: 37,
+        });
+        sim.ammo.ammo_index = 77;
+        sim.shots[0].damage = 9_999;
+        let mut expected_rng = ammo::Rng(sim.world.random.state() as u32);
+        expected_rng.draw16();
+
+        sim.apply_damage(row, 200);
+
+        assert_eq!(sim.cover.crash_spawned, 1);
+        assert_eq!(sim.cover.crash_missing_facts, 0);
+        assert_eq!(sim.cover.deaths, 1);
+        assert_eq!(sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE, 0);
+        assert_eq!(sim.world.random.state(), expected_rng.0 as i32);
+        assert_eq!(sim.ammo.ammo_index, 78);
+        assert_eq!(sim.ammo.live(), 1);
+        let wreck = &sim.ammo.slots[0].w;
+        assert_eq!((wreck.index, wreck.graph_index), (0, 77));
+        assert_eq!((wreck.who, wreck.o), (2, sim.world.units.o()[row] as i32));
+        assert_eq!((wreck.sx, wreck.sy, wreck.sz), (2_000, 5_000, 1_000));
+        assert_eq!(wreck.ex, 2_200, "endpoint x comes from the owning Unit");
+        assert_eq!(wreck.ez, 37);
+        assert_eq!(wreck.start_roll_angle, -13);
+        assert_eq!(wreck.traj, ammo::TRAJ_ARC);
+        assert_eq!(
+            sim.shots[0].damage, 0,
+            "a recycled ordinary shot cannot leak damage"
+        );
+        assert!(
+            sim.deaths.slots.iter().any(|death| death.valid != 0),
+            "corpse transaction still follows"
+        );
+    }
+
+    #[test]
+    fn live_crash_missing_terrain_fails_closed_before_pool_rng_or_sidecar_mutation() {
+        let mut sim = Sim::new(0x8765_4321, 16);
+        sim.activate(2);
+        let h = sim.spawn_unit(2, 99, 2_200, 5_100, 4).unwrap();
+        let row = arm_exact_one_guy_crash(&mut sim, h);
+        let before_checksum = sim.ammo.checksum();
+        let before_index = sim.ammo.ammo_index;
+        let before_rng = sim.world.random.state();
+        let before_shot = sim.shots[0].damage;
+
+        sim.apply_damage(row, 200);
+
+        assert_eq!(sim.cover.crash_spawned, 0);
+        assert_eq!(sim.cover.crash_missing_facts, 1);
+        assert_eq!(sim.ammo.checksum(), before_checksum);
+        assert_eq!(sim.ammo.ammo_index, before_index);
+        assert_eq!(sim.world.random.state(), before_rng);
+        assert_eq!(sim.shots[0].damage, before_shot);
+        assert_eq!(sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE, 0);
+        assert_eq!(
+            sim.cover.deaths, 1,
+            "crash suppression must not suppress death"
+        );
     }
 
     /// The whole point of the file: the same seed produces the same trace and the same
@@ -2405,6 +2797,62 @@ mod tests {
         let second = sim.do_frame();
         assert_eq!(second.steps[27], StepRun::Vacuous);
         assert_eq!(second.work[27], 0);
+    }
+
+    #[test]
+    fn completed_wonder_live_value_drives_the_standard_countdown() {
+        let value = Arc::new(AtomicI32::new(0));
+        let mut sim = Sim::new(10, 8);
+        sim.activate(0);
+        sim.activate(1);
+        sim.vic_match.options.victory = victory_score::Victory::Standard as u8;
+        // This 32-cell-wide test map scales the rule against the 70-wide standard map;
+        // four source frames become a two-frame countdown by Game::wonder_timer.
+        sim.vic_match.constants.wonder_timer = 4;
+        sim.wonder_world = Some(Box::new(TickWonderWorld {
+            who: 0,
+            o: 12,
+            value: Arc::clone(&value),
+            prerequisite_set: false,
+        }));
+        assert_eq!(sim.init_completed_wonder(0, 12), Ok(0));
+
+        // A current value below the threshold neither arms nor wins.
+        sim.do_frame();
+        assert_eq!(sim.vic_leaders.slots[0].wonderwin_timer, 0);
+        assert!(!sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+
+        // The next frame queries the live host again and arms at that frame.
+        value.store(1, Ordering::SeqCst);
+        sim.do_frame();
+        assert_eq!(sim.vic_leaders.slots[0].wonderwin_timer, 1);
+        assert_eq!(sim.vic_leaders.slots[0].wonderwin_stamp, 1);
+        sim.do_frame();
+        assert!(!sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+        sim.do_frame();
+        assert!(sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
+        assert!(sim.wonder_error.is_none());
+    }
+
+    #[test]
+    fn active_wonder_without_world_blocks_the_victory_sweep_fail_closed() {
+        let value = Arc::new(AtomicI32::new(1));
+        let mut seed_world = TickWonderWorld {
+            who: 0,
+            o: 12,
+            value,
+            prerequisite_set: false,
+        };
+        let mut sim = Sim::new(12, 8);
+        sim.activate(0);
+        sim.activate(1);
+        sim.vic_match.options.victory = victory_score::Victory::Wonder as u8;
+        sim.wonders.init_wonder(&mut seed_world, 0, 12).unwrap();
+
+        sim.do_frame();
+        assert_eq!(sim.wonder_error, Some(wonders::WonderError::MissingWorld));
+        assert_eq!(sim.cover.gaps[Gap::WonderValueWorld.index()], 1);
+        assert!(!sim.vic_leaders.slots[0].flag(victory_score::leader_flag::WON));
     }
 
     /// Construction is driven from inside the object traversal, so the `helpers` divisor

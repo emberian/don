@@ -1101,6 +1101,118 @@ fn ammo_init_post_gate(
 // Aircraft wreck projectile — `Ammo::init_crash` `0x0067B800`
 // ============================================================================
 
+/// PDB `TypeData::cat` value admitted by the aircraft-wreck arm in `Objects::kill_guy`.
+pub const CRASH_TYPE_CAT: i32 = 8;
+/// `ObjectTypeData::obj_masks` bit that suppresses the wreck even for category 8.
+pub const CRASH_SUPPRESS_OBJ_MASK: u32 = 0x0800_0000;
+
+/// Static type-table facts needed to decide and construct one aircraft wreck.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CrashTypeRule {
+    /// Global PDB `TypeIndex` used by `GuyData::type` / the owning Unit's `ptype`.
+    pub type_index: i32,
+    /// PDB `TypeData +0x14 cat`.
+    pub cat: i32,
+    /// PDB `UnitTypeData +0x2C0 moves`.
+    pub moves: i32,
+    /// PDB `ObjectTypeData +0x1E4 obj_masks`.
+    pub obj_masks: u32,
+}
+
+/// Live owning-Unit facts around the dying PDB Guy.
+#[derive(Clone, Copy, Debug)]
+pub struct CrashOwnerView<'a> {
+    pub who: i32,
+    pub o: i32,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+    /// Result of the owning Object's virtual `get_gpiece`; absent means the adapter cannot
+    /// reproduce the constructor and must fail closed.
+    pub gpiece: Option<i32>,
+    /// `UnitData::order_type()`, with `-1` representing an empty order list.
+    pub order_type: i32,
+    /// `UnitData::guys[0]`; conditionally required by orders 16, 17, and 24.
+    pub lead_guy: Option<&'a super::groups_guys::GuyData>,
+}
+
+/// Why the live crash adapter could not construct retail input without guessing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrashPlanError {
+    MissingDyingGuy,
+    MissingDyingTypeRule(i32),
+    MissingOwnerTypeRule(i32),
+    MissingOwnerGpiece,
+    MissingLeadGuy,
+    OwnerIdentityMismatch {
+        guy_who: i32,
+        guy_o: i32,
+        owner_who: i32,
+        owner_o: i32,
+    },
+}
+
+/// Pure, fail-closed `Objects::kill_guy` crash gate and live-view flattener.
+///
+/// `Ok(None)` is a fully known retail rejection (`cat != 8` or the suppression mask).
+/// `Err` means a fact required by the admitted arm was unavailable or incoherent. No ammo-pool
+/// or RNG reference is accepted here, so every error is transactionally mutation-free.
+pub fn plan_ammo_crash(
+    dying_guy: Option<&super::groups_guys::GuyData>,
+    owner: CrashOwnerView<'_>,
+    rules: &[CrashTypeRule],
+) -> Result<Option<CrashGuy>, CrashPlanError> {
+    let guy = dying_guy.ok_or(CrashPlanError::MissingDyingGuy)?;
+    let guy_rule = rules
+        .iter()
+        .find(|r| r.type_index == guy.ty)
+        .ok_or(CrashPlanError::MissingDyingTypeRule(guy.ty))?;
+    if guy_rule.cat != CRASH_TYPE_CAT {
+        return Ok(None);
+    }
+
+    let owner_rule = rules
+        .iter()
+        .find(|r| r.type_index == owner.type_index)
+        .ok_or(CrashPlanError::MissingOwnerTypeRule(owner.type_index))?;
+    if owner_rule.obj_masks & CRASH_SUPPRESS_OBJ_MASK != 0 {
+        return Ok(None);
+    }
+
+    let guy_who = guy.who as i32;
+    let guy_o = guy.o as i32;
+    if (guy_who, guy_o) != (owner.who, owner.o) {
+        return Err(CrashPlanError::OwnerIdentityMismatch {
+            guy_who,
+            guy_o,
+            owner_who: owner.who,
+            owner_o: owner.o,
+        });
+    }
+    let gpiece = owner.gpiece.ok_or(CrashPlanError::MissingOwnerGpiece)?;
+    let lead_bank = if matches!(owner.order_type, 16 | 17 | 24) {
+        owner.lead_guy.ok_or(CrashPlanError::MissingLeadGuy)?.bank
+    } else {
+        0.0
+    };
+
+    Ok(Some(CrashGuy {
+        who: guy_who,
+        o: guy_o,
+        type_index: guy.ty,
+        x: guy.x,
+        y: guy.y,
+        z: guy.z,
+        angle: guy.angle,
+        shooter_gpiece: gpiece,
+        owner_x: owner.x,
+        owner_y: owner.y,
+        moves: guy_rule.moves,
+        order_type: owner.order_type,
+        lead_bank,
+    }))
+}
+
 /// The exact `Guy`/owner/type facts consumed by `Ammo::init_crash`.
 ///
 /// The source pointer is a PDB `Guy*`, not a Unit. Identity and pose come from `GuyData`,
@@ -1169,7 +1281,7 @@ fn crash_cvtt_f32_i32(value: f32) -> i32 {
 ///
 /// The two bank draws therefore do not advance the game stream and are identical for crashes
 /// with the same coordinate sum.
-pub fn ammo_init_crash<E: CrashEnv>(
+pub fn ammo_init_crash<E: CrashEnv + ?Sized>(
     ammo: &mut Ammo,
     guy: &CrashGuy,
     slot: i32,
@@ -1253,7 +1365,7 @@ pub fn ammo_init_crash<E: CrashEnv>(
 /// increments the counter. The PDB `TypeData::cat == 8` and `obj_masks & 0x08000000` gates stay
 /// with the death caller; once it elects to spawn a wreck, this is the complete ammo-owned
 /// transaction.
-pub fn ammo_spawn_crash<E: CrashEnv>(
+pub fn ammo_spawn_crash<E: CrashEnv + ?Sized>(
     pool: &mut AmmoPool,
     guy: &CrashGuy,
     env: &E,
@@ -2149,6 +2261,130 @@ mod tests {
             order_type: 16,
             lead_bank: 12.75,
         }
+    }
+
+    fn live_crash_guy() -> super::super::groups_guys::GuyData {
+        super::super::groups_guys::GuyData {
+            ty: 88,
+            x: 2_000,
+            y: 5_000,
+            z: 1_000,
+            angle: crate::trig::QUARTER_TURN,
+            bank: 13.75,
+            who: 2,
+            o: 17,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn crash_death_plan_flattens_distinct_guy_owner_lead_and_type_facts() {
+        let dying = live_crash_guy();
+        let mut lead = dying;
+        lead.bank = -9.875;
+        let rules = [
+            CrashTypeRule {
+                type_index: 88,
+                cat: CRASH_TYPE_CAT,
+                moves: 123,
+                ..Default::default()
+            },
+            CrashTypeRule {
+                type_index: 99,
+                obj_masks: 0,
+                ..Default::default()
+            },
+        ];
+        let owner = CrashOwnerView {
+            who: 2,
+            o: 17,
+            type_index: 99,
+            x: 2_200,
+            y: 5_100,
+            gpiece: Some(41),
+            order_type: 16,
+            lead_guy: Some(&lead),
+        };
+
+        let got = plan_ammo_crash(Some(&dying), owner, &rules)
+            .expect("complete live facts")
+            .expect("category 8 is eligible");
+
+        assert_eq!(got.type_index, 88);
+        assert_eq!((got.who, got.o), (2, 17));
+        assert_eq!((got.x, got.y, got.z), (2_000, 5_000, 1_000));
+        assert_eq!((got.owner_x, got.owner_y), (2_200, 5_100));
+        assert_eq!((got.shooter_gpiece, got.moves), (41, 123));
+        assert_eq!((got.order_type, got.lead_bank), (16, -9.875));
+    }
+
+    #[test]
+    fn crash_death_plan_distinguishes_known_gates_from_missing_admitted_facts() {
+        let dying = live_crash_guy();
+        let owner = CrashOwnerView {
+            who: 2,
+            o: 17,
+            type_index: 99,
+            x: 2_200,
+            y: 5_100,
+            gpiece: None,
+            order_type: 16,
+            lead_guy: None,
+        };
+
+        let ground = [CrashTypeRule {
+            type_index: 88,
+            cat: 7,
+            ..Default::default()
+        }];
+        assert_eq!(
+            plan_ammo_crash(Some(&dying), owner, &ground),
+            Ok(None),
+            "known category rejection must not demand owner-only facts"
+        );
+
+        let suppressed = [
+            CrashTypeRule {
+                type_index: 88,
+                cat: CRASH_TYPE_CAT,
+                ..Default::default()
+            },
+            CrashTypeRule {
+                type_index: 99,
+                obj_masks: CRASH_SUPPRESS_OBJ_MASK,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(plan_ammo_crash(Some(&dying), owner, &suppressed), Ok(None));
+
+        let admitted = [
+            suppressed[0],
+            CrashTypeRule {
+                obj_masks: 0,
+                ..suppressed[1]
+            },
+        ];
+        assert_eq!(
+            plan_ammo_crash(Some(&dying), owner, &admitted),
+            Err(CrashPlanError::MissingOwnerGpiece)
+        );
+
+        let owner_without_lead = CrashOwnerView {
+            gpiece: Some(41),
+            ..owner
+        };
+        assert_eq!(
+            plan_ammo_crash(Some(&dying), owner_without_lead, &admitted),
+            Err(CrashPlanError::MissingLeadGuy),
+            "only an admitted bank-inheriting order requires guys[0]"
+        );
+        let ordinary_order = CrashOwnerView {
+            order_type: 10,
+            ..owner_without_lead
+        };
+        assert!(plan_ammo_crash(Some(&dying), ordinary_order, &admitted)
+            .expect("ordinary orders do not read the lead Guy")
+            .is_some());
     }
 
     #[test]

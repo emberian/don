@@ -184,8 +184,19 @@ those two draws never advance the global stream. Finally, `start_roll_angle` is
 `Objects::kill_guy` (`0x00659410`) owns the surrounding gate: the dying guy's PDB
 `TypeData::cat` must be 8 and the owning type must not carry object-mask bit `0x08000000`. Once
 admitted, retail claims the lowest `flags & 3 == 0` ammo slot, calls `init_crash` with the old
-`Objects::ammo_index`, then increments that counter. `ammo_spawn_crash` closes this pool mutation;
-only the death-path gate and extraction of the flattened `CrashGuy` view remain to be wired.
+`Objects::ammo_index`, then increments that counter. `plan_ammo_crash` now performs that exact
+gate and flattens the PDB Guy, owning Unit, lead-Guy bank, and both type records without accepting
+an ammo or RNG reference; `ammo_spawn_crash` then closes the pool mutation.
+
+The live `Sim::apply_damage` seam invokes the pair **before** clearing the Unit active bit and
+filing its corpse. Its current whole-unit damage model can identify the retail `kill_guy`
+casualty only when there is exactly one live Guy. For that shape, callers may install an exact
+`CrashUnitSource`, `CrashTypeRule` records, and `CrashEnv`; the driver then mutates the lowest
+free ammo slot and advances the real simulation RNG once. A missing Guy body, type record,
+gpiece, conditionally required lead Guy, terrain provider, or inconsistent world dimensions
+suppresses the wreck before pool, counter, RNG, or the port-only damage sidecar changes. Known
+retail rejections (`cat != 8` or the mask bit) remain distinct from missing facts. Multi-Guy
+casualty selection remains fail-closed until the damage path models which squad member died.
 
 ---
 
@@ -460,8 +471,9 @@ Ordered by how much they would cost a replay harness.
   world bounds, unit/building search, water test), `SplashEnv` (WData heads, down-chain objects,
   diplomacy), and `CrashEnv` (WCoord bounds and terrain height) rather than reaching into the SoA
   world, so it will not collide with the `world.rs` rewrite. Whoever owns the world implements
-  those adapters; `ammo_spawn_crash` is complete but intentionally not wired into the live
-  `Objects::kill_guy` equivalent or `tick.rs`.
+  those adapters. The crash adapter is wired at the live death seam and activates only when its
+  exact optional Guy/type/terrain sources are installed; it does not reuse `AmmoView`'s documented
+  flat-terrain compatibility substitution.
 - Damage is **emitted, not applied**: `ammo_do_damage_single` / `ammo_do_damage_splash` return
   `DamageCall` values matching `Object::do_damage`'s argument list exactly. This keeps the
   `ammo`/`units`/`deaths` channel boundary clean.

@@ -1530,7 +1530,9 @@ impl Leaders {
     ///
     /// `wonder_net` / `wonder_value` are the per-slot outputs of
     /// `LeaderData::get_wonder_net` (`0x006EBB10`) and `get_wonder_value`
-    /// (`0x006EBB90`), which are owned by the wonder lane; pass zeroes if unmodelled.
+    /// (`0x006EBB90`), which are owned by [`super::wonders`]. The live tick supplies
+    /// verified values from that registry; other callers remain responsible for these
+    /// slices and must not substitute zeroes for active records.
     pub fn process_victory(&mut self, m: &mut Match, wonder_net: &[i32], wonder_value: &[i32]) {
         self.events.clear();
 
