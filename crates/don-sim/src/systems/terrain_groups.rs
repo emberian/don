@@ -20,9 +20,12 @@ use super::terrain_doobers::{
     DooberTilesetRules, MountainRockDooberPlacement, MountainRockFringeError,
     MountainRockFringeReceipt,
 };
+use super::terrain_drop_tile::{
+    DropTileError, DropTileExternalRequest, DropTileExternalResolution, DropTileReceipt,
+};
 use super::terrain_region_placement::{
     PlaceRegionGroupCall, PlaceRegionGroupPrefixError, PlaceRegionGroupPrefixOutcome,
-    PlaceRegionGroupPrefixReceipt, RegionDropTileInvocation, RegionHelpingState,
+    PlaceRegionGroupPrefixReceipt, RegionHelpingState,
 };
 use crate::rng::Random;
 
@@ -148,6 +151,9 @@ pub struct PlaceAllPreviewReceipt {
     /// Present when a resolved unit-catalog/region-selection receipt advances
     /// the selected pattern arm through `place_region_group`'s entry search.
     pub region_group_prefix: Option<PlaceRegionGroupPrefixReceipt>,
+    /// Present after the selected candidate has executed the complete
+    /// `TerrainGroup::drop_tile` branch on preview state.
+    pub region_group_drop: Option<DropTileReceipt>,
 }
 
 /// Outputs of the still-upstream unit-catalog and region-selection block in
@@ -164,6 +170,8 @@ pub struct ResolvedRegionGroupPlacement {
     pub land_subtype: i32,
     pub rng_state_at_call: i32,
     pub helping: Option<RegionHelpingState>,
+    /// Required only for Mountains, Oil-Good, and Cliffs branches.
+    pub drop_tile_external: Option<DropTileExternalResolution>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -287,11 +295,15 @@ pub enum TerrainPlacementBoundary {
     /// Patterns 1--3 first inspect the unit-type catalog and then call
     /// `place_region_group` (`0x006a2f60`).
     UnitTypeCatalogAndRegionPlacementKernel { group_index: usize, pattern: i32 },
-    /// The region candidate search completed; this is the first state-changing
-    /// call in `TerrainGroup::place_region_group`.
-    RegionGroupDropTileMutationKernel {
-        invocation: RegionDropTileInvocation,
-    },
+    /// The chosen `drop_tile` branch belongs to another gameplay subsystem and
+    /// needs the exact typed resolution before local continuation can advance.
+    RegionGroupDropTileExternalSubsystem { request: DropTileExternalRequest },
+    /// `drop_tile` returned zero. Retail next advances the region cursor and
+    /// resumes candidate selection without another initial RNG draw.
+    RegionGroupCandidateContinuation { group_index: usize },
+    /// `drop_tile` succeeded and appended its coordinate. The remaining
+    /// type/helping/growth continuation of `place_region_group` is downstream.
+    RegionGroupPostDropControl { group_index: usize },
     /// No candidate survived the exact search. Retail next returns zero to the
     /// enclosing per-clump/catalog continuation in `place_all`.
     RegionGroupPostSearchControl { group_index: usize },
@@ -315,6 +327,7 @@ pub enum PlaceAllError {
     InvalidMountainRockFringe(MountainRockFringeError),
     InvalidTreeifyMountains(TreeifyMountainsError),
     InvalidRegionGroupPrefix(PlaceRegionGroupPrefixError),
+    InvalidDropTile(DropTileError),
     InvalidResolvedRegionGroupPlacement {
         group_index: usize,
         clump_index: usize,
@@ -683,6 +696,7 @@ impl TerrainGroups {
         let mut mountain_rock_fringe = None;
         let mut treeify_mountains = None;
         let mut region_group_prefix = None;
+        let mut region_group_drop = None;
         let boundary = if let Some((regions, resolved)) = resolved_region_group {
             let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
                 group_index,
@@ -733,9 +747,35 @@ impl TerrainGroups {
                     resolved.helping,
                 )
                 .map_err(PlaceAllError::InvalidRegionGroupPrefix)?;
-            let next = match receipt.outcome {
+            let next = match &receipt.outcome {
                 PlaceRegionGroupPrefixOutcome::DropTile(invocation) => {
-                    TerrainPlacementBoundary::RegionGroupDropTileMutationKernel { invocation }
+                    let invocation = *invocation;
+                    if let Some(request) = self.groups[group_index]
+                        .drop_tile_external_request(invocation)
+                        .filter(|_| resolved.drop_tile_external.is_none())
+                    {
+                        TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem { request }
+                    } else {
+                        let mut preview_world = world.clone();
+                        let mut preview_group = self.groups[group_index].clone();
+                        let drop_receipt = preview_group
+                            .apply_drop_tile(
+                                &mut preview_world,
+                                &mut preview_random,
+                                invocation,
+                                resolved.drop_tile_external,
+                            )
+                            .map_err(PlaceAllError::InvalidDropTile)?;
+                        let next = if drop_receipt.placed {
+                            TerrainPlacementBoundary::RegionGroupPostDropControl { group_index }
+                        } else {
+                            TerrainPlacementBoundary::RegionGroupCandidateContinuation {
+                                group_index,
+                            }
+                        };
+                        region_group_drop = Some(drop_receipt);
+                        next
+                    }
                 }
                 PlaceRegionGroupPrefixOutcome::Exhausted => {
                     TerrainPlacementBoundary::RegionGroupPostSearchControl { group_index }
@@ -789,6 +829,7 @@ impl TerrainGroups {
                 mountain_rock_fringe,
                 treeify_mountains,
                 region_group_prefix,
+                region_group_drop,
             },
             boundary,
         })

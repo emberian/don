@@ -359,6 +359,7 @@ fn place_all_composes_the_resolved_call_and_stays_transactional_at_drop_tile() {
                 land_subtype: 13,
                 rng_state_at_call: 0x2222_3333,
                 helping: None,
+                drop_tile_external: None,
             },
             |event| host.push(event),
         )
@@ -369,22 +370,14 @@ fn place_all_composes_the_resolved_call_and_stays_transactional_at_drop_tile() {
     };
     assert_eq!(
         boundary,
-        TerrainPlacementBoundary::RegionGroupDropTileMutationKernel {
-            invocation: RegionDropTileInvocation {
-                world_x: 2,
-                world_y: 2,
-                group_type: 6,
-                group_radius: 3,
-                land_subtype: 13,
-                target_tiles: 9,
-                oil_deposits: 2,
-                group_index: 0,
-            },
-        }
+        TerrainPlacementBoundary::RegionGroupPostDropControl { group_index: 0 }
     );
     let prefix = preview.region_group_prefix.unwrap();
     assert_eq!(prefix.region_cursor_draws, 0);
     assert_eq!(prefix.rng_state_after, 0x2222_3333);
+    let drop = preview.region_group_drop.unwrap();
+    assert!(drop.placed);
+    assert_eq!(drop.tiles_len_after, 1);
     assert_eq!(host.len(), 1);
     assert_eq!(world.wdata, before_world.wdata);
     assert_eq!(world.tdata, before_world.tdata);

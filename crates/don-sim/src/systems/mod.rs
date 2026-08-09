@@ -127,6 +127,7 @@ pub mod tech_cities;
 /// Exact first (bush-fringe) pass of `TerrainGroups::add_doobers`, through the
 /// second pass's external doober-occupancy query.
 pub mod terrain_doobers;
+pub mod terrain_drop_tile;
 /// Exact `TerrainGroups::fill_fertile`, mountain/list RNG, grouped selection,
 /// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
