@@ -196,9 +196,9 @@ fn emitted_bytecode_decodes_and_every_jump_lands_in_range() {
     });
 }
 
-/// Static slots must be unique per script and every trigger the code refers to must have
-/// a name and a bit. A collision here would make two `static`s share cross-frame storage,
-/// which is exactly the state the `script_run_time` checksum channel hashes.
+/// Static names must be retained while the compiler-stage runtime array stays empty;
+/// `OP_INIT[_COPY]` grows it on first execution, as measured from retail. Every trigger
+/// the code refers to must also have a name and a bit.
 #[test]
 fn static_and_trigger_tables_are_consistent() {
     let Some(root) = corpus_root() else {
@@ -227,10 +227,9 @@ fn static_and_trigger_tables_are_consistent() {
                 f.display(),
                 s.name
             );
-            assert_eq!(
-                s.statics.len(),
-                s.static_var_names.len(),
-                "{}: script `{}` static table mismatch",
+            assert!(
+                s.statics.is_empty(),
+                "{}: script `{}` preallocated compiler-stage static values",
                 f.display(),
                 s.name
             );

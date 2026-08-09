@@ -97,6 +97,7 @@ mod op {
     pub const INIT_COPY: u8 = 0x32;
     pub const INIT: u8 = 0x33;
     pub const CAST: u8 = 0x34;
+    pub const CAST_BOOL: u8 = 0x35;
     pub const CALL: u8 = 0x36;
     pub const CALL_INCLUDE: u8 = 0x37;
     pub const CALL_GAME: u8 = 0x38;
@@ -111,6 +112,7 @@ mod op {
     pub const JUMP_IF_SC_FALSE: u8 = 0x43;
     pub const JUMP_IF_INITED: u8 = 0x44;
     pub const JUMP_IF_BITSET: u8 = 0x45;
+    pub const SCRIPT_MARKER: u8 = 0x47;
     pub const ERROR_TOKEN: u8 = 0x48;
 }
 
@@ -263,7 +265,10 @@ impl ScriptGen {
         self.triggers.push(name.to_string());
         let i = self.triggers.len() - 1;
         if self.trigger_bits.len() * 8 <= i {
-            self.trigger_bits.push(0);
+            // Retail initializes each allocated trigger byte to all ones, including
+            // unused high bits. The distinction is checksummed and the one-trigger
+            // retail capture contains exactly 0xff rather than 0x01.
+            self.trigger_bits.push(0xff);
         }
         // Triggers are ENABLED at load: the shipped scripts call `disable_trigger` to
         // turn one off, never `enable_trigger` before first use. `OP_JUMP_IF_BITSET`
@@ -483,6 +488,11 @@ impl<'a> FileGen<'a> {
             continues: Vec::new(),
         };
 
+        // Retail begins every function with `OP_SCRIPT_MARKER(script_index)`. A
+        // two-script retail probe measured operands 0 and 1 at the corresponding
+        // `Script::offset`s; the VM consumes the operand and otherwise ignores it.
+        self.emit1(op::SCRIPT_MARKER, si as u32, sig.pos);
+
         // Parameters occupy local slots 0..arity, in order. `RunTimeEnv::call_script`
         // leaves the arguments on the shared run stack and
         // `expected_stack_size -= params.count`, so the callee's slots line up with the
@@ -504,8 +514,7 @@ impl<'a> FileGen<'a> {
         // `expected_stack_size`, which is +1 for a non-void script, so a non-void script
         // that falls off the end must still leave a value.
         if !matches!(ret, Ty::Scalar(ScriptTy::Void)) {
-            let c = self.intern(Value::Int(0));
-            self.emit1(op::PUSH, Slot::Const(c).encode(), body.pos);
+            self.emit_default_value(&mut g, &ret, body.pos);
         }
         self.emit(op::RETURN, body.pos);
 
@@ -533,7 +542,9 @@ impl<'a> FileGen<'a> {
         s.script_type = script_type_tag(sig.script_type.as_deref());
         s.var_names = g.locals;
         s.static_var_names = g.statics.clone();
-        s.statics = vec![None; g.statics.len()];
+        // Retail's compiler-stage Script contains the names but no preallocated
+        // static values. `OP_INIT[_COPY]` grows the runtime array on first execution.
+        s.statics = Vec::new();
         s.trigger_names = g.triggers;
         s.trigger_count = s.trigger_names.len() as i32;
         s.trigger_bits = g.trigger_bits;
@@ -679,8 +690,8 @@ impl<'a> FileGen<'a> {
                     }
                     None => {
                         if !is_void {
-                            let c = self.intern(Value::Int(0));
-                            self.emit1(op::PUSH, Slot::Const(c).encode(), *pos);
+                            let ret = g.ret.clone();
+                            self.emit_default_value(g, &ret, *pos);
                         }
                     }
                 }
@@ -710,17 +721,13 @@ impl<'a> FileGen<'a> {
                 self.place(g, l_end);
             }
             Stmt::RunOnce { body, pos } => {
-                // Lowered with the same mechanism `static` initialisers use: a hidden
-                // static slot plus `OP_JUMP_IF_INITED`. [inferred] — the opcode
-                // semantics are measured, retail's choice of lowering for `run_once` is
-                // not.
-                let slot =
-                    g.declare_static(&format!("run_once@{}", pos.line), Ty::Scalar(ScriptTy::Int));
+                // Retail represents `run_once` as an unnamed trigger enabled at load.
+                // The first entry falls into the body and immediately clears its own
+                // bit; later entries jump past it. [measured in the run_once fixture]
+                let idx = g.trigger_index("");
                 let l_end = g.new_label();
-                self.emit_jump2(g, op::JUMP_IF_INITED, slot.encode(), l_end, *pos);
-                let c = self.intern(Value::Int(1));
-                self.emit1(op::PUSH, Slot::Const(c).encode(), *pos);
-                self.emit1(op::INIT, slot.encode(), *pos);
+                self.emit_jump2(g, op::JUMP_IF_BITSET, idx, l_end, *pos);
+                self.emit1(op::BIT_CLEAR, idx, *pos);
                 g.scopes.push(HashMap::new());
                 for s in &body.stmts {
                     self.stmt(g, s);
@@ -835,9 +842,9 @@ impl<'a> FileGen<'a> {
     /// should be used instead of `OP_INIT`.
     ///
     /// The two opcodes share `set_value`; the difference is whether the stored value
-    /// keeps aliasing the source. We use `OP_INIT_COPY` when the initialiser is a bare
-    /// variable reference (which `OP_PUSH` leaves on the stack as an alias) and `OP_INIT`
-    /// for a freshly computed temporary. [inferred]
+    /// keeps aliasing the source. A pushed constant or storage reference is an alias and
+    /// therefore needs `OP_INIT_COPY`; aggregate constructors and other fresh computed
+    /// temporaries may be transferred with `OP_INIT`. [measured for scalar constants]
     fn init_value(&mut self, g: &mut ScriptGen, ty: &Ty, d: &Declarator) -> bool {
         match (&d.init, &d.array) {
             (Some(Expr::ArrayLit(items, pos)), _) => {
@@ -864,7 +871,16 @@ impl<'a> FileGen<'a> {
             }
             (Some(e), _) => {
                 self.expr(g, e);
-                matches!(e, Expr::Name(..))
+                matches!(
+                    e,
+                    Expr::Int(..)
+                        | Expr::Real(..)
+                        | Expr::Str(..)
+                        | Expr::LocStr(..)
+                        | Expr::Name(..)
+                        | Expr::Index { .. }
+                        | Expr::Member { .. }
+                )
             }
             (None, Some(ArraySuffix::Sized(n))) => {
                 self.emit_default_value(g, array_inner(ty), d.pos);
@@ -1000,6 +1016,31 @@ impl<'a> FileGen<'a> {
     /// why `i++;` costs no stack traffic in retail either. [measured]
     fn expr_stmt(&mut self, g: &mut ScriptGen, e: &Expr) {
         let pos = e.pos();
+        // Retail's empty type-specifier grammar reduction turns `name = value;` into
+        // a declaration when `name` is not already in scope. The captured assignment
+        // fixtures lower that declaration directly as value + INIT_COPY, with no
+        // ASSIGN result and therefore no trailing POP.
+        if let Expr::Assign {
+            op: P::Assign,
+            target,
+            value,
+            ..
+        } = e
+        {
+            if let Expr::Name(name, _) = target.as_ref() {
+                if g.lookup(name).is_none() && !g.labels.contains_key(name) {
+                    self.diag(
+                        Severity::Note,
+                        pos,
+                        format!("`{name}` is used with no declaration; compiled as a fresh local"),
+                    );
+                    let slot = g.declare_local(name, Ty::Scalar(ScriptTy::Int));
+                    self.expr(g, value);
+                    self.emit1(op::INIT_COPY, slot.encode(), pos);
+                    return;
+                }
+            }
+        }
         self.expr(g, e);
         if self.leaves_value(g, e) {
             self.emit(op::POP, pos);
@@ -1246,10 +1287,9 @@ impl<'a> FileGen<'a> {
 
     fn binary(&mut self, g: &mut ScriptGen, p: P, lhs: &Expr, rhs: &Expr, pos: Pos) {
         // `&&` and `||` short-circuit through the dedicated jumps: the handler pops the
-        // operand, and on the deciding value pushes it BACK and jumps, so the result of
-        // `a && b` is `a` when `a` is false and `b` otherwise — not a normalised 0/1.
-        // Every conditional opcode calls `is_false`, so the difference only shows if the
-        // result is stored. [measured, handlers 0x009e142d / 0x009e1477]
+        // operand, and on the deciding value pushes it back and jumps. Retail then sends
+        // both paths through `OP_CAST_BOOL`, normalising the expression to 0/1.
+        // [measured in the logical-and compiler fixture]
         if p == P::AndAnd || p == P::OrOr {
             let l_end = g.new_label();
             self.expr(g, lhs);
@@ -1261,6 +1301,7 @@ impl<'a> FileGen<'a> {
             self.emit_jump(g, b, l_end, pos);
             self.expr(g, rhs);
             self.place(g, l_end);
+            self.emit(op::CAST_BOOL, pos);
             return;
         }
         self.expr(g, lhs);
@@ -1832,11 +1873,13 @@ mod tests {
     #[test]
     fn static_initialiser_is_guarded_by_jump_if_inited() {
         let (prog, _, _) = compile_src("scenario { static int s = 3; }");
-        assert_eq!(prog.files[0].code[0], op::JUMP_IF_INITED);
+        assert_eq!(prog.files[0].code[0], op::SCRIPT_MARKER);
+        assert_eq!(prog.files[0].code[5], op::JUMP_IF_INITED);
         assert_eq!(
             prog.files[0].scripts[0].static_var_names,
             vec!["s".to_string()]
         );
+        assert!(prog.files[0].scripts[0].statics.is_empty());
     }
 
     #[test]
@@ -1847,8 +1890,9 @@ mod tests {
             .iter()
             .find(|s| s.name == "f")
             .unwrap();
-        // The whole body of a void script that does nothing is one OP_RETURN.
-        assert_eq!(prog.files[0].code[f.entry as usize], op::RETURN);
+        // The marker is the whole function prologue; void fallthrough adds no value.
+        assert_eq!(prog.files[0].code[f.entry as usize], op::SCRIPT_MARKER);
+        assert_eq!(prog.files[0].code[f.entry as usize + 5], op::RETURN);
     }
 
     #[test]

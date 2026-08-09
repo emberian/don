@@ -274,7 +274,7 @@ fn retail_lowering_answers_the_first_open_compiler_questions() {
 }
 
 #[test]
-fn current_local_compiler_debt_is_measured_not_waived() {
+fn all_measured_fixtures_are_byte_identical() {
     let mut byte_identical = 0usize;
     for fixture in FIXTURES {
         let expected = retail(fixture);
@@ -286,14 +286,15 @@ fn current_local_compiler_debt_is_measured_not_waived() {
             eprintln!("{} differs in {}", fixture.id, changed.join(", "));
         }
         assert!(
-            changed.contains(&"code"),
-            "{} unexpectedly reached code identity; refresh the measured status",
-            fixture.id
+            changed.is_empty(),
+            "{} parity status drifted; changed fields: {}",
+            fixture.id,
+            changed.join(", ")
         );
     }
     assert_eq!(
-        byte_identical, 0,
-        "a fixture reached retail identity; refresh the differential record"
+        byte_identical, 5,
+        "the measured local/retail identity count drifted"
     );
 }
 
