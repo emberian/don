@@ -731,6 +731,7 @@ pub struct Sim {
 
     // ---- step 14: the object bands ----------------------------------------------------
     pub prod_rules: production::ProdRules,
+    pub production_runtime: production::runtime::LiveProductionRuntime,
     pub combat_rules: combat::CombatConstants,
     /// Band 2000, indexed by the row an [`crate::objects::ObjectRegistry`] entry carries.
     pub builds: Vec<production::BuildData>,
@@ -802,6 +803,7 @@ impl Sim {
             armies: crate::systems::armies::Armies::new(),
             army_leader_flags2: [0; NUM_LEADERS],
             prod_rules: production::ProdRules::shipped(),
+            production_runtime: production::runtime::LiveProductionRuntime::default(),
             combat_rules: combat::CombatConstants::shipped(),
             builds: Vec::new(),
             walls: Vec::new(),
@@ -2141,16 +2143,21 @@ impl Sim {
     /// `Build::process` `0x0061EDF0`, the deterministic head we have: the `Wall::process`
     /// helper latch plus the under-construction hit-point recompute.
     fn build_process(&mut self, row: usize, _frame: i32) {
-        let bd = &mut self.builds[row];
-        bd.begin_frame_construction();
-        let ct = production::construct_time(
-            bd.constr_time,
-            false,
-            &production::ConstructQueryGates::default(),
-            &self.prod_rules,
-        );
-        bd.construct_hits =
-            production::construct_hits(bd.myhits, bd.is_active(), false, bd.job_counter, ct);
+        {
+            let bd = &mut self.builds[row];
+            bd.begin_frame_construction();
+            let ct = production::construct_time(
+                bd.constr_time,
+                false,
+                &production::ConstructQueryGates::default(),
+                &self.prod_rules,
+            );
+            bd.construct_hits =
+                production::construct_hits(bd.myhits, bd.is_active(), false, bd.job_counter, ct);
+        }
+        let mut runtime = std::mem::take(&mut self.production_runtime);
+        let _production = production::runtime::process_sim_build_queue(self, &mut runtime, row);
+        self.production_runtime = runtime;
         self.cover.build_process += 1;
     }
 

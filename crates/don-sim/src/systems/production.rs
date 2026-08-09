@@ -71,6 +71,9 @@
 
 #![allow(clippy::too_many_arguments)]
 
+#[path = "production_runtime.rs"]
+pub mod runtime;
+
 use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
 use crate::systems::tech_cities::{
     execute_gain_tech_cohort, GainTechCohortContext, TechAutoUnlockHost, TechOneShotError,
