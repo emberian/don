@@ -2,7 +2,7 @@
 
 **Lane:** `mech:production` · **Checksum channel served:** `check_builds` (channel 2 of 15,
 `CheckSums::check_builds` `0x00937290`, checksums.cpp:646) · **Module:**
-`crates/don-sim/src/systems/production.rs` (84 focused tests, all green).
+`crates/don-sim/src/systems/production.rs` (85 focused tests, all green).
 
 ---
 
@@ -28,7 +28,7 @@ oracle run would have to cover.
 | Under-construction collapse | `Object::take_damage` `0x00652020` | `under_construction_collapses` |
 | Hit points while razing (float!) | `BuildData::hits` `0x0062E740` | `build_hits` |
 | Training/production queue tick | `Build::do_queue` `0x0061E410` | `queue_step`, `QueueKind`, `execute_local_queue_slot`, `execute_routed_queue_slots` |
-| Queue completion effect routing | `Build::finished` `0x00628490`; `Build::train` `0x0062F9B0`; `Leader::gain_tech` `0x006DCB60` | `execute_finished_effect`, `execute_unit_completion`, `execute_unit_placement`, `execute_building_completion`, `FinishedEffectHost`, `TechState::gain` |
+| Queue completion effect routing | `Build::finished` `0x00628490`; `Build::train` `0x0062F9B0`; `Leader::gain_tech` `0x006DCB60` | `execute_finished_effect`, `execute_unit_completion`, `preflight_unit_placement`, `execute_unit_placement`, `execute_building_completion`, `FinishedEffectHost`, `TechState::gain` |
 | Library queue aggregation / forwarded unqueue | `BuildData::get_queue` `0x0062D280`, `Build::unqueue` `0x006207C0`, `LeaderData::get_first_library` `0x006DB6C0` | `BuildPool::{first_library_object,library_queue_type,execute_library_unqueue}` |
 | `JOB_EXTRA_TIME` ramp + 3× cap | `ObjectData::train_time` `0x006508C0` | `train_time_ramp` |
 | Age penalty + difficulty scale | same, tail | `train_time_age_penalty`, `train_time_finalize` |
@@ -47,7 +47,7 @@ oracle run would have to cover.
 | Channel iteration | `CheckSums::check_builds` `0x00937290` | `BuildPool::check_builds` |
 | adler32 / `CheckSum::walk_function` | `0x00A46830` / `0x00936FF0` | `adler32`, `CheckSum` |
 
-**Verification method.** 84 focused unit tests through the wired `don-sim` crate. They are behavioural
+**Verification method.** 85 focused unit tests through the wired `don-sim` crate. They are behavioural
 assertions on the *derived* arithmetic, not captured retail vectors: they prove the port
 matches what I read out of the instruction stream, and they pin the six places where a
 plausible-looking reimplementation diverges (§3). They are **not** evidence of fidelity to
@@ -410,16 +410,19 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
   pre-allocation control, caravan, and Aircraft Carrier capacity gates plus `Build::train`'s
   common spine: exact `Objects::init_unit` request, negative-allocation return, both
   last-unit publications, stance inheritance, `Unit::go_inside`, and entry into the
-  placement/rally tail. `execute_unit_placement` now owns the coherent mutation-order subset
-  at `0x0062FAC0..0x0063042E`: signed gather-point iteration, invalid-point skip, the live
-  per-point order-list read, first `add_air_patrol_order` versus later x/y waypoint append,
-  the selected seven-argument strafe call, `come_out(0)`, capacity-destruction early return,
-  the carrier-before-presentation common tail, and the rally-conflict presentation-before-
-  carrier early return. The host still resolves type masks, target-at-coordinate,
-  diplomacy/carry admission, and live aircraft counts into a receipt-checked typed route;
-  it also owns the actual object-order writes, `die`, Aircraft Carrier payload allocations,
-  and local message/sound/event mutations. Those are explicit echoed receipts rather than
-  one opaque placement callback.
+  placement/rally tail. `preflight_unit_placement` now owns the recovered classifier at
+  `0x0062FAC0..0x0063042E`: the missile/Helicopter masks, exact target-at-coordinate query,
+  enemy and missile-defense branch, allied carry admission, aircraft count/limit branch,
+  University Scholar handling, default garrison limit 10, and strict Aircraft Carrier
+  routing. The host supplies only typed read-only object-graph facts; there is no opaque
+  route callback. `execute_unit_placement` consumes that single plan and owns the mutation
+  order: gather-point validation, live per-point order-list reads, first air-patrol versus
+  waypoint append, either exact strafe form, `come_out(0)`, live post-release garrison
+  check, the two distinct capacity deaths, `check_gatherers`, held-inside presentation,
+  launching-bit clear, conditional Carrier payload tail, final presentation, and both
+  missile-defense early returns. The host still owns actual object/order writes, `die`,
+  Aircraft Carrier payload allocations, and local message/sound/event mutations; each is
+  receipt-checked before the executor advances.
   `can_queue` / `could_queue` / `can_make` were read (they gate on `queued < num` and a
   scholar cap of 7 via `count_queue(1, 0x34) + num_gatherers > 6`) but are type-tree
   dependent.
@@ -493,9 +496,10 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
    negative allocator result or the later air-host capacity kill still counts as a
    completed `Build::finished` attempt, so the paid record is removed and repeat-queue runs
    afterward through the existing `completed_unqueue -> repeat_unit` transaction. The
-   placement route classifier and its object/order mutations, spell casting, the remainder
-   of the 15,001-byte `gain_tech` body, and the Capitol hero train/upgrade remain mandatory
-   host callbacks because they allocate or mutate world objects this module does not own.
+   Placement object/order mutations, spell casting, the remainder of the 15,001-byte
+   `gain_tech` body, and the Capitol hero train/upgrade remain mandatory host callbacks
+   because they allocate or mutate world objects this module does not own. Placement route
+   classification itself is executable here; its world reads are explicit typed facts.
 7. **`Object::must_walk` `0x00647930`** is an input to the walk. Getting it wrong changes
    which windows are hashed, so it must be settled by whoever owns `Object`.
 
@@ -512,13 +516,14 @@ globals, which is the shape the existing oracle already handles.
 ## 7. Wiring
 
 The module is exported through `systems::production` and participates in the normal crate
-gate. The current focused gate is **84 passed, 0 failed**. `production::adler32` already
+gate. The current focused gate is **85 passed, 0 failed**. `production::adler32` already
 re-exports the crate's shared checksum implementation.
 
 The remaining wiring is deliberately at typed world boundaries, not module visibility:
 queue completion now owns top-level effect selection, tech mutation, ordinary-building
-callback order, the unit allocation spine, and the placement/rally mutation transaction,
-but still needs the live object graph behind placement classification and effects plus the
+callback order, the unit allocation spine, executable placement classification, and the
+placement/rally mutation transaction, but still needs the live object graph behind its
+typed fact/effect boundaries plus the
 cast, building-leaf, and one-shot world owners. Parallel production needs
 the live leader slot limit, and Library aggregation needs city assimilation, type-tree,
 stockpile, and queued-counter hosts. `production::train_time_ramp` also supersedes

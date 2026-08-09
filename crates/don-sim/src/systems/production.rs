@@ -1450,6 +1450,17 @@ pub struct UnitRallyPoint {
     pub y: i32,
 }
 
+/// `ObjectTypeData::obj_masks & 0x0800_0000`, the shipped `'2'` Missile class.
+pub const UNIT_PLACEMENT_OBJ_MISSILE: u32 = 0x0800_0000;
+/// `UnitTypeData::unit_flags & 0x20`, the shipped `'f'` Helicopter class.
+pub const UNIT_PLACEMENT_FLAG_HELICOPTER: u32 = 0x20;
+pub const UNIT_PLACEMENT_TYPE_HELICOPTER: i32 = 310;
+pub const UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER: i32 = 351;
+pub const UNIT_PLACEMENT_TYPE_UNIVERSITY: i32 = 420;
+pub const UNIT_PLACEMENT_TYPE_SCHOLAR: i32 = 52;
+pub const UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR: i32 = 53;
+pub const UNIT_PLACEMENT_TECH_MISSILE_DEFENSE: i32 = 693;
+
 /// Object-graph classification for the type-specific portion of `Build::train`.
 ///
 /// The host resolves retail's type masks, target-at-coordinate lookup, diplomacy, carry
@@ -1467,21 +1478,36 @@ pub enum UnitPlacementRoute {
     Strafe(UnitStrafeOrderRequest),
     /// Ordinary non-air release through `Unit::come_out(0)`.
     ComeOut,
+    /// Ordinary non-air release followed, only when `come_out(0)` succeeds, by retail's
+    /// live post-release `producer.num_inside(0) > garrison_limit` capacity check.
+    ComeOutWithGarrisonLimit { garrison_limit: i32 },
     /// The special air-host branch found `num_aircraft_here(0) > num_aircraft_limit()`.
     /// Retail calls `come_out(0)`, and only a non-zero return is followed by `die`.
     AirCapacityOverflow,
     /// The unit intentionally remains inside and proceeds to the common carrier/presentation
     /// tail.
     RemainInside,
+    /// A University that trained a Scholar within `gather_max` invokes
+    /// `Build::check_gatherers` and then reaches the common tail without `come_out`.
+    CheckGatherers,
     /// Retail's local-player air-rally warning returns directly, before the common carrier
     /// tail. Presentation remains world-owned but its position in the transaction is pinned.
     EarlyPresentation,
+    /// The same missile-defense conflict for a non-local owner: retail returns without
+    /// constructing the local message/sound and without reaching the common tail.
+    EarlyReturn,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnitPlacementPlanReceipt {
+pub struct UnitPlacementPlan {
     pub request: UnitPlacementRequest,
     pub route: UnitPlacementRoute,
+    /// Local held-inside event at `0x006300E4..0x006301DE`, before the common tail.
+    pub pre_common_presentation: bool,
+    /// Exact strict `is(AIRCRAFTCARRIER, 1)` result consumed by the common payload arm.
+    pub carrier_payload: bool,
+    /// `owner == local_player && ScenarioData[+0x550] > 0` at the final presentation arm.
+    pub completed_presentation: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1493,8 +1519,27 @@ pub struct UnitRallyPointRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnitRallyPointReceipt {
     pub request: UnitRallyPointRequest,
-    /// `None` is the exact `WorldData::valid == 0` skip for this list element.
-    pub point: Option<UnitRallyPoint>,
+    /// Exact `WorldData::valid(&x, &y)` result; it does not rewrite either coordinate.
+    pub valid: bool,
+}
+
+/// Exact `ObjectsData::find_building_at` query issued for a valid single rally point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitRallyTargetRequest {
+    pub placement: UnitPlacementRequest,
+    pub point: UnitRallyPoint,
+    pub category: i32,
+    pub excluded_object: i32,
+    pub flags: [i32; 2],
+    /// The final argument is the arithmetic `point.y >> 6`.
+    pub world_row: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitRallyTargetReceipt {
+    pub request: UnitRallyTargetRequest,
+    /// Retail returns the owner through `ObjectsData +0x200`; `None` represents object -1.
+    pub target: Option<UnitIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1549,6 +1594,8 @@ pub struct UnitComeOutRequest {
 pub enum UnitPresentationStage {
     /// Target-at-rally warning at `0x0062FD28..0x0062FD97`, which returns early.
     EarlyRallyConflict,
+    /// Local non-University producer kept the trained unit inside within its garrison limit.
+    HeldInside,
     /// Normal local-player notification after the common carrier tail.
     Completed,
 }
@@ -1559,7 +1606,11 @@ pub enum UnitPlacementMutation {
     AppendAirPatrolWaypoint(UnitAppendPatrolWaypointRequest),
     AddStrafe(UnitStrafeOrderRequest),
     ComeOut(UnitComeOutRequest),
+    CheckProducerGatherers(UnitPlacementRequest),
     DestroyAtAirCapacity(UnitPlacementRequest),
+    DestroyAfterGarrisonOverflow(UnitPlacementRequest),
+    /// `UnitData::unit_masks &= 0xFBFF_FFFF` at `0x0062FC07`, before carrier routing.
+    ClearLaunching(UnitPlacementRequest),
     CompleteCarrierTail(UnitPlacementRequest),
     Present {
         placement: UnitPlacementRequest,
@@ -1584,6 +1635,8 @@ pub enum UnitPlacementOutcome {
     Ready,
     /// The air-host overflow path called `come_out`, killed the new unit, and returned `-1`.
     DestroyedAtCapacity,
+    /// A successful ordinary `come_out(0)` left the producer above its garrison limit.
+    DestroyedAfterGarrisonOverflow,
 }
 
 /// Executed portion of `Build::train`. Even allocation failure is a completed
@@ -1631,13 +1684,13 @@ pub enum UnitCompletionError {
         expected: UnitAllocationRequest,
         observed: UnitAllocationRequest,
     },
-    PlacementPlanReceiptMismatch {
-        expected: UnitPlacementRequest,
-        observed: UnitPlacementRequest,
-    },
     RallyPointReceiptMismatch {
         expected: UnitRallyPointRequest,
         observed: UnitRallyPointRequest,
+    },
+    RallyTargetReceiptMismatch {
+        expected: UnitRallyTargetRequest,
+        observed: UnitRallyTargetRequest,
     },
     OrderStateReceiptMismatch {
         expected: UnitOrderStateRequest,
@@ -1685,20 +1738,38 @@ pub trait UnitCompletionHost {
         secondary: i32,
     );
     fn producer_holds_air(&mut self, build: &BuildData) -> bool;
-    /// Resolve type masks, target-at-coordinate, diplomacy/carry admission, and air-host
-    /// counts into one retail route. The echoed request is checked before any route mutation.
-    fn unit_placement_plan(
-        &mut self,
-        build: &BuildData,
-        request: UnitPlacementRequest,
-    ) -> UnitPlacementPlanReceipt;
-    /// Indexed `BuildData::gather` seek followed by `WorldData::valid`. Invalid points are
-    /// returned as `None` and skipped without querying the trained unit's order list.
-    fn unit_rally_point(
+    /// Raw `ObjectTypeData::obj_masks` for the trained unit.
+    fn unit_object_masks(&mut self, unit: UnitIdentity) -> u32;
+    /// Raw `UnitTypeData::unit_flags` for the trained unit.
+    fn unit_type_flags(&mut self, unit: UnitIdentity) -> u32;
+    /// Exact `ObjectData::is(type, strict)` query on the trained unit.
+    fn unit_is_type(&mut self, unit: UnitIdentity, type_index: i32, strict: i32) -> bool;
+
+    /// `WorldData::valid` for one point already read from `BuildData::gather`.
+    fn validate_unit_rally_point(
         &mut self,
         build: &BuildData,
         request: UnitRallyPointRequest,
     ) -> UnitRallyPointReceipt;
+    /// Exact target-at-coordinate lookup for the valid single-point air branch.
+    fn find_building_at_rally(&mut self, request: UnitRallyTargetRequest)
+        -> UnitRallyTargetReceipt;
+    fn owners_are_enemies(&mut self, owner: u8, other_owner: u8) -> bool;
+    fn leader_has_prerequisite(&mut self, owner: u8, type_index: i32) -> bool;
+    fn target_can_carry(&mut self, target: UnitIdentity, unit: UnitIdentity) -> bool;
+    /// Target object's virtual `SubObjectData::is_valid` (`vtable +0x10`).
+    fn target_is_valid(&mut self, target: UnitIdentity) -> bool;
+
+    fn producer_garrison_limit(&mut self, build: &BuildData) -> i32;
+    fn producer_is_type(&mut self, build: &BuildData, type_index: i32, strict: i32) -> bool;
+    /// Type table entry `types[type_index]->type`, used for the Scholar/Korean Scholar arm.
+    fn trained_current_type(&mut self, type_index: i32) -> i32;
+    fn producer_num_inside(&mut self, build: &BuildData, mode: i32) -> i32;
+    fn producer_gather_inside(&mut self, build: &BuildData) -> bool;
+    fn local_player_owner(&mut self) -> u8;
+    /// `ScenarioData +0x550`, compared signed-greater-than zero.
+    fn scenario_presentation_count(&mut self) -> i32;
+
     /// Per-valid-point `UnitData::orderlist.length != 0` read.
     fn unit_has_orders(&mut self, request: UnitOrderStateRequest) -> UnitOrderStateReceipt;
 
@@ -1714,12 +1785,26 @@ pub trait UnitCompletionHost {
         -> UnitPlacementMutationReceipt;
     /// `Unit::come_out(0)`. Its integer return is observed only by the air-capacity route.
     fn come_out(&mut self, request: UnitComeOutRequest) -> UnitComeOutReceipt;
+    fn check_producer_gatherers(
+        &mut self,
+        request: UnitPlacementRequest,
+    ) -> UnitPlacementMutationReceipt;
     /// Host-owned `Unit::die(0, -1, 0)` after a successful capacity-overflow `come_out`.
     fn destroy_at_air_capacity(
         &mut self,
         request: UnitPlacementRequest,
     ) -> UnitPlacementMutationReceipt;
-    /// Common clear-launching-bit plus Aircraft Carrier payload construction tail.
+    /// Host-owned `Unit::die(0, -1, 0)` after the live post-`come_out` garrison check.
+    fn destroy_after_garrison_overflow(
+        &mut self,
+        request: UnitPlacementRequest,
+    ) -> UnitPlacementMutationReceipt;
+    /// Common `UnitData::unit_masks &= 0xFBFF_FFFF` store.
+    fn clear_unit_launching(
+        &mut self,
+        request: UnitPlacementRequest,
+    ) -> UnitPlacementMutationReceipt;
+    /// Aircraft Carrier `action_unqueue(1)` plus current-Helicopter payload construction.
     fn complete_carrier_tail(
         &mut self,
         request: UnitPlacementRequest,
@@ -1746,25 +1831,225 @@ fn require_placement_mutation(
     Ok(())
 }
 
+fn held_air_capacity_route<H: UnitCompletionHost>(
+    build: &BuildData,
+    unit: UnitIdentity,
+    host: &mut H,
+) -> UnitPlacementRoute {
+    if !host.unit_is_type(unit, UNIT_PLACEMENT_TYPE_HELICOPTER, 0) {
+        return UnitPlacementRoute::RemainInside;
+    }
+    let aircraft = host.hosted_aircraft(build, 0);
+    let limit = host.aircraft_limit(build);
+    if aircraft > limit {
+        UnitPlacementRoute::AirCapacityOverflow
+    } else {
+        UnitPlacementRoute::RemainInside
+    }
+}
+
+fn single_air_rally_route<H: UnitCompletionHost>(
+    build: &BuildData,
+    request: UnitPlacementRequest,
+    unit: UnitIdentity,
+    producer: UnitIdentity,
+    missile: bool,
+    host: &mut H,
+) -> Result<UnitPlacementRoute, UnitCompletionError> {
+    let gather = build
+        .gather
+        .first()
+        .expect("single-air-rally classification requires a gather point");
+    let point = UnitRallyPoint {
+        x: gather.x,
+        y: gather.y,
+    };
+    let point_request = UnitRallyPointRequest {
+        placement: request,
+        index: 0,
+    };
+    let point_receipt = host.validate_unit_rally_point(build, point_request);
+    if point_receipt.request != point_request {
+        return Err(UnitCompletionError::RallyPointReceiptMismatch {
+            expected: point_request,
+            observed: point_receipt.request,
+        });
+    }
+    if !point_receipt.valid {
+        return Ok(held_air_capacity_route(build, unit, host));
+    }
+
+    let target_request = UnitRallyTargetRequest {
+        placement: request,
+        point,
+        category: 0,
+        excluded_object: -1,
+        flags: [0; 2],
+        world_row: point.y >> 6,
+    };
+    let target_receipt = host.find_building_at_rally(target_request);
+    if target_receipt.request != target_request {
+        return Err(UnitCompletionError::RallyTargetReceiptMismatch {
+            expected: target_request,
+            observed: target_receipt.request,
+        });
+    }
+    let Some(target) = target_receipt.target else {
+        return Ok(if missile {
+            UnitPlacementRoute::RemainInside
+        } else {
+            UnitPlacementRoute::AirPatrol { point }
+        });
+    };
+    if target == producer {
+        return Ok(if missile {
+            UnitPlacementRoute::RemainInside
+        } else {
+            UnitPlacementRoute::AirPatrol { point }
+        });
+    }
+
+    if host.owners_are_enemies(request.owner, target.owner) {
+        if missile
+            && host.leader_has_prerequisite(request.owner, UNIT_PLACEMENT_TECH_MISSILE_DEFENSE)
+        {
+            return Ok(if request.owner == host.local_player_owner() {
+                UnitPlacementRoute::EarlyPresentation
+            } else {
+                UnitPlacementRoute::EarlyReturn
+            });
+        }
+        return Ok(UnitPlacementRoute::Strafe(UnitStrafeOrderRequest {
+            actor: unit,
+            target,
+            rally_target: producer,
+            queue_position: 1,
+            mode: 2,
+            final_flag: 1,
+        }));
+    }
+
+    if host.target_can_carry(target, unit) && host.target_is_valid(target) && !missile {
+        return Ok(UnitPlacementRoute::Strafe(UnitStrafeOrderRequest {
+            actor: target,
+            target: UnitIdentity {
+                owner: u8::MAX,
+                object_id: -1,
+            },
+            rally_target: target,
+            queue_position: 1,
+            mode: 2,
+            final_flag: 1,
+        }));
+    }
+    Ok(if missile {
+        UnitPlacementRoute::RemainInside
+    } else {
+        UnitPlacementRoute::AirPatrol { point }
+    })
+}
+
+/// Classify the complete `Build::train` placement route before issuing any world mutation.
+/// [measured, `0x0062FAC0..0x0063042E`]
+pub fn preflight_unit_placement<H: UnitCompletionHost>(
+    build: &BuildData,
+    request: UnitPlacementRequest,
+    host: &mut H,
+) -> Result<UnitPlacementPlan, UnitCompletionError> {
+    let unit = UnitIdentity {
+        owner: request.owner,
+        object_id: request.object_id,
+    };
+    let producer = UnitIdentity {
+        owner: request.producer_owner,
+        object_id: request.producer_object_id,
+    };
+    let mut pre_common_presentation = false;
+
+    let route = if request.producer_holds_air {
+        if build.gather.is_empty() {
+            held_air_capacity_route(build, unit, host)
+        } else {
+            let masks = host.unit_object_masks(unit);
+            let missile = masks & UNIT_PLACEMENT_OBJ_MISSILE != 0;
+            if !missile && host.unit_type_flags(unit) & UNIT_PLACEMENT_FLAG_HELICOPTER == 0 {
+                UnitPlacementRoute::AirPatrolWaypoints {
+                    point_count: i32::try_from(build.gather.len()).unwrap_or(i32::MAX),
+                }
+            } else {
+                single_air_rally_route(build, request, unit, producer, missile, host)?
+            }
+        }
+    } else {
+        let mut limit = host.producer_garrison_limit(build);
+        if limit == 0 {
+            limit = 10;
+        }
+        if host.producer_is_type(build, UNIT_PLACEMENT_TYPE_UNIVERSITY, 0) {
+            let current_type = host.trained_current_type(request.type_index);
+            if current_type == UNIT_PLACEMENT_TYPE_SCHOLAR
+                || current_type == UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR
+            {
+                if host.producer_num_inside(build, 1) > i32::from(build.gather_max) {
+                    UnitPlacementRoute::ComeOut
+                } else {
+                    UnitPlacementRoute::CheckGatherers
+                }
+            } else {
+                UnitPlacementRoute::ComeOut
+            }
+        } else if host.producer_gather_inside(build) && host.producer_num_inside(build, 0) <= limit
+        {
+            let carrier = host.unit_is_type(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1);
+            if !carrier && request.owner == host.local_player_owner() {
+                pre_common_presentation = true;
+            }
+            UnitPlacementRoute::RemainInside
+        } else {
+            UnitPlacementRoute::ComeOutWithGarrisonLimit {
+                garrison_limit: limit,
+            }
+        }
+    };
+
+    if matches!(
+        route,
+        UnitPlacementRoute::EarlyPresentation | UnitPlacementRoute::EarlyReturn
+    ) {
+        return Ok(UnitPlacementPlan {
+            request,
+            route,
+            pre_common_presentation: false,
+            carrier_payload: false,
+            completed_presentation: false,
+        });
+    }
+
+    let carrier_payload = host.unit_is_type(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1);
+    let completed_presentation =
+        request.owner == host.local_player_owner() && host.scenario_presentation_count() > 0;
+    Ok(UnitPlacementPlan {
+        request,
+        route,
+        pre_common_presentation,
+        carrier_payload,
+        completed_presentation,
+    })
+}
+
 /// Execute the recovered `Build::train` placement/rally transaction. [measured]
 ///
 /// `AirPatrolWaypoints` preserves the unusual retail ordering: seek/validate one gather
 /// point, then read the live order-list length, then either install the first patrol or
 /// append x/y to the current order. Invalid points cause no order-list read. Every normal
-/// route reaches carrier finalization before presentation; capacity destruction and the
-/// rally-conflict presentation are early returns.
+/// route reaches the launching-bit clear, then conditional carrier finalization and final
+/// presentation; capacity destruction and the rally-conflict presentation are early returns.
 pub fn execute_unit_placement<H: UnitCompletionHost>(
     build: &BuildData,
     request: UnitPlacementRequest,
     host: &mut H,
 ) -> Result<UnitPlacementOutcome, UnitCompletionError> {
-    let plan = host.unit_placement_plan(build, request);
-    if plan.request != request {
-        return Err(UnitCompletionError::PlacementPlanReceiptMismatch {
-            expected: request,
-            observed: plan.request,
-        });
-    }
+    let plan = preflight_unit_placement(build, request, host)?;
 
     let unit = UnitIdentity {
         owner: request.owner,
@@ -1783,15 +2068,22 @@ pub fn execute_unit_placement<H: UnitCompletionHost>(
                     placement: request,
                     index,
                 };
-                let point = host.unit_rally_point(build, point_request);
-                if point.request != point_request {
+                let point_receipt = host.validate_unit_rally_point(build, point_request);
+                if point_receipt.request != point_request {
                     return Err(UnitCompletionError::RallyPointReceiptMismatch {
                         expected: point_request,
-                        observed: point.request,
+                        observed: point_receipt.request,
                     });
                 }
-                let Some(point) = point.point else {
+                if !point_receipt.valid {
                     continue;
+                }
+                let Some(gather) = build.gather.get(index as usize) else {
+                    continue;
+                };
+                let point = UnitRallyPoint {
+                    x: gather.x,
+                    y: gather.y,
                 };
 
                 let state_request = UnitOrderStateRequest { unit, point };
@@ -1840,7 +2132,9 @@ pub fn execute_unit_placement<H: UnitCompletionHost>(
                 host.add_strafe_order(strafe),
             )?;
         }
-        UnitPlacementRoute::ComeOut | UnitPlacementRoute::AirCapacityOverflow => {
+        UnitPlacementRoute::ComeOut
+        | UnitPlacementRoute::ComeOutWithGarrisonLimit { .. }
+        | UnitPlacementRoute::AirCapacityOverflow => {
             let come_out = UnitComeOutRequest { unit, mode: 0 };
             let receipt = host.come_out(come_out);
             let mutation = UnitPlacementMutation::ComeOut(come_out);
@@ -1859,8 +2153,23 @@ pub fn execute_unit_placement<H: UnitCompletionHost>(
                 )?;
                 return Ok(UnitPlacementOutcome::DestroyedAtCapacity);
             }
+            if let UnitPlacementRoute::ComeOutWithGarrisonLimit { garrison_limit } = plan.route {
+                if receipt.returned != 0 && host.producer_num_inside(build, 0) > garrison_limit {
+                    require_placement_mutation(
+                        UnitPlacementMutation::DestroyAfterGarrisonOverflow(request),
+                        host.destroy_after_garrison_overflow(request),
+                    )?;
+                    return Ok(UnitPlacementOutcome::DestroyedAfterGarrisonOverflow);
+                }
+            }
         }
         UnitPlacementRoute::RemainInside => {}
+        UnitPlacementRoute::CheckGatherers => {
+            require_placement_mutation(
+                UnitPlacementMutation::CheckProducerGatherers(request),
+                host.check_producer_gatherers(request),
+            )?;
+        }
         UnitPlacementRoute::EarlyPresentation => {
             let stage = UnitPresentationStage::EarlyRallyConflict;
             require_placement_mutation(
@@ -1872,20 +2181,39 @@ pub fn execute_unit_placement<H: UnitCompletionHost>(
             )?;
             return Ok(UnitPlacementOutcome::Ready);
         }
+        UnitPlacementRoute::EarlyReturn => return Ok(UnitPlacementOutcome::Ready),
     }
 
+    if plan.pre_common_presentation {
+        let stage = UnitPresentationStage::HeldInside;
+        require_placement_mutation(
+            UnitPlacementMutation::Present {
+                placement: request,
+                stage,
+            },
+            host.present_trained_unit(request, stage),
+        )?;
+    }
     require_placement_mutation(
-        UnitPlacementMutation::CompleteCarrierTail(request),
-        host.complete_carrier_tail(request),
+        UnitPlacementMutation::ClearLaunching(request),
+        host.clear_unit_launching(request),
     )?;
-    let stage = UnitPresentationStage::Completed;
-    require_placement_mutation(
-        UnitPlacementMutation::Present {
-            placement: request,
-            stage,
-        },
-        host.present_trained_unit(request, stage),
-    )?;
+    if plan.carrier_payload {
+        require_placement_mutation(
+            UnitPlacementMutation::CompleteCarrierTail(request),
+            host.complete_carrier_tail(request),
+        )?;
+    }
+    if plan.completed_presentation {
+        let stage = UnitPresentationStage::Completed;
+        require_placement_mutation(
+            UnitPlacementMutation::Present {
+                placement: request,
+                stage,
+            },
+            host.present_trained_unit(request, stage),
+        )?;
+    }
     Ok(UnitPlacementOutcome::Ready)
 }
 
@@ -4135,8 +4463,22 @@ mod tests {
         SetUnitStance(u8, i32, i32, i32),
         PutUnitInside(u8, i32, i32, u8, i32),
         ProducerHoldsAir(bool),
-        UnitPlacementPlan(UnitPlacementRequest),
-        UnitRallyPoint(UnitRallyPointRequest),
+        UnitObjectMasks(UnitIdentity, u32),
+        UnitTypeFlags(UnitIdentity, u32),
+        UnitIsType(UnitIdentity, i32, i32, bool),
+        UnitRallyPoint(UnitRallyPointRequest, bool),
+        UnitRallyTarget(UnitRallyTargetRequest, Option<UnitIdentity>),
+        OwnersAreEnemies(u8, u8, bool),
+        LeaderHasPrerequisite(u8, i32, bool),
+        TargetCanCarry(UnitIdentity, UnitIdentity, bool),
+        TargetIsValid(UnitIdentity, bool),
+        ProducerGarrisonLimit(i32),
+        ProducerIsType(i32, i32, bool),
+        TrainedCurrentType(i32, i32),
+        ProducerNumInside(i32, i32),
+        ProducerGatherInside(bool),
+        LocalPlayerOwner(u8),
+        ScenarioPresentationCount(i32),
         UnitHasOrders(UnitOrderStateRequest),
         ApplyPlacement(UnitPlacementMutation),
         IsSpell(i32),
@@ -4185,9 +4527,24 @@ mod tests {
         unit_stance_type: i32,
         producer_stance_type: i32,
         producer_holds_air: bool,
-        placement_route: UnitPlacementRoute,
-        placement_request_override: Option<UnitPlacementRequest>,
-        rally_points: Vec<Option<UnitRallyPoint>>,
+        unit_object_masks: u32,
+        unit_type_flags: u32,
+        placement_helicopter: bool,
+        placement_carrier: bool,
+        rally_valid: Vec<bool>,
+        rally_target: Option<UnitIdentity>,
+        target_enemy: bool,
+        missile_defense: bool,
+        target_can_carry: bool,
+        target_valid: bool,
+        garrison_limit: i32,
+        producer_university: bool,
+        trained_current_type: i32,
+        producer_inside_mode0: i32,
+        producer_inside_mode1: i32,
+        producer_gather_inside: bool,
+        local_owner: u8,
+        scenario_presentation_count: i32,
         order_states: Vec<bool>,
         come_out_return: i32,
         placement_mutation_override: Option<UnitPlacementMutation>,
@@ -4222,9 +4579,24 @@ mod tests {
                 unit_stance_type: 1,
                 producer_stance_type: 2,
                 producer_holds_air: false,
-                placement_route: UnitPlacementRoute::RemainInside,
-                placement_request_override: None,
-                rally_points: Vec::new(),
+                unit_object_masks: 0,
+                unit_type_flags: 0,
+                placement_helicopter: false,
+                placement_carrier: false,
+                rally_valid: Vec::new(),
+                rally_target: None,
+                target_enemy: false,
+                missile_defense: false,
+                target_can_carry: false,
+                target_valid: false,
+                garrison_limit: 10,
+                producer_university: false,
+                trained_current_type: 60,
+                producer_inside_mode0: 0,
+                producer_inside_mode1: 0,
+                producer_gather_inside: false,
+                local_owner: u8::MAX,
+                scenario_presentation_count: 0,
                 order_states: Vec::new(),
                 come_out_return: 1,
                 placement_mutation_override: None,
@@ -4464,28 +4836,135 @@ mod tests {
             self.producer_holds_air
         }
 
-        fn unit_placement_plan(
-            &mut self,
-            _build: &BuildData,
-            request: UnitPlacementRequest,
-        ) -> UnitPlacementPlanReceipt {
-            self.events.push(FinishedEvent::UnitPlacementPlan(request));
-            UnitPlacementPlanReceipt {
-                request: self.placement_request_override.unwrap_or(request),
-                route: self.placement_route,
-            }
+        fn unit_object_masks(&mut self, unit: UnitIdentity) -> u32 {
+            self.events
+                .push(FinishedEvent::UnitObjectMasks(unit, self.unit_object_masks));
+            self.unit_object_masks
         }
 
-        fn unit_rally_point(
+        fn unit_type_flags(&mut self, unit: UnitIdentity) -> u32 {
+            self.events
+                .push(FinishedEvent::UnitTypeFlags(unit, self.unit_type_flags));
+            self.unit_type_flags
+        }
+
+        fn unit_is_type(&mut self, unit: UnitIdentity, type_index: i32, strict: i32) -> bool {
+            let value = match type_index {
+                UNIT_PLACEMENT_TYPE_HELICOPTER => self.placement_helicopter,
+                UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER => self.placement_carrier,
+                _ => false,
+            };
+            self.events
+                .push(FinishedEvent::UnitIsType(unit, type_index, strict, value));
+            value
+        }
+
+        fn validate_unit_rally_point(
             &mut self,
             _build: &BuildData,
             request: UnitRallyPointRequest,
         ) -> UnitRallyPointReceipt {
-            self.events.push(FinishedEvent::UnitRallyPoint(request));
-            UnitRallyPointReceipt {
+            let valid = self.rally_valid.remove(0);
+            self.events
+                .push(FinishedEvent::UnitRallyPoint(request, valid));
+            UnitRallyPointReceipt { request, valid }
+        }
+
+        fn find_building_at_rally(
+            &mut self,
+            request: UnitRallyTargetRequest,
+        ) -> UnitRallyTargetReceipt {
+            self.events
+                .push(FinishedEvent::UnitRallyTarget(request, self.rally_target));
+            UnitRallyTargetReceipt {
                 request,
-                point: self.rally_points.remove(0),
+                target: self.rally_target,
             }
+        }
+
+        fn owners_are_enemies(&mut self, owner: u8, other_owner: u8) -> bool {
+            self.events.push(FinishedEvent::OwnersAreEnemies(
+                owner,
+                other_owner,
+                self.target_enemy,
+            ));
+            self.target_enemy
+        }
+
+        fn leader_has_prerequisite(&mut self, owner: u8, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::LeaderHasPrerequisite(
+                owner,
+                type_index,
+                self.missile_defense,
+            ));
+            self.missile_defense
+        }
+
+        fn target_can_carry(&mut self, target: UnitIdentity, unit: UnitIdentity) -> bool {
+            self.events.push(FinishedEvent::TargetCanCarry(
+                target,
+                unit,
+                self.target_can_carry,
+            ));
+            self.target_can_carry
+        }
+
+        fn target_is_valid(&mut self, target: UnitIdentity) -> bool {
+            self.events
+                .push(FinishedEvent::TargetIsValid(target, self.target_valid));
+            self.target_valid
+        }
+
+        fn producer_garrison_limit(&mut self, _build: &BuildData) -> i32 {
+            self.events
+                .push(FinishedEvent::ProducerGarrisonLimit(self.garrison_limit));
+            self.garrison_limit
+        }
+
+        fn producer_is_type(&mut self, _build: &BuildData, type_index: i32, strict: i32) -> bool {
+            let value = type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY && self.producer_university;
+            self.events
+                .push(FinishedEvent::ProducerIsType(type_index, strict, value));
+            value
+        }
+
+        fn trained_current_type(&mut self, type_index: i32) -> i32 {
+            self.events.push(FinishedEvent::TrainedCurrentType(
+                type_index,
+                self.trained_current_type,
+            ));
+            self.trained_current_type
+        }
+
+        fn producer_num_inside(&mut self, _build: &BuildData, mode: i32) -> i32 {
+            let value = if mode == 1 {
+                self.producer_inside_mode1
+            } else {
+                self.producer_inside_mode0
+            };
+            self.events
+                .push(FinishedEvent::ProducerNumInside(mode, value));
+            value
+        }
+
+        fn producer_gather_inside(&mut self, _build: &BuildData) -> bool {
+            self.events.push(FinishedEvent::ProducerGatherInside(
+                self.producer_gather_inside,
+            ));
+            self.producer_gather_inside
+        }
+
+        fn local_player_owner(&mut self) -> u8 {
+            self.events
+                .push(FinishedEvent::LocalPlayerOwner(self.local_owner));
+            self.local_owner
+        }
+
+        fn scenario_presentation_count(&mut self) -> i32 {
+            self.events.push(FinishedEvent::ScenarioPresentationCount(
+                self.scenario_presentation_count,
+            ));
+            self.scenario_presentation_count
         }
 
         fn unit_has_orders(&mut self, request: UnitOrderStateRequest) -> UnitOrderStateReceipt {
@@ -4538,11 +5017,44 @@ mod tests {
             }
         }
 
+        fn check_producer_gatherers(
+            &mut self,
+            request: UnitPlacementRequest,
+        ) -> UnitPlacementMutationReceipt {
+            let mutation = UnitPlacementMutation::CheckProducerGatherers(request);
+            self.events.push(FinishedEvent::ApplyPlacement(mutation));
+            UnitPlacementMutationReceipt {
+                mutation: self.placement_mutation_override.unwrap_or(mutation),
+            }
+        }
+
         fn destroy_at_air_capacity(
             &mut self,
             request: UnitPlacementRequest,
         ) -> UnitPlacementMutationReceipt {
             let mutation = UnitPlacementMutation::DestroyAtAirCapacity(request);
+            self.events.push(FinishedEvent::ApplyPlacement(mutation));
+            UnitPlacementMutationReceipt {
+                mutation: self.placement_mutation_override.unwrap_or(mutation),
+            }
+        }
+
+        fn destroy_after_garrison_overflow(
+            &mut self,
+            request: UnitPlacementRequest,
+        ) -> UnitPlacementMutationReceipt {
+            let mutation = UnitPlacementMutation::DestroyAfterGarrisonOverflow(request);
+            self.events.push(FinishedEvent::ApplyPlacement(mutation));
+            UnitPlacementMutationReceipt {
+                mutation: self.placement_mutation_override.unwrap_or(mutation),
+            }
+        }
+
+        fn clear_unit_launching(
+            &mut self,
+            request: UnitPlacementRequest,
+        ) -> UnitPlacementMutationReceipt {
+            let mutation = UnitPlacementMutation::ClearLaunching(request);
             self.events.push(FinishedEvent::ApplyPlacement(mutation));
             UnitPlacementMutationReceipt {
                 mutation: self.placement_mutation_override.unwrap_or(mutation),
@@ -4905,7 +5417,9 @@ mod tests {
             unit_stance_type: 9,
             producer_stance_type: 9,
             producer_holds_air: true,
-            placement_route: UnitPlacementRoute::AirCapacityOverflow,
+            placement_helicopter: true,
+            hosted_aircraft: 2,
+            aircraft_limit: 1,
             ..FinishedProbe::default()
         };
 
@@ -4934,7 +5448,27 @@ mod tests {
                 FinishedEvent::SetUnitStance(3, 42, 5, 0),
                 FinishedEvent::PutUnitInside(3, 42, 77, 3, 0),
                 FinishedEvent::ProducerHoldsAir(true),
-                FinishedEvent::UnitPlacementPlan(placement_request),
+                FinishedEvent::UnitIsType(
+                    UnitIdentity {
+                        owner: 3,
+                        object_id: 42,
+                    },
+                    UNIT_PLACEMENT_TYPE_HELICOPTER,
+                    0,
+                    true,
+                ),
+                FinishedEvent::HostedAircraft(0, 2),
+                FinishedEvent::AircraftLimit(1),
+                FinishedEvent::UnitIsType(
+                    UnitIdentity {
+                        owner: 3,
+                        object_id: 42,
+                    },
+                    UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER,
+                    1,
+                    false,
+                ),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
                 FinishedEvent::ApplyPlacement(UnitPlacementMutation::ComeOut(UnitComeOutRequest {
                     unit: UnitIdentity {
                         owner: 3,
@@ -4976,7 +5510,7 @@ mod tests {
 
     #[test]
     fn unit_placement_installs_patrol_then_appends_only_valid_gather_points() {
-        let build = unit_producer(3, 77, 768, -192);
+        let mut build = unit_producer(3, 77, 768, -192);
         let placement = UnitPlacementRequest {
             owner: 3,
             type_index: 60,
@@ -4987,6 +5521,23 @@ mod tests {
         };
         let first = UnitRallyPoint { x: 640, y: 896 };
         let second = UnitRallyPoint { x: 1280, y: 1536 };
+        build.gather = vec![
+            GatherPoint {
+                x: first.x,
+                y: first.y,
+                ..GatherPoint::default()
+            },
+            GatherPoint {
+                x: 900,
+                y: 1100,
+                ..GatherPoint::default()
+            },
+            GatherPoint {
+                x: second.x,
+                y: second.y,
+                ..GatherPoint::default()
+            },
+        ];
         let unit = UnitIdentity {
             owner: 3,
             object_id: 42,
@@ -4996,8 +5547,9 @@ mod tests {
             object_id: 77,
         };
         let mut host = FinishedProbe {
-            placement_route: UnitPlacementRoute::AirPatrolWaypoints { point_count: 3 },
-            rally_points: vec![Some(first), None, Some(second)],
+            unit_object_masks: 0,
+            unit_type_flags: 0,
+            rally_valid: vec![true, false, true],
             order_states: vec![false, true],
             ..FinishedProbe::default()
         };
@@ -5009,11 +5561,17 @@ mod tests {
         assert_eq!(
             host.events,
             vec![
-                FinishedEvent::UnitPlacementPlan(placement),
-                FinishedEvent::UnitRallyPoint(UnitRallyPointRequest {
-                    placement,
-                    index: 0,
-                }),
+                FinishedEvent::UnitObjectMasks(unit, 0),
+                FinishedEvent::UnitTypeFlags(unit, 0),
+                FinishedEvent::UnitIsType(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1, false,),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 0,
+                    },
+                    true,
+                ),
                 FinishedEvent::UnitHasOrders(UnitOrderStateRequest { unit, point: first }),
                 FinishedEvent::ApplyPlacement(UnitPlacementMutation::AddAirPatrol(
                     UnitAirPatrolOrderRequest {
@@ -5023,14 +5581,20 @@ mod tests {
                         queue_position: 1,
                     },
                 )),
-                FinishedEvent::UnitRallyPoint(UnitRallyPointRequest {
-                    placement,
-                    index: 1,
-                }),
-                FinishedEvent::UnitRallyPoint(UnitRallyPointRequest {
-                    placement,
-                    index: 2,
-                }),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 1,
+                    },
+                    false,
+                ),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 2,
+                    },
+                    true,
+                ),
                 FinishedEvent::UnitHasOrders(UnitOrderStateRequest {
                     unit,
                     point: second,
@@ -5041,20 +5605,20 @@ mod tests {
                         point: second,
                     },
                 ),),
-                FinishedEvent::ApplyPlacement(UnitPlacementMutation::CompleteCarrierTail(
-                    placement,
-                )),
-                FinishedEvent::ApplyPlacement(UnitPlacementMutation::Present {
-                    placement,
-                    stage: UnitPresentationStage::Completed,
-                }),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::ClearLaunching(placement,)),
             ]
         );
     }
 
     #[test]
     fn unit_placement_orders_strafe_capacity_release_and_early_presentation() {
-        let build = unit_producer(3, 77, 768, -192);
+        let mut build = unit_producer(3, 77, 768, -192);
+        let rally = UnitRallyPoint { x: 640, y: 896 };
+        build.gather.push(GatherPoint {
+            x: rally.x,
+            y: rally.y,
+            ..GatherPoint::default()
+        });
         let placement = UnitPlacementRequest {
             owner: 3,
             type_index: 60,
@@ -5080,8 +5644,19 @@ mod tests {
             mode: 2,
             final_flag: 1,
         };
+        let rally_target_request = UnitRallyTargetRequest {
+            placement,
+            point: rally,
+            category: 0,
+            excluded_object: -1,
+            flags: [0; 2],
+            world_row: rally.y >> 6,
+        };
         let mut host = FinishedProbe {
-            placement_route: UnitPlacementRoute::Strafe(strafe),
+            unit_object_masks: UNIT_PLACEMENT_OBJ_MISSILE,
+            rally_valid: vec![true],
+            rally_target: Some(strafe.target),
+            target_enemy: true,
             ..FinishedProbe::default()
         };
         assert_eq!(
@@ -5091,28 +5666,53 @@ mod tests {
         assert_eq!(
             host.events,
             vec![
-                FinishedEvent::UnitPlacementPlan(placement),
+                FinishedEvent::UnitObjectMasks(strafe.actor, UNIT_PLACEMENT_OBJ_MISSILE),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 0,
+                    },
+                    true,
+                ),
+                FinishedEvent::UnitRallyTarget(rally_target_request, Some(strafe.target)),
+                FinishedEvent::OwnersAreEnemies(3, 5, true),
+                FinishedEvent::LeaderHasPrerequisite(3, UNIT_PLACEMENT_TECH_MISSILE_DEFENSE, false,),
+                FinishedEvent::UnitIsType(
+                    strafe.actor,
+                    UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER,
+                    1,
+                    false,
+                ),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
                 FinishedEvent::ApplyPlacement(UnitPlacementMutation::AddStrafe(strafe)),
-                FinishedEvent::ApplyPlacement(UnitPlacementMutation::CompleteCarrierTail(
-                    placement,
-                )),
-                FinishedEvent::ApplyPlacement(UnitPlacementMutation::Present {
-                    placement,
-                    stage: UnitPresentationStage::Completed,
-                }),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::ClearLaunching(placement,)),
             ]
         );
 
-        host.events.clear();
-        host.placement_route = UnitPlacementRoute::AirCapacityOverflow;
+        let mut empty_build = unit_producer(3, 77, 768, -192);
+        let mut host = FinishedProbe {
+            placement_helicopter: true,
+            hosted_aircraft: 2,
+            aircraft_limit: 1,
+            ..FinishedProbe::default()
+        };
         assert_eq!(
-            execute_unit_placement(&build, placement, &mut host).unwrap(),
+            execute_unit_placement(&empty_build, placement, &mut host).unwrap(),
             UnitPlacementOutcome::DestroyedAtCapacity
         );
         assert_eq!(
             host.events,
             vec![
-                FinishedEvent::UnitPlacementPlan(placement),
+                FinishedEvent::UnitIsType(strafe.actor, UNIT_PLACEMENT_TYPE_HELICOPTER, 0, true,),
+                FinishedEvent::HostedAircraft(0, 2),
+                FinishedEvent::AircraftLimit(1),
+                FinishedEvent::UnitIsType(
+                    strafe.actor,
+                    UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER,
+                    1,
+                    false,
+                ),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
                 FinishedEvent::ApplyPlacement(UnitPlacementMutation::ComeOut(UnitComeOutRequest {
                     unit: UnitIdentity {
                         owner: 3,
@@ -5126,8 +5726,15 @@ mod tests {
             ]
         );
 
-        host.events.clear();
-        host.placement_route = UnitPlacementRoute::EarlyPresentation;
+        let mut host = FinishedProbe {
+            unit_object_masks: UNIT_PLACEMENT_OBJ_MISSILE,
+            rally_valid: vec![true],
+            rally_target: Some(strafe.target),
+            target_enemy: true,
+            missile_defense: true,
+            local_owner: 3,
+            ..FinishedProbe::default()
+        };
         assert_eq!(
             execute_unit_placement(&build, placement, &mut host).unwrap(),
             UnitPlacementOutcome::Ready
@@ -5135,7 +5742,18 @@ mod tests {
         assert_eq!(
             host.events,
             vec![
-                FinishedEvent::UnitPlacementPlan(placement),
+                FinishedEvent::UnitObjectMasks(strafe.actor, UNIT_PLACEMENT_OBJ_MISSILE),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 0,
+                    },
+                    true,
+                ),
+                FinishedEvent::UnitRallyTarget(rally_target_request, Some(strafe.target)),
+                FinishedEvent::OwnersAreEnemies(3, 5, true),
+                FinishedEvent::LeaderHasPrerequisite(3, UNIT_PLACEMENT_TECH_MISSILE_DEFENSE, true,),
+                FinishedEvent::LocalPlayerOwner(3),
                 FinishedEvent::ApplyPlacement(UnitPlacementMutation::Present {
                     placement,
                     stage: UnitPresentationStage::EarlyRallyConflict,
@@ -5144,8 +5762,11 @@ mod tests {
         );
 
         // Mutation receipts are fail-closed at the first divergent world write.
-        host.events.clear();
-        host.placement_route = UnitPlacementRoute::ComeOut;
+        empty_build.gather.clear();
+        let ordinary_placement = UnitPlacementRequest {
+            producer_holds_air: false,
+            ..placement
+        };
         let expected = UnitPlacementMutation::ComeOut(UnitComeOutRequest {
             unit: UnitIdentity {
                 owner: 3,
@@ -5154,21 +5775,204 @@ mod tests {
             mode: 0,
         });
         let observed = UnitPlacementMutation::Present {
-            placement,
+            placement: ordinary_placement,
             stage: UnitPresentationStage::Completed,
         };
-        host.placement_mutation_override = Some(observed);
+        let mut host = FinishedProbe {
+            placement_mutation_override: Some(observed),
+            ..FinishedProbe::default()
+        };
         assert_eq!(
-            execute_unit_placement(&build, placement, &mut host),
+            execute_unit_placement(&empty_build, ordinary_placement, &mut host),
             Err(UnitCompletionError::PlacementMutationReceiptMismatch { expected, observed })
         );
         assert_eq!(
             host.events,
             vec![
-                FinishedEvent::UnitPlacementPlan(placement),
+                FinishedEvent::ProducerGarrisonLimit(10),
+                FinishedEvent::ProducerIsType(UNIT_PLACEMENT_TYPE_UNIVERSITY, 0, false),
+                FinishedEvent::ProducerGatherInside(false),
+                FinishedEvent::UnitIsType(
+                    strafe.actor,
+                    UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER,
+                    1,
+                    false,
+                ),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
                 FinishedEvent::ApplyPlacement(expected),
             ]
         );
+    }
+
+    #[test]
+    fn unit_placement_preflight_pins_carry_university_held_and_garrison_routes() {
+        let mut build = unit_producer(3, 77, 768, -192);
+        let point = UnitRallyPoint { x: 640, y: 896 };
+        build.gather.push(GatherPoint {
+            x: point.x,
+            y: point.y,
+            ..GatherPoint::default()
+        });
+        let placement = UnitPlacementRequest {
+            owner: 3,
+            type_index: 60,
+            object_id: 42,
+            producer_owner: 3,
+            producer_object_id: 77,
+            producer_holds_air: true,
+        };
+        let unit = UnitIdentity {
+            owner: 3,
+            object_id: 42,
+        };
+        let target = UnitIdentity {
+            owner: 4,
+            object_id: 91,
+        };
+        let target_request = UnitRallyTargetRequest {
+            placement,
+            point,
+            category: 0,
+            excluded_object: -1,
+            flags: [0; 2],
+            world_row: point.y >> 6,
+        };
+        let carry_strafe = UnitStrafeOrderRequest {
+            actor: target,
+            target: UnitIdentity {
+                owner: u8::MAX,
+                object_id: -1,
+            },
+            rally_target: target,
+            queue_position: 1,
+            mode: 2,
+            final_flag: 1,
+        };
+        let mut host = FinishedProbe {
+            unit_type_flags: UNIT_PLACEMENT_FLAG_HELICOPTER,
+            rally_valid: vec![true],
+            rally_target: Some(target),
+            target_can_carry: true,
+            target_valid: true,
+            ..FinishedProbe::default()
+        };
+        assert_eq!(
+            preflight_unit_placement(&build, placement, &mut host).unwrap(),
+            UnitPlacementPlan {
+                request: placement,
+                route: UnitPlacementRoute::Strafe(carry_strafe),
+                pre_common_presentation: false,
+                carrier_payload: false,
+                completed_presentation: false,
+            }
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::UnitObjectMasks(unit, 0),
+                FinishedEvent::UnitTypeFlags(unit, UNIT_PLACEMENT_FLAG_HELICOPTER),
+                FinishedEvent::UnitRallyPoint(
+                    UnitRallyPointRequest {
+                        placement,
+                        index: 0,
+                    },
+                    true,
+                ),
+                FinishedEvent::UnitRallyTarget(target_request, Some(target)),
+                FinishedEvent::OwnersAreEnemies(3, 4, false),
+                FinishedEvent::TargetCanCarry(target, unit, true),
+                FinishedEvent::TargetIsValid(target, true),
+                FinishedEvent::UnitIsType(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1, false,),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
+            ]
+        );
+
+        let mut university = unit_producer(3, 77, 768, -192);
+        university.gather_max = 2;
+        let ordinary = UnitPlacementRequest {
+            producer_holds_air: false,
+            ..placement
+        };
+        let mut host = FinishedProbe {
+            producer_university: true,
+            trained_current_type: UNIT_PLACEMENT_TYPE_SCHOLAR,
+            producer_inside_mode1: 2,
+            ..FinishedProbe::default()
+        };
+        assert_eq!(
+            execute_unit_placement(&university, ordinary, &mut host).unwrap(),
+            UnitPlacementOutcome::Ready
+        );
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::ProducerGarrisonLimit(10),
+                FinishedEvent::ProducerIsType(UNIT_PLACEMENT_TYPE_UNIVERSITY, 0, true),
+                FinishedEvent::TrainedCurrentType(60, UNIT_PLACEMENT_TYPE_SCHOLAR),
+                FinishedEvent::ProducerNumInside(1, 2),
+                FinishedEvent::UnitIsType(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1, false,),
+                FinishedEvent::LocalPlayerOwner(u8::MAX),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::CheckProducerGatherers(
+                    ordinary,
+                )),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::ClearLaunching(ordinary)),
+            ]
+        );
+
+        let mut host = FinishedProbe {
+            producer_gather_inside: true,
+            producer_inside_mode0: 1,
+            local_owner: 3,
+            scenario_presentation_count: 1,
+            ..FinishedProbe::default()
+        };
+        assert_eq!(
+            execute_unit_placement(&university, ordinary, &mut host).unwrap(),
+            UnitPlacementOutcome::Ready
+        );
+        assert_eq!(
+            &host.events[6..],
+            &[
+                FinishedEvent::UnitIsType(unit, UNIT_PLACEMENT_TYPE_AIRCRAFT_CARRIER, 1, false,),
+                FinishedEvent::LocalPlayerOwner(3),
+                FinishedEvent::ScenarioPresentationCount(1),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::Present {
+                    placement: ordinary,
+                    stage: UnitPresentationStage::HeldInside,
+                }),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::ClearLaunching(ordinary)),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::Present {
+                    placement: ordinary,
+                    stage: UnitPresentationStage::Completed,
+                }),
+            ]
+        );
+
+        let mut host = FinishedProbe {
+            producer_inside_mode0: 11,
+            ..FinishedProbe::default()
+        };
+        assert_eq!(
+            execute_unit_placement(&university, ordinary, &mut host).unwrap(),
+            UnitPlacementOutcome::DestroyedAfterGarrisonOverflow
+        );
+        assert_eq!(
+            host.events.last(),
+            Some(&FinishedEvent::ApplyPlacement(
+                UnitPlacementMutation::DestroyAfterGarrisonOverflow(ordinary)
+            ))
+        );
+        assert!(matches!(
+            host.events.as_slice(),
+            [
+                ..,
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::ComeOut(_)),
+                FinishedEvent::ProducerNumInside(0, 11),
+                FinishedEvent::ApplyPlacement(UnitPlacementMutation::DestroyAfterGarrisonOverflow(
+                    _
+                ))
+            ]
+        ));
     }
 
     #[test]
