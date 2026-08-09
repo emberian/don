@@ -441,6 +441,12 @@ fn i32_at(b: &[u8], off: usize) -> Option<i32> {
 }
 
 #[inline]
+fn u16_at(b: &[u8], off: usize) -> Option<u16> {
+    b.get(off..off + 2)
+        .map(|s| u16::from_le_bytes([s[0], s[1]]))
+}
+
+#[inline]
 fn i8_at(b: &[u8], off: usize) -> Option<i8> {
     b.get(off).map(|v| *v as i8)
 }
@@ -1142,6 +1148,17 @@ pub struct HotKeySlot {
     pub camera: Option<HotKeyCamera>,
 }
 
+/// `TurnControl`'s five eight-player telemetry arrays written by `TurnDataCommand`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TurnDataState {
+    pub flags: u8,
+    pub last_wait_times: [u32; NUM_NETWORK_PLAYERS],
+    pub last_lag_times: [u32; NUM_NETWORK_PLAYERS],
+    pub last_average_frame_times: [u32; NUM_NETWORK_PLAYERS],
+    pub last_ping_times: [u32; NUM_NETWORK_PLAYERS],
+    pub last_forced_loads: [u32; NUM_NETWORK_PLAYERS],
+}
+
 /// State written inline by command handlers without an `action_*` receiver.
 ///
 /// `speed` is `TurnControl+0x30`. `network`, `speed_locked`, and `immediate_process`
@@ -1170,6 +1187,10 @@ pub struct InlineCommandState {
     pub player_who: [u8; NUM_NETWORK_PLAYERS],
     /// Eight recipient status words for each `who` in the global chat matrix.
     pub chat_status: [[u32; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
+    pub local_play: i32,
+    pub reveal_map: bool,
+    pub accum_cheated: [u8; NUM_NETWORK_PLAYERS],
+    pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
     pub hotkeys: Vec<HotKeySlot>,
@@ -1193,6 +1214,10 @@ impl Default for InlineCommandState {
             checksum_recheck: 0,
             player_who: std::array::from_fn(|play| play as u8),
             chat_status: [[0; NUM_NETWORK_PLAYERS]; NUM_NETWORK_PLAYERS],
+            local_play: 0,
+            reveal_map: false,
+            accum_cheated: [0; NUM_NETWORK_PLAYERS],
+            turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
             hotkeys: (0..HOTKEY_GROUP_SLOTS)
@@ -1404,6 +1429,11 @@ impl Bridge {
                     }
                 }
             }
+            59 => {
+                if let Some(who) = i32_at(cmd, 1) {
+                    self.process_cheat_view_all(who);
+                }
+            }
             // The three AI controls write a diagnostic log before this branch. Their only
             // simulation mutation is gated off in network play.
             62 => {
@@ -1443,6 +1473,7 @@ impl Bridge {
             // CameraCommand logs the remote viewpoint and may update only the local
             // Console/Scene zoom and scroll. It has no headless simulation mutation.
             72 => {}
+            74 => self.process_turn_data(pkg, cmd),
             76 => {
                 if let Some(&state) = cmd.get(1) {
                     self.process_pause(pkg.play, state);
@@ -1466,6 +1497,57 @@ impl Bridge {
             81 => {}
             _ => unreachable!("inline command table and dispatcher disagree"),
         }
+    }
+
+    /// `Game::action_cheat_view_all` `0x00592CD0`, excluding UI invalidation and the
+    /// network cheat-warning callback. The warning's accumulated telemetry byte remains.
+    fn process_cheat_view_all(&mut self, who: i32) {
+        if self.inline.reveal_map {
+            self.inline.reveal_map = false;
+            if self.inline.restart_delay == 0 {
+                self.inline.restart_delay = 2;
+            }
+        } else {
+            self.inline.reveal_map = true;
+            self.inline.restart_delay = 0;
+        }
+        let Ok(who) = usize::try_from(who) else {
+            return;
+        };
+        if let Some(accum) = self.inline.accum_cheated.get_mut(who) {
+            *accum = accum.wrapping_add(1);
+        }
+    }
+
+    /// `CommandPackage::process_turn_data` `0x00943D20`.
+    fn process_turn_data(&mut self, pkg: &Package, cmd: &[u8]) {
+        let (Some(ping), Some(average), Some(wait), Some(lag), Some(forced)) = (
+            u16_at(cmd, 1),
+            u16_at(cmd, 3),
+            u16_at(cmd, 5),
+            u16_at(cmd, 7),
+            u16_at(cmd, 9),
+        ) else {
+            return;
+        };
+        let Ok(play) = usize::try_from(pkg.play) else {
+            return;
+        };
+        if play >= NUM_NETWORK_PLAYERS {
+            return;
+        }
+
+        if ping & 0x80 != 0 && pkg.play != self.inline.local_play && !self.inline.reveal_map {
+            let who = self.inline.player_who[play] as i32;
+            self.process_cheat_view_all(who);
+        }
+
+        self.inline.turn_data.flags |= 1 << play;
+        self.inline.turn_data.last_forced_loads[play] = forced as u32;
+        self.inline.turn_data.last_average_frame_times[play] = average as u32;
+        self.inline.turn_data.last_ping_times[play] = ping as u32;
+        self.inline.turn_data.last_wait_times[play] = wait as u32;
+        self.inline.turn_data.last_lag_times[play] = lag as u32;
     }
 
     /// `CommandPackage::process_hotkey` `0x009474D0`.

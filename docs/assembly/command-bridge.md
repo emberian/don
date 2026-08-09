@@ -30,10 +30,10 @@ Concretely, what executes now:
   nothing downstream could act before.
 * **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
   complete state actions, one complete `begin`, and three capability-gated state paths.
-* **Sixteen inline state handlers** — control-group save/camera, MP-log toggle, speed
+* **Eighteen inline state handlers** — control-group save/camera, MP-log toggle, speed
   set/up/down, all eight player-speed accumulators, two lockstep report stores, chat-route
-  status, three AI controls, and three measured simulation no-ops are complete; pause's
-  common state path is wired but remains partial.
+  status, reveal-map/turn telemetry, three AI controls, and three measured simulation
+  no-ops are complete; pause's common state path is wired but remains partial.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -50,10 +50,10 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,461 |
-| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 16 `InlineDef` + 82 `OpDef` | 166 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, inline state, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,543 |
+| `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 18 `InlineDef` + 82 `OpDef` | 168 |
 | `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 105 |
-| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–58/62–64/69/72/76/79/81, 5 tests | 286 |
+| `crates/don-sim/tests/command_speed_state.rs` | byte/state mutation pins for opcodes 34/52–59/62–64/69/72/74/76/79/81, 6 tests | 347 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
 | `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
@@ -61,9 +61,9 @@ Concretely, what executes now:
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched.
 
-50 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+51 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
 `cargo test -p don-sim --test command_simple_state` 1/1,
-`cargo test -p don-sim --test command_speed_state` 5/5,
+`cargo test -p don-sim --test command_speed_state` 6/6,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
 `cargo test -p don-env --test command_bridge_agreement` 9/9.
 
@@ -247,6 +247,26 @@ and ping delivery, so the routing matrix is retained rather than dismissed as UI
 Opcode 72 is closure-green as a measured simulation no-op: every non-log branch targets
 local camera presentation, and the full ten-byte body is still consumed before the next
 command.
+
+### Reveal-map and turn telemetry tranche (2026-08-09)
+
+| opcode | handler | recovered target | status |
+|---:|---|---|---|
+| 59 | `process_cheat_view_all` `0x009449B0` | toggle reveal bit, restart delay, and addressed player's accumulated-cheat byte | `complete` |
+| 74 | `process_turn_data` `0x00943D20` | five `u16` telemetry arrays + sender flag; conditional remote reveal | `complete` |
+
+`Game::action_cheat_view_all` `0x00592CD0` toggles semaphore bit `0x02`: clearing it
+changes a zero restart delay to two, while setting it zeroes the delay. Its
+`action_cheat_warning` tail increments `Player::accum_cheated` with byte wrapping; UI
+invalidation and external telemetry remain outside the headless core.
+
+TURN_DATA decodes unsigned `ping_time/frame_average/wait_time/game_lag/forced_loads` at
+`+1/+3/+5/+7/+9`, writes the five exact `TurnControl` arrays for `package.play`, and ORs
+that sender into the byte flag at `TurnControl+0x168`. `ping_time & 0x80` reveals only
+for a non-local sender while reveal-map is clear, using the sender's `Player::who` map.
+The newly implemented `ATTACK_TO`/`GROUP_ATTACK` executors were also re-audited here, but
+their command receivers still cross formation, caster, and target-split tails; those rows
+remain honestly `orders_partial`.
 
 ## Five things worth keeping
 

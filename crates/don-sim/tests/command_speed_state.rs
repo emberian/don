@@ -284,3 +284,64 @@ fn checksum_chat_status_and_camera_paths_preserve_exact_state_boundaries() {
     assert_eq!(bridge.stats.inline_state, 5);
     assert_eq!(bridge.stats.inert, 0);
 }
+
+fn turn_data(ping: u16, average: u16, wait: u16, lag: u16, forced: u16) -> Vec<u8> {
+    let mut bytes = vec![74];
+    for value in [ping, average, wait, lag, forced] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn reveal_map_and_turn_data_decode_exact_unsigned_fields_and_remote_gate() {
+    for op in [59, 74] {
+        assert_eq!(InlineDef::find(op).unwrap().port, InlinePort::Complete);
+    }
+
+    let mut bridge = Bridge::new();
+    bridge.inline.local_play = 1;
+    bridge.inline.player_who[3] = 6;
+    let mut package = Package::new(3, 0);
+
+    issue(
+        &mut bridge,
+        &mut package,
+        &turn_data(0x80f2, 0x1234, 0xabcd, 0x8001, 0xffff),
+    );
+    assert!(bridge.inline.reveal_map, "remote ping bit 0x80 reveals");
+    assert_eq!(bridge.inline.restart_delay, 0);
+    assert_eq!(bridge.inline.accum_cheated[6], 1);
+    assert_eq!(bridge.inline.turn_data.flags, 1 << 3);
+    assert_eq!(bridge.inline.turn_data.last_ping_times[3], 0x80f2);
+    assert_eq!(bridge.inline.turn_data.last_average_frame_times[3], 0x1234);
+    assert_eq!(bridge.inline.turn_data.last_wait_times[3], 0xabcd);
+    assert_eq!(bridge.inline.turn_data.last_lag_times[3], 0x8001);
+    assert_eq!(bridge.inline.turn_data.last_forced_loads[3], 0xffff);
+
+    issue(&mut bridge, &mut package, &turn_data(0x0080, 2, 3, 4, 5));
+    assert!(
+        bridge.inline.reveal_map,
+        "already revealed does not retoggle"
+    );
+    assert_eq!(bridge.inline.accum_cheated[6], 1);
+
+    issue(&mut bridge, &mut package, &fixed_i32(59, 6));
+    assert!(!bridge.inline.reveal_map);
+    assert_eq!(bridge.inline.restart_delay, 2);
+    assert_eq!(bridge.inline.accum_cheated[6], 2);
+    issue(&mut bridge, &mut package, &fixed_i32(59, 6));
+    assert!(bridge.inline.reveal_map);
+    assert_eq!(bridge.inline.restart_delay, 0);
+    assert_eq!(bridge.inline.accum_cheated[6], 3);
+
+    package.play = 1;
+    bridge.inline.reveal_map = false;
+    issue(&mut bridge, &mut package, &turn_data(0x0080, 0, 0, 0, 0));
+    assert!(
+        !bridge.inline.reveal_map,
+        "local sender cannot trigger reveal"
+    );
+    assert_eq!(bridge.stats.inline_state, 5);
+    assert_eq!(bridge.stats.inert, 0);
+}
