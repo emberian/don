@@ -163,6 +163,12 @@ pub enum Plan {
         random: u32,
         distribution: &'static str,
     },
+    /// `World::add_starting_location`, with preallocated World arrays so the
+    /// isolated writer never enters the engine allocator.
+    AddStartingLocation {
+        random: u32,
+        distribution: &'static str,
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -533,6 +539,33 @@ pub static REGISTRY: &[Case] = &[
         },
     },
     Case {
+        id: "add_starting_location",
+        va: 0x006B_2DE0,
+        abi: "int __thiscall World::add_starting_location(WCoord const& x, \
+              WCoord const& y), ret 8; ECX is unread",
+        model: "don_sim::systems::map_terrain::World::add_starting_location",
+        subsystem: "world generation / starting-position writer",
+        ledger: "docs/mechanics/map-terrain.md §7.1 — executable start-placement writer",
+        derivation: "docs/mechanics/map-terrain.md §7.1; PDB \
+                     World::add_starting_location; retail 0x006b2de0..0x006b3019",
+        reachability: "Map generators call the common World writer after selecting a start. \
+                       The fixture installs World+0x80/+0x9c/+0xb8/+0xd4 arrays with \
+                       measured metadata and spare capacity, keeping all allocator calls \
+                       untaken while executing every append and occupancy-bit write",
+        caveat: "This proves the returned start index, four array append sequences, and \
+                 all four row-major LSB-first occupancy writes. The fixture deliberately \
+                 preallocates capacity, so array-growth policy is established separately \
+                 from SimpleArray::increase_size disassembly and sim tests. It does not \
+                 choose coordinates or approximate Map::make.",
+        plan: Plan::AddStartingLocation {
+            random: 100_000,
+            distribution: "byte/row-boundary coordinate sequences plus xorshift64 worlds \
+                           2..128 cells per axis, 1..8 valid appended starts per fixture; \
+                           return index, walked array metadata/elements, and full bit plane \
+                           compared after every append",
+        },
+    },
+    Case {
         id: "accessor_movsx_word_0xa",
         va: 0x0047_2400,
         abi: "__thiscall, no stack args (movsx eax, word ptr [ecx+0xA])",
@@ -705,13 +738,32 @@ pub static REGISTRY: &[Case] = &[
         plan: Plan::Fastcall2 {
             model: models::vector_dist,
             edges: &[
-                (0, 0), (0, 1), (1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1),
-                (59999, 59999), (60000, 59999), (59999, 60000), (60000, 60000),
-                (0xEA5F, 0xEA5F), (0xEA60, 1), (1, 0xEA60),
-                (i32::MAX, i32::MAX), (i32::MAX, 0), (0, i32::MAX),
-                (i32::MIN, 0), (0, i32::MIN), (i32::MIN, i32::MIN),
-                (i32::MIN, i32::MAX), (i32::MAX, i32::MIN),
-                (i32::MIN, 1), (1, i32::MIN), (-60000, -60000), (192, 0),
+                (0, 0),
+                (0, 1),
+                (1, 0),
+                (1, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+                (59999, 59999),
+                (60000, 59999),
+                (59999, 60000),
+                (60000, 60000),
+                (0xEA5F, 0xEA5F),
+                (0xEA60, 1),
+                (1, 0xEA60),
+                (i32::MAX, i32::MAX),
+                (i32::MAX, 0),
+                (0, i32::MAX),
+                (i32::MIN, 0),
+                (0, i32::MIN),
+                (i32::MIN, i32::MIN),
+                (i32::MIN, i32::MAX),
+                (i32::MAX, i32::MIN),
+                (i32::MIN, 1),
+                (1, i32::MIN),
+                (-60000, -60000),
+                (192, 0),
             ],
             dists: &[
                 Phase2 {
@@ -720,12 +772,19 @@ pub static REGISTRY: &[Case] = &[
                                   wrapping abs",
                 },
                 Phase2 {
-                    dist: Dist2::Centered { half: 65_536, count: 1_000_000 },
+                    dist: Dist2::Centered {
+                        half: 65_536,
+                        count: 1_000_000,
+                    },
                     description: "realistic map deltas: RoN world coords step 192 per A* cell \
                                   and a big map is a few hundred cells across, so |d| ≲ 40k",
                 },
                 Phase2 {
-                    dist: Dist2::Straddle { center: 60_000, span: 31, count: 1_000_000 },
+                    dist: Dist2::Straddle {
+                        center: 60_000,
+                        span: 31,
+                        count: 1_000_000,
+                    },
                     description: "straddling the 0xEA60 guard exactly, both signs",
                 },
             ],
@@ -782,11 +841,37 @@ pub static REGISTRY: &[Case] = &[
         plan: Plan::AsScaled {
             scales: &[192, 256, 100],
             edges: &[
-                "", " ", "/", "0/0", "1/0", "0/16", "/16", "5/", "-3/4", "3/-4",
-                "  7  /  2 ", "1/16 tile", "1/192 tile", "6/5 base rate", "2/3", "2/1",
-                "12/10", "80/100", "+5/+2", "2147483647/1", "1/2147483647",
-                "-2147483648/1", "abc", "abc/2", "1/2/3", "10 resources", "450 frames",
-                "50%", "0", "-1", "99999999/7",
+                "",
+                " ",
+                "/",
+                "0/0",
+                "1/0",
+                "0/16",
+                "/16",
+                "5/",
+                "-3/4",
+                "3/-4",
+                "  7  /  2 ",
+                "1/16 tile",
+                "1/192 tile",
+                "6/5 base rate",
+                "2/3",
+                "2/1",
+                "12/10",
+                "80/100",
+                "+5/+2",
+                "2147483647/1",
+                "1/2147483647",
+                "-2147483648/1",
+                "abc",
+                "abc/2",
+                "1/2/3",
+                "10 resources",
+                "450 frames",
+                "50%",
+                "0",
+                "-1",
+                "99999999/7",
             ],
             corpus_file: "data/rules.xml",
             generated: 200_000,

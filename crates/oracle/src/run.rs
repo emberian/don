@@ -148,7 +148,24 @@ unsafe fn call_map_make(f: *const u8, this: *mut u8, map_arg: i32, seed: i32, mo
 }
 
 /// `WorldData::start_city_wcoord`: two pointer arguments, callee cleans (`ret 8`).
-unsafe fn call_start_city_wcoord(
+unsafe fn call_start_city_wcoord(f: *const u8, this: *mut u8, x: *const i32, y: *const i32) -> i32 {
+    let r: i32;
+    std::arch::asm!(
+        "push {y:e}",
+        "push {x:e}",
+        "call {f}",
+        y = in(reg) y,
+        x = in(reg) x,
+        f = in(reg) f,
+        in("ecx") this,
+        lateout("eax") r,
+        clobber_abi("C"),
+    );
+    r
+}
+
+/// `World::add_starting_location`: two pointer arguments, callee cleans (`ret 8`).
+unsafe fn call_add_starting_location(
     f: *const u8,
     this: *mut u8,
     x: *const i32,
@@ -445,7 +462,11 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                     a.first_detail(format!("edge x={x:#010x} model={want} retail={got}"));
                 }
             }
-            a.phase("edges", edges.len() as u64, "instruction-sequence boundaries and neighbours");
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "instruction-sequence boundaries and neighbours",
+            );
             let n = ctx.scaled(*sweep_count);
             let mut x = *sweep_start;
             for _ in 0..n {
@@ -498,7 +519,9 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 return a;
             }
             let Some(table) = ctx.at(*table_va) else {
-                a.skip = Some(format!("table VA {table_va:#010x} outside the mapped image"));
+                a.skip = Some(format!(
+                    "table VA {table_va:#010x} outside the mapped image"
+                ));
                 return a;
             };
             let table_rva = (*table_va - ctx.pe.image_base) as i64;
@@ -572,7 +595,9 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             //    assumption this suite exists to catch, so make the span writable and
             //    then read one byte back through the mapping before believing it.
             let Some(dst) = ctx.at(*table_va) else {
-                a.skip = Some(format!("table VA {table_va:#010x} outside the mapped image"));
+                a.skip = Some(format!(
+                    "table VA {table_va:#010x} outside the mapped image"
+                ));
                 return a;
             };
             let end_rva = (*table_va - ctx.pe.image_base) as usize + raw.len();
@@ -681,7 +706,11 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 let want = s.model_turn_speed();
                 let got = unsafe { call_thiscall1(f, guy, s.arg) as u32 };
                 a.trials += 1;
-                counts[if (s.guy_num as i32) < s.squad_size { 0 } else { 1 }] += 1;
+                counts[if (s.guy_num as i32) < s.squad_size {
+                    0
+                } else {
+                    1
+                }] += 1;
                 counts[if s.arg == 0 { 2 } else { 3 }] += 1;
                 if s.track_dx != 0 || s.track_dy != 0 {
                     counts[4] += 1;
@@ -721,12 +750,7 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             let mut de = 0u64;
             let before = a.trials;
             for _ in 0..generated {
-                let s = turn_test::Scenario::draw([
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                ]);
+                let s = turn_test::Scenario::draw([rng.next(), rng.next(), rng.next(), rng.next()]);
                 if s.turn_speed_would_de() {
                     de += 1;
                     continue;
@@ -740,8 +764,14 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 format!(
                     "squad={} crew={} damped={} raw={} tracking={} fast_face={} scale2={} \
                      signed_or_wrapping_rules={}",
-                    counts[0], counts[1], counts[2], counts[3], counts[4], counts[5],
-                    counts[6], counts[7]
+                    counts[0],
+                    counts[1],
+                    counts[2],
+                    counts[3],
+                    counts[4],
+                    counts[5],
+                    counts[6],
+                    counts[7]
                 ),
             ));
             unsafe { libc::munmap(arena as *mut c_void, turn_test::ARENA_BYTES) };
@@ -773,14 +803,7 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 let (want_angle, want_rem) = s.model_turn_angles();
                 let mut got_angle = 0xDEAD_BEEFu32;
                 let got_rem = unsafe {
-                    call_turn_angles(
-                        f,
-                        guy,
-                        s.desired,
-                        &mut got_angle,
-                        1,
-                        s.half as i32,
-                    )
+                    call_turn_angles(f, guy, s.desired, &mut got_angle, 1, s.half as i32)
                 };
                 a.trials += 1;
                 let diff = s.desired.wrapping_sub(s.angle);
@@ -821,12 +844,7 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             let generated = ctx.scaled(*random);
             let mut rng = Xs(ctx.seed ^ 0xA5A5_5A5A_C3C3_3C3C);
             for _ in 0..generated {
-                let s = turn_test::Scenario::draw([
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                ]);
+                let s = turn_test::Scenario::draw([rng.next(), rng.next(), rng.next(), rng.next()]);
                 check(s, "random", &mut a);
             }
             a.phase("random", generated as u64, distribution);
@@ -918,12 +936,7 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             let generated = ctx.scaled(*random);
             let mut rng = Xs(ctx.seed ^ 0xD1B5_4A32_D192_ED03);
             for _ in 0..generated {
-                let s = turn_test::Scenario::draw([
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                    rng.next(),
-                ]);
+                let s = turn_test::Scenario::draw([rng.next(), rng.next(), rng.next(), rng.next()]);
                 check(s, "random", &mut a);
             }
             a.phase("random", generated as u64, distribution);
@@ -999,7 +1012,8 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 return a;
             };
             let Some(random_slot) = ctx.at(VA_RANDOM_PTR) else {
-                a.skip = Some("GameAccess::game_random pointer VA is outside the mapped image".into());
+                a.skip =
+                    Some("GameAccess::game_random pointer VA is outside the mapped image".into());
                 unsafe { libc::munmap(arena as *mut c_void, PAGE) };
                 return a;
             };
@@ -1076,7 +1090,10 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             a.phase("random", n as u64, distribution);
             a.extras.push((
                 "branch_counts".into(),
-                format!("negative_preserve={} nonnegative_seed={}", counts[0], counts[1]),
+                format!(
+                    "negative_preserve={} nonnegative_seed={}",
+                    counts[0], counts[1]
+                ),
             ));
             a.extras.push((
                 "isolation_boundary".into(),
@@ -1123,50 +1140,46 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 std::ptr::write_bytes(bits, 0, BIT_BYTES);
             }
             let f = f as *const u8;
-            let mut model_world =
-                don_sim::systems::map_terrain::World::init_default_rules(0, 0);
+            let mut model_world = don_sim::systems::map_terrain::World::init_default_rules(0, 0);
             model_world.start_city_locs.resize(BIT_BYTES, 0);
             let mut byte_boundary = 0u64;
             let mut row_boundary = 0u64;
-            let mut check = |width: i32,
-                             height: i32,
-                             x: i32,
-                             y: i32,
-                             byte: u8,
-                             label: &str,
-                             a: &mut Acc| {
-                debug_assert!(width > 0 && height > 0 && x >= 0 && x < width && y >= 0 && y < height);
-                let index = y * width + x;
-                let byte_index = (index >> 3) as usize;
-                debug_assert!(byte_index < BIT_BYTES);
-                unsafe {
-                    std::ptr::write_unaligned(worldc as *mut i32, width);
-                    std::ptr::write_unaligned(x_ptr, x);
-                    std::ptr::write_unaligned(y_ptr, y);
-                    std::ptr::write_volatile(bits.add(byte_index), byte);
-                }
-                model_world.xs = width;
-                model_world.start_city_locs[byte_index] = byte;
-                let want = model_world.start_city_wcoord(
-                    don_sim::systems::map_terrain::WCoord(x),
-                    don_sim::systems::map_terrain::WCoord(y),
-                ) as i32;
-                let got = unsafe { call_start_city_wcoord(f, world, x_ptr, y_ptr) };
-                a.trials += 1;
-                if index & 7 == 0 || index & 7 == 7 {
-                    byte_boundary += 1;
-                }
-                if x == 0 || x == width - 1 {
-                    row_boundary += 1;
-                }
-                if got != want {
-                    a.mismatches += 1;
-                    a.first_detail(format!(
-                        "{label} width={width} height={height} x={x} y={y} index={index} \
+            let mut check =
+                |width: i32, height: i32, x: i32, y: i32, byte: u8, label: &str, a: &mut Acc| {
+                    debug_assert!(
+                        width > 0 && height > 0 && x >= 0 && x < width && y >= 0 && y < height
+                    );
+                    let index = y * width + x;
+                    let byte_index = (index >> 3) as usize;
+                    debug_assert!(byte_index < BIT_BYTES);
+                    unsafe {
+                        std::ptr::write_unaligned(worldc as *mut i32, width);
+                        std::ptr::write_unaligned(x_ptr, x);
+                        std::ptr::write_unaligned(y_ptr, y);
+                        std::ptr::write_volatile(bits.add(byte_index), byte);
+                    }
+                    model_world.xs = width;
+                    model_world.start_city_locs[byte_index] = byte;
+                    let want = model_world.start_city_wcoord(
+                        don_sim::systems::map_terrain::WCoord(x),
+                        don_sim::systems::map_terrain::WCoord(y),
+                    ) as i32;
+                    let got = unsafe { call_start_city_wcoord(f, world, x_ptr, y_ptr) };
+                    a.trials += 1;
+                    if index & 7 == 0 || index & 7 == 7 {
+                        byte_boundary += 1;
+                    }
+                    if x == 0 || x == width - 1 {
+                        row_boundary += 1;
+                    }
+                    if got != want {
+                        a.mismatches += 1;
+                        a.first_detail(format!(
+                            "{label} width={width} height={height} x={x} y={y} index={index} \
                          byte={byte:#04x} model={want} retail={got}"
-                    ));
-                }
-            };
+                        ));
+                    }
+                };
             let edges = [
                 (1, 1, 0, 0, 0x00),
                 (1, 1, 0, 0, 0x01),
@@ -1203,6 +1216,212 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             a.extras.push((
                 "boundary_counts".into(),
                 format!("byte_edge={byte_boundary} row_edge={row_boundary}"),
+            ));
+            unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+        }
+
+        Plan::AddStartingLocation {
+            random,
+            distribution,
+        } => {
+            const ARENA_BYTES: usize = PAGE * 4;
+            const O_WORLD: usize = 0x200;
+            const O_BITS: usize = 0x2000;
+            const BIT_BYTES: usize = 2048;
+            const O_X: usize = 0x3000;
+            const O_Y: usize = 0x3010;
+            const ARRAY_OFFSETS: [usize; 4] = [0x80, 0x9c, 0xb8, 0xd4];
+            const LIST_OFFSETS: [usize; 4] = [0x1000, 0x1200, 0x1400, 0x1600];
+            const ARRAY_CAPACITY: i32 = 64;
+            const VA_WORLD_PTR: u32 = 0x00C0_6188;
+            let Some(arena) = scratch_page(ARENA_BYTES) else {
+                a.skip = Some("starting-location fixture scratch mmap failed".into());
+                return a;
+            };
+            let world = unsafe { arena.add(O_WORLD) };
+            let bits = unsafe { arena.add(O_BITS) };
+            let x_ptr = unsafe { arena.add(O_X) as *mut i32 };
+            let y_ptr = unsafe { arena.add(O_Y) as *mut i32 };
+            let Some(world_slot) = ctx.at(VA_WORLD_PTR) else {
+                a.skip = Some("World access pointer VA is outside the mapped image".into());
+                unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
+                return a;
+            };
+            unsafe {
+                std::ptr::write_unaligned(world_slot as *mut u32, world as usize as u32);
+                std::ptr::write_unaligned(world.add(0xf8) as *mut u32, bits as usize as u32);
+            }
+            let f = f as *const u8;
+            let mut model = don_sim::systems::map_terrain::World::init_default_rules(2, 2);
+            let mut check =
+                |width: i32, height: i32, coords: &[(i32, i32)], label: &str, a: &mut Acc| {
+                    debug_assert!(
+                        (2..=128).contains(&width)
+                            && (2..=128).contains(&height)
+                            && coords.len() <= 8
+                            && coords
+                                .iter()
+                                .all(|&(x, y)| x > 0 && x < width && y > 0 && y < height)
+                    );
+                    let bit_bytes = ((width * height + 7) / 8) as usize;
+                    unsafe {
+                        std::ptr::write_bytes(bits, 0, BIT_BYTES);
+                        std::ptr::write_unaligned(world as *mut i32, width);
+                        for (&array_offset, &list_offset) in
+                            ARRAY_OFFSETS.iter().zip(LIST_OFFSETS.iter())
+                        {
+                            let array = world.add(array_offset);
+                            std::ptr::write_unaligned(array.add(4) as *mut i32, 0);
+                            std::ptr::write_unaligned(array.add(8) as *mut i32, ARRAY_CAPACITY);
+                            std::ptr::write_unaligned(array.add(0x0c) as *mut i16, -1);
+                            std::ptr::write_unaligned(
+                                array.add(0x10) as *mut u32,
+                                arena.add(list_offset) as usize as u32,
+                            );
+                            std::ptr::write_unaligned(array.add(0x14), 0u8);
+                            std::ptr::write_bytes(arena.add(list_offset), 0, 0x100);
+                        }
+                    }
+                    model.xs = width;
+                    model.start_x.items.clear();
+                    model.start_y.items.clear();
+                    model.start_city_x.items.clear();
+                    model.start_city_y.items.clear();
+                    for array in [
+                        &mut model.start_x,
+                        &mut model.start_y,
+                        &mut model.start_city_x,
+                        &mut model.start_city_y,
+                    ] {
+                        array.capacity = ARRAY_CAPACITY;
+                        array.increment = -1;
+                        array.flags = 0;
+                    }
+                    model.start_city_locs.resize(bit_bytes, 0);
+                    model.start_city_locs.fill(0);
+
+                    for &(x, y) in coords {
+                        unsafe {
+                            std::ptr::write_unaligned(x_ptr, x);
+                            std::ptr::write_unaligned(y_ptr, y);
+                        }
+                        let want_return = model.add_starting_location(
+                            don_sim::systems::map_terrain::WCoord(x),
+                            don_sim::systems::map_terrain::WCoord(y),
+                        );
+                        let got_return =
+                            unsafe { call_add_starting_location(f, world, x_ptr, y_ptr) };
+                        a.trials += 1;
+
+                        let expected = [
+                            &model.start_x,
+                            &model.start_y,
+                            &model.start_city_x,
+                            &model.start_city_y,
+                        ];
+                        let mut mismatch = got_return != want_return;
+                        let mut detail = format!(
+                            "{label} width={width} height={height} append=({x},{y}) \
+                         model_return={want_return} retail_return={got_return}"
+                        );
+                        for (array_index, ((&array_offset, &list_offset), want)) in ARRAY_OFFSETS
+                            .iter()
+                            .zip(LIST_OFFSETS.iter())
+                            .zip(expected)
+                            .enumerate()
+                        {
+                            let array = unsafe { world.add(array_offset) };
+                            let got_len =
+                                unsafe { std::ptr::read_unaligned(array.add(4) as *const i32) };
+                            let got_capacity =
+                                unsafe { std::ptr::read_unaligned(array.add(8) as *const i32) };
+                            let got_increment =
+                                unsafe { std::ptr::read_unaligned(array.add(0x0c) as *const i16) };
+                            let got_flags = unsafe { std::ptr::read_unaligned(array.add(0x14)) };
+                            let got_items = if got_len >= 0 && got_len <= ARRAY_CAPACITY {
+                                unsafe {
+                                    std::slice::from_raw_parts(
+                                        arena.add(list_offset) as *const i32,
+                                        got_len as usize,
+                                    )
+                                }
+                            } else {
+                                &[]
+                            };
+                            if got_len != want.items.len() as i32
+                                || got_capacity != want.capacity
+                                || got_increment != want.increment
+                                || got_flags != want.flags
+                                || got_items != want.items.as_slice()
+                            {
+                                mismatch = true;
+                                detail.push_str(&format!(
+                                    " array{array_index}=len {got_len}/{} cap {got_capacity}/{} \
+                                 inc {got_increment}/{} flags {got_flags:#x}/{:#x} \
+                                 items {got_items:?}/{:?}",
+                                    want.items.len(),
+                                    want.capacity,
+                                    want.increment,
+                                    want.flags,
+                                    want.items
+                                ));
+                            }
+                        }
+                        let got_bits = unsafe { std::slice::from_raw_parts(bits, bit_bytes) };
+                        if got_bits != model.start_city_locs.as_slice() {
+                            mismatch = true;
+                            detail.push_str(" occupancy bit plane differs");
+                        }
+                        if mismatch {
+                            a.mismatches += 1;
+                            a.first_detail(detail);
+                        }
+                    }
+                };
+
+            let edges: &[&[(i32, i32)]] = &[
+                &[(1, 1)],
+                &[(7, 1), (1, 2)],
+                &[(8, 1), (1, 2)],
+                &[
+                    (2, 2),
+                    (3, 3),
+                    (4, 4),
+                    (5, 5),
+                    (6, 6),
+                    (7, 7),
+                    (8, 8),
+                    (9, 9),
+                ],
+            ];
+            for coords in edges {
+                check(16, 16, coords, "edge", &mut a);
+            }
+            a.phase(
+                "edges",
+                edges.iter().map(|v| v.len() as u64).sum(),
+                "LSB/MSB, byte/row crossings, and append return indices 0..7",
+            );
+
+            let n = ctx.scaled(*random);
+            let mut rng = Xs(ctx.seed ^ 0x4144_4453_5441_5254);
+            let random_before = a.trials;
+            for _ in 0..n {
+                let width = 2 + (rng.next() as i32 & 0x7e);
+                let height = 2 + ((rng.next() >> 8) as i32 & 0x7e);
+                let count = ((rng.next() & 7) + 1) as usize;
+                let mut coords = [(1, 1); 8];
+                for coord in &mut coords[..count] {
+                    coord.0 = 1 + (rng.next() as u32 % (width - 1) as u32) as i32;
+                    coord.1 = 1 + (rng.next() as u32 % (height - 1) as u32) as i32;
+                }
+                check(width, height, &coords[..count], "random", &mut a);
+            }
+            a.phase("random", a.trials - random_before, distribution);
+            a.extras.push((
+                "fixture_boundary".into(),
+                "all four arrays preallocated to 64 WCoord entries; allocator branch untaken"
+                    .into(),
             ));
             unsafe { libc::munmap(arena as *mut c_void, ARENA_BYTES) };
         }
@@ -1346,8 +1565,10 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 }
             }
             a.mismatches += bad_state + bad_float;
-            a.extras.push(("state_mismatches".into(), bad_state.to_string()));
-            a.extras.push(("float_mismatches".into(), bad_float.to_string()));
+            a.extras
+                .push(("state_mismatches".into(), bad_state.to_string()));
+            a.extras
+                .push(("float_mismatches".into(), bad_float.to_string()));
             a.phase(
                 "chained-walk",
                 a.trials,
@@ -1403,7 +1624,11 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             for &(s0, lo, hi) in edges.iter() {
                 check(s0, lo, hi, &mut a, "edge");
             }
-            a.phase("edges", edges.len() as u64, "empty/inverted ranges, negatives, the 16-bit boundary");
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "empty/inverted ranges, negatives, the 16-bit boundary",
+            );
             let n = ctx.scaled(*random);
             let mut rng = Xs(ctx.seed);
             for _ in 0..n {
@@ -1446,7 +1671,11 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                     a.first_detail(format!("edge a={a_} b={b_} model={want} retail={got}"));
                 }
             }
-            a.phase("edges", edges.len() as u64, "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination");
+            a.phase(
+                "edges",
+                edges.len() as u64,
+                "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination",
+            );
             let mut rng = Xs(ctx.seed);
             for p in dists.iter() {
                 let n = match p.dist {
@@ -1564,7 +1793,11 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                     "null-buffer call returned {nullret}, disassembly predicts 1"
                 ));
             }
-            a.phase("edges", 1, "buf == NULL, which the disassembly says returns 1");
+            a.phase(
+                "edges",
+                1,
+                "buf == NULL, which the disassembly says returns 1",
+            );
             unsafe { libc::munmap(buf as *mut c_void, *bufcap) };
         }
 
@@ -1592,7 +1825,10 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
                 let w = ctx.at(models::tokenizer::IAT_WTOI).unwrap() as *mut u32;
                 let c = ctx.at(models::tokenizer::IAT_WCSCHR).unwrap() as *mut u32;
                 std::ptr::write_unaligned(w, models::tokenizer::wtoi as *const () as usize as u32);
-                std::ptr::write_unaligned(c, models::tokenizer::wcschr as *const () as usize as u32);
+                std::ptr::write_unaligned(
+                    c,
+                    models::tokenizer::wcschr as *const () as usize as u32,
+                );
             }
             let Some(obj) = scratch_page(PAGE) else {
                 a.skip = Some("scratch mmap failed".into());
@@ -1687,7 +1923,16 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             a.phase("edges", n, "hand-chosen tokenizer edges x every scale");
 
             let count = ctx.scaled(*generated);
-            let tails = ["", " tile", " tiles (comment)", " frames", "%", " resources", " x", "/"];
+            let tails = [
+                "",
+                " tile",
+                " tiles (comment)",
+                " frames",
+                "%",
+                " resources",
+                " x",
+                "/",
+            ];
             let mut rng = Xs(ctx.seed);
             for _ in 0..count {
                 let r = rng.next();
@@ -1776,9 +2021,8 @@ fn run_isolated(ctx: &Ctx, c: &Case) -> CaseResult {
         let b = out.as_bytes();
         let mut off = 0usize;
         while off < b.len() {
-            let n = unsafe {
-                libc::write(fds[1], b[off..].as_ptr() as *const c_void, b.len() - off)
-            };
+            let n =
+                unsafe { libc::write(fds[1], b[off..].as_ptr() as *const c_void, b.len() - off) };
             if n <= 0 {
                 break;
             }
@@ -1835,7 +2079,9 @@ fn run_isolated(ctx: &Ctx, c: &Case) -> CaseResult {
     };
     let mut saw_status = false;
     for line in text.lines() {
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         match k {
             "status" => {
                 saw_status = true;
@@ -1945,7 +2191,10 @@ pub fn run_all(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    println!("oracle regression suite — {} registered cases", REGISTRY.len());
+    println!(
+        "oracle regression suite — {} registered cases",
+        REGISTRY.len()
+    );
     let selftest = image::selftest();
     match &selftest {
         Ok(()) => println!(
@@ -1954,16 +2203,14 @@ pub fn run_all(
         Err(e) => println!("  selftest      FAILED: {e} — no case can be reported as passing"),
     }
     let sha = image::sha256_hex(image_bytes);
-    println!("  image         {image_path}  sha256 {sha}  {} bytes", image_bytes.len());
+    println!(
+        "  image         {image_path}  sha256 {sha}  {} bytes",
+        image_bytes.len()
+    );
     println!("  scale {scale}   seed {seed:#018x}");
     println!();
 
-    let ctx = Ctx {
-        m,
-        pe,
-        scale,
-        seed,
-    };
+    let ctx = Ctx { m, pe, scale, seed };
     let mut results = Vec::new();
     for c in REGISTRY.iter() {
         if let Some(f) = only {
@@ -2013,7 +2260,10 @@ fn print_case(c: &Case, r: &CaseResult) {
     );
     println!("        model  {}", c.model);
     for p in &r.phases {
-        println!("        phase  {:<16} {:>10}  {}", p.kind, p.count, p.description);
+        println!(
+            "        phase  {:<16} {:>10}  {}",
+            p.kind, p.count, p.description
+        );
     }
     for e in &r.excluded {
         println!("        excl   {:>10}  {}", e.count, e.reason);
@@ -2122,8 +2372,14 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
     s.push_str(&format!("    \"registered\": {},\n", REGISTRY.len()));
     s.push_str(&format!("    \"pass\": {},\n", rep.count(Status::Pass)));
     s.push_str(&format!("    \"fail\": {},\n", rep.count(Status::Fail)));
-    s.push_str(&format!("    \"skipped\": {},\n", rep.count(Status::Skipped)));
-    s.push_str(&format!("    \"crashed\": {},\n", rep.count(Status::Crashed)));
+    s.push_str(&format!(
+        "    \"skipped\": {},\n",
+        rep.count(Status::Skipped)
+    ));
+    s.push_str(&format!(
+        "    \"crashed\": {},\n",
+        rep.count(Status::Crashed)
+    ));
     s.push_str(&format!("    \"error\": {},\n", rep.count(Status::Error)));
     s.push_str(&format!("    \"total_trials\": {}\n", rep.total_trials()));
     s.push_str("  },\n");
@@ -2142,8 +2398,14 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
         s.push_str(&format!("      \"model\": \"{}\",\n", esc(c.model)));
         s.push_str(&format!("      \"subsystem\": \"{}\",\n", esc(c.subsystem)));
         s.push_str(&format!("      \"ledger_entry\": \"{}\",\n", esc(c.ledger)));
-        s.push_str(&format!("      \"derivation\": \"{}\",\n", esc(c.derivation)));
-        s.push_str(&format!("      \"reachability\": \"{}\",\n", esc(c.reachability)));
+        s.push_str(&format!(
+            "      \"derivation\": \"{}\",\n",
+            esc(c.derivation)
+        ));
+        s.push_str(&format!(
+            "      \"reachability\": \"{}\",\n",
+            esc(c.reachability)
+        ));
         s.push_str(&format!("      \"caveat\": \"{}\",\n", esc(c.caveat)));
         s.push_str("      \"tier\": \"B\",\n");
         s.push_str(&format!("      \"status\": \"{}\",\n", r.status.as_str()));
@@ -2162,7 +2424,11 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
                 esc(&p.description)
             ));
         }
-        s.push_str(if r.phases.is_empty() { "],\n" } else { "\n      ],\n" });
+        s.push_str(if r.phases.is_empty() {
+            "],\n"
+        } else {
+            "\n      ],\n"
+        });
         s.push_str("      \"excluded\": [");
         for (j, e) in r.excluded.iter().enumerate() {
             if j > 0 {
@@ -2174,7 +2440,11 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
                 e.count
             ));
         }
-        s.push_str(if r.excluded.is_empty() { "],\n" } else { "\n      ],\n" });
+        s.push_str(if r.excluded.is_empty() {
+            "],\n"
+        } else {
+            "\n      ],\n"
+        });
         s.push_str("      \"extras\": {");
         for (j, (k, v)) in r.extras.iter().enumerate() {
             if j > 0 {
@@ -2182,7 +2452,11 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
             }
             s.push_str(&format!("\n        \"{}\": \"{}\"", esc(k), esc(v)));
         }
-        s.push_str(if r.extras.is_empty() { "},\n" } else { "\n      },\n" });
+        s.push_str(if r.extras.is_empty() {
+            "},\n"
+        } else {
+            "\n      },\n"
+        });
         s.push_str(&format!(
             "      \"detail\": {}\n",
             if r.detail.is_empty() {
@@ -2191,7 +2465,11 @@ pub fn write_json(rep: &RunReport, path: &str) -> std::io::Result<()> {
                 format!("\"{}\"", esc(&r.detail))
             }
         ));
-        s.push_str(if i + 1 == REGISTRY.len() { "    }\n" } else { "    },\n" });
+        s.push_str(if i + 1 == REGISTRY.len() {
+            "    }\n"
+        } else {
+            "    },\n"
+        });
     }
     s.push_str("  ],\n");
 

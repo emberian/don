@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786242273,
+  "generated_unix": 1786249099,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 60829,
+  "wall_ms": 60934,
   "exit_code": 0,
   "summary": {
-    "registered": 18,
-    "pass": 18,
+    "registered": 19,
+    "pass": 19,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 17573073
+    "total_trials": 18022536
   },
   "cases": [
     {
@@ -85,7 +85,7 @@
       "status": "pass",
       "trials": 247049,
       "mismatches": 0,
-      "wall_ms": 3,
+      "wall_ms": 2,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the 493x493 defined type domain"},
         {"kind": "grid", "count": 4000, "distribution": "rows past the type domain, exercising the multiply/add with no bounds check"}
@@ -108,7 +108,7 @@
       "status": "pass",
       "trials": 243049,
       "mismatches": 0,
-      "wall_ms": 46,
+      "wall_ms": 43,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)"},
         {"kind": "grid", "count": 0, "distribution": "the guard band below the domain — GoodType ids, which have no balance row"},
@@ -137,7 +137,7 @@
       "status": "pass",
       "trials": 243578,
       "mismatches": 0,
-      "wall_ms": 511,
+      "wall_ms": 504,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected squad/crew, early-return, scaling, damping, floor and signed/wrapping boundaries"},
         {"kind": "random", "count": 243562, "distribution": "branch-biased xorshift64: squad/crew boundary; raw/damped; tracking and fast-face early returns; both rule scales; wrapping i32 rule products; avg_speed division/floor boundaries"}
@@ -164,7 +164,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 513,
+      "wall_ms": 504,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap neighbours, half-turn tie, wrap, step equality and half-step boundaries"},
         {"kind": "random", "count": 250000, "distribution": "branch-biased xorshift64: exact snap neighbours; 0x80000000 direction tie; clockwise/counter-clockwise wrap; step equality and one-past; full/half step; the turn_speed rule boundaries"}
@@ -189,7 +189,7 @@
       "status": "pass",
       "trials": 250016,
       "mismatches": 0,
-      "wall_ms": 1434,
+      "wall_ms": 1405,
       "phases": [
         {"kind": "edges", "count": 16, "distribution": "hand-selected snap, wrap, step, squad/crew, leader and do_turn state boundaries; full synchronized GuyData image compared"},
         {"kind": "random", "count": 250000, "distribution": "the turn_angles boundary distribution plus leader/nonleader and squad/crew bodies; the ABI's unread middle argument varies across zero and arbitrary nonzero dwords; full post-call GuyData image compared byte-for-byte"}
@@ -214,7 +214,7 @@
       "status": "pass",
       "trials": 100007,
       "mismatches": 0,
-      "wall_ms": 4,
+      "wall_ms": 3,
       "phases": [
         {"kind": "edges", "count": 7, "distribution": "signed seed gate boundaries plus independent prior World/RNG/map words"},
         {"kind": "random", "count": 100000, "distribution": "seven signed-gate/map-argument edges, then xorshift64: seed and initial World/RNG/map words uniform over all 32-bit patterns; exact positive/negative branch counts reported"}
@@ -230,12 +230,12 @@
       "id": "start_city_wcoord",
       "va": "0x006b30e0",
       "abi": "int __thiscall WorldData::start_city_wcoord(WCoord const& x, WCoord const& y), ret 8; ECX is unread",
-      "model": "oracle::models::worldgen::start_city_wcoord — exact gap marker; waiting for don_sim::systems::map_terrain::World::start_city_wcoord",
+      "model": "don_sim::systems::map_terrain::World::start_city_wcoord",
       "subsystem": "world generation / starting-position occupancy",
       "ledger_entry": "docs/mechanics/map-terrain.md §7.1 — executable start-placement foothold",
       "derivation": "docs/mechanics/map-terrain.md §7.1; PDB WorldData::start_city_wcoord; retail 0x006b30e0..0x006b311d",
       "reachability": "64-byte pure leaf once GameAccessConst::worldc, GameAccess::world, and World::start_city_locs are installed; no calls or allocations",
-      "caveat": "Valid-domain claim only: width 1..512, height 1..128, and x/y in bounds. Retail performs no bounds check. This proves exact row-major flattening and LSB-first bit order for the start-city occupancy plane, not how Map::place_start_in_region chooses a coordinate and not ring/radius exclusion semantics. No shipped don-sim accessor exists yet.",
+      "caveat": "Valid-domain claim only: width 1..512, height 1..128, and x/y in bounds. Retail performs no bounds check. This proves exact row-major flattening and LSB-first bit order for the start-city occupancy plane, not how Map::place_start_in_region chooses a coordinate and not ring/radius exclusion semantics.",
       "tier": "B",
       "status": "pass",
       "trials": 250011,
@@ -248,6 +248,31 @@
       "excluded": [],
       "extras": {
         "boundary_counts": "byte_edge=62360 row_edge=6562"
+      },
+      "detail": null
+    },
+    {
+      "id": "add_starting_location",
+      "va": "0x006b2de0",
+      "abi": "int __thiscall World::add_starting_location(WCoord const& x, WCoord const& y), ret 8; ECX is unread",
+      "model": "don_sim::systems::map_terrain::World::add_starting_location",
+      "subsystem": "world generation / starting-position writer",
+      "ledger_entry": "docs/mechanics/map-terrain.md §7.1 — executable start-placement writer",
+      "derivation": "docs/mechanics/map-terrain.md §7.1; PDB World::add_starting_location; retail 0x006b2de0..0x006b3019",
+      "reachability": "Map generators call the common World writer after selecting a start. The fixture installs World+0x80/+0x9c/+0xb8/+0xd4 arrays with measured metadata and spare capacity, keeping all allocator calls untaken while executing every append and occupancy-bit write",
+      "caveat": "This proves the returned start index, four array append sequences, and all four row-major LSB-first occupancy writes. The fixture deliberately preallocates capacity, so array-growth policy is established separately from SimpleArray::increase_size disassembly and sim tests. It does not choose coordinates or approximate Map::make.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 449463,
+      "mismatches": 0,
+      "wall_ms": 795,
+      "phases": [
+        {"kind": "edges", "count": 13, "distribution": "LSB/MSB, byte/row crossings, and append return indices 0..7"},
+        {"kind": "random", "count": 449450, "distribution": "byte/row-boundary coordinate sequences plus xorshift64 worlds 2..128 cells per axis, 1..8 valid appended starts per fixture; return index, walked array metadata/elements, and full bit plane compared after every append"}
+      ],
+      "excluded": [],
+      "extras": {
+        "fixture_boundary": "all four arrays preallocated to 64 WCoord entries; allocator branch untaken"
       },
       "detail": null
     },
@@ -309,7 +334,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 41981,
+      "wall_ms": 41435,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -344,7 +369,7 @@
       "status": "pass",
       "trials": 999950,
       "mismatches": 0,
-      "wall_ms": 25,
+      "wall_ms": 24,
       "phases": [
         {"kind": "chained-walk", "count": 999950, "distribution": "70 seeds x 14285 steps: six edge seeds (0 is what every statically-constructed Random starts at) plus 64 random seeds, each walked forward; compares the f32 bit pattern and the resulting state at every step"}
       ],
@@ -440,7 +465,7 @@
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15592,
+      "wall_ms": 15491,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -464,7 +489,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 181,
+      "wall_ms": 187,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},

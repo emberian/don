@@ -571,6 +571,49 @@ impl<T> WalkedArray<T> {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
+
+    /// The empty `SimpleArray<WCoord>` state installed by `WorldData::WorldData`
+    /// (`0x0047c4c0`) and preserved by `World::init` (`0x006b76f0`).
+    ///
+    /// These six World arrays are not the five-element `SimpleArray<T>` variant:
+    /// their constructor leaves `size == 0`, sets `increment == -1`, and relies on
+    /// the first append to grow them to four elements.
+    fn empty_world_coords() -> Self {
+        WalkedArray {
+            items: Vec::new(),
+            capacity: 0,
+            increment: -1,
+            flags: 0,
+        }
+    }
+
+    /// `SimpleArray<WCoord>::add` plus `increase_size` (`0x00434630`) for the
+    /// World start/oil arrays. Returns the inserted index, as retail does.
+    fn push_world_coord(&mut self, value: T) -> i32 {
+        let index = self.items.len() as i32;
+        if index >= self.capacity {
+            let increase = if self.increment == 0 {
+                0
+            } else if self.increment < 0 {
+                if self.capacity == 0 {
+                    4
+                } else {
+                    self.capacity
+                }
+            } else {
+                self.increment as i32
+            };
+            // A zero increment makes retail write beyond its allocation. Do not
+            // silently repair corrupt metadata into a different checksum history.
+            assert!(
+                increase > 0,
+                "retail SimpleArray cannot grow with this increment"
+            );
+            self.capacity = self.capacity.wrapping_add(increase);
+        }
+        self.items.push(value);
+        index
+    }
 }
 
 /// The four `Terrain` members that sit inside the `world` checksum channel.
@@ -690,8 +733,9 @@ pub struct World {
     pub oil_x: WalkedArray<i32>,
     /// `+0x118` `SimpleArray<WCoord> oil_y`
     pub oil_y: WalkedArray<i32>,
-    /// `+0xf0` `DynamicBitMask start_city_locs` — **not walked by `World::walk_data`**;
-    /// only cleared by `wipe`. Kept for state fidelity, absent from the checksum.
+    /// `+0xf0` `DynamicBitMask start_city_locs` — **not walked by `World::walk_data`**.
+    /// `World::init` allocates `ceil(size/8)` zero bytes and `wipe` clears them.
+    /// Kept for state fidelity, absent from the checksum.
     pub start_city_locs: Vec<u8>,
 
     /// `+0x134` — `size` entries, indexed `wy * xs + wx` (`World::get_wdata` `0x0046d220`).
@@ -775,13 +819,15 @@ impl World {
             sea_resources: 0,
             land_size: 0,
             seed: 0,
-            start_x: WalkedArray::new(),
-            start_y: WalkedArray::new(),
-            start_city_x: WalkedArray::new(),
-            start_city_y: WalkedArray::new(),
-            oil_x: WalkedArray::new(),
-            oil_y: WalkedArray::new(),
-            start_city_locs: Vec::new(),
+            start_x: WalkedArray::empty_world_coords(),
+            start_y: WalkedArray::empty_world_coords(),
+            start_city_x: WalkedArray::empty_world_coords(),
+            start_city_y: WalkedArray::empty_world_coords(),
+            oil_x: WalkedArray::empty_world_coords(),
+            oil_y: WalkedArray::empty_world_coords(),
+            // `DynamicBitMask::init` `0x00a3a3c0`: store `size` bits,
+            // allocate `(size + 7) / 8` bytes, then zero the whole buffer.
+            start_city_locs: vec![0; size.max(0).saturating_add(7) as usize / 8],
             wdata: vec![WData::default(); size.max(0) as usize],
             tdata: vec![0u16; tile_size.max(0) as usize],
             danger: std::array::from_fn(|_| vec![0i32; reg_size.max(0) as usize]),
@@ -864,6 +910,34 @@ impl World {
         }
         self.seed = seed;
         Some(seed)
+    }
+
+    /// `World::add_starting_location(WCoord const&, WCoord const&)`
+    /// `0x006b2de0`–`0x006b3019`.
+    ///
+    /// Retail appends one player start, appends the four cells of the 2x2
+    /// starting-city footprint in this exact order, sets the matching LSB-first
+    /// row-major bits, and returns the player-start index. It performs no bounds
+    /// checks; callers must supply the generator's valid `x >= 1, y >= 1` result.
+    pub fn add_starting_location(&mut self, x: WCoord, y: WCoord) -> i32 {
+        let start = self.start_x.push_world_coord(x.0);
+        let y_start = self.start_y.push_world_coord(y.0);
+        debug_assert_eq!(start, y_start);
+
+        let xm1 = x.0.wrapping_sub(1);
+        let ym1 = y.0.wrapping_sub(1);
+        for value in [x.0, xm1, x.0, xm1] {
+            self.start_city_x.push_world_coord(value);
+        }
+        for value in [y.0, y.0, ym1, ym1] {
+            self.start_city_y.push_world_coord(value);
+        }
+
+        for (wx, wy) in [(x.0, y.0), (xm1, y.0), (x.0, ym1), (xm1, ym1)] {
+            let index = wy.wrapping_mul(self.xs).wrapping_add(wx);
+            self.start_city_locs[(index >> 3) as usize] |= 1u8 << ((index & 7) as u32);
+        }
+        start
     }
 
     /// `WorldData::start_city_wcoord(WCoord const&, WCoord const&)` `0x006b30e0`.
@@ -2096,11 +2170,48 @@ mod tests {
     #[test]
     fn start_city_bits_are_row_major_and_lsb_first() {
         let mut w = World::init_default_rules(9, 2);
-        w.start_city_locs = vec![0; 3];
+        assert_eq!(w.start_city_locs, vec![0; 3]);
         // width=9, (8,1) => bit 17 => byte 2, mask 0x02.
         w.start_city_locs[2] = 0x02;
         assert!(w.start_city_wcoord(WCoord(8), WCoord(1)));
         assert!(!w.start_city_wcoord(WCoord(7), WCoord(1)));
+    }
+
+    #[test]
+    fn add_starting_location_writes_retail_arrays_growth_and_footprint() {
+        let mut w = World::init_default_rules(9, 9);
+        for a in [
+            &w.start_x,
+            &w.start_y,
+            &w.start_city_x,
+            &w.start_city_y,
+            &w.oil_x,
+            &w.oil_y,
+        ] {
+            assert_eq!((a.capacity, a.increment, a.flags), (0, -1, 0));
+        }
+
+        assert_eq!(w.add_starting_location(WCoord(5), WCoord(4)), 0);
+        assert_eq!(w.start_x.items, [5]);
+        assert_eq!(w.start_y.items, [4]);
+        assert_eq!(w.start_city_x.items, [5, 4, 5, 4]);
+        assert_eq!(w.start_city_y.items, [4, 4, 3, 3]);
+        assert_eq!((w.start_x.capacity, w.start_y.capacity), (4, 4));
+        assert_eq!((w.start_city_x.capacity, w.start_city_y.capacity), (4, 4));
+        for (x, y) in [(5, 4), (4, 4), (5, 3), (4, 3)] {
+            assert!(w.start_city_wcoord(WCoord(x), WCoord(y)));
+        }
+        assert!(!w.start_city_wcoord(WCoord(3), WCoord(3)));
+
+        // The fifth player doubles the single-coordinate arrays to eight. The
+        // four-coordinate footprint arrays cross 4, 8 and 16 on their way to
+        // twenty elements and therefore finish at capacity 32.
+        for (x, y) in [(2, 2), (7, 2), (2, 7), (7, 7)] {
+            let expected = w.start_x.items.len() as i32;
+            assert_eq!(w.add_starting_location(WCoord(x), WCoord(y)), expected);
+        }
+        assert_eq!((w.start_x.capacity, w.start_y.capacity), (8, 8));
+        assert_eq!((w.start_city_x.capacity, w.start_city_y.capacity), (32, 32));
     }
 
     /// `World::wipe` leaves every cell in the state the disassembly writes.

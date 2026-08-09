@@ -450,6 +450,7 @@ The structural result above now has two fork-isolated retail cases in
 |---|---|---|---|
 | `map_make_seed_prefix` | `Map::make` entry `0x0068bc90` through the seed write at `0x0068bcd0` | the signed-negative preserve gate; `Map+0x110 = map_arg`; and identical nonnegative seed writes to `World+0x7c` and `game_random+0` | terrain construction, RNG consumption, orientation, continents, fairness or starts |
 | `start_city_wcoord` | complete leaf `0x006b30e0`–`0x006b311d` | valid coordinates flatten as `y * world_xs + x`; `start_city_locs` is LSB-first | coordinate selection, radius tests, or placement policy |
+| `add_starting_location` | complete writer `0x006b2de0`–`0x006b3019` | returned start index; all four walked-array append sequences; the exact 2×2 row-major LSB-first occupancy writes | coordinate selection, map-style placement, or allocator execution (fixture supplies measured spare capacity) |
 
 The seed-prefix case isolates an exact instruction boundary rather than invoking a fake
 constructor. In its already-forked case process it replaces the first instruction *after*
@@ -467,17 +468,23 @@ valid-domain predicate is exact: positive width, in-bounds nonnegative x/y, and 
 has no bounds check, so invalid coordinates are excluded rather than converted into a
 made-up policy.
 
+`add_starting_location` uses a World fixture whose four destination arrays have measured
+`SimpleArray<WCoord>` layouts and spare capacity. The retail allocator branches therefore stay
+untaken, but every append and bit write in the shipped writer executes. The production Rust
+method owns the same walked metadata and uses the separately disassembled growth rule: these
+World arrays start at capacity 0 with `increment == -1`, then grow 0→4→8→16. `World::init`
+also now mirrors `DynamicBitMask::init` (`0x00a3a3c0`) by allocating and zeroing
+`ceil(xs*ys/8)` bytes instead of leaving a convenient empty plane.
+
 This establishes the following evidence ladder for a pinned-seed world oracle:
 
 1. **Landed:** prove seed installation and negative-seed preservation without entering
    the unconstructed map body.
 2. **Landed:** prove the final start-city occupancy representation and indexing.
-3. **Next isolatable writer:** `World::add_starting_location` `0x006b2de0` appends to the
-   four start-coordinate `SimpleArray`s and sets the exact 2×2 bit block `(x,y)`,
-   `(x-1,y)`, `(x,y-1)`, `(x-1,y-1)`. Its only calls are array-growth vtable calls; a
-   fixture with measured `SimpleArray` layouts and sufficient preallocated capacity can
-   keep all of them untaken and compare every append and bit write.
-4. **Then distance/exclusion leaves:** `WorldData::start_city_rad_wcoord` `0x006b3850`
+3. **Landed:** `World::add_starting_location` appends the player coordinate, the ordered
+   city-footprint coordinates `(x,y)`, `(x-1,y)`, `(x,y-1)`, `(x-1,y-1)`, and the matching
+   occupancy bits, returning the original player-start index.
+4. **Next distance/exclusion leaves:** `WorldData::start_city_rad_wcoord` `0x006b3850`
    walks the recorded start-city coordinate arrays and applies the engine's integer
    `vector_dist` threshold; `MapFairness::calc_distances` `0x0068a1c0` writes its binary32
    distance table and extrema. These require exact array/count and Constants fields, but
@@ -499,8 +506,7 @@ executed and compared.
 
 ## 8. What the Rust module does, and how it was measured
 
-`crates/don-sim/src/systems/map_terrain.rs`, self-contained (no crate-internal
-dependencies), **23 tests, all passing**:
+`crates/don-sim/src/systems/map_terrain.rs`, **28 focused tests, all passing**:
 
 ```
 rustc --edition 2021 --test crates/don-sim/src/systems/map_terrain.rs -o /tmp/mt && /tmp/mt
