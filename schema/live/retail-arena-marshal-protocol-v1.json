@@ -1,0 +1,34 @@
+{
+  "schema": "don.retail-arena-marshal-protocol.v1",
+  "input": "don.retail-player.v2",
+  "policy_source": "crates/don-ai/src/arena/bots/marshal.rs Marshal::act",
+  "adapter": "faithful supported subsequence",
+  "source_order": ["sense", "economy", "scout", "military", "army_control", "employ"],
+  "selection": "first supported emitted command in source order; at most one live action",
+  "mappings": {
+    "Queue": {
+      "retail": "BuildData::can_queue then GroupOut::issue_queue_up",
+      "don_env_heads": ["QUEUE_UP+1", 0, 0, 0, "TypeIndex", 0, 0, 0, 0, 1]
+    },
+    "Build": "unsupported until a positive retail four-Coord placement-gesture oracle exists",
+    "Move": "unsupported for Marshal scouting until v2 has a fog-safe explored-map plane",
+    "Attack": "unsupported until fog-approved visible/remembered enemy sightings exist",
+    "Gather": "unsupported until v2 exposes exact own gather_max and occupancy",
+    "Work": "unsupported until own unfinished-site identity is exposed",
+    "Halt": "available in retail ingress but emitted only from supported Marshal state"
+  },
+  "economy_fidelity": {
+    "tech_priority": [565, 558, 572, 544, 551],
+    "citizen_target": "max(12, useful_food_slots + useful_timber_slots + 3)",
+    "constants": "ron-data/rules.xml CITY_GATHER, PEASANT_RATE, TECH_COST_FACTOR",
+    "caps": "live own commerce_cap_x16_i32",
+    "legality": "shipped retail BuildData::can_queue"
+  },
+  "fog_exclusions": [
+    "enemy and neutral live object tables",
+    "hidden terrain or exploration",
+    "unproven visibility bits",
+    "enemy economy and AI state"
+  ],
+  "transaction": ["observe paused", "dry plan", "retail legality query", "one bounded apply", "observe exact effect", "STOP park"]
+}

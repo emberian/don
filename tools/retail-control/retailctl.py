@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 
 HERE = Path(__file__).resolve().parent
@@ -540,6 +541,7 @@ def validate_action_batch(batch: dict, observation: dict) -> None:
 
 
 OPENING_RESEARCH_TYPES = [565, 558, 572, 544, 551]
+MARSHAL_CAP_TECH_TYPES = [565, 558, 544, 551]
 
 
 def exact_validation(root: str, words: list[str]) -> dict:
@@ -630,6 +632,175 @@ def conservative_opening_policy(observation: dict, root: str) -> dict:
                    "automatic build placement is fail-closed until the exact four-coordinate "
                    "retail placement gesture has a positive live oracle"),
         "action": None,
+    }
+
+
+def arena_rule_ints() -> tuple[list[int], int, int]:
+    constants = ET.parse(HERE.parents[1] / "ron-data/rules.xml").getroot().find("CONSTANTS")
+    if constants is None:
+        raise RuntimeError("rules.xml has no CONSTANTS block")
+    city = constants.find("CITY_GATHER")
+    peasant = constants.find("PEASANT_RATE")
+    tech_factor = constants.find("TECH_COST_FACTOR")
+    if city is None or peasant is None or tech_factor is None:
+        raise RuntimeError("rules.xml lacks a Marshal economy constant")
+    def first_int(value: str) -> int:
+        match = re.search(r"-?\d+", value)
+        if not match:
+            raise RuntimeError(f"retail rule has no integer value: {value!r}")
+        return int(match.group())
+    return ([first_int(city.attrib[f"entry{i}"]) for i in range(6)],
+            first_int(peasant.attrib["value"]), first_int(tech_factor.attrib["value"]))
+
+
+def live_tech_raw_food_cost(type_index: int) -> int:
+    lines = (HERE.parents[1] / "schema/live/live-tables-tech.tsv").read_text().splitlines()
+    header = lines[0].split("\t")
+    type_col, cost_col = header.index("type_id"), header.index("cost0")
+    for line in lines[1:]:
+        fields = line.split("\t")
+        if int(fields[type_col]) == type_index:
+            return int(fields[cost_col])
+    raise RuntimeError(f"live tech table has no TypeIndex {type_index}")
+
+
+def arena_marshal_extracted_plan(observation: dict, root: str,
+                                 queue_query=queue_validation) -> dict:
+    """Faithful supported subsequence of Marshal::act, in its source command order."""
+    if observation.get("protocol") != "don.retail-player.v2":
+        raise RuntimeError("Arena Marshal adapter requires fog-safe retail-player.v2")
+    owner = observation["player"]["owner"]
+    objects = observation["objects"]
+    by_type: dict[int, list[dict]] = {}
+    for obj in objects:
+        if obj.get("type_valid"):
+            by_type.setdefault(obj["type_index"], []).append(obj)
+    queued = {item["type_index"]: item["count"] for item in observation["queued_types"]}
+    held = set(observation["technology"]["owned_type_indices"])
+    trace: list[dict] = []
+    supported: list[dict] = []
+
+    # Marshal::sense cannot infer threat or an enemy base from v2: no enemy list and no
+    # last-damaged timestamp are exposed.  Missing evidence means initial Massing, not a
+    # fabricated peaceful enemy observation.
+    trace.append({
+        "stage": "sense",
+        "source": "Marshal::sense",
+        "result": "Massing",
+        "reason": "v2 contains no fog-approved enemy sightings or last-damaged field",
+    })
+
+    # Marshal::economy calls next_tech in this exact order. next_tech does not skip an
+    # already queued tech; queue_at then suppresses it, and does not fall through.
+    next_tech = next((type_index for type_index in OPENING_RESEARCH_TYPES
+                      if type_index not in held), None)
+    libraries = sorted(by_type.get(435, []), key=lambda obj: obj["object_id"])
+    if next_tech is None:
+        trace.append({"stage": "economy.tech", "result": "complete"})
+    elif queued.get(next_tech, 0):
+        trace.append({
+            "stage": "economy.tech", "type_index": next_tech,
+            "type_name": type_names().get(next_tech, f"TypeIndex({next_tech})"),
+            "result": "suppressed", "reason": "Marshal queue_at rejects a tech already queued",
+        })
+    elif not libraries:
+        trace.append({"stage": "economy.tech", "type_index": next_tech,
+                      "result": "suppressed", "reason": "no own complete Library"})
+    else:
+        producer = min(libraries,
+                       key=lambda obj: (obj["production_queue"]["logical_length"],
+                                        obj["object_id"]))
+        validation = queue_query(root, owner, producer["object_id"], next_tech)
+        accepted = bool(validation["validation_result"])
+        trace.append({
+            "stage": "economy.tech", "type_index": next_tech,
+            "type_name": type_names().get(next_tech, f"TypeIndex({next_tech})"),
+            "producer_id": producer["object_id"], "retail_can_queue": int(accepted),
+            "result": "emit" if accepted else "suppressed",
+        })
+        if accepted:
+            supported.append({"verb": "queue", "owner": owner,
+                              "producer_id": producer["object_id"],
+                              "type_index": next_tech,
+                              "type_name": type_names().get(next_tech), "count": 1})
+
+    trace.append({
+        "stage": "economy.placement",
+        "source": "Marshal::economy/place_except",
+        "result": "unsupported",
+        "reason": ("retail v2 has no fog-safe terrain/exploration plane and no positive "
+                   "four-Coord placement-gesture oracle; no Build command is synthesized"),
+    })
+
+    # CapFirst::target_citizens = useful food seats + useful timber seats + 3 builders.
+    # Consume live commerce-cap x16 values, and shipped rule constants, preserving the
+    # same integer division as useful_slots.
+    city_gather, peasant_rate, tech_cost_factor = arena_rule_ints()
+    cities = sum(len(by_type.get(t, [])) for t in (414, 415, 416))
+    caps = observation["economy"]["commerce_cap_x16_i32"]
+    useful = [max(0, (caps[r] - cities * city_gather[r] * 16) //
+                  max(1, peasant_rate * 16)) for r in (0, 1)]
+    target_citizens = max(12, useful[0] + useful[1] + 3)
+    citizen_count = len(by_type.get(50, [])) + len(by_type.get(51, [])) + queued.get(50, 0)
+    cap_first_want = next((t for t in MARSHAL_CAP_TECH_TYPES if t not in held), None)
+    classical_food_cost = live_tech_raw_food_cost(544) * tech_cost_factor
+    food_locked = (cap_first_want == 544 and 544 not in held and
+                   observation["economy"]["stockpile_i32"][0] * 10 >=
+                   classical_food_cost * 6)
+    cities_by_queue = sorted(
+        [obj for type_index in (414, 415, 416) for obj in by_type.get(type_index, [])],
+        key=lambda obj: (obj["production_queue"]["logical_length"], obj["object_id"]),
+    )
+    if (not food_locked and citizen_count < target_citizens and
+            observation["population"]["current"] < observation["population"]["cap"] and
+            cities_by_queue):
+        producer = cities_by_queue[0]
+        validation = queue_query(root, owner, producer["object_id"], 50)
+        accepted = bool(validation["validation_result"])
+        trace.append({
+            "stage": "economy.citizen", "source": "Marshal::economy/CapFirst",
+            "current_with_queued": citizen_count, "target": target_citizens,
+            "producer_id": producer["object_id"], "retail_can_queue": int(accepted),
+            "result": "emit" if accepted else "suppressed",
+        })
+        if accepted:
+            supported.append({"verb": "queue", "owner": owner,
+                              "producer_id": producer["object_id"], "type_index": 50,
+                              "type_name": "Citizen", "count": 1})
+    else:
+        trace.append({
+            "stage": "economy.citizen", "current_with_queued": citizen_count,
+            "target": target_citizens, "food_locked": food_locked,
+            "result": "suppressed",
+        })
+
+    trace.extend([
+        {"stage": "scout", "source": "Marshal::do_scout", "result": "unsupported",
+         "reason": "nearest-unexplored waypoint requires a fog-safe explored map plane"},
+        {"stage": "military", "source": "Marshal::military", "result": "suppressed",
+         "reason": ("before Marshal military_from horizon" if observation["frame"] < 2250
+                    else "no supported public candidate selected")},
+        {"stage": "army_control", "source": "Marshal::army_control", "result": "suppressed",
+         "reason": "no own live unit satisfies Arena TypeRow::is_military"},
+        {"stage": "employ", "source": "Marshal::employ_except", "result": "unsupported",
+         "reason": "v2 omits exact gather_max/occupancy needed to allocate a free seat"},
+    ])
+
+    action = supported[0] if supported else None
+    heads = ([23, 0, 0, 0, action["type_index"], 0, 0, 0, 0, action["count"]]
+             if action and action["verb"] == "queue" else None)
+    return {
+        "schema": "don.retail-arena-marshal-plan.v1",
+        "protocol": observation["protocol"],
+        "policy": "Arena Marshal faithful-supported-subsequence",
+        "source": "crates/don-ai/src/arena/bots/marshal.rs Marshal::act",
+        "observation_frame": observation["frame"],
+        "command_order": ["sense", "economy", "scout", "military", "army_control", "employ"],
+        "trace": trace,
+        "supported_actions": supported,
+        "selected_action": action,
+        "selected_don_env_heads": heads,
+        "selection_rule": "first supported emitted command in Marshal source order; max one live action",
     }
 
 
@@ -831,6 +1002,58 @@ def economy_policy_run(root: str, generation: str, output: Path, apply: bool) ->
         output.write_text(json.dumps(artifact, indent=2) + "\n")
         print(json.dumps(plan, indent=2))
         print(f"wrote economy policy run to {output}")
+    except BaseException as exc:
+        failure = exc
+    finally:
+        try:
+            stop(root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise failure
+
+
+def arena_marshal_policy_run(root: str, generation: str, output: Path, apply: bool) -> None:
+    failure: BaseException | None = None
+    try:
+        observation = player_observation(root, generation)
+        plan = arena_marshal_extracted_plan(observation, root)
+        proof_summary = None
+        if apply and plan["selected_action"]:
+            proof_path = output.with_name("retail-arena-marshal-action-proof-v1.json")
+            proof = prove_economy_action(root, generation, plan["selected_action"], proof_path)
+            proof_summary = {
+                "artifact": proof_path.name,
+                "schema": proof["schema"],
+                "action": proof["action"],
+                "retail_command_hex": proof["retail_command_hex"],
+                "frame_boundary": proof.get("frame_boundary", {
+                    "before": proof["before"]["frame"], "after": proof["after"]["frame"]}),
+                "pause_before_after": proof["pause_before_after"],
+            }
+        artifact = {
+            "schema": "don.retail-arena-marshal-run.v1",
+            "protocol": observation["protocol"],
+            "controller_generation": generation,
+            "mode": "apply" if apply else "dry-run",
+            "observation_summary": {
+                "frame": observation["frame"], "paused": observation["paused"],
+                "population": observation["population"],
+                "queued_types": observation["queued_types"],
+                "owned_type_counts": {
+                    str(type_index): sum(1 for obj in observation["objects"]
+                                         if obj["type_index"] == type_index)
+                    for type_index in sorted({obj["type_index"] for obj in observation["objects"]})
+                },
+            },
+            "plan": plan,
+            "proof": proof_summary,
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(artifact, indent=2) + "\n")
+        print(json.dumps(plan, indent=2))
+        print(f"wrote Arena Marshal {'apply' if apply else 'dry-run'} to {output}")
     except BaseException as exc:
         failure = exc
     finally:
@@ -1116,6 +1339,11 @@ def main() -> None:
     ep.add_argument("--output", type=Path,
                     default=HERE.parents[1] / "schema/live/retail-economy-policy-run-v1.json")
     add_generation(ep)
+    mp = sub.add_parser("marshal-policy")
+    mp.add_argument("--apply", action="store_true")
+    mp.add_argument("--output", type=Path,
+                    default=HERE.parents[1] / "schema/live/retail-arena-marshal-run-v1.json")
+    add_generation(mp)
     ea = sub.add_parser("economy-action")
     ea.add_argument("verb", choices=["queue", "gather", "build"])
     ea.add_argument("--owner", type=int, default=0)
@@ -1177,6 +1405,9 @@ def main() -> None:
                       "x1": a.x1, "y1": a.y1, "x2": a.x2, "y2": a.y2, "queue": 2}
         economy_action_command(generation_root(a.generation), a.generation, action,
                                a.output.resolve())
+    elif a.action == "marshal-policy":
+        arena_marshal_policy_run(generation_root(a.generation), a.generation,
+                                 a.output.resolve(), a.apply)
     elif a.action == "stop": stop(generation_root(a.generation))
     elif a.action == "rearm": rearm(generation_root(a.generation))
 

@@ -29,6 +29,9 @@ game:
   building inside a supervised 180-frame cap or it fails closed.
 - `run-frames` is an internal supervised boundary: it starts only paused, advances exactly 1–30
   retail simulation frames, re-pauses on the retail main thread, and verifies the terminal frame.
+- `marshal-policy` adapts the source-ordered supported subsequence of Arena `Marshal::act` to v2.
+  It emits the same ten `don-env` heads, records unsupported fog/map branches as no-ops, dry-runs
+  by default, and applies at most the first retail-validated command.
 
 Build and attach:
 
@@ -51,6 +54,8 @@ python3 tools/retail-control/retailctl.py rearm --generation player-v7
 python3 tools/retail-control/retailctl.py policy --apply --generation player-v7
 python3 tools/retail-control/retailctl.py rearm --generation economy-v10
 python3 tools/retail-control/retailctl.py economy-policy --generation economy-v10
+python3 tools/retail-control/retailctl.py rearm --generation economy-v10
+python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v10
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

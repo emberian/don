@@ -207,6 +207,78 @@ class RetailCtlTests(unittest.TestCase):
         )
         self.assertIn("must not synthesize", protocol["actions"]["build"]["coordinates"])
 
+    def test_arena_marshal_adapter_preserves_source_order_and_rl_heads(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v2.json")
+            .read_text()
+        )
+        calls = []
+        def accept(root, owner, producer, type_index):
+            calls.append((owner, producer, type_index))
+            return {"validation_result": 1}
+        plan = retailctl.arena_marshal_extracted_plan(observation, "unused", accept)
+        self.assertEqual(plan["policy"], "Arena Marshal faithful-supported-subsequence")
+        self.assertEqual(plan["command_order"],
+                         ["sense", "economy", "scout", "military", "army_control", "employ"])
+        # City State is already queued. Marshal::next_tech chooses it and queue_at
+        # suppresses it without falling through; the supported later economy command is Citizen.
+        self.assertEqual(plan["selected_action"]["type_index"], 50)
+        self.assertEqual(plan["selected_don_env_heads"], [23, 0, 0, 0, 50, 0, 0, 0, 0, 1])
+        self.assertEqual(calls, [(0, 2000, 50)])
+        placement = next(t for t in plan["trace"] if t["stage"] == "economy.placement")
+        self.assertEqual(placement["result"], "unsupported")
+        self.assertIn("no Build command", placement["reason"])
+
+    def test_arena_marshal_adapter_does_not_skip_a_rejected_first_tech(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v2.json")
+            .read_text()
+        )
+        observation = copy.deepcopy(observation)
+        observation["queued_types"] = [q for q in observation["queued_types"]
+                                       if q["type_index"] != 565]
+        library = next(o for o in observation["objects"] if o["object_id"] == 2005)
+        library["production_queue"]["logical_length"] = 0
+        library["production_queue"]["items"] = []
+        calls = []
+        def reject_city_state(root, owner, producer, type_index):
+            calls.append(type_index)
+            return {"validation_result": 0 if type_index == 565 else 1}
+        plan = retailctl.arena_marshal_extracted_plan(observation, "unused", reject_city_state)
+        self.assertEqual(calls, [565, 50])
+        self.assertEqual(plan["selected_action"]["type_index"], 50)
+        self.assertNotIn(572, calls)
+
+    def test_live_arena_marshal_run_applies_exactly_one_bounded_action(self):
+        live = Path(__file__).parents[2] / "schema/live"
+        dry = json.loads((live / "retail-arena-marshal-dry-run-v1.json").read_text())
+        self.assertEqual(dry["mode"], "dry-run")
+        self.assertIsNone(dry["proof"])
+        run = json.loads((live / "retail-arena-marshal-run-v1.json").read_text())
+        self.assertEqual(run["mode"], "apply")
+        self.assertEqual(run["plan"]["selected_don_env_heads"],
+                         [23, 0, 0, 0, 50, 0, 0, 0, 0, 1])
+        self.assertEqual(run["proof"]["frame_boundary"], {"before": 357, "after": 357})
+        self.assertEqual(run["proof"]["pause_before_after"], [1, 1])
+        proof = json.loads((live / "retail-arena-marshal-action-proof-v1.json").read_text())
+        command = bytes.fromhex(proof["retail_command_hex"])
+        self.assertEqual(command[-9], 0x18)
+        for side, expected in (("before", 1), ("after", 2)):
+            aggregate = next(q["count"] for q in proof[side]["queued_types"]
+                             if q["type_index"] == 50)
+            city = next(o for o in proof[side]["objects"] if o["object_id"] == 2000)
+            self.assertEqual(aggregate, expected)
+            self.assertEqual(city["production_queue"]["logical_length"], expected)
+
+    def test_arena_marshal_protocol_refuses_unsupported_build_substitution(self):
+        protocol = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-arena-marshal-protocol-v1.json")
+            .read_text()
+        )
+        self.assertEqual(protocol["adapter"], "faithful supported subsequence")
+        self.assertIn("unsupported", protocol["mappings"]["Build"])
+        self.assertIn("at most one", protocol["selection"])
+
 
 if __name__ == "__main__":
     unittest.main()

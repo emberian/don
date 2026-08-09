@@ -258,6 +258,29 @@ recorded as a negative attempt, not a positive proof; guessed degenerate placeme
 the opening policy. See `schema/live/retail-player-protocol-v2.json` and the
 `schema/live/retail-economy-*-v1.json` fixtures.
 
+### Arena Marshal retail adapter
+
+`marshal-policy` follows `Marshal::act` in source order—sense, economy, scout, military,
+army control, employ—and selects at most the first command the v2 observation can faithfully
+support. Queue commands preserve Arena's producer/type/count semantics and its ten-head RL form;
+`QUEUE_UP` is heads `[23,0,0,0,TypeIndex,0,0,0,0,1]`. The adapter reads `CITY_GATHER`,
+`PEASANT_RATE`, and `TECH_COST_FACTOR` from shipped `rules.xml`, combines those with retail's live
+own commerce-cap values, and uses the same CapFirst citizen-target integer equation. Final legality
+still comes from retail `BuildData::can_queue`.
+
+This is explicitly a supported subsequence, not a synthetic Arena world. Enemy sensing/attacks are
+omitted because v2 exposes no fog-approved sightings; scout waypoints are omitted because it has no
+explored-map plane; employment is omitted because exact gather capacity/occupancy is not yet in the
+snapshot; builds are omitted because the retail four-Coord placement gesture has no positive oracle.
+The adapter never substitutes a different action for those branches. Its trace records each omission.
+
+The live dry run at frame 357 observed City State already queued, so Arena's `next_tech` selected it
+and `queue_at` suppressed the duplicate without falling through—matching the Rust source. Marshal's
+later CapFirst step counted six live Citizens plus one queued, derived a target of 21, and retail
+accepted one Citizen at City 2000. The apply run issued exactly heads
+`[23,0,0,0,50,0,0,0,0,1]`; packet opcode `0x18` changed both the aggregate Citizen count and City
+queue from 1 to 2 at unchanged frame 357, with pause `[1,1]`. `economy-v10` was then STOP-parked.
+
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
 - module base `0x00D60000`, ASLR delta `0x00960000`;
