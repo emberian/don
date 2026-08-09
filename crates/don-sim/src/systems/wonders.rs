@@ -1,16 +1,20 @@
 //! Completed-Wonder registry and Wonder-victory point supply.
 //!
-//! This is the bounded state transition reached by `Build::activate` after a Wonder
-//! finishes.  It does **not** claim the rest of building activation or the unbuilt-Wonder
-//! registry.  The recovered retail path is:
+//! This is the bounded Wonder state transition reached by `Build::activate` after a Wonder
+//! finishes, plus the caller-owned completion/close/capture transaction around it.  The
+//! recovered retail path is:
 //!
-//! - `Build::activate` calls `Wonders::init_wonder` at `0x00625B5B` and stores its return
-//!   in `BuildData::wonder` (`+0x76`);
+//! - `Build::activate` removes the first matching unbuilt record, increments
+//!   `LeaderData::wonders_built`, calls `Wonders::init_wonder` at `0x00625B5B`, and stores
+//!   its return in `BuildData::wonder` (`+0x76`);
 //! - `Wonders::init_wonder` `0x0073C860` reuses the first inactive slot below
 //!   `LeaderData::wonder_mark` (`+0x424`), or appends at the mark, then calls the inlined
 //!   `Wonder::init` body from `0x0073C986..0x0073C9E9`;
 //! - `Wonders::close_wonder` `0x0073C7E0` invalidates a slot and trims only inactive
 //!   records at the tail of `wonder_mark`;
+//! - `Build::check_capture` calls the generic `Build::swap_team`, activates the new build,
+//!   closes the old build, and finally masks the new build. A captured Wonder is therefore
+//!   newly registered for the capturer, not moved between registry lists;
 //! - `LeaderData::get_wonder_value` `0x006EBB90`,
 //!   `get_team_wonder_value` `0x006DA990`, and `get_wonder_net` `0x006EBB10` supply
 //!   `Game::wonder_winning`.
@@ -21,7 +25,10 @@
 //! write returns an effect receipt.  An absent, stale, mutating query or unconfirmed game-bit
 //! write is an error; it never silently manufactures zero Wonder points.
 
-use super::victory_score::{self, Leaders};
+use super::{
+    production::BuildData,
+    victory_score::{self, Leaders},
+};
 
 pub const NUM_WONDER_OWNERS: usize = victory_score::NUM_LEADERS;
 pub const WONDER_FIRST: i32 = 0x20E;
@@ -29,6 +36,15 @@ pub const WONDER_LAST: i32 = 0x21E;
 pub const WONDER_VALID: u8 = 0x01;
 pub const INVALID_SHORT: i16 = -1;
 pub const INVALID_WHO: i8 = -1;
+
+/// Packed entry in the per-owner `UnbuiltWonders` lists (PDB size `0x4`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnbuiltWonder {
+    pub o: i16,
+    pub who: i8,
+}
+
+const _: [(); 4] = [(); std::mem::size_of::<UnbuiltWonder>()];
 
 /// The checksummed `WonderData` prefix (PDB size `0x10`).
 ///
@@ -135,6 +151,142 @@ pub trait WonderWorld {
     ) -> Result<ReadReceipt<WonderValue>, WonderWorldError>;
 }
 
+/// Retail caller-side operation requested around the completed-Wonder registry.
+///
+/// Mutable [`BuildData`] references make the caller-owned `wonder` link part of the same
+/// local commit as the registry and counters. The `Capture` variant starts after the generic
+/// object copy has produced `new_build`; its mandatory swap receipt still has to prove the
+/// old/new object identities before any Wonder state can commit.
+pub enum WonderLifecycle<'a> {
+    Complete {
+        o: i32,
+        build: &'a mut BuildData,
+    },
+    Close {
+        o: i32,
+        build: &'a mut BuildData,
+        remove_unbuilt: bool,
+    },
+    Capture {
+        old_o: i32,
+        old_build: &'a mut BuildData,
+        new_o: i32,
+        new_build: &'a mut BuildData,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureSwapRequest {
+    pub old_who: i32,
+    pub old_o: i32,
+    pub old_wonder: i16,
+    pub new_who: i32,
+    pub new_o: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureSwapReceipt {
+    pub old_who: i32,
+    pub old_o: i32,
+    pub old_wonder: i16,
+    pub new_who: i32,
+    pub new_o: i32,
+    pub swap_complete: bool,
+    pub rng_draws: u32,
+    pub world_writes: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloseEffectsRequest {
+    pub who: i32,
+    pub o: i32,
+    pub wonder: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloseEffectsReceipt {
+    pub who: i32,
+    pub o: i32,
+    pub wonder: i16,
+    pub type_index: i32,
+    /// The caller ORed `leaders::flag::UNIT_STATS_DIRTY` (`0x0400_0000`).
+    pub unit_stats_dirty: bool,
+    /// Whether the type-specific Wonder bonus/terrain recalculation completed.
+    pub type_specific_recalculated: bool,
+    pub rng_draws: u32,
+    pub world_writes: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureMaskRequest {
+    pub who: i32,
+    pub o: i32,
+    pub first: i32,
+    pub second: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureMaskReceipt {
+    pub who: i32,
+    pub o: i32,
+    pub first: i32,
+    pub second: i32,
+    pub mask_complete: bool,
+    pub rng_draws: u32,
+    pub world_writes: u32,
+}
+
+/// Mandatory non-registry effects surrounding Wonder completion/capture/close.
+///
+/// These methods have no defaults. In particular, DoN must not treat a local
+/// `close_wonder` as a complete `Build::close`: retail also marks unit stats dirty and, for
+/// four Wonder types, runs a type-specific recalculation. Capture likewise remains blocked
+/// without identity-bound proof of `Build::swap_team` and the final `mask_me(1, 2)`.
+pub trait WonderLifecycleHost {
+    fn capture_swap(
+        &mut self,
+        request: CaptureSwapRequest,
+    ) -> Result<CaptureSwapReceipt, WonderWorldError>;
+
+    fn close_effects(
+        &mut self,
+        request: CloseEffectsRequest,
+    ) -> Result<CloseEffectsReceipt, WonderWorldError>;
+
+    fn capture_mask(
+        &mut self,
+        request: CaptureMaskRequest,
+    ) -> Result<CaptureMaskReceipt, WonderWorldError>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WonderLifecycleReceipt {
+    Completed {
+        who: i32,
+        o: i32,
+        wonder: i16,
+        unbuilt_removed: bool,
+        wonders_built: i32,
+    },
+    Closed {
+        who: i32,
+        o: i32,
+        wonder: Option<i16>,
+        unbuilt_removed: bool,
+    },
+    Captured {
+        old_who: i32,
+        old_o: i32,
+        old_wonder: i16,
+        new_who: i32,
+        new_o: i32,
+        new_wonder: i16,
+        new_unbuilt_removed: bool,
+        old_unbuilt_removed: bool,
+        new_wonders_built: i32,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WonderWorldError {
     pub detail: String,
@@ -190,6 +342,15 @@ pub enum WonderError {
         wonder: i32,
         allocated: usize,
     },
+    BuildWonderMismatch {
+        who: i32,
+        o: i32,
+        wonder: i16,
+    },
+    SameCaptureOwner(i32),
+    LifecycleReceiptMismatch {
+        operation: &'static str,
+    },
 }
 
 impl From<WonderWorldError> for WonderError {
@@ -198,7 +359,7 @@ impl From<WonderWorldError> for WonderError {
     }
 }
 
-/// The eight `PtrArray<Wonder>` lists plus their two LeaderData-side counters.
+/// The eight completed/unbuilt lists plus their LeaderData-side counters.
 ///
 /// `wonder_mark` is the logical prefix the retail getters walk. `wonders_held` is a
 /// lifetime high-water statistic: initialization raises it to the maximum simultaneous
@@ -206,7 +367,9 @@ impl From<WonderWorldError> for WonderError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wonders {
     lists: [Vec<WonderRecord>; NUM_WONDER_OWNERS],
+    unbuilt: [Vec<UnbuiltWonder>; NUM_WONDER_OWNERS],
     wonder_mark: [i32; NUM_WONDER_OWNERS],
+    wonders_built: [i32; NUM_WONDER_OWNERS],
     wonders_held: [i32; NUM_WONDER_OWNERS],
 }
 
@@ -214,7 +377,9 @@ impl Default for Wonders {
     fn default() -> Self {
         Self {
             lists: std::array::from_fn(|_| Vec::new()),
+            unbuilt: std::array::from_fn(|_| Vec::new()),
             wonder_mark: [0; NUM_WONDER_OWNERS],
+            wonders_built: [0; NUM_WONDER_OWNERS],
             wonders_held: [0; NUM_WONDER_OWNERS],
         }
     }
@@ -236,6 +401,16 @@ impl Wonders {
     }
 
     #[inline]
+    pub fn wonders_built(&self, who: usize) -> i32 {
+        self.wonders_built[who]
+    }
+
+    #[inline]
+    pub fn unbuilt(&self, who: usize) -> &[UnbuiltWonder] {
+        &self.unbuilt[who]
+    }
+
+    #[inline]
     pub fn record(&self, who: usize, wonder: usize) -> Option<&WonderRecord> {
         self.lists.get(who)?.get(wonder)
     }
@@ -245,6 +420,245 @@ impl Wonders {
             let mark = self.wonder_mark[who].max(0) as usize;
             list.iter().take(mark).any(|record| record.is_valid())
         })
+    }
+
+    /// `UnbuiltWonders::add_unbuilt_wonder` `0x0073C1D0`.
+    pub fn add_unbuilt_wonder(&mut self, who: i32, o: i32) -> Result<(), WonderError> {
+        let owner = checked_owner(who)?;
+        if o < 0 || o > i16::MAX as i32 {
+            return Err(WonderError::InvalidObject(o));
+        }
+        self.unbuilt[owner]
+            .try_reserve(1)
+            .map_err(|_| WonderError::Allocation)?;
+        self.unbuilt[owner].push(UnbuiltWonder {
+            o: o as i16,
+            who: who as i8,
+        });
+        Ok(())
+    }
+
+    /// Execute one caller-owned Wonder lifecycle transaction.
+    ///
+    /// Local registry, counter, unbuilt-list, and `BuildData::wonder` changes are staged and
+    /// commit together only after every mandatory external receipt validates. External host
+    /// operations cannot be rolled back by this module; an error after a host call therefore
+    /// remains an explicit incomplete lifecycle, never a locally reported success.
+    pub fn apply_build_lifecycle<W>(
+        &mut self,
+        world: &mut W,
+        lifecycle: WonderLifecycle<'_>,
+    ) -> Result<WonderLifecycleReceipt, WonderError>
+    where
+        W: WonderWorld + WonderLifecycleHost + ?Sized,
+    {
+        let mut staged = self.clone();
+        match lifecycle {
+            WonderLifecycle::Complete { o, build } => {
+                let mut staged_build = build.clone();
+                let receipt = staged.complete_build(world, o, &mut staged_build)?;
+                *self = staged;
+                *build = staged_build;
+                Ok(receipt)
+            }
+            WonderLifecycle::Close {
+                o,
+                build,
+                remove_unbuilt,
+            } => {
+                let mut staged_build = build.clone();
+                let receipt = staged.close_build(world, o, &mut staged_build, remove_unbuilt)?;
+                *self = staged;
+                *build = staged_build;
+                Ok(receipt)
+            }
+            WonderLifecycle::Capture {
+                old_o,
+                old_build,
+                new_o,
+                new_build,
+            } => {
+                let mut staged_old = old_build.clone();
+                let mut staged_new = new_build.clone();
+                let receipt =
+                    staged.capture_build(world, old_o, &mut staged_old, new_o, &mut staged_new)?;
+                *self = staged;
+                *old_build = staged_old;
+                *new_build = staged_new;
+                Ok(receipt)
+            }
+        }
+    }
+
+    fn complete_build<W>(
+        &mut self,
+        world: &mut W,
+        o: i32,
+        build: &mut BuildData,
+    ) -> Result<WonderLifecycleReceipt, WonderError>
+    where
+        W: WonderWorld + WonderLifecycleHost + ?Sized,
+    {
+        let who = i32::from(build.who);
+        let owner = checked_build_identity(o, build)?;
+
+        // `Build::activate` `0x00625B32..0x00625B60`: swap-remove first, then increment,
+        // register, and finally store the returned short in `BuildData::wonder`.
+        let unbuilt_removed = remove_unbuilt(&mut self.unbuilt[owner], o as i16);
+        self.wonders_built[owner] = self.wonders_built[owner].wrapping_add(1);
+        let wonder = self.init_wonder(world, who, o)?;
+        build.wonder = wonder;
+
+        Ok(WonderLifecycleReceipt::Completed {
+            who,
+            o,
+            wonder,
+            unbuilt_removed,
+            wonders_built: self.wonders_built[owner],
+        })
+    }
+
+    fn close_build<W>(
+        &mut self,
+        world: &mut W,
+        o: i32,
+        build: &mut BuildData,
+        remove_unbuilt_entry: bool,
+    ) -> Result<WonderLifecycleReceipt, WonderError>
+    where
+        W: WonderWorld + WonderLifecycleHost + ?Sized,
+    {
+        let who = i32::from(build.who);
+        let owner = checked_build_identity(o, build)?;
+        let mut closed = None;
+
+        // `Build::close` guards the completed-registry portion with `wonder >= 0`.
+        if build.wonder >= 0 {
+            let wonder = build.wonder;
+            self.require_linked_record(who, o, wonder)?;
+            self.close_wonder(who, i32::from(wonder))?;
+
+            let request = CloseEffectsRequest { who, o, wonder };
+            let effect = world.close_effects(request)?;
+            validate_close_effects(request, effect)?;
+            build.wonder = INVALID_SHORT;
+            closed = Some(wonder);
+        }
+
+        // The retail caller performs this after clearing `BuildData::wonder`, and its close
+        // argument decides whether it happens. Missing entries are intentionally a no-op.
+        let unbuilt_removed =
+            remove_unbuilt_entry && remove_unbuilt(&mut self.unbuilt[owner], o as i16);
+        Ok(WonderLifecycleReceipt::Closed {
+            who,
+            o,
+            wonder: closed,
+            unbuilt_removed,
+        })
+    }
+
+    fn capture_build<W>(
+        &mut self,
+        world: &mut W,
+        old_o: i32,
+        old_build: &mut BuildData,
+        new_o: i32,
+        new_build: &mut BuildData,
+    ) -> Result<WonderLifecycleReceipt, WonderError>
+    where
+        W: WonderWorld + WonderLifecycleHost + ?Sized,
+    {
+        checked_build_identity(old_o, old_build)?;
+        checked_build_identity(new_o, new_build)?;
+        let old_who = i32::from(old_build.who);
+        let new_who = i32::from(new_build.who);
+        if old_who == new_who {
+            return Err(WonderError::SameCaptureOwner(old_who));
+        }
+        let old_wonder = old_build.wonder;
+        if old_wonder < 0 {
+            return Err(WonderError::BuildWonderMismatch {
+                who: old_who,
+                o: old_o,
+                wonder: old_wonder,
+            });
+        }
+        self.require_linked_record(old_who, old_o, old_wonder)?;
+
+        // `Build::check_capture` success tail `0x00627DFA..0x00627FBA`.
+        let swap_request = CaptureSwapRequest {
+            old_who,
+            old_o,
+            old_wonder,
+            new_who,
+            new_o,
+        };
+        validate_capture_swap(swap_request, world.capture_swap(swap_request)?)?;
+
+        let completed = self.complete_build(world, new_o, new_build)?;
+        let (new_wonder, new_unbuilt_removed, new_wonders_built) = match completed {
+            WonderLifecycleReceipt::Completed {
+                wonder,
+                unbuilt_removed,
+                wonders_built,
+                ..
+            } => (wonder, unbuilt_removed, wonders_built),
+            _ => unreachable!("complete_build has one receipt shape"),
+        };
+
+        let closed = self.close_build(world, old_o, old_build, true)?;
+        let old_unbuilt_removed = match closed {
+            WonderLifecycleReceipt::Closed {
+                wonder: Some(closed),
+                unbuilt_removed,
+                ..
+            } if closed == old_wonder => unbuilt_removed,
+            _ => {
+                return Err(WonderError::LifecycleReceiptMismatch {
+                    operation: "Wonders::capture_build/close",
+                })
+            }
+        };
+
+        let mask_request = CaptureMaskRequest {
+            who: new_who,
+            o: new_o,
+            first: 1,
+            second: 2,
+        };
+        validate_capture_mask(mask_request, world.capture_mask(mask_request)?)?;
+
+        Ok(WonderLifecycleReceipt::Captured {
+            old_who,
+            old_o,
+            old_wonder,
+            new_who,
+            new_o,
+            new_wonder,
+            new_unbuilt_removed,
+            old_unbuilt_removed,
+            new_wonders_built,
+        })
+    }
+
+    fn require_linked_record(&self, who: i32, o: i32, wonder: i16) -> Result<(), WonderError> {
+        let owner = checked_owner(who)?;
+        let slot = usize::try_from(wonder).map_err(|_| WonderError::BuildWonderMismatch {
+            who,
+            o,
+            wonder,
+        })?;
+        let Some(record) = self.lists[owner].get(slot) else {
+            return Err(WonderError::BuildWonderMismatch { who, o, wonder });
+        };
+        if !record.is_valid()
+            || record.wonder != wonder
+            || record.o != o as i16
+            || record.who != who as i8
+        {
+            return Err(WonderError::BuildWonderMismatch { who, o, wonder });
+        }
+        Ok(())
     }
 
     /// `Wonders::init_wonder` `0x0073C860`, the completed-Wonder registration called by
@@ -489,6 +903,98 @@ fn checked_owner(who: i32) -> Result<usize, WonderError> {
 }
 
 #[inline]
+fn checked_build_identity(o: i32, build: &BuildData) -> Result<usize, WonderError> {
+    if o < 0 || o > i16::MAX as i32 {
+        return Err(WonderError::InvalidObject(o));
+    }
+    checked_owner(i32::from(build.who))
+}
+
+#[inline]
+fn remove_unbuilt(list: &mut Vec<UnbuiltWonder>, o: i16) -> bool {
+    let Some(index) = list.iter().position(|record| record.o == o) else {
+        return false;
+    };
+    // `remove_unbuilt_wonder` `0x0073C220` overwrites the first match with the final
+    // logical record and decrements the count.
+    list.swap_remove(index);
+    true
+}
+
+#[inline]
+fn requires_close_recalculation(type_index: i32) -> bool {
+    matches!(type_index, 0x20F | 0x212 | 0x214 | 0x21C)
+}
+
+fn validate_capture_swap(
+    request: CaptureSwapRequest,
+    receipt: CaptureSwapReceipt,
+) -> Result<(), WonderError> {
+    require_mutating_effect(
+        "WonderLifecycleHost::capture_swap",
+        receipt.rng_draws,
+        receipt.world_writes,
+    )?;
+    if receipt.old_who != request.old_who
+        || receipt.old_o != request.old_o
+        || receipt.old_wonder != request.old_wonder
+        || receipt.new_who != request.new_who
+        || receipt.new_o != request.new_o
+        || !receipt.swap_complete
+    {
+        return Err(WonderError::LifecycleReceiptMismatch {
+            operation: "WonderLifecycleHost::capture_swap",
+        });
+    }
+    Ok(())
+}
+
+fn validate_close_effects(
+    request: CloseEffectsRequest,
+    receipt: CloseEffectsReceipt,
+) -> Result<(), WonderError> {
+    require_mutating_effect(
+        "WonderLifecycleHost::close_effects",
+        receipt.rng_draws,
+        receipt.world_writes,
+    )?;
+    if receipt.who != request.who
+        || receipt.o != request.o
+        || receipt.wonder != request.wonder
+        || !(WONDER_FIRST..=WONDER_LAST).contains(&receipt.type_index)
+        || !receipt.unit_stats_dirty
+        || receipt.type_specific_recalculated != requires_close_recalculation(receipt.type_index)
+    {
+        return Err(WonderError::LifecycleReceiptMismatch {
+            operation: "WonderLifecycleHost::close_effects",
+        });
+    }
+    Ok(())
+}
+
+fn validate_capture_mask(
+    request: CaptureMaskRequest,
+    receipt: CaptureMaskReceipt,
+) -> Result<(), WonderError> {
+    require_mutating_effect(
+        "WonderLifecycleHost::capture_mask",
+        receipt.rng_draws,
+        receipt.world_writes,
+    )?;
+    if receipt.who != request.who
+        || receipt.o != request.o
+        || receipt.first != request.first
+        || receipt.second != request.second
+        || !receipt.mask_complete
+    {
+        return Err(WonderError::LifecycleReceiptMismatch {
+            operation: "WonderLifecycleHost::capture_mask",
+        });
+    }
+    Ok(())
+}
+
+#[inline]
 fn checked_mark(who: usize, mark: i32, allocated: usize) -> Result<usize, WonderError> {
     let converted = usize::try_from(mark).map_err(|_| WonderError::CorruptMark {
         who,
@@ -521,6 +1027,22 @@ fn require_read_only(
     Ok(())
 }
 
+#[inline]
+fn require_mutating_effect(
+    operation: &'static str,
+    rng_draws: u32,
+    world_writes: u32,
+) -> Result<(), WonderError> {
+    if rng_draws != 0 || world_writes == 0 {
+        return Err(WonderError::UnexpectedEffects {
+            operation,
+            rng_draws,
+            world_writes,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,7 +1054,12 @@ mod tests {
         facts: BTreeMap<(i32, i32), WonderInitFacts>,
         values: BTreeMap<(i32, i32), i32>,
         flag_calls: Vec<WonderInitFacts>,
+        lifecycle_calls: Vec<&'static str>,
         fail_flag: bool,
+        fail_lifecycle: Option<&'static str>,
+        stale_swap: bool,
+        bad_close: bool,
+        bad_mask: bool,
         stale_value: bool,
         query_writes: u32,
     }
@@ -563,6 +1090,7 @@ mod tests {
             who: i32,
             o: i32,
         ) -> Result<ReadReceipt<WonderInitFacts>, WonderWorldError> {
+            self.lifecycle_calls.push("init_facts");
             let value = self
                 .facts
                 .get(&(who, o))
@@ -582,6 +1110,7 @@ mod tests {
             if self.fail_flag {
                 return Err(WonderWorldError::from("flag store refused"));
             }
+            self.lifecycle_calls.push("prerequisite");
             self.flag_calls.push(facts);
             Ok(WonderFlagReceipt {
                 who: facts.who,
@@ -612,6 +1141,84 @@ mod tests {
                 rng_draws: 0,
                 world_writes: self.query_writes,
             })
+        }
+    }
+
+    impl WonderLifecycleHost for FakeWorld {
+        fn capture_swap(
+            &mut self,
+            request: CaptureSwapRequest,
+        ) -> Result<CaptureSwapReceipt, WonderWorldError> {
+            self.lifecycle_calls.push("swap");
+            if self.fail_lifecycle == Some("swap") {
+                return Err(WonderWorldError::from("swap refused"));
+            }
+            Ok(CaptureSwapReceipt {
+                old_who: request.old_who,
+                old_o: request.old_o,
+                old_wonder: request.old_wonder,
+                new_who: request.new_who,
+                new_o: if self.stale_swap {
+                    request.new_o.wrapping_add(1)
+                } else {
+                    request.new_o
+                },
+                swap_complete: true,
+                rng_draws: 0,
+                world_writes: 1,
+            })
+        }
+
+        fn close_effects(
+            &mut self,
+            request: CloseEffectsRequest,
+        ) -> Result<CloseEffectsReceipt, WonderWorldError> {
+            self.lifecycle_calls.push("close_effects");
+            if self.fail_lifecycle == Some("close") {
+                return Err(WonderWorldError::from("close effects refused"));
+            }
+            let type_index = self
+                .facts
+                .get(&(request.who, request.o))
+                .map(|facts| facts.type_index)
+                .unwrap_or(WONDER_FIRST);
+            Ok(CloseEffectsReceipt {
+                who: request.who,
+                o: request.o,
+                wonder: request.wonder,
+                type_index,
+                unit_stats_dirty: !self.bad_close,
+                type_specific_recalculated: requires_close_recalculation(type_index),
+                rng_draws: 0,
+                world_writes: 1,
+            })
+        }
+
+        fn capture_mask(
+            &mut self,
+            request: CaptureMaskRequest,
+        ) -> Result<CaptureMaskReceipt, WonderWorldError> {
+            self.lifecycle_calls.push("mask");
+            if self.fail_lifecycle == Some("mask") {
+                return Err(WonderWorldError::from("mask refused"));
+            }
+            Ok(CaptureMaskReceipt {
+                who: request.who,
+                o: request.o,
+                first: request.first,
+                second: request.second,
+                mask_complete: !self.bad_mask,
+                rng_draws: 0,
+                world_writes: 1,
+            })
+        }
+    }
+
+    fn build(who: u8, wonder: i16) -> BuildData {
+        BuildData {
+            who,
+            wonder,
+            ..BuildData::default()
         }
     }
 
@@ -664,6 +1271,354 @@ mod tests {
             Err(WonderError::World(_))
         ));
         assert_eq!(registry, before);
+    }
+
+    #[test]
+    fn completion_swap_removes_unbuilt_then_wraps_built_and_stores_slot() {
+        let mut registry = Wonders::new();
+        registry.add_unbuilt_wonder(1, 10).unwrap();
+        registry.add_unbuilt_wonder(1, 20).unwrap();
+        registry.add_unbuilt_wonder(1, 30).unwrap();
+        registry.wonders_built[1] = i32::MAX;
+        let mut world = FakeWorld::default();
+        world.add(1, 20, WONDER_FIRST, 4);
+        let mut completed = build(1, INVALID_SHORT);
+
+        let receipt = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 20,
+                    build: &mut completed,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            receipt,
+            WonderLifecycleReceipt::Completed {
+                who: 1,
+                o: 20,
+                wonder: 0,
+                unbuilt_removed: true,
+                wonders_built: i32::MIN,
+            }
+        );
+        assert_eq!(completed.wonder, 0);
+        assert_eq!(registry.wonders_built(1), i32::MIN);
+        assert_eq!(
+            registry.unbuilt(1),
+            &[
+                UnbuiltWonder { o: 10, who: 1 },
+                UnbuiltWonder { o: 30, who: 1 },
+            ],
+            "retail overwrites the first match with the final logical entry"
+        );
+    }
+
+    #[test]
+    fn completion_missing_unbuilt_is_a_retail_exact_noop() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        world.add(3, 44, WONDER_LAST, 8);
+        let mut completed = build(3, 77);
+
+        let receipt = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 44,
+                    build: &mut completed,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            receipt,
+            WonderLifecycleReceipt::Completed {
+                wonder: 0,
+                unbuilt_removed: false,
+                wonders_built: 1,
+                ..
+            }
+        ));
+        assert_eq!(completed.wonder, 0, "activation overwrites the old link");
+    }
+
+    #[test]
+    fn failed_completion_rolls_back_unbuilt_counter_and_build_link() {
+        let mut registry = Wonders::new();
+        registry.add_unbuilt_wonder(0, 4).unwrap();
+        let before = registry.clone();
+        let mut world = FakeWorld::default();
+        world.add(0, 4, WONDER_FIRST, 1);
+        world.fail_flag = true;
+        let mut completed = build(0, INVALID_SHORT);
+
+        assert!(matches!(
+            registry.apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 4,
+                    build: &mut completed,
+                },
+            ),
+            Err(WonderError::World(_))
+        ));
+        assert_eq!(registry, before);
+        assert_eq!(completed.wonder, INVALID_SHORT);
+    }
+
+    #[test]
+    fn close_requires_dirty_and_type_recalculation_receipt_before_commit() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        world.add(2, 17, 0x20F, 4);
+        let mut completed = build(2, INVALID_SHORT);
+        registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 17,
+                    build: &mut completed,
+                },
+            )
+            .unwrap();
+        world.lifecycle_calls.clear();
+
+        let receipt = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Close {
+                    o: 17,
+                    build: &mut completed,
+                    remove_unbuilt: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            receipt,
+            WonderLifecycleReceipt::Closed {
+                who: 2,
+                o: 17,
+                wonder: Some(0),
+                unbuilt_removed: false,
+            }
+        );
+        assert_eq!(world.lifecycle_calls, ["close_effects"]);
+        assert_eq!(completed.wonder, INVALID_SHORT);
+        assert!(!registry.record(2, 0).unwrap().is_valid());
+        assert_eq!(registry.wonders_built(2), 1);
+        assert_eq!(registry.wonders_held(2), 1);
+    }
+
+    #[test]
+    fn malformed_close_receipt_rolls_back_registry_and_build_link() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        world.add(0, 9, WONDER_FIRST, 2);
+        let mut completed = build(0, INVALID_SHORT);
+        registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 9,
+                    build: &mut completed,
+                },
+            )
+            .unwrap();
+        let before = registry.clone();
+        world.bad_close = true;
+
+        assert_eq!(
+            registry.apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Close {
+                    o: 9,
+                    build: &mut completed,
+                    remove_unbuilt: true,
+                },
+            ),
+            Err(WonderError::LifecycleReceiptMismatch {
+                operation: "WonderLifecycleHost::close_effects",
+            })
+        );
+        assert_eq!(registry, before);
+        assert_eq!(completed.wonder, 0);
+    }
+
+    #[test]
+    fn close_argument_controls_unbuilt_removal_even_without_completed_link() {
+        let mut registry = Wonders::new();
+        registry.add_unbuilt_wonder(4, 33).unwrap();
+        let mut world = FakeWorld::default();
+        let mut unfinished = build(4, INVALID_SHORT);
+
+        let kept = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Close {
+                    o: 33,
+                    build: &mut unfinished,
+                    remove_unbuilt: false,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            kept,
+            WonderLifecycleReceipt::Closed {
+                wonder: None,
+                unbuilt_removed: false,
+                ..
+            }
+        ));
+        assert_eq!(registry.unbuilt(4).len(), 1);
+        assert!(world.lifecycle_calls.is_empty());
+
+        let removed = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Close {
+                    o: 33,
+                    build: &mut unfinished,
+                    remove_unbuilt: true,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            removed,
+            WonderLifecycleReceipt::Closed {
+                wonder: None,
+                unbuilt_removed: true,
+                ..
+            }
+        ));
+        assert!(registry.unbuilt(4).is_empty());
+        assert!(world.lifecycle_calls.is_empty());
+    }
+
+    #[test]
+    fn capture_registers_new_owner_then_closes_old_owner_in_retail_order() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        world.add(0, 10, WONDER_FIRST, 4);
+        world.add(1, 21, WONDER_FIRST + 2, 4);
+        let mut old_build = build(0, INVALID_SHORT);
+        registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 10,
+                    build: &mut old_build,
+                },
+            )
+            .unwrap();
+        registry.add_unbuilt_wonder(1, 21).unwrap();
+        let mut new_build = build(1, old_build.wonder);
+        world.lifecycle_calls.clear();
+
+        let receipt = registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Capture {
+                    old_o: 10,
+                    old_build: &mut old_build,
+                    new_o: 21,
+                    new_build: &mut new_build,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            receipt,
+            WonderLifecycleReceipt::Captured {
+                old_who: 0,
+                old_o: 10,
+                old_wonder: 0,
+                new_who: 1,
+                new_o: 21,
+                new_wonder: 0,
+                new_unbuilt_removed: true,
+                old_unbuilt_removed: false,
+                new_wonders_built: 1,
+            }
+        );
+        assert_eq!(
+            world.lifecycle_calls,
+            [
+                "swap",
+                "init_facts",
+                "prerequisite",
+                "close_effects",
+                "mask"
+            ]
+        );
+        assert_eq!(old_build.wonder, INVALID_SHORT);
+        assert_eq!(new_build.wonder, 0);
+        assert!(!registry.record(0, 0).unwrap().is_valid());
+        assert!(registry.record(1, 0).unwrap().is_valid());
+        assert_eq!(registry.wonders_built(0), 1);
+        assert_eq!(registry.wonders_built(1), 1);
+        assert_eq!(registry.wonders_held(0), 1);
+        assert_eq!(registry.wonders_held(1), 1);
+    }
+
+    #[test]
+    fn stale_swap_or_failed_final_mask_never_commits_partial_local_capture() {
+        let mut registry = Wonders::new();
+        let mut world = FakeWorld::default();
+        world.add(0, 10, WONDER_FIRST, 4);
+        world.add(1, 21, WONDER_LAST, 4);
+        let mut old_build = build(0, INVALID_SHORT);
+        registry
+            .apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Complete {
+                    o: 10,
+                    build: &mut old_build,
+                },
+            )
+            .unwrap();
+        let mut new_build = build(1, old_build.wonder);
+        let before = registry.clone();
+
+        world.stale_swap = true;
+        assert!(matches!(
+            registry.apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Capture {
+                    old_o: 10,
+                    old_build: &mut old_build,
+                    new_o: 21,
+                    new_build: &mut new_build,
+                },
+            ),
+            Err(WonderError::LifecycleReceiptMismatch {
+                operation: "WonderLifecycleHost::capture_swap"
+            })
+        ));
+        assert_eq!(registry, before);
+        assert_eq!(old_build.wonder, 0);
+        assert_eq!(new_build.wonder, 0);
+
+        world.stale_swap = false;
+        world.bad_mask = true;
+        assert!(matches!(
+            registry.apply_build_lifecycle(
+                &mut world,
+                WonderLifecycle::Capture {
+                    old_o: 10,
+                    old_build: &mut old_build,
+                    new_o: 21,
+                    new_build: &mut new_build,
+                },
+            ),
+            Err(WonderError::LifecycleReceiptMismatch {
+                operation: "WonderLifecycleHost::capture_mask"
+            })
+        ));
+        assert_eq!(registry, before);
+        assert_eq!(old_build.wonder, 0);
+        assert_eq!(new_build.wonder, 0);
     }
 
     #[test]
