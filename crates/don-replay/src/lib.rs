@@ -54,6 +54,7 @@ pub mod initial;
 pub mod map_style;
 pub mod player_land;
 pub mod pools;
+pub mod post_continent;
 pub mod replay;
 pub mod report;
 pub mod rules_channel;
@@ -92,6 +93,10 @@ pub use player_land::{
 pub use pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
     PoolMergeReceipt,
+};
+pub use post_continent::{
+    execute_post_continent, PostContinentError, PostContinentReceipt, TerritoryLimits,
+    MAP_FIX_DIAG_LAND_VA, MAP_MAKE_COASTLINES_VA, TERRAIN_GROUPS_FILL_FERTILE_VA,
 };
 pub use replay::{corpus, Replay};
 pub use state::SimState;

@@ -237,8 +237,8 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 12] = [
     },
     MapGenerationStage {
         name: "make_regions",
-        evidence_va: None,
-        rng: "indirect calls unresolved",
+        evidence_va: Some(0x0068_0060),
+        rng: "none; clear_all/find_all runs before and after coastlines",
     },
     MapGenerationStage {
         name: "fix_diag_land",
@@ -247,13 +247,13 @@ pub const MAP_MAKE_SCHEDULE: [MapGenerationStage; 12] = [
     },
     MapGenerationStage {
         name: "make_coastlines",
-        evidence_va: None,
-        rng: "indirect calls unresolved",
+        evidence_va: Some(0x0069_47a0),
+        rng: "none",
     },
     MapGenerationStage {
         name: "fill_fertile",
-        evidence_va: Some(0x0068_bfb8),
-        rng: "indirect calls unresolved",
+        evidence_va: Some(0x006a_6f90),
+        rng: "none; requires unreconstructed Fractal::frac and partitions",
     },
     MapGenerationStage {
         name: "terrain_groups_place_all",

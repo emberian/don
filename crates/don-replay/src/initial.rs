@@ -410,13 +410,9 @@ pub enum InitialItemBoundary {
         make_continents_va: u32,
         primitive_va: u32,
     },
-    /// The style virtual completed. The common Map::make region/coast sequence
-    /// is now the first unexecuted stage.
-    MapPostContinentUnavailable {
-        map_style: u8,
-        make_continents_va: u32,
-        next_va: u32,
-    },
+    /// Both common region passes, diagonal repair and coastline construction
+    /// completed. TerrainGroups::fill_fertile is the next call.
+    MapTerrainGroupsUnavailable { next_va: u32 },
 }
 
 impl InitialItemBoundary {
@@ -429,7 +425,7 @@ impl InitialItemBoundary {
             Self::MapStyleContentUnavailable { .. } => "map_style_content",
             Self::MapContinentGenerationUnavailable { .. } => "map_continent_generation",
             Self::MapContinentPrimitiveUnavailable { boundary, .. } => boundary,
-            Self::MapPostContinentUnavailable { .. } => "map_post_continent_regions",
+            Self::MapTerrainGroupsUnavailable { .. } => "terrain_groups_fill_fertile",
         }
     }
 }
@@ -448,6 +444,8 @@ pub struct InitialItemReconstruction {
     /// Independently catalog-validated local install data. `None` is distinct
     /// from an initialized style whose `GOODIES` section is genuinely empty.
     pub style: Option<MapStyleStaticData>,
+    /// Common `Map::make` continuation after a completed style virtual.
+    pub post_continent: Option<crate::post_continent::PostContinentReceipt>,
     pub boundary: InitialItemBoundary,
 }
 
@@ -470,6 +468,7 @@ pub enum InitialItemReconstructionError {
         actual_seed: i32,
     },
     ContinentPrefix(crate::continent::ContinentError),
+    PostContinent(crate::post_continent::PostContinentError),
     Blocked(InitialItemBoundary),
 }
 
@@ -500,7 +499,7 @@ impl InitialItemReconstruction {
             InitialItemBoundary::MapStyleContentUnavailable { .. }
                 | InitialItemBoundary::MapContinentGenerationUnavailable { .. }
                 | InitialItemBoundary::MapContinentPrimitiveUnavailable { .. }
-                | InitialItemBoundary::MapPostContinentUnavailable { .. }
+                | InitialItemBoundary::MapTerrainGroupsUnavailable { .. }
         ) {
             return Err(InitialItemReconstructionError::Blocked(self.boundary));
         }
@@ -537,20 +536,33 @@ impl InitialItemReconstruction {
                 .ok_or(InitialItemReconstructionError::StyleIdentityMismatch {
                     map_style: self.inputs.map_style,
                 })?;
+        // The style virtual and its common continuation are one Map::make
+        // transaction from the replay reconstructor's perspective.  Stage both
+        // authoritative stores so a late region-shape failure cannot expose a
+        // partially generated world while leaving this plan at its old boundary.
+        let mut next_world = map.world.clone();
+        let mut next_regions = map.generation_regions.clone();
         let receipt = crate::continent::execute_continent_prefix_with_regions(
             &self.inputs,
             style,
-            &mut map.world,
-            &mut map.generation_regions,
+            &mut next_world,
+            &mut next_regions,
         )
         .map_err(InitialItemReconstructionError::ContinentPrefix)?;
-        self.boundary = match &receipt.stop {
+        let mut post_continent = None;
+        let boundary = match &receipt.stop {
             crate::continent::ContinentStop::HookComplete { next_va } => {
-                InitialItemBoundary::MapPostContinentUnavailable {
-                    map_style: receipt.map_style,
-                    make_continents_va: receipt.make_continents_va,
-                    next_va: *next_va,
-                }
+                debug_assert_eq!(*next_va, crate::post_continent::REGIONS_CLEAR_ALL_VA);
+                let limits = crate::post_continent::TerritoryLimits::from_world_prefix(&next_world);
+                let post = crate::post_continent::execute_post_continent(
+                    &mut next_world,
+                    &mut next_regions,
+                    limits,
+                )
+                .map_err(InitialItemReconstructionError::PostContinent)?;
+                let next_va = post.next_va;
+                post_continent = Some(post);
+                InitialItemBoundary::MapTerrainGroupsUnavailable { next_va }
             }
             crate::continent::ContinentStop::MakeRegion { primitive_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
@@ -601,6 +613,10 @@ impl InitialItemReconstruction {
                 }
             }
         };
+        map.world = next_world;
+        map.generation_regions = next_regions;
+        self.post_continent = post_continent;
+        self.boundary = boundary;
         Ok(receipt)
     }
 }
@@ -666,6 +682,7 @@ impl InitialState {
             inputs,
             rules: self.rules,
             style: None,
+            post_continent: None,
             boundary,
         }
     }

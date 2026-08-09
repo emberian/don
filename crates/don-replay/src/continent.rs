@@ -19,14 +19,13 @@ use crate::player_land::{
 use crate::pools::{
     execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
 };
+pub use crate::post_continent::{REGIONS_CLEAR_ALL_VA, REGIONS_FIND_ALL_VA};
 use don_sim::rng::Random;
 use don_sim::systems::combat::circle_table;
 use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
 use don_sim::systems::regions::Regions;
 use don_sim::trig::{cosx, sinx};
 
-pub const REGIONS_CLEAR_ALL_VA: u32 = 0x0068_0060;
-pub const REGIONS_FIND_ALL_VA: u32 = 0x0067_eff0;
 pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
