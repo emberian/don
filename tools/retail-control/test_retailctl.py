@@ -545,6 +545,120 @@ class RetailCtlTests(unittest.TestCase):
                 "checksum", [{**checksum, "checksum_total_consistent": 0}]
             )
 
+    def test_netsys_launcher_profiles_are_process_local_and_load_only_first(self):
+        load_environment = retailctl.netsys_environment("load-only")
+        self.assertEqual(load_environment["DON_NET_NAME"], "Ai")
+        self.assertEqual(load_environment["DON_NET_ID"], "1")
+        self.assertEqual(load_environment["DON_NET_LOAD_ONLY"], "1")
+        load_launcher = retailctl.netsys_launcher_text("load-only", load_environment)
+        self.assertLess(
+            load_launcher.index('set "DON_NET_LOAD_ONLY="'),
+            load_launcher.index('set "DON_NET_LOAD_ONLY=1"'),
+        )
+        host_environment = retailctl.netsys_environment("host", "127.0.0.1:31337")
+        self.assertNotIn("DON_NET_LOAD_ONLY", host_environment)
+        host_launcher = retailctl.netsys_launcher_text("host", host_environment)
+        self.assertIn('set "DON_NET_LOAD_ONLY="', host_launcher)
+        self.assertNotIn('set "DON_NET_LOAD_ONLY=1"', host_launcher)
+        self.assertIn(f'"{retailctl.RETAIL_EXE}"', host_launcher)
+        bridge_environment = retailctl.netsys_environment(
+            "host-bridge", "127.0.0.1:31337"
+        )
+        self.assertEqual(bridge_environment["DON_NET_SETUP_BRIDGE"], "1")
+        bridge_launcher = retailctl.netsys_launcher_text(
+            "host-bridge", bridge_environment
+        )
+        self.assertLess(
+            bridge_launcher.index('set "DON_NET_SETUP_BRIDGE="'),
+            bridge_launcher.index('set "DON_NET_SETUP_BRIDGE=1"'),
+        )
+        with self.assertRaisesRegex(ValueError, "loopback or 0.0.0.0"):
+            retailctl.netsys_environment("host", "192.0.2.1:31337")
+
+    def test_netsys_manifest_is_bound_to_shipped_backup_and_exact_environment(self):
+        environment = retailctl.netsys_environment("load-only")
+        manifest = {
+            "schema": retailctl.NETSYS_SCHEMA,
+            "state": "installed",
+            "created_unix_ms": 1,
+            "credential_material": "none",
+            "task_name": retailctl.NETSYS_TASK_NAME,
+            "retail_executable": {
+                "path": retailctl.RETAIL_EXE,
+                "size": 9_925_120,
+                "sha256": retailctl.EXPECTED_SHA256,
+            },
+            "original_dll": {
+                "path": retailctl.RETAIL_NETSYS_DLL,
+                "size": retailctl.EXPECTED_NETSYS_SIZE,
+                "sha256": retailctl.EXPECTED_NETSYS_SHA256,
+            },
+            "backup_dll": {
+                "path": retailctl.NETSYS_BACKUP,
+                "size": retailctl.EXPECTED_NETSYS_SIZE,
+                "sha256": retailctl.EXPECTED_NETSYS_SHA256,
+            },
+            "shim": {
+                "path": retailctl.NETSYS_STAGED,
+                "size": 188_928,
+                "sha256": "a" * 64,
+            },
+            "mode": "load-only",
+            "environment": environment,
+            "launcher_sha256": "b" * 64,
+        }
+        self.assertIs(retailctl.validate_netsys_manifest(manifest), manifest)
+        wrong_backup = copy.deepcopy(manifest)
+        wrong_backup["backup_dll"]["sha256"] = "c" * 64
+        with self.assertRaisesRegex(ValueError, "shipped files"):
+            retailctl.validate_netsys_manifest(wrong_backup)
+        leaked_environment = copy.deepcopy(manifest)
+        leaked_environment["environment"]["STEAM_TICKET"] = "forbidden"
+        with self.assertRaisesRegex(ValueError, "exact supported profile"):
+            retailctl.validate_netsys_manifest(leaked_environment)
+
+    def test_netsys_trace_is_contiguous_pid_bound_and_credential_free(self):
+        trace = (
+            "seq=1 pid=77 call=factory.get_netsys_object_ptr\n"
+            "seq=2 pid=77 factory=ready abi=netsys-v65 role=Host "
+            "load_only=true local_addr=127.0.0.1:49152\n"
+            "seq=3 pid=77 call=vtable.ns_error_set_callback\n"
+            "seq=4 pid=77 call=vtable.ns_set_profiler\n"
+        )
+        parsed = retailctl.parse_netsys_trace(trace, 77)
+        self.assertTrue(parsed["load_only"])
+        self.assertEqual(len(parsed["records"]), 4)
+        retailctl.validate_netsys_load_only_frontier(parsed)
+        self.assertEqual(retailctl.parse_netsys_exit(b"exit_code=0\r\n"), {"exit_code": 0})
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            retailctl.parse_netsys_exit(b"result=success\n")
+        with self.assertRaisesRegex(ValueError, "sequence"):
+            retailctl.parse_netsys_trace(trace.replace("seq=2", "seq=3"), 77)
+        with self.assertRaisesRegex(ValueError, "multiple process|does not match"):
+            retailctl.parse_netsys_trace(trace.replace("pid=77 factory", "pid=78 factory"))
+        with self.assertRaisesRegex(ValueError, "credential"):
+            retailctl.parse_netsys_trace(trace + "seq=5 pid=77 token=abc\n", 77)
+        bridge_off = retailctl.parse_netsys_trace(
+            "seq=1 pid=81 call=factory.get_netsys_object_ptr\n"
+            "seq=2 pid=81 factory=ready abi=netsys-v65 role=Host "
+            "load_only=false local_addr=127.0.0.1:31337\n"
+            "seq=3 pid=81 call=vtable.ns_host\n"
+            "seq=4 pid=81 callback=NetMessenger.on_player_added player_non_null=true\n"
+            "seq=5 pid=81 callback=NetMessenger.on_player_added player_non_null=true\n",
+            81,
+        )
+        retailctl.validate_netsys_bridge_off_frontier(bridge_off)
+
+    def test_encoded_guest_powershell_preserves_quotes_without_shell_reparsing(self):
+        completed = mock.Mock(stdout="ok\r\n")
+        with mock.patch.object(retailctl, "run", return_value=completed) as invoked:
+            self.assertEqual(retailctl.guest_ps_encoded("Write-Output 'Ai'"), "ok")
+        arguments = invoked.call_args.args[0]
+        self.assertIn("-EncodedCommand", arguments)
+        payload = arguments[arguments.index("-EncodedCommand") + 1]
+        decoded = retailctl.base64.b64decode(payload).decode("utf-16le")
+        self.assertEqual(decoded, "Write-Output 'Ai'")
+
     def test_tactical_move_and_attack_replay_exact_public_identities(self):
         observation = json.loads(
             (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")

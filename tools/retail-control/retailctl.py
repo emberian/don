@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import http.server
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -38,6 +40,30 @@ MIN_DUMP_FREE_BYTES = 12 * 1024 * 1024 * 1024
 DAMAGE_HOOK = HERE.parent / "damage-hook"
 INJECTOR_SOURCE = DAMAGE_HOOK / "donject.c"
 HOST_INJECTOR = DAMAGE_HOOK / "donject.exe"
+RETAIL_ROOT = r"C:\Program Files (x86)\Steam\steamapps\common\Rise of Nations"
+RETAIL_EXE = RETAIL_ROOT + r"\riseofnations.exe"
+RETAIL_NETSYS_DLL = RETAIL_ROOT + r"\CrossplayNetLib.dll"
+EXPECTED_NETSYS_SHA256 = "d716caafa565fbe9a914ae912b981573d14e7fa19efb73d500bbd5016de6ab60"
+EXPECTED_NETSYS_SIZE = 1_198_592
+NETSYS_ROOT = r"C:\Users\Public\don-netsys-experiment"
+NETSYS_BACKUP = NETSYS_ROOT + r"\CrossplayNetLib.shipped.dll"
+NETSYS_STAGED = NETSYS_ROOT + r"\CrossplayNetLib.experimental.dll"
+NETSYS_MANIFEST = NETSYS_ROOT + r"\manifest.json"
+NETSYS_LAUNCHER = NETSYS_ROOT + r"\launch.cmd"
+NETSYS_LOAD_TRACE = NETSYS_ROOT + r"\trace-load-only.log"
+NETSYS_HOST_TRACE = NETSYS_ROOT + r"\trace-host.log"
+NETSYS_BRIDGE_TRACE = NETSYS_ROOT + r"\trace-host-bridge.log"
+NETSYS_LOAD_EXIT = NETSYS_ROOT + r"\exit-load-only.txt"
+NETSYS_HOST_EXIT = NETSYS_ROOT + r"\exit-host.txt"
+NETSYS_BRIDGE_EXIT = NETSYS_ROOT + r"\exit-host-bridge.txt"
+NETSYS_TASK_NAME = "don-netsys-experiment"
+DEFAULT_NETSYS_SHIM = (
+    HERE.parents[1] / "crates/netsys-shim/target/i686-pc-windows-msvc/release/"
+    "CrossplayNetLib.dll"
+)
+NETSYS_SCHEMA = "don.retail-netsys-experiment.v1"
+NETSYS_JSON_BEGIN = "DON_NETSYS_JSON_BEGIN"
+NETSYS_JSON_END = "DON_NETSYS_JSON_END"
 
 
 def validate_generation(generation: str) -> str:
@@ -114,6 +140,20 @@ def guest_ps(command: str, *, check: bool = True) -> str:
     p = run(["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-Command", command],
             check=check)
     return p.stdout.replace("\r\n", "\n").strip()
+
+
+def guest_ps_encoded(command: str, *, check: bool = True) -> str:
+    """Run PowerShell without letting prlctl consume the script's quotes."""
+    encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+    p = run(
+        ["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-EncodedCommand", encoded],
+        check=check,
+    )
+    return p.stdout.replace("\r\n", "\n").strip()
+
+
+def ps_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def pid() -> int:
@@ -277,19 +317,23 @@ def preflight(target_pid: int) -> None:
         raise SystemExit(f"REFUSING unsupported target digest; expected {EXPECTED_SHA256}:\n{out}")
 
 
-def extract_marked_json(output: str) -> object:
+def extract_json_between(output: str, begin: str, end: str) -> object:
     lines = output.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.strip() == PREFLIGHT_JSON_BEGIN]
-    ends = [i for i, line in enumerate(lines) if line.strip() == PREFLIGHT_JSON_END]
+    starts = [i for i, line in enumerate(lines) if line.strip() == begin]
+    ends = [i for i, line in enumerate(lines) if line.strip() == end]
     if len(starts) != 1 or len(ends) != 1 or ends[0] <= starts[0]:
-        raise ValueError("preflight response has missing or ambiguous JSON markers")
+        raise ValueError("response has missing or ambiguous JSON markers")
     payload = "\n".join(lines[starts[0] + 1:ends[0]]).strip()
     if not payload:
-        raise ValueError("preflight response has an empty JSON payload")
+        raise ValueError("response has an empty JSON payload")
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise ValueError("preflight response contains malformed JSON") from exc
+        raise ValueError("response contains malformed JSON") from exc
+
+
+def extract_marked_json(output: str) -> object:
+    return extract_json_between(output, PREFLIGHT_JSON_BEGIN, PREFLIGHT_JSON_END)
 
 
 def parse_ready_record(raw: object) -> dict:
@@ -3815,6 +3859,972 @@ def rearm(root: str) -> None:
     print(ready)
 
 
+def netsys_environment(mode: str, bind: str = "127.0.0.1:31337") -> dict[str, str]:
+    if mode not in {"load-only", "host", "host-bridge"}:
+        raise ValueError(f"unsupported NetSys mode {mode!r}")
+    host, separator, port_text = bind.rpartition(":")
+    try:
+        address = ipaddress.ip_address(host) if separator else None
+        port = int(port_text) if separator else 0
+    except ValueError as exc:
+        raise ValueError(f"invalid host bind {bind!r}") from exc
+    if (address is None or address.version != 4 or
+            not (address.is_loopback or address == ipaddress.ip_address("0.0.0.0")) or
+            not 1 <= port <= 65535):
+        raise ValueError("host bind must be loopback or 0.0.0.0 with a valid port")
+    trace, _ = netsys_mode_paths(mode)
+    environment = {
+        "DON_NET_ROLE": "host",
+        "DON_NET_BIND": "127.0.0.1:31337" if mode == "load-only" else bind,
+        "DON_NET_ID": "1",
+        "DON_NET_NAME": "Ai",
+        "DON_NET_TRACE": trace,
+    }
+    if mode == "load-only":
+        environment["DON_NET_LOAD_ONLY"] = "1"
+    elif mode == "host-bridge":
+        environment["DON_NET_SETUP_BRIDGE"] = "1"
+    return environment
+
+
+def netsys_mode_paths(mode: str) -> tuple[str, str]:
+    paths = {
+        "load-only": (NETSYS_LOAD_TRACE, NETSYS_LOAD_EXIT),
+        "host": (NETSYS_HOST_TRACE, NETSYS_HOST_EXIT),
+        "host-bridge": (NETSYS_BRIDGE_TRACE, NETSYS_BRIDGE_EXIT),
+    }
+    try:
+        return paths[mode]
+    except KeyError as exc:
+        raise ValueError(f"unsupported NetSys mode {mode!r}") from exc
+
+
+def netsys_launcher_text(mode: str, environment: dict[str, str]) -> str:
+    if environment != netsys_environment(mode, environment.get("DON_NET_BIND", "")):
+        raise ValueError("NetSys launcher environment is not the exact supported profile")
+    _, exit_path = netsys_mode_paths(mode)
+    lines = [
+        "@echo off",
+        "setlocal",
+        'set "DON_NET_ADDR="',
+        'set "DON_NET_LOAD_ONLY="',
+        'set "DON_NET_SETUP_BRIDGE="',
+    ]
+    for key in ["DON_NET_ROLE", "DON_NET_BIND", "DON_NET_ID", "DON_NET_NAME",
+                "DON_NET_TRACE", "DON_NET_LOAD_ONLY", "DON_NET_SETUP_BRIDGE"]:
+        if key in environment:
+            lines.append(f'set "{key}={environment[key]}"')
+    lines += [
+        f'cd /d "{RETAIL_ROOT}"',
+        f'"{RETAIL_EXE}"',
+        "set DON_NET_EXIT_CODE=%ERRORLEVEL%",
+        f'>"{exit_path}" echo exit_code=%DON_NET_EXIT_CODE%',
+        "exit /b %DON_NET_EXIT_CODE%",
+    ]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def parse_netsys_trace(raw: str, expected_pid: int | None = None) -> dict:
+    encoded = raw.encode("utf-8")
+    if len(encoded) > 1024 * 1024:
+        raise ValueError("NetSys trace exceeds the 1 MiB evidence bound")
+    lines = raw.replace("\r\n", "\n").splitlines()
+    if not lines or len(lines) > 4096:
+        raise ValueError("NetSys trace is empty or exceeds 4096 records")
+    records = []
+    expected_sequence = 1
+    first_pid = None
+    sensitive = re.compile(
+        r"(?i)(?:ticket|token|secret|credential|lobby_id|platform_id|steam_id)="
+    )
+    for line in lines:
+        match = re.fullmatch(r"seq=([0-9]+) pid=([0-9]+) ([ -~]+)", line)
+        if not match:
+            raise ValueError("NetSys trace has a malformed or non-ASCII record")
+        sequence = int(match.group(1))
+        trace_pid = int(match.group(2))
+        detail = match.group(3)
+        if sequence != expected_sequence:
+            raise ValueError("NetSys trace sequence is not contiguous from one")
+        if expected_pid is not None and trace_pid != expected_pid:
+            raise ValueError("NetSys trace PID does not match the retail process")
+        if first_pid is None:
+            first_pid = trace_pid
+        elif trace_pid != first_pid:
+            raise ValueError("NetSys trace mixes multiple process identities")
+        if sensitive.search(detail):
+            raise ValueError("NetSys trace contains prohibited credential/identity material")
+        records.append({"sequence": sequence, "pid": trace_pid, "detail": detail})
+        expected_sequence += 1
+    factory = [record for record in records if record["detail"].startswith("factory=ready ")]
+    return {
+        "records": records,
+        "factory_ready": factory[-1]["detail"] if len(factory) == 1 else None,
+        "load_only": len(factory) == 1 and " load_only=true " in factory[0]["detail"],
+    }
+
+
+def validate_netsys_load_only_frontier(trace: dict) -> None:
+    if not trace.get("load_only") or trace.get("factory_ready") is None:
+        raise ValueError("trace does not prove a load-only factory boundary")
+    details = [record.get("detail") for record in trace.get("records", [])]
+    required = [
+        "call=factory.get_netsys_object_ptr",
+        trace["factory_ready"],
+        "call=vtable.ns_error_set_callback",
+        "call=vtable.ns_set_profiler",
+    ]
+    positions = []
+    for detail in required:
+        matches = [index for index, value in enumerate(details) if value == detail]
+        if len(matches) != 1:
+            raise ValueError(f"load-only trace lacks one exact {detail!r} boundary")
+        positions.append(matches[0])
+    if positions != sorted(positions):
+        raise ValueError("load-only loader frontier is not chronological")
+
+
+def validate_netsys_bridge_off_frontier(trace: dict) -> None:
+    if trace.get("load_only") or trace.get("factory_ready") is None:
+        raise ValueError("trace does not prove a transport-enabled factory boundary")
+    details = [record.get("detail") for record in trace.get("records", [])]
+    factory_call = [index for index, detail in enumerate(details)
+                    if detail == "call=factory.get_netsys_object_ptr"]
+    factory_ready = [index for index, detail in enumerate(details)
+                     if detail == trace["factory_ready"]]
+    host_call = [index for index, detail in enumerate(details)
+                 if detail == "call=vtable.ns_host"]
+    additions = [index for index, detail in enumerate(details)
+                 if detail == "callback=NetMessenger.on_player_added player_non_null=true"]
+    if len(factory_call) != 1 or len(factory_ready) != 1 or len(host_call) != 1:
+        raise ValueError("bridge-off trace lacks exact factory/host boundaries")
+    if len(additions) < 1:
+        raise ValueError("bridge-off trace does not prove a player-added callback frontier")
+    if not factory_call[0] < factory_ready[0] < host_call[0] < additions[0]:
+        raise ValueError("bridge-off host/roster frontier is not chronological")
+
+
+def parse_netsys_exit(raw: bytes) -> dict:
+    try:
+        text = raw.decode("ascii", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError("retail exit record is not ASCII") from exc
+    match = re.fullmatch(r"exit_code=(-?[0-9]+)", text)
+    if not match:
+        raise ValueError("retail exit record is malformed")
+    value = int(match.group(1))
+    if not -(2 ** 31) <= value < 2 ** 32:
+        raise ValueError("retail exit code is outside the Windows process range")
+    return {"exit_code": value}
+
+
+def _netsys_file_identity(value: object, expected_path: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"NetSys manifest identity for {expected_path} is not an object")
+    if set(value) != {"path", "size", "sha256"}:
+        raise ValueError(f"NetSys manifest identity for {expected_path} has invalid fields")
+    path = value.get("path")
+    size = value.get("size")
+    digest = value.get("sha256")
+    if (not isinstance(path, str) or normalize_windows_path(path) !=
+            normalize_windows_path(expected_path) or
+            not isinstance(size, int) or size <= 0 or
+            not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise ValueError(f"NetSys manifest identity for {expected_path} is invalid")
+    return value
+
+
+def validate_netsys_manifest(manifest: object) -> dict:
+    if not isinstance(manifest, dict):
+        raise ValueError("NetSys manifest is not an object")
+    required = {
+        "schema", "state", "created_unix_ms", "credential_material", "task_name",
+        "retail_executable", "original_dll", "backup_dll", "shim", "mode",
+        "environment", "launcher_sha256",
+    }
+    if set(manifest) != required:
+        raise ValueError("NetSys manifest fields are incomplete or unexpected")
+    if (manifest.get("schema") != NETSYS_SCHEMA or
+            manifest.get("state") not in {"snapshot", "replacement-staged", "installed",
+                                           "restored"} or
+            not isinstance(manifest.get("created_unix_ms"), int) or
+            manifest.get("credential_material") != "none" or
+            manifest.get("task_name") != NETSYS_TASK_NAME):
+        raise ValueError("NetSys manifest header is invalid")
+    exe = _netsys_file_identity(manifest["retail_executable"], RETAIL_EXE)
+    original = _netsys_file_identity(manifest["original_dll"], RETAIL_NETSYS_DLL)
+    backup = _netsys_file_identity(manifest["backup_dll"], NETSYS_BACKUP)
+    if (exe["sha256"] != EXPECTED_SHA256 or
+            original["sha256"] != EXPECTED_NETSYS_SHA256 or
+            original["size"] != EXPECTED_NETSYS_SIZE or
+            backup["sha256"] != original["sha256"] or
+            backup["size"] != original["size"]):
+        raise ValueError("NetSys manifest is not bound to the supported shipped files")
+    shim = manifest["shim"]
+    mode = manifest["mode"]
+    environment = manifest["environment"]
+    launcher_sha256 = manifest["launcher_sha256"]
+    if manifest["state"] == "snapshot" or (
+            manifest["state"] == "restored" and shim is None):
+        if shim is not None or mode is not None or environment != {} or launcher_sha256 is not None:
+            raise ValueError("snapshot NetSys manifest unexpectedly contains launch state")
+    else:
+        shim = _netsys_file_identity(shim, NETSYS_STAGED)
+        if (shim["sha256"] == EXPECTED_NETSYS_SHA256 or
+                not 64 * 1024 <= shim["size"] <= 16 * 1024 * 1024):
+            raise ValueError("NetSys replacement identity is not a bounded distinct DLL")
+        if mode not in {"load-only", "host", "host-bridge"} or not isinstance(
+                environment, dict):
+            raise ValueError("NetSys manifest mode/environment is invalid")
+        if environment != netsys_environment(mode, environment.get("DON_NET_BIND", "")):
+            raise ValueError("NetSys manifest environment is not an exact supported profile")
+        if not isinstance(launcher_sha256, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", launcher_sha256):
+            raise ValueError("NetSys manifest launcher identity is invalid")
+    return manifest
+
+
+def guest_file_record(path: str) -> dict:
+    literal = ps_literal(path)
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$path = {literal}
+if (Test-Path -LiteralPath $path -PathType Leaf) {{
+    $file = Get-Item -LiteralPath $path
+    $record = [pscustomobject]@{{
+        present = $true
+        path = $file.FullName
+        size = [int64]$file.Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+    }}
+}} else {{
+    $record = [pscustomobject]@{{ present = $false; path = $path }}
+}}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    record = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+    )
+    if not isinstance(record, dict) or not isinstance(record.get("present"), bool):
+        raise ValueError(f"guest returned an invalid file record for {path}")
+    if (not isinstance(record.get("path"), str) or
+            normalize_windows_path(record["path"]) != normalize_windows_path(path)):
+        raise ValueError(f"guest file record path does not match {path}")
+    if record["present"]:
+        if (set(record) != {"present", "path", "size", "sha256"} or
+                not isinstance(record.get("size"), int) or record["size"] <= 0 or
+                not isinstance(record.get("sha256"), str) or
+                not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])):
+            raise ValueError(f"guest returned an invalid file identity for {path}")
+    elif set(record) != {"present", "path"}:
+        raise ValueError(f"guest returned unexpected missing-file fields for {path}")
+    return record
+
+
+def guest_read_bytes(path: str, maximum: int) -> bytes:
+    if maximum <= 0 or maximum > 4 * 1024 * 1024:
+        raise ValueError("guest read bound is invalid")
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$path = {ps_literal(path)}
+$file = Get-Item -LiteralPath $path
+if ($file.Length -gt {maximum}) {{ throw 'file exceeds host evidence bound' }}
+Write-Output '{NETSYS_JSON_BEGIN}'
+Write-Output ([Convert]::ToBase64String([IO.File]::ReadAllBytes($path)))
+Write-Output '{NETSYS_JSON_END}'
+"""
+    output = guest_ps_encoded(script)
+    lines = output.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == NETSYS_JSON_BEGIN]
+    ends = [i for i, line in enumerate(lines) if line.strip() == NETSYS_JSON_END]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] != starts[0] + 2:
+        raise ValueError("guest byte response has missing or ambiguous markers")
+    try:
+        data = base64.b64decode(lines[starts[0] + 1].strip(), validate=True)
+    except ValueError as exc:
+        raise ValueError("guest byte response is not canonical base64") from exc
+    if len(data) > maximum:
+        raise ValueError("guest byte response exceeds its declared bound")
+    return data
+
+
+def guest_write_bytes(path: str, data: bytes) -> None:
+    encoded = base64.b64encode(data).decode("ascii")
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$path = {ps_literal(path)}
+$directory = Split-Path -Parent $path
+[IO.Directory]::CreateDirectory($directory) | Out-Null
+$temp = $path + '.write.tmp'
+[IO.File]::WriteAllBytes($temp, [Convert]::FromBase64String('{encoded}'))
+if (Test-Path -LiteralPath $path -PathType Leaf) {{
+    [IO.File]::Replace($temp, $path, $null)
+}} else {{
+    [IO.File]::Move($temp, $path)
+}}
+"""
+    guest_ps_encoded(script)
+
+
+def read_netsys_manifest() -> dict:
+    try:
+        raw = guest_read_bytes(NETSYS_MANIFEST, 64 * 1024)
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("NetSys manifest is not canonical UTF-8 JSON") from exc
+    return validate_netsys_manifest(manifest)
+
+
+def write_netsys_manifest(manifest: dict) -> None:
+    validate_netsys_manifest(manifest)
+    guest_write_bytes(
+        NETSYS_MANIFEST,
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+
+
+def require_retail_absent(operation: str) -> None:
+    try:
+        pids, detail = process_pids()
+    except RuntimeError as exc:
+        raise SystemExit(f"REFUSING {operation}: {exc}") from exc
+    if pids:
+        raise SystemExit(
+            f"REFUSING {operation} while riseofnations.exe is running as {pids}; "
+            "close the disposable retail process first"
+        )
+    if detail and any(line.strip().isdigit() for line in detail.splitlines()):
+        raise SystemExit(f"REFUSING {operation}: process enumeration was ambiguous")
+
+
+def host_netsys_identity(shim: Path) -> dict:
+    shim = shim.resolve()
+    if not shim.is_file() or shim.name.lower() != "crossplaynetlib.dll":
+        raise SystemExit("replacement must be an existing file named CrossplayNetLib.dll")
+    if shim != DEFAULT_NETSYS_SHIM.resolve():
+        raise SystemExit("replacement must be the current parity-gated netsys-shim build")
+    parity = run([
+        "uv", "run", "--with", "pefile", "--with", "capstone", "python",
+        str(HERE.parents[1] / "crates/netsys-shim/check-exports.py"),
+    ])
+    if not parity.stdout.splitlines() or parity.stdout.splitlines()[-1].strip() != "PASS":
+        raise SystemExit(f"replacement export/ABI parity gate did not pass:\n{parity.stdout}")
+    identity = run(["file", str(shim)]).stdout.strip()
+    if "PE32 executable" not in identity or "Intel 80386" not in identity or "DLL" not in identity:
+        raise SystemExit(f"replacement is not a PE32/i386 DLL: {identity}")
+    size = shim.stat().st_size
+    digest = sha256_file(shim)
+    if not 64 * 1024 <= size <= 16 * 1024 * 1024 or digest == EXPECTED_NETSYS_SHA256:
+        raise SystemExit("replacement DLL identity is unbounded or identical to the shipped DLL")
+    return {"path": str(shim), "size": size, "sha256": digest}
+
+
+def netsys_snapshot() -> dict:
+    require_retail_absent("NetSys snapshot")
+    if guest_file_record(NETSYS_MANIFEST)["present"]:
+        raise SystemExit("REFUSING to overwrite an existing NetSys experiment manifest")
+    exe = guest_file_record(RETAIL_EXE)
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    stale_paths = [
+        path for path in [NETSYS_BACKUP, NETSYS_STAGED, NETSYS_LAUNCHER,
+                          NETSYS_LOAD_TRACE, NETSYS_HOST_TRACE, NETSYS_BRIDGE_TRACE,
+                          NETSYS_LOAD_EXIT, NETSYS_HOST_EXIT, NETSYS_BRIDGE_EXIT]
+        if guest_file_record(path)["present"]
+    ]
+    if stale_paths:
+        raise SystemExit(
+            "REFUSING orphaned NetSys experiment files without a manifest: " +
+            ", ".join(stale_paths)
+        )
+    if (not exe["present"] or exe["sha256"] != EXPECTED_SHA256 or
+            not target["present"] or target["sha256"] != EXPECTED_NETSYS_SHA256 or
+            target["size"] != EXPECTED_NETSYS_SIZE):
+        raise SystemExit(
+            "REFUSING snapshot: retail executable/DLL identity is not shipped ground truth"
+        )
+    script = f"""
+$ErrorActionPreference = 'Stop'
+[IO.Directory]::CreateDirectory({ps_literal(NETSYS_ROOT)}) | Out-Null
+$temp = {ps_literal(NETSYS_BACKUP + '.tmp')}
+if (Test-Path -LiteralPath $temp) {{ Remove-Item -LiteralPath $temp -Force }}
+[IO.File]::Copy({ps_literal(RETAIL_NETSYS_DLL)}, $temp, $false)
+[IO.File]::Move($temp, {ps_literal(NETSYS_BACKUP)})
+"""
+    guest_ps_encoded(script)
+    backup = guest_file_record(NETSYS_BACKUP)
+    if (not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256 or
+            backup["size"] != EXPECTED_NETSYS_SIZE):
+        raise SystemExit("REFUSING experiment: the immutable backup did not verify")
+    manifest = {
+        "schema": NETSYS_SCHEMA,
+        "state": "snapshot",
+        "created_unix_ms": int(time.time() * 1000),
+        "credential_material": "none",
+        "task_name": NETSYS_TASK_NAME,
+        "retail_executable": {key: exe[key] for key in ("path", "size", "sha256")},
+        "original_dll": {key: target[key] for key in ("path", "size", "sha256")},
+        "backup_dll": {key: backup[key] for key in ("path", "size", "sha256")},
+        "shim": None,
+        "mode": None,
+        "environment": {},
+        "launcher_sha256": None,
+    }
+    write_netsys_manifest(manifest)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return manifest
+
+
+def netsys_replace(shim: Path, port: int) -> dict:
+    require_retail_absent("NetSys replacement")
+    manifest = read_netsys_manifest()
+    if manifest["state"] not in {"snapshot", "restored"}:
+        raise SystemExit("REFUSING replacement: experiment is not at a shipped-DLL boundary")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    backup = guest_file_record(NETSYS_BACKUP)
+    if (not target["present"] or target["sha256"] != EXPECTED_NETSYS_SHA256 or
+            not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256):
+        raise SystemExit("REFUSING replacement: target/backup does not prove shipped state")
+    host = host_netsys_identity(shim)
+    server = serve_once(port, shim.resolve().parent)
+    download = NETSYS_STAGED + ".download"
+    try:
+        guest_cmd(
+            f'curl.exe -f -sS -o "{download}" '
+            f'http://10.211.55.2:{port}/CrossplayNetLib.dll'
+        )
+        downloaded = guest_file_record(download)
+        if (not downloaded["present"] or downloaded["sha256"] != host["sha256"] or
+                downloaded["size"] != host["size"]):
+            raise SystemExit("REFUSING replacement: guest download does not match host DLL")
+        guest_ps_encoded(
+            f"Move-Item -LiteralPath {ps_literal(download)} "
+            f"-Destination {ps_literal(NETSYS_STAGED)} -Force"
+        )
+        staged = guest_file_record(NETSYS_STAGED)
+        if staged["sha256"] != host["sha256"] or staged["size"] != host["size"]:
+            raise SystemExit("REFUSING replacement: staged DLL identity changed")
+        environment = netsys_environment("load-only")
+        launcher = netsys_launcher_text("load-only", environment).encode("ascii")
+        guest_write_bytes(NETSYS_LAUNCHER, launcher)
+        launcher_hash = hashlib.sha256(launcher).hexdigest()
+        manifest.update({
+            "state": "replacement-staged",
+            "shim": {
+                "path": NETSYS_STAGED,
+                "size": staged["size"],
+                "sha256": staged["sha256"],
+            },
+            "mode": "load-only",
+            "environment": environment,
+            "launcher_sha256": launcher_hash,
+        })
+        write_netsys_manifest(manifest)
+        require_retail_absent("NetSys replacement final gate")
+        final_target = guest_file_record(RETAIL_NETSYS_DLL)
+        final_backup = guest_file_record(NETSYS_BACKUP)
+        if (final_target.get("sha256") != EXPECTED_NETSYS_SHA256 or
+                final_backup.get("sha256") != EXPECTED_NETSYS_SHA256):
+            raise SystemExit("REFUSING replacement: shipped target/backup changed before swap")
+        temp = RETAIL_NETSYS_DLL + ".don-next"
+        script = f"""
+$ErrorActionPreference = 'Stop'
+if (Test-Path -LiteralPath {ps_literal(temp)}) {{
+    Remove-Item -LiteralPath {ps_literal(temp)} -Force
+}}
+[IO.File]::Copy({ps_literal(NETSYS_STAGED)}, {ps_literal(temp)}, $false)
+[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
+"""
+        guest_ps_encoded(script)
+        installed = guest_file_record(RETAIL_NETSYS_DLL)
+        if installed["sha256"] != staged["sha256"] or installed["size"] != staged["size"]:
+            raise SystemExit("replacement completed without the exact staged DLL identity")
+        manifest["state"] = "installed"
+        write_netsys_manifest(manifest)
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        return manifest
+    finally:
+        guest_cmd(f'del /q "{download}" 2>nul & exit /b 0', check=False)
+        server.shutdown()
+        server.server_close()
+
+
+def netsys_configure_host(bind: str) -> dict:
+    require_retail_absent("NetSys host configuration")
+    manifest = read_netsys_manifest()
+    if manifest["state"] != "installed" or manifest["mode"] != "load-only":
+        raise SystemExit("REFUSING host mode before an installed load-only experiment")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if not target["present"] or target["sha256"] != manifest["shim"]["sha256"]:
+        raise SystemExit("REFUSING host mode: installed DLL no longer matches the manifest")
+    trace_file = guest_file_record(NETSYS_LOAD_TRACE)
+    if not trace_file["present"]:
+        raise SystemExit("REFUSING host mode without a flushed load-only retail trace")
+    try:
+        trace = parse_netsys_trace(guest_read_bytes(NETSYS_LOAD_TRACE, 1024 * 1024).decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING host mode: invalid load-only trace: {exc}") from exc
+    try:
+        validate_netsys_load_only_frontier(trace)
+    except ValueError as exc:
+        raise SystemExit(f"REFUSING host mode: {exc}") from exc
+    exit_file = guest_file_record(NETSYS_LOAD_EXIT)
+    if not exit_file["present"]:
+        raise SystemExit("REFUSING host mode until the load-only retail process exits cleanly")
+    try:
+        load_exit = parse_netsys_exit(guest_read_bytes(NETSYS_LOAD_EXIT, 1024))
+    except ValueError as exc:
+        raise SystemExit(f"REFUSING host mode: {exc}") from exc
+    if load_exit["exit_code"] != 0:
+        raise SystemExit(
+            f"REFUSING host mode after load-only exit code {load_exit['exit_code']}"
+        )
+    if guest_file_record(NETSYS_HOST_TRACE)["present"]:
+        raise SystemExit("REFUSING to append to an existing host-mode trace")
+    environment = netsys_environment("host", bind)
+    launcher = netsys_launcher_text("host", environment).encode("ascii")
+    guest_write_bytes(NETSYS_LAUNCHER, launcher)
+    manifest.update({
+        "mode": "host",
+        "environment": environment,
+        "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
+    })
+    write_netsys_manifest(manifest)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return manifest
+
+
+def netsys_configure_bridge() -> dict:
+    require_retail_absent("NetSys setup-bridge configuration")
+    manifest = read_netsys_manifest()
+    if manifest["state"] != "installed" or manifest["mode"] != "host":
+        raise SystemExit("REFUSING setup bridge before a bridge-off host experiment")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if not target["present"] or target["sha256"] != manifest["shim"]["sha256"]:
+        raise SystemExit("REFUSING setup bridge: installed DLL no longer matches the manifest")
+    trace_file = guest_file_record(NETSYS_HOST_TRACE)
+    if not trace_file["present"]:
+        raise SystemExit("REFUSING setup bridge without a flushed bridge-off host trace")
+    try:
+        trace = parse_netsys_trace(
+            guest_read_bytes(NETSYS_HOST_TRACE, 1024 * 1024).decode("utf-8")
+        )
+        validate_netsys_bridge_off_frontier(trace)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING setup bridge: invalid host trace: {exc}") from exc
+    exit_file = guest_file_record(NETSYS_HOST_EXIT)
+    if not exit_file["present"]:
+        raise SystemExit("REFUSING setup bridge until the bridge-off host exits cleanly")
+    try:
+        host_exit = parse_netsys_exit(guest_read_bytes(NETSYS_HOST_EXIT, 1024))
+    except ValueError as exc:
+        raise SystemExit(f"REFUSING setup bridge: {exc}") from exc
+    if host_exit["exit_code"] != 0:
+        raise SystemExit(
+            f"REFUSING setup bridge after bridge-off exit code {host_exit['exit_code']}"
+        )
+    if guest_file_record(NETSYS_BRIDGE_TRACE)["present"]:
+        raise SystemExit("REFUSING to append to an existing setup-bridge trace")
+    bind = manifest["environment"]["DON_NET_BIND"]
+    environment = netsys_environment("host-bridge", bind)
+    launcher = netsys_launcher_text("host-bridge", environment).encode("ascii")
+    guest_write_bytes(NETSYS_LAUNCHER, launcher)
+    manifest.update({
+        "mode": "host-bridge",
+        "environment": environment,
+        "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
+    })
+    write_netsys_manifest(manifest)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return manifest
+
+
+def delete_netsys_task() -> None:
+    guest_cmd(
+        f'schtasks.exe /delete /tn "\\{NETSYS_TASK_NAME}" /f >nul 2>nul & exit /b 0',
+        check=False,
+    )
+
+
+def netsys_process_record(target_pid: int) -> dict:
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$process = Get-Process -Id {target_pid}
+$record = [pscustomobject]@{{
+    pid = [int]$process.Id
+    path = $process.Path
+    session_id = [int]$process.SessionId
+    start_utc = $process.StartTime.ToUniversalTime().ToString('o')
+}}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    record = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+    )
+    if (not isinstance(record, dict) or set(record) !=
+            {"pid", "path", "session_id", "start_utc"} or
+            record.get("pid") != target_pid or
+            not isinstance(record.get("session_id"), int) or record["session_id"] <= 0 or
+            not isinstance(record.get("start_utc"), str) or
+            not isinstance(record.get("path"), str) or
+            normalize_windows_path(record["path"]) != normalize_windows_path(RETAIL_EXE)):
+        raise ValueError("retail process identity/session record is invalid")
+    return record
+
+
+def netsys_launch(timeout: float) -> dict:
+    require_retail_absent("NetSys launch")
+    manifest = read_netsys_manifest()
+    if manifest["state"] != "installed":
+        raise SystemExit("REFUSING launch without an installed experiment DLL")
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    launcher = guest_file_record(NETSYS_LAUNCHER)
+    trace_path, exit_path = netsys_mode_paths(manifest["mode"])
+    if (not target["present"] or target["sha256"] != manifest["shim"]["sha256"] or
+            not launcher["present"] or launcher["sha256"] != manifest["launcher_sha256"]):
+        raise SystemExit("REFUSING launch: target DLL or process-local launcher changed")
+    if guest_file_record(trace_path)["present"] or guest_file_record(exit_path)["present"]:
+        raise SystemExit("REFUSING launch because this mode already has trace/exit evidence")
+    delete_netsys_task()
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$user = (Get-CimInstance Win32_ComputerSystem).UserName
+if ([string]::IsNullOrWhiteSpace($user)) {{ throw 'no interactive Windows user' }}
+$sessions = @(Get-Process -Name explorer -ErrorAction Stop |
+    Where-Object {{ $_.SessionId -gt 0 }} | Select-Object -ExpandProperty SessionId -Unique)
+if ($sessions.Count -ne 1) {{ throw 'interactive explorer session is missing or ambiguous' }}
+$service = New-Object -ComObject 'Schedule.Service'
+$service.Connect()
+$folder = $service.GetFolder('\\')
+$definition = $service.NewTask(0)
+$definition.RegistrationInfo.Description = 'Disposable credential-free DON NetSys launch'
+$definition.Settings.Enabled = $true
+$definition.Settings.AllowDemandStart = $true
+$definition.Settings.DisallowStartIfOnBatteries = $false
+$definition.Settings.StopIfGoingOnBatteries = $false
+$definition.Settings.ExecutionTimeLimit = 'PT0S'
+$definition.Principal.UserId = $user
+$definition.Principal.LogonType = 3
+$definition.Principal.RunLevel = 0
+$action = $definition.Actions.Create(0)
+$action.Path = "$env:SystemRoot\\System32\\cmd.exe"
+$action.Arguments = {ps_literal('/d /c call "' + NETSYS_LAUNCHER + '"')}
+$action.WorkingDirectory = {ps_literal(NETSYS_ROOT)}
+$task = $folder.RegisterTaskDefinition(
+    {ps_literal(NETSYS_TASK_NAME)}, $definition, 6, $user, $null, 3, $null)
+$null = $task.Run($null)
+$record = [pscustomobject]@{{ session_id = [int]$sessions[0]; task_started = $true }}
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $record -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    try:
+        launched = extract_json_between(
+            guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+        )
+        if (not isinstance(launched, dict) or launched.get("task_started") is not True or
+                not isinstance(launched.get("session_id"), int)):
+            raise SystemExit("interactive launch task returned an invalid record")
+        deadline = time.monotonic() + timeout
+        target_pid = None
+        while time.monotonic() < deadline:
+            pids, _ = process_pids()
+            if len(pids) == 1:
+                target_pid = pids[0]
+                break
+            if len(pids) > 1:
+                raise SystemExit(f"launch created ambiguous retail processes: {pids}")
+            time.sleep(0.1)
+        if target_pid is None:
+            raise SystemExit("interactive launch did not produce a retail process")
+        process = netsys_process_record(target_pid)
+        if process["session_id"] != launched["session_id"]:
+            raise SystemExit("retail launched outside the one interactive Explorer session")
+        result = {
+            "schema": NETSYS_SCHEMA,
+            "operation": "launch",
+            "credential_material": "none",
+            "mode": manifest["mode"],
+            "environment": manifest["environment"],
+            "process": process,
+            "host_activation": (
+                "not-applicable-load-only" if manifest["mode"] == "load-only" else
+                "staged-awaiting-retail-ui-or-explicit-invoke; launcher does not call ns_host"
+            ),
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return result
+    finally:
+        delete_netsys_task()
+
+
+def netsys_listener_records(target_pid: int) -> list[dict]:
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$rows = @(Get-NetTCPConnection -OwningProcess {target_pid} -ErrorAction SilentlyContinue |
+    Sort-Object LocalAddress, LocalPort, State |
+    ForEach-Object {{
+        [pscustomobject]@{{
+            local_address = $_.LocalAddress
+            local_port = [int]$_.LocalPort
+            state = [string]$_.State
+        }}
+    }})
+Write-Output '{NETSYS_JSON_BEGIN}'
+ConvertTo-Json -InputObject $rows -Compress
+Write-Output '{NETSYS_JSON_END}'
+"""
+    rows = extract_json_between(
+        guest_ps_encoded(script), NETSYS_JSON_BEGIN, NETSYS_JSON_END
+    )
+    if not isinstance(rows, list):
+        raise ValueError("TCP listener response is not an array")
+    normalized = []
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) !=
+                {"local_address", "local_port", "state"} or
+                not isinstance(row.get("local_address"), str) or
+                not isinstance(row.get("local_port"), int) or
+                not 0 <= row["local_port"] <= 65535 or
+                not isinstance(row.get("state"), str)):
+            raise ValueError("TCP listener response has an invalid row")
+        normalized.append(row)
+    return normalized
+
+
+def netsys_status() -> dict:
+    manifest_record = guest_file_record(NETSYS_MANIFEST)
+    manifest = read_netsys_manifest() if manifest_record["present"] else None
+    try:
+        pids, process_detail = process_pids()
+        process_error = None
+    except RuntimeError as exc:
+        pids, process_detail, process_error = [], "", str(exc)
+    files = {}
+    for label, path in {
+        "retail_executable": RETAIL_EXE,
+        "target_dll": RETAIL_NETSYS_DLL,
+        "backup_dll": NETSYS_BACKUP,
+        "staged_dll": NETSYS_STAGED,
+        "launcher": NETSYS_LAUNCHER,
+        "load_only_trace": NETSYS_LOAD_TRACE,
+        "host_trace": NETSYS_HOST_TRACE,
+        "host_bridge_trace": NETSYS_BRIDGE_TRACE,
+    }.items():
+        files[label] = guest_file_record(path)
+    exits = {}
+    for label, path in {
+        "load-only": NETSYS_LOAD_EXIT,
+        "host": NETSYS_HOST_EXIT,
+        "host-bridge": NETSYS_BRIDGE_EXIT,
+    }.items():
+        record = guest_file_record(path)
+        if record["present"]:
+            try:
+                exits[label] = parse_netsys_exit(guest_read_bytes(path, 1024))
+            except ValueError as exc:
+                exits[label] = {"error": str(exc)}
+        else:
+            exits[label] = None
+    module = None
+    if len(pids) == 1:
+        listing = remote_modules(pids[0])
+        matches = [item for item in listing.get("modules", [])
+                   if item["name"].lower() == "crossplaynetlib.dll"]
+        if listing["status"] == "ok" and len(matches) == 1:
+            item = matches[0]
+            identity = guest_file_record(item["path"])
+            module = {**item, "file_size": identity.get("size"),
+                      "sha256": identity.get("sha256")}
+        else:
+            module = {"status": "unavailable", "detail": listing.get("detail"),
+                      "match_count": len(matches)}
+    result = {
+        "schema": NETSYS_SCHEMA,
+        "operation": "status",
+        "mutation": "none",
+        "credential_material": "none",
+        "manifest": manifest,
+        "files": files,
+        "exits": exits,
+        "process": {
+            "pids": pids,
+            "enumeration_detail": process_detail,
+            "error": process_error,
+        },
+        "loaded_module": module,
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def netsys_capture(output: Path, generation: str | None, timeout: float) -> dict:
+    manifest = read_netsys_manifest()
+    if manifest["state"] != "installed":
+        raise SystemExit("REFUSING capture without an installed experiment")
+    target_pid = pid()
+    process = netsys_process_record(target_pid)
+    exe = guest_file_record(RETAIL_EXE)
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (exe["sha256"] != EXPECTED_SHA256 or
+            target["sha256"] != manifest["shim"]["sha256"]):
+        raise SystemExit("REFUSING capture: executable or installed DLL identity changed")
+    listing = remote_modules(target_pid)
+    if listing["status"] != "ok":
+        raise SystemExit("REFUSING capture: x86 module inventory is incomplete")
+    matches = [item for item in listing["modules"]
+               if item["name"].lower() == "crossplaynetlib.dll"]
+    if len(matches) != 1:
+        raise SystemExit("REFUSING capture: CrossplayNetLib module is missing or ambiguous")
+    loaded = matches[0]
+    if normalize_windows_path(loaded["path"]) != normalize_windows_path(RETAIL_NETSYS_DLL):
+        raise SystemExit("REFUSING capture: retail loaded CrossplayNetLib from another path")
+    loaded_file = guest_file_record(loaded["path"])
+    if loaded_file["sha256"] != manifest["shim"]["sha256"]:
+        raise SystemExit("REFUSING capture: mapped module file does not match the manifest")
+    trace_path, exit_path = netsys_mode_paths(manifest["mode"])
+    trace_file = guest_file_record(trace_path)
+    if not trace_file["present"]:
+        raise SystemExit("REFUSING capture without the explicit flushed mode trace")
+    try:
+        trace_raw = guest_read_bytes(trace_path, 1024 * 1024).decode("utf-8")
+        trace = parse_netsys_trace(trace_raw, target_pid)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"REFUSING malformed NetSys trace: {exc}") from exc
+    if trace["factory_ready"] is None:
+        raise SystemExit("REFUSING trace without exactly one factory-ready boundary")
+    if (manifest["mode"] == "load-only") != trace["load_only"]:
+        raise SystemExit("REFUSING trace whose load-only state contradicts the manifest")
+    if manifest["mode"] == "load-only":
+        try:
+            validate_netsys_load_only_frontier(trace)
+        except ValueError as exc:
+            raise SystemExit(f"REFUSING incomplete load-only trace: {exc}") from exc
+    elif manifest["mode"] == "host-bridge":
+        details = [record["detail"] for record in trace["records"]]
+        if (not any(detail.startswith("setup_bridge=ok action=add_player ")
+                    for detail in details) or
+                any(detail.startswith("setup_bridge=refused ") for detail in details)):
+            raise SystemExit("REFUSING setup-bridge capture without one clean bridged slot")
+    observation = None
+    if generation is not None:
+        events = send(["observe-network"], timeout, generation_root(generation))
+        terminal = [event for event in events if event.get("phase") == "observed"]
+        if len(terminal) != 1:
+            raise SystemExit("REFUSING capture without one passive network observation")
+        observation = terminal[0]
+    listeners = netsys_listener_records(target_pid)
+    if manifest["mode"] == "load-only":
+        host_activation = {"status": "not-applicable-load-only"}
+    else:
+        try:
+            validate_netsys_bridge_off_frontier(trace)
+            host_activation = {"status": "ns_host-and-player-callback-observed"}
+        except ValueError as exc:
+            host_activation = {
+                "status": "staged-awaiting-retail-ui-or-explicit-invoke",
+                "detail": str(exc),
+            }
+    exit_record = None
+    if guest_file_record(exit_path)["present"]:
+        try:
+            exit_record = parse_netsys_exit(guest_read_bytes(exit_path, 1024))
+        except ValueError as exc:
+            raise SystemExit(f"REFUSING malformed retail exit record: {exc}") from exc
+    artifact = {
+        "schema": NETSYS_SCHEMA,
+        "operation": "capture",
+        "mutation": "none except an explicitly requested passive main-thread observation",
+        "credential_material": "none",
+        "mode": manifest["mode"],
+        "environment": manifest["environment"],
+        "process": process,
+        "retail_executable": {key: exe[key] for key in ("path", "size", "sha256")},
+        "installed_dll": {key: target[key] for key in ("path", "size", "sha256")},
+        "loaded_module": {
+            "path": loaded["path"],
+            "base": loaded["base_hex"],
+            "size_of_image": loaded["size"],
+            "file_size": loaded_file["size"],
+            "sha256": loaded_file["sha256"],
+        },
+        "local_tcp_endpoints": listeners,
+        "trace": {
+            "path": trace_path,
+            "size": trace_file["size"],
+            "sha256": trace_file["sha256"],
+            "factory_ready": trace["factory_ready"],
+            "records": trace["records"],
+        },
+        "controller_observe_network": observation,
+        "host_activation": host_activation,
+        "exit": exit_record,
+        "redacted_by_design": [
+            "environment outside DON_NET_*", "tickets", "tokens", "lobby ids",
+            "platform ids", "Steam ids", "packet payloads", "remote endpoints",
+        ],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(artifact, indent=2, sort_keys=True))
+    print(f"wrote credential-free NetSys evidence to {output}")
+    return artifact
+
+
+def netsys_restore() -> dict:
+    require_retail_absent("NetSys restore")
+    manifest = read_netsys_manifest()
+    backup = guest_file_record(NETSYS_BACKUP)
+    target = guest_file_record(RETAIL_NETSYS_DLL)
+    if (not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256 or
+            backup["size"] != EXPECTED_NETSYS_SIZE):
+        raise SystemExit("REFUSING restore: immutable shipped backup does not verify")
+    allowed_current = {EXPECTED_NETSYS_SHA256}
+    if manifest["shim"] is not None:
+        allowed_current.add(manifest["shim"]["sha256"])
+    if not target["present"] or target["sha256"] not in allowed_current:
+        raise SystemExit("REFUSING restore over an unknown current CrossplayNetLib.dll")
+    delete_netsys_task()
+    if target["sha256"] != EXPECTED_NETSYS_SHA256:
+        require_retail_absent("NetSys restore final gate")
+        final_target = guest_file_record(RETAIL_NETSYS_DLL)
+        final_backup = guest_file_record(NETSYS_BACKUP)
+        if (final_target.get("sha256") != target["sha256"] or
+                final_backup.get("sha256") != EXPECTED_NETSYS_SHA256):
+            raise SystemExit("REFUSING restore: target/backup changed before swap")
+        temp = RETAIL_NETSYS_DLL + ".don-restore"
+        script = f"""
+$ErrorActionPreference = 'Stop'
+if (Test-Path -LiteralPath {ps_literal(temp)}) {{
+    Remove-Item -LiteralPath {ps_literal(temp)} -Force
+}}
+[IO.File]::Copy({ps_literal(NETSYS_BACKUP)}, {ps_literal(temp)}, $false)
+[IO.File]::Replace({ps_literal(temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
+"""
+        guest_ps_encoded(script)
+    restored = guest_file_record(RETAIL_NETSYS_DLL)
+    if (restored["sha256"] != EXPECTED_NETSYS_SHA256 or
+            restored["size"] != EXPECTED_NETSYS_SIZE):
+        raise SystemExit("restore did not reproduce the shipped DLL identity")
+    guest_cmd(f'del /q "{NETSYS_LAUNCHER}" 2>nul & exit /b 0', check=False)
+    manifest["state"] = "restored"
+    write_netsys_manifest(manifest)
+    result = {
+        "schema": NETSYS_SCHEMA,
+        "operation": "restore",
+        "state": "restored",
+        "credential_material": "none",
+        "restored_dll": {key: restored[key] for key in ("path", "size", "sha256")},
+        "backup_retained": NETSYS_BACKUP,
+        "manifest_retained": NETSYS_MANIFEST,
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="action", required=True)
@@ -3836,6 +4846,49 @@ def main() -> None:
     )
     prepare_parser.add_argument("--port", type=int, default=18081)
     sub.add_parser("build")
+    sub.add_parser(
+        "netsys-snapshot",
+        help="snapshot the closed retail CrossplayNetLib.dll into an immutable hash-bound backup",
+    )
+    netsys_replace_parser = sub.add_parser(
+        "netsys-replace",
+        help="replace the closed retail DLL and create a load-only process-local launcher",
+    )
+    netsys_replace_parser.add_argument("--shim", type=Path, default=DEFAULT_NETSYS_SHIM)
+    netsys_replace_parser.add_argument("--port", type=int, default=18083)
+    netsys_host_parser = sub.add_parser(
+        "netsys-configure-host",
+        help=("stage bridge-off host transport after load-only; does not bypass retail "
+              "UI/auth gates or invoke ns_host"),
+    )
+    netsys_host_parser.add_argument(
+        "--bind", choices=["127.0.0.1:31337", "0.0.0.0:31337"],
+        default="127.0.0.1:31337",
+    )
+    sub.add_parser(
+        "netsys-configure-bridge",
+        help="promote a proven bridge-off host run to DON_NET_SETUP_BRIDGE=1",
+    )
+    netsys_launch_parser = sub.add_parser(
+        "netsys-launch",
+        help="launch retail once in the interactive session with process-local DON_NET_* values",
+    )
+    netsys_launch_parser.add_argument("--timeout", type=float, default=30.0)
+    sub.add_parser("netsys-status", help="read-only NetSys experiment and module status")
+    netsys_capture_parser = sub.add_parser(
+        "netsys-capture",
+        help="capture credential-free process/module/trace/local-network evidence",
+    )
+    netsys_capture_parser.add_argument("--generation")
+    netsys_capture_parser.add_argument("--timeout", type=float, default=5.0)
+    netsys_capture_parser.add_argument(
+        "--output", type=Path,
+        default=HERE.parents[1] / "schema/live/retail-netsys-experiment-v1.json",
+    )
+    sub.add_parser(
+        "netsys-restore",
+        help="atomically restore the hash-bound shipped CrossplayNetLib.dll",
+    )
     d = sub.add_parser("deploy")
     d.add_argument("--pid", type=int)
     d.add_argument("--port", type=int, default=18082)
@@ -3925,6 +4978,16 @@ def main() -> None:
     elif a.action == "preflight": prelaunch_command(a.max_generations, a.pid)
     elif a.action == "prepare-injector": prepare_injector(a.port)
     elif a.action == "build": build()
+    elif a.action == "netsys-snapshot": netsys_snapshot()
+    elif a.action == "netsys-replace": netsys_replace(a.shim, a.port)
+    elif a.action == "netsys-configure-host": netsys_configure_host(a.bind)
+    elif a.action == "netsys-configure-bridge": netsys_configure_bridge()
+    elif a.action == "netsys-launch": netsys_launch(a.timeout)
+    elif a.action == "netsys-status": netsys_status()
+    elif a.action == "netsys-capture": netsys_capture(
+        a.output.resolve(), a.generation, a.timeout
+    )
+    elif a.action == "netsys-restore": netsys_restore()
     elif a.action == "deploy": deploy(
         a.pid or pid(), a.port, a.generation, a.max_generations, a.injector_port
     )
