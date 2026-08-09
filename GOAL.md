@@ -24,7 +24,7 @@ Snapshot date: 2026-08-08. Generated records override prose if the tree advances
 
 | Surface | State | Evidence |
 |---|---|---|
-| Retail differential oracle | green | `schema/oracle-regression.json`: 18/18 cases, 17,573,073 trials, zero mismatches/skips/crashes/errors; includes full-state turning and map/start anchors |
+| Retail differential oracle | green | `schema/oracle-regression.json`: 19/19 cases, 18,022,536 trials, zero mismatches/skips/crashes/errors; includes full-state turning, map/start anchors, and the exact starting-location writer |
 | Replay corpus | structurally green, dynamically incomplete | 61 recordings, 585,152 turns, 488,557 valid checksum packets; initial-world reconstruction is still absent, so current matches are not non-trivial whole-game agreement |
 | Simulation | broad and actively integrating | retail tick/order foundations plus economy, production, combat, movement/A*, collision/boats, spatial chains, groups/guys, cities, borders/fog, air, naval, walls, items, animation events, RNG, walkers |
 | Product readiness | intentionally red | default improved seams are wired; current reachable drift is tracked by `tools/product-readiness.sh`, not waived |

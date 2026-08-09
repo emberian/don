@@ -96,7 +96,7 @@ with prose.
 
 | Gate/surface | Current authoritative state |
 |---|---|
-| Retail differential suite | `schema/oracle-regression.json`: 18/18 cases, 17,573,073 trials, zero mismatches/skips/crashes/errors after adding full-state turning plus map-seed/start-coordinate anchors. |
+| Retail differential suite | `schema/oracle-regression.json`: 19/19 cases, 18,022,536 trials, zero mismatches/skips/crashes/errors after adding full-state turning plus map-seed/start-coordinate and starting-location writer anchors. |
 | Replay corpus | `schema/replay-validation.json`: 61 files, 585,152 turns, 488,557 structurally valid checksum packets; dynamic world reconstruction remains unmodelled, so current checksum agreement is not whole-game fidelity. |
 | Improved-mode seams | The seven default fixes are wired through real economy/production/border/BHS paths and covered by the fidelity gate. |
 | Product readiness | `tools/product-readiness.sh` intentionally refuses on literal registered subsystem blockers, including RL air physics/unit-search/building-search and independently gated Arena transactions. Do not turn them into waivers. |
