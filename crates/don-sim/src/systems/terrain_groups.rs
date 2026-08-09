@@ -857,110 +857,133 @@ impl TerrainGroups {
             else {
                 return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
             };
-            let Some(&target_tiles) = prepared.primary_sizes.first() else {
+            if prepared.primary_sizes.is_empty()
+                || prepared.primary_sizes.len() != prepared.secondary_sizes.len()
+            {
                 return Err(PlaceAllError::InvalidPlayerGroupInputs { group_index });
-            };
+            }
             if world.start_x.items.is_empty() {
                 TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index }
             } else {
-                let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
-                    group_index,
-                    clump_index: 0,
-                    player_index: 0,
-                };
-                host(event);
-                player_group_host_events.push(event);
-
                 let mut preview_world = world.clone();
                 let mut preview_group = self.groups[group_index].clone();
-                let land_subtype = if preview_group.group_type == 5 {
-                    preview_mountains.get_range_raw(target_tiles)
-                } else {
-                    target_tiles
-                };
                 let mut calls = Vec::new();
                 let mut consumed = 0usize;
-                let first = preview_group
-                    .apply_place_player_group_prefix(
-                        &mut preview_world,
-                        &mut preview_random,
-                        PlacePlayerGroupCall {
-                            target_tiles,
-                            player_index: 0,
-                            land_subtype,
-                            oil_deposits: prepared.secondary_sizes[0],
-                            group_index,
-                            strict_type_four: preview_group.group_type == 4,
-                        },
-                        &mut player_group_formation_x,
-                        &mut player_group_formation_y,
-                        &externals[consumed..],
-                    )
-                    .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
-                consumed += first.external_resolutions_consumed;
-                let mut outcome = first.outcome.clone();
-                calls.push(first);
-
-                // Pattern 0 retries a failed type-4 player call without the
-                // strict 9x9 forest probe and without another daemon pump.
-                if preview_group.group_type == 4
-                    && matches!(outcome, PlacePlayerGroupOutcome::Returned(0))
+                let mut next = TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index };
+                let mut complete = true;
+                'clumps: for (clump_index, (&target_tiles, &oil_deposits)) in prepared
+                    .primary_sizes
+                    .iter()
+                    .zip(&prepared.secondary_sizes)
+                    .enumerate()
                 {
-                    let retry = preview_group
-                        .apply_place_player_group_prefix(
-                            &mut preview_world,
-                            &mut preview_random,
-                            PlacePlayerGroupCall {
-                                target_tiles,
-                                player_index: 0,
-                                land_subtype,
-                                oil_deposits: prepared.secondary_sizes[0],
-                                group_index,
-                                strict_type_four: false,
-                            },
-                            &mut player_group_formation_x,
-                            &mut player_group_formation_y,
-                            &externals[consumed..],
-                        )
-                        .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
-                    outcome = retry.outcome.clone();
-                    calls.push(retry);
-                }
+                    for player_index in 0..world.start_x.items.len() {
+                        let event = PlaceAllHostEvent::NetDaemonProcessAllPlayer {
+                            group_index,
+                            clump_index,
+                            player_index,
+                        };
+                        host(event);
+                        player_group_host_events.push(event);
 
-                let next = match outcome {
-                    PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
-                        TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
-                            group_index,
-                            clump_index: 0,
-                            player_index: 0,
-                            request,
-                        }
-                    }
-                    PlacePlayerGroupOutcome::GrowthKernel { .. } => {
-                        TerrainPlacementBoundary::PlayerGroupGrowthKernel {
-                            group_index,
-                            clump_index: 0,
-                            player_index: 0,
-                        }
-                    }
-                    PlacePlayerGroupOutcome::Returned(return_value) => {
-                        if preview_group.group_type == 5 && return_value == 0 {
-                            TerrainPlacementBoundary::PlayerGroupMountainTemplateRetry {
-                                group_index,
-                                clump_index: 0,
-                                player_index: 0,
-                            }
+                        let land_subtype = if preview_group.group_type == 5 {
+                            preview_mountains.get_range_raw(target_tiles)
                         } else {
-                            preview_group.placed.push(return_value);
-                            TerrainPlacementBoundary::PlayerGroupReturnControl {
-                                group_index,
-                                clump_index: 0,
-                                player_index: 0,
-                                return_value,
+                            target_tiles
+                        };
+                        let first = preview_group
+                            .apply_place_player_group(
+                                &mut preview_world,
+                                &mut preview_random,
+                                PlacePlayerGroupCall {
+                                    target_tiles,
+                                    player_index,
+                                    land_subtype,
+                                    oil_deposits,
+                                    group_index,
+                                    strict_type_four: preview_group.group_type == 4,
+                                },
+                                &mut player_group_formation_x,
+                                &mut player_group_formation_y,
+                                &externals[consumed..],
+                            )
+                            .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                        consumed += first.external_resolutions_consumed;
+                        let mut outcome = first.outcome.clone();
+                        calls.push(first);
+
+                        // Pattern 0 retries a failed type-4 player call without
+                        // the strict 9x9 forest probe or another daemon pump.
+                        if preview_group.group_type == 4
+                            && matches!(outcome, PlacePlayerGroupOutcome::Returned(0))
+                        {
+                            let retry = preview_group
+                                .apply_place_player_group(
+                                    &mut preview_world,
+                                    &mut preview_random,
+                                    PlacePlayerGroupCall {
+                                        target_tiles,
+                                        player_index,
+                                        land_subtype,
+                                        oil_deposits,
+                                        group_index,
+                                        strict_type_four: false,
+                                    },
+                                    &mut player_group_formation_x,
+                                    &mut player_group_formation_y,
+                                    &externals[consumed..],
+                                )
+                                .map_err(PlaceAllError::InvalidPlayerGroupPrefix)?;
+                            consumed += retry.external_resolutions_consumed;
+                            outcome = retry.outcome.clone();
+                            calls.push(retry);
+                        }
+
+                        match outcome {
+                            PlacePlayerGroupOutcome::ExternalResolutionRequired { request } => {
+                                next = TerrainPlacementBoundary::PlayerGroupExternalSubsystem {
+                                    group_index,
+                                    clump_index,
+                                    player_index,
+                                    request,
+                                };
+                                complete = false;
+                                break 'clumps;
+                            }
+                            PlacePlayerGroupOutcome::GrowthKernel { .. } => {
+                                next = TerrainPlacementBoundary::PlayerGroupGrowthKernel {
+                                    group_index,
+                                    clump_index,
+                                    player_index,
+                                };
+                                complete = false;
+                                break 'clumps;
+                            }
+                            PlacePlayerGroupOutcome::Returned(return_value) => {
+                                if preview_group.group_type == 5 && return_value == 0 {
+                                    next =
+                                        TerrainPlacementBoundary::PlayerGroupMountainTemplateRetry {
+                                            group_index,
+                                            clump_index,
+                                            player_index,
+                                        };
+                                    complete = false;
+                                    break 'clumps;
+                                }
+                                preview_group.placed.push(return_value);
+                                next = TerrainPlacementBoundary::PlayerGroupReturnControl {
+                                    group_index,
+                                    clump_index,
+                                    player_index,
+                                    return_value,
+                                };
                             }
                         }
                     }
-                };
+                }
+                if complete {
+                    next = TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index };
+                }
                 player_group_placed_after = preview_group.placed.clone();
                 player_group_prefix = Some(calls);
                 next

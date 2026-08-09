@@ -11,6 +11,9 @@ use super::borders_fog::{CircleTable, CIRCLE_MAX_R};
 use super::map_terrain::{wflag, World};
 use super::terrain_drop_tile::{DropTileError, DropTileReceipt};
 use super::terrain_groups::TerrainGroup;
+use super::terrain_player_growth::{
+    PlayerGroupGrowthError, PlayerGroupGrowthOutcome, PlayerGroupGrowthReceipt,
+};
 use super::terrain_region_placement::RegionDropTileInvocation;
 use crate::rng::Random;
 
@@ -59,6 +62,16 @@ pub enum PlayerGroupExternalRequest {
         cliff_face: i32,
         anchor_y: i32,
     },
+    /// `clear_group` and the type-6 oil tail call `World::set_oil_at`, whose
+    /// Good-object close/create effects are owned by the object system.
+    OilGoodMutation {
+        world_x: i32,
+        world_y: i32,
+        enabled: bool,
+        good_type: i32,
+        coord_x: i32,
+        coord_y: i32,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -75,6 +88,9 @@ pub enum PlayerGroupExternalResolution {
         request: PlayerGroupExternalRequest,
         return_value: i32,
     },
+    OilGoodsApplied {
+        request: PlayerGroupExternalRequest,
+    },
 }
 
 impl PlayerGroupExternalResolution {
@@ -82,7 +98,8 @@ impl PlayerGroupExternalResolution {
         match self {
             Self::Mountains { request, .. }
             | Self::CliffsVerify { request, .. }
-            | Self::CliffsPosition { request, .. } => request,
+            | Self::CliffsPosition { request, .. }
+            | Self::OilGoodsApplied { request } => request,
         }
     }
 }
@@ -144,6 +161,9 @@ pub struct PlacePlayerGroupReceipt {
     pub formation_x_after: Vec<i32>,
     pub formation_y_after: Vec<i32>,
     pub external_resolutions_consumed: usize,
+    /// Filled by the composed caller after a first local type-4/type-6 drop
+    /// enters the exact `0x006a4cf0` continuation.
+    pub growth: Option<PlayerGroupGrowthReceipt>,
     pub outcome: PlacePlayerGroupOutcome,
     pub rng_state_after: i32,
 }
@@ -180,6 +200,7 @@ pub enum PlacePlayerGroupError {
         y: usize,
     },
     InvalidDropTile(DropTileError),
+    InvalidGrowth(PlayerGroupGrowthError),
     ExternalResolutionMismatch {
         expected: PlayerGroupExternalRequest,
         actual: PlayerGroupExternalRequest,
@@ -190,6 +211,57 @@ pub enum PlacePlayerGroupError {
 }
 
 impl TerrainGroup {
+    /// Execute the locally closed player-group path, including the exact
+    /// orthogonal growth continuation after a successful first forest/rock
+    /// drop. Object-system effects remain ordered typed receipts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_place_player_group(
+        &mut self,
+        world: &mut World,
+        random: &mut Random,
+        call: PlacePlayerGroupCall,
+        formation_x: &mut Vec<i32>,
+        formation_y: &mut Vec<i32>,
+        externals: &[PlayerGroupExternalResolution],
+    ) -> Result<PlacePlayerGroupReceipt, PlacePlayerGroupError> {
+        let mut receipt = self.apply_place_player_group_prefix(
+            world,
+            random,
+            call,
+            formation_x,
+            formation_y,
+            externals,
+        )?;
+        if matches!(
+            receipt.outcome,
+            PlacePlayerGroupOutcome::GrowthKernel { .. }
+        ) {
+            let consumed = receipt.external_resolutions_consumed;
+            let growth = self
+                .apply_player_group_growth(
+                    world,
+                    random,
+                    call,
+                    formation_x,
+                    formation_y,
+                    &externals[consumed..],
+                )
+                .map_err(PlacePlayerGroupError::InvalidGrowth)?;
+            receipt.external_resolutions_consumed += growth.external_resolutions_consumed;
+            receipt.outcome = match growth.outcome {
+                PlayerGroupGrowthOutcome::Returned(value) => {
+                    PlacePlayerGroupOutcome::Returned(value)
+                }
+                PlayerGroupGrowthOutcome::ExternalResolutionRequired { request } => {
+                    PlacePlayerGroupOutcome::ExternalResolutionRequired { request }
+                }
+            };
+            receipt.growth = Some(growth);
+            finish_receipt(&mut receipt, formation_x, formation_y, random);
+        }
+        Ok(receipt)
+    }
+
     /// Execute `place_player_group` from entry through its first unresolved
     /// post-drop growth dependency. `formation_x/y` are the two group-local
     /// arrays passed by pattern 0 and retained across player calls.
@@ -223,6 +295,7 @@ impl TerrainGroup {
             formation_x_after: formation_x.clone(),
             formation_y_after: formation_y.clone(),
             external_resolutions_consumed: 0,
+            growth: None,
             outcome: PlacePlayerGroupOutcome::Returned(0),
             rng_state_after: random.state(),
         };

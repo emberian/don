@@ -257,7 +257,7 @@ fn pattern_zero_type_four_retries_without_strict_forest_probe_or_second_pump() {
     };
     assert!(matches!(
         boundary,
-        TerrainPlacementBoundary::PlayerGroupGrowthKernel { .. }
+        TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
     ));
     let calls = preview.player_group_prefix.unwrap();
     assert_eq!(calls.len(), 2);
@@ -267,11 +267,12 @@ fn pattern_zero_type_four_retries_without_strict_forest_probe_or_second_pump() {
     )));
     assert!(matches!(
         calls[1].outcome,
-        PlacePlayerGroupOutcome::GrowthKernel { .. }
+        PlacePlayerGroupOutcome::Returned(_)
     ));
+    assert!(calls[1].growth.is_some());
     assert_eq!(preview.player_group_host_events.len(), 1);
-    assert_eq!(preview.player_group_formation_x, [0]);
-    assert_eq!(preview.player_group_formation_y, [0]);
+    assert_eq!(preview.player_group_formation_x, [0, 0]);
+    assert_eq!(preview.player_group_formation_y, [0, -1]);
 }
 
 #[test]
@@ -321,11 +322,7 @@ fn place_all_composes_player_entry_pump_and_keeps_growth_preview_transactional()
 
     assert_eq!(
         boundary,
-        TerrainPlacementBoundary::PlayerGroupGrowthKernel {
-            group_index: 0,
-            clump_index: 0,
-            player_index: 0,
-        }
+        TerrainPlacementBoundary::PlayerGroupPatternComplete { group_index: 0 }
     );
     assert_eq!(
         host.last(),
@@ -336,6 +333,9 @@ fn place_all_composes_player_entry_pump_and_keeps_growth_preview_transactional()
         })
     );
     assert_eq!(preview.player_group_prefix.as_ref().unwrap().len(), 1);
+    assert!(preview.player_group_prefix.as_ref().unwrap()[0]
+        .growth
+        .is_some());
     assert_eq!(world.wdata, before_world.wdata);
     assert_eq!(world.tdata, before_world.tdata);
     assert_eq!(groups, before_groups);
