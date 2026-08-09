@@ -141,14 +141,18 @@ try {
         schema_version: 1,
         source: {
           session_id: 'smoke-session', sequence: 41, captured_at_ms: now,
-          process_id: 41, process_started_at_ms: now - 10000,
+          process_id: 41, process_started_100ns: '133994400000000000',
           module_sha256: '1'.repeat(64), module_size: 12345678,
+          image_entry_rva: 1431193, image_size: 12271616,
         },
         capture: {
           frame_start: 630, frame_end: 630, complete: true, advice_allowed: true,
           duration_us: 250, read_count: 12, bytes_read: 256,
         },
-        game: { frame: 630, player_id: 1, mode: 'single_player', age: 2, paused: false },
+        game: {
+          frame: 630, player_id: 1, mode: 'single_player', age: 2, paused: false,
+          human_count: 1, human_selection_basis: 'unique_active_in_play_console_flags',
+        },
         economy: {
           resources: {
             food: { stock: 180, income_per_min: 62, gatherers: 7, gatherers_basis: 'direct_count' },
@@ -197,11 +201,41 @@ try {
   assert(hostAdmission.headline === 'Population headroom low' && hostAdmission.cache === '5 sim frames',
     'host advice or rate-cache age was misrepresented');
 
+  const observationOnly = await cdp.eval(`(() => {
+    const observed = structuredClone(window.__rontoyHostEnvelope);
+    observed.stream_revision = 5001;
+    observed.snapshot.source.sequence = 42;
+    observed.analysis.source_sequence = 42;
+    observed.snapshot.capture.advice_allowed = false;
+    observed.snapshot.game.paused = null;
+    observed.analysis.advice_allowed = false;
+    observed.analysis.rate_advice_allowed = false;
+    observed.analysis.suppressed_reasons = ['reader_disallowed_advice', 'pause_state_unknown'];
+    observed.analysis.advice = [];
+    const accepted = window.rontoy.ingestHostEnvelope(observed);
+    const result = {
+      accepted,
+      headline: document.getElementById('adviceHeadline').textContent,
+      actions: document.querySelectorAll('.action').length,
+      adviceAllowed: window.rontoy.snapshot()?.capture.adviceAllowed,
+    };
+    const restored = structuredClone(window.__rontoyHostEnvelope);
+    restored.stream_revision = 5002;
+    restored.snapshot.source.sequence = 43;
+    restored.analysis.source_sequence = 43;
+    window.__rontoyHostEnvelope = restored;
+    result.recovery = window.rontoy.ingestHostEnvelope(restored);
+    return result;
+  })()`);
+  assert(observationOnly.accepted && observationOnly.recovery && observationOnly.adviceAllowed === false
+      && observationOnly.headline.includes('advice suppressed') && observationOnly.actions === 0,
+    `observation-only host snapshot was misrepresented: ${JSON.stringify(observationOnly)}`);
+
   const rateSuppression = await cdp.eval(`(() => {
     const suppressed = structuredClone(window.__rontoyHostEnvelope);
-    suppressed.stream_revision = 5001;
-    suppressed.snapshot.source.sequence = 42;
-    suppressed.analysis.source_sequence = 42;
+    suppressed.stream_revision = 5003;
+    suppressed.snapshot.source.sequence = 44;
+    suppressed.analysis.source_sequence = 44;
     suppressed.snapshot.economy.rate_sample = {
       basis: 'sampled_stock_delta', gather_stamp_raw: null, age_frames: 15, confidence: 'estimated',
     };
@@ -216,9 +250,9 @@ try {
     const actions = document.querySelectorAll('.action').length;
     const confidence = document.getElementById('overallConfidence').textContent;
     const restored = structuredClone(window.__rontoyHostEnvelope);
-    restored.stream_revision = 5002;
-    restored.snapshot.source.sequence = 43;
-    restored.analysis.source_sequence = 43;
+    restored.stream_revision = 5004;
+    restored.snapshot.source.sequence = 45;
+    restored.analysis.source_sequence = 45;
     window.__rontoyHostEnvelope = restored;
     const recovery = window.rontoy.ingestHostEnvelope(restored);
     return { accepted, headline, actions, confidence, recovery };
@@ -247,6 +281,22 @@ try {
       mismatchedRateClaim: attemptEnvelope((e) => { e.analysis.metrics.income_rate_age_frames = 1; }),
       nullAdvice: attemptEnvelope((e) => { e.analysis.advice[0] = null; }),
       unprovedQueue: attemptEnvelope((e) => { delete e.snapshot.economy.production.queue_basis; }),
+      numericProcessStart: attemptEnvelope((e) => { e.snapshot.source.process_started_100ns = 1; }),
+      overflowingProcessStart: attemptEnvelope((e) => { e.snapshot.source.process_started_100ns = '18446744073709551616'; }),
+      invalidSessionId: attemptEnvelope((e) => { e.snapshot.source.session_id = 'bad session'; }),
+      invalidSourceSequence: attemptEnvelope((e) => { e.snapshot.source.sequence = '46'; }),
+      futureProducerCapture: attemptEnvelope((e) => { e.snapshot.source.captured_at_ms = Date.now() + 600000; }),
+      invalidProcessId: attemptEnvelope((e) => { e.snapshot.source.process_id = 0; }),
+      invalidModuleSize: attemptEnvelope((e) => { e.snapshot.source.module_size = 0; }),
+      missingEntryRva: attemptEnvelope((e) => { delete e.snapshot.source.image_entry_rva; }),
+      invalidImageSize: attemptEnvelope((e) => { e.snapshot.source.image_size = 0; }),
+      uppercaseModuleHash: attemptEnvelope((e) => { e.snapshot.source.module_sha256 = 'A'.repeat(64); }),
+      invalidPlayerId: attemptEnvelope((e) => { e.snapshot.game.player_id = 16; }),
+      unsafeModeWithAdvice: attemptEnvelope((e) => { e.snapshot.game.mode = 'multiplayer'; }),
+      missingHumanCount: attemptEnvelope((e) => { delete e.snapshot.game.human_count; }),
+      unprovedHumanBasis: attemptEnvelope((e) => { e.snapshot.game.human_selection_basis = 'guess'; }),
+      unknownPauseWithAdvice: attemptEnvelope((e) => { e.snapshot.game.paused = null; }),
+      pausedWithAdvice: attemptEnvelope((e) => { e.snapshot.game.paused = true; }),
       futureReceipt: attemptEnvelope((e) => { e.received_at_ms = Date.now() + 5000; }),
       nullWorker: attemptSnapshot((s) => { s.workers[0] = null; }),
       noAdviceGate: attemptSnapshot((s) => { delete s.capture.adviceAllowed; }),
@@ -263,7 +313,7 @@ try {
   })()`);
   assert(Object.values(hardening.results).every((accepted) => accepted === false),
     `unsafe payload was admitted: ${JSON.stringify(hardening.results)}`);
-  assert(hardening.beforeSequence === hardening.afterSequence && hardening.rejectedDelta === 13,
+  assert(hardening.beforeSequence === hardening.afterSequence && hardening.rejectedDelta === 29,
     'rejected payload mutated the last admitted snapshot');
   assert(hardening.headline.includes('suppressed') && hardening.actions === 0,
     'rejection did not immediately suppress actionable advice');

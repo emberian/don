@@ -92,9 +92,11 @@ function validateSnapshot(s, now = Date.now()) {
   const captured = Date.parse(s.capturedAt);
   if (!Number.isFinite(captured)) return 'capturedAt is not an ISO timestamp';
   if (captured > now + 1_000) return 'capturedAt is in the future';
-  if (!record(s.capture) || s.capture.complete !== true || s.capture.adviceAllowed !== true) {
-    return 'capture is not complete and advice-allowed';
+  if (!record(s.capture) || s.capture.complete !== true || typeof s.capture.adviceAllowed !== 'boolean') {
+    return 'capture is not complete or lacks an advice gate';
   }
+  if (!Array.isArray(s.capture.suppressedReasons) || s.capture.suppressedReasons.length > 8
+      || s.capture.suppressedReasons.some((reason) => !text(reason, 128))) return 'capture suppression reasons are invalid';
   if (!integer(s.capture.frameStart) || !integer(s.capture.frameEnd)
       || s.capture.frameStart !== s.capture.frameEnd || s.capture.frameEnd !== s.gameFrame
       || s.coherence !== 'single-frame') return 'capture is not single-frame coherent';
@@ -288,6 +290,12 @@ function renderAdvice(advice) {
     .map((action) => node('span', 'action', action)));
 }
 
+function renderAdmissionAdvice(snapshot) {
+  if (snapshot.capture.adviceAllowed) renderAdvice(snapshot.advice);
+  else suppressAdvice('observing', 'Economy observed — advice suppressed',
+    `This capture is display-only: ${snapshot.capture.suppressedReasons.join(', ') || 'host did not allow advice'}.`);
+}
+
 function renderSnapshot(snapshot) {
   const age = Date.now() - Date.parse(snapshot.capturedAt);
   el.playerName.textContent = str(snapshot.player?.name, 'unknown player');
@@ -300,7 +308,7 @@ function renderSnapshot(snapshot) {
   el.rateCacheAge.textContent = integer(snapshot.rateCacheAgeFrames)
     ? `${snapshot.rateCacheAgeFrames} sim frame${snapshot.rateCacheAgeFrames === 1 ? '' : 's'}` : 'not reported';
   el.incomeWindow.textContent = `rate / ${Math.max(1, Math.floor(finite(snapshot.rateWindowSeconds, 60)))} s`;
-  renderAdvice(snapshot.advice);
+  renderAdmissionAdvice(snapshot);
   renderResources(snapshot.resources);
   renderWorkers(snapshot.workers);
   renderPopulation(snapshot.population);
@@ -390,16 +398,25 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
   const raw = envelope.snapshot;
   const analysis = envelope.analysis;
   if (!record(raw) || raw.schema_version !== VERSION) return fail('host snapshot schema is unsupported');
-  if (!record(raw.source) || !text(raw.source.session_id, 128) || !integer(raw.source.sequence)
+  let processStartValid = false;
+  if (text(raw.source?.process_started_100ns, 20) && /^[0-9]+$/.test(raw.source.process_started_100ns)) {
+    try { processStartValid = BigInt(raw.source.process_started_100ns) <= 0xffff_ffff_ffff_ffffn; } catch {}
+  }
+  if (!record(raw.source) || !text(raw.source.session_id, 128)
+      || !/^[A-Za-z0-9_.:-]{1,128}$/.test(raw.source.session_id) || !integer(raw.source.sequence)
       || raw.source.sequence < 0 || !integer(raw.source.captured_at_ms) || raw.source.captured_at_ms < 0
-      || !integer(raw.source.process_id) || raw.source.process_id < 1
-      || !integer(raw.source.process_started_at_ms) || raw.source.process_started_at_ms < 0
+      || !integer(raw.source.process_id) || raw.source.process_id < 1 || raw.source.process_id > 0xffff_ffff
+      || !processStartValid
       || !text(raw.source.module_sha256, 64) || !/^[0-9a-f]{64}$/.test(raw.source.module_sha256)
-      || !integer(raw.source.module_size) || raw.source.module_size < 1) {
+      || !integer(raw.source.module_size) || raw.source.module_size < 1 || raw.source.module_size > 2 ** 40
+      || !integer(raw.source.image_entry_rva) || raw.source.image_entry_rva < 1 || raw.source.image_entry_rva > 0xffff_ffff
+      || !integer(raw.source.image_size) || raw.source.image_size < 1 || raw.source.image_size > 0xffff_ffff
+      || (raw.source.reader_version !== undefined
+        && (!text(raw.source.reader_version, 64) || raw.source.reader_version.length < 1))) {
     return fail('host snapshot source is invalid');
   }
   if (raw.source.captured_at_ms > now + 300_000) return fail('producer capture timestamp is implausibly far in the future');
-  if (!record(raw.capture) || raw.capture.complete !== true || raw.capture.advice_allowed !== true
+  if (!record(raw.capture) || raw.capture.complete !== true || typeof raw.capture.advice_allowed !== 'boolean'
       || !integer(raw.capture.frame_start)
       || !integer(raw.capture.frame_end) || raw.capture.frame_start !== raw.capture.frame_end) {
     return fail('host capture is incomplete or mixed-frame');
@@ -411,7 +428,12 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
       || !integer(raw.game.player_id) || raw.game.player_id < 0 || raw.game.player_id > 15) {
     return fail('host game identity is not coherent with capture');
   }
-  if (raw.game.mode !== 'single_player' || typeof raw.game.paused !== 'boolean') return fail('host game is not advice-safe single player');
+  if (!['single_player', 'multiplayer', 'unknown'].includes(raw.game.mode)
+      || (raw.game.paused !== null && typeof raw.game.paused !== 'boolean')
+      || !integer(raw.game.human_count) || raw.game.human_count < 0 || raw.game.human_count > 16
+      || raw.game.human_selection_basis !== 'unique_active_in_play_console_flags') {
+    return fail('host game safety evidence is invalid');
+  }
   if (raw.game.age !== undefined && (!integer(raw.game.age) || raw.game.age < 0 || raw.game.age > 8)) return fail('host game age is invalid');
   if (!record(raw.economy) || !record(raw.economy.resources) || !record(raw.economy.population)) {
     return fail('host economy is incomplete');
@@ -451,14 +473,33 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
   } else if (rateSample.gather_stamp_raw !== null
       || (rateSample.basis === 'sampled_stock_delta' ? rateSample.confidence !== 'estimated'
         : rateSample.confidence !== 'unavailable')) return fail('host rate sample basis and confidence disagree');
+  const expectedSuppressed = [];
+  if (!raw.capture.advice_allowed) expectedSuppressed.push('reader_disallowed_advice');
+  if (raw.game.mode !== 'single_player') expectedSuppressed.push('not_single_player');
+  if (raw.game.human_count !== 1) expectedSuppressed.push('not_unique_human');
+  if (raw.game.paused === null) expectedSuppressed.push('pause_state_unknown');
+  else if (raw.game.paused) expectedSuppressed.push('game_paused');
+  const expectedRateSuppressed = [];
+  if (rateSample.basis !== 'engine_direct_gather_cache' || rateSample.confidence !== 'direct') {
+    expectedRateSuppressed.push('income_rate_not_engine_direct');
+  }
+  if (rateSample.age_frames > 45) expectedRateSuppressed.push('income_rate_too_old_for_eta');
   if (!record(analysis) || analysis.source_sequence !== raw.source.sequence || analysis.game_frame !== raw.game.frame
-      || analysis.advice_allowed !== true || !Array.isArray(analysis.suppressed_reasons)
-      || analysis.suppressed_reasons.length !== 0 || typeof analysis.rate_advice_allowed !== 'boolean'
+      || typeof analysis.advice_allowed !== 'boolean' || !Array.isArray(analysis.suppressed_reasons)
+      || analysis.suppressed_reasons.length !== expectedSuppressed.length
+      || analysis.suppressed_reasons.some((reason, index) => reason !== expectedSuppressed[index])
+      || analysis.advice_allowed !== (expectedSuppressed.length === 0)
+      || typeof analysis.rate_advice_allowed !== 'boolean'
       || !Array.isArray(analysis.rate_suppressed_reasons)
-      || analysis.rate_suppressed_reasons.some((reason) => !text(reason, 128)) || !record(analysis.metrics)
+      || analysis.rate_suppressed_reasons.length !== expectedRateSuppressed.length
+      || analysis.rate_suppressed_reasons.some((reason, index) => reason !== expectedRateSuppressed[index])
+      || analysis.rate_advice_allowed !== (expectedSuppressed.length === 0 && expectedRateSuppressed.length === 0)
+      || !record(analysis.metrics)
       || !Array.isArray(analysis.advice) || analysis.advice.length > 32) {
     return fail('host analysis does not match the admitted capture');
   }
+  if ((!analysis.advice_allowed && analysis.advice.length !== 0)
+      || (analysis.rate_advice_allowed && !analysis.advice_allowed)) return fail('host emitted advice outside its safety gate');
   if (analysis.metrics.income_rate_age_frames !== rateSample.age_frames
       || analysis.metrics.income_rate_basis !== rateSample.basis
       || analysis.metrics.income_rate_confidence !== rateSample.confidence) {
@@ -478,7 +519,11 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
   }));
   if (pop.idle_citizens > 0) workers.push({ id: 'idle', label: 'Idle', count: pop.idle_citizens, target: null });
   const primary = analysis.advice[0];
-  const advice = primary ? {
+  const advice = !analysis.advice_allowed ? {
+    severity: 'info', headline: 'Economy observed — advice suppressed',
+    detail: `The host admitted aggregate telemetry but disabled coaching: ${analysis.suppressed_reasons.join(', ')}.`,
+    actions: [], confidence: null,
+  } : primary ? {
     severity: primary.severity === 'critical' ? 'urgent' : primary.severity,
     headline: primary.title,
     detail: primary.detail,
@@ -507,11 +552,12 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
     // Freshness uses the Mac host's receipt clock, never the potentially skewed guest clock.
     capturedAt: new Date(envelope.received_at_ms).toISOString(),
     source: `rontoy host · ${raw.source.session_id}`, confidence: null,
-    confidenceLabel: `${rateSample.confidence}${analysis.rate_advice_allowed ? '' : ' · rate advice suppressed'}`,
+    confidenceLabel: `${rateSample.confidence}${analysis.advice_allowed ? '' : ' · observation only'}${analysis.advice_allowed && !analysis.rate_advice_allowed ? ' · rate advice suppressed' : ''}`,
     rateWindowSeconds: 60, gameTime, gameFrame: raw.game.frame,
     coherence: 'single-frame', rateCacheAgeFrames: rateSample.age_frames,
     capture: {
-      complete: true, adviceAllowed: true,
+      complete: true, adviceAllowed: analysis.advice_allowed,
+      suppressedReasons: analysis.suppressed_reasons.slice(),
       frameStart: raw.capture.frame_start, frameEnd: raw.capture.frame_end,
     },
     phase: raw.game.age === undefined ? 'Age not reported' : `Age ${raw.game.age}`,
@@ -566,6 +612,7 @@ function makeMockSnapshot() {
     coherence: 'single-frame', rateCacheAgeFrames: 3,
     capture: {
       complete: true, adviceAllowed: true,
+      suppressedReasons: [],
       frameStart: Math.round(mockGameTime / .067), frameEnd: Math.round(mockGameTime / .067),
     },
     phase: 'Classical Age', map: 'Old World',
@@ -720,7 +767,7 @@ function connectSse(url = '/v1/stream') {
       state.hostAgeMs = 0;
       state.hostStale = false;
       document.querySelector('.advice').classList.remove('detached');
-      renderAdvice(state.snapshot.advice);
+      renderAdmissionAdvice(state.snapshot);
       updateFreshness(0);
       state.transport = 'streaming';
       updateTransport('live');
