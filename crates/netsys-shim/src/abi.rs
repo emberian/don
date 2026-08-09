@@ -473,6 +473,15 @@ pub struct MsvcFunction40 {
     pub target: *mut c_void,
 }
 
+impl MsvcFunction40 {
+    pub const fn empty() -> Self {
+        Self {
+            storage: [0; 36],
+            target: core::ptr::null_mut(),
+        }
+    }
+}
+
 const _: () = assert!(core::mem::size_of::<MsvcFunction40>() == 40);
 const _: () = assert!(core::mem::offset_of!(MsvcFunction40, target) == 0x24);
 

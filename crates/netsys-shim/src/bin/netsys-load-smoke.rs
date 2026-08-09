@@ -29,6 +29,7 @@ const ON_PLAYER_JOINED: &[u8] = b"?OnPlayerJoined@CrossplayNetLibSys@@QAEXABVLob
 const SHIM_MARKER: &[u8] = b"shim_is_connected_to_network\0";
 const SHIM_MATERIALIZE: &[u8] = b"shim_materialize_load_only_peer\0";
 const SHIM_SETUP_BRIDGE_TEST: &[u8] = b"shim_test_setup_bridge_sequence\0";
+const SHIM_P2P_CALLBACK_TEST: &[u8] = b"shim_test_p2p_callback_ownership\0";
 
 const SHIPPED_EXPORTS: &[&[u8]] = &[
     b"?IsHost@CrossplayNetLibSys@@QAE_NABVLobbyMemberDTO@DTO@Lobby@Crossplay@@@Z\0",
@@ -95,8 +96,10 @@ struct FakeConnectionData {
     add_sequence: u32,
     get_sequence: u32,
     send_sequence: u32,
-    add_id: MsvcWstring,
-    find_id: MsvcWstring,
+    add_id_len: u32,
+    find_id_len: u32,
+    add_id_first: u16,
+    find_id_first: u16,
     sent_slot: i32,
     sent_refresh: bool,
 }
@@ -133,10 +136,34 @@ struct MsvcObjectArrayString {
     padding_15: [u8; 3],
 }
 
+#[repr(C)]
+struct MsvcFunction40 {
+    storage: [u8; 36],
+    target: *mut c_void,
+}
+
+#[repr(C)]
+struct FakeFunctionTarget {
+    vftable: *const *const c_void,
+    stats: *mut FakeFunctionStats,
+    tag: u32,
+}
+
+#[repr(C, align(4))]
+#[derive(Default)]
+struct FakeFunctionStats {
+    copies: u32,
+    moves: u32,
+    deletes: u32,
+    deallocates: u32,
+}
+
 const _: () = assert!(std::mem::size_of::<MsvcGameString>() == 20);
 const _: () = assert!(std::mem::size_of::<MsvcWstring>() == 24);
 const _: () = assert!(std::mem::size_of::<MsvcArrayNetPlayers>() == 28);
 const _: () = assert!(std::mem::size_of::<MsvcObjectArrayString>() == 0x18);
+const _: () = assert!(std::mem::size_of::<MsvcFunction40>() == 40);
+const _: () = assert!(std::mem::offset_of!(MsvcFunction40, target) == 0x24);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, flags) == 0x58);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, net_messenger) == 0x5c);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, m_crossplay) == 0xcc);
@@ -149,6 +176,11 @@ extern "system" {
     fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
     fn FreeLibrary(module: *mut c_void) -> i32;
     fn GetLastError() -> u32;
+}
+
+extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(block: *mut c_void);
 }
 
 struct Module(*mut c_void);
@@ -188,15 +220,69 @@ unsafe extern "thiscall" fn msg_session(this: *mut FakeMessenger) -> *const c_vo
 unsafe extern "thiscall" fn service_set_timeout(this: *mut FakeService, timeout_ms: i32) {
     (*this).timeout_ms = timeout_ms;
 }
-unsafe extern "thiscall" fn bridge_add(this: *mut FakeConnectionData, id: MsvcWstring) {
+
+unsafe fn wstring_units(value: &MsvcWstring) -> Option<&[u16]> {
+    if value.capacity < value.len || value.len > 128 {
+        return None;
+    }
+    if value.capacity < 8 {
+        return Some(&value.sso[..value.len as usize]);
+    }
+    let pointer = core::ptr::read_unaligned(value.sso.as_ptr().cast::<*const u16>());
+    (!pointer.is_null()).then(|| core::slice::from_raw_parts(pointer, value.len as usize))
+}
+
+unsafe fn free_wstring(value: &mut MsvcWstring) {
+    if value.capacity >= 8 {
+        let pointer = core::ptr::read_unaligned(value.sso.as_ptr().cast::<*mut c_void>());
+        if !pointer.is_null() {
+            free(pointer);
+        }
+    }
+    *value = MsvcWstring {
+        sso: [0; 8],
+        len: 0,
+        capacity: 7,
+    };
+}
+
+unsafe fn heap_wstring(units: &[u16]) -> Result<MsvcWstring, String> {
+    if units.len() <= 7 {
+        return Err("heap_wstring fixture requires more than seven code units".into());
+    }
+    let bytes = (units.len() + 1) * core::mem::size_of::<u16>();
+    let pointer = malloc(bytes).cast::<u16>();
+    if pointer.is_null() {
+        return Err("malloc failed for heap wstring fixture".into());
+    }
+    core::ptr::copy_nonoverlapping(units.as_ptr(), pointer, units.len());
+    *pointer.add(units.len()) = 0;
+    let mut storage = [0u16; 8];
+    core::ptr::write_unaligned(storage.as_mut_ptr().cast::<*mut u16>(), pointer);
+    Ok(MsvcWstring {
+        sso: storage,
+        len: units.len() as u32,
+        capacity: units.len() as u32,
+    })
+}
+
+unsafe extern "thiscall" fn bridge_add(this: *mut FakeConnectionData, mut id: MsvcWstring) {
     (*this).sequence += 1;
     (*this).add_sequence = (*this).sequence;
-    (*this).add_id = id;
+    if let Some(units) = wstring_units(&id) {
+        (*this).add_id_len = units.len() as u32;
+        (*this).add_id_first = units.first().copied().unwrap_or(0);
+    }
+    free_wstring(&mut id);
 }
-unsafe extern "thiscall" fn bridge_get(this: *mut FakeConnectionData, id: MsvcWstring) -> i32 {
+unsafe extern "thiscall" fn bridge_get(this: *mut FakeConnectionData, mut id: MsvcWstring) -> i32 {
     (*this).sequence += 1;
     (*this).get_sequence = (*this).sequence;
-    (*this).find_id = id;
+    if let Some(units) = wstring_units(&id) {
+        (*this).find_id_len = units.len() as u32;
+        (*this).find_id_first = units.first().copied().unwrap_or(0);
+    }
+    free_wstring(&mut id);
     1
 }
 unsafe extern "thiscall" fn bridge_send(this: *mut FakeConnectionData, slot: i32, refresh: bool) {
@@ -204,6 +290,72 @@ unsafe extern "thiscall" fn bridge_send(this: *mut FakeConnectionData, slot: i32
     (*this).send_sequence = (*this).sequence;
     (*this).sent_slot = slot;
     (*this).sent_refresh = refresh;
+}
+
+unsafe extern "thiscall" fn fake_function_copy(
+    this: *mut FakeFunctionTarget,
+    destination: *mut c_void,
+) -> *mut c_void {
+    let stats = (*this).stats;
+    (*stats).copies += 1;
+    let target = destination.cast::<FakeFunctionTarget>();
+    core::ptr::write(
+        target,
+        FakeFunctionTarget {
+            vftable: (*this).vftable,
+            stats,
+            tag: (*this).tag,
+        },
+    );
+    target.cast()
+}
+
+unsafe extern "thiscall" fn fake_function_move(
+    this: *mut FakeFunctionTarget,
+    destination: *mut c_void,
+) -> *mut c_void {
+    let stats = (*this).stats;
+    (*stats).moves += 1;
+    let target = destination.cast::<FakeFunctionTarget>();
+    core::ptr::write(
+        target,
+        FakeFunctionTarget {
+            vftable: (*this).vftable,
+            stats,
+            tag: (*this).tag,
+        },
+    );
+    target.cast()
+}
+
+unsafe extern "thiscall" fn fake_function_call(_this: *mut FakeFunctionTarget) {}
+
+unsafe extern "thiscall" fn fake_function_delete(this: *mut FakeFunctionTarget, deallocate: bool) {
+    let stats = (*this).stats;
+    (*stats).deletes += 1;
+    (*stats).deallocates += u32::from(deallocate);
+}
+
+unsafe fn init_inline_function(
+    function: &mut MsvcFunction40,
+    vtable: *const *const c_void,
+    stats: &mut FakeFunctionStats,
+    tag: u32,
+) {
+    *function = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let base = (function as *mut MsvcFunction40).cast::<FakeFunctionTarget>();
+    core::ptr::write(
+        base,
+        FakeFunctionTarget {
+            vftable: vtable,
+            stats,
+            tag,
+        },
+    );
+    function.target = base.cast();
 }
 
 fn main() {
@@ -258,6 +410,22 @@ fn run() -> Result<String, String> {
     let mut stack_pointer_checks = 0usize;
     let factory: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut NetSysPrefix =
         unsafe { std::mem::transmute(resolve(&module, FACTORY)?) };
+    env::set_var("DON_NET_LOAD_ONLY_FORCE_TRANSPORT_FAILURE", "1");
+    let inert = checked_call(
+        "factory forced transport failure",
+        &mut stack_pointer_checks,
+        || unsafe { factory(core::ptr::null_mut(), core::ptr::null_mut()) },
+    )?;
+    env::remove_var("DON_NET_LOAD_ONLY_FORCE_TRANSPORT_FAILURE");
+    if inert.is_null() || unsafe { (*inert).vftable.is_null() } {
+        return Err("factory transport failure did not return a callable inert object".into());
+    }
+    let inert_vtable = unsafe { (*inert).vftable };
+    for slot in 0..NETSYS_VTABLE_SLOTS {
+        if unsafe { (*inert_vtable.add(slot)).is_null() } {
+            return Err(format!("inert factory vtable slot {slot} is null"));
+        }
+    }
     let object = checked_call("factory", &mut stack_pointer_checks, || unsafe {
         factory(core::ptr::null_mut(), core::ptr::null_mut())
     })?;
@@ -285,6 +453,20 @@ fn run() -> Result<String, String> {
             "NetSys concrete flags: expected shipped constructor state 0x40, got 0x{:x}",
             unsafe { (*object).flags }
         ));
+    }
+    let vtable_is_host: unsafe extern "thiscall" fn(*mut NetSysPrefix) -> bool =
+        unsafe { vtable_fn(vtable, 4) };
+    let is_session_full: unsafe extern "thiscall" fn(*mut NetSysPrefix) -> i32 =
+        unsafe { vtable_fn(vtable, 9) };
+    let initially_host = checked_call(
+        "NetSys[4] is_host before lifecycle",
+        &mut stack_pointer_checks,
+        || unsafe { vtable_is_host(object) },
+    )?;
+    if initially_host {
+        return Err(
+            "NetSys[4] reported host before the host lifecycle set concrete flag bit 0".into(),
+        );
     }
 
     // These are the two virtual calls made immediately by NetSys::load_dll at
@@ -415,6 +597,165 @@ fn run() -> Result<String, String> {
         return Err("retail post-init service slot47 did not receive timeout 20".into());
     }
 
+    // Only after the ordinary loader frontier has been traced, prove that the
+    // callable inert object also tolerates retail's unconditional loader
+    // virtuals and then refuses init.
+    let inert_error: unsafe extern "thiscall" fn(
+        *mut NetSysPrefix,
+        Option<unsafe extern "C" fn(i32)>,
+    ) = unsafe { vtable_fn(inert_vtable, 56) };
+    let inert_profiler: unsafe extern "thiscall" fn(*mut NetSysPrefix, *mut c_void) =
+        unsafe { vtable_fn(inert_vtable, 63) };
+    let inert_init: unsafe extern "thiscall" fn(
+        *mut NetSysPrefix,
+        *mut c_void,
+        *const c_void,
+        i32,
+        i32,
+        u32,
+        u32,
+    ) -> i32 = unsafe { vtable_fn(inert_vtable, 1) };
+    checked_call(
+        "inert NetSys[56] error_set_callback",
+        &mut stack_pointer_checks,
+        || unsafe { inert_error(inert, None) },
+    )?;
+    checked_call(
+        "inert NetSys[63] set_profiler",
+        &mut stack_pointer_checks,
+        || unsafe { inert_profiler(inert, core::ptr::null_mut()) },
+    )?;
+    let inert_init_result = checked_call(
+        "inert NetSys[1] init",
+        &mut stack_pointer_checks,
+        || unsafe { inert_init(inert, core::ptr::null_mut(), core::ptr::null(), 0, 0, 0, 0) },
+    )?;
+    if inert_init_result != LIBERR_NOT_AVAILABLE {
+        return Err(format!(
+            "inert factory init returned {inert_init_result}, expected {LIBERR_NOT_AVAILABLE}"
+        ));
+    }
+
+    // Exercise the exact MSVC `_Func_base::_Copy/_Move/_Delete_this` ownership
+    // path used by the real by-value set_p2p_callbacks call. The shim-only
+    // pointer form keeps each inline target's self-pointer stable.
+    let p2p_test: unsafe extern "C" fn(
+        *mut NetSysPrefix,
+        *const MsvcFunction40,
+        *const MsvcFunction40,
+        *const MsvcFunction40,
+    ) -> bool = unsafe { std::mem::transmute(resolve(&module, SHIM_P2P_CALLBACK_TEST)?) };
+    let function_vtable = [
+        fake_function_copy as *const c_void,
+        fake_function_move as *const c_void,
+        fake_function_call as *const c_void,
+        core::ptr::null(),
+        fake_function_delete as *const c_void,
+    ];
+    let mut first_stats = [
+        FakeFunctionStats::default(),
+        FakeFunctionStats::default(),
+        FakeFunctionStats::default(),
+    ];
+    let mut second_stats = [
+        FakeFunctionStats::default(),
+        FakeFunctionStats::default(),
+        FakeFunctionStats::default(),
+    ];
+    let mut first_opened = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let mut first_closed = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let mut first_failed = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let mut second_opened = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let mut second_closed = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let mut second_failed = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    unsafe {
+        init_inline_function(
+            &mut first_opened,
+            function_vtable.as_ptr(),
+            &mut first_stats[0],
+            1,
+        );
+        init_inline_function(
+            &mut first_closed,
+            function_vtable.as_ptr(),
+            &mut first_stats[1],
+            2,
+        );
+        init_inline_function(
+            &mut first_failed,
+            function_vtable.as_ptr(),
+            &mut first_stats[2],
+            3,
+        );
+        init_inline_function(
+            &mut second_opened,
+            function_vtable.as_ptr(),
+            &mut second_stats[0],
+            4,
+        );
+        init_inline_function(
+            &mut second_closed,
+            function_vtable.as_ptr(),
+            &mut second_stats[1],
+            5,
+        );
+        init_inline_function(
+            &mut second_failed,
+            function_vtable.as_ptr(),
+            &mut second_stats[2],
+            6,
+        );
+    }
+    let first_retained = checked_call(
+        "shim p2p callback first retain",
+        &mut stack_pointer_checks,
+        || unsafe { p2p_test(object, &first_opened, &first_closed, &first_failed) },
+    )?;
+    let second_retained = checked_call(
+        "shim p2p callback replacement",
+        &mut stack_pointer_checks,
+        || unsafe { p2p_test(object, &second_opened, &second_closed, &second_failed) },
+    )?;
+    let empty_function = MsvcFunction40 {
+        storage: [0; 36],
+        target: core::ptr::null_mut(),
+    };
+    let cleared = checked_call(
+        "shim p2p callback clear",
+        &mut stack_pointer_checks,
+        || unsafe { p2p_test(object, &empty_function, &empty_function, &empty_function) },
+    )?;
+    if !first_retained
+        || !second_retained
+        || !cleared
+        || first_stats.iter().any(|stats| {
+            (stats.copies, stats.moves, stats.deletes, stats.deallocates) != (1, 1, 2, 0)
+        })
+        || second_stats.iter().any(|stats| {
+            (stats.copies, stats.moves, stats.deletes, stats.deallocates) != (1, 1, 2, 0)
+        })
+    {
+        return Err("MSVC inline std::function clone/move/delete ownership mismatch".into());
+    }
+
     // Prove the diagnostic cannot silently become a network session.
     let host: unsafe extern "thiscall" fn(
         *mut NetSysPrefix,
@@ -432,6 +773,13 @@ fn run() -> Result<String, String> {
         *const c_void,
         i32,
     ) -> i32 = unsafe { vtable_fn(vtable, 26) };
+    let send: unsafe extern "thiscall" fn(
+        *mut NetSysPrefix,
+        *const u8,
+        i32,
+        *const NetPlayerPrefix,
+        i32,
+    ) -> bool = unsafe { vtable_fn(vtable, 21) };
     let send_all: unsafe extern "thiscall" fn(*mut NetSysPrefix, *const u8, i32, i32) -> bool =
         unsafe { vtable_fn(vtable, 22) };
     let get: unsafe extern "thiscall" fn(
@@ -466,6 +814,12 @@ fn run() -> Result<String, String> {
         &mut stack_pointer_checks,
         || unsafe { send_all(object, core::ptr::null(), 0, 0) },
     )?;
+    let one_byte = 0x39u8;
+    let null_unicast = checked_call(
+        "NetSys[21] send null destination",
+        &mut stack_pointer_checks,
+        || unsafe { send(object, &one_byte, 1, core::ptr::null(), 0) },
+    )?;
     let get_result = checked_call("NetSys[23] get", &mut stack_pointer_checks, || unsafe {
         get(
             object,
@@ -479,9 +833,9 @@ fn run() -> Result<String, String> {
             "load-only lifecycle gate failed: host={host_result} join={join_result}"
         ));
     }
-    if send_result || get_result {
+    if send_result || null_unicast || get_result {
         return Err(format!(
-            "load-only traffic gate failed: send={send_result} get={get_result}"
+            "load-only traffic gate failed: send_all={send_result} null_unicast={null_unicast} get={get_result}"
         ));
     }
 
@@ -511,6 +865,14 @@ fn run() -> Result<String, String> {
         *mut NetSysPrefix,
         *mut c_void,
     ) -> *mut c_void = unsafe { vtable_fn(vtable, 58) };
+    let get_host_port: unsafe extern "thiscall" fn(*mut NetSysPrefix) -> u32 =
+        unsafe { vtable_fn(vtable, 49) };
+    let set_host_port: unsafe extern "thiscall" fn(*mut NetSysPrefix, u32) =
+        unsafe { vtable_fn(vtable, 50) };
+    let get_local_port: unsafe extern "thiscall" fn(*mut NetSysPrefix) -> u32 =
+        unsafe { vtable_fn(vtable, 51) };
+    let set_local_port: unsafe extern "thiscall" fn(*mut NetSysPrefix, u32) =
+        unsafe { vtable_fn(vtable, 52) };
 
     let url = checked_call(
         "NetSys[10] get_url_string",
@@ -565,7 +927,7 @@ fn run() -> Result<String, String> {
         &mut stack_pointer_checks,
         || unsafe { get_group_data(object, core::ptr::null_mut()) },
     )?;
-    let service = checked_call(
+    let service_data = checked_call(
         "NetSys[58] get_service_data",
         &mut stack_pointer_checks,
         || unsafe { get_service_data(object, core::ptr::null_mut()) },
@@ -578,8 +940,106 @@ fn run() -> Result<String, String> {
             "load-only corrected-slot gates failed: poll_services={poll_services_result} disconnect={disconnect_result} poll_players={poll_players_result}"
         ));
     }
-    if !found.is_null() || !group.is_null() || !service.is_null() {
+    if !found.is_null() || !group.is_null() || !service_data.is_null() {
         return Err("load-only corrected pointer-return slot returned non-null".into());
+    }
+    checked_call(
+        "NetSys[50] set_host_port before close",
+        &mut stack_pointer_checks,
+        || unsafe { set_host_port(object, 31337) },
+    )?;
+    checked_call(
+        "NetSys[52] set_local_port before close",
+        &mut stack_pointer_checks,
+        || unsafe { set_local_port(object, 30000) },
+    )?;
+
+    // Shipped init begins by closing the old attempt. Exercise that boundary
+    // explicitly: the retail-visible roster and retained pointers must be
+    // empty before a second init can authorize a fresh lifecycle.
+    let close: unsafe extern "thiscall" fn(*mut NetSysPrefix) = unsafe { vtable_fn(vtable, 2) };
+    checked_call("NetSys[2] close", &mut stack_pointer_checks, || unsafe {
+        close(object)
+    })?;
+    if unsafe {
+        (*object).num_players != 0
+            || (*object).players.iter().any(|player| !player.is_null())
+            || !(*object).local_player.is_null()
+            || !(*object).host_player.is_null()
+            || !(*object).net_messenger.is_null()
+            || !(*object).m_crossplay.is_null()
+    } {
+        return Err("NetSys[2] close left stale retail-visible attempt state".into());
+    }
+    let closed_is_host = checked_call(
+        "NetSys[4] is_host after close",
+        &mut stack_pointer_checks,
+        || unsafe { vtable_is_host(object) },
+    )?;
+    let closed_is_full = checked_call(
+        "NetSys[9] is_session_full after close",
+        &mut stack_pointer_checks,
+        || unsafe { is_session_full(object) },
+    )?;
+    let reset_host_port = checked_call(
+        "NetSys[49] get_host_port after close",
+        &mut stack_pointer_checks,
+        || unsafe { get_host_port(object) },
+    )?;
+    let reset_local_port = checked_call(
+        "NetSys[51] get_local_port after close",
+        &mut stack_pointer_checks,
+        || unsafe { get_local_port(object) },
+    )?;
+    let reset_game_version =
+        unsafe { core::ptr::read_unaligned((object as *const u8).add(0x270).cast::<u32>()) };
+    if closed_is_host
+        || closed_is_full != 0
+        || reset_host_port != 0x88ab
+        || reset_local_port != 0x88ab
+        || reset_game_version != 0
+    {
+        return Err(format!(
+            "NetSys[2] close did not restore shipped scalar state: host={closed_is_host} full={closed_is_full} host_port=0x{reset_host_port:x} local_port=0x{reset_local_port:x} game_version=0x{reset_game_version:x}"
+        ));
+    }
+    let reinit_result = checked_call(
+        "NetSys[1] reinit after close",
+        &mut stack_pointer_checks,
+        || unsafe {
+            init(
+                object,
+                (&mut messenger as *mut FakeMessenger).cast(),
+                (&service as *const FakeService).cast(),
+                0x1234,
+                0,
+                0,
+                0,
+            )
+        },
+    )?;
+    if reinit_result != 0
+        || unsafe { (*object).net_messenger } != (&mut messenger as *mut FakeMessenger).cast()
+        || unsafe { (*object).m_crossplay } != (&service as *const FakeService).cast_mut().cast()
+    {
+        return Err("NetSys[1] reinit did not establish a fresh attempt".into());
+    }
+    unsafe { (*object).num_players = 8 };
+    let full_at_allowed = checked_call(
+        "NetSys[9] is_session_full at allowed count",
+        &mut stack_pointer_checks,
+        || unsafe { is_session_full(object) },
+    )?;
+    unsafe { (*object).num_players = 0 };
+    let empty_not_full = checked_call(
+        "NetSys[9] is_session_full after count reset",
+        &mut stack_pointer_checks,
+        || unsafe { is_session_full(object) },
+    )?;
+    if full_at_allowed != 1 || empty_not_full != 0 {
+        return Err(format!(
+            "NetSys[9] did not compare the retail base count to the allowed count: full={full_at_allowed} empty={empty_not_full}"
+        ));
     }
 
     let is_connected: unsafe extern "C" fn() -> bool =
@@ -653,6 +1113,14 @@ fn run() -> Result<String, String> {
             messenger.callbacks, messenger.added
         ));
     }
+    let host_after_lifecycle = checked_call(
+        "NetSys[4] is_host after host lifecycle",
+        &mut stack_pointer_checks,
+        || unsafe { vtable_is_host(object) },
+    )?;
+    if !host_after_lifecycle {
+        return Err("NetSys[4] did not reflect concrete host flag bit 0 after lifecycle".into());
+    }
     if unsafe {
         u16::from_le_bytes([
             (*object).reserved_to_crossplay[0x50],
@@ -673,20 +1141,8 @@ fn run() -> Result<String, String> {
         );
     }
 
-    let retail_id = MsvcWstring {
-        sso: [
-            b'r' as u16,
-            b'e' as u16,
-            b't' as u16,
-            b'a' as u16,
-            b'i' as u16,
-            b'l' as u16,
-            b'1' as u16,
-            0,
-        ],
-        len: 7,
-        capacity: 7,
-    };
+    let retail_id_units: Vec<u16> = "retail-host-0001".encode_utf16().collect();
+    let mut retail_id = unsafe { heap_wstring(&retail_id_units)? };
     let on_player_joined: unsafe extern "thiscall" fn(
         *mut NetSysPrefix,
         *const MsvcWstring,
@@ -697,11 +1153,14 @@ fn run() -> Result<String, String> {
         &mut stack_pointer_checks,
         || unsafe { on_player_joined(object, &retail_id, &retail_id) },
     )?;
+    let callback_id_matches = unsafe {
+        wstring_units(&messenger.id_seen_on_add)
+            .is_some_and(|units| units == retail_id_units.as_slice())
+    };
     if messenger.added != 1
         || messenger.flags_seen_on_add & 2 == 0
         || !messenger.crossplay_non_null_on_add
-        || messenger.id_seen_on_add.len != 7
-        || messenger.id_seen_on_add.sso[..7] != retail_id.sso[..7]
+        || !callback_id_matches
         || unsafe { (*player).flags & 2 != 0 }
     {
         return Err(format!(
@@ -720,24 +1179,22 @@ fn run() -> Result<String, String> {
     if messenger.added != 1 {
         return Err("repeated OnPlayerJoined emitted a duplicate player-added callback".into());
     }
+    unsafe { free_wstring(&mut retail_id) };
 
     // Exercise the exact production ConnectionData ABI with inert callbacks:
     // add by-value wstring, resolve slot by-value wstring, write the 59-byte
     // record's ready field, then send_player(slot, refresh=true). No retail RVA
     // is resolved in this disposable process.
-    let empty_wstring = MsvcWstring {
-        sso: [0; 8],
-        len: 0,
-        capacity: 7,
-    };
     let mut connection = FakeConnectionData {
         records: [0; 118],
         sequence: 0,
         add_sequence: 0,
         get_sequence: 0,
         send_sequence: 0,
-        add_id: empty_wstring,
-        find_id: empty_wstring,
+        add_id_len: 0,
+        find_id_len: 0,
+        add_id_first: 0,
+        find_id_first: 0,
         sent_slot: -1,
         sent_refresh: false,
     };
@@ -767,10 +1224,10 @@ fn run() -> Result<String, String> {
             connection.get_sequence,
             connection.send_sequence,
         ) != (1, 2, 3)
-        || connection.add_id.len != 1
-        || connection.add_id.sso[0] != b'2' as u16
-        || connection.find_id.len != 1
-        || connection.find_id.sso[0] != b'2' as u16
+        || connection.add_id_len != 1
+        || connection.add_id_first != b'2' as u16
+        || connection.find_id_len != 1
+        || connection.find_id_first != b'2' as u16
         || connection.records[59 + 58] != 1
         || connection.sent_slot != 1
         || !connection.sent_refresh
@@ -910,24 +1367,54 @@ fn run() -> Result<String, String> {
             &mut stack_pointer_checks,
             || unsafe { getter(player, &mut value) },
         )?;
-        if returned != &mut value || value.capacity != 7 || value.len > 7 {
+        let units = unsafe { wstring_units(&value) };
+        let valid = if slot == 11 {
+            units == Some(&[b'd' as u16, b'o' as u16, b'n' as u16][..]) && value.capacity == 7
+        } else {
+            units == Some(retail_id_units.as_slice()) && value.capacity >= 8
+        };
+        if returned != &mut value || !valid {
             return Err(format!(
                 "NetPlayer[{slot}] returned an invalid hidden wstring buffer"
             ));
         }
         returned_wstrings.push(value);
     }
-    let platform = &returned_wstrings[2];
-    if platform.len != 3 || platform.sso[..3] != [b'd' as u16, b'o' as u16, b'n' as u16] {
-        return Err("NetPlayer[11] platform was not the expected SSO string 'don'".into());
-    }
     let found_local = checked_call(
-        "NetSys[36] find_player_from_id(local)",
+        "NetSys[36] find_player_from_id(heap local)",
         &mut stack_pointer_checks,
         || unsafe { find_player_from_id(object, returned_wstrings[0]) },
     )?;
     if found_local != player {
         return Err("NetSys[36] did not resolve the stable local NetPlayer id".into());
+    }
+    unsafe { free_wstring(&mut returned_wstrings[1]) };
+
+    // Repeat the heap-return/consume boundary to catch accidental ownership
+    // aliasing or a first-call-only success.
+    let get_id_again: WstringGet = unsafe { vtable_fn(player_vtable, 9) };
+    let mut repeated_id = MsvcWstring {
+        sso: [0xffff; 8],
+        len: u32::MAX,
+        capacity: u32::MAX,
+    };
+    let repeated_return = checked_call(
+        "NetPlayer[9] get_id repeated heap",
+        &mut stack_pointer_checks,
+        || unsafe { get_id_again(player, &mut repeated_id) },
+    )?;
+    if repeated_return != &mut repeated_id
+        || unsafe { wstring_units(&repeated_id) } != Some(retail_id_units.as_slice())
+    {
+        return Err("NetPlayer[9] repeated heap wstring return was invalid".into());
+    }
+    let found_repeated = checked_call(
+        "NetSys[36] find_player_from_id(repeated heap local)",
+        &mut stack_pointer_checks,
+        || unsafe { find_player_from_id(object, repeated_id) },
+    )?;
+    if found_repeated != player {
+        return Err("NetSys[36] repeated heap wstring ownership failed".into());
     }
 
     let get_i32 = |slot| unsafe {
@@ -1049,7 +1536,7 @@ fn run() -> Result<String, String> {
 
     drop(module);
     Ok(format!(
-        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204,416],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,48,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"setup_bridge_order\":\"add-find-ready-write-send\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
+        "{{\"schema\":\"don.netsys-load-smoke.v4\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"factory_bind_failure\":\"callable-inert\",\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204,416],\"netsys_corrected_slots_called\":[4,9,10,24,31,35,36,46,48,49,50,51,52,57,58],\"netplayer_slots_called\":20,\"p2p_callback_ownership\":\"clone-replace-destroy\",\"heap_wstring_paths\":[\"find_player\",\"player_get_id\",\"platform_id\",\"setup_bridge\"],\"attempt_reuse\":\"close-init-fresh\",\"null_unicast_result\":false,\"netmessenger_add_order\":\"pending-then-clear\",\"setup_bridge_order\":\"add-find-ready-write-send\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
     ))
 }
 

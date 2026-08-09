@@ -114,7 +114,12 @@ pub fn trace_detail(args: fmt::Arguments<'_>) {
 }
 
 struct State {
-    session: Session<TcpTransport>,
+    /// A transport bind failure must not turn the factory result into NULL:
+    /// retail dispatches two loader virtuals even after its null diagnostic.
+    /// An absent session is therefore a callable, fail-closed NetSys object.
+    session: Option<Session<TcpTransport>>,
+    role: Role,
+    retail_objects_constructed: bool,
     /// Game-layer packets waiting for `NetSys::get`.
     inbox: VecDeque<(i32, Vec<u8>)>,
     players: Vec<Box<NetPlayerObj>>,
@@ -131,6 +136,7 @@ struct State {
     error_callback: Option<unsafe extern "C" fn(i32)>,
     load_only: bool,
     game_version: u32,
+    init_count: u32,
     active: bool,
     /// Friend Game calls NetSys::host before its direct OnPlayerJoined export.
     /// Keep the local player pending until that later DTO supplies the retail
@@ -157,7 +163,23 @@ struct NetSysObj {
     // bytes, followed by the shipped ip_addresses field at +0x1A0.
     m_lobby: [u8; 0xd0],
     ip_addresses: MsvcObjectArrayString,
-    reserved_after_ip_addresses: [u8; 536],
+    // Keep the scalar portion of the concrete retail object visible at its
+    // exact offsets. Nontrivial FIFO/Log/Array/std::function members in the
+    // remaining image are still bypassed by every shim thunk.
+    ip_override: MsvcGameString,
+    concrete_host_port: u32,
+    concrete_local_port: u32,
+    lobby_launched: u8,
+    reserved_to_timeout: [u8; 0x97],
+    concrete_timeout: u32,
+    concrete_game_version: u32,
+    concrete_matchmaking_id: i32,
+    reserved_to_num_allowed: [u8; 0x44],
+    concrete_num_allowed: i32,
+    reserved_to_callbacks: [u8; 0x98],
+    data_channel_opened_callback: MsvcFunction40,
+    data_channel_closed_callback: MsvcFunction40,
+    connection_failed_callback: MsvcFunction40,
     /// Boxed so the C-visible prefix stays exactly `NetSysBase`.
     state: *mut State,
 }
@@ -168,7 +190,16 @@ const _: () = {
     assert!(core::mem::offset_of!(NetSysObj, m_crossplay) == 0xcc);
     assert!(core::mem::offset_of!(NetSysObj, m_lobby) == 0xd0);
     assert!(core::mem::offset_of!(NetSysObj, ip_addresses) == 0x1a0);
-    assert!(core::mem::offset_of!(NetSysObj, reserved_after_ip_addresses) == 0x1b8);
+    assert!(core::mem::offset_of!(NetSysObj, ip_override) == 0x1b8);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_host_port) == 0x1cc);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_local_port) == 0x1d0);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_timeout) == 0x26c);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_game_version) == 0x270);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_matchmaking_id) == 0x274);
+    assert!(core::mem::offset_of!(NetSysObj, concrete_num_allowed) == 0x2bc);
+    assert!(core::mem::offset_of!(NetSysObj, data_channel_opened_callback) == 0x358);
+    assert!(core::mem::offset_of!(NetSysObj, data_channel_closed_callback) == 0x380);
+    assert!(core::mem::offset_of!(NetSysObj, connection_failed_callback) == 0x3a8);
     assert!(core::mem::offset_of!(NetSysObj, state) == 0x3d0);
 };
 
@@ -184,6 +215,46 @@ type LobbyDtoCtor = unsafe extern "thiscall" fn(*mut c_void) -> *mut c_void;
 const OBJECT_ARRAY_STRING_CTOR_RVA: usize = 0x0003_9e80;
 type ObjectArrayStringCtor =
     unsafe extern "thiscall" fn(*mut MsvcObjectArrayString) -> *mut MsvcObjectArrayString;
+
+const RETAIL_PE_TIMESTAMP: u32 = 0x6674_863f;
+const RETAIL_IMAGE_BASE: u32 = 0x0040_0000;
+const RETAIL_IMAGE_SIZE: usize = 0x00bb_4000;
+const LOBBY_DTO_CTOR_PREFIX: &[u8] = &[
+    0x55, 0x8b, 0xec, 0x6a, 0xff, 0x68, 0x2a, 0xfe, 0xa5, 0x00, 0x64, 0xa1, 0x00, 0x00, 0x00, 0x00,
+];
+const OBJECT_ARRAY_STRING_CTOR_PREFIX: &[u8] = &[
+    0x56, 0x8b, 0xf1, 0x83, 0xc8, 0xff, 0x66, 0x89, 0x46, 0x0c, 0xc7, 0x46, 0x04, 0x00, 0x00, 0x00,
+];
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+/// Validate the immutable PE identity fields before any hard-coded executable
+/// RVA is invoked. The filename alone is not a build identity.
+fn pinned_retail_pe_headers(headers: &[u8]) -> bool {
+    if read_u16(headers, 0) != Some(0x5a4d) {
+        return false;
+    }
+    let Some(pe) = read_u32(headers, 0x3c).map(|value| value as usize) else {
+        return false;
+    };
+    pe <= 0x800
+        && headers.get(pe..pe + 4) == Some(b"PE\0\0")
+        && read_u16(headers, pe + 4) == Some(0x014c)
+        && read_u32(headers, pe + 8) == Some(RETAIL_PE_TIMESTAMP)
+        && read_u16(headers, pe + 24) == Some(0x010b)
+        && read_u32(headers, pe + 24 + 28) == Some(RETAIL_IMAGE_BASE)
+        && read_u32(headers, pe + 24 + 56) == Some(RETAIL_IMAGE_SIZE as u32)
+}
 
 fn is_retail_executable_path(path: &[u16]) -> bool {
     let leaf = path
@@ -207,6 +278,17 @@ unsafe fn retail_executable_base() -> Option<*mut u8> {
     if length == 0
         || length as usize >= path.len()
         || !is_retail_executable_path(&path[..length as usize])
+    {
+        return None;
+    }
+    let headers = core::slice::from_raw_parts(base, 0x1000);
+    if !pinned_retail_pe_headers(headers)
+        || core::slice::from_raw_parts(base.add(LOBBY_DTO_CTOR_RVA), LOBBY_DTO_CTOR_PREFIX.len())
+            != LOBBY_DTO_CTOR_PREFIX
+        || core::slice::from_raw_parts(
+            base.add(OBJECT_ARRAY_STRING_CTOR_RVA),
+            OBJECT_ARRAY_STRING_CTOR_PREFIX.len(),
+        ) != OBJECT_ARRAY_STRING_CTOR_PREFIX
     {
         return None;
     }
@@ -243,12 +325,22 @@ pub unsafe fn is_load_only(this: *mut NetSysBase) -> bool {
     st(this).is_some_and(|s| s.load_only)
 }
 
+pub unsafe fn role_is_host(this: *mut NetSysBase) -> bool {
+    st(this).is_some_and(|s| s.role == Role::Host)
+}
+
 fn env(k: &str) -> Option<String> {
     std::env::var(k).ok()
 }
 
 fn build_transport(id: i32) -> std::io::Result<(TcpTransport, Role)> {
     if load_only_mode() {
+        if env_truthy("DON_NET_LOAD_ONLY_FORCE_TRANSPORT_FAILURE") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "forced load-only transport failure",
+            ));
+        }
         // A loopback ephemeral listener keeps the ordinary `Session` object
         // valid while making the diagnostic incapable of accepting a remote
         // connection or colliding with the configured gameplay port.
@@ -272,39 +364,70 @@ pub fn create() -> *mut NetSysBase {
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or_else(|| std::process::id() as i32);
     let name = env("DON_NET_NAME").unwrap_or_else(|| "donnet".into());
-
-    let Ok((transport, role)) = build_transport(id) else {
-        trace_detail(format_args!("factory=refused reason=transport"));
-        return core::ptr::null_mut();
-    };
-    let local_addr = transport
-        .local_addr()
-        .map(|addr| addr.to_string())
-        .unwrap_or_else(|_| "unavailable".into());
     let load_only = load_only_mode();
+    let retail_exe = unsafe { retail_executable_base() };
+    let configured_role = if load_only || env("DON_NET_ROLE").as_deref() != Some("join") {
+        Role::Host
+    } else {
+        Role::Client
+    };
+    let built = if load_only || retail_exe.is_some() {
+        build_transport(id).ok()
+    } else {
+        None
+    };
+    let (session, role, local_addr) = match built {
+        Some((transport, role)) => {
+            let local_addr = transport
+                .local_addr()
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|_| "unavailable".into());
+            (Some(Session::new(transport, role, name)), role, local_addr)
+        }
+        None => {
+            let reason = if retail_exe.is_none() && !load_only {
+                "retail-executable-identity"
+            } else {
+                "transport"
+            };
+            trace_detail(format_args!("factory=inert reason={reason}"));
+            (None, configured_role, "unavailable".into())
+        }
+    };
     // Merely loading the replacement is not a connection. The lifecycle
     // entry point makes this true after `init` retained retail's callbacks.
     CONNECTED.store(false, Ordering::Relaxed);
-    trace_detail(format_args!(
-        "factory=ready abi=netsys-v65 role={role:?} load_only={load_only} local_addr={local_addr}"
-    ));
+    if session.is_some() {
+        trace_detail(format_args!(
+            "factory=ready abi=netsys-v65 role={role:?} load_only={load_only} local_addr={local_addr} transport_ready=true retail_identity={}",
+            retail_exe.is_some()
+        ));
+    } else {
+        trace_detail(format_args!(
+            "factory=callable-inert abi=netsys-v65 role={role:?} load_only={load_only} transport_ready=false retail_identity={}",
+            retail_exe.is_some()
+        ));
+    }
     let state = Box::new(State {
-        session: Session::new(transport, role, name),
+        session,
+        role,
+        retail_objects_constructed: retail_exe.is_some(),
         inbox: VecDeque::new(),
         players: Vec::new(),
         started: Instant::now(),
-        time_out_ms: 30_000,
+        time_out_ms: 20_000,
         allow_timeout: 1,
         playing: 0,
         joining: 0,
         accept_host_messages: 1,
         num_allowed_players: 8,
-        host_port: 31337,
-        local_port: 31337,
+        host_port: 0x88ab,
+        local_port: 0x88ab,
         matchmaking_id: 0,
         error_callback: None,
         load_only,
         game_version: 0,
+        init_count: 0,
         active: false,
         defer_local_add_until_identity: false,
         local_member_id: Vec::new(),
@@ -334,10 +457,23 @@ pub fn create() -> *mut NetSysBase {
         m_crossplay: core::ptr::null_mut(),
         m_lobby: [0; 0xd0],
         ip_addresses: MsvcObjectArrayString::empty_unconstructed(),
-        reserved_after_ip_addresses: [0; 536],
+        ip_override: empty_game_string(),
+        concrete_host_port: 0x88ab,
+        concrete_local_port: 0x88ab,
+        lobby_launched: 0,
+        reserved_to_timeout: [0; 0x97],
+        concrete_timeout: 20_000,
+        concrete_game_version: 0,
+        concrete_matchmaking_id: 0,
+        reserved_to_num_allowed: [0; 0x44],
+        concrete_num_allowed: 8,
+        reserved_to_callbacks: [0; 0x98],
+        data_channel_opened_callback: MsvcFunction40::empty(),
+        data_channel_closed_callback: MsvcFunction40::empty(),
+        connection_failed_callback: MsvcFunction40::empty(),
         state: Box::into_raw(state),
     });
-    if let Some(exe) = unsafe { retail_executable_base() } {
+    if let Some(exe) = retail_exe {
         let ctor: LobbyDtoCtor = unsafe { core::mem::transmute(exe.add(LOBBY_DTO_CTOR_RVA)) };
         let ip_ctor: ObjectArrayStringCtor =
             unsafe { core::mem::transmute(exe.add(OBJECT_ARRAY_STRING_CTOR_RVA)) };
@@ -350,13 +486,8 @@ pub fn create() -> *mut NetSysBase {
         ));
     } else if !load_only {
         trace_detail(format_args!(
-            "factory=refused reason=retail-executable-identity"
+            "factory=inert reason=retail-executable-identity loader_virtuals=callable"
         ));
-        unsafe {
-            drop(Box::from_raw(obj.state));
-        }
-        obj.state = core::ptr::null_mut();
-        return core::ptr::null_mut();
     } else {
         trace_detail(format_args!(
             "factory=lobby-dto-skipped reason=non-retail-load-only-executable"
@@ -379,7 +510,97 @@ pub unsafe fn with<R>(
     if obj.is_null() || (*obj).state.is_null() {
         return None;
     }
-    Some(f(&mut (*(*obj).state).session))
+    (*(*obj).state).session.as_mut().map(f)
+}
+
+type MsvcFunctionCopy = unsafe extern "thiscall" fn(*mut c_void, *mut c_void) -> *mut c_void;
+type MsvcFunctionMove = unsafe extern "thiscall" fn(*mut c_void, *mut c_void) -> *mut c_void;
+type MsvcFunctionDelete = unsafe extern "thiscall" fn(*mut c_void, bool);
+
+unsafe fn msvc_function_vtable(function: &MsvcFunction40) -> Option<*const *const c_void> {
+    if function.target.is_null() {
+        return None;
+    }
+    let vtable = *function.target.cast::<*const *const c_void>();
+    (!vtable.is_null()).then_some(vtable)
+}
+
+pub unsafe fn destroy_msvc_function(function: &mut MsvcFunction40) {
+    let Some(vtable) = msvc_function_vtable(function) else {
+        *function = MsvcFunction40::empty();
+        return;
+    };
+    let target = function.target;
+    let object_base = function as *mut MsvcFunction40 as *mut c_void;
+    let destructor: MsvcFunctionDelete = core::mem::transmute(*vtable.add(4));
+    destructor(target, target != object_base);
+    *function = MsvcFunction40::empty();
+}
+
+unsafe fn clone_msvc_function_into_empty(
+    destination: &mut MsvcFunction40,
+    source: &MsvcFunction40,
+) -> bool {
+    debug_assert!(destination.target.is_null());
+    let Some(vtable) = msvc_function_vtable(source) else {
+        return true;
+    };
+    let copy: MsvcFunctionCopy = core::mem::transmute(*vtable);
+    let destination_base = destination as *mut MsvcFunction40 as *mut c_void;
+    let target = copy(source.target, destination_base);
+    destination.target = target;
+    !target.is_null()
+}
+
+/// Clone-assign an x86 MSVC `std::function` without retaining the caller's
+/// by-value object. Small targets must be reconstructed in the destination's
+/// inline buffer; large targets remain independently heap-owned.
+unsafe fn replace_msvc_function(destination: &mut MsvcFunction40, source: &MsvcFunction40) -> bool {
+    let mut replacement = MsvcFunction40::empty();
+    if !clone_msvc_function_into_empty(&mut replacement, source) {
+        return false;
+    }
+    destroy_msvc_function(destination);
+    if replacement.target.is_null() {
+        return true;
+    }
+    let replacement_base = &mut replacement as *mut MsvcFunction40 as *mut c_void;
+    if replacement.target == replacement_base {
+        let Some(vtable) = msvc_function_vtable(&replacement) else {
+            return false;
+        };
+        let move_target: MsvcFunctionMove = core::mem::transmute(*vtable.add(1));
+        let destination_base = destination as *mut MsvcFunction40 as *mut c_void;
+        destination.target = move_target(replacement.target, destination_base);
+        destroy_msvc_function(&mut replacement);
+        !destination.target.is_null()
+    } else {
+        core::ptr::copy_nonoverlapping(
+            &replacement as *const MsvcFunction40,
+            destination as *mut MsvcFunction40,
+            1,
+        );
+        true
+    }
+}
+
+pub unsafe fn retain_p2p_callbacks(
+    this: *mut NetSysBase,
+    opened: &MsvcFunction40,
+    closed: &MsvcFunction40,
+    failed: &MsvcFunction40,
+) -> bool {
+    let object = this.cast::<NetSysObj>();
+    if object.is_null() {
+        return false;
+    }
+    let opened_ok = replace_msvc_function(&mut (*object).data_channel_opened_callback, opened);
+    let closed_ok = replace_msvc_function(&mut (*object).data_channel_closed_callback, closed);
+    let failed_ok = replace_msvc_function(&mut (*object).connection_failed_callback, failed);
+    trace_detail(format_args!(
+        "p2p_callbacks=retained opened={opened_ok} closed={closed_ok} failed={failed_ok}"
+    ));
+    opened_ok && closed_ok && failed_ok
 }
 
 unsafe fn st<'a>(this: *mut NetSysBase) -> Option<&'a mut State> {
@@ -649,7 +870,8 @@ const CONNECTION_SEND_PLAYER_RVA: usize = 0x0054_ec40;
 
 unsafe fn bridge_context(this: *mut NetSysBase) -> Option<(*mut u8, *mut c_void)> {
     let state = st(this)?;
-    if state.load_only || !state.setup_bridge || state.session.role != Role::Host {
+    if state.load_only || !state.setup_bridge || state.role != Role::Host || state.session.is_none()
+    {
         return None;
     }
     let base = GetModuleHandleW(core::ptr::null()).cast::<u8>();
@@ -715,7 +937,10 @@ unsafe fn bridge_add_player(this: *mut NetSysBase, player: *const NetPlayerObj) 
         return BridgeAddResult::Disabled;
     }
     let enabled = st(this).is_some_and(|state| {
-        !state.load_only && state.setup_bridge && state.session.role == Role::Host
+        !state.load_only
+            && state.setup_bridge
+            && state.role == Role::Host
+            && state.session.is_some()
     });
     if !enabled {
         return BridgeAddResult::Disabled;
@@ -764,9 +989,12 @@ unsafe fn pump(this: *mut NetSysBase) {
             return;
         }
         let t = now_ms(s);
-        let _ = s.session.poll(t, Duration::from_millis(0));
+        let Some(session) = s.session.as_mut() else {
+            return;
+        };
+        let _ = session.poll(t, Duration::from_millis(0));
         let mut ready_changes = Vec::new();
-        for e in s.session.drain_events() {
+        for e in session.drain_events() {
             match e {
                 don_net::session::Event::Game { from, msg } => {
                     if msg.bytes.len() <= NETDAEMON_RECEIVE_EXTENT {
@@ -783,7 +1011,7 @@ unsafe fn pump(this: *mut NetSysBase) {
         // removes the pointer from NetSys::players, then invokes
         // NetMessenger::on_player_deleted while the object remains alive
         // (0x10018B4B..0x10018BAD). Rebuilding every box would violate both parts.
-        let roster = s.session.players().to_vec();
+        let roster = session.players().to_vec();
         let mut old = core::mem::take(&mut s.players);
         let mut next = Vec::with_capacity(roster.len());
         for player in &roster {
@@ -911,7 +1139,7 @@ unsafe fn pump(this: *mut NetSysBase) {
 /// to the local pointer/pending/callback ordering used in `ns_host`.
 unsafe fn activate_host_lifecycle(this: *mut NetSysBase, connected: bool) -> bool {
     let Some(state) = st(this) else { return false };
-    if state.session.role != Role::Host {
+    if state.role != Role::Host || state.session.is_none() {
         return false;
     }
     state.active = true;
@@ -1060,6 +1288,53 @@ unsafe extern "thiscall" fn ns_dtor(_this: *mut NetSysBase, _flags: u32) -> *mut
     core::ptr::null_mut()
 }
 
+unsafe fn reset_attempt_state(this: *mut NetSysBase) {
+    let object = this as *mut NetSysObj;
+    if object.is_null() {
+        return;
+    }
+    if let Some(state) = st(this) {
+        state.active = false;
+        state.joining = 0;
+        state.playing = 0;
+        state.accept_host_messages = 1;
+        state.inbox.clear();
+        state.players.clear();
+        state.bridged_slots.clear();
+        state.local_member_id.clear();
+        state.defer_local_add_until_identity = false;
+        state.started = Instant::now();
+        state.time_out_ms = 20_000;
+        state.allow_timeout = 1;
+        state.num_allowed_players = 8;
+        state.host_port = 0x88ab;
+        state.local_port = 0x88ab;
+        state.game_version = 0;
+        state.matchmaking_id = 0;
+        let role = state.role;
+        if let Some(session) = state.session.as_mut() {
+            session.reset_for_reuse(role);
+            session.set_timeout_ms(20_000);
+        }
+    }
+    (*object).base.num_players = 0;
+    (*object).base.players = [core::ptr::null_mut(); 8];
+    (*object).base.local_player = core::ptr::null_mut();
+    (*object).base.host_player = core::ptr::null_mut();
+    (*object).base.local_player_connection = LOCAL_PLAYER_CONNECTED;
+    (*object).base.local_player_disconnect_pct = 0.0;
+    (*object).net_messenger = core::ptr::null_mut();
+    (*object).m_crossplay = core::ptr::null_mut();
+    (*object).flags = 0x40;
+    (*object).concrete_host_port = 0x88ab;
+    (*object).concrete_local_port = 0x88ab;
+    (*object).concrete_timeout = 20_000;
+    (*object).concrete_game_version = 0;
+    (*object).concrete_matchmaking_id = 0;
+    (*object).concrete_num_allowed = 8;
+    CONNECTED.store(false, Ordering::Relaxed);
+}
+
 unsafe extern "thiscall" fn ns_init(
     this: *mut NetSysBase,
     messenger: *mut c_void,
@@ -1074,22 +1349,40 @@ unsafe extern "thiscall" fn ns_init(
     if object.is_null() {
         return LIBERR_NOT_AVAILABLE;
     }
+    // Shipped init starts with close. Make re-entry a new attempt epoch rather
+    // than leaving a hidden don-net roster behind the cleared retail prefix.
+    reset_attempt_state(this);
     (*object).net_messenger = messenger.cast();
     (*object).m_crossplay = crossplay_service.cast_mut();
+    let mut init_count = 0;
     if let Some(state) = st(this) {
         // Shipped init stores its first integer argument at the concrete
         // CrossplayNetLibSys game-version field (+0x270).
         state.game_version = game_version as u32;
+        state.init_count = state.init_count.saturating_add(1);
+        init_count = state.init_count;
     }
-    trace_detail(format_args!(
-        "init=stored messenger={} crossplay_service={} object_size=0x3d4",
-        !messenger.is_null(),
-        !crossplay_service.is_null()
-    ));
+    (*object).concrete_game_version = game_version as u32;
+    if init_count == 1 {
+        trace_detail(format_args!(
+            "init=stored messenger={} crossplay_service={} object_size=0x3d4",
+            !messenger.is_null(),
+            !crossplay_service.is_null()
+        ));
+    } else {
+        trace_detail(format_args!(
+            "init=reinitialized count={init_count} messenger={} crossplay_service={}",
+            !messenger.is_null(),
+            !crossplay_service.is_null()
+        ));
+    }
     // Returning success authorises retail's immediate `[netsys+0xCC]` service
     // vcall. Only do so when both retained pointers are concrete; load-only is
     // still safe because every session/traffic entry point remains refused.
-    if messenger.is_null() || crossplay_service.is_null() {
+    let operational = st(this).is_some_and(|state| {
+        state.session.is_some() && (state.load_only || state.retail_objects_constructed)
+    });
+    if messenger.is_null() || crossplay_service.is_null() || !operational {
         return LIBERR_NOT_AVAILABLE;
     }
     LIBERR_OK
@@ -1097,24 +1390,15 @@ unsafe extern "thiscall" fn ns_init(
 
 unsafe extern "thiscall" fn ns_close(this: *mut NetSysBase) {
     trace_once("vtable.ns_close");
-    if let Some(state) = st(this) {
-        state.active = false;
-        state.joining = 0;
-    }
-    let object = this as *mut NetSysObj;
-    if !object.is_null() {
-        (*object).flags = 0;
-    }
-    CONNECTED.store(false, Ordering::Relaxed);
+    reset_attempt_state(this);
 }
 
 nop!(ns_get_memory_manager() -> *mut c_void = core::ptr::null_mut());
 
 unsafe extern "thiscall" fn ns_is_host(this: *mut NetSysBase) -> bool {
     trace_once("vtable.ns_is_host");
-    st(this)
-        .map(|s| s.session.role == Role::Host)
-        .unwrap_or(false)
+    let object = this as *mut NetSysObj;
+    !object.is_null() && (*object).flags & 1 != 0
 }
 
 nop!(ns_enable_join(i32));
@@ -1128,18 +1412,21 @@ unsafe extern "thiscall" fn ns_set_playing(this: *mut NetSysBase, v: i32) {
 
 unsafe extern "thiscall" fn ns_is_playing(this: *mut NetSysBase) -> i32 {
     trace_once("vtable.ns_is_playing");
-    st(this).map(|s| s.playing).unwrap_or(0)
+    st(this)
+        .map(|s| if s.playing != 0 { 0x20 } else { 0 })
+        .unwrap_or(0)
 }
 
 unsafe extern "thiscall" fn ns_is_joining_in_process(this: *mut NetSysBase) -> i32 {
     trace_once("vtable.ns_is_joining_in_process");
-    st(this).map(|s| s.joining).unwrap_or(0)
+    st(this).map(|s| i32::from(s.joining != 0)).unwrap_or(0)
 }
 
 unsafe extern "thiscall" fn ns_is_session_full(this: *mut NetSysBase) -> i32 {
     trace_once("vtable.ns_is_session_full");
+    let object = this as *mut NetSysObj;
     st(this)
-        .map(|s| i32::from(s.session.players().len() as i32 >= s.num_allowed_players))
+        .map(|s| i32::from((*object).base.num_players == s.num_allowed_players))
         .unwrap_or(0)
 }
 
@@ -1162,6 +1449,10 @@ unsafe extern "thiscall" fn ns_set_number_players(this: *mut NetSysBase, v: i32)
     if let Some(s) = st(this) {
         s.num_allowed_players = v;
     }
+    let object = this.cast::<NetSysObj>();
+    if !object.is_null() {
+        (*object).concrete_num_allowed = v;
+    }
 }
 
 nop!(ns_set_number_observers(i32));
@@ -1183,7 +1474,13 @@ unsafe extern "thiscall" fn ns_set_time_out(this: *mut NetSysBase, v: u32) {
     trace_once("vtable.ns_set_time_out");
     if let Some(s) = st(this) {
         s.time_out_ms = v;
-        s.session.set_timeout_ms(v as u64);
+        if let Some(session) = s.session.as_mut() {
+            session.set_timeout_ms(v as u64);
+        }
+    }
+    let object = this.cast::<NetSysObj>();
+    if !object.is_null() {
+        (*object).concrete_timeout = v;
     }
 }
 
@@ -1201,7 +1498,9 @@ unsafe extern "thiscall" fn ns_set_allow_timeout(this: *mut NetSysBase, v: i32) 
 
 unsafe extern "thiscall" fn ns_get_allow_timeout(this: *mut NetSysBase) -> i32 {
     trace_once("vtable.ns_get_allow_timeout");
-    st(this).map(|s| s.allow_timeout).unwrap_or(1)
+    st(this)
+        .map(|s| if s.allow_timeout != 0 { 0x40 } else { 0 })
+        .unwrap_or(0x40)
 }
 
 unsafe extern "thiscall" fn ns_get_num_allowed_players(this: *mut NetSysBase) -> i32 {
@@ -1218,6 +1517,7 @@ unsafe extern "thiscall" fn ns_send(
 ) -> bool {
     trace_once("vtable.ns_send");
     if packet.is_null()
+        || to.is_null()
         || size <= 0
         || size as usize > NETDAEMON_RECEIVE_EXTENT
         || st(this).is_some_and(|s| s.load_only)
@@ -1225,13 +1525,10 @@ unsafe extern "thiscall" fn ns_send(
         return false;
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
-    let dest = if to.is_null() {
-        Dest::All
-    } else {
-        Dest::One((*to).unique_id)
-    };
+    let dest = Dest::One((*to).unique_id);
     st(this)
-        .map(|s| s.session.transport.send(dest, bytes).is_ok())
+        .and_then(|s| s.session.as_mut())
+        .map(|session| session.transport.send(dest, bytes).is_ok())
         .unwrap_or(false)
 }
 
@@ -1251,7 +1548,8 @@ unsafe extern "thiscall" fn ns_send_all(
     }
     let bytes = core::slice::from_raw_parts(packet, size as usize);
     st(this)
-        .map(|s| s.session.transport.send(Dest::All, bytes).is_ok())
+        .and_then(|s| s.session.as_mut())
+        .map(|session| session.transport.send(Dest::All, bytes).is_ok())
         .unwrap_or(false)
 }
 
@@ -1262,39 +1560,41 @@ unsafe extern "thiscall" fn ns_get(
     size: *mut u32,
 ) -> bool {
     trace_once("vtable.ns_get");
-    if st(this).is_some_and(|s| s.load_only) {
+    if packet.is_null() || from.is_null() || size.is_null() || st(this).is_some_and(|s| s.load_only)
+    {
         return false;
     }
     pump(this);
     let Some(s) = st(this) else { return false };
-    let Some((sender, bytes)) = s.inbox.pop_front() else {
-        return false;
-    };
-    if packet.is_null() || bytes.len() > NETDAEMON_RECEIVE_EXTENT {
-        return false;
-    }
-    core::ptr::copy_nonoverlapping(bytes.as_ptr(), packet, bytes.len());
-    if !size.is_null() {
-        *size = bytes.len() as u32;
-    }
-    if !from.is_null() {
-        *from = s
+    while let Some((sender, bytes)) = s.inbox.pop_front() {
+        if bytes.len() > NETDAEMON_RECEIVE_EXTENT {
+            continue;
+        }
+        let Some(sender_ptr) = s
             .players
             .iter_mut()
-            .find(|p| p.unique_id == sender)
-            .map(|p| p.as_mut() as *const NetPlayerObj)
-            .unwrap_or(core::ptr::null());
+            .find(|player| player.unique_id == sender)
+            .map(|player| player.as_mut() as *const NetPlayerObj)
+        else {
+            trace_detail(format_args!(
+                "receive=dropped reason=sender-not-live unique_id={sender}"
+            ));
+            continue;
+        };
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), packet, bytes.len());
+        *size = bytes.len() as u32;
+        *from = sender_ptr;
+        return true;
     }
-    true
+    false
 }
 
-unsafe extern "thiscall" fn ns_poll_services(this: *mut NetSysBase, _services: *mut c_void) -> i32 {
+unsafe extern "thiscall" fn ns_poll_services(
+    _this: *mut NetSysBase,
+    _services: *mut c_void,
+) -> i32 {
     trace_once("vtable.ns_poll_services");
-    if st(this).is_some_and(|s| s.load_only) {
-        LIBERR_NOT_AVAILABLE
-    } else {
-        LIBERR_OK
-    }
+    LIBERR_NOT_AVAILABLE
 }
 
 unsafe extern "thiscall" fn ns_host(
@@ -1315,7 +1615,12 @@ unsafe extern "thiscall" fn ns_host(
     // Shipped host reads the first BHG String's length at +8 and returns
     // failure before touching session state when it is empty.
     let first_arg_nonempty = !a.is_null() && *a.cast::<u8>().add(8).cast::<u16>() != 0;
-    if state.load_only || state.session.role != Role::Host || !ready || !first_arg_nonempty {
+    if state.load_only
+        || state.role != Role::Host
+        || state.session.is_none()
+        || !ready
+        || !first_arg_nonempty
+    {
         return LIBERR_NOT_AVAILABLE;
     }
     if activate_host_lifecycle(this, true) {
@@ -1327,7 +1632,7 @@ unsafe extern "thiscall" fn ns_host(
 
 unsafe extern "thiscall" fn ns_join(
     this: *mut NetSysBase,
-    _s: *const c_void,
+    session_arg: *const c_void,
     _a: *const c_void,
     _b: *const c_void,
     _c: *const c_void,
@@ -1341,7 +1646,12 @@ unsafe extern "thiscall" fn ns_join(
         let Some(state) = st(this) else {
             return LIBERR_NOT_AVAILABLE;
         };
-        if state.load_only || state.session.role != Role::Client || !ready {
+        if state.load_only
+            || state.role != Role::Client
+            || state.session.is_none()
+            || !ready
+            || session_arg.is_null()
+        {
             return LIBERR_NOT_AVAILABLE;
         }
         state.active = true;
@@ -1375,7 +1685,7 @@ unsafe extern "thiscall" fn ns_join_ip(
     // transition as `join` and no interpretation of lobby/auth arguments.
     ns_join(
         this,
-        core::ptr::null(),
+        core::ptr::NonNull::<u8>::dangling().as_ptr().cast(),
         core::ptr::null(),
         core::ptr::null(),
         core::ptr::null(),
@@ -1401,7 +1711,10 @@ unsafe extern "thiscall" fn ns_disconnect(this: *mut NetSysBase, _forced: bool) 
         LIBERR_OK
     }
 }
-nop!(ns_poll_sessions(*const c_void) -> i32 = LIBERR_OK);
+// Shipped CrossplayNetLib has no list-backed implementation for these polling
+// APIs and returns LIBERR_NOT_AVAILABLE. Returning success with untouched
+// output storage lets retail consume an object we never populated.
+nop!(ns_poll_sessions(*const c_void) -> i32 = LIBERR_NOT_AVAILABLE);
 nop!(ns_stop_poll_sessions());
 nop!(ns_clear_net_sessions(u32));
 unsafe extern "thiscall" fn ns_poll_players(
@@ -1415,11 +1728,8 @@ unsafe extern "thiscall" fn ns_poll_players(
     if !backing.is_null() {
         free(backing);
     }
-    if st(this).is_some_and(|s| s.load_only) {
-        LIBERR_NOT_AVAILABLE
-    } else {
-        LIBERR_OK
-    }
+    let _ = this;
+    LIBERR_NOT_AVAILABLE
 }
 
 unsafe extern "thiscall" fn ns_find_player_from_id(
@@ -1450,7 +1760,13 @@ unsafe extern "thiscall" fn ns_validate_player(
         return 0;
     }
     st(this)
-        .map(|s| i32::from(s.players.iter().any(|q| q.unique_id == (*p).unique_id)))
+        .map(|s| {
+            i32::from(
+                s.players
+                    .iter()
+                    .any(|candidate| core::ptr::eq(candidate.as_ref(), p)),
+            )
+        })
         .unwrap_or(0)
 }
 
@@ -1496,6 +1812,10 @@ unsafe extern "thiscall" fn ns_set_host_port(this: *mut NetSysBase, v: u32) {
     if let Some(s) = st(this) {
         s.host_port = v;
     }
+    let object = this.cast::<NetSysObj>();
+    if !object.is_null() {
+        (*object).concrete_host_port = v;
+    }
 }
 unsafe extern "thiscall" fn ns_get_local_port(this: *mut NetSysBase) -> u32 {
     trace_once("vtable.ns_get_local_port");
@@ -1506,6 +1826,10 @@ unsafe extern "thiscall" fn ns_set_local_port(this: *mut NetSysBase, v: u32) {
     if let Some(s) = st(this) {
         s.local_port = v;
     }
+    let object = this.cast::<NetSysObj>();
+    if !object.is_null() {
+        (*object).concrete_local_port = v;
+    }
 }
 
 nop!(ns_set_ip_override(*const c_void));
@@ -1514,6 +1838,10 @@ unsafe extern "thiscall" fn ns_set_matchmaking_id(this: *mut NetSysBase, v: i32)
     trace_once("vtable.ns_set_matchmaking_id");
     if let Some(s) = st(this) {
         s.matchmaking_id = v;
+    }
+    let object = this.cast::<NetSysObj>();
+    if !object.is_null() {
+        (*object).concrete_matchmaking_id = v;
     }
 }
 
@@ -1858,5 +2186,55 @@ mod tests {
         assert!(is_retail_executable_path(&retail));
         assert!(is_retail_executable_path(&upper));
         assert!(!is_retail_executable_path(&smoke));
+    }
+
+    #[test]
+    fn constructor_rvas_are_gated_by_the_pinned_pe_identity() {
+        let mut headers = vec![0u8; 0x400];
+        headers[0..2].copy_from_slice(&0x5a4du16.to_le_bytes());
+        headers[0x3c..0x40].copy_from_slice(&0x138u32.to_le_bytes());
+        headers[0x138..0x13c].copy_from_slice(b"PE\0\0");
+        headers[0x13c..0x13e].copy_from_slice(&0x014cu16.to_le_bytes());
+        headers[0x140..0x144].copy_from_slice(&RETAIL_PE_TIMESTAMP.to_le_bytes());
+        let optional = 0x138 + 24;
+        headers[optional..optional + 2].copy_from_slice(&0x010bu16.to_le_bytes());
+        headers[optional + 28..optional + 32].copy_from_slice(&RETAIL_IMAGE_BASE.to_le_bytes());
+        headers[optional + 56..optional + 60]
+            .copy_from_slice(&(RETAIL_IMAGE_SIZE as u32).to_le_bytes());
+        assert!(pinned_retail_pe_headers(&headers));
+
+        for corrupt in [0usize, 0x13c, 0x140, optional, optional + 28, optional + 56] {
+            let mut wrong = headers.clone();
+            wrong[corrupt] ^= 0xff;
+            assert!(
+                !pinned_retail_pe_headers(&wrong),
+                "accepted corruption at {corrupt:#x}"
+            );
+        }
+        assert!(!pinned_retail_pe_headers(&headers[..0x150]));
+    }
+
+    #[test]
+    fn concrete_scalars_and_callback_storage_match_crossplaynetsys() {
+        assert_eq!(core::mem::offset_of!(NetSysObj, concrete_host_port), 0x1cc);
+        assert_eq!(core::mem::offset_of!(NetSysObj, concrete_local_port), 0x1d0);
+        assert_eq!(core::mem::offset_of!(NetSysObj, concrete_timeout), 0x26c);
+        assert_eq!(
+            core::mem::offset_of!(NetSysObj, concrete_num_allowed),
+            0x2bc
+        );
+        assert_eq!(
+            core::mem::offset_of!(NetSysObj, data_channel_opened_callback),
+            0x358
+        );
+        assert_eq!(
+            core::mem::offset_of!(NetSysObj, data_channel_closed_callback),
+            0x380
+        );
+        assert_eq!(
+            core::mem::offset_of!(NetSysObj, connection_failed_callback),
+            0x3a8
+        );
+        assert_eq!(core::mem::offset_of!(NetSysObj, state), 0x3d0);
     }
 }

@@ -110,6 +110,23 @@ pub unsafe extern "C" fn shim_test_setup_bridge_sequence(
     )
 }
 
+/// Shim-only load-only acceptance for MSVC `std::function` clone/move/delete
+/// ownership. Pointer arguments keep inline targets at stable addresses so the
+/// PE32 smoke can exercise replacement without relying on Rust's by-value move
+/// to emulate a C++ copy constructor.
+#[no_mangle]
+pub unsafe extern "C" fn shim_test_p2p_callback_ownership(
+    this: *mut NetSysBase,
+    opened: *const MsvcFunction40,
+    closed: *const MsvcFunction40,
+    failed: *const MsvcFunction40,
+) -> bool {
+    if !netsys::is_load_only(this) || opened.is_null() || closed.is_null() || failed.is_null() {
+        return false;
+    }
+    netsys::retain_p2p_callbacks(this, &*opened, &*closed, &*failed)
+}
+
 /// `void CrossplayNetLib::set_network_connection_state(bool)` — `__cdecl`.
 #[no_mangle]
 pub extern "C" fn shim_set_network_connection_state(state: bool) {
@@ -152,7 +169,7 @@ pub unsafe extern "thiscall" fn shim_reset_ready_flags(this: *mut NetSysBase) {
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_IsHost(this: *mut NetSysBase, _member: *const c_void) -> bool {
     netsys::trace_once("export.IsHost");
-    netsys::with(this, |s| s.role == don_net::session::Role::Host).unwrap_or(false)
+    netsys::role_is_host(this)
 }
 
 /// `void CrossplayNetLibSys::OnPlayerJoined(const LobbyMemberDTO&, const std::wstring&)`
@@ -197,34 +214,22 @@ pub unsafe extern "thiscall" fn shim_OnHostUpdated(_this: *mut NetSysBase, _id: 
 /// `void CrossplayNetLibSys::set_p2p_callbacks(function<...>, function<...>, function<...>)`
 ///
 /// Three 40-byte `std::function`s by value. The shipped callee at
-/// `0x10017420` consumes 120 stack bytes and destroys each target through its
-/// `_Func_base` vtable `+0x10`, passing whether the target is outside the
-/// inline object. We reproduce that ownership transfer exactly while never
-/// invoking the callbacks: this transport raises its own session events.
+/// `0x10017420` clone-assigns them into the concrete object at
+/// `+0x358/+0x380/+0x3A8`, then destroys each by-value input. Preserve the
+/// same independent ownership even though the owned transport has no
+/// Crossplay data-channel service event source to invoke them yet.
 #[no_mangle]
 pub unsafe extern "thiscall" fn shim_set_p2p_callbacks(
-    _this: *mut NetSysBase,
+    this: *mut NetSysBase,
     mut opened: MsvcFunction40,
     mut closed: MsvcFunction40,
     mut failed: MsvcFunction40,
 ) {
     netsys::trace_once("export.set_p2p_callbacks");
-    destroy_msvc_function(&mut opened);
-    destroy_msvc_function(&mut closed);
-    destroy_msvc_function(&mut failed);
-}
-
-unsafe fn destroy_msvc_function(function: &mut MsvcFunction40) {
-    let target = function.target;
-    if target.is_null() {
-        return;
-    }
-    let object_base = function as *mut MsvcFunction40 as *mut c_void;
-    let vtable = *(target as *const *const *const c_void);
-    let destructor: unsafe extern "thiscall" fn(*mut c_void, bool) =
-        core::mem::transmute(*vtable.add(4));
-    destructor(target, target != object_base);
-    function.target = core::ptr::null_mut();
+    let _ = netsys::retain_p2p_callbacks(this, &opened, &closed, &failed);
+    netsys::destroy_msvc_function(&mut opened);
+    netsys::destroy_msvc_function(&mut closed);
+    netsys::destroy_msvc_function(&mut failed);
 }
 
 #[cfg(test)]

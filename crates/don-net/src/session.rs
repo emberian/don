@@ -197,6 +197,36 @@ impl<T: Transport> Session<T> {
         &self.players
     }
 
+    /// Clear every per-attempt state while keeping the transport allocation,
+    /// its local identity, and the configured local name reusable.
+    ///
+    /// `CrossplayNetLibSys::init` begins by closing the previous session.  A
+    /// replacement that only clears its C++-visible player pointers leaves a
+    /// second, hidden roster in this object; the next poll can then resurrect
+    /// stale peers, events, or turn packages.  Reset the complete session
+    /// epoch instead.  The caller supplies the configured role because host
+    /// migration may have changed `self.role` during the old attempt.
+    pub fn reset_for_reuse(&mut self, role: Role) {
+        let local_id = self.transport.local_id();
+        self.role = role;
+        self.players.clear();
+        self.players.push(Player {
+            unique_id: local_id,
+            name: self.local_name.clone(),
+            is_host: role == Role::Host,
+            is_local: true,
+            ready: false,
+            last_pulse_ms: 0,
+            slot: 0,
+        });
+        self.events.clear();
+        self.turns.clear();
+        self.announced_to.clear();
+        self.all_ready_fired = false;
+        self.now_ms = 0;
+        self.last_pulse_sent_ms = 0;
+    }
+
     pub fn local_id(&self) -> i32 {
         self.transport.local_id()
     }
@@ -802,6 +832,36 @@ mod tests {
         settle(&mut host, &mut client, &mut now, 4);
         assert!(!host.all_ready());
         assert!(!client.all_ready());
+    }
+
+    #[test]
+    fn reset_for_reuse_preserves_transport_identity_and_clears_the_attempt() {
+        let (mut host, mut client) = pair();
+        let mut now = 0u64;
+        settle(&mut host, &mut client, &mut now, 8);
+        host.send_ready_flag(true).unwrap();
+        client.send_command_package(77, 1, &[0x39, 0xaa]).unwrap();
+        settle(&mut host, &mut client, &mut now, 3);
+        assert_eq!(host.players().len(), 2);
+        assert!(!host.drain_events().is_empty());
+        assert!(host.package_for_turn(77, 1).is_some());
+
+        let local_id = host.local_id();
+        host.reset_for_reuse(Role::Client);
+
+        assert_eq!(host.local_id(), local_id);
+        assert_eq!(host.role, Role::Client);
+        assert_eq!(host.players().len(), 1);
+        let local = &host.players()[0];
+        assert_eq!(local.unique_id, local_id);
+        assert_eq!(local.name, "host");
+        assert!(local.is_local);
+        assert!(!local.is_host);
+        assert!(!local.ready);
+        assert_eq!(local.slot, 0);
+        assert!(host.drain_events().is_empty());
+        assert!(host.package_for_turn(77, 1).is_none());
+        assert!(!host.all_ready());
     }
 
     #[test]
