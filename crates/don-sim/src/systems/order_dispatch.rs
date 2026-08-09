@@ -234,7 +234,10 @@ pub mod masks {
     pub const PERIODIC_32: u32 = 0x0000_0004;
     /// Cleared by `Unit::do_move`'s arrival path; set by `kill_current_order`'s facing arm.
     pub const ARRIVED_FACING: u32 = 0x0000_0002;
-    /// Guards a second path attempt inside `Unit::do_move` (`test [ebx+0x68], 8`).
+    /// Marks the currently installed movement leg as usable. `Unit::move_step` clears it when
+    /// `invalid_loc` rejects a tile, causing `Unit::do_move` to call `Unit::find_path` again on
+    /// the following frame (`test [ebx+0x68], 8`). The historical Rust name predates recovery
+    /// of that control flow and is therefore misleading; the bit position is measured.
     pub const PATH_EXHAUSTED: u32 = 0x0000_0008;
     /// Cleared at `0x0060D1F1` when the head order carries `ORDER_GROUP` and is not
     /// `EXPLORE_TO`.
@@ -374,7 +377,8 @@ pub struct OrderRec {
     pub dest: i32,
     /// `MoveOrder::tolerance` at `+20`. `0` means "use `UnitData::tolerance`".
     pub tolerance: i32,
-    /// `MoveOrder::pause` at `+24`.
+    /// `MoveOrder::pause` at `+24`. A non-zero value is decremented and holds movement for the
+    /// frame at `0x005F8C88`; collision resolution writes its retail wait here.
     pub pause: i32,
     /// `MoveOrder::retry` at `+28` — the 6-to-8 tick delay a failed search installs.
     pub retry: i32,
@@ -382,7 +386,8 @@ pub struct OrderRec {
     pub attempts: i32,
     /// `MoveOrder::timer` at `+36`. `Unit::do_move` retires the order when it reaches 1
     /// [measured, `if (0 < timer) { if (timer == 1) { kill_current_order(0); ... } }`]. The
-    /// `timer > 1` arm is **UNVERIFIED** and is modelled here as a plain decrement.
+    /// `timer > 1` arm decrements the value and returns for this frame [measured
+    /// `0x005F7FA7..0x005F7FB6`].
     pub timer: i32,
     /// `MoveOrder::facing` at `+40`.
     pub facing: i32,
@@ -1074,6 +1079,29 @@ pub trait WorkWorld: UnitWorld {
     /// as a retry delay. A host with a real stream must draw here; a host without one must
     /// say so, because skipping it desyncs every later draw in the tick.
     fn draw_path_retry_delay(&mut self) -> i32;
+
+    /// The side-effecting `detect_unit_collision` -> `resolve_unit_collision` bridge used by
+    /// `Unit::move_step`. The default preserves the older boolean occupancy host, but a
+    /// fidelity host must apply blocker/order state on `Detect(MoveStep)` and consume it on
+    /// the following `Resolve` event. The mutable receiver is intentional: retail mutates the
+    /// collision bitmap cache, unit rows, order, RNG stream, and repath budgets here.
+    fn move_collision(
+        &mut self,
+        _actor: &mut UnitWork,
+        _pf: &mut PathFinder,
+        event: movement::MoveCollisionEvent<'_>,
+    ) -> movement::MoveCollisionReply {
+        match event {
+            movement::MoveCollisionEvent::Detect { x, y, .. } => {
+                if self.unit_collides(x, y) {
+                    movement::MoveCollisionReply::Hit
+                } else {
+                    movement::MoveCollisionReply::Clear
+                }
+            }
+            movement::MoveCollisionEvent::Resolve { .. } => movement::MoveCollisionReply::Unhandled,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,9 +1206,11 @@ impl DispatchCoverage {
 // 8. `Unit::find_path` — the pathfinder call `do_move` makes
 // ---------------------------------------------------------------------------
 
-/// What `Unit::find_path` `0x005FB910` returned. The engine's raw returns are `1` success,
-/// `0` failure, `-1` suspended [measured, from `Unit::do_move`'s three-way test at
-/// `0x005F8B2x`].
+/// The result of the fine UCoord path leg exposed by this module.
+///
+/// This is intentionally not labelled with `Unit::find_path`'s raw integers: the full retail
+/// composition uses `0` for its normal synchronous completion, `1` for several early/direct
+/// exits, and `2` for suspension. The Rust enum describes the narrower leg below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathOutcome {
     /// Waypoints are on the stack (possibly just one, for a trivial hop).
@@ -1192,13 +1222,14 @@ pub enum PathOutcome {
     Suspended,
 }
 
-/// `Unit::find_path(Coord, Coord)` `0x005FB910` (840 instructions, **0 float**) — the
-/// composition `Unit::do_move` calls.
+/// The fine UCoord leg that full retail `Unit::find_path(Coord, Coord)` `0x005FB910` may call.
+/// It runs `PathFinder::find_upath` `0x00682F30` (straight-line probe and three-record search
+/// frame), `PathFinder::astar_path` `0x00683770` when needed, then waypoint compression.
 ///
-/// It is `PathFinder::find_upath` `0x00682F30` (the straight-line probe and the three-record
-/// search frame), then `PathFinder::astar_path` `0x00683770` when the probe did not settle
-/// it, then the waypoint compression. All three halves live in
-/// [`crate::systems::movement`]; this is the caller they did not have.
+/// The 840-instruction `Unit::find_path` wrapper itself is not yet ported. It adjusts obstructed
+/// endpoints, recursively composes route fragments, and crosses WCoord/TCoord domains through
+/// `find_wpath`/`find_tpath`; `Unit::do_move`'s second-chance route rebuild depends on that full
+/// composition. This function does not claim those behaviours.
 ///
 /// The initial wrapper `PathFinder::find_upath` `0x00688EB0` installs a soft budget of
 /// `500 / player_path_scale²` (halved for quick mode). `find_upath_restore` `0x00688F40`
@@ -1224,7 +1255,10 @@ pub fn find_path<W: UnitWorld>(
             .take()
             .expect("UnitData::openlist requires parked PathFinder containers");
         *pf = *parked;
-        assert!(pf.suspended, "parked PathFinder must carry a continuation frame");
+        assert!(
+            pf.suspended,
+            "parked PathFinder must carry a continuation frame"
+        );
         pf.soft_node_limit = 300 / scale_sq;
         pf.in_upath = 1;
         let searched = pf.astar_path_unit(w, &mut u.path, &args);
@@ -1338,20 +1372,24 @@ pub enum ArmResult {
 ///
 /// The parts reproduced, in retail's order [measured unless marked]:
 ///
-/// 1. **the timer.** `if (0 < order->timer)`; `timer == 1` retires the order. The `> 1` arm
-///    is UNVERIFIED and modelled as a decrement.
+/// 1. **the timer.** `if (0 < order->timer)`; `timer == 1` retires the order and `timer > 1`
+///    decrements it and holds the frame.
 /// 2. **arrival.** `vector_dist(dx, dy) <= UnitData::tolerance` at `0x005F87xx`. On arrival:
 ///    `order->dest = 0`, pop the top `PathData`; if it does **not** carry `FLAG_MORE` there
 ///    are more waypoints and the order stays; if it does, clear `ORDER_PATHED` and
 ///    `kill_current_order(0)` — the order **completed**.
-/// 3. **pathing.** With no waypoints and [`masks::PATH_EXHAUSTED`] clear, run
+/// 3. **pathing.** With movement-leg bit 8 clear, run
 ///    [`find_path`]. On failure: retire the move, then if the new head order is `ATTACK` or
 ///    `BUILD_AT` retire that too (`0x005F8B5F`, the cascade in the module header), and
 ///    service the pathfinder's RNG obligation.
-/// 4. **integration.** [`movement::move_step`] `0x005FAF30`.
+/// 4. **collision pause.** A non-zero `MoveOrder::pause` is decremented and holds the frame.
+/// 5. **integration.** [`movement::move_step_profile_with_collision`] `0x005FAF30`, including
+///    the side-effecting detect / waypoint-probe / resolve sequence supplied by [`WorkWorld`].
 ///
-/// Not reproduced: transport legs, `Unit::resolve_unit_collision`, the formation offset
-/// (`MoveOrder::off_x` / `off_y`), and the second-chance retry block at `0x005F8BD4`.
+/// Not reproduced here: transport legs, the formation offset (`MoveOrder::off_x` / `off_y`),
+/// and the coarse-route second-chance block at `0x005F8BD4`. A host may reproduce
+/// `Unit::resolve_unit_collision` through [`WorkWorld::move_collision`]; the default boolean
+/// host explicitly cannot.
 fn apply_move_path_outcome<W: WorkWorld>(
     outcome: PathOutcome,
     u: &mut UnitWork,
@@ -1365,6 +1403,10 @@ fn apply_move_path_outcome<W: WorkWorld>(
                 c.dest = 1;
                 c.flags |= ORDER_PATHED;
             }
+            // `do_move` raises bit 8 when the path top differs from the current position
+            // (`0x005F8AFD`). `move_step` clears it on an invalid tile, which re-enters this
+            // path arm next frame even though the old stack still contains records.
+            u.unit_masks |= masks::PATH_EXHAUSTED;
             None
         }
         PathOutcome::Suspended => Some(ArmResult::Working),
@@ -1483,14 +1525,24 @@ pub fn do_move<W: WorkWorld>(
     // `tolerance` finer than 48. The final leg is therefore a direct walk to the order's
     // destination, which is also what retail's straight-line probe produces.
     let far = vector_dist(dx, dy) > movement::UCELL;
-    if far && u.path.is_empty() && (u.unit_masks & masks::PATH_EXHAUSTED) == 0 {
+    if far && (u.unit_masks & masks::PATH_EXHAUSTED) == 0 {
         let outcome = find_path(pf, w, u, dest.0, dest.1, 0);
         if let Some(done) = apply_move_path_outcome(outcome, u, w, pf, cov) {
             return done;
         }
     }
 
-    // 4. integration.
+    // `MoveOrder+0x18` at `0x005F8C88`: every non-zero pause is decremented and holds the
+    // unit for this frame. The extra retail branches only choose animation/idle side effects;
+    // all of them return before `move_step`. Collision resolution writes this field.
+    if ord.pause != 0 {
+        if let Some(c) = u.orders.front_mut() {
+            c.pause = c.pause.wrapping_sub(1);
+        }
+        return ArmResult::Working;
+    }
+
+    // 5. integration.
     let target = u
         .path
         .peek()
@@ -1516,14 +1568,15 @@ pub fn do_move<W: WorkWorld>(
     u.idle = 0;
     let mut body = u.body;
     let mut path = std::mem::take(&mut u.path);
-    let step = movement::move_step_profile(
-        &*w,
+    let step = movement::move_step_profile_with_collision(
+        w,
         &mut body,
         &mut path,
         target,
         speed,
         turn_rate,
         &mut turn_profile,
+        |world, event| world.move_collision(u, pf, event),
     );
     u.body = body;
     u.lead_guy.angle = body.angle;
@@ -1538,6 +1591,15 @@ pub fn do_move<W: WorkWorld>(
         MoveStep::Moved => ArmResult::Moved,
         MoveStep::Blocked => ArmResult::Blocked,
         MoveStep::Arrived => ArmResult::Working,
+        MoveStep::InvalidTerrain => {
+            // `0x005FB76E`: an invalid terrain transition clears UnitData mask bit 8 before
+            // returning. The next `do_move` therefore rebuilds the route; retaining the old
+            // bit/path here produced a permanent retry of the same invalid waypoint.
+            u.unit_masks &= !masks::PATH_EXHAUSTED;
+            ArmResult::Blocked
+        }
+        // The four out-of-bounds exits at `0x005FB4E8..0x005FB52F` return without clearing
+        // bit 8, unlike the later invalid-terrain exit.
         MoveStep::Refused => ArmResult::Blocked,
     }
 }
@@ -2372,6 +2434,130 @@ mod tests {
     }
 
     #[test]
+    fn suspended_search_containers_are_owned_per_unit() {
+        let w = TestWorld::open(16);
+        let mut singleton = PathFinder::new();
+        let mut a = UnitWork::at(0, 1, movement::ucell_centre(2), movement::ucell_centre(2));
+        let mut b = UnitWork::at(0, 2, movement::ucell_centre(2), movement::ucell_centre(10));
+        a.path_unit.small_footprint = false;
+        b.path_unit.small_footprint = false;
+        // 500 / 100² and 300 / 100² are both zero: each call yields a small search slice.
+        a.guy_env.ai_speed = 100;
+        b.guy_env.ai_speed = 100;
+        let ad = (movement::ucell_centre(40), movement::ucell_centre(2));
+        let bd = (movement::ucell_centre(40), movement::ucell_centre(10));
+
+        assert_eq!(
+            find_path(&mut singleton, &w, &mut a, ad.0, ad.1, 0),
+            PathOutcome::Suspended
+        );
+        assert_eq!(
+            find_path(&mut singleton, &w, &mut b, bd.0, bd.1, 0),
+            PathOutcome::Suspended
+        );
+        assert!(a.parked_pathfinder.is_some());
+        assert!(b.parked_pathfinder.is_some());
+
+        let mut ao = PathOutcome::Suspended;
+        let mut bo = PathOutcome::Suspended;
+        for _ in 0..128 {
+            if ao == PathOutcome::Suspended {
+                ao = find_path(&mut singleton, &w, &mut a, ad.0, ad.1, 0);
+            }
+            if bo == PathOutcome::Suspended {
+                bo = find_path(&mut singleton, &w, &mut b, bd.0, bd.1, 0);
+            }
+            if ao != PathOutcome::Suspended && bo != PathOutcome::Suspended {
+                break;
+            }
+        }
+        assert_eq!(ao, PathOutcome::Found);
+        assert_eq!(bo, PathOutcome::Found);
+        assert!(!a.path.is_empty());
+        assert!(!b.path.is_empty());
+    }
+
+    #[test]
+    fn move_retry_countdown_adds_three_attempts_when_it_expires() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 100);
+        let mut order = OrderRec::move_to(1000, 1000, 0);
+        order.retry = 2;
+        u.orders.push_back(order);
+        u.unit_masks |= masks::PATH_EXHAUSTED;
+
+        assert_eq!(
+            do_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().retry, 1);
+        assert_eq!(
+            do_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().retry, 0);
+        assert_eq!(u.orders.front().unwrap().attempts, 3);
+        let _ = do_move(&mut u, &mut w, &mut pf, &mut cov);
+        assert_eq!(u.orders.front().unwrap().attempts, 2);
+    }
+
+    #[test]
+    fn collision_pause_decrements_and_holds_the_frame() {
+        let mut w = TestWorld::open(16);
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 100, 100);
+        let mut order = OrderRec::move_to(1000, 100, 0);
+        order.pause = 2;
+        u.orders.push_back(order);
+        u.unit_masks |= masks::PATH_EXHAUSTED;
+        let before = u.body;
+
+        assert_eq!(
+            do_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Working
+        );
+        assert_eq!(u.orders.front().unwrap().pause, 1);
+        assert_eq!((u.body.x, u.body.y), (before.x, before.y));
+    }
+
+    #[test]
+    fn invalid_step_clears_the_path_bit_and_rebuilds_next_frame() {
+        let mut w = TestWorld::open(16);
+        w.blocked.push((1, 0));
+        let mut pf = PathFinder::new();
+        let mut cov = DispatchCoverage::default();
+        let mut u = UnitWork::at(0, 0, 180, 24);
+        u.body.angle = 0x4000_0000;
+        u.myspeed = 48;
+        u.tolerance = 0;
+        u.orders.push_back(OrderRec::move_to(600, 24, 0));
+        u.path.push(PathData {
+            to_x: 220,
+            to_y: 24,
+            tolerance: 0,
+            flags: PathData::FLAG_WAYPOINT,
+        });
+        u.unit_masks |= masks::PATH_EXHAUSTED;
+
+        assert_eq!(
+            do_move(&mut u, &mut w, &mut pf, &mut cov),
+            ArmResult::Blocked
+        );
+        assert_eq!(u.unit_masks & masks::PATH_EXHAUSTED, 0);
+        assert_eq!(u.path.peek().unwrap().to_x, 220);
+
+        // The old stack remains exactly as in retail, but bit 8 makes the next frame enter
+        // Unit::find_path. Remove the transient obstruction and verify a fresh leg is installed.
+        w.blocked.clear();
+        let _ = do_move(&mut u, &mut w, &mut pf, &mut cov);
+        assert_ne!(u.path.peek().map(|p| p.to_x), Some(220));
+        assert_ne!(u.unit_masks & masks::PATH_EXHAUSTED, 0);
+    }
+
+    #[test]
     fn a_queued_order_becomes_current_when_the_move_retires() {
         let mut w = TestWorld::open(16).with_object(1, 3, tgt(24, 24, 42));
         let mut pf = PathFinder::new();
@@ -2436,6 +2622,7 @@ mod tests {
         assert_eq!(cov.failed, 2, "both orders should be counted as failures");
         assert_eq!(w.draws, 1, "the pathfinder RNG obligation was not serviced");
         assert_eq!(cov.path_retry_draws, 1);
+        assert_eq!(u.safe, 30, "A* failure must add 0x1e to UnitData::safe");
     }
 
     #[test]
@@ -2720,7 +2907,10 @@ mod tests {
             work(&mut slow, &mut w, &mut pf, &mut cov);
             work(&mut fast, &mut w, &mut pf, &mut cov);
         }
-        assert!(slow.orders.is_empty(), "the slow-turning unit remained in an artificial orbit");
+        assert!(
+            slow.orders.is_empty(),
+            "the slow-turning unit remained in an artificial orbit"
+        );
         assert!(
             fast.orders.is_empty(),
             "the fast-turning unit should have arrived and retired"

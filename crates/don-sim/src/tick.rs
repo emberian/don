@@ -1283,11 +1283,11 @@ impl Sim {
             stuck_budget: 0,
         };
         // Field borrows are disjoint: the view reads `map`, the step writes `paths`.
-        let view = MapView { map: &self.map };
+        let mut view = MapView { map: &self.map };
         let path = &mut self.paths[row];
         // `turn_rate` reads Unit+0xA1/+0x8C/+0xA2 through 0x005DE340 and is unmodelled;
         // a full turn per frame makes the arm reduce to the translation half.
-        let outcome = movement::move_step(&view, &mut body, path, target, speed, i32::MAX);
+        let outcome = movement::move_step(&mut view, &mut body, path, target, speed, i32::MAX);
         self.cover.unit_move_step += 1;
         self.world.units.x_internal_mut()[row] = body.x.rem_euclid(MAP_SPAN);
         self.world.units.y_internal_mut()[row] = body.y.rem_euclid(MAP_SPAN);
@@ -1364,12 +1364,12 @@ impl Sim {
                 angle,
                 stuck_budget: 0,
             };
-            let view = MapView { map: &self.map };
+            let mut view = MapView { map: &self.map };
             let path = &mut self.paths[row];
             let tx = self.world.units.x_internal()[trow];
             let ty = self.world.units.y_internal()[trow];
             let speed = self.world.units.myspeed()[row] as i32;
-            movement::move_step(&view, &mut body, path, (tx, ty), speed.max(1), i32::MAX);
+            movement::move_step(&mut view, &mut body, path, (tx, ty), speed.max(1), i32::MAX);
             self.cover.unit_move_step += 1;
             self.world.units.x_internal_mut()[row] = body.x.rem_euclid(MAP_SPAN);
             self.world.units.y_internal_mut()[row] = body.y.rem_euclid(MAP_SPAN);

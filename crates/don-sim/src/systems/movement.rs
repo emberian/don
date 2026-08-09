@@ -1446,8 +1446,56 @@ pub enum MoveStep {
     Blocked,
     /// The waypoint was reached and popped.
     Arrived,
-    /// Off-map or `invalid_loc` rejected the destination tile; nothing happened.
+    /// The proposed coordinate was outside the map; retail returns without changing path bit 8.
     Refused,
+    /// `invalid_loc` rejected a tile transition; retail clears path bit 8 so `do_move` rebuilds
+    /// the route on the following frame.
+    InvalidTerrain,
+}
+
+/// Which of `Unit::move_step`'s two collision queries is being made. [measured]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveCollisionProbe {
+    /// The proposed translation, using `DetectArgs::MOVE_STEP` in the retail collision lane.
+    MoveStep,
+    /// The path waypoint re-test used by the close-waypoint escape arm. Retail makes this a
+    /// read-only probe with the same argument shape as `DetectArgs::DETOUR_PROBE`.
+    Waypoint,
+}
+
+/// A collision operation requested by [`move_step_profile_with_collision`].
+///
+/// Detection and resolution are deliberately separate. Retail first lets
+/// `detect_unit_collision` persist the blocker identity and proposed order destination, may
+/// then probe the current waypoint for its one escape hatch, and only then calls
+/// `resolve_unit_collision`, which consumes that persisted state. A boolean occupancy query
+/// cannot reproduce those side effects.
+pub enum MoveCollisionEvent<'a> {
+    Detect {
+        x: i32,
+        y: i32,
+        probe: MoveCollisionProbe,
+    },
+    Resolve {
+        x: i32,
+        y: i32,
+        body: &'a mut Body,
+        path: &'a mut PathStack,
+    },
+}
+
+/// Host response to a [`MoveCollisionEvent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveCollisionReply {
+    /// The collision detector returned zero.
+    Clear,
+    /// The collision detector returned one. For [`MoveCollisionProbe::MoveStep`], the host
+    /// must already have applied the detector's blocker/order mutations before returning.
+    Hit,
+    /// `resolve_unit_collision` ran and applied its detour/wait/repath state.
+    Handled,
+    /// No side-effecting resolver is available; retain the retail-shaped stuck fallback.
+    Unhandled,
 }
 
 /// The `UnitType`/`UnitData` inputs which select `Unit::move_step`'s turning arms.
@@ -1482,7 +1530,8 @@ pub const UNIT_FLAG_MOVE_WHILE_TURNING: u32 = 0x20;
 /// `0x80000000` to mean an instant half-turn, and treating that bit pattern as a negative
 /// signed value disables turning entirely.
 ///
-/// The integrator, stripped to its arithmetic:
+/// The port includes retail's UnitType-dependent turn-only gates and speed-halving latch, plus
+/// the heading/translation arithmetic:
 /// ```text
 ///   dx = target.x - x;  dy = target.y - y;  dist = |dx| + |dy|
 ///   want = find_angle(dx, dy)
@@ -1495,9 +1544,10 @@ pub const UNIT_FLAG_MOVE_WHILE_TURNING: u32 = 0x20;
 ///     nx = x + sx;  ny = y - sy
 /// ```
 /// The `y - sy` is not a sign bug: `find_angle` negates its `dy` argument, so angle 0 is
-/// screen-up and the two conventions cancel.
+/// screen-up and the two conventions cancel. Animation/location side effects remain in their
+/// owning lanes; collision side effects enter through [`move_step_profile_with_collision`].
 pub fn move_step<W: UnitWorld>(
-    w: &W,
+    w: &mut W,
     body: &mut Body,
     path: &mut PathStack,
     target: (i32, i32),
@@ -1516,7 +1566,7 @@ pub fn move_step<W: UnitWorld>(
 
 /// `Unit::move_step` with the measured UnitType-dependent turning arms enabled.
 pub fn move_step_profile<W: UnitWorld>(
-    w: &W,
+    w: &mut W,
     body: &mut Body,
     path: &mut PathStack,
     target: (i32, i32),
@@ -1524,6 +1574,47 @@ pub fn move_step_profile<W: UnitWorld>(
     turn_rate: i32,
     profile: &mut MoveTurnProfile,
 ) -> MoveStep {
+    move_step_profile_with_collision(
+        w,
+        body,
+        path,
+        target,
+        speed,
+        turn_rate,
+        profile,
+        |world, event| match event {
+            MoveCollisionEvent::Detect { x, y, .. } => {
+                if world.unit_collides(x, y) {
+                    MoveCollisionReply::Hit
+                } else {
+                    MoveCollisionReply::Clear
+                }
+            }
+            MoveCollisionEvent::Resolve { .. } => MoveCollisionReply::Unhandled,
+        },
+    )
+}
+
+/// [`move_step_profile`] with retail's side-effecting collision pipeline supplied by the host.
+///
+/// The callback is passed `&mut W` instead of closing over it, so a host can honestly mutate
+/// its collision bitmap, blocker rows, RNG, and repath counters. The event order on a collision
+/// is `Detect(MoveStep)`, optionally `Detect(Waypoint)`, then `Resolve`; `Resolve` is never
+/// issued without a preceding `Hit` whose mutations the host has already applied.
+pub fn move_step_profile_with_collision<W, F>(
+    w: &mut W,
+    body: &mut Body,
+    path: &mut PathStack,
+    target: (i32, i32),
+    speed: i32,
+    turn_rate: i32,
+    profile: &mut MoveTurnProfile,
+    mut collision: F,
+) -> MoveStep
+where
+    W: UnitWorld,
+    F: FnMut(&mut W, MoveCollisionEvent<'_>) -> MoveCollisionReply,
+{
     let mut speed = speed;
     let (tx, ty) = target;
     let dx = tx - body.x;
@@ -1610,23 +1701,55 @@ pub fn move_step_profile<W: UnitWorld>(
         return MoveStep::Refused;
     }
 
-    if w.unit_collides(nx, ny) {
+    let collision_hit = matches!(
+        collision(
+            w,
+            MoveCollisionEvent::Detect {
+                x: nx,
+                y: ny,
+                probe: MoveCollisionProbe::MoveStep,
+            },
+        ),
+        MoveCollisionReply::Hit
+    );
+    if collision_hit {
         // The one escape hatch [measured 0x005FB6C9]: if the current waypoint is a pathfinder
         // waypoint (`flags & 2`), the *waypoint* is clear, and both axes are within 0x61 world
         // units, jump straight to the order target instead of resolving the collision.
         let escape = (waypoint.flags & PathData::FLAG_WAYPOINT) != 0
-            && !w.unit_collides(waypoint.to_x, waypoint.to_y)
+            && matches!(
+                collision(
+                    w,
+                    MoveCollisionEvent::Detect {
+                        x: waypoint.to_x,
+                        y: waypoint.to_y,
+                        probe: MoveCollisionProbe::Waypoint,
+                    },
+                ),
+                MoveCollisionReply::Clear
+            )
             && dx.abs() < 0x61
             && dy.abs() < 0x61;
         if !escape {
-            body.stuck_budget = dist * 2;
+            let resolved = collision(
+                w,
+                MoveCollisionEvent::Resolve {
+                    x: nx,
+                    y: ny,
+                    body,
+                    path,
+                },
+            );
+            if resolved != MoveCollisionReply::Handled {
+                body.stuck_budget = dist * 2;
+            }
             return MoveStep::Blocked;
         }
     }
 
     let tile_changed = tile_of(body.x) != tile_of(nx) || tile_of(body.y) != tile_of(ny);
     if tile_changed && w.invalid_loc(tile_of(nx), tile_of(ny)) {
-        return MoveStep::Refused;
+        return MoveStep::InvalidTerrain;
     }
 
     body.x = nx;
@@ -2050,7 +2173,11 @@ mod tests {
             SearchResult::Suspended
         );
         assert!(pf.suspended);
-        assert_eq!(s.records.len(), 1, "goal/start stay in the continuation frame");
+        assert_eq!(
+            s.records.len(),
+            1,
+            "goal/start stay in the continuation frame"
+        );
         let nodes_after_slice = pf.nodes.len();
         let spent_after_slice = pf.last_expanded;
 
@@ -2062,8 +2189,14 @@ mod tests {
         );
         assert!(!pf.suspended);
         assert!(pf.resume.is_none());
-        assert!(pf.nodes.len() >= nodes_after_slice, "the parked trees were retained");
-        assert!(pf.last_expanded >= spent_after_slice, "hard-budget accounting is cumulative");
+        assert!(
+            pf.nodes.len() >= nodes_after_slice,
+            "the parked trees were retained"
+        );
+        assert!(
+            pf.last_expanded >= spent_after_slice,
+            "hard-budget accounting is cumulative"
+        );
         assert!(s.records.len() > 1, "the resumed search emitted waypoints");
     }
 
@@ -2233,7 +2366,7 @@ mod tests {
 
     #[test]
     fn move_step_walks_a_path_to_its_target() {
-        let w = TestWorld::open(16, 16);
+        let mut w = TestWorld::open(16, 16);
         let mut body = Body {
             x: 300,
             y: 300,
@@ -2244,7 +2377,7 @@ mod tests {
         let target = (300 + 500, 300);
         let mut n = 0;
         while (body.x, body.y) != target && n < 200 {
-            move_step(&w, &mut body, &mut path, target, 40, 1 << 28);
+            move_step(&mut w, &mut body, &mut path, target, 40, 1 << 28);
             n += 1;
         }
         assert_eq!((body.x, body.y), target, "did not arrive in {n} steps");
@@ -2253,7 +2386,7 @@ mod tests {
 
     #[test]
     fn move_step_refuses_to_leave_the_map() {
-        let w = TestWorld::open(16, 16);
+        let mut w = TestWorld::open(16, 16);
         let mut body = Body {
             x: 10,
             y: 10,
@@ -2263,7 +2396,7 @@ mod tests {
         let mut path = PathStack::new();
         let mut r = MoveStep::TurnedOnly;
         for _ in 0..16 {
-            r = move_step(&w, &mut body, &mut path, (-5000, 10), 40, 1 << 28);
+            r = move_step(&mut w, &mut body, &mut path, (-5000, 10), 40, 1 << 28);
             if r != MoveStep::TurnedOnly {
                 break;
             }
@@ -2283,14 +2416,60 @@ mod tests {
             stuck_budget: 0,
         };
         let mut path = PathStack::new();
-        let r = move_step(&w, &mut body, &mut path, (900, 300), 100, 1 << 28);
+        let r = move_step(&mut w, &mut body, &mut path, (900, 300), 100, 1 << 28);
         assert_eq!(r, MoveStep::Blocked);
         assert!(body.stuck_budget > 0);
     }
 
     #[test]
+    fn side_effecting_collision_hook_detects_before_it_resolves() {
+        let mut w = TestWorld::open(16, 16);
+        let mut body = Body {
+            x: 300,
+            y: 300,
+            angle: 0x4000_0000,
+            stuck_budget: 0,
+        };
+        let mut path = PathStack::new();
+        let mut profile = MoveTurnProfile::default();
+        let mut calls = Vec::new();
+        let r = move_step_profile_with_collision(
+            &mut w,
+            &mut body,
+            &mut path,
+            (900, 300),
+            100,
+            1 << 28,
+            &mut profile,
+            |_, event| match event {
+                MoveCollisionEvent::Detect { x, y, probe } => {
+                    calls.push((0, x, y, probe as i32));
+                    MoveCollisionReply::Hit
+                }
+                MoveCollisionEvent::Resolve { x, y, path, .. } => {
+                    calls.push((1, x, y, -1));
+                    path.push(PathData {
+                        to_x: x,
+                        to_y: y + UCELL,
+                        tolerance: 0,
+                        flags: PathData::FLAG_WAYPOINT,
+                    });
+                    MoveCollisionReply::Handled
+                }
+            },
+        );
+        assert_eq!(r, MoveStep::Blocked);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, 0, "detect must precede resolve");
+        assert_eq!(calls[0].3, MoveCollisionProbe::MoveStep as i32);
+        assert_eq!(calls[1].0, 1);
+        assert_eq!(body.stuck_budget, 0, "handled collision skips fallback");
+        assert_eq!(path.len(), 1, "resolver's detour must survive the step");
+    }
+
+    #[test]
     fn move_step_treats_the_half_turn_rate_as_unsigned_bits() {
-        let w = TestWorld::open(16, 16);
+        let mut w = TestWorld::open(16, 16);
         let mut body = Body {
             x: 300,
             y: 300,
@@ -2299,7 +2478,7 @@ mod tests {
         };
         let mut path = PathStack::new();
         let r = move_step(
-            &w,
+            &mut w,
             &mut body,
             &mut path,
             (300, 500),
@@ -2308,12 +2487,15 @@ mod tests {
         );
         assert_eq!(r, MoveStep::Moved);
         assert_eq!(body.angle as u32, 0x8000_0000);
-        assert!(body.y > 300, "the instant half-turn must not be clamped to zero");
+        assert!(
+            body.y > 300,
+            "the instant half-turn must not be clamped to zero"
+        );
     }
 
     #[test]
     fn near_waypoint_turns_in_place_instead_of_orbiting() {
-        let w = TestWorld::open(16, 16);
+        let mut w = TestWorld::open(16, 16);
         let mut body = Body {
             x: 300,
             y: 300,
@@ -2332,7 +2514,7 @@ mod tests {
             ..MoveTurnProfile::default()
         };
         let r = move_step_profile(
-            &w,
+            &mut w,
             &mut body,
             &mut path,
             (360, 300),
