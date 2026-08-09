@@ -324,7 +324,7 @@ A unit fires one projectile per **live guy** but divides by **`uber_size`** (the
 size). A full squad delivers `D/ammo_per_att` in aggregate; a half-dead squad delivers half
 that. Attrition is expressed through the projectile *count*, not through a damage multiplier.
 
-### Splash
+### Splash falloff has separate building and unit arms
 
 ```
 dx = max(0, |impact.x - victim.x| - victim.x_size*192)
@@ -337,17 +337,44 @@ take full splash much further out. A negative result skips the victim rather tha
 Note the two extents genuinely differ: splash insets by `size*192` (a full tile per size unit),
 `hit_target` by `size*96`.
 
+That formula is the `is_live_build` (`vt+0x0C`) arm. Units use a radial inset instead:
+
+```
+distance = max(0, vector_dist(impact.x - unit.x, impact.y - unit.y)
+                  - unit.block_radius - 192)
+scale = 256 - (distance << 8) / (splash_area * 192)
+```
+
+The unit arm additionally requires `is_live_unit` (`vt+0x08`) and `is_on_map` (`vt+0xBC`),
+keeps the candidate in the same air/non-air partition as the target domain, and rejects the
+`0x08000000` missile object-mask bit. Buildings are rejected when the target domain is air.
+
 One measured inconsistency worth recording rather than smoothing over: the two splash call
 sites disagree by one instruction. `0x00678937` is `js` (skip only when negative — a victim at
 exactly `scale == 0` still gets a call); `0x00678AC3` is `test ecx,ecx ; jle` (skips at zero
 too). Observable damage is identical because `Object::do_damage` itself returns on `scale <= 0`,
 but the *call count* differs, which matters to anything counting damage events. The port follows
-the `js` form.
+the `js` form in the rectangular compatibility helper; the exact scan preserves `js` for builds
+and `jle` for units.
 
-The ring walk itself uses precomputed tile-offset discs (`DAT_00ADC400` / `DAT_00ADCAF0`, count
-from `DAT_00ADD1E0[ring]`, `ring = min(10, splash_area/4 + 1)`). `splash_ring` is ported; the
-disc tables and the diplomacy/self filters are **not** — `ammo_do_damage_splash` takes the
-victim list as input.
+The ring walk is now executable in `ammo_do_damage_splash_scan`. It converts the impact to a
+four-tile `WCoord` (`div_3_table[coord >> 8]`), then uses the shipped offset tables
+`DAT_00ADCAF0` / `DAT_00ADC400`. Each in-bounds `WData` head is followed through the complete
+PDB-named `ObjectData::{down,down_who}` chain. There is no deduplication: if an object is linked
+from two cells it is hit twice. Shooter self is skipped; the recorded primary bypasses
+`LeaderData::is_enemy`; all other victims must be enemies and owners `0..7`.
+
+The loop's endpoint is a retail bug/quirk worth preserving. `DAT_00ADD1E0[ring]` contains
+`1,9,25,...,441`, but the back-edge at `0x00678B50` is `jle`, so the index is inclusive. Rings
+1 through 9 also probe the first entry of the next ring. Ring 10 probes index 441, the bytes
+immediately after the tables (`(0x00610076,120)`), which are out of bounds on retail maps.
+The port reuses the byte-digest-pinned tables from `systems::collision` and preserves that
+sentinel read.
+
+For shooter unit types with flag `0x2000`, the scan centre is the truncating signed midpoint
+between muzzle and impact; otherwise it is the impact. Every candidate identity is written to
+`AmmoData::{whom,ox}` before filtering and the original primary is not restored. These writes
+are mutation-tested because the fields live in the ammo checksum until the projectile closes.
 
 ---
 
@@ -369,9 +396,11 @@ Ordered by how much they would cost a replay harness.
    with a spline hashes an extra `Spline::walk_data` block, so those projectiles will diverge
    on the channel. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is never
    set by `init`, which is worth confirming independently.
-4. **The splash ring tile-offset tables** (`DAT_00ADC400`, `DAT_00ADCAF0`, `DAT_00ADD1E0`) are
-   not extracted, so victim *selection* for splash is the caller's problem; only the per-victim
-   arithmetic is ported.
+4. **The live impact driver must supply `SplashEnv` and call `ammo_do_damage_splash_scan`.**
+   The exact extractor is implemented and mutation-pinned, but its world/object/diplomacy
+   adapter is intentionally separate from the currently owned tick lane. The old
+   `ammo_do_damage_splash` compatibility helper remains for callers that already selected a
+   victim list; it does not have the scan's unit arm or mutation semantics.
 5. `Objects::ammo_index` — I have not established whether it is walked by `Objects::walk_data`
    (`0x006541E0`) and therefore whether it is on any channel. It monotonically increases and
    never rewinds, so if it *is* walked, save/load round-tripping must preserve it.
@@ -388,8 +417,9 @@ Ordered by how much they would cost a replay harness.
   integration seam is the tick launch call described in §7.2; callers that have live order and
   flight-band state should use `ammo_init_targeted`, not the post-gate compatibility adapter.
 - The module takes world access through the `AmmoEnv` trait (object lookup, terrain height,
-  world bounds, unit/building search, water test) rather than reaching into the SoA world, so
-  it will not collide with the `world.rs` rewrite. Whoever owns the world implements `AmmoEnv`.
+  world bounds, unit/building search, water test) and `SplashEnv` (WData heads, down-chain
+  objects, diplomacy) rather than reaching into the SoA world, so it will not collide with the
+  `world.rs` rewrite. Whoever owns the world implements those adapters.
 - Damage is **emitted, not applied**: `ammo_do_damage_single` / `ammo_do_damage_splash` return
   `DamageCall` values matching `Object::do_damage`'s argument list exactly. This keeps the
   `ammo`/`units`/`deaths` channel boundary clean.

@@ -1523,12 +1523,14 @@ pub fn ammo_do_damage_single<E: AmmoEnv>(
 
 /// The splash path of `Ammo::do_damage`, given the victims the ring walk found.
 ///
-/// The engine walks a precomputed disc of tile offsets (`DAT_00ADC400` / `DAT_00ADCAF0`,
+/// The engine walks a precomputed disc of four-tile `WCoord` offsets
+/// (`DAT_00ADC400` / `DAT_00ADCAF0`,
 /// count from `DAT_00ADD1E0[ring]`) where
 /// `ring = min(10, splash_area/4 + 1)`, reads each tile's occupant from
-/// `World.tiles[t] + 8` (`o`) and `+ 10` (`who`), and issues one `Object::do_damage` per
-/// distinct occupant. The disc tables and the diplomacy/self filters are **not** derived;
-/// pass the victim list in and this function reproduces the per-victim arithmetic.
+/// `World.tiles[t] + 8` (`o`) and `+ 10` (`who`).  [`ammo_do_damage_splash_scan`] now owns
+/// that exact extraction.  This older compatibility adapter accepts an already-selected list
+/// and reproduces only the rectangular per-victim arithmetic; it deliberately does not replace
+/// the exact scan's down-chain, diplomacy, unit geometry, or mutation behaviour.
 ///
 /// `secondary` is `0` exactly when the victim is the projectile's recorded target.
 pub fn ammo_do_damage_splash(
@@ -1561,7 +1563,215 @@ pub fn ammo_do_damage_splash(
     out
 }
 
-/// `ring = min(10, splash_area/4 + 1)` — the tile-disc selector [measured,
+/// One object reached by the splash walk's `WData::down` / `ObjectData::down` chain.
+///
+/// The three virtual predicates are kept explicit because retail does not reduce them to one
+/// generic `alive` test.  Slot `+0x0c` (`is_live_build`) selects the building arm first; the
+/// other arm then requires slot `+0x08` (`is_live_unit`) and slot `+0xbc` (`is_on_map`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SplashObject {
+    pub view: ObjView,
+    /// Object virtual `+0x0c`: live Build or Wall.  This arm uses the rectangular footprint.
+    pub live_build: bool,
+    /// Object virtual `+0x08`: live Unit.  Read only when [`SplashObject::live_build`] is false.
+    pub live_unit: bool,
+    /// Object virtual `+0xbc`: `ObjectData::is_on_map`.
+    pub on_map: bool,
+    /// `UnitType + 0x23c`, PDB `UnitData::block_radius`.
+    pub block_radius: i32,
+    /// PDB `ObjectData::{down,down_who}` at `+0x2c/+0x2e`.
+    pub down: Option<(i32, i32)>,
+}
+
+/// World/object access needed by retail's splash-victim extractor.
+pub trait SplashEnv {
+    /// `WorldData +0/+4`, in four-tile `WCoord` cells.
+    fn world_wcells(&self) -> (i32, i32);
+    /// Head of the object chain stored in one `WData` cell (`+8/+10`).
+    fn splash_head(&self, wx: i32, wy: i32) -> Option<(i32, i32)>;
+    /// `Objects[who][o]`, including the next link read before any victim gate.
+    fn splash_object(&self, who: i32, o: i32) -> Option<SplashObject>;
+    /// `LeaderData::is_enemy` (`0x006ebaa0`).  The recorded primary bypasses this predicate.
+    fn splash_is_enemy(&self, shooter_who: i32, candidate_who: i32) -> bool;
+}
+
+/// The byte immediately following each 441-entry ring table in retail `.rdata`.
+///
+/// `Ammo::do_damage` uses `jle` at `0x00678b50`, so its walk is inclusive: it reads index
+/// `RING_COUNT[ring]`, not merely the preceding prefix.  For rings 1..9 that is the first
+/// point of the next ring.  At ring 10 it reads the adjacent bytes at index 441.  Those decode
+/// as `(0x00610076, 120)` and are necessarily out of bounds on a retail-sized world, but they
+/// remain part of the exact extractor and are pinned here rather than silently repaired.
+pub const SPLASH_RING_SENTINEL: (i32, i32) = (0x0061_0076, 120);
+
+/// Number of table probes made for `splash_area > 0`, including retail's inclusive endpoint.
+#[inline]
+pub fn splash_probe_count(splash_area: i32) -> usize {
+    if splash_area <= 0 {
+        return 0;
+    }
+    let ring = splash_ring(splash_area) as usize;
+    super::collision::RING_COUNT[ring] as usize + 1
+}
+
+/// One exact splash-table probe.  The shared literals are the measured retail tables owned by
+/// `systems::collision`; index 441 is the adjacent-byte sentinel described above.
+#[inline]
+pub fn splash_probe_offset(index: usize) -> Option<(i32, i32)> {
+    if index < super::collision::RING_X.len() {
+        Some((
+            super::collision::RING_X[index],
+            super::collision::RING_Y[index],
+        ))
+    } else if index == super::collision::RING_X.len() {
+        Some(SPLASH_RING_SENTINEL)
+    } else {
+        None
+    }
+}
+
+/// `div_3_table[coord >> 8]`: world coordinate to the four-tile `WCoord` grid used by the
+/// splash walk.  `div_3_table[i] == i/3`; the shift is deliberately 8 rather than the tile
+/// conversion's 6.  Impact positions are in-bounds/non-negative at this call site.
+#[inline]
+pub fn splash_wcell(coord: i32) -> i32 {
+    (coord >> 8) / 3
+}
+
+/// Unit-arm splash falloff (`0x00678a58..0x00678ac3`).
+///
+/// Unlike buildings, units use centre distance minus `block_radius + 192`, and the call is
+/// suppressed at `scale <= 0` (`jle`).
+#[inline]
+pub fn splash_unit_scale(
+    impact_x: i32,
+    impact_y: i32,
+    victim: &ObjView,
+    block_radius: i32,
+    splash_area: i32,
+) -> Option<i32> {
+    let centre = vector_dist(impact_x - victim.x, impact_y - victim.y);
+    let distance = (centre - block_radius - TILE).max(0);
+    let den = splash_area * TILE;
+    if den == 0 {
+        return None;
+    }
+    let scale = 0x100 - ((distance << 8) / den);
+    if scale <= 0 {
+        None
+    } else {
+        Some(scale)
+    }
+}
+
+/// Retail-exact splash victim extraction and `Object::do_damage` call packing from
+/// `Ammo::do_damage` `0x00678629..0x00678b56`.
+///
+/// This is intentionally mutation-sensitive.  Retail writes each candidate identity into
+/// `AmmoData::{whom,ox}` *before* the self/diplomacy/class gates and does not restore the
+/// recorded primary afterward.  It also does not deduplicate: an object linked from two world
+/// cells receives two calls.  Each cell walks the complete `ObjectData::down` chain.
+pub fn ammo_do_damage_splash_scan<E: SplashEnv>(
+    a: &mut AmmoWalk,
+    env: &E,
+    target_domain: i32,
+) -> Vec<DamageCall> {
+    if a.splash_area <= 0 {
+        return Vec::new();
+    }
+
+    let primary = (a.whom, a.ox);
+    let shooter_midpoint = env
+        .splash_object(a.who, a.o)
+        .is_some_and(|s| s.view.is_unit && s.view.rules.unit_flags & 0x2000 != 0);
+    let (centre_x, centre_y) = if shooter_midpoint {
+        (a.sx.wrapping_add(a.ex) / 2, a.sy.wrapping_add(a.ey) / 2)
+    } else {
+        (a.ex, a.ey)
+    };
+    let base_x = splash_wcell(centre_x);
+    let base_y = splash_wcell(centre_y);
+    let angle = crate::trig::find_angle(a.ex.wrapping_sub(a.sx), a.ey.wrapping_sub(a.sy));
+    let (world_xs, world_ys) = env.world_wcells();
+    let mut calls = Vec::new();
+
+    for index in 0..splash_probe_count(a.splash_area) {
+        let (dx, dy) = splash_probe_offset(index).expect("probe count is bounded by retail table");
+        let wx = base_x.wrapping_add(dx);
+        let wy = base_y.wrapping_add(dy);
+        if wx < 0 || wy < 0 || wx >= world_xs || wy >= world_ys {
+            continue;
+        }
+
+        let mut next = env.splash_head(wx, wy);
+        while let Some((who, o)) = next {
+            if o < 0 {
+                break;
+            }
+            a.whom = who;
+            a.ox = o;
+
+            let Some(victim) = env.splash_object(who, o) else {
+                break;
+            };
+            // Retail fetches +0x2c/+0x2e before every gate, then resumes this link at
+            // 0x00678b2b.  Preserve the chain even when this node is rejected.
+            next = victim.down;
+
+            if (who, o) == (a.who, a.o) || !(0..8).contains(&who) {
+                continue;
+            }
+            let is_primary = (who, o) == primary;
+            if !is_primary && !env.splash_is_enemy(a.who, who) {
+                continue;
+            }
+
+            let scale = if victim.live_build {
+                if target_domain == DOMAIN_AIR {
+                    continue;
+                }
+                match splash_scale(a.ex, a.ey, &victim.view, a.splash_area) {
+                    Some(scale) => scale, // building arm uses `js`: zero is still dispatched
+                    None => continue,
+                }
+            } else {
+                if !victim.live_unit || !victim.on_map {
+                    continue;
+                }
+                let same_air_partition =
+                    (target_domain != DOMAIN_AIR) == (victim.view.rules.domain != DOMAIN_AIR);
+                if !same_air_partition || victim.view.rules.obj_masks & 0x0800_0000 != 0 {
+                    continue;
+                }
+                match splash_unit_scale(
+                    a.ex,
+                    a.ey,
+                    &victim.view,
+                    victim.block_radius,
+                    a.splash_area,
+                ) {
+                    Some(scale) => scale,
+                    None => continue,
+                }
+            };
+
+            calls.push(DamageCall {
+                victim_o: o,
+                victim_who: who,
+                angle,
+                num_guys: a.num_guys,
+                ammo_slot: a.index,
+                scale256: scale,
+                secondary: i32::from(!is_primary),
+                shooter_who: a.who,
+                shooter_o: a.o,
+            });
+        }
+    }
+    calls
+}
+
+/// `ring = min(10, splash_area/4 + 1)` — the `WCoord`-disc selector [measured,
 /// `0x006786??`: `(splash + (splash>>31 & 3)) >> 2` then `+ 1`, capped at 10].
 #[inline]
 pub fn splash_ring(splash_area: i32) -> i32 {
@@ -2672,6 +2882,286 @@ mod tests {
         assert_eq!(calls[0].secondary, 0);
         assert_eq!(calls[1].secondary, 1);
         assert_eq!(calls[0].scale256, calls[1].scale256);
+    }
+
+    #[derive(Default)]
+    struct SplashWorld {
+        xs: i32,
+        ys: i32,
+        heads: Vec<(i32, i32, i32, i32)>,
+        objects: Vec<(i32, i32, SplashObject)>,
+        enemies: Vec<(i32, i32)>,
+    }
+
+    impl SplashEnv for SplashWorld {
+        fn world_wcells(&self) -> (i32, i32) {
+            (self.xs, self.ys)
+        }
+
+        fn splash_head(&self, wx: i32, wy: i32) -> Option<(i32, i32)> {
+            self.heads
+                .iter()
+                .find(|&&(x, y, _, _)| x == wx && y == wy)
+                .map(|&(_, _, who, o)| (who, o))
+        }
+
+        fn splash_object(&self, who: i32, o: i32) -> Option<SplashObject> {
+            self.objects
+                .iter()
+                .find(|&&(w, i, _)| w == who && i == o)
+                .map(|&(_, _, object)| object)
+        }
+
+        fn splash_is_enemy(&self, shooter_who: i32, candidate_who: i32) -> bool {
+            self.enemies.contains(&(shooter_who, candidate_who))
+        }
+    }
+
+    fn splash_unit(x: i32, y: i32, domain: i32, down: Option<(i32, i32)>) -> SplashObject {
+        SplashObject {
+            view: ObjView {
+                alive: true,
+                is_unit: true,
+                x,
+                y,
+                rules: ShooterRules {
+                    domain,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            live_build: false,
+            live_unit: true,
+            on_map: true,
+            block_radius: 0,
+            down,
+        }
+    }
+
+    fn splash_build(x: i32, y: i32, down: Option<(i32, i32)>) -> SplashObject {
+        SplashObject {
+            view: ObjView {
+                alive: true,
+                x,
+                y,
+                ..Default::default()
+            },
+            live_build: true,
+            live_unit: false,
+            on_map: false,
+            block_radius: 0,
+            down,
+        }
+    }
+
+    #[test]
+    fn splash_scan_uses_the_shipped_inclusive_ring_endpoint() {
+        assert_eq!(splash_probe_count(0), 0);
+        assert_eq!(
+            splash_probe_count(1),
+            10,
+            "ring 1 count 9 is an inclusive endpoint"
+        );
+        assert_eq!(splash_probe_offset(9), Some((-1, -2)));
+        assert_eq!(splash_probe_count(40), 442);
+        assert_eq!(splash_probe_offset(440), Some((-10, 0)));
+        assert_eq!(splash_probe_offset(441), Some(SPLASH_RING_SENTINEL));
+        assert_eq!(splash_probe_offset(442), None);
+    }
+
+    #[test]
+    fn splash_scan_walks_down_links_in_order_and_leaves_the_last_identity_in_ammo() {
+        let centre = 4 * 768;
+        let mut world = SplashWorld {
+            xs: 10,
+            ys: 10,
+            heads: vec![(4, 4, 1, 10)],
+            objects: vec![
+                (0, 7, splash_unit(0, 0, DOMAIN_LAND, None)),
+                (
+                    1,
+                    10,
+                    splash_unit(centre, centre, DOMAIN_LAND, Some((2, 20))),
+                ),
+                (2, 20, splash_build(centre, centre, None)),
+            ],
+            enemies: vec![(0, 1), (0, 2)],
+        };
+        let mut a = AmmoWalk {
+            sx: centre - 100,
+            sy: centre,
+            ex: centre,
+            ey: centre,
+            splash_area: 1,
+            who: 0,
+            o: 7,
+            whom: 1,
+            ox: 10,
+            num_guys: 3,
+            index: 12,
+            ..Default::default()
+        };
+        let calls = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_LAND);
+        assert_eq!(
+            calls
+                .iter()
+                .map(|c| (c.victim_who, c.victim_o))
+                .collect::<Vec<_>>(),
+            [(1, 10), (2, 20)]
+        );
+        assert_eq!((calls[0].secondary, calls[1].secondary), (0, 1));
+        assert_eq!(calls[0].angle, crate::trig::find_angle(100, 0));
+        assert_eq!(
+            (a.whom, a.ox),
+            (2, 20),
+            "the scan does not restore the primary"
+        );
+
+        // The engine does no identity deduplication: put the same chain head in the next
+        // probe cell and both linked objects are dispatched again.
+        world.heads.push((3, 3, 1, 10)); // table index 1 = (-1,-1)
+        a.whom = 1;
+        a.ox = 10;
+        let duplicated = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_LAND);
+        assert_eq!(duplicated.len(), 4);
+    }
+
+    #[test]
+    fn splash_primary_bypasses_diplomacy_but_secondary_allies_and_self_do_not() {
+        let centre = 3 * 768;
+        let world = SplashWorld {
+            xs: 8,
+            ys: 8,
+            heads: vec![(3, 3, 1, 10)],
+            objects: vec![
+                (0, 7, splash_unit(centre, centre, DOMAIN_LAND, None)),
+                (
+                    1,
+                    10,
+                    splash_unit(centre, centre, DOMAIN_LAND, Some((1, 11))),
+                ),
+                (
+                    1,
+                    11,
+                    splash_unit(centre, centre, DOMAIN_LAND, Some((8, 80))),
+                ),
+                (
+                    8,
+                    80,
+                    splash_unit(centre, centre, DOMAIN_LAND, Some((0, 7))),
+                ),
+            ],
+            enemies: vec![],
+        };
+        let mut a = AmmoWalk {
+            ex: centre,
+            ey: centre,
+            splash_area: 1,
+            who: 0,
+            o: 7,
+            whom: 1,
+            ox: 10,
+            ..Default::default()
+        };
+        let calls = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_LAND);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            (calls[0].victim_who, calls[0].victim_o, calls[0].secondary),
+            (1, 10, 0)
+        );
+        assert_eq!(
+            (a.whom, a.ox),
+            (0, 7),
+            "owner 8 and the rejected self node are followed and mutate the fields"
+        );
+    }
+
+    #[test]
+    fn splash_unit_gates_and_building_zero_scale_asymmetry_are_exact() {
+        let mut dead = splash_unit(0, 0, DOMAIN_LAND, Some((2, 22)));
+        dead.live_unit = false;
+        let mut off_map = splash_unit(0, 0, DOMAIN_LAND, Some((2, 23)));
+        off_map.on_map = false;
+        let air = splash_unit(0, 0, DOMAIN_AIR, Some((2, 24)));
+        let mut missile = splash_unit(0, 0, DOMAIN_LAND, Some((2, 25)));
+        missile.view.rules.obj_masks = 0x0800_0000;
+        // At 192 from a zero-size build the rectangular arm computes scale == 0 and still
+        // dispatches (`js`).  A unit at 384 has centre distance - (block 0 + 192) == 192,
+        // also scale zero, but its arm uses `jle` and suppresses the call.
+        let build_zero = splash_build(192, 0, Some((2, 26)));
+        let unit_zero = splash_unit(384, 0, DOMAIN_LAND, None);
+        let world = SplashWorld {
+            xs: 3,
+            ys: 3,
+            heads: vec![(0, 0, 2, 20)],
+            objects: vec![
+                (0, 7, splash_unit(0, 0, DOMAIN_LAND, None)),
+                (2, 20, dead),
+                (2, 22, off_map),
+                (2, 23, air),
+                (2, 24, missile),
+                (2, 25, build_zero),
+                (2, 26, unit_zero),
+            ],
+            enemies: vec![(0, 2)],
+        };
+        let mut a = AmmoWalk {
+            ex: 0,
+            ey: 0,
+            splash_area: 1,
+            who: 0,
+            o: 7,
+            whom: 9,
+            ox: 9,
+            ..Default::default()
+        };
+        let calls = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_LAND);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            (calls[0].victim_who, calls[0].victim_o, calls[0].scale256),
+            (2, 25, 0)
+        );
+
+        a.whom = 9;
+        a.ox = 9;
+        let air_calls = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_AIR);
+        assert_eq!(
+            air_calls
+                .iter()
+                .map(|c| (c.victim_who, c.victim_o))
+                .collect::<Vec<_>>(),
+            [(2, 23)],
+            "air-target splash rejects builds/non-air units and admits the air unit"
+        );
+    }
+
+    #[test]
+    fn splash_midpoint_flag_moves_the_wcoord_scan_centre_with_truncation_to_zero() {
+        let mut shooter = splash_unit(0, 0, DOMAIN_LAND, None);
+        shooter.view.rules.unit_flags = 0x2000;
+        let world = SplashWorld {
+            xs: 4,
+            ys: 4,
+            heads: vec![(0, 0, 1, 10)],
+            objects: vec![(0, 7, shooter), (1, 10, splash_build(0, 0, None))],
+            enemies: vec![(0, 1)],
+        };
+        let mut a = AmmoWalk {
+            // (-3 + 2) / 2 is 0 in MSVC's signed divide-by-two sequence, not -1.
+            sx: -3,
+            sy: 0,
+            ex: 2,
+            ey: 0,
+            splash_area: 1,
+            who: 0,
+            o: 7,
+            whom: 1,
+            ox: 10,
+            ..Default::default()
+        };
+        let calls = ammo_do_damage_splash_scan(&mut a, &world, DOMAIN_LAND);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(splash_wcell(a.sx.wrapping_add(a.ex) / 2), 0);
     }
 
     #[test]
