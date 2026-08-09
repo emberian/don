@@ -349,6 +349,22 @@ title-only read above together with a double-read snapshot of Crossplay's scalar
 That closes the last unknown value without inspecting a ticket, token, player name, platform id,
 lobby id, descriptor, or developer secret.
 
+The host-side collector for that experiment is now:
+
+```sh
+python3 tools/retail-control/netstate.py --pid PID
+```
+
+It is read-only and does not change the frozen injector. It requires exact SHA-256 and
+`SizeOfImage` identities for the executable plus CrossplayProxy, CrossplayNetLib, PartyWin and
+PlayFabMultiplayerWin; double-reads the NetSys pointer array and the three selected Crossplay
+scalars; and brackets the exact 24-byte MSVC `titleId` string object at
+`CrossplayProxy.dll+0xC2ED8 -> +56`. A heap string causes two reads of exactly its declared title
+length. The tool emits only pointer-presence masks, bounded scalar values, and the validated title
+id. Its output schema explicitly excludes developer secrets, tickets, tokens, lobby descriptors,
+player/platform identifiers and names. Any root, bytes, module identity, or string shape changing
+during the bracket refuses the artifact.
+
 ### 5.3 What this means for "internet games work"
 
 Two honest routes, and they are different products:
