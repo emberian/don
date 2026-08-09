@@ -673,7 +673,10 @@ impl<'a, H: Host> Vm<'a, H> {
                 let out = match ScriptTy::from_tag(tag) {
                     Some(ScriptTy::Int) => Value::Int(v.as_int()),
                     Some(ScriptTy::Real) => Value::Real(v.as_real()),
-                    Some(ScriptTy::Str) => Value::str(v.as_string()),
+                    Some(ScriptTy::Str) => Value::str(
+                        v.as_string()
+                            .map_err(|_| VmError::Unimplemented("ScriptObject::get_string"))?,
+                    ),
                     _ => v,
                 };
                 self.stack.push(Slot::Val(out));
@@ -1105,7 +1108,13 @@ impl<'a, H: Host> Vm<'a, H> {
                 Some(Value::Null)
             }
             17 => {
-                let name = args.first().map(|v| v.as_string()).unwrap_or_default();
+                let name = match args.first() {
+                    Some(v) => match v.as_string() {
+                        Ok(s) => s,
+                        Err(_) => return Some(Value::Int(-1)),
+                    },
+                    None => String::new(),
+                };
                 Some(Value::Int(match s.find_trigger(&name) {
                     Some(i) => i32::from(s.is_trigger_enabled(i as i32)),
                     None => -1,

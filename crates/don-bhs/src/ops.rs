@@ -205,7 +205,10 @@ fn str_op(a: &str, op: u8, rhs: Option<&Value>) -> OpResult {
         Some(r) => r,
         None => return Err(OpError::BadOperand("string binary opcode with no rhs")),
     };
-    let r = rv.as_string();
+    let r = match rv {
+        Value::Str(s) => &**s,
+        _ => return Err(OpError::BadOperand("string operator with non-string rhs")),
+    };
     let al = a.to_lowercase();
     let rl = r.to_lowercase();
     Ok(match op {

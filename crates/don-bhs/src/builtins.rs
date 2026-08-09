@@ -153,12 +153,18 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
         // ---- StringUtilFuncSet ----------------------------------------------
         // length(str) is `String::curr_len`, a count of UTF-16 code units.
         18 => Ok(Value::Int(
-            arg(args, 0).as_string().encode_utf16().count() as i32
+            arg(args, 0)
+                .as_string()
+                .map_err(|_| HostError::BadArgs("length: cannot convert value to string"))?
+                .encode_utf16()
+                .count() as i32,
         )),
         // char_at(str, i): out of range (either end) yields 0, else the UTF-16 unit
         // zero-extended to int.
         19 => {
-            let s = arg(args, 0).as_string();
+            let s = arg(args, 0)
+                .as_string()
+                .map_err(|_| HostError::BadArgs("char_at: cannot convert value to string"))?;
             let i = arg(args, 1).as_int();
             let units: Vec<u16> = s.encode_utf16().collect();
             if i < 0 || i as usize >= units.len() {
@@ -179,11 +185,17 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
         // stays unimplemented rather than invented.
         21 => Err(HostError::Unimplemented),
         22 => {
-            host.script_print(&arg(args, 0).as_string(), false)?;
+            let s = arg(args, 0)
+                .as_string()
+                .map_err(|_| HostError::Unimplemented)?;
+            host.script_print(&s, false)?;
             Ok(Value::Null)
         }
         23 => {
-            host.script_print(&arg(args, 0).as_string(), true)?;
+            let s = arg(args, 0)
+                .as_string()
+                .map_err(|_| HostError::Unimplemented)?;
+            host.script_print(&s, true)?;
             Ok(Value::Null)
         }
 

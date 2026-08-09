@@ -306,20 +306,18 @@ impl Value {
     /// `ScriptType::get_string` (vtable +20). This is the conversion `print` and
     /// `print_line` use on their `anytype` argument.
     ///
-    /// `ScriptObject::get_string` (`0x009d6370`, 353 bytes) formats an aggregate by
-    /// walking its members; we have not decoded that format, so we render the
-    /// members comma-separated and say so rather than pretending.
-    pub fn as_string(&self) -> String {
+    /// `ScriptObject::get_string` (`0x009d6370`, 353 bytes) has not yet been
+    /// decoded. Aggregates and null pointers fail explicitly instead of receiving
+    /// an invented comma-joined/empty rendering.
+    pub fn as_string(&self) -> Result<String, OpError> {
         match self {
-            Value::Int(i) => i.to_string(),
-            Value::Real(f) => f.to_string(),
-            Value::Str(s) => (**s).clone(),
-            Value::Obj(o) => {
-                let o = o.borrow();
-                let inner: Vec<String> = o.values.iter().map(|c| c.borrow().as_string()).collect();
-                inner.join(",")
-            }
-            Value::Null => String::new(),
+            Value::Int(i) => Ok(i.to_string()),
+            Value::Real(f) => Ok(f.to_string()),
+            Value::Str(s) => Ok((**s).clone()),
+            Value::Obj(_) => Err(OpError::BadOperand(
+                "ScriptObject::get_string is not recovered",
+            )),
+            Value::Null => Err(OpError::BadOperand("get_string on a null ScriptType*")),
         }
     }
 

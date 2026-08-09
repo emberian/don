@@ -90,6 +90,7 @@ mod op {
     pub const CREATE_ARRAY_INITER: u8 = 0x2b;
     pub const CREATE_STRUCT: u8 = 0x2c;
     pub const PUSH_ARRAY_INDEX: u8 = 0x2d;
+    pub const CREATE_ARRAY_INDEX: u8 = 0x2e;
     pub const PUSH_STRUCT_FIELD: u8 = 0x2f;
     pub const PUSH_ARRAY_LENGTH: u8 = 0x30;
     pub const SET_ARRAY_LENGTH: u8 = 0x31;
@@ -496,10 +497,11 @@ impl<'a> FileGen<'a> {
             self.code[at..at + 4].copy_from_slice(&target.to_le_bytes());
         }
 
+        let return_type = self.resolved_type_tag(&ret);
         let s = &mut self.scripts[si];
         s.arity = sig.params.len();
         s.entry = entry;
-        s.return_type = ret.tag();
+        s.return_type = return_type;
         s.script_type = script_type_tag(sig.script_type.as_deref());
         s.var_names = g.locals;
         s.static_var_names = g.statics.clone();
@@ -811,10 +813,20 @@ impl<'a> FileGen<'a> {
     fn init_value(&mut self, g: &mut ScriptGen, ty: &Ty, d: &Declarator) -> bool {
         match (&d.init, &d.array) {
             (Some(Expr::ArrayLit(items, pos)), _) => {
-                for it in items {
+                // Retail's constructor pops into values[0..], so source element 0
+                // must be on top: emit the source list in reverse.
+                for it in items.iter().rev() {
                     self.expr(g, it);
                 }
-                self.emit2(op::CREATE_ARRAY_INITER, ty.tag(), items.len() as u32, *pos);
+                if items.is_empty() {
+                    self.diag(Severity::Error, *pos, "an array initializer cannot be empty");
+                }
+                self.emit2(
+                    op::CREATE_ARRAY_INITER,
+                    items.len() as u32,
+                    self.array_element_tag(ty),
+                    *pos,
+                );
                 false
             }
             (Some(e), _) => {
@@ -822,25 +834,63 @@ impl<'a> FileGen<'a> {
                 matches!(e, Expr::Name(..))
             }
             (None, Some(ArraySuffix::Sized(n))) => {
+                self.emit_default_value(g, array_inner(ty), d.pos);
                 self.expr(g, n);
-                self.emit1(op::CREATE_ARRAY_DYN, ty.tag(), d.pos);
+                self.emit1(op::CREATE_ARRAY_DYN, self.array_element_tag(ty), d.pos);
                 false
             }
             (None, Some(ArraySuffix::Dynamic)) => {
-                self.emit1(op::CREATE_ARRAY, ty.tag(), d.pos);
+                self.emit_default_value(g, array_inner(ty), d.pos);
+                self.emit1(op::CREATE_ARRAY, self.array_element_tag(ty), d.pos);
                 false
             }
             (None, None) => {
-                match ty {
-                    Ty::Struct(si) => {
-                        let n = self.unit.structs[*si].fields.len() as u32;
-                        self.emit2(op::CREATE_STRUCT, *si as u32, n, d.pos);
-                    }
-                    _ => self.emit1(op::CREATE_SIMPLE, ty.tag(), d.pos),
-                }
+                self.emit_default_value(g, ty, d.pos);
                 false
             }
         }
+    }
+
+    /// Emit a real initialized value, including the prototypes and member values
+    /// consumed by the aggregate constructors. The earlier recovered compiler
+    /// emitted aggregate opcodes onto an empty stack; it decoded but could never run.
+    fn emit_default_value(&mut self, g: &mut ScriptGen, ty: &Ty, pos: Pos) {
+        match ty {
+            Ty::Struct(si) => {
+                let fields = self.unit.structs[*si].fields.clone();
+                for field in fields.iter().rev() {
+                    if let Some(n) = field.fixed_len {
+                        self.emit_default_value(g, &field.ty, pos);
+                        let c = self.intern(Value::Int(n as i32));
+                        self.emit1(op::PUSH, Slot::Const(c).encode(), pos);
+                        self.emit1(op::CREATE_ARRAY_DYN, self.resolved_type_tag(&field.ty), pos);
+                    } else {
+                        self.emit_default_value(g, &field.ty, pos);
+                    }
+                }
+                // Both operands are measured: [member count][struct type tag].
+                // SymTable assigns user types String::generate_hash's
+                // case-insensitive word, the same scheme as the ten builtin tags.
+                let tag = bhs_type_hash(&self.unit.structs[*si].name);
+                self.emit2(op::CREATE_STRUCT, fields.len() as u32, tag, pos);
+            }
+            Ty::Array(inner) => {
+                self.emit_default_value(g, inner, pos);
+                self.emit1(op::CREATE_ARRAY, self.resolved_type_tag(inner), pos);
+            }
+            _ => self.emit1(op::CREATE_SIMPLE, self.resolved_type_tag(ty), pos),
+        }
+    }
+
+    fn resolved_type_tag(&self, ty: &Ty) -> u32 {
+        match ty {
+            Ty::Struct(si) => bhs_type_hash(&self.unit.structs[*si].name),
+            _ => ty.tag(),
+        }
+    }
+
+    fn array_element_tag(&self, ty: &Ty) -> u32 {
+        self.resolved_type_tag(array_inner(ty))
     }
 
     // --------------------------------------------------------- expressions
@@ -912,20 +962,27 @@ impl<'a> FileGen<'a> {
                 self.emit1(op::PUSH, slot.encode(), pos);
             }
             Expr::ArrayLit(items, _) => {
-                for it in items {
+                for it in items.iter().rev() {
                     self.expr(g, it);
+                }
+                let elem_tag = items
+                    .first()
+                    .and_then(|e| self.static_ty(g, e))
+                    .map(|t| self.resolved_type_tag(&t));
+                if items.is_empty() {
+                    self.diag(Severity::Error, pos, "an untyped array literal cannot be empty");
                 }
                 self.emit2(
                     op::CREATE_ARRAY_INITER,
-                    ScriptTy::Array.tag(),
                     items.len() as u32,
+                    elem_tag.unwrap_or_else(|| ScriptTy::Any.tag()),
                     pos,
                 );
             }
             Expr::Cast { ty, expr, .. } => {
                 self.expr(g, expr);
                 let t = self.unit.resolve_type(Some(ty));
-                self.emit1(op::CAST, t.tag(), pos);
+                self.emit1(op::CAST, self.resolved_type_tag(&t), pos);
             }
             Expr::Unary { op: p, expr, .. } => {
                 self.expr(g, expr);
@@ -1167,11 +1224,9 @@ impl<'a> FileGen<'a> {
                 && name.eq_ignore_ascii_case("length")
                 && !self.is_struct_with_field(g, base, name)
             {
-                self.expr(g, base);
                 self.expr(g, value);
+                self.expr(g, base);
                 self.emit(op::SET_ARRAY_LENGTH, pos);
-                // `OP_SET_ARRAY_LENGTH` is not attested in any shipped script; its
-                // operand order is [inferred].
                 return;
             }
         }
@@ -1194,9 +1249,8 @@ impl<'a> FileGen<'a> {
             Expr::Index { base, index, .. } => {
                 self.expr(g, base);
                 self.expr(g, index);
-                // The write form of an index: unlike `OP_PUSH_ARRAY_INDEX` this one may
-                // have to materialise the element. [inferred]
-                self.emit(op::PUSH_ARRAY_INDEX, e.pos());
+                // The measured write form grows through blank_base when needed.
+                self.emit(op::CREATE_ARRAY_INDEX, e.pos());
             }
             other => {
                 self.diag(
@@ -1374,6 +1428,43 @@ impl<'a> FileGen<'a> {
     }
 }
 
+fn array_inner(ty: &Ty) -> &Ty {
+    match ty {
+        Ty::Array(inner) => inner,
+        other => other,
+    }
+}
+
+/// `String::generate_hash` (`0x00a1b6b0`) case-insensitive result, which
+/// `SymTable::add_data_type` stores as a BHS type tag.
+///
+/// BHS identifiers are ASCII; applying ASCII lowercase here matches retail's
+/// `towlower` for the language's admitted names.
+fn bhs_type_hash(name: &str) -> u32 {
+    const T: [u32; 50] = [
+        127, 811, 1597, 2131, 2749, 4759, 5527, 5953, 8117, 9539, 10273, 10753, 11159,
+        12301, 13217, 14207, 15413, 17681, 18661, 19013, 21089, 22051, 25111, 25801,
+        27457, 28057, 29581, 30809, 32611, 34469, 36067, 37511, 38723, 40093, 41983,
+        43321, 45083, 47431, 49667, 50767, 53453, 55469, 57193, 59369, 61987, 65071,
+        73421, 77849, 84223, 89009,
+    ];
+    let units: Vec<u16> = name.encode_utf16().collect();
+    let mut remaining = units.len() as u32;
+    let mut hash = 0u32;
+    for (index, &unit) in units.iter().enumerate().rev() {
+        let c = if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+            unit + (b'a' - b'A') as u16
+        } else {
+            unit
+        } as u32;
+        hash = hash
+            .wrapping_add(T[c as usize % T.len()].wrapping_mul(remaining))
+            .wrapping_add(c.wrapping_mul(T[index % T.len()]));
+        remaining -= 1;
+    }
+    hash
+}
+
 /// `Script::script_type` (+200). The three qualifiers the corpus uses are given stable
 /// small ids; the retail encoding is unread, so this is ours until it can be diffed.
 /// [inferred]
@@ -1389,7 +1480,9 @@ fn script_type_tag(s: Option<&str>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use don_bhs::host::NullHost;
     use don_bhs::opcode;
+    use don_bhs::vm::Vm;
 
     /// Walk an emitted code array with the engine's own decoder. Every byte must be a
     /// legal opcode and every operand must be inside the array — the check that catches
@@ -1425,6 +1518,20 @@ mod tests {
         compile(&u)
     }
 
+    fn run_src(src: &str) -> Value {
+        let (mut prog, diags, _) = compile_src(src);
+        assert!(
+            diags.iter().all(|d| d.severity != Severity::Error),
+            "compile errors: {diags:#?}"
+        );
+        let mut host = NullHost;
+        let mut vm = Vm::new(&mut prog, &mut host);
+        vm.run_script(0, "t")
+            .expect("compiler emitted an implementation gap")
+            .returned
+            .expect("test script did not return")
+    }
+
     #[test]
     fn emitted_code_decodes_with_the_engine_table() {
         let (prog, _, _) = compile_src(
@@ -1437,6 +1544,33 @@ mod tests {
         );
         let n = decode_all(&prog.files[0].code).unwrap();
         assert!(n > 10, "suspiciously short program: {n} instructions");
+    }
+
+    #[test]
+    fn emitted_aggregate_code_executes_with_retail_stack_order() {
+        assert_eq!(
+            run_src("int scenario { int a[] = [ 10, 20, 30 ]; return a[1]; }"),
+            Value::Int(20)
+        );
+        assert_eq!(
+            run_src("int scenario { int a[3]; a[2] = 7; return a[2]; }"),
+            Value::Int(7)
+        );
+        assert_eq!(
+            run_src(
+                "struct Pair { int a; int b; }; \
+                 int scenario { Pair p; p.b = 7; return p.b; }"
+            ),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn user_type_tags_use_retail_string_hash() {
+        assert_eq!(bhs_type_hash("int"), ScriptTy::Int.tag());
+        assert_eq!(bhs_type_hash("FLOAT"), ScriptTy::Real.tag());
+        assert_eq!(bhs_type_hash("String"), ScriptTy::Str.tag());
+        assert_eq!(bhs_type_hash("Pair"), bhs_type_hash("pair"));
     }
 
     #[test]
