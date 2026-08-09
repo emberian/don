@@ -1,7 +1,7 @@
 {
   "schema": "don/oracle-regression",
   "schema_version": 1,
-  "generated_unix": 1786212049,
+  "generated_unix": 1786239554,
   "host": "hbox",
   "target": "i686-unknown-linux-musl",
   "harness_selftest": "pass",
@@ -13,16 +13,16 @@
   "seed": "0x2545f4914f6cdd1d",
   "scale": 1,
   "only": null,
-  "wall_ms": 58687,
+  "wall_ms": 59602,
   "exit_code": 0,
   "summary": {
-    "registered": 12,
-    "pass": 12,
+    "registered": 13,
+    "pass": 13,
     "fail": 0,
     "skipped": 0,
     "crashed": 0,
     "error": 0,
-    "total_trials": 16236396
+    "total_trials": 16479445
   },
   "cases": [
     {
@@ -85,13 +85,42 @@
       "status": "pass",
       "trials": 247049,
       "mismatches": 0,
-      "wall_ms": 2,
+      "wall_ms": 3,
       "phases": [
         {"kind": "grid", "count": 243049, "distribution": "exhaustive over the 493x493 defined type domain"},
         {"kind": "grid", "count": 4000, "distribution": "rows past the type domain, exercising the multiply/add with no bounds check"}
       ],
       "excluded": [],
       "extras": {},
+      "detail": null
+    },
+    {
+      "id": "balance_final_table",
+      "va": "0x00581ca0",
+      "abi": "__stdcall(i32 atk_type, i32 def_type) -> i32, ret 8. PDB: Balance::return_modifier(TypeIndex, TypeIndex). Seven instructions, ECX unread, so the __thiscall receiver is irrelevant",
+      "model": "don_sim::balance::BalanceTable::get (via don_sim::balance_path::table_index)",
+      "subsystem": "combat",
+      "ledger_entry": "§1.5 balance_index(atk, def) — Balance::return_modifier",
+      "derivation": "docs/assembly/balance-path.md; docs/derivation/combat.md §1, §5",
+      "reachability": "reads .data through the folded base 0x00C06AFC and writes nothing; the capture is injected at the real base 0x00C12BF4 before the call",
+      "caveat": "This case pins the ACCESSOR against real contents, not the CONTENTS themselves — the array it injects is a live capture, so agreement says our loader and index reproduce retail's read of the bytes we already had, not that those bytes are what Balance::fill_tables would produce. Balance::type_damage 0x0057FB50 and Balance::compute_modifier 0x00581CC0 remain UNTESTED and unported: they run once at rules-load, inside Balance::init, and no runtime path reaches them, so a fabricated 543-entry type array with virtual dispatch would be needed to call them. Trials outside TypeIndex 50..=542 are EXCLUDED, not passed: retail reads adjacent .data there and we deliberately model no value for it.",
+      "tier": "B",
+      "status": "pass",
+      "trials": 243049,
+      "mismatches": 0,
+      "wall_ms": 44,
+      "phases": [
+        {"kind": "grid", "count": 243049, "distribution": "exhaustive over the whole balance type domain, TypeIndex 50..=542 (Citizen .. Space Program)"},
+        {"kind": "grid", "count": 0, "distribution": "the guard band below the domain — GoodType ids, which have no balance row"},
+        {"kind": "grid", "count": 0, "distribution": "the guard band above the domain — ItemType ids and beyond"}
+      ],
+      "excluded": [
+        {"reason": "TypeIndex outside 50..=542, where the shipped accessor refuses and retail reads adjacent .data", "count": 321}
+      ],
+      "extras": {
+        "injected_bytes": "486098 at 0x00c12bf4",
+        "injected_shape": "min=5 max=2574 distinct=367 nonzero=243049"
+      },
       "detail": null
     },
     {
@@ -152,7 +181,7 @@
       "status": "pass",
       "trials": 7986675,
       "mismatches": 0,
-      "wall_ms": 42570,
+      "wall_ms": 42997,
       "phases": [
         {"kind": "random", "count": 998276, "distribution": "seed 0x2545f4914f6cdd1d: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
         {"kind": "random", "count": 998371, "distribution": "seed 0x9e3779b97f4a7c15: numerics from a mixture (50% ±100, 25% ±10k, 12.5% full i32, 12.5% boundary constants); balance_pct uniform i16; angles biased onto the eleven classifier boundaries; masks biased onto the fourteen bit patterns the code tests; type ids drawn to reach the three id-keyed guards; all 26 stubbed predicates fair coins"},
@@ -212,7 +241,7 @@
       "status": "pass",
       "trials": 1000012,
       "mismatches": 0,
-      "wall_ms": 46,
+      "wall_ms": 43,
       "phases": [
         {"kind": "edges", "count": 12, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 1000000, "distribution": "state uniform over u32; lo,hi uniform over ±0xFFFF; compares the return value and the resulting state"}
@@ -235,7 +264,7 @@
       "status": "pass",
       "trials": 500003,
       "mismatches": 0,
-      "wall_ms": 23,
+      "wall_ms": 22,
       "phases": [
         {"kind": "edges", "count": 3, "distribution": "empty/inverted ranges, negatives, the 16-bit boundary"},
         {"kind": "random", "count": 500000, "distribution": "state uniform over u32; lo,hi uniform over ±2^29"}
@@ -258,7 +287,7 @@
       "status": "pass",
       "trials": 4000026,
       "mismatches": 0,
-      "wall_ms": 105,
+      "wall_ms": 103,
       "phases": [
         {"kind": "edges", "count": 26, "distribution": "zero, ±1, the 0xEA60 guard from both sides, i32::MIN/MAX in every combination"},
         {"kind": "random", "count": 2000000, "distribution": "uniform 32-bit pairs — stresses the overflow guard and the wrapping abs"},
@@ -273,17 +302,17 @@
       "id": "adler32",
       "va": "0x00a46830",
       "abi": "__fastcall(ecx = sum, edx = buf) + one stack dword len; CALLER cleans (`ret`)",
-      "model": "oracle::models::adler32 — NO implementation in this repo (ledger §2.3)",
+      "model": "don_sim::checksum::adler32 — the shipped primitive, not a copy",
       "subsystem": "determinism / lockstep checksum",
       "ledger_entry": "§2.3 adler32(adler, buf, len) — the lockstep checksum primitive",
       "derivation": "docs/derivation/checksum.md; PDB ?adler32@@YAKKPBEK@Z",
       "reachability": "leaf; reads only the buffer it is handed",
-      "caveat": "Ledger §7.4 recorded this harness as living ONLY at hbox:~/don-oracle-checksum. Default case count here is 100,000 rather than the historical 500,000 so the suite stays runnable; `--scale 5` reproduces the original count. The model is written from the algorithm, not from zlib, so agreement is evidence about the routine rather than about a shared source.",
+      "caveat": "Ledger §7.4 recorded this harness as living ONLY at hbox:~/don-oracle-checksum. Default case count here is 100,000 rather than the historical 500,000 so the suite stays runnable; `--scale 5` reproduces the original count. REPOINTED 2026-08-08 by the world-channel lane: the model used to be `oracle::models::adler32`, a copy transcribed into the oracle, so the case proved the copy. It is now the single implementation every checksum walker in the workspace calls, which is what makes this case evidence about shipped code. Note the binary holds a second, structurally identical `_adler32` at 0x005089d0; the checksum path calls THIS one (`CheckSum::walk_function` 0x00936ff0 is `call 0xa46830`).",
       "tier": "B",
       "status": "pass",
       "trials": 100013,
       "mismatches": 0,
-      "wall_ms": 15380,
+      "wall_ms": 15817,
       "phases": [
         {"kind": "boundary-lengths", "count": 12, "distribution": "lengths straddling the 16-byte unrolled block and NMAX = 5552"},
         {"kind": "random", "count": 100000, "distribution": "12 boundary lengths, then uniform lengths in [0, 24576] with uniform random bytes and a uniform random 32-bit initial value; plus the buf == NULL case, which the disassembly says returns 1"},
@@ -307,7 +336,7 @@
       "status": "pass",
       "trials": 202643,
       "mismatches": 0,
-      "wall_ms": 178,
+      "wall_ms": 187,
       "phases": [
         {"kind": "shipped-corpus", "count": 2550, "distribution": "850 value/entry strings from data/rules.xml x 3 scales"},
         {"kind": "edges", "count": 93, "distribution": "hand-chosen tokenizer edges x every scale"},

@@ -87,15 +87,9 @@ pub fn vector_dist(a: i32, b: i32) -> i32 {
 // from zlib, so agreement is evidence about the routine and not about a shared source.
 // ---------------------------------------------------------------------------------
 
-pub fn adler32(adler: u32, buf: &[u8]) -> u32 {
-    let mut a = adler & 0xffff;
-    let mut b = adler >> 16;
-    for &x in buf {
-        a = (a + x as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
-}
+// GAP CLOSED 2026-08-08. `don_sim::checksum::adler32` now exists and is the only
+// implementation in the workspace, so the registry points at it and the copy that used to
+// live here is deleted, per this module's own rule.
 
 // ---------------------------------------------------------------------------------
 // The engine RNG. `docs/derivation/rng.md` proposes a ledger entry naming

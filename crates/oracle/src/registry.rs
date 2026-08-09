@@ -114,6 +114,24 @@ pub enum Plan {
         index: fn(i32, i32) -> i32,
         grids: &'static [Grid],
     },
+    /// `Balance::return_modifier` over a **populated** `final_balance_table`.
+    ///
+    /// [`Plan::Stdcall2Table`] compares retail against a raw read of the *file* image,
+    /// which at `0x00C06AFC` is almost entirely zero — so it pins the multiply/add and
+    /// says nothing about the contents, and a zero table agrees with any indexing at all.
+    /// This variant loads the captured array, writes it into the mapped image at
+    /// `table_va`, and compares retail's own read against the **shipped**
+    /// `don_sim::balance::BalanceTable`, at raw `TypeIndex` arguments. That is what makes
+    /// the 50-row bias a thing the case can fail on.
+    BalanceTable {
+        /// `Balance::final_balance_table`, the array's real base.
+        table_va: u32,
+        /// Captured `493x493` `i16` array, relative to the oracle's working directory. A
+        /// case whose capture is missing SKIPs; it never falls back to the zero image.
+        capture_file: &'static str,
+        /// Grids over raw `TypeIndex` values — not zero-based rows.
+        grids: &'static [Grid],
+    },
     /// The damage pipeline. Needs the fabricated world in `damage_env.rs`.
     Damage {
         seeds: &'static [u64],
@@ -298,6 +316,55 @@ pub static REGISTRY: &[Case] = &[
                     row_lo: 500,
                     row_hi: 1500,
                     cols: Cols::List(&[0, 1, 100, 492]),
+                },
+            ],
+        },
+    },
+    Case {
+        id: "balance_final_table",
+        va: 0x0058_1CA0,
+        abi: "__stdcall(i32 atk_type, i32 def_type) -> i32, ret 8. PDB: \
+              Balance::return_modifier(TypeIndex, TypeIndex). Seven instructions, ECX \
+              unread, so the __thiscall receiver is irrelevant",
+        model: "don_sim::balance::BalanceTable::get (via don_sim::balance_path::table_index)",
+        subsystem: "combat",
+        ledger: "§1.5 balance_index(atk, def) — Balance::return_modifier",
+        derivation: "docs/assembly/balance-path.md; docs/derivation/combat.md §1, §5",
+        reachability: "reads .data through the folded base 0x00C06AFC and writes nothing; \
+                       the capture is injected at the real base 0x00C12BF4 before the call",
+        caveat: "This case pins the ACCESSOR against real contents, not the CONTENTS \
+                 themselves — the array it injects is a live capture, so agreement says \
+                 our loader and index reproduce retail's read of the bytes we already had, \
+                 not that those bytes are what Balance::fill_tables would produce. \
+                 Balance::type_damage 0x0057FB50 and Balance::compute_modifier 0x00581CC0 \
+                 remain UNTESTED and unported: they run once at rules-load, inside \
+                 Balance::init, and no runtime path reaches them, so a fabricated 543-entry \
+                 type array with virtual dispatch would be needed to call them. Trials \
+                 outside TypeIndex 50..=542 are EXCLUDED, not passed: retail reads adjacent \
+                 .data there and we deliberately model no value for it.",
+        plan: Plan::BalanceTable {
+            table_va: 0x00C1_2BF4,
+            capture_file: "data/balance-real.bin",
+            grids: &[
+                Grid {
+                    label: "exhaustive over the whole balance type domain, TypeIndex \
+                            50..=542 (Citizen .. Space Program)",
+                    row_lo: 50,
+                    row_hi: 543,
+                    cols: Cols::Range(50, 543),
+                },
+                Grid {
+                    label: "the guard band below the domain — GoodType ids, which have no \
+                            balance row",
+                    row_lo: 0,
+                    row_hi: 50,
+                    cols: Cols::List(&[50, 100, 542]),
+                },
+                Grid {
+                    label: "the guard band above the domain — ItemType ids and beyond",
+                    row_lo: 543,
+                    row_hi: 600,
+                    cols: Cols::List(&[50, 100, 542]),
                 },
             ],
         },
@@ -505,7 +572,7 @@ pub static REGISTRY: &[Case] = &[
         id: "adler32",
         va: 0x00A4_6830,
         abi: "__fastcall(ecx = sum, edx = buf) + one stack dword len; CALLER cleans (`ret`)",
-        model: "oracle::models::adler32 — NO implementation in this repo (ledger §2.3)",
+        model: "don_sim::checksum::adler32 — the shipped primitive, not a copy",
         subsystem: "determinism / lockstep checksum",
         ledger: "§2.3 adler32(adler, buf, len) — the lockstep checksum primitive",
         derivation: "docs/derivation/checksum.md; PDB ?adler32@@YAKKPBEK@Z",
@@ -513,10 +580,15 @@ pub static REGISTRY: &[Case] = &[
         caveat: "Ledger §7.4 recorded this harness as living ONLY at \
                  hbox:~/don-oracle-checksum. Default case count here is 100,000 rather than \
                  the historical 500,000 so the suite stays runnable; `--scale 5` reproduces \
-                 the original count. The model is written from the algorithm, not from zlib, \
-                 so agreement is evidence about the routine rather than about a shared source.",
+                 the original count. REPOINTED 2026-08-08 by the world-channel lane: the \
+                 model used to be `oracle::models::adler32`, a copy transcribed into the \
+                 oracle, so the case proved the copy. It is now the single implementation \
+                 every checksum walker in the workspace calls, which is what makes this \
+                 case evidence about shipped code. Note the binary holds a second, \
+                 structurally identical `_adler32` at 0x005089d0; the checksum path calls \
+                 THIS one (`CheckSum::walk_function` 0x00936ff0 is `call 0xa46830`).",
         plan: Plan::Adler32 {
-            model: models::adler32,
+            model: don_sim::checksum::adler32,
             // The two structural boundaries in the routine: the 16-byte unrolled block and
             // NMAX = 5552. Uniform lengths alone would straddle neither reliably.
             boundary_lens: &[0, 1, 2, 15, 16, 17, 31, 5551, 5552, 5553, 11104, 11105],

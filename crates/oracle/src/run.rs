@@ -449,6 +449,117 @@ fn exec(ctx: &Ctx, c: &Case) -> Acc {
             a.exclude("index outside the mapped image", out_of_image);
         }
 
+        Plan::BalanceTable {
+            table_va,
+            capture_file,
+            grids,
+        } => {
+            // 1. Load the capture through the SHIPPED loader, so its size and
+            //    no-negatives guards are part of what this case exercises.
+            let raw = match std::fs::read(capture_file) {
+                Ok(r) => r,
+                Err(e) => {
+                    a.skip = Some(format!(
+                        "captured balance table {capture_file} is not readable: {e} — \
+                         refusing to run against the zero-filled image, which would agree \
+                         with any indexing at all"
+                    ));
+                    return a;
+                }
+            };
+            let model = match don_sim::balance::BalanceTable::from_bytes(&raw) {
+                Ok(t) => t,
+                Err(e) => {
+                    a.skip = Some(format!("{capture_file} did not load: {e}"));
+                    return a;
+                }
+            };
+
+            // 2. Write it into the mapped image at the array's real base. `.data` is
+            //    mapped RW, but assuming that would be exactly the sort of unchecked
+            //    assumption this suite exists to catch, so make the span writable and
+            //    then read one byte back through the mapping before believing it.
+            let Some(dst) = ctx.at(*table_va) else {
+                a.skip = Some(format!("table VA {table_va:#010x} outside the mapped image"));
+                return a;
+            };
+            let end_rva = (*table_va - ctx.pe.image_base) as usize + raw.len();
+            if end_rva > ctx.pe.size_of_image as usize {
+                a.skip = Some(format!(
+                    "the {} byte array at {table_va:#010x} runs past the image",
+                    raw.len()
+                ));
+                return a;
+            }
+            let span_start = (dst as usize) & !(PAGE - 1);
+            let span_end = image::round_up(dst as usize + raw.len(), PAGE);
+            let rc = unsafe {
+                libc::mprotect(
+                    span_start as *mut c_void,
+                    span_end - span_start,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                )
+            };
+            if rc != 0 {
+                a.skip = Some(format!("cannot make {table_va:#010x} writable"));
+                return a;
+            }
+            unsafe { std::ptr::copy_nonoverlapping(raw.as_ptr(), dst, raw.len()) };
+            let last = unsafe { std::ptr::read_unaligned(dst.add(raw.len() - 2) as *const i16) };
+            let want_last = model.raw()[model.raw().len() - 1];
+            if last != want_last {
+                a.skip = Some(format!(
+                    "the injected array did not stick: last element reads {last}, expected \
+                     {want_last}"
+                ));
+                return a;
+            }
+            a.extras.push((
+                "injected_bytes".into(),
+                format!("{} at {table_va:#010x}", raw.len()),
+            ));
+            let (min, max, distinct, nz) = model.stats();
+            a.extras.push((
+                "injected_shape".into(),
+                format!("min={min} max={max} distinct={distinct} nonzero={nz}"),
+            ));
+
+            // 3. Retail's own accessor against the shipped one, at raw TypeIndex.
+            let g: extern "stdcall" fn(i32, i32) -> i32 =
+                unsafe { std::mem::transmute(f as *const u8) };
+            let mut outside = 0u64;
+            for grid in grids.iter() {
+                let cols: Vec<i32> = match &grid.cols {
+                    Cols::Range(lo, hi) => (*lo..*hi).collect(),
+                    Cols::List(v) => v.to_vec(),
+                };
+                let mut n = 0u64;
+                for row in grid.row_lo..grid.row_hi {
+                    for &col in &cols {
+                        let Some(want) = model.get(row, col) else {
+                            outside += 1;
+                            continue;
+                        };
+                        let got = g(row, col);
+                        a.trials += 1;
+                        n += 1;
+                        if want != got {
+                            a.mismatches += 1;
+                            a.first_detail(format!(
+                                "atk_type={row} def_type={col} model={want} retail={got}"
+                            ));
+                        }
+                    }
+                }
+                a.phase("grid", n, grid.label);
+            }
+            a.exclude(
+                "TypeIndex outside 50..=542, where the shipped accessor refuses and retail \
+                 reads adjacent .data",
+                outside,
+            );
+        }
+
         Plan::Damage {
             seeds,
             trials_per_seed,

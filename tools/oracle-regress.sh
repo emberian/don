@@ -115,6 +115,19 @@ if ! ssh "${SSH_OPTS[@]}" "$HOST" "test -f $REMOTE/data/rules.xml"; then
   fi
 fi
 
+# `data/balance-real.bin` is the balance_final_table case's injected array — the live
+# capture of Balance::final_balance_table at 0x00C12BF4. Without it that case SKIPs rather
+# than running against the zero-filled image, which would agree with any indexing at all.
+# Copyrighted game content, so it is mirrored only if it is already here.
+if ! ssh "${SSH_OPTS[@]}" "$HOST" "test -f $REMOTE/data/balance-real.bin"; then
+  if [ -f "$REPO/schema/live/balance-real.bin" ]; then
+    echo "oracle-regress: copying balance-real.bin (injected array for balance_final_table)"
+    scp -q "$REPO/schema/live/balance-real.bin" "$HOST:$REMOTE/data/balance-real.bin"
+  else
+    echo "oracle-regress: WARNING — no balance-real.bin locally or remotely; balance_final_table will SKIP"
+  fi
+fi
+
 # --------------------------------------------------------------------------------------
 # Sync sources. Named directories only: the retail image, the sweep outputs and the other
 # lanes' scratch on that box are not ours to touch.

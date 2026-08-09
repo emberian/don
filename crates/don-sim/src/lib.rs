@@ -38,7 +38,9 @@
 //! including the ones that did not pay.
 
 pub mod balance;
+pub mod balance_path;
 pub mod batch;
+pub mod checksum;
 pub mod container;
 pub mod generated;
 pub mod interleave;

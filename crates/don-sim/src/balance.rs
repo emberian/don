@@ -5,22 +5,36 @@
 //! `Balance combat_table` lives at `0x00C12BF0`; the array inside it is
 //! `Balance::final_balance_table` at **`0x00C12BF4`**, and the PDB type record says
 //! `short[493][493]` — 486,098 bytes. `ObjectData::get_damage` reads
-//! `(i32)(i16) table[attacker_type_id * 493 + defender_type_id]` at `0x0064418E` and
-//! feeds it into the chain as a percentage. [`crate::mechanics::balance_index`] is that
-//! address arithmetic.
+//! `(i32)(i16) *(i16*)(0x00C06AFC + 2*(attacker_type_id*493 + defender_type_id))` at
+//! `0x0064418E` and feeds it into the chain as a percentage.
+//! [`crate::mechanics::balance_index`] is that address arithmetic — **and it is
+//! arithmetic relative to `0x00C06AFC`, not to `0x00C12BF4`**. See the trap below.
 //!
 //! The bytes are **not embedded here**. They are captured game content and live in
 //! `schema/live/balance-real.bin`, which is gitignored; this module loads that file.
 //! Loading rather than embedding also keeps a stale copy from silently outliving a
 //! recapture.
 //!
-//! # A trap this module exists to prevent
+//! # A trap this module exists to prevent — and the half of it that got through
 //!
 //! An earlier capture used `0x00C06AFC`, which is a **bias-folded base**:
 //! `0x00C12BF4 - 0x00C06AFC = 49,400 = 2 * (50*493 + 50)`, because unit ids start at 50.
 //! Capturing there reads 49,400 bytes early and produces the "unexplained negatives"
 //! that were chased for a day. [`BalanceTable::from_bytes`] therefore rejects a table
 //! containing negative entries by default: the real one has none.
+//!
+//! That guarded the *capture* and left the *index* unguarded. Until the balance-path lane
+//! (`docs/assembly/balance-path.md`) this module loaded the table captured at
+//! `0x00C12BF4` and then indexed it with `attacker*493 + defender` — retail's arithmetic
+//! for the **folded** base. Over the 493×493 type domain that returned a wrong percentage
+//! for 61.9 % of matchups and refused outright for another 10.2 %. `get` now applies the
+//! bias, via [`crate::balance_path::table_index`]; [`BalanceTable::get_folded`] keeps the
+//! old arithmetic under a name that says which base it belongs to.
+//!
+//! The index law is `row = type_index - 50` over `type_index` in `50..=542`, measured four
+//! ways in `crate::balance_path`'s header, including `Balance::fill_tables`' own loop
+//! bounds and the live type table (`50` = Citizen, `542` = Space Program, `543` = the
+//! first `ItemType`).
 
 use std::path::{Path, PathBuf};
 
@@ -109,14 +123,32 @@ impl BalanceTable {
         Ok(BalanceTable { data })
     }
 
-    /// `(i32)(i16) table[atk * 493 + def]`, the value `get_damage` reads at `0x0064418E`.
+    /// The percentage `get_damage` reads at `0x0064418E`, from **raw `TypeIndex`
+    /// arguments** — the ids in `UnitTypeData::type` at `+4`, which start at 50.
     ///
-    /// Returns `None` for an index outside the array rather than reading whatever the
-    /// engine would read out of bounds — retail has no check here, but silently
-    /// returning adjacent memory would be a divergence we could not see.
+    /// `table[(atk - 50) * 493 + (def - 50)]`. Retail computes `atk*493 + def` off the
+    /// folded base `0x00C06AFC`; this array is captured at `0x00C12BF4`, 24,700 elements
+    /// later, so the bias belongs in the index. See [`BalanceTable::get_folded`].
+    ///
+    /// Returns `None` outside `50..=542` rather than reading whatever the engine would
+    /// read out of bounds — retail has no check here, but silently returning adjacent
+    /// memory would be a divergence we could not see.
     #[inline]
     pub fn get(&self, attacker_type_id: i32, defender_type_id: i32) -> Option<i32> {
-        let i = crate::mechanics::balance_index(attacker_type_id, defender_type_id);
+        let i = crate::balance_path::table_index(attacker_type_id, defender_type_id)?;
+        self.data.get(i).map(|&v| v as i32)
+    }
+
+    /// [`crate::mechanics::balance_index`] applied to this array — i.e. treating it as
+    /// though it started at the folded base `0x00C06AFC`.
+    ///
+    /// Kept because the oracle's `balance_accessor` case pins exactly this arithmetic
+    /// against retail, and because a reader comparing the two functions can then see in
+    /// one place which base each belongs to. It is **not** the accessor a simulation
+    /// should call: for that, use [`BalanceTable::get`].
+    #[inline]
+    pub fn get_folded(&self, row: i32, col: i32) -> Option<i32> {
+        let i = crate::mechanics::balance_index(row, col);
         if i < 0 {
             return None;
         }
@@ -171,23 +203,37 @@ mod tests {
         ));
     }
 
+    /// `get` takes raw `TypeIndex` values, so the cell for the first two unit types is
+    /// element 1 of the array — not element `50*493+51`.
     #[test]
     fn indexing_matches_the_damage_pipeline() {
         let mut raw = vec![0u8; BYTES];
-        let i = crate::mechanics::balance_index(50, 51) as usize;
+        let i = crate::balance_path::table_index(50, 51).unwrap();
+        assert_eq!(
+            i, 1,
+            "row = type - 50, so (Citizen, next type) is element 1"
+        );
         raw[i * 2] = 0x39;
         raw[i * 2 + 1] = 0x05; // 1337
         let t = BalanceTable::from_bytes(&raw).unwrap();
         assert_eq!(t.get(50, 51), Some(1337));
         assert_eq!(t.get(50, 52), Some(0));
+        // The old arithmetic reads a different cell entirely; if these ever agree, the
+        // bias has been dropped again.
+        assert_ne!(t.get_folded(50, 51), t.get(50, 51));
     }
 
     #[test]
     fn out_of_domain_indices_are_none_not_garbage() {
         let t = BalanceTable::from_bytes(&vec![0u8; BYTES]).unwrap();
-        assert_eq!(t.get(492, 492), Some(0));
-        assert_eq!(t.get(493, 0), None);
+        assert_eq!(t.get(50, 50), Some(0));
+        assert_eq!(t.get(542, 542), Some(0));
+        assert_eq!(t.get(49, 50), None, "49 is a GoodType, not a balance row");
+        assert_eq!(t.get(543, 50), None, "543 is the first ItemType");
         assert_eq!(t.get(-1, 0), None);
+        // The folded accessor keeps its own 0..493*493 domain.
+        assert_eq!(t.get_folded(492, 492), Some(0));
+        assert_eq!(t.get_folded(493, 0), None);
     }
 
     /// Only runs where the captured file is present (it is gitignored game content).
