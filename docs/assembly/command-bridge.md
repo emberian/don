@@ -28,8 +28,8 @@ Concretely, what executes now:
   writes the slot into `CommandPackage::group`, and back-links every member's
   `ObjectData::group`. Without this every other command is a no-op, which is exactly why
   nothing downstream could act before.
-* **18 of the 34 wire-reachable `Group::action_*`** — order installation per member, with
-  real `QueuePos` semantics.
+* **22 of the 35 wire-reachable `Group::action_*`** — 15 order installers, three
+  complete state actions, one complete `begin`, and three capability-gated state paths.
 * **`Unit::add_*_order`'s `QueuePos` handling**, including the `QUEUE_FIRST` stash /
   `action_halt` / re-issue-as-`QUEUE_NEW` / `finish_insert` replay dance.
 
@@ -46,18 +46,20 @@ Concretely, what executes now:
 
 | path | what | lines |
 |---|---|---:|
-| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, `Groups` pool, `Group::action_*`, `Fleet`, 28 tests | 2,026 |
+| `crates/don-sim/src/command.rs` | the bridge: opcode dispatch, `Groups` pool, `Group::action_*`, `Fleet`, 29 tests | 3,110 |
 | `crates/don-sim/src/command_tables.rs` | generated: 42 `ActionDef` + 82 `OpDef` | 143 |
+| `crates/don-sim/tests/command_simple_state.rs` | byte/state mutation pins for opcodes 1/14/32/33, 1 test | 102 |
 | `crates/don-replay/tests/command_bridge_agreement.rs` | don-net ↔ don-replay ↔ don-sim, 6 tests | 226 |
-| `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 7 tests | 223 |
+| `crates/don-env/tests/command_bridge_agreement.rs` | don-env ↔ don-sim, 9 tests | 548 |
 
 **Shared-file edit, one line**: `crates/don-sim/src/lib.rs` gained `pub mod command;` with
 a three-line doc comment, inserted after `pub mod checksum;`. Nothing else in that file was
 touched. The two test files are new paths no lane owns.
 
-41 tests, all green. `cargo test -p don-sim --lib command::` 28/28,
+45 bridge tests, all green. `cargo test -p don-sim --lib command::` 29/29,
+`cargo test -p don-sim --test command_simple_state` 1/1,
 `cargo test -p don-replay --test command_bridge_agreement` 6/6,
-`cargo test -p don-env --test command_bridge_agreement` 7/7.
+`cargo test -p don-env --test command_bridge_agreement` 9/9.
 
 ## How many `Group::action_*` exist, and how many are ported
 
@@ -70,14 +72,17 @@ They carry **209 direct `call`/`jmp` sites** across all named procedures in `.te
 
 | status | count | meaning |
 |---|---:|---|
+| `Port::Complete` | 1 | complete simulation-side mutation (`begin`) |
 | `Port::Orders` | 15 | installs orders per member, with `QueuePos`, from a command |
 | `Port::State` | 3 | reproduced, and retail installs no order either (`halt`, `stance`, `disband`) |
-| `Port::Todo` | 16 | dispatched and counted, body not ported |
-| `Port::NotOnTheWire` | 8 | no `CommandPackage` handler reaches them |
+| `Port::StateWired` | 3 | exact wire/state path; host capability/state columns remain explicit |
+| `Port::Todo` | 13 | dispatched and counted, body not ported |
+| `Port::NotOnTheWire` | 7 | no `CommandPackage` handler reaches them |
 
-So **18 of the 34 wire-reachable actions are ported** and 16 remain. `BridgeStats` counts
-the split at runtime (`acted` vs `unported`), so the number is measured per run rather than
-asserted.
+So **22 of the 35 wire-reachable actions execute a recovered mutation** and 13 remain
+bodyless. Only `Complete`, `Orders`, and `State` are closure-green: `StateWired` is an
+honest intermediate tier because product hosts must still populate exact capability/state
+columns. `BridgeStats` counts the split at runtime (`acted` vs `unported`).
 
 ### The full table, in descending call-site order
 
@@ -112,7 +117,7 @@ asserted.
 | `hotkey` | `0x006FA7A0` | 64 | 2 | binds a control group; **only caller is `Console::on_key_down`** | NotOnTheWire |
 | `recall` | `0x006FA7E0` | 1373 | 2 | `STRAFE` → `return` | Todo |
 | `return` | `0x006FAD40` | 1307 | 2 | `STRAFE` back to base | NotOnTheWire |
-| `buildmask` | `0x006FC9A0` | 487 | 2 | per-group building mask; installs nothing | Todo |
+| `buildmask` | `0x006FC9A0` | 487 | 2 | toggles `BuildData::build_masks` for `Build::mask_me`-eligible members | StateWired |
 | `spell` | `0x006FE1A0` | 4100 | 2 | `CAST_SPELL` | Todo |
 | `gather_point` | `0x006FF1B0` | 3668 | 2 | sets a building's rally point → `flight` | Todo |
 | `transport` | `0x00702620` | 932 | 2 | toggles transport mode; clears orders | Todo |
@@ -120,15 +125,42 @@ asserted.
 | `siege_attack_to` | `0x0070D830` | 2037 | 2 | AI-only (`Army::do_forming`, `Army::march_to_target`) → `guard`, `move_to` | NotOnTheWire |
 | `scramble` | `0x007111C0` | 894 | 2 | `AIR_PATROL` over the unit's own position | Orders |
 | `launch_flight` | `0x006FBFB0` | 2544 | 1 | → `flight` | NotOnTheWire |
-| `unitmask` | `0x006FCB90` | 404 | 1 | per-group unit mask; clears partial paths | Todo |
+| `unitmask` | `0x006FCB90` | 404 | 1 | toggles `UnitData::unit_masks`; mask `0x100` clears canonical orders | StateWired |
 | `stop_spell` | `0x006FD7A0` | 480 | 1 | cancels casting | Todo |
 | `alarm_peasant` | `0x006FD980` | 550 | 1 | allocates `GARRISON` **directly**, not through an `add_*_order` | NotOnTheWire |
 | `city_gather` | `0x00701780` | 1333 | 1 | city rally point; installs nothing | Todo |
-| `set_transport` | `0x007024B0` | 357 | 1 | flag only | Todo |
+| `set_transport` | `0x007024B0` | 357 | 1 | toggles unit mask `0x00800000` under owner transport capability | StateWired |
 | `launch_patrol` | `0x00703580` | 2043 | 1 | **`AIR_PATROL`** | Orders |
 | `siege_attack` | `0x00706FF0` | 549 | 1 | → `attack`, `guard` | Todo |
 | `build` | `0x00707510` | 1256 | 1 | → `swarm_around` | Todo |
-| `begin` | `0x00714100` | 8 | 0 | virtual, 8 bytes, no direct caller | NotOnTheWire |
+| `begin` | `0x00714100` | 8 | 0 | virtual receiver; writes `GroupData::disband = 0` | Complete |
+
+### Simple state opcode tranche (2026-08-09)
+
+| opcode | command | recovered target | status |
+|---:|---|---|---|
+| 1 | `BeginCommand` | `GroupData::disband = 0` | `complete` |
+| 14 | `SetTransportCommand` | unit mask `0x00800000`, gated by owner transport state and `can_ever_transport` | `state_wired` |
+| 32 | `UnitmaskCommand` | `UnitData::unit_masks` with the recovered first-eligible carry rule | `state_wired` |
+| 33 | `BuildmaskCommand` | `BuildData::build_masks` after the `Build::mask_me` capability predicate | `state_wired` |
+
+Opcode 1 corrects an extraction blind spot: `process_begin` `0x00949FD0` reaches the
+group's virtual slot `+0x14`, whose concrete `Group::action_begin` implementation at
+`0x00714100` is only `mov [ecx+0x28], 0; ret`. A direct-call-only scan therefore reported
+zero sites and incorrectly classified it as off-wire.
+
+The fixed mask commands decode `mask` at wire `+1` and a second signed dword at `+5`.
+Both recovered optimized bodies ignore the second dword. For mask `0x40000`, UNITMASK
+force-clears; otherwise the first eligible member chooses set versus clear and the
+decision carries through the remaining selection. BUILDMASK uses the same carry rule.
+The bridge requires explicit `Fleet` predicates for transport and build-mask capability,
+so missing product data skips instead of guessing. UNITMASK `0x100` also clears modeled
+order queues, but retail's adjacent partial-path and presentation state is not represented;
+that is why these three rows remain `state_wired`, not `complete`.
+
+Diplomacy opcodes 37–45 remain inert. Their action bodies cross proposal/offer ownership,
+resource transfer, and target retasking; reducing those effects to a relation matrix would
+silently manufacture lockstep behavior that has not been recovered.
 
 ## Five things worth keeping
 
@@ -248,7 +280,7 @@ length functions.
 
 `crates/don-env/tests/command_bridge_agreement.rs`, 7 tests.
 
-**(a) Three group-scoped opcodes sit on the env's player head.** 34 opcodes are handed to
+**(a) Three group-scoped opcodes sit on the env's player head.** 35 opcodes are handed to
 `groups.list[package.group]` — they act on the current *selection*. `don-env` puts 31 of
 them on its unit head and classifies **`ALARM` (27), `UNITMASK` (32) and `BUILDMASK` (33)**
 as player verbs. Measured, all three take the group as `this` exactly the way `MOVE_TO`
@@ -256,6 +288,10 @@ does: `Group::action_alarm` `0x0070EC30`, `Group::action_unitmask` `0x006FCB90`,
 `Group::action_buildmask` `0x006FC9A0`. A player head carries no selection, so those three
 cannot be expressed faithfully where they are. Not fixed here — `don-env/src/generated.rs`
 is generated by another lane's `gen_spec.py`.
+
+Opcode 1 `BEGIN` is the additional group receiver. Its command handler uses the group
+vtable rather than a direct `call Group::action_begin`, so it does not add another env
+classification disagreement.
 
 **(b) `PATROL` and `LAUNCH_PATROL` are not `MOVE_TO`.** The env now
 follows the measured answer: opcode 10 → `Group::action_patrol` → `Unit::add_patrol_order` →
@@ -338,7 +374,7 @@ Two sentences each, per the standing rule. None of these files was edited.
   cycles whose modulus is 6/4/2/2 by stance type `[measured, the switch at 0x0070D47B]`.
   The type needs unit-type data the bridge does not hold, so a negative argument resolves
   against the combat cycle of 6 and the assumption is stated in the doc comment.
-* **The 16 `Port::Todo` actions.** They dispatch and increment `BridgeStats::unported`
+* **The 13 `Port::Todo` actions.** They dispatch and increment `BridgeStats::unported`
   rather than pretending to act, so a replay run reports its own coverage.
 
 ## Regenerating `command_tables.rs`
@@ -349,6 +385,8 @@ uv run --quiet --with capstone --with pefile python - <<'EOF'
 # For each CommandPackage::process_* in schema/rise-procs.tsv: disassemble its extent,
 # record every direct call target, resolve it against the proc table, and take the last
 # `mov eax, imm` before `ret` as the wire length.
+# Also resolve virtual receiver slots: process_begin's vtable +0x14 target is the measured
+# Group::action_begin 0x00714100 exception that a direct-call scan cannot see.
 # For each Group::action_*: same, plus count direct call/jmp sites to it over every named
 # procedure, and follow the Unit::add_*_order calls to their
 # `push imm; call 0x00730AC0` (OrdersMemManager::get_obj) argument.

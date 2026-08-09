@@ -16,8 +16,8 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "return", va: 0x006FAD40, size: 1307, call_sites: 2, installs: &[OrderIndex::Strafe], delegates: &[], port: Port::NotOnTheWire },
     ActionDef { name: "flight", va: 0x006FB260, size: 3398, call_sites: 6, installs: &[OrderIndex::Strafe], delegates: &["attack", "guard", "launch_flight"], port: Port::Todo },
     ActionDef { name: "launch_flight", va: 0x006FBFB0, size: 2544, call_sites: 1, installs: &[], delegates: &["flight"], port: Port::NotOnTheWire },
-    ActionDef { name: "buildmask", va: 0x006FC9A0, size: 487, call_sites: 2, installs: &[], delegates: &[], port: Port::Todo },
-    ActionDef { name: "unitmask", va: 0x006FCB90, size: 404, call_sites: 1, installs: &[], delegates: &[], port: Port::Todo },
+    ActionDef { name: "buildmask", va: 0x006FC9A0, size: 487, call_sites: 2, installs: &[], delegates: &[], port: Port::StateWired },
+    ActionDef { name: "unitmask", va: 0x006FCB90, size: 404, call_sites: 1, installs: &[], delegates: &[], port: Port::StateWired },
     ActionDef { name: "guard", va: 0x006FCD30, size: 2012, call_sites: 8, installs: &[OrderIndex::Guard], delegates: &["halt"], port: Port::Orders },
     ActionDef { name: "follow", va: 0x006FD510, size: 645, call_sites: 4, installs: &[OrderIndex::Follow], delegates: &["halt"], port: Port::Orders },
     ActionDef { name: "stop_spell", va: 0x006FD7A0, size: 480, call_sites: 1, installs: &[], delegates: &[], port: Port::Todo },
@@ -31,7 +31,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "city_gather", va: 0x00701780, size: 1333, call_sites: 1, installs: &[], delegates: &[], port: Port::Todo },
     ActionDef { name: "trade", va: 0x00701CC0, size: 1022, call_sites: 3, installs: &[OrderIndex::TradeRoute], delegates: &["halt"], port: Port::Orders },
     ActionDef { name: "repair", va: 0x007020C0, size: 999, call_sites: 3, installs: &[OrderIndex::Repair, OrderIndex::CastSpell], delegates: &["halt"], port: Port::Orders },
-    ActionDef { name: "set_transport", va: 0x007024B0, size: 357, call_sites: 1, installs: &[], delegates: &[], port: Port::Todo },
+    ActionDef { name: "set_transport", va: 0x007024B0, size: 357, call_sites: 1, installs: &[], delegates: &[], port: Port::StateWired },
     ActionDef { name: "transport", va: 0x00702620, size: 932, call_sites: 2, installs: &[], delegates: &[], port: Port::Todo },
     ActionDef { name: "air_patrol", va: 0x007029D0, size: 1763, call_sites: 5, installs: &[OrderIndex::AirPatrol], delegates: &["move_to"], port: Port::NotOnTheWire },
     ActionDef { name: "patrol", va: 0x007030C0, size: 1215, call_sites: 5, installs: &[OrderIndex::MoveTo, OrderIndex::AttackTo, OrderIndex::ExploreTo, OrderIndex::FleeTo, OrderIndex::GroupPatrol], delegates: &["air_patrol"], port: Port::Orders },
@@ -52,14 +52,14 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     ActionDef { name: "eject_all", va: 0x00710B40, size: 766, call_sites: 3, installs: &[], delegates: &[], port: Port::Todo },
     ActionDef { name: "scramble", va: 0x007111C0, size: 894, call_sites: 2, installs: &[OrderIndex::AirPatrol], delegates: &[], port: Port::Orders },
     ActionDef { name: "attack", va: 0x00712490, size: 3833, call_sites: 16, installs: &[OrderIndex::MoveTo, OrderIndex::AttackTo, OrderIndex::ExploreTo, OrderIndex::FleeTo, OrderIndex::Attack, OrderIndex::CastSpell], delegates: &["halt", "move_to"], port: Port::Orders },
-    ActionDef { name: "begin", va: 0x00714100, size: 8, call_sites: 0, installs: &[], delegates: &[], port: Port::NotOnTheWire },
+    ActionDef { name: "begin", va: 0x00714100, size: 8, call_sites: 0, installs: &[], delegates: &[], port: Port::Complete },
 ];
 
 pub const NUM_OPCODES: usize = 82;
 
 pub static OPCODES: [OpDef; NUM_OPCODES] = [
     OpDef { op: 0, name: "GroupCommand", method: "process_group", method_va: 0x94a0c0, receiver: Receiver::None, action: None, wire: WireLen::Variable },
-    OpDef { op: 1, name: "BeginCommand", method: "process_begin", method_va: 0x949fd0, receiver: Receiver::None, action: None, wire: WireLen::Fixed(1) },
+    OpDef { op: 1, name: "BeginCommand", method: "process_begin", method_va: 0x949fd0, receiver: Receiver::Group, action: Some("begin"), wire: WireLen::Fixed(1) },
     OpDef { op: 2, name: "StanceCommand", method: "process_stance", method_va: 0x949ed0, receiver: Receiver::Group, action: Some("stance"), wire: WireLen::Fixed(5) },
     OpDef { op: 3, name: "FormCommand", method: "process_form", method_va: 0x949d90, receiver: Receiver::Group, action: Some("form"), wire: WireLen::Fixed(13) },
     OpDef { op: 4, name: "AttackCommand", method: "process_attack", method_va: 0x949c30, receiver: Receiver::Group, action: Some("attack"), wire: WireLen::Fixed(17) },

@@ -49,8 +49,10 @@ fn main() {
     }
     for x in GROUP_ACTIONS {
         let status = match x.port {
+            Port::Complete => "complete",
             Port::Orders => "orders_partial",
             Port::State => "state_partial",
+            Port::StateWired => "state_wired",
             Port::Todo => "unimplemented",
             Port::NotOnTheWire => "not_on_wire",
         };
@@ -89,8 +91,10 @@ fn main() {
             .and_then(|name| GROUP_ACTIONS.iter().find(|a| a.name == name))
         {
             match a.port {
+                Port::Complete => "complete",
                 Port::Orders => "orders_partial",
                 Port::State => "state_partial",
+                Port::StateWired => "state_wired",
                 Port::Todo => "unimplemented",
                 Port::NotOnTheWire => "not_on_wire",
             }

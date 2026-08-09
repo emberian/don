@@ -211,7 +211,7 @@ pub struct OpDef {
 }
 
 impl OpDef {
-    /// Does this opcode reach a `Group::action_*`? 36 of the 82 do.
+    /// Does this opcode reach a `Group::action_*`? 35 of the 82 do.
     #[inline]
     pub fn is_group_action(&self) -> bool {
         matches!(self.receiver, Receiver::Group)
@@ -225,6 +225,9 @@ impl OpDef {
 /// How much of one `Group::action_*` this module reproduces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Port {
+    /// The complete simulation-side effect is reproduced. Presentation/logging calls are
+    /// deliberately outside the headless bridge.
+    Complete,
     /// The order installed on each eligible member, its `OrderIndex`, its target/coords
     /// and its `QueuePos` handling are reproduced. Eligibility predicates that need
     /// unit-type data we do not hold here are delegated to [`Fleet`].
@@ -232,6 +235,10 @@ pub enum Port {
     /// Reproduced, and retail installs no order either — it edits group or unit state
     /// (`stance`, `unitmask`, `set_transport`) or clears orders (`halt`).
     State,
+    /// The packet is decoded and the recovered state mutation is routed through
+    /// [`Fleet`], but the host must still supply an exact capability predicate or state
+    /// column before the row can be called complete.
+    StateWired,
     /// Dispatched and counted, body not ported. Hitting this increments a counter rather
     /// than pretending to act.
     Todo,
@@ -497,6 +504,26 @@ pub trait Fleet {
         0
     }
     fn set_unit_masks(&mut self, _who: u8, _o: i16, _masks: u32) {}
+    /// `UnitData::can_ever_transport` `0x0046F290`. Land units return true without
+    /// consulting any other state; non-land hosts override this for their type/ability
+    /// branch.
+    fn can_ever_transport(&self, who: u8, o: i16) -> bool {
+        self.is_unit(who, o) && self.domain(who, o) == 0
+    }
+    /// `BuildData::build_masks`, the `u16` at `+0x60`. `None` makes BUILD_MASK
+    /// fail closed for a host which has not connected that state column.
+    fn build_masks(&self, _who: u8, _o: i16) -> Option<u16> {
+        None
+    }
+    fn set_build_masks(&mut self, _who: u8, _o: i16, _masks: u16) -> bool {
+        false
+    }
+    /// `Build::mask_me` `0x0063E2A0`: whether this building admits this UI build-mask
+    /// selector. The predicate is type/object dependent, so absence is false rather than
+    /// a guessed capability.
+    fn can_toggle_build_mask(&self, _who: u8, _o: i16, _mask: u16) -> bool {
+        false
+    }
     /// Can this object be given movement orders at all? Retail asks
     /// `UnitData::get_speed() > 0` plus a stack of "entering/exiting", "is_blown" and
     /// garrison predicates; a port supplies whichever of those it holds.
@@ -600,6 +627,9 @@ pub struct Slot {
     pub role: i32,
     pub domain: i32,
     pub unit_masks: u32,
+    pub can_ever_transport: bool,
+    pub build_masks: u16,
+    pub build_mask_capabilities: u16,
     pub group: i16,
     pub uid: u16,
     pub x: i32,
@@ -617,6 +647,7 @@ impl Slot {
             can_move: true,
             is_on_map: true,
             is_captain: true,
+            can_ever_transport: true,
             group: -1,
             uid,
             x,
@@ -742,6 +773,26 @@ impl Fleet for ObjectTable {
         if let Some(s) = self.get_mut(who, o) {
             s.unit_masks = masks;
         }
+    }
+    fn can_ever_transport(&self, who: u8, o: i16) -> bool {
+        self.get(who, o)
+            .is_some_and(|s| s.is_unit && s.can_ever_transport)
+    }
+    fn build_masks(&self, who: u8, o: i16) -> Option<u16> {
+        self.get(who, o)
+            .filter(|s| s.is_building)
+            .map(|s| s.build_masks)
+    }
+    fn set_build_masks(&mut self, who: u8, o: i16, masks: u16) -> bool {
+        let Some(slot) = self.get_mut(who, o).filter(|s| s.is_building) else {
+            return false;
+        };
+        slot.build_masks = masks;
+        true
+    }
+    fn can_toggle_build_mask(&self, who: u8, o: i16, mask: u16) -> bool {
+        self.get(who, o)
+            .is_some_and(|s| s.is_building && s.build_mask_capabilities & mask != 0)
     }
     fn can_move(&self, who: u8, o: i16) -> bool {
         self.get(who, o).is_some_and(|s| s.can_move)
@@ -1053,6 +1104,9 @@ pub struct Bridge {
     pub stats: BridgeStats,
     /// `Game::frame`, stamped into interned groups.
     pub frame: i32,
+    /// The non-zero test recovered from `Group::action_set_transport` `0x007024B0`.
+    /// Callers populate it from the owner leader's `0x100/0x200/0x400` transport flags.
+    transport_level: [u8; NUM_OWNER_SLOTS],
 }
 
 impl Default for Bridge {
@@ -1068,6 +1122,15 @@ impl Bridge {
             last_selection: std::array::from_fn(|_| Vec::new()),
             stats: BridgeStats::default(),
             frame: 0,
+            transport_level: [0; NUM_OWNER_SLOTS],
+        }
+    }
+
+    /// Install the already-decoded transport level for one owner. Only zero/non-zero is
+    /// read by opcode 14, exactly as retail's collapsed leader-flag branch does.
+    pub fn set_transport_level(&mut self, who: u8, level: u8) {
+        if let Some(slot) = self.transport_level.get_mut(who as usize) {
+            *slot = level;
         }
     }
 
@@ -1195,6 +1258,7 @@ impl Bridge {
             slot,
             stats: &mut self.stats,
             frame: self.frame,
+            transport_level: self.transport_level,
         };
         act.run(name, cmd, f);
     }
@@ -1210,6 +1274,7 @@ struct Action<'a> {
     slot: i32,
     stats: &'a mut BridgeStats,
     frame: i32,
+    transport_level: [u8; NUM_OWNER_SLOTS],
 }
 
 impl Action<'_> {
@@ -1274,6 +1339,7 @@ impl Action<'_> {
                 slot: self.slot,
                 stats: self.stats,
                 frame: self.frame,
+                transport_level: self.transport_level,
             };
             body(&mut inner, QueuePos::New, f);
         }
@@ -1293,6 +1359,7 @@ impl Action<'_> {
 
     fn run(&mut self, name: &str, cmd: &[u8], f: &mut dyn Fleet) {
         match name {
+            "begin" => self.action_begin(),
             "move_to" => {
                 // MoveToCommand: to_x@1 to_y@5 set_angle@9 angle@13 orders@17 queued@18
                 // form@19 width@20 disembark@21. process_move_to passes them to
@@ -1348,6 +1415,11 @@ impl Action<'_> {
                 self.action_ground(OrderIndex::AttackGround, x, y, q, f);
             }
             "halt" => self.action_halt(0, f),
+            "set_transport" => {
+                if let Some(flag) = i32_at(cmd, 1) {
+                    self.action_set_transport(flag, f);
+                }
+            }
             "stance" => {
                 let s = i32_at(cmd, 1).unwrap_or(0);
                 self.action_stance(s, f);
@@ -1439,9 +1511,118 @@ impl Action<'_> {
                 let all = i32_at(cmd, 1).unwrap_or(0);
                 self.action_disband(all != 0, f);
             }
+            "unitmask" => {
+                if let (Some(mask), Some(set)) = (i32_at(cmd, 1), i32_at(cmd, 5)) {
+                    self.action_unitmask(mask as u32, set, f);
+                }
+            }
+            "buildmask" => {
+                if let (Some(mask), Some(set)) = (i32_at(cmd, 1), i32_at(cmd, 5)) {
+                    self.action_buildmask(mask as u16, set, f);
+                }
+            }
             _ => {
                 self.stats.unported += 1;
             }
+        }
+    }
+
+    /// `Group::action_begin` `0x00714100`: one store, `GroupData::disband = 0`.
+    fn action_begin(&mut self) {
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            group.disband = 0;
+        }
+    }
+
+    /// Simulation state of `Group::action_set_transport` `0x007024B0`.
+    ///
+    /// The handler calls `action_begin`, collapses the owner's three transport flags to
+    /// a zero/non-zero level, then sets `UnitData::unit_masks & 0x0080_0000` on members
+    /// for which `UnitData::can_ever_transport` succeeds. The command flag is ignored
+    /// when the owner has no transport level. Presentation callbacks are omitted.
+    fn action_set_transport(&mut self, flag: i32, f: &mut dyn Fleet) {
+        self.action_begin();
+        if self.groups.get(self.slot).is_none_or(|g| g.buildings != 0) {
+            return;
+        }
+        let (who, list) = self.members();
+        let enabled = self
+            .transport_level
+            .get(who as usize)
+            .is_some_and(|level| *level != 0)
+            && flag != 0;
+        for o in list {
+            if !f.alive(who, o) || !f.is_unit(who, o) || !f.can_ever_transport(who, o) {
+                continue;
+            }
+            let current = f.unit_masks(who, o);
+            let next = if enabled {
+                current | 0x0080_0000
+            } else {
+                current & !0x0080_0000
+            };
+            f.set_unit_masks(who, o, next);
+        }
+    }
+
+    /// `Group::action_unitmask` `0x006FCB90`.
+    ///
+    /// The second wire dword is unused by retail. Except for mask `0x40000`, the first
+    /// eligible member decides whether the whole group sets or clears the bit. Mask
+    /// `0x40000` always clears. Mask `0x100` skips true planes and additionally cancels
+    /// the current unit action; the bridge's canonical action state is its order queue.
+    fn action_unitmask(&mut self, mask: u32, _set: i32, f: &mut dyn Fleet) {
+        if self.groups.get(self.slot).is_none_or(|g| g.buildings != 0) {
+            return;
+        }
+        let (who, list) = self.members();
+        let mut set = mask != 0x0004_0000;
+        for o in list {
+            if (!f.alive(who, o) || !f.is_unit(who, o)) || (mask == 0x100 && f.is_plane(who, o)) {
+                continue;
+            }
+            set = f.unit_masks(who, o) & mask == 0 && set;
+            let mut next = f.unit_masks(who, o);
+            if set {
+                next |= mask;
+            } else {
+                next &= !mask;
+            }
+            if mask == 0x100 {
+                next &= !0x0400_0000;
+                if let Some(orders) = f.orders_mut(who, o) {
+                    if !orders.is_empty() {
+                        self.stats.orders_cleared += 1;
+                    }
+                    orders.clear();
+                }
+            }
+            f.set_unit_masks(who, o, next);
+        }
+    }
+
+    /// `Group::action_buildmask` `0x006FC9A0`.
+    ///
+    /// Like UNIT_MASK, the second dword is unused and the first eligible building
+    /// chooses set-vs-clear for the whole selection. `Build::mask_me` is an explicit
+    /// Fleet predicate: a missing build-state host therefore skips rather than guesses.
+    fn action_buildmask(&mut self, mask: u16, _set: i32, f: &mut dyn Fleet) {
+        if self.groups.get(self.slot).is_none_or(|g| g.buildings == 0) {
+            return;
+        }
+        let (who, list) = self.members();
+        let mut set = true;
+        for o in list {
+            if !f.alive(who, o) || !f.is_building(who, o) || !f.can_toggle_build_mask(who, o, mask)
+            {
+                continue;
+            }
+            let Some(current) = f.build_masks(who, o) else {
+                continue;
+            };
+            set = current & mask == 0 && set;
+            let next = if set { current | mask } else { current & !mask };
+            let _ = f.set_build_masks(who, o, next);
         }
     }
 
@@ -2451,19 +2632,21 @@ mod tests {
 
     /// The engine's own receiver split, by the call each handler makes.
     #[test]
-    fn the_receiver_split_is_34_group_11_leader_2_unit_7_game() {
+    fn the_receiver_split_is_35_group_11_leader_2_unit_7_game() {
         let count = |r: Receiver| OPCODES.iter().filter(|d| d.receiver == r).count();
-        assert_eq!(count(Receiver::Group), 34);
+        assert_eq!(count(Receiver::Group), 35);
         assert_eq!(count(Receiver::Leader), 11);
         assert_eq!(count(Receiver::Unit), 2);
         assert_eq!(count(Receiver::Game), 7);
-        assert_eq!(count(Receiver::None), 28);
-        assert_eq!(34 + 11 + 2 + 7 + 28, NUM_OPCODES);
-        // ALARM / UNITMASK / BUILDMASK are group-scoped, not player-scoped: their
-        // handlers call Group::action_*, exactly like MOVE_TO's does.
-        for op in [27usize, 32, 33] {
+        assert_eq!(count(Receiver::None), 27);
+        assert_eq!(35 + 11 + 2 + 7 + 27, NUM_OPCODES);
+        // BEGIN / ALARM / UNITMASK / BUILDMASK are group-scoped, not player-scoped:
+        // BEGIN reaches action_begin through the group vtable; the other three call
+        // Group::action_* directly, exactly like MOVE_TO's handler does.
+        for op in [1usize, 27, 32, 33] {
             assert!(OPCODES[op].is_group_action(), "opcode {op}");
         }
+        assert_eq!(OPCODES[1].action, Some("begin"));
         // …and HOTKEY is not: process_hotkey calls HotKeyGroups::copy_group.
         assert!(!OPCODES[34].is_group_action());
         assert_eq!(OPCODES[34].action, None);

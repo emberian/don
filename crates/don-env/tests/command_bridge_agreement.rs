@@ -82,7 +82,7 @@ fn three_group_scoped_opcodes_sit_on_the_env_player_head() {
         .filter(|d| d.is_group_action())
         .map(|d| d.op)
         .collect();
-    assert_eq!(group_ops.len(), 34);
+    assert_eq!(group_ops.len(), 35);
 
     let unit_ops: Vec<u8> = g::UNIT_VERBS.iter().map(|v| v.opcode).collect();
     let player_ops: Vec<u8> = g::PLAYER_VERBS.iter().map(|v| v.opcode).collect();
@@ -99,8 +99,12 @@ fn three_group_scoped_opcodes_sit_on_the_env_player_head() {
          docs/assembly/command-bridge.md"
     );
 
-    // Everything else group-scoped is on the unit head, plus the two Unit-scoped ones.
-    for op in group_ops.iter().filter(|op| !misplaced.contains(op)) {
+    // Everything else group-scoped except administrative BEGIN is on the unit head,
+    // plus the two Unit-scoped ones.
+    for op in group_ops
+        .iter()
+        .filter(|op| **op != 1 && !misplaced.contains(op))
+    {
         assert!(
             unit_ops.contains(op),
             "opcode {op} ({}) is group-scoped but on no env unit head",
@@ -527,13 +531,18 @@ fn the_ported_share_of_wire_reachable_actions_is_recorded() {
         .iter()
         .filter(|a| a.port != cb::Port::NotOnTheWire)
         .collect();
-    assert_eq!(wire_reachable.len(), 34);
+    assert_eq!(wire_reachable.len(), 35);
     let ported = wire_reachable
         .iter()
-        .filter(|a| matches!(a.port, cb::Port::Orders | cb::Port::State))
+        .filter(|a| {
+            matches!(
+                a.port,
+                cb::Port::Complete | cb::Port::Orders | cb::Port::State | cb::Port::StateWired
+            )
+        })
         .count();
     assert_eq!(
-        ported, 18,
+        ported, 22,
         "ported action count changed; update docs/assembly/command-bridge.md"
     );
 }
