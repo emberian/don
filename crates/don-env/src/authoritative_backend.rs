@@ -14,6 +14,7 @@ use don_sim::systems::movement_live::{LiveCollisionFault, LiveCollisionSource};
 use don_sim::systems::victory_score::{leader_flag, Diplo};
 use don_sim::world::{OBJ_FLAG_ACTIVE, SUBTILE};
 use don_sim::Handle;
+use std::fmt;
 
 pub const UNIT_VERB_COUNT: usize = 33;
 pub const PLAYER_VERB_COUNT: usize = 16;
@@ -26,6 +27,9 @@ pub enum IntegrationBoundary {
     FormationHost,
     CombatTargetHost,
     MovementCommandHost,
+    /// `LiveCollisionRuntime` owns `UnitData::moving/action_type`, but does not yet expose
+    /// the atomic setter an action transaction needs.
+    MovementSourceStateHost,
     PatrolAirframeHost,
     TransportContainmentHost,
     GatheringHost,
@@ -132,6 +136,120 @@ pub enum QueuePosition {
     Replace,
 }
 
+/// Exact movement/collision facts captured for one unit in scenario allocation order.
+///
+/// Handles are deliberately absent: reset reconstructs them, while the unit ordinal is part
+/// of [`ScenarioSpec`]'s deterministic allocation contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScenarioMovementSource {
+    pub unit: usize,
+    pub source: LiveCollisionSource,
+}
+
+/// Additive authoritative setup surface which leaves the original [`ScenarioSpec`] stable.
+///
+/// Movement sources are installed in declaration order after every unit has spawned. The
+/// declaration is retained by [`AuthoritativeBackend`] and replayed by
+/// [`AuthoritativeBackend::reset`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthoritativeScenarioSpec {
+    pub episode: ScenarioSpec,
+    pub movement_sources: Vec<ScenarioMovementSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScenarioSetupError {
+    Episode(EpisodeError),
+    MovementSourceUnitOutOfRange {
+        source: usize,
+        unit: usize,
+        units: usize,
+    },
+    DuplicateMovementSource {
+        source: usize,
+        unit: usize,
+    },
+    MovementSource {
+        source: usize,
+        unit: usize,
+        fault: LiveCollisionFault,
+    },
+}
+
+impl fmt::Display for ScenarioSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Episode(error) => write!(f, "{error}"),
+            Self::MovementSourceUnitOutOfRange {
+                source,
+                unit,
+                units,
+            } => write!(
+                f,
+                "scenario movement source {source} names unit {unit}, but only {units} units exist"
+            ),
+            Self::DuplicateMovementSource { source, unit } => write!(
+                f,
+                "scenario movement source {source} duplicates source for unit {unit}"
+            ),
+            Self::MovementSource {
+                source,
+                unit,
+                fault,
+            } => write!(
+                f,
+                "scenario movement source {source} for unit {unit} was refused: {fault:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScenarioSetupError {}
+
+impl From<EpisodeError> for ScenarioSetupError {
+    fn from(error: EpisodeError) -> Self {
+        Self::Episode(error)
+    }
+}
+
+/// Future action-owned transition into `UnitData::moving/action_type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionSourceState {
+    pub moving: bool,
+    pub action: OrderIndex,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionSourceStateRequest {
+    pub actor: Handle,
+    pub state: ActionSourceState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionSourceStateSetterRoute {
+    /// A backend sidecar would not be consumed by the tick, so transition requests remain red
+    /// until the Sim-owned live collision source exposes this mutation.
+    Refused(IntegrationBoundary),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActionSourceStateSetterIntegration {
+    pub owner: &'static str,
+    pub required_method: &'static str,
+    pub route: ActionSourceStateSetterRoute,
+}
+
+/// Typed integration map for the only missing MOVE_TO action-state transition.
+///
+/// The required implementation must update the installed source in place after validating
+/// the handle and before `Sim::issue`; it must leave both source and world unchanged on error.
+pub const ACTION_SOURCE_STATE_SETTER: ActionSourceStateSetterIntegration =
+    ActionSourceStateSetterIntegration {
+        owner: "don_sim::tick::Sim -> movement_live::LiveCollisionRuntime",
+        required_method: "Sim::set_movement_source_state(handle, moving, OrderIndex)",
+        route: ActionSourceStateSetterRoute::Refused(IntegrationBoundary::MovementSourceStateHost),
+    };
+
 /// Raw core-coordinate request produced after the policy head decoder resolves grid cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnitActionRequest {
@@ -142,6 +260,24 @@ pub struct UnitActionRequest {
     pub target_y: i32,
     pub queue: QueuePosition,
     pub order_flags: u8,
+}
+
+pub const UNIT_VERB_HEAD_COUNT: usize = UNIT_VERB_COUNT + 1;
+
+/// Exact conditional mask for the verb head of one complete request template.
+///
+/// Actor, destination, queue, and order flags are held fixed. Consequently a set bit means
+/// replacing only `verb_head` with that index is accepted by the same read-only preflight
+/// used by [`AuthoritativeBackend::apply_unit`]. Index zero is NOOP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuthoritativeUnitVerbMask {
+    pub allowed: [bool; UNIT_VERB_HEAD_COUNT],
+}
+
+impl AuthoritativeUnitVerbMask {
+    pub fn allows(&self, verb_head: usize) -> bool {
+        self.allowed.get(verb_head).copied().unwrap_or(false)
+    }
 }
 
 /// Shape needed to decode the generated ten-head policy action without borrowing the
@@ -353,19 +489,55 @@ pub struct CoreReward {
     pub alive: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedUnitAction {
+    row: usize,
+    kind: OrderIndex,
+}
+
 pub struct AuthoritativeBackend {
     episode: AuthoritativeEpisode,
+    scenario_movement_sources: Vec<ScenarioMovementSource>,
 }
 
 impl AuthoritativeBackend {
     pub fn from_spec(spec: ScenarioSpec) -> Result<Self, EpisodeError> {
         Ok(Self {
             episode: AuthoritativeEpisode::from_spec(spec)?,
+            scenario_movement_sources: Vec::new(),
         })
     }
 
-    pub fn reset(&mut self) -> Result<(), EpisodeError> {
-        self.episode.reset()
+    /// Construct a scenario and atomically install its captured movement sources.
+    ///
+    /// Source ordinals and duplicates are rejected before the episode is constructed. Any
+    /// collision-host refusal then destroys the private candidate rather than exposing a
+    /// partly installed backend.
+    pub fn from_authoritative_scenario(
+        setup: AuthoritativeScenarioSpec,
+    ) -> Result<Self, ScenarioSetupError> {
+        validate_scenario_movement_sources(&setup)?;
+        let AuthoritativeScenarioSpec {
+            episode: spec,
+            movement_sources,
+        } = setup;
+        let mut episode = AuthoritativeEpisode::from_spec(spec)?;
+        install_scenario_movement_sources(&mut episode, &movement_sources)?;
+        Ok(Self {
+            episode,
+            scenario_movement_sources: movement_sources,
+        })
+    }
+
+    /// Rebuild seed, allocation identity, and captured movement sources as one replacement.
+    /// The current episode remains intact if construction or source installation is refused.
+    pub fn reset(&mut self) -> Result<(), ScenarioSetupError> {
+        let replacement = Self::from_authoritative_scenario(AuthoritativeScenarioSpec {
+            episode: self.episode.spec().clone(),
+            movement_sources: self.scenario_movement_sources.clone(),
+        })?;
+        *self = replacement;
+        Ok(())
     }
 
     pub fn step_frames(&mut self, frames: u32) -> StepReceipt {
@@ -374,6 +546,11 @@ impl AuthoritativeBackend {
 
     pub fn sim(&self) -> &don_sim::tick::Sim {
         self.episode.sim()
+    }
+
+    /// Captured setup sources in deterministic installation order.
+    pub fn scenario_movement_sources(&self) -> &[ScenarioMovementSource] {
+        &self.scenario_movement_sources
     }
 
     /// Scenario/content setup installs exact non-column movement facts through Sim's own
@@ -388,93 +565,35 @@ impl AuthoritativeBackend {
             .install_movement_collision_source(actor, source)
     }
 
+    /// Compute the verb mask without borrowing any mutable simulation store.
+    pub fn unit_verb_mask(
+        &self,
+        who: u8,
+        template: UnitActionRequest,
+    ) -> AuthoritativeUnitVerbMask {
+        let mut allowed = [false; UNIT_VERB_HEAD_COUNT];
+        for (verb_head, slot) in allowed.iter_mut().enumerate() {
+            let request = UnitActionRequest {
+                verb_head: verb_head as u16,
+                ..template
+            };
+            *slot = preflight_unit(self.episode.sim(), who, request).is_ok();
+        }
+        AuthoritativeUnitVerbMask { allowed }
+    }
+
     pub fn apply_unit(
         &mut self,
         who: u8,
         request: UnitActionRequest,
     ) -> Result<ApplyReceipt, ApplyRefusal> {
-        let sim = self.episode.sim_mut_for_backend();
-        if request.verb_head == 0 {
+        let Some(PreparedUnitAction { row, kind }) =
+            preflight_unit(self.episode.sim(), who, request)?
+        else {
             return Ok(ApplyReceipt::Noop {
-                frame: sim.world.frame,
+                frame: self.episode.sim().world.frame,
             });
-        }
-        let verb_index = usize::from(request.verb_head - 1);
-        let integration = UNIT_INTEGRATION
-            .get(verb_index)
-            .ok_or(ApplyRefusal::UnknownVerb(request.verb_head))?;
-        if let VerbRoute::Refused(boundary) = integration.route {
-            return Err(ApplyRefusal::Unhosted {
-                verb_index,
-                boundary,
-            });
-        }
-
-        let player = sim
-            .vic_leaders
-            .slots
-            .get(usize::from(who))
-            .ok_or(ApplyRefusal::InvalidPlayer(who))?;
-        if !player.is_alive() {
-            return Err(ApplyRefusal::PlayerNotAlive(who));
-        }
-        let row = sim
-            .world
-            .row_of(request.actor)
-            .ok_or(ApplyRefusal::StaleActor(request.actor))?;
-        let actual = sim.world.units.get_who(row);
-        if actual != who {
-            return Err(ApplyRefusal::ActorNotOwned {
-                actor: request.actor,
-                expected: who,
-                actual,
-            });
-        }
-        if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
-            return Err(ApplyRefusal::InactiveActor(request.actor));
-        }
-        if request.queue != QueuePosition::Replace {
-            return Err(ApplyRefusal::UnsupportedQueue(request.queue));
-        }
-        if request.order_flags & !ORDER_FLEEING != 0 {
-            return Err(ApplyRefusal::UnsupportedOrderFlags(request.order_flags));
-        }
-        if !sim
-            .map
-            .world
-            .valid_coord(request.target_x, request.target_y)
-        {
-            return Err(ApplyRefusal::InvalidDestination {
-                x: request.target_x,
-                y: request.target_y,
-            });
-        }
-
-        sim.movement_collision
-            .preflight(&sim.world, &sim.map.world, &sim.paths)
-            .map_err(ApplyRefusal::MovementHost)?;
-        sim.movement_collision
-            .actor_ready(&sim.world, row)
-            .map_err(ApplyRefusal::MovementHost)?;
-        let kind = if request.order_flags & ORDER_FLEEING != 0 {
-            OrderIndex::FleeTo
-        } else {
-            OrderIndex::MoveTo
         };
-        let source = sim
-            .movement_collision
-            .source(row)
-            .ok_or(ApplyRefusal::MovementHost(
-                LiveCollisionFault::MissingSource(row),
-            ))?;
-        if !source.moving || source.action != kind as i32 {
-            return Err(ApplyRefusal::MovementSourceState {
-                actor: request.actor,
-                expected_action: kind as i32,
-                observed_action: source.action,
-                moving: source.moving,
-            });
-        }
 
         let order = Order {
             kind,
@@ -484,6 +603,7 @@ impl AuthoritativeBackend {
             tolerance: 0,
             ..Order::default()
         };
+        let sim = self.episode.sim_mut_for_backend();
         if !sim.issue(request.actor, order) {
             return Err(ApplyRefusal::CoreRejectedAfterPreflight);
         }
@@ -639,4 +759,134 @@ impl AuthoritativeBackend {
             alive: now.alive,
         })
     }
+}
+
+fn validate_scenario_movement_sources(
+    setup: &AuthoritativeScenarioSpec,
+) -> Result<(), ScenarioSetupError> {
+    let units = setup.episode.units.len();
+    let mut seen = vec![false; units];
+    for (source_index, captured) in setup.movement_sources.iter().enumerate() {
+        if captured.unit >= units {
+            return Err(ScenarioSetupError::MovementSourceUnitOutOfRange {
+                source: source_index,
+                unit: captured.unit,
+                units,
+            });
+        }
+        if std::mem::replace(&mut seen[captured.unit], true) {
+            return Err(ScenarioSetupError::DuplicateMovementSource {
+                source: source_index,
+                unit: captured.unit,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn install_scenario_movement_sources(
+    episode: &mut AuthoritativeEpisode,
+    sources: &[ScenarioMovementSource],
+) -> Result<(), ScenarioSetupError> {
+    let spawned = episode.spawned().to_vec();
+    for (source_index, captured) in sources.iter().enumerate() {
+        let handle = spawned[captured.unit];
+        episode
+            .sim_mut_for_backend()
+            .install_movement_collision_source(handle, captured.source.clone())
+            .map_err(|fault| ScenarioSetupError::MovementSource {
+                source: source_index,
+                unit: captured.unit,
+                fault,
+            })?;
+    }
+    Ok(())
+}
+
+/// Read-only half of the action transaction, shared byte-for-byte by masking and apply.
+fn preflight_unit(
+    sim: &don_sim::tick::Sim,
+    who: u8,
+    request: UnitActionRequest,
+) -> Result<Option<PreparedUnitAction>, ApplyRefusal> {
+    if request.verb_head == 0 {
+        return Ok(None);
+    }
+    let verb_index = usize::from(request.verb_head - 1);
+    let integration = UNIT_INTEGRATION
+        .get(verb_index)
+        .ok_or(ApplyRefusal::UnknownVerb(request.verb_head))?;
+    if let VerbRoute::Refused(boundary) = integration.route {
+        return Err(ApplyRefusal::Unhosted {
+            verb_index,
+            boundary,
+        });
+    }
+
+    let player = sim
+        .vic_leaders
+        .slots
+        .get(usize::from(who))
+        .ok_or(ApplyRefusal::InvalidPlayer(who))?;
+    if !player.is_alive() {
+        return Err(ApplyRefusal::PlayerNotAlive(who));
+    }
+    let row = sim
+        .world
+        .row_of(request.actor)
+        .ok_or(ApplyRefusal::StaleActor(request.actor))?;
+    let actual = sim.world.units.get_who(row);
+    if actual != who {
+        return Err(ApplyRefusal::ActorNotOwned {
+            actor: request.actor,
+            expected: who,
+            actual,
+        });
+    }
+    if sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE == 0 {
+        return Err(ApplyRefusal::InactiveActor(request.actor));
+    }
+    if request.queue != QueuePosition::Replace {
+        return Err(ApplyRefusal::UnsupportedQueue(request.queue));
+    }
+    if request.order_flags & !ORDER_FLEEING != 0 {
+        return Err(ApplyRefusal::UnsupportedOrderFlags(request.order_flags));
+    }
+    if !sim
+        .map
+        .world
+        .valid_coord(request.target_x, request.target_y)
+    {
+        return Err(ApplyRefusal::InvalidDestination {
+            x: request.target_x,
+            y: request.target_y,
+        });
+    }
+
+    sim.movement_collision
+        .preflight(&sim.world, &sim.map.world, &sim.paths)
+        .map_err(ApplyRefusal::MovementHost)?;
+    sim.movement_collision
+        .actor_ready(&sim.world, row)
+        .map_err(ApplyRefusal::MovementHost)?;
+    let kind = if request.order_flags & ORDER_FLEEING != 0 {
+        OrderIndex::FleeTo
+    } else {
+        OrderIndex::MoveTo
+    };
+    let source = sim
+        .movement_collision
+        .source(row)
+        .ok_or(ApplyRefusal::MovementHost(
+            LiveCollisionFault::MissingSource(row),
+        ))?;
+    if !source.moving || source.action != kind as i32 {
+        return Err(ApplyRefusal::MovementSourceState {
+            actor: request.actor,
+            expected_action: kind as i32,
+            observed_action: source.action,
+            moving: source.moving,
+        });
+    }
+    Ok(Some(PreparedUnitAction { row, kind }))
 }
