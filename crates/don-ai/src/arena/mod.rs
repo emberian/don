@@ -36,6 +36,7 @@
 
 pub mod bots;
 pub mod cmd;
+pub mod eval;
 pub mod map;
 pub mod match_run;
 pub mod obs;

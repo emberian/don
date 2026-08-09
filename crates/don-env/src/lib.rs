@@ -27,6 +27,7 @@
 
 pub mod action;
 pub mod env;
+pub mod eval;
 pub mod generated;
 pub mod mask;
 pub mod obs;

@@ -177,6 +177,17 @@ impl<'a> Obs<'a> {
     pub fn explored(&self, tx: i32, ty: i32) -> bool {
         self.world.explored(self.pi, tx, ty)
     }
+    /// Whether a tile is in current line of sight.
+    ///
+    /// This is intentionally narrower than exposing entity liveness. A remembered enemy
+    /// outside current sight may have died or moved; a policy may walk to its last known
+    /// location, but must not query the authoritative object table to learn which happened.
+    pub fn visible(&self, tx: i32, ty: i32) -> bool {
+        if tx < 0 || ty < 0 || tx >= self.map.w || ty >= self.map.h {
+            return false;
+        }
+        self.world.players[self.pi].visible[(ty * self.map.w + tx) as usize]
+    }
     pub fn score(&self) -> Score {
         self.world.score(self.pi)
     }

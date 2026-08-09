@@ -659,7 +659,7 @@ impl Marshal {
                     let targets = target_ranking(obs, (m.tx, m.ty), siege);
                     let pickt = targets.first();
                     if let Some(t) = pickt {
-                        if obs.world.ent(t.0).is_some() {
+                        if obs.visible(t.1, t.2) {
                             // Re-issuing an order a unit already has is free in the arena
                             // and noise in the command count; skip it so "commands issued"
                             // stays a readable number.
@@ -670,6 +670,9 @@ impl Marshal {
                                 });
                             }
                         } else if needs_move(m, t.1, t.2) {
+                            // A remembered target outside current sight is not known to be
+                            // alive. Walk to the last sighting; acquisition may issue an
+                            // attack only after the target is seen again.
                             out.push(Cmd::Move {
                                 unit: m.id,
                                 tx: t.1,
