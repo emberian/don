@@ -106,7 +106,7 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         cfg.assert_ready(Surface::PlayableEdition),
         Err(ModeError::KnownDrift(
             Surface::PlayableEdition,
-            Deviation::ArenaModelSimplifications,
+            Deviation::ArenaConstructionModel,
         ))
     );
     assert_eq!(
@@ -122,7 +122,16 @@ fn known_product_drift_blocks_only_the_surfaces_it_reaches() {
         product,
         vec![
             ReadinessBlocker::KnownDrift(Deviation::EnvPatrolExecution),
-            ReadinessBlocker::KnownDrift(Deviation::ArenaModelSimplifications),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaTargetAcquisitionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaFlankModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaWaterModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaNavalModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaAirModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaDiplomacyModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaAttritionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaSupplyModel),
         ]
     );
     assert!(product
@@ -137,9 +146,18 @@ fn wired_improvements_leave_only_known_product_drift() {
     let playable: Vec<_> = cfg.readiness_blockers(Surface::PlayableEdition).collect();
     assert_eq!(
         playable,
-        vec![ReadinessBlocker::KnownDrift(
-            Deviation::ArenaModelSimplifications
-        )]
+        vec![
+            ReadinessBlocker::KnownDrift(Deviation::ArenaConstructionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaGatherModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaTargetAcquisitionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaFlankModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaWaterModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaNavalModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaAirModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaDiplomacyModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaAttritionModel),
+            ReadinessBlocker::KnownDrift(Deviation::ArenaSupplyModel),
+        ]
     );
     for d in [
         Deviation::AiGatherHandicap,

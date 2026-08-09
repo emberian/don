@@ -240,14 +240,32 @@ pub enum Deviation {
     EnvPatrolExecution = 9,
     /// `don-ai`'s six numbered model simplifications.
     AiModelSimplifications = 10,
-    /// `don-ai::arena`'s five remaining declared substitutes for retail game systems.
-    ArenaModelSimplifications = 11,
+    /// Arena MODEL 2: builder-frame construction substitute.
+    ArenaConstructionModel = 11,
+    /// Arena MODEL 3: inferred gather ownership/slot substitute.
+    ArenaGatherModel = 12,
+    /// Arena MODEL 4: incomplete retail target-acquisition host.
+    ArenaTargetAcquisitionModel = 13,
+    /// Arena MODEL 5: incomplete flank-input host.
+    ArenaFlankModel = 14,
+    /// Arena MODEL 6a: no retail water terrain/pathing host.
+    ArenaWaterModel = 15,
+    /// Arena MODEL 6b: no retail naval object/order/production host.
+    ArenaNavalModel = 16,
+    /// Arena MODEL 6c: no complete retail airframe host.
+    ArenaAirModel = 17,
+    /// Arena MODEL 6d: no complete retail diplomacy state/side-effect host.
+    ArenaDiplomacyModel = 18,
+    /// Arena MODEL 6e: no wired retail attrition state/damage host.
+    ArenaAttritionModel = 19,
+    /// Arena MODEL 6f: no wired retail supply-query/state host.
+    ArenaSupplyModel = 20,
 
     // -- Rejected ------------------------------------------------------------------------
     /// "`attack_dir` does not mean what its name says" — it does.
-    AttackDirSemantics = 12,
+    AttackDirSemantics = 21,
     /// "The gather-enhancer tables are off by one" — they are 1-based by design.
-    GatherEnhancerTableBase = 13,
+    GatherEnhancerTableBase = 22,
 }
 
 /// One registry entry: the whole justification for a divergence, in one place.
@@ -658,25 +676,223 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
     },
     // ---------------------------------------------------------------------------------
     Entry {
-        id: Deviation::ArenaModelSimplifications,
-        slug: "arena-model-simplifications",
-        title: "don-ai's playable arena substitutes five simplified models for retail systems",
+        id: Deviation::ArenaConstructionModel,
+        slug: "arena-construction-model",
+        title: "Arena MODEL 2 substitutes builder-frame construction",
         kind: Kind::Drift,
-        retail:
-            "Retail uses actual build-site construction, terrain resource ownership, and target \
-                 scans; fully derived flank \
-                 semantics; and water, naval, air, diplomacy, attrition, and supply systems.",
-        ours: "`crates/don-ai/src/arena/world.rs` retains five numbered `MODEL` choices: \
-               a builder-frame construction model, inferred gather slots, nearest-hostile \
-               acquisition, incompletely derived flank inputs, and the \
-               omission of water, naval, air, diplomacy, attrition, and supply.",
-        why: "The arena is invoked as a head-to-head game and feeds the playable WebGPU client. \
-              Those approximations are therefore not merely research boundaries: until replaced \
-              with retail-sophisticated systems, they block claims that the playable edition or \
-              complete product is ready.",
-        derived_from: &["crates/don-ai/src/arena/world.rs:34-48 (MODEL declarations 2-6)"],
-        evidence: "Self-declared by the arena implementation and audited against the playable \
-                   `arena` binary; each retail replacement still requires its own derivation.",
+        retail: "Construction owns a live build site, exact worker order/state, progress, \
+                 interruption and completion side effects.",
+        ours: "MODEL 2 advances construction with an arena builder-frame model.",
+        why: "A build timer changes economy, obstruction and combat timing on the playable path.",
+        derived_from: &["crates/don-ai/src/arena/world.rs MODEL 2 declaration"],
+        evidence: "Self-declared arena model; production prerequisites are inventoried in \
+                   docs/mechanics/production.md.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaGatherModel,
+        slug: "arena-gather-model",
+        title: "Arena MODEL 3 infers gather ownership and worker slots",
+        kind: Kind::Drift,
+        retail: "Map resources and gatherer objects own the resource kind, capacity, occupancy \
+                 and depletion transitions.",
+        ours: "MODEL 3 derives gather targets/slots from arena state instead of executing the \
+               retail resource-object channel.",
+        why: "Invented capacity or ownership changes the opening economy that arena results rank.",
+        derived_from: &["crates/don-ai/src/arena/world.rs MODEL 3 declaration"],
+        evidence: "Self-declared arena model; gathering host recovery is tracked in \
+                   docs/mechanics/economy.md.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaTargetAcquisitionModel,
+        slug: "arena-target-acquisition-model",
+        title: "Arena MODEL 4 has an incomplete retail target-acquisition host",
+        kind: Kind::Drift,
+        retail: "Retail walks spatial cells in stable order and applies diplomacy, visibility, \
+                 validity, region, priority, crowding and stance gates.",
+        ours:
+            "The arena does not yet execute that entire recovered scan at every acquisition site.",
+        why: "A nearest-hostile or partially gated scan changes both combat choices and hidden \
+              information; it cannot stand in for retail target selection.",
+        derived_from: &[
+            "Object::find_auto_target 0x0064DDA0",
+            "crates/don-ai/src/arena/world.rs MODEL 4 declaration",
+        ],
+        evidence: "docs/assembly/target-selection.md and \
+                   don_sim::systems::target::find_auto_target.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaFlankModel,
+        slug: "arena-flank-model",
+        title: "Arena MODEL 5 has incomplete retail flank inputs",
+        kind: Kind::Drift,
+        retail: "Retail derives attack direction, defender facing and type predicates at the \
+                 live fight/damage call boundary.",
+        ours: "MODEL 5 still marks one or more arena flank inputs as incomplete.",
+        why: "The damage multiplier is derived, but invented inputs still change combat outcomes.",
+        derived_from: &[
+            "Unit::fight 0x005FE872..0x005FE89B",
+            "crates/don-ai/src/arena/world.rs MODEL 5 declaration",
+        ],
+        evidence: "docs/mechanics/combat.md; leave blocked until the arena runtime caller and \
+                   focused tests are green.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaWaterModel,
+        slug: "arena-water-model",
+        title: "Arena MODEL 6a has no retail water terrain/pathing host",
+        kind: Kind::Drift,
+        retail: "Maps carry water/WATERHALF cells, water regions and the tile/water A* domains.",
+        ours: "The playable arena generator is land-only and cannot execute a retail water path.",
+        why: "A water capability flag or body-radius route would be a new simplified model, not \
+              the missing retail terrain and pathfinder.",
+        derived_from: &[
+            "WorldData water fields and astar_path 0x00683770",
+            "crates/don-ai/src/arena/world.rs MODEL 6 declaration",
+        ],
+        evidence: "docs/mechanics/map-terrain.md and docs/mechanics/movement.md; exact missing \
+                   prerequisites listed in arena::retail_systems::MODEL6_INVENTORY.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaNavalModel,
+        slug: "arena-naval-model",
+        title: "Arena MODEL 6b has no retail naval object/order/production host",
+        kind: Kind::Drift,
+        retail: "Naval play uses find_wpath, dock lifecycle, queues, boarding, containment, \
+                 rendezvous, unloading, fishing, naval territory and supply.",
+        ours: "The arena admits no naval runtime; the recovered naval module remains Tier C and \
+               labels its incomplete route/board APIs as proxies.",
+        why: "Calling a proxy or spawning one ship would replace the omission with a knowingly \
+              simplified naval simulation.",
+        derived_from: &[
+            "crates/don-sim/src/systems/naval.rs",
+            "crates/don-ai/src/arena/world.rs MODEL 6 declaration",
+        ],
+        evidence: "docs/mechanics/naval.md and arena MODEL6 integration inventory.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaAirModel,
+        slug: "arena-air-model",
+        title: "Arena MODEL 6c has no complete retail airframe host",
+        kind: Kind::Drift,
+        retail: "Aircraft execute do_air_physics, live order/host scans, fuel, capacity and the \
+                 anti-air gate at Ammo::init's main-RNG position.",
+        ours: "Live AirTypeData and exact local air adapters now exist, but the playable arena \
+               has no airframe/ammo/order/checksum caller.",
+        why: "The adapter is fail-closed scaffolding; it does not turn isolated primitives into \
+              an air simulation claim.",
+        derived_from: &[
+            "Unit::do_air_physics",
+            "Ammo::init 0x0067BBF0",
+            "crates/don-ai/src/arena/retail_systems.rs",
+        ],
+        evidence: "docs/mechanics/air.md and arena MODEL6 integration inventory.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaDiplomacyModel,
+        slug: "arena-diplomacy-model",
+        title: "Arena MODEL 6d has no complete retail diplomacy host",
+        kind: Kind::Drift,
+        retail: "Diplomacy stores bilateral declarations, resolves their mutual minimum, and \
+                 applies retargeting, vision, event/chat and strategy side effects.",
+        ours: "The exact explicit relation table adapter is available, but arena matches still \
+               expose no declaration command or runtime side-effect channel.",
+        why: "Two players beginning at war does not make diplomacy complete, and relation state \
+              may not be hidden inside a bot.",
+        derived_from: &[
+            "LeaderData::get_diplo 0x006EBA50",
+            "Leader::set_diplo 0x006EC6A0",
+            "Leader::diplomacy 0x006BC950",
+        ],
+        evidence: "docs/mechanics/victory-score.md and arena MODEL6 integration inventory.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaAttritionModel,
+        slug: "arena-attrition-model",
+        title: "Arena MODEL 6e does not execute retail attrition state/damage",
+        kind: Kind::Drift,
+        retail: "Retail recomputes each unit's period from territory/leader/type predicates, \
+                 phases it by object id, supply-gates it and applies the exact damage shape.",
+        ours: "Exact arithmetic and a prerequisite-explicit adapter exist, but arena units do \
+               not own or tick the required attrition state.",
+        why: "Applying a generic damage-over-time constant would be a deliberate simplification.",
+        derived_from: &[
+            "Unit::process_attrition 0x005E11A0",
+            "Unit::suffer_attrition 0x005E1A10",
+            "UnitData::get_attrition 0x00608FD0",
+        ],
+        evidence: "docs/mechanics/borders-fog.md and arena MODEL6 integration inventory.",
+        default_in_improved: false,
+        affects_checksum: true,
+        seam: "",
+        surfaces: &[Surface::PlayableEdition],
+        implementation: ImplementationStatus::KnownDrift,
+    },
+    // ---------------------------------------------------------------------------------
+    Entry {
+        id: Deviation::ArenaSupplyModel,
+        slug: "arena-supply-model",
+        title: "Arena MODEL 6f does not execute retail supply queries/state",
+        kind: Kind::Drift,
+        retail: "Unit::process_supply short-circuits exact type/bonus gates then queries live \
+                 supply sources and three building classes in order; supply gates attrition and \
+                 affects reload/healing.",
+        ours:
+            "The predicate adapter requires every query result explicitly; Supplies::find_supply \
+               and arena source/building queries are absent, so no supply result is fabricated.",
+        why: "Always-in-supply is not neutral: it disables attrition and changes combat pacing.",
+        derived_from: &[
+            "Unit::process_supply 0x005E0560",
+            "Supplies::find_supply 0x0073ABA0",
+        ],
+        evidence: "docs/mechanics/borders-fog.md and arena MODEL6 integration inventory.",
         default_in_improved: false,
         affects_checksum: true,
         seam: "",
@@ -747,7 +963,7 @@ pub static REGISTRY: [Entry; Deviation::COUNT] = [
 
 impl Deviation {
     /// The number of registry entries.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 23;
 
     /// Every deviation, in registry order.
     pub const ALL: [Deviation; Deviation::COUNT] = [
@@ -762,7 +978,16 @@ impl Deviation {
         Deviation::RefineryBonusDead,
         Deviation::EnvPatrolExecution,
         Deviation::AiModelSimplifications,
-        Deviation::ArenaModelSimplifications,
+        Deviation::ArenaConstructionModel,
+        Deviation::ArenaGatherModel,
+        Deviation::ArenaTargetAcquisitionModel,
+        Deviation::ArenaFlankModel,
+        Deviation::ArenaWaterModel,
+        Deviation::ArenaNavalModel,
+        Deviation::ArenaAirModel,
+        Deviation::ArenaDiplomacyModel,
+        Deviation::ArenaAttritionModel,
+        Deviation::ArenaSupplyModel,
         Deviation::AttackDirSemantics,
         Deviation::GatherEnhancerTableBase,
     ];

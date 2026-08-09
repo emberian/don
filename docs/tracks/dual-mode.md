@@ -117,7 +117,16 @@ form:
 | `refinery-bonus-dead` | `CityData::refinery` stored as literal 0 | apply `REFINERY_BONUS` | off |
 | `env-patrol-execution` | orders 17/22 route, queue, execute, and cross retail airframe/search boundaries | *drift*: exact dynamic queue and patrol transitions; env air physics/target-search host remains incomplete | — |
 | `ai-model-simplifications` | full dynamics | *drift*: six numbered model gaps in `don-ai` | — |
-| `arena-model-simplifications` | full retail game systems | *drift*: five simplified arena models on the playable path (retail A* movement is now wired) | — |
+| `arena-construction-model` | retail build-site/worker state | *drift*: MODEL 2 builder-frame construction | — |
+| `arena-gather-model` | retail resource objects/occupancy | *drift*: MODEL 3 inferred gather state | — |
+| `arena-target-acquisition-model` | complete retail spatial target scan | *drift*: MODEL 4 incomplete host | — |
+| `arena-flank-model` | live retail fight inputs | *drift*: MODEL 5 incomplete host | — |
+| `arena-water-model` | water terrain/regions and water A* | *drift*: MODEL 6a absent host | — |
+| `arena-naval-model` | naval objects, orders, queues and supply | *drift*: MODEL 6b absent host | — |
+| `arena-air-model` | air physics, orders, ammo RNG and walked state | *drift*: MODEL 6c local adapters only | — |
+| `arena-diplomacy-model` | declaration state and all set/strategy side effects | *drift*: MODEL 6d relation adapter only | — |
+| `arena-attrition-model` | per-unit period/recompute/damage state | *drift*: MODEL 6e arithmetic adapter only | — |
+| `arena-supply-model` | source/building queries, reload and healing | *drift*: MODEL 6f predicate adapter only | — |
 | `attack-dir-semantics` | attacker→target bearing | *rejected*: retail is right | — |
 | `gather-enhancer-table-base` | tables indexed `level − 1` | *rejected*: deliberate, 1-based accessors | — |
 

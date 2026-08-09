@@ -185,6 +185,22 @@ pub enum Diplo {
     Ally = 2,
 }
 
+/// `LeaderData::get_diplo(int)` @ `0x006EBA50`, detached from leader storage so a host
+/// adapter can use the retail mutual-minimum rule without copying it. `declared_ab` and
+/// `declared_ba` are the two `LeaderData::diplos` cells.
+#[inline]
+pub const fn effective_diplo(same_player: bool, declared_ab: i32, declared_ba: i32) -> Diplo {
+    if same_player {
+        Diplo::Ally
+    } else if declared_ab == Diplo::War as i32 || declared_ba == Diplo::War as i32 {
+        Diplo::War
+    } else if declared_ab == Diplo::Ally as i32 && declared_ba == Diplo::Ally as i32 {
+        Diplo::Ally
+    } else {
+        Diplo::Peace
+    }
+}
+
 /// `LeaderFlagIndex` bits of `LeaderData::leader_flags` (`+0x00`).
 pub mod leader_flag {
     pub const VALID: i32 = 1;
@@ -951,56 +967,23 @@ impl Leaders {
     /// `LeaderData::get_diplo(int j)` @ `0x006EBA50`. The pairwise state is the
     /// *mutual minimum*: war if either side declares it, ally only if both do.
     pub fn get_diplo(&self, i: usize, j: usize) -> Diplo {
-        if i == j {
-            return Diplo::Ally;
-        }
-        let a = self.slots[i].diplos[j];
-        if a == 0 {
-            return Diplo::War;
-        }
-        let b = self.slots[j].diplos[i];
-        if b == 0 {
-            return Diplo::War;
-        }
-        if a == Diplo::Ally as i32 && b == a {
-            Diplo::Ally
-        } else {
-            Diplo::Peace
-        }
+        effective_diplo(i == j, self.slots[i].diplos[j], self.slots[j].diplos[i])
     }
 
     /// `LeaderData::is_enemy(int j)` @ `0x006EBAA0`. Note this is *not*
     /// `get_diplo == War` on self: a leader is never its own enemy.
     pub fn is_enemy(&self, i: usize, j: usize) -> bool {
-        if i == j {
-            return false;
-        }
-        self.slots[i].diplos[j] == 0 || self.slots[j].diplos[i] == 0
+        effective_diplo(i == j, self.slots[i].diplos[j], self.slots[j].diplos[i]) == Diplo::War
     }
 
     /// `LeaderData::is_ally(int j)` @ `0x006EDB50`. Self counts as an ally.
     pub fn is_ally(&self, i: usize, j: usize) -> bool {
-        if i == j {
-            return true;
-        }
-        self.slots[i].diplos[j] == Diplo::Ally as i32
-            && self.slots[j].diplos[i] == Diplo::Ally as i32
+        effective_diplo(i == j, self.slots[i].diplos[j], self.slots[j].diplos[i]) == Diplo::Ally
     }
 
     /// `LeaderData::is_peace(int j)` @ `0x006E1200`.
     pub fn is_peace(&self, i: usize, j: usize) -> bool {
-        if i == j {
-            return false;
-        }
-        let a = self.slots[i].diplos[j];
-        if a == 0 {
-            return false;
-        }
-        let b = self.slots[j].diplos[i];
-        if b == 0 {
-            return false;
-        }
-        !(a == Diplo::Ally as i32 && b == a)
+        effective_diplo(i == j, self.slots[i].diplos[j], self.slots[j].diplos[i]) == Diplo::Peace
     }
 
     /// `Leader::set_diplo(int j, int state)` @ `0x006EC6A0`, state part only.

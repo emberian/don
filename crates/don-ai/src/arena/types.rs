@@ -102,6 +102,12 @@ pub struct TypeRow {
     pub unit_flags2: u32,
     /// `OBJ_MASK`, the `UnitType[+0x1E4]` bit-set `get_damage` reads.
     pub obj_masks: u32,
+    /// `ObjectTypeData::fly_high` / `fly_low` at `+0x250/+0x254`. These percentages are
+    /// consumed by retail's anti-air dud gate; zero is meaningful and is not defaulted.
+    pub fly_high: i32,
+    pub fly_low: i32,
+    /// `UnitTypeData::mana` at `+0x2EC`; for aircraft this is the sortie fuel budget.
+    pub mana: i32,
     pub uber_size: i32,
     pub ammo_per_att: i32,
     pub splash_percent: i32,
@@ -130,6 +136,21 @@ impl TypeRow {
     }
     pub fn is_civilian(&self) -> bool {
         self.kind_unit && self.cat == 5
+    }
+
+    /// Exact static fields consumed by the recovered retail air primitives. Keeping this
+    /// conversion on the live-table row prevents an arena adapter from inventing flight
+    /// bands or fuel values when aircraft are eventually admitted to the map.
+    pub fn air_type_data(&self) -> don_sim::systems::air::AirTypeData {
+        don_sim::systems::air::AirTypeData {
+            obj_masks: self.obj_masks,
+            domain: self.domain,
+            los: self.los,
+            fly_high: self.fly_high,
+            fly_low: self.fly_low,
+            unit_flags: self.unit_flags,
+            mana: self.mana,
+        }
     }
 }
 
@@ -258,6 +279,9 @@ impl Types {
             "moves",
             "turn_speed",
             "new_block_radius",
+            "fly_high",
+            "fly_low",
+            "mana",
             "squad_size",
             "role",
             "base_form",
@@ -311,6 +335,9 @@ impl Types {
                     unit_flags: num(h, r, "unit_flags") as u32,
                     unit_flags2: num(h, r, "unit_flags2") as u32,
                     obj_masks: num(h, r, "obj_masks") as u32,
+                    fly_high: num(h, r, "fly_high") as i32,
+                    fly_low: num(h, r, "fly_low") as i32,
+                    mana: num(h, r, "mana") as i32,
                     uber_size: num(h, r, "uber_size").max(1) as i32,
                     ammo_per_att: num(h, r, "ammo_per_att").max(1) as i32,
                     splash_percent: num(h, r, "splash_percent") as i32,
@@ -416,6 +443,18 @@ mod tests {
         assert_eq!(citizen.base_form, 0);
         assert_eq!(citizen.push_size, 48);
         assert_eq!(citizen.push_circles, 1);
+    }
+
+    #[test]
+    fn air_adapter_uses_live_flight_and_fuel_fields() {
+        let Some(t) = types() else { return };
+        let fighter = t.get(295).unwrap().air_type_data();
+        assert_eq!(fighter.domain, don_sim::systems::air::DOMAIN_AIR);
+        assert_eq!(fighter.fly_high, 0);
+        assert_eq!(fighter.fly_low, 10);
+        assert_eq!(fighter.mana, 500);
+        assert!(fighter.is_plane());
+        assert!(!fighter.is_helicopter());
     }
 
     #[test]

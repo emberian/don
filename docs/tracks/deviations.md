@@ -265,19 +265,38 @@ a fidelity result. This particular runner is explicitly **research-only**, so it
 systems do not falsely block unrelated replay, playable, or RL entrypoints.
 *`docs/tracks/ron-ai-impl.md` §3.*
 
-### `arena-model-simplifications`
+### Arena MODEL 2–6 blockers
 
-`crates/don-ai/src/arena/world.rs` retains five numbered `MODEL` substitutions: a
-builder-frame construction model; inferred terrain gather slots; nearest-hostile target
-acquisition; incompletely derived flank inputs; and no water, naval, air, diplomacy,
-attrition, or supply. The former greedy-movement model has been replaced by the derived
-retail A* pathfinder; it is no longer part of this blocker.
+The former aggregate `arena-model-simplifications` entry is split so one successful adapter
+cannot silently clear unrelated product gaps. All ten entries below independently block the
+playable surface while their runtime path remains incomplete:
 
-Unlike the older research runner, the arena drives head-to-head matches and the playable
-WebGPU client. It is therefore a **playable-product blocker**, not an acceptable research
-boundary. The fix is to replace each model with a system at least as sophisticated as the
-derived retail behaviour, then remove this drift status. *Self-declared at
-`crates/don-ai/src/arena/world.rs:34-48`.*
+| registry slug | declared model | literal remaining system |
+|---|---:|---|
+| `arena-construction-model` | 2 | build-site, builder-order, interruption and completion state |
+| `arena-gather-model` | 3 | resource-object ownership, capacity, occupancy and depletion |
+| `arena-target-acquisition-model` | 4 | complete stable spatial scan with diplomacy, fog, validity, region and priority gates |
+| `arena-flank-model` | 5 | live fight-call direction, facing and type inputs |
+| `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
+| `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
+| `arena-air-model` | 6c | `do_air_physics`, target/host scans, Ammo RNG insertion, orders and walked state |
+| `arena-diplomacy-model` | 6d | declaration command plus retargeting, shared vision, event/chat and strategy side effects |
+| `arena-attrition-model` | 6e | per-unit period state/recomputation and exact fractional damage host |
+| `arena-supply-model` | 6f | `Supplies::find_supply`, building scans, reload call site and healing |
+
+The former greedy-movement model has already been replaced by the derived retail A*
+pathfinder and is not on this list. `arena::retail_systems::MODEL6_INVENTORY` is the
+executable integration inventory: it maps recovered `don-sim` kernels to the prerequisites
+still missing. Its air, diplomacy, attrition and supply adapters are deliberately fail-closed:
+they require live type-table fields, the caller's main RNG, explicit bilateral declaration
+state, and explicit world-query results. They do not spawn an aircraft, pretend every unit is
+supplied, or promote `naval::*_proxy` functions into product behavior.
+
+Unlike `ai-model-simplifications`, these are **playable-product blockers** because the arena
+feeds head-to-head matches and the WebGPU client. Clear an entry only after its real arena
+tick/command path and focused tests are wired; an isolated adapter is necessary integration
+work, not completion. *Self-declared in `crates/don-ai/src/arena/world.rs`; subsystem evidence
+is listed in the registry and `docs/mechanics/{air,naval,borders-fog}.md`.*
 
 ---
 

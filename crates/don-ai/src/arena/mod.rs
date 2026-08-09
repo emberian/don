@@ -38,6 +38,7 @@ pub mod cmd;
 pub mod map;
 pub mod match_run;
 pub mod obs;
+pub mod retail_systems;
 pub mod types;
 pub mod world;
 
