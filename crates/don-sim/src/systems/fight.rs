@@ -23,26 +23,27 @@
 //!
 //! ## Graphics turrets are a mandatory boundary
 //!
-//! `Unit::target_guy` `0x005FCE70` calls `Guy::attack` `0x005D8BC0`. A Guy with raw
-//! `guy_flags & 0x0100` can aim graphics turret nodes while the Unit body keeps its current
-//! facing; in that arm `Unit::fight` passes the retained body facing as `attack_dir` to
-//! `Object::do_damage`. Resolving it needs the graphics node/animation packet graph. The
-//! caller must therefore provide [`AimMode::GraphicsTurret`] with the measured alignment
-//! result. [`AimMode::UnresolvedGraphicsTurret`] fails closed; it never silently substitutes
-//! the target bearing.
+//! `Unit::target_guy` `0x005FCE70` calls the PDB-named `Guy::set_all_pivots`
+//! `0x005D8BC0`. A Guy with raw `guy_flags & 0x0100` can aim graphics turret nodes while
+//! the Unit body keeps its current facing; in that arm `Unit::fight` passes the retained
+//! body facing as `attack_dir` to `Object::do_damage`.
+//! [`super::graphics_turret::resolve_turret_aim`] evaluates the exact restriction/angle arm
+//! when a loaded-hierarchy provider is available. The caller must pass its measured result
+//! as [`AimMode::GraphicsTurret`]. [`AimMode::UnresolvedGraphicsTurret`] fails closed; it
+//! never silently substitutes the target bearing.
 
 use super::groups_guys::{UnitGuys, GUY_FLAG_TURRETS};
 use super::target::{attack_dir, flank_tier};
 
-/// How `Unit::target_guy` / `Guy::attack` resolved the attacker's body aim this frame.
+/// How `Unit::target_guy` / `Guy::set_all_pivots` resolved body aim this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AimMode {
     /// No graphics turret arm retained the body facing. The Unit turns to the target.
     BodyTracksTarget,
     /// A graphics-turret Guy was evaluated with its exact graphics graph.
     ///
-    /// `aligned == true` is the non-zero return from `Guy::attack`: turret nodes may fire
-    /// while the Unit keeps its current facing. `false` falls through to body tracking.
+    /// `aligned == true` is the non-zero return from `Guy::set_all_pivots`: turret nodes may
+    /// fire while the Unit keeps its current facing. `false` falls through to body tracking.
     GraphicsTurret { aligned: bool },
     /// Raw Guy state advertises graphics turrets, but the host has not evaluated their
     /// graphics node/animation graph. Planning a volley must return an error.

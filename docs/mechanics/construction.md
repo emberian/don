@@ -180,12 +180,35 @@ Until these are satisfied, Arena should keep a loud fidelity blocker rather than
 - Full `BuildTypeData::blocked_location` `0x006375B0`, `blocked_tcoord` `0x00636DB0`, and
   the `blocked_site` dependency graph (terrain, territory, cliffs/water, adjacency, dock,
   city limits).
-- Exact state transactions in `Build::start`, `Build::activate`, and `Object::disband`,
-  including ownership/city/world events and their RNG/checksum consequences.
-- Exact `Unit::check_build_order` movement/alternate-site behavior and `Unit::build_done`
-  follow-on assignment in the executable order driver.
+- A production host for the ordered `construction_lifecycle` start, activation,
+  rejection/refund, terrain, registry, city, leader, farm-spawn and visibility calls.
+- Wiring `construction_builder`'s exact plans and executable short-circuiting `build_done`
+  driver into the real unit/order/group stores, including `check_build_order` movement and
+  alternate-site mutation bodies.
 - Retail oracle cases for start, rejection, 1–N builders, under-fire Korean/non-Korean,
   completion, cancellation, builder death, target death, and checksum/RNG deltas.
 
 These blockers are why `RUNTIME_FIDELITY_READY` is false.  They are interfaces here, not
 empty defaults, so incomplete work cannot silently ship as fidelity.
+
+## 6. Oracle boundary
+
+`ConstructionOracleSnapshot` and `verify_oracle_receipt` define the minimum coherent retail
+capture accepted for promotion. A case must bracket the exact transaction with:
+
+- shared `game_random` state before and after;
+- isolated builds, units, guys, leaders, cities, groups, world, and other-object channel
+  accumulators;
+- the addressed site's full 220-byte `BuildData` image;
+- builder `(who,o,uid)`, raw unit masks/angle/group and ordered BUILD_AT target payload;
+- callback trace sufficient to distinguish blocked-site, start, activate, disband and
+  builder-tail ordering.
+
+The verifier advances the measured LCG exactly `receipt.rng_draws` times and requires the
+captured post-seed to agree. It also requires the reported checksum-effect set to equal the
+channels which changed. A UI-only video, a wall-clock completion time, the current negative
+Barracks attempt, or a capture without the RNG seed/channel split is not an oracle.
+
+The currently deployed retail hook cannot expose these fields or callback sequence, so no
+Cycle 6 test is promoted above Tier C. The boundary is executable and tested so a future
+hook can add cases without redefining what counts as evidence.

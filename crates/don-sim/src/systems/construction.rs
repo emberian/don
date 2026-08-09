@@ -274,6 +274,81 @@ pub struct EffectReceipt {
     pub checksums: ChecksumEffects,
 }
 
+/// Channel/RNG snapshot required from a retail oracle capture around one construction
+/// transaction. Values are the isolated channel accumulators, not a synthetic combined
+/// digest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstructionOracleSnapshot {
+    pub rng_state: i32,
+    pub site_image: [u8; production::BUILDDATA_SIZE],
+    pub builder: ObjectKey,
+    pub order_target: ObjectKey,
+    pub builder_unit_masks: u32,
+    pub builder_angle: i32,
+    pub builder_group: i32,
+    pub builds: u32,
+    pub units: u32,
+    pub guys: u32,
+    pub leaders: u32,
+    pub cities: u32,
+    pub groups: u32,
+    pub world: u32,
+    pub objects_other: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OracleReceiptError {
+    RngState {
+        expected: i32,
+        observed: i32,
+    },
+    ChecksumEffects {
+        expected: ChecksumEffects,
+        observed: ChecksumEffects,
+    },
+}
+
+/// Verify one effect receipt against coherent before/after retail snapshots.
+///
+/// This is intentionally strict. A capture which cannot expose each channel separately or
+/// cannot bracket the shared RNG seed is not a construction oracle and must not promote
+/// the fidelity tier.
+pub fn verify_oracle_receipt(
+    before: ConstructionOracleSnapshot,
+    after: ConstructionOracleSnapshot,
+    receipt: EffectReceipt,
+) -> Result<(), OracleReceiptError> {
+    let mut expected_rng = before.rng_state;
+    for _ in 0..receipt.rng_draws {
+        expected_rng = expected_rng
+            .wrapping_mul(crate::rng::Random::MUL)
+            .wrapping_add(crate::rng::Random::ADD);
+    }
+    if after.rng_state != expected_rng {
+        return Err(OracleReceiptError::RngState {
+            expected: expected_rng,
+            observed: after.rng_state,
+        });
+    }
+    let observed = ChecksumEffects {
+        builds: before.builds != after.builds,
+        units: before.units != after.units,
+        guys: before.guys != after.guys,
+        leaders: before.leaders != after.leaders,
+        cities: before.cities != after.cities,
+        groups: before.groups != after.groups,
+        world: before.world != after.world,
+        objects_other: before.objects_other != after.objects_other,
+    };
+    if observed != receipt.checksums {
+        return Err(OracleReceiptError::ChecksumEffects {
+            expected: receipt.checksums,
+            observed,
+        });
+    }
+    Ok(())
+}
+
 /// Result of the exact `blocked_site` query and the `0x2A` linked-city wonder-capacity
 /// dependency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -954,6 +1029,59 @@ mod tests {
         assert_eq!(invalid.target.uid, 0xFFFF);
         let valid = BuildOrderTarget::from_indices(7, 2, Some(0x1234), false);
         assert_eq!(valid.target.uid, 0x1234);
+    }
+
+    #[test]
+    fn oracle_boundary_verifies_exact_rng_steps_and_channel_deltas() {
+        let before = ConstructionOracleSnapshot {
+            rng_state: 7,
+            site_image: [0; production::BUILDDATA_SIZE],
+            builder: BUILDER,
+            order_target: SITE,
+            builder_unit_masks: UNIT_BUILDER,
+            builder_angle: 0,
+            builder_group: -1,
+            builds: 10,
+            units: 20,
+            guys: 30,
+            leaders: 40,
+            cities: 50,
+            groups: 60,
+            world: 70,
+            objects_other: 80,
+        };
+        let mut expected_rng = before.rng_state;
+        for _ in 0..15 {
+            expected_rng = expected_rng
+                .wrapping_mul(crate::rng::Random::MUL)
+                .wrapping_add(crate::rng::Random::ADD);
+        }
+        let after = ConstructionOracleSnapshot {
+            rng_state: expected_rng,
+            site_image: {
+                let mut image = before.site_image;
+                image[production::off::JOB_COUNTER] = 1;
+                image
+            },
+            builder_unit_masks: UNIT_BUILDER | UNIT_CAN_TRANSPORT,
+            builds: 11,
+            units: 21,
+            ..before
+        };
+        let effect = EffectReceipt {
+            rng_draws: 15,
+            checksums: ChecksumEffects::BUILDS.union(ChecksumEffects::UNITS),
+        };
+        assert_eq!(verify_oracle_receipt(before, after, effect), Ok(()));
+
+        let wrong = ConstructionOracleSnapshot {
+            rng_state: before.rng_state,
+            ..after
+        };
+        assert!(matches!(
+            verify_oracle_receipt(before, wrong, effect),
+            Err(OracleReceiptError::RngState { .. })
+        ));
     }
 
     #[test]

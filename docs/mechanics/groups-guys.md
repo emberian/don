@@ -38,7 +38,7 @@ the guy turret settle, group membership pruning and compaction, and the formatio
 | `Group::action_form` `0x00707220` form selection | ported (selection half) | `resolve_form` |
 | `Form::categorize` / `Form::compute` layout | **not ported** | §6 |
 | collision-block bit writes | **not ported** (hook) | §6 |
-| graphics-derived crew attachment positions | **not ported** | §6 |
+| graphics-derived gpiece, track offsets, and turret pivot state | exact extractor boundary | `graphics_turret`; [graphics-turrets.md](graphics-turrets.md) |
 
 ### How it was measured
 
@@ -573,12 +573,12 @@ My module adds `sinx`, `cosx` and `angle_diff` and leaves `trig.rs` untouched.
 
 Listed so nobody mistakes silence for coverage.
 
-1. **Graphics-derived crew attachment positions.** Initial squad placement is exact, and
-   the old heuristic `placeholder_offsets` has been deleted. Crew are recursively attached
-   to Guy 0 using `track_dx/track_dy` written from the selected graphics piece. The rotation
-   is statically decoded, and live relative positions are recorded in §2.4, but the graph
-   packet lookup that supplies those two per-Guy magnitudes is not represented by the sim's
-   `UnitTypeStats`; no attachment vector is synthesized.
+1. **Graphics hierarchy host integration.** Initial squad placement is exact, and the old
+   heuristic `placeholder_offsets` has been deleted. The supported installed XML catalog,
+   per-Guy gpiece/track/pivot materialization transaction and live pivot-aim arithmetic are
+   recovered in `graphics_turret`; see [graphics-turrets.md](graphics-turrets.md). Arena still
+   needs a provider backed by the loaded `.bh3` hierarchy, so no attachment vector or node
+   transform is synthesized.
 2. **`squad_size`'s data source.** Bound at `0x0061CEEE` to `UnitTypeData +0x304`, absent
    from `unitrules.xml`. Needs a read of `UnitType::init` `0x0061AB50`.
 3. **Guy count vs hit points, and the "3-sub-unit damage division".** See §2.2. No evidence

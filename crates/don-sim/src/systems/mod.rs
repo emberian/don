@@ -44,6 +44,12 @@ pub mod combat;
 /// placement/start/activation/disband transactions are mandatory fail-loud host effects;
 /// the module cannot silently fall back to builder-frame construction.
 pub mod construction;
+/// Exact unit-side `do_build`, completion, `build_done`, and candidate-balancing policy
+/// around the fail-closed construction lifecycle.
+pub mod construction_builder;
+/// Exact placement, start, rejection/refund, activation, and farm-spawn transactions
+/// behind construction's mandatory world-store boundary.
+pub mod construction_lifecycle;
 pub mod economy;
 /// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
 /// composed flank direction, and a fail-closed graphics-turret boundary.
@@ -51,6 +57,9 @@ pub mod fight;
 /// Retail gathering-site capacity boundary, owner-local worker chains, worker/order
 /// lifecycle, rate scaling, and checksum-visible GatherOrder payload.
 pub mod gathering;
+/// Exact, fail-closed bridge from the supported installed `unit_graphics.xml` and a
+/// retail hierarchy resolver to checksum-visible Guy graphics/turret state.
+pub mod graphics_turret;
 pub mod groups_guys;
 /// Recovered from an interrupted lane and audited as a Tier-C goody-box registry/checksum
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration
