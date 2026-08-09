@@ -218,6 +218,10 @@ pub mod mask {
     pub const EJECTING: u16 = 0x4000;
     /// Ownership/visibility latch consumed by `Build::process`.
     pub const OWNERSHIP_LATCH: u16 = 0x0200;
+    /// Repeat-production latch. `Build::do_queue` snapshots this before removing a
+    /// completed unit, clears it, then calls `Build::action_queue`; a failed repeat sets
+    /// it again. `Build::unqueue` also clears it whenever the logical queue becomes empty.
+    pub const REPEAT_QUEUE: u16 = 0x0040;
 }
 
 /// `Object` flag byte at `+0x08`, `[measured]` from the folded accessors.
@@ -1345,6 +1349,161 @@ pub fn queue_step(
         done,
         rate,
     })
+}
+
+// =======================================================================================
+// Executable single-slot queue transaction
+// =======================================================================================
+
+/// Mandatory world boundary for one local, non-parallel `Build::do_queue` transaction.
+///
+/// The queue owns progress and compaction. The host owns type-table queries, the enormous
+/// `Build::finished` world mutation, per-player queued counters, and the paid repeat-queue
+/// operation. None has a default: silently omitting any one leaves checksum-visible state
+/// stale.
+pub trait QueueCompletionHost {
+    /// `ObjectData::train_time(type)` `0x006508C0`.
+    fn train_time(&mut self, type_index: i32) -> i32;
+    /// The type-tree / player-availability classification used to select the accelerator.
+    fn classify(&mut self, type_index: i32) -> QueueKind;
+    /// `Build::finished(type)` `0x00628490`. The queue entry has already been saturated to
+    /// its total, exactly as at `0x0061EBC1..0x0061EBCD`. Return false when population,
+    /// support, placement, or another world gate prevents completion this frame.
+    fn finished(&mut self, type_index: i32, queue: &BuildQueue, slot: usize) -> bool;
+    /// The store-dirty write at `0x006208A8..0x006208B1`, before `unqueue` touches the
+    /// entry. This is a mandatory callback because its owner is outside `BuildData`.
+    fn mark_queue_dirty(&mut self);
+    /// Per-player counter mutations inside `Build::unqueue(slot, 0)`, after the removed
+    /// entry's elapsed field is zeroed but before logical compaction.
+    fn completed_unqueue(&mut self, type_index: i32, queue: &BuildQueue, slot: usize);
+    /// `Build::action_queue(type, 0)` `0x00620F40`, reached only for a completed unit when
+    /// the pre-unqueue repeat latch was set. The host must perform payment and queue
+    /// mutation. Return true on retail's non-zero success result.
+    fn repeat_unit(&mut self, build: &mut BuildData, type_index: i32) -> bool;
+}
+
+/// Fail-closed violations of the normal retail queue invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueTransactionError {
+    /// `queued` is a logical prefix of `BuildQueue::num` in reachable retail state.
+    LogicalLengthExceedsAllocation { queued: usize, allocated: usize },
+    /// `Build::process` starts at slot zero and parallel recursion checks `slot < queued`.
+    SlotOutsideLogicalQueue { slot: usize, queued: usize },
+    /// A reachable queue record always names a real type; `-1` is only an accessor sentinel.
+    InvalidTypeIndex(i32),
+}
+
+/// Result of one executable queue-slot transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueTransaction {
+    /// Progress was advanced and saturated, but completion is tested next frame.
+    Advanced { type_index: i32, step: QueueStep },
+    /// Progress was already complete, but `Build::finished` rejected the world mutation.
+    FinishBlocked { type_index: i32, step: QueueStep },
+    /// `finished` succeeded and local `unqueue(slot, 0)` completed.
+    Completed {
+        type_index: i32,
+        step: QueueStep,
+        repeat_attempted: bool,
+        repeat_succeeded: bool,
+    },
+}
+
+/// Execute the ordinary local, single-slot body of `Build::do_queue` (`0x0061E410`) through
+/// successful `Build::unqueue(slot, 0)` (`0x006207C0`). [measured]
+///
+/// This function deliberately starts *after* the two routing decisions that need the
+/// owning object graph: a multi-slot producer recurses into `slot + 1` first, and a Library
+/// can forward an overflow slot to the player's primary Library. The caller must resolve
+/// those two decisions before entering this local transaction.
+///
+/// The allocated `entries` vector is not shortened on completion. Retail's
+/// `BuildQueue::un_queue` memmoves the remaining logical suffix but leaves `num` and the
+/// last physical record intact; that stale record is checksum-visible because the queue
+/// walker uses allocated length. `Vec::remove` would therefore desynchronise immediately.
+pub fn execute_local_queue_slot<H: QueueCompletionHost>(
+    build: &mut BuildData,
+    slot: usize,
+    ai_speed: i32,
+    rules: &ProdRules,
+    host: &mut H,
+) -> Result<Option<QueueTransaction>, QueueTransactionError> {
+    let queued = build.queue.queued as usize;
+    if queued == 0 {
+        return Ok(None);
+    }
+    let allocated = build.queue.num();
+    if queued > allocated {
+        return Err(QueueTransactionError::LogicalLengthExceedsAllocation { queued, allocated });
+    }
+    if slot >= queued {
+        return Err(QueueTransactionError::SlotOutsideLogicalQueue { slot, queued });
+    }
+
+    let type_index = build.queue.type_at(slot);
+    if type_index < 0 {
+        return Err(QueueTransactionError::InvalidTypeIndex(type_index));
+    }
+    let total = host.train_time(type_index);
+    let kind = host.classify(type_index);
+    let mut step = queue_step(
+        build.queue.queued,
+        slot,
+        allocated,
+        build.queue.entries[slot].elapsed,
+        total,
+        kind,
+        ai_speed,
+        rules,
+    )
+    .expect("non-empty queue was checked above");
+
+    if !step.done {
+        build.queue.entries[slot].elapsed = step.elapsed;
+        return Ok(Some(QueueTransaction::Advanced { type_index, step }));
+    }
+
+    // The ordinary branch writes the total (not the wrapped `prog + rate` candidate)
+    // before invoking Build::finished; this distinction is observable if stale progress
+    // or a modded accelerator overflows.
+    step.elapsed = total;
+    build.queue.entries[slot].elapsed = step.elapsed;
+    if !host.finished(type_index, &build.queue, slot) {
+        return Ok(Some(QueueTransaction::FinishBlocked { type_index, step }));
+    }
+
+    let repeat_attempted = kind == QueueKind::Unit && (build.build_masks & mask::REPEAT_QUEUE) != 0;
+
+    // Build::unqueue(slot, 0): dirty marker, elapsed reset, external queued counters,
+    // physical memmove, logical decrement, and empty-queue latch clear in this order.
+    host.mark_queue_dirty();
+    build.queue.entries[slot].elapsed = 0;
+    host.completed_unqueue(type_index, &build.queue, slot);
+    if slot + 1 < queued {
+        build.queue.entries.copy_within(slot + 1..queued, slot);
+    }
+    build.queue.queued -= 1;
+    if build.queue.queued == 0 {
+        build.build_masks &= !mask::REPEAT_QUEUE;
+    }
+
+    let repeat_succeeded = if repeat_attempted {
+        build.build_masks &= !mask::REPEAT_QUEUE;
+        let succeeded = host.repeat_unit(build, type_index);
+        if !succeeded {
+            build.build_masks |= mask::REPEAT_QUEUE;
+        }
+        succeeded
+    } else {
+        false
+    };
+
+    Ok(Some(QueueTransaction::Completed {
+        type_index,
+        step,
+        repeat_attempted,
+        repeat_succeeded,
+    }))
 }
 
 // =======================================================================================
@@ -2682,6 +2841,299 @@ mod tests {
             QueueKind::Research,
             "a unit the player cannot make falls to accel_research"
         );
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum QueueEvent {
+        TrainTime(i32),
+        Classify(i32),
+        Finished(i32, i32),
+        Dirty,
+        CompletedUnqueue(i32, i32),
+        Repeat(i32, u8, bool),
+    }
+
+    struct QueueProbe {
+        total: i32,
+        kind: QueueKind,
+        finish_ok: bool,
+        repeat_ok: bool,
+        events: Vec<QueueEvent>,
+    }
+
+    impl QueueProbe {
+        fn unit(total: i32) -> Self {
+            Self {
+                total,
+                kind: QueueKind::Unit,
+                finish_ok: true,
+                repeat_ok: false,
+                events: Vec::new(),
+            }
+        }
+    }
+
+    impl QueueCompletionHost for QueueProbe {
+        fn train_time(&mut self, type_index: i32) -> i32 {
+            self.events.push(QueueEvent::TrainTime(type_index));
+            self.total
+        }
+
+        fn classify(&mut self, type_index: i32) -> QueueKind {
+            self.events.push(QueueEvent::Classify(type_index));
+            self.kind
+        }
+
+        fn finished(&mut self, type_index: i32, queue: &BuildQueue, slot: usize) -> bool {
+            self.events.push(QueueEvent::Finished(
+                type_index,
+                queue.entries[slot].elapsed,
+            ));
+            self.finish_ok
+        }
+
+        fn mark_queue_dirty(&mut self) {
+            self.events.push(QueueEvent::Dirty);
+        }
+
+        fn completed_unqueue(&mut self, type_index: i32, queue: &BuildQueue, slot: usize) {
+            self.events.push(QueueEvent::CompletedUnqueue(
+                type_index,
+                queue.entries[slot].elapsed,
+            ));
+        }
+
+        fn repeat_unit(&mut self, build: &mut BuildData, type_index: i32) -> bool {
+            self.events.push(QueueEvent::Repeat(
+                type_index,
+                build.queue.queued,
+                (build.build_masks & mask::REPEAT_QUEUE) != 0,
+            ));
+            if self.repeat_ok {
+                build.queue.entries[0] = BuildQueueEntry {
+                    type_index: type_index as i16,
+                    res: [-1; 3],
+                    ..BuildQueueEntry::default()
+                };
+                build.queue.queued = 1;
+            }
+            self.repeat_ok
+        }
+    }
+
+    fn one_item_build(type_index: i16, elapsed: i32) -> BuildData {
+        let mut build = BuildData::default();
+        build.flags = flag::VALID | flag::ACTIVE;
+        build.queue.queued = 1;
+        build.queue.entries.push(BuildQueueEntry {
+            elapsed,
+            type_index,
+            res: [-1; 3],
+            ..BuildQueueEntry::default()
+        });
+        build
+    }
+
+    #[test]
+    fn executable_queue_saturates_then_completes_on_the_following_frame() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 950);
+        let mut host = QueueProbe::unit(1000);
+
+        let first = execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+        assert_eq!(
+            first,
+            Some(QueueTransaction::Advanced {
+                type_index: 60,
+                step: QueueStep {
+                    elapsed: 1000,
+                    done: false,
+                    rate: 100,
+                },
+            })
+        );
+        assert_eq!(build.queue.queued, 1);
+        assert_eq!(build.queue.entries[0].elapsed, 1000);
+        assert_eq!(
+            host.events,
+            vec![QueueEvent::TrainTime(60), QueueEvent::Classify(60)]
+        );
+
+        host.events.clear();
+        let second = execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+        assert_eq!(
+            second,
+            Some(QueueTransaction::Completed {
+                type_index: 60,
+                step: QueueStep {
+                    elapsed: 1000,
+                    done: true,
+                    rate: 100,
+                },
+                repeat_attempted: false,
+                repeat_succeeded: false,
+            })
+        );
+        assert_eq!(build.queue.queued, 0);
+        assert_eq!(build.queue.num(), 1, "unqueue does not shrink allocation");
+        assert_eq!(build.queue.entries[0].type_index, 60);
+        assert_eq!(build.queue.entries[0].elapsed, 0);
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Finished(60, 1000),
+                QueueEvent::Dirty,
+                QueueEvent::CompletedUnqueue(60, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_compacts_only_the_logical_prefix_and_preserves_stale_allocation() {
+        let rules = ProdRules::shipped();
+        let mut build = BuildData::default();
+        build.queue.queued = 2;
+        build.queue.entries = vec![
+            BuildQueueEntry {
+                elapsed: 1000,
+                type_index: 551,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 17,
+                type_index: 552,
+                tail: 7,
+                ..BuildQueueEntry::default()
+            },
+            BuildQueueEntry {
+                elapsed: 88,
+                type_index: 553,
+                tail: 9,
+                ..BuildQueueEntry::default()
+            },
+        ];
+        let mut host = QueueProbe {
+            total: 1000,
+            kind: QueueKind::Research,
+            finish_ok: true,
+            repeat_ok: false,
+            events: Vec::new(),
+        };
+
+        execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert_eq!(build.queue.queued, 1);
+        assert_eq!(build.queue.num(), 3);
+        assert_eq!(build.queue.entries[0].type_index, 552);
+        assert_eq!(build.queue.entries[0].elapsed, 17);
+        assert_eq!(
+            build.queue.entries[1], build.queue.entries[0],
+            "memmove leaves the old source as the checksum-visible stale tail"
+        );
+        assert_eq!(build.queue.entries[2].type_index, 553);
+        assert_eq!(build.queue.entries[2].elapsed, 88);
+    }
+
+    #[test]
+    fn failed_finish_keeps_the_saturated_item_and_skips_unqueue_effects() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 1000);
+        let mut host = QueueProbe::unit(1000);
+        host.finish_ok = false;
+
+        let result = execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert!(matches!(
+            result,
+            Some(QueueTransaction::FinishBlocked { .. })
+        ));
+        assert_eq!(build.queue.queued, 1);
+        assert_eq!(build.queue.entries[0].elapsed, 1000);
+        assert_eq!(
+            host.events,
+            vec![
+                QueueEvent::TrainTime(60),
+                QueueEvent::Classify(60),
+                QueueEvent::Finished(60, 1000),
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_commits_total_not_an_overflowed_progress_candidate() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, i32::MAX);
+        let mut host = QueueProbe::unit(100);
+        host.finish_ok = false;
+
+        let result = execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert!(matches!(
+            result,
+            Some(QueueTransaction::FinishBlocked { .. })
+        ));
+        assert_eq!(build.queue.entries[0].elapsed, 100);
+        assert!(host.events.contains(&QueueEvent::Finished(60, 100)));
+    }
+
+    #[test]
+    fn unit_repeat_runs_after_unqueue_with_the_latch_temporarily_clear() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 0);
+        build.build_masks |= mask::REPEAT_QUEUE;
+        let mut host = QueueProbe::unit(1);
+        host.repeat_ok = true;
+
+        let result = execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host).unwrap();
+
+        assert!(matches!(
+            result,
+            Some(QueueTransaction::Completed {
+                repeat_attempted: true,
+                repeat_succeeded: true,
+                ..
+            })
+        ));
+        assert_eq!(build.queue.queued, 1);
+        assert_eq!(build.queue.entries[0].type_index, 60);
+        assert_eq!(build.queue.entries[0].elapsed, 0);
+        assert_eq!(build.build_masks & mask::REPEAT_QUEUE, 0);
+        assert!(host.events.contains(&QueueEvent::Repeat(60, 0, false)));
+
+        let mut failed_build = one_item_build(60, 0);
+        failed_build.build_masks |= mask::REPEAT_QUEUE;
+        let mut failed_host = QueueProbe::unit(1);
+        execute_local_queue_slot(&mut failed_build, 0, 1, &rules, &mut failed_host).unwrap();
+        assert_eq!(failed_build.queue.queued, 0);
+        assert_ne!(failed_build.build_masks & mask::REPEAT_QUEUE, 0);
+        assert!(failed_host
+            .events
+            .contains(&QueueEvent::Repeat(60, 0, false)));
+    }
+
+    #[test]
+    fn executable_queue_refuses_corrupt_lengths_before_world_callbacks() {
+        let rules = ProdRules::shipped();
+        let mut build = one_item_build(60, 0);
+        build.queue.queued = 2;
+        let mut host = QueueProbe::unit(1000);
+        assert_eq!(
+            execute_local_queue_slot(&mut build, 0, 1, &rules, &mut host),
+            Err(QueueTransactionError::LogicalLengthExceedsAllocation {
+                queued: 2,
+                allocated: 1,
+            })
+        );
+        assert!(host.events.is_empty());
+
+        build.queue.queued = 1;
+        assert_eq!(
+            execute_local_queue_slot(&mut build, 1, 1, &rules, &mut host),
+            Err(QueueTransactionError::SlotOutsideLogicalQueue { slot: 1, queued: 1 })
+        );
+        assert!(host.events.is_empty());
     }
 
     #[test]

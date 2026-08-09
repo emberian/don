@@ -27,7 +27,7 @@ oracle run would have to cover.
 | Under-construction hit points | `Wall::update_hits` `0x0063F0D0` | `construct_hits` |
 | Under-construction collapse | `Object::take_damage` `0x00652020` | `under_construction_collapses` |
 | Hit points while razing (float!) | `BuildData::hits` `0x0062E740` | `build_hits` |
-| Training/production queue tick | `Build::do_queue` `0x0061E410` | `queue_step`, `QueueKind` |
+| Training/production queue tick | `Build::do_queue` `0x0061E410` | `queue_step`, `QueueKind`, `execute_local_queue_slot` |
 | `JOB_EXTRA_TIME` ramp + 3× cap | `ObjectData::train_time` `0x006508C0` | `train_time_ramp` |
 | Age penalty + difficulty scale | same, tail | `train_time_age_penalty`, `train_time_finalize` |
 | SUPPORT × PROGRESSION cost ramp | `TypeData::get_cost` `0x00664090` | `ramp_cost`, `progression_ramp_count` |
@@ -448,11 +448,14 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
    multiply/divide with a truncating cast. This is a genuine exception to README-LLM's "the
    sim is INTEGERS" and belongs on the same list as `LeaderData::anti_att`,
    `LeaderData::plunder_scale` and `Unit::move_step`. Reproduced literally in `build_hits`.
-5. **Multi-slot production.** `Build::do_queue` recurses into `do_queue(slot+1)` for types
+5. **Multi-slot production.** The local single-slot progress -> `finished` -> completion
+   `unqueue` transaction is now executable as `execute_local_queue_slot`, including the
+   stale allocated tail and paid unit-repeat boundary. `Build::do_queue` still recurses
+   into `do_queue(slot+1)` for types
    satisfying `is(0x1B3)`, and `BuildData::get_queue` remaps slots past `queued` onto a
    *different building* (`FUN_006DB6C0`, apparently a per-player primary/capital). Neither
-   is ported; both are type-tree/leader lookups. This is the mechanism behind buildings that
-   train several things at once and needs its own pass.
+   routing decision is ported; both are type-tree/leader lookups. This is the mechanism
+   behind buildings that train several things at once and needs its own pass.
 6. **`Object::must_walk` `0x00647930`** is an input to the walk. Getting it wrong changes
    which windows are hashed, so it must be settled by whoever owns `Object`.
 
