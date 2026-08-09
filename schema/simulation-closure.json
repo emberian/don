@@ -1,0 +1,2484 @@
+{
+  "schema": "don.simulation-closure.v1",
+  "generated_by": "tools/simulation-closure.py",
+  "ground_truth": "compiled retail-addressed inventories plus schema/replay-validation.json",
+  "definition": "complete means recovered, implemented, wired into the real path, and evidenced; partial ports remain red",
+  "ready": false,
+  "red": 196,
+  "summary": {
+    "tick": {
+      "total": 29,
+      "complete": 18,
+      "red": 11
+    },
+    "orders": {
+      "total": 28,
+      "complete": 7,
+      "red": 21
+    },
+    "group_actions": {
+      "total": 42,
+      "complete": 0,
+      "red": 42
+    },
+    "opcodes": {
+      "total": 82,
+      "complete": 2,
+      "red": 80
+    },
+    "checksums": {
+      "total": 15,
+      "complete": 1,
+      "red": 14
+    },
+    "product_blockers": {
+      "total": 19,
+      "complete": 0,
+      "red": 19
+    },
+    "global_stages": {
+      "total": 9,
+      "complete": 0,
+      "red": 9
+    }
+  },
+  "domains": {
+    "tick": [
+      {
+        "id": 0,
+        "name": "AutoSave::restore",
+        "retail_va": "0x005A20C0",
+        "source": "autosave.cpp:115",
+        "status": "out_of_scope",
+        "note": "only if Game+0x821 & 0x20",
+        "complete": true
+      },
+      {
+        "id": 1,
+        "name": "GameLog::begin_frame",
+        "retail_va": "0x00932A70",
+        "source": "gamelog.cpp:333",
+        "status": "out_of_scope",
+        "note": "desync-log frame marker",
+        "complete": true
+      },
+      {
+        "id": 2,
+        "name": "Random::get (artificial lag)",
+        "retail_va": "0x00A39D70",
+        "source": "random.cpp:28",
+        "status": "out_of_scope",
+        "note": "debug artificial-lag only, gated on Game+0x9E0; NOT a sim draw",
+        "complete": true
+      },
+      {
+        "id": 3,
+        "name": "CommandManager::issue_player_speed",
+        "retail_va": "0x00943100",
+        "source": "commandmanager.cpp:119",
+        "status": "out_of_scope",
+        "note": "every 8 frames, phase-offset per player",
+        "complete": true
+      },
+      {
+        "id": 4,
+        "name": "RunTimeEnv::run_script",
+        "retail_va": "0x0043D0E0",
+        "source": "runtimeenv.h:113",
+        "status": "stub",
+        "note": "scenario/trigger script step, called twice",
+        "complete": false
+      },
+      {
+        "id": 5,
+        "name": "ConquestGame::place_reinforcements",
+        "retail_va": "0x00798880",
+        "source": "conquestgame.cpp:6202",
+        "status": "out_of_scope",
+        "note": "Conquer-the-World only",
+        "complete": true
+      },
+      {
+        "id": 6,
+        "name": "TutorialPromptWin::exec",
+        "retail_va": "0x007C2810",
+        "source": "tutorialpromptwin.cpp:14",
+        "status": "out_of_scope",
+        "note": "tutorial only",
+        "complete": true
+      },
+      {
+        "id": 7,
+        "name": "SteamLeaderboards::UploadScore",
+        "retail_va": "0x00A36190",
+        "source": "steamleaderboards.cpp:129",
+        "status": "out_of_scope",
+        "note": "",
+        "complete": true
+      },
+      {
+        "id": 8,
+        "name": "Leaders::process_all",
+        "retail_va": "0x006ED2A0",
+        "source": "leaders.cpp:28778",
+        "status": "stub",
+        "note": "per-player economy: gather, calc_wall_stats, calc_unit_stats, process_elimination, process_taunt",
+        "complete": false
+      },
+      {
+        "id": 9,
+        "name": "NetDaemon::process_all",
+        "retail_va": "0x00951300",
+        "source": "netdaemon.cpp:34",
+        "status": "out_of_scope",
+        "note": "socket pump; retail calls it 5x inside one tick",
+        "complete": true
+      },
+      {
+        "id": 10,
+        "name": "AI diplomacy chat",
+        "retail_va": null,
+        "source": "leaders.cpp",
+        "status": "out_of_scope",
+        "note": "Leader::set_diplo -> chat_to_local",
+        "complete": true
+      },
+      {
+        "id": 11,
+        "name": "Leaders::strategy_all",
+        "retail_va": "0x006ED430",
+        "source": "leaders.cpp:28747",
+        "status": "stub",
+        "note": "check_explore, plan_strategy, compute_score, diplomacy (20,348 B), check_victory",
+        "complete": false
+      },
+      {
+        "id": 12,
+        "name": "GameDaemon::process_all",
+        "retail_va": "0x00732700",
+        "source": "gamedaemon.cpp:1403",
+        "status": "stub",
+        "note": "victory, danger map, fog update_all_seen, markets, borders, coll blocks, Groups::process",
+        "complete": false
+      },
+      {
+        "id": 13,
+        "name": "Armies::process_all",
+        "retail_va": "0x006F3B00",
+        "source": "armies.cpp:695",
+        "status": "stub",
+        "note": "army aggregation",
+        "complete": false
+      },
+      {
+        "id": 14,
+        "name": "Objects::process_all",
+        "retail_va": "0x0065DCE0",
+        "source": "objects.cpp:5287",
+        "status": "implemented",
+        "note": "owner-slot rotation (frame+i)%10 plus the 2000/3000 bands; see crate::objects",
+        "complete": true
+      },
+      {
+        "id": 15,
+        "name": "Objects::inc_time",
+        "retail_va": "0x0065DB70",
+        "source": "objects.cpp:5434",
+        "status": "stub",
+        "note": "animation/time advance for all objects",
+        "complete": false
+      },
+      {
+        "id": 16,
+        "name": "GraphicEvents::process",
+        "retail_va": "0x008E50A0",
+        "source": "graphicevent.cpp:434",
+        "status": "out_of_scope",
+        "note": "FX event queue",
+        "complete": true
+      },
+      {
+        "id": 17,
+        "name": "Leaders::end_process_all",
+        "retail_va": "0x006ED070",
+        "source": "leaders.cpp:28794",
+        "status": "stub",
+        "note": "post-pass; emits player feedback messages",
+        "complete": false
+      },
+      {
+        "id": 18,
+        "name": "Achieve::capture_data",
+        "retail_va": "0x007AF980",
+        "source": "achieve.cpp:244",
+        "status": "out_of_scope",
+        "note": "achievements",
+        "complete": true
+      },
+      {
+        "id": 19,
+        "name": "Leader::process_event_frame",
+        "retail_va": "0x006EC180",
+        "source": "leaders.cpp:28958",
+        "status": "stub",
+        "note": "loop over 8 leaders, stride 0x6EEC from 0x00E3A390",
+        "complete": false
+      },
+      {
+        "id": 20,
+        "name": "Game::frame++",
+        "retail_va": "0x005924BF",
+        "source": "game.cpp",
+        "status": "implemented",
+        "note": "THE frame counter increments HERE, after Objects::process_all -- so the rotation uses the pre-increment frame",
+        "complete": true
+      },
+      {
+        "id": 21,
+        "name": "OrdersMemManager::cycle",
+        "retail_va": "0x00730E20",
+        "source": "ordmemmgr.cpp:43",
+        "status": "out_of_scope",
+        "note": "flips 28 SafeRecycler pools; freed orders stay readable until this runs",
+        "complete": true
+      },
+      {
+        "id": 22,
+        "name": "Roads::scan_and_kill_stray_roads",
+        "retail_va": "0x008956A0",
+        "source": "roads.cpp:3647",
+        "status": "stub",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 23,
+        "name": "frame % 15 -> Game::seconds++",
+        "retail_va": "0x005924CF",
+        "source": "game.cpp",
+        "status": "implemented",
+        "note": "15 sim frames is one game second, exactly",
+        "complete": true
+      },
+      {
+        "id": 24,
+        "name": "TurnControl::check_cannon_time",
+        "retail_va": "0x009579E0",
+        "source": "turncontrol.cpp:116",
+        "status": "stub",
+        "note": "no-rush / countdown timer",
+        "complete": false
+      },
+      {
+        "id": 25,
+        "name": "SaveGame::save_game / LoadGame::load_game",
+        "retail_va": "0x005A8220",
+        "source": "save.cpp:1081",
+        "status": "out_of_scope",
+        "note": "autosave, conditional",
+        "complete": true
+      },
+      {
+        "id": 26,
+        "name": "GameLog::end_frame",
+        "retail_va": "0x009329D0",
+        "source": "gamelog.cpp:354",
+        "status": "out_of_scope",
+        "note": "",
+        "complete": true
+      },
+      {
+        "id": 27,
+        "name": "Game::process_end_game",
+        "retail_va": "0x00591CE0",
+        "source": "game.cpp:2182",
+        "status": "stub",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 28,
+        "name": "Scene::process_capture_sequence",
+        "retail_va": "0x008C13C0",
+        "source": "scene.cpp:137",
+        "status": "out_of_scope",
+        "note": "cinematic capture",
+        "complete": true
+      }
+    ],
+    "orders": [
+      {
+        "id": 0,
+        "name": "NONE",
+        "retail_va": null,
+        "symbol": "virtual [unit+0x184] (do_idle)",
+        "status": "implemented",
+        "note": "no order: the unit holds position",
+        "complete": true
+      },
+      {
+        "id": 1,
+        "name": "MOVE_TO",
+        "retail_va": "0x005F7B30",
+        "symbol": "Unit::do_move",
+        "status": "implemented",
+        "note": "unit.cpp:15757, the locomotion funnel",
+        "complete": true
+      },
+      {
+        "id": 2,
+        "name": "ATTACK_TO",
+        "retail_va": "0x005F2320",
+        "symbol": "Unit::do_attack_to",
+        "status": "unimplemented",
+        "note": "calls through to do_move after target selection",
+        "complete": false
+      },
+      {
+        "id": 3,
+        "name": "EXPLORE_TO",
+        "retail_va": "0x005F24A0",
+        "symbol": "Unit::do_explore_to",
+        "status": "unimplemented",
+        "note": "calls through to do_move",
+        "complete": false
+      },
+      {
+        "id": 4,
+        "name": "FLEE_TO",
+        "retail_va": "0x005F7B30",
+        "symbol": "Unit::do_move",
+        "status": "implemented",
+        "note": "SAME ARM as MOVE_TO [measured]",
+        "complete": true
+      },
+      {
+        "id": 5,
+        "name": "PATROL",
+        "retail_va": null,
+        "symbol": "(default arm)",
+        "status": "faithfully_empty",
+        "note": "OrderIndex::PATROL falls to the default arm and does nothing; live patrols are GROUP_PATROL",
+        "complete": true
+      },
+      {
+        "id": 6,
+        "name": "BUILD_AT",
+        "retail_va": "0x005EEBF0",
+        "symbol": "Unit::do_build",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 7,
+        "name": "GATHER",
+        "retail_va": "0x005EF2A0",
+        "symbol": "Unit::do_gather",
+        "status": "unimplemented",
+        "note": "economy lane owns the gather rates",
+        "complete": false
+      },
+      {
+        "id": 8,
+        "name": "BOARD_SHIP",
+        "retail_va": "0x005ED1F0",
+        "symbol": "Unit::do_board",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 9,
+        "name": "AWAIT_BOARD",
+        "retail_va": "0x005ED040",
+        "symbol": "Unit::do_await_board",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 10,
+        "name": "ATTACK",
+        "retail_va": "0x005F1B80",
+        "symbol": "Unit::do_attack",
+        "status": "implemented",
+        "note": "unit.cpp:20156; range/recharge gate is ours, the damage arithmetic is the derived pipeline",
+        "complete": true
+      },
+      {
+        "id": 11,
+        "name": "FOLLOW",
+        "retail_va": "0x005E65D0",
+        "symbol": "Unit::do_follow",
+        "status": "unimplemented",
+        "note": "calls through to do_move",
+        "complete": false
+      },
+      {
+        "id": 12,
+        "name": "GUARD",
+        "retail_va": "0x005E5C70",
+        "symbol": "Unit::do_guard",
+        "status": "unimplemented",
+        "note": "calls through to do_move",
+        "complete": false
+      },
+      {
+        "id": 13,
+        "name": "REPAIR",
+        "retail_va": "0x005EE420",
+        "symbol": "Unit::do_repair",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 14,
+        "name": "CAST_SPELL",
+        "retail_va": "0x005EBFE0",
+        "symbol": "Unit::do_cast",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 15,
+        "name": "TRADE_ROUTE",
+        "retail_va": "0x005ED270",
+        "symbol": "Unit::do_trade",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 16,
+        "name": "STRAFE",
+        "retail_va": "0x005EAB00",
+        "symbol": "Unit::do_strafe",
+        "status": "unimplemented",
+        "note": "aircraft",
+        "complete": false
+      },
+      {
+        "id": 17,
+        "name": "AIR_PATROL",
+        "retail_va": "0x005EA620",
+        "symbol": "Unit::do_air_patrol",
+        "status": "implemented",
+        "note": "dynamic waypoints, air-physics boundary, 16/32-frame scans and STRAFE insertion",
+        "complete": true
+      },
+      {
+        "id": 18,
+        "name": "CHANGE_FORM",
+        "retail_va": "0x005E8670",
+        "symbol": "Unit::do_form_change",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 19,
+        "name": "GROUP_MOVE",
+        "retail_va": "0x005E79A0",
+        "symbol": "Unit::do_group_move",
+        "status": "unimplemented",
+        "note": "calls through to do_move",
+        "complete": false
+      },
+      {
+        "id": 20,
+        "name": "GROUP_ATTACK",
+        "retail_va": "0x005E75A0",
+        "symbol": "Unit::do_group_attack",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 21,
+        "name": "GROUP_ATTACK_TO",
+        "retail_va": "0x005E74E0",
+        "symbol": "Unit::do_group_attack_to",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 22,
+        "name": "GROUP_PATROL",
+        "retail_va": "0x005F1910",
+        "symbol": "Unit::do_patrol",
+        "status": "implemented",
+        "note": "the live ground patrol arm; inserts ATTACK_TO or delegates Group::action_move_to",
+        "complete": true
+      },
+      {
+        "id": 23,
+        "name": "ATTACK_GROUND",
+        "retail_va": "0x005F1410",
+        "symbol": "Unit::do_attack_ground",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 24,
+        "name": "AIR_ATTACK_GROUND",
+        "retail_va": "0x005EA420",
+        "symbol": "Unit::do_air_attack_ground",
+        "status": "unimplemented",
+        "note": "aircraft",
+        "complete": false
+      },
+      {
+        "id": 25,
+        "name": "SPECIAL_ANIM",
+        "retail_va": "0x005E5880",
+        "symbol": "Unit::do_spec_anim",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 26,
+        "name": "GARRISON",
+        "retail_va": "0x005E6B80",
+        "symbol": "Unit::do_garrison",
+        "status": "unimplemented",
+        "note": "",
+        "complete": false
+      },
+      {
+        "id": 27,
+        "name": "THINK",
+        "retail_va": "0x005E5BF0",
+        "symbol": "Unit::do_think_order",
+        "status": "unimplemented",
+        "note": "unit AI entry",
+        "complete": false
+      }
+    ],
+    "group_actions": [
+      {
+        "name": "hotkey",
+        "retail_va": "0x006fa7a0",
+        "retail_size": 64,
+        "call_sites": 2,
+        "installs": [],
+        "delegates": [],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "recall",
+        "retail_va": "0x006fa7e0",
+        "retail_size": 1373,
+        "call_sites": 2,
+        "installs": [
+          "STRAFE"
+        ],
+        "delegates": [
+          "return"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "return",
+        "retail_va": "0x006fad40",
+        "retail_size": 1307,
+        "call_sites": 2,
+        "installs": [
+          "STRAFE"
+        ],
+        "delegates": [],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "flight",
+        "retail_va": "0x006fb260",
+        "retail_size": 3398,
+        "call_sites": 6,
+        "installs": [
+          "STRAFE"
+        ],
+        "delegates": [
+          "attack",
+          "guard",
+          "launch_flight"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "launch_flight",
+        "retail_va": "0x006fbfb0",
+        "retail_size": 2544,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [
+          "flight"
+        ],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "buildmask",
+        "retail_va": "0x006fc9a0",
+        "retail_size": 487,
+        "call_sites": 2,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "unitmask",
+        "retail_va": "0x006fcb90",
+        "retail_size": 404,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "guard",
+        "retail_va": "0x006fcd30",
+        "retail_size": 2012,
+        "call_sites": 8,
+        "installs": [
+          "GUARD"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "follow",
+        "retail_va": "0x006fd510",
+        "retail_size": 645,
+        "call_sites": 4,
+        "installs": [
+          "FOLLOW"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "stop_spell",
+        "retail_va": "0x006fd7a0",
+        "retail_size": 480,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "alarm_peasant",
+        "retail_va": "0x006fd980",
+        "retail_size": 550,
+        "call_sites": 1,
+        "installs": [
+          "GARRISON"
+        ],
+        "delegates": [],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "queue_up",
+        "retail_va": "0x006fdbb0",
+        "retail_size": 1516,
+        "call_sites": 6,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "spell",
+        "retail_va": "0x006fe1a0",
+        "retail_size": 4100,
+        "call_sites": 2,
+        "installs": [
+          "CAST_SPELL"
+        ],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "gather_point",
+        "retail_va": "0x006ff1b0",
+        "retail_size": 3668,
+        "call_sites": 2,
+        "installs": [],
+        "delegates": [
+          "flight"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "board_ship",
+        "retail_va": "0x00700010",
+        "retail_size": 1149,
+        "call_sites": 3,
+        "installs": [
+          "BOARD_SHIP",
+          "AWAIT_BOARD"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "garrison",
+        "retail_va": "0x00700490",
+        "retail_size": 1791,
+        "call_sites": 7,
+        "installs": [
+          "GARRISON"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "gather",
+        "retail_va": "0x00700b90",
+        "retail_size": 3052,
+        "call_sites": 3,
+        "installs": [
+          "GATHER",
+          "CAST_SPELL"
+        ],
+        "delegates": [
+          "move_near"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "city_gather",
+        "retail_va": "0x00701780",
+        "retail_size": 1333,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "trade",
+        "retail_va": "0x00701cc0",
+        "retail_size": 1022,
+        "call_sites": 3,
+        "installs": [
+          "TRADE_ROUTE"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "repair",
+        "retail_va": "0x007020c0",
+        "retail_size": 999,
+        "call_sites": 3,
+        "installs": [
+          "REPAIR",
+          "CAST_SPELL"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "set_transport",
+        "retail_va": "0x007024b0",
+        "retail_size": 357,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "transport",
+        "retail_va": "0x00702620",
+        "retail_size": 932,
+        "call_sites": 2,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "air_patrol",
+        "retail_va": "0x007029d0",
+        "retail_size": 1763,
+        "call_sites": 5,
+        "installs": [
+          "AIR_PATROL"
+        ],
+        "delegates": [
+          "move_to"
+        ],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "patrol",
+        "retail_va": "0x007030c0",
+        "retail_size": 1215,
+        "call_sites": 5,
+        "installs": [
+          "MOVE_TO",
+          "ATTACK_TO",
+          "EXPLORE_TO",
+          "FLEE_TO",
+          "GROUP_PATROL"
+        ],
+        "delegates": [
+          "air_patrol"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "launch_patrol",
+        "retail_va": "0x00703580",
+        "retail_size": 2043,
+        "call_sites": 1,
+        "installs": [
+          "AIR_PATROL"
+        ],
+        "delegates": [],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "air_attack_ground",
+        "retail_va": "0x00703d80",
+        "retail_size": 1939,
+        "call_sites": 2,
+        "installs": [
+          "AIR_ATTACK_GROUND"
+        ],
+        "delegates": [],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "attack_ground",
+        "retail_va": "0x00704520",
+        "retail_size": 1133,
+        "call_sites": 3,
+        "installs": [
+          "ATTACK_GROUND"
+        ],
+        "delegates": [
+          "air_attack_ground"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "move_near",
+        "retail_va": "0x00704990",
+        "retail_size": 9205,
+        "call_sites": 23,
+        "installs": [
+          "MOVE_TO",
+          "ATTACK_TO",
+          "EXPLORE_TO",
+          "FLEE_TO",
+          "GROUP_MOVE",
+          "GROUP_ATTACK_TO",
+          "GARRISON"
+        ],
+        "delegates": [
+          "halt"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "siege_attack",
+        "retail_va": "0x00706ff0",
+        "retail_size": 549,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [
+          "attack",
+          "guard"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "form",
+        "retail_va": "0x00707220",
+        "retail_size": 746,
+        "call_sites": 6,
+        "installs": [],
+        "delegates": [
+          "halt",
+          "move_to"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "build",
+        "retail_va": "0x00707510",
+        "retail_size": 1256,
+        "call_sites": 1,
+        "installs": [],
+        "delegates": [
+          "swarm_around"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "halt",
+        "retail_va": "0x0070d0c0",
+        "retail_size": 685,
+        "call_sites": 14,
+        "installs": [],
+        "delegates": [],
+        "status": "state_partial",
+        "complete": false
+      },
+      {
+        "name": "stance",
+        "retail_va": "0x0070d440",
+        "retail_size": 928,
+        "call_sites": 8,
+        "installs": [],
+        "delegates": [],
+        "status": "state_partial",
+        "complete": false
+      },
+      {
+        "name": "siege_attack_to",
+        "retail_va": "0x0070d830",
+        "retail_size": 2037,
+        "call_sites": 2,
+        "installs": [],
+        "delegates": [
+          "guard",
+          "move_to"
+        ],
+        "status": "not_on_wire",
+        "complete": false
+      },
+      {
+        "name": "disband",
+        "retail_va": "0x0070e260",
+        "retail_size": 693,
+        "call_sites": 3,
+        "installs": [],
+        "delegates": [],
+        "status": "state_partial",
+        "complete": false
+      },
+      {
+        "name": "alarm",
+        "retail_va": "0x0070ec30",
+        "retail_size": 3169,
+        "call_sites": 4,
+        "installs": [],
+        "delegates": [
+          "alarm_peasant",
+          "garrison"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "move_to",
+        "retail_va": "0x0070fba0",
+        "retail_size": 49,
+        "call_sites": 34,
+        "installs": [],
+        "delegates": [
+          "move_near"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "swarm_around",
+        "retail_va": "0x0070fbe0",
+        "retail_size": 3044,
+        "call_sites": 13,
+        "installs": [
+          "MOVE_TO",
+          "ATTACK_TO",
+          "EXPLORE_TO",
+          "FLEE_TO",
+          "BUILD_AT",
+          "REPAIR",
+          "CAST_SPELL"
+        ],
+        "delegates": [
+          "halt",
+          "move_to"
+        ],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "eject_all",
+        "retail_va": "0x00710b40",
+        "retail_size": 766,
+        "call_sites": 3,
+        "installs": [],
+        "delegates": [],
+        "status": "unimplemented",
+        "complete": false
+      },
+      {
+        "name": "scramble",
+        "retail_va": "0x007111c0",
+        "retail_size": 894,
+        "call_sites": 2,
+        "installs": [
+          "AIR_PATROL"
+        ],
+        "delegates": [],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "attack",
+        "retail_va": "0x00712490",
+        "retail_size": 3833,
+        "call_sites": 16,
+        "installs": [
+          "MOVE_TO",
+          "ATTACK_TO",
+          "EXPLORE_TO",
+          "FLEE_TO",
+          "ATTACK",
+          "CAST_SPELL"
+        ],
+        "delegates": [
+          "halt",
+          "move_to"
+        ],
+        "status": "orders_partial",
+        "complete": false
+      },
+      {
+        "name": "begin",
+        "retail_va": "0x00714100",
+        "retail_size": 8,
+        "call_sites": 0,
+        "installs": [],
+        "delegates": [],
+        "status": "not_on_wire",
+        "complete": false
+      }
+    ],
+    "opcodes": [
+      {
+        "op": 0,
+        "name": "GroupCommand",
+        "method": "process_group",
+        "retail_va": "0x0094a0c0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "variable",
+        "class": "sim",
+        "bridge_status": "selection_partial",
+        "complete": false
+      },
+      {
+        "op": 1,
+        "name": "BeginCommand",
+        "method": "process_begin",
+        "retail_va": "0x00949fd0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 2,
+        "name": "StanceCommand",
+        "method": "process_stance",
+        "retail_va": "0x00949ed0",
+        "receiver": "group",
+        "action": "stance",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "state_partial",
+        "complete": false
+      },
+      {
+        "op": 3,
+        "name": "FormCommand",
+        "method": "process_form",
+        "retail_va": "0x00949d90",
+        "receiver": "group",
+        "action": "form",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 4,
+        "name": "AttackCommand",
+        "method": "process_attack",
+        "retail_va": "0x00949c30",
+        "receiver": "group",
+        "action": "attack",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 5,
+        "name": "SiegeAttackCommand",
+        "method": "process_siege_attack",
+        "retail_va": "0x00949ae0",
+        "receiver": "group",
+        "action": "siege_attack",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 6,
+        "name": "SwarmAroundCommand",
+        "method": "process_swarm_around",
+        "retail_va": "0x00949970",
+        "receiver": "group",
+        "action": "swarm_around",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 7,
+        "name": "MoveToCommand",
+        "method": "process_move_to",
+        "retail_va": "0x009497c0",
+        "receiver": "group",
+        "action": "move_to",
+        "wire_bytes": "22",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 8,
+        "name": "MoveNearCommand",
+        "method": "process_move_near",
+        "retail_va": "0x009495c0",
+        "receiver": "group",
+        "action": "move_near",
+        "wire_bytes": "26",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 9,
+        "name": "AttackGroundCommand",
+        "method": "process_attack_ground",
+        "retail_va": "0x009494a0",
+        "receiver": "group",
+        "action": "attack_ground",
+        "wire_bytes": "10",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 10,
+        "name": "PatrolCommand",
+        "method": "process_patrol",
+        "retail_va": "0x00949380",
+        "receiver": "group",
+        "action": "patrol",
+        "wire_bytes": "10",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 11,
+        "name": "LaunchPatrolCommand",
+        "method": "process_launch_patrol",
+        "retail_va": "0x00949230",
+        "receiver": "group",
+        "action": "launch_patrol",
+        "wire_bytes": "25",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 12,
+        "name": "HaltCommand",
+        "method": "process_halt",
+        "retail_va": "0x00949140",
+        "receiver": "group",
+        "action": "halt",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "state_partial",
+        "complete": false
+      },
+      {
+        "op": 13,
+        "name": "TransportCommand",
+        "method": "process_transport",
+        "retail_va": "0x00949050",
+        "receiver": "group",
+        "action": "transport",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 14,
+        "name": "SetTransportCommand",
+        "method": "process_set_transport",
+        "retail_va": "0x00948f60",
+        "receiver": "group",
+        "action": "set_transport",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 15,
+        "name": "BoardShipCommand",
+        "method": "process_board_ship",
+        "retail_va": "0x00948e00",
+        "receiver": "group",
+        "action": "board_ship",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 16,
+        "name": "RepairCommand",
+        "method": "process_repair",
+        "retail_va": "0x00948cb0",
+        "receiver": "group",
+        "action": "repair",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 17,
+        "name": "TradeCommand",
+        "method": "process_trade",
+        "retail_va": "0x00948b20",
+        "receiver": "group",
+        "action": "trade",
+        "wire_bytes": "21",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 18,
+        "name": "CityGatherCommand",
+        "method": "process_city_gather",
+        "retail_va": "0x00948a10",
+        "receiver": "group",
+        "action": "city_gather",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 19,
+        "name": "GatherCommand",
+        "method": "process_gather",
+        "retail_va": "0x009488b0",
+        "receiver": "group",
+        "action": "gather",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 20,
+        "name": "GarrisonCommand",
+        "method": "process_garrison",
+        "retail_va": "0x00948760",
+        "receiver": "group",
+        "action": "garrison",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 21,
+        "name": "DisbandCommand",
+        "method": "process_disband",
+        "retail_va": "0x00948660",
+        "receiver": "group",
+        "action": "disband",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "state_partial",
+        "complete": false
+      },
+      {
+        "op": 22,
+        "name": "GatherPointCommand",
+        "method": "process_gather_point",
+        "retail_va": "0x00948510",
+        "receiver": "group",
+        "action": "gather_point",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 23,
+        "name": "SpellCommand",
+        "method": "process_spell",
+        "retail_va": "0x00948340",
+        "receiver": "group",
+        "action": "spell",
+        "wire_bytes": "21",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 24,
+        "name": "QueueUpCommand",
+        "method": "process_queue_up",
+        "retail_va": "0x00948230",
+        "receiver": "group",
+        "action": "queue_up",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 25,
+        "name": "BuildCommand",
+        "method": "process_build",
+        "retail_va": "0x00948110",
+        "receiver": "group",
+        "action": "build",
+        "wire_bytes": "25",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 26,
+        "name": "EjectAllCommand",
+        "method": "process_eject_all",
+        "retail_va": "0x00947fe0",
+        "receiver": "group",
+        "action": "eject_all",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 27,
+        "name": "AlarmCommand",
+        "method": "process_alarm",
+        "retail_va": "0x00947ef0",
+        "receiver": "group",
+        "action": "alarm",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 28,
+        "name": "FlightCommand",
+        "method": "process_flight",
+        "retail_va": "0x00947db0",
+        "receiver": "group",
+        "action": "flight",
+        "wire_bytes": "25",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 29,
+        "name": "StopSpellCommand",
+        "method": "process_stop_spell",
+        "retail_va": "0x00947cc0",
+        "receiver": "group",
+        "action": "stop_spell",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 30,
+        "name": "FollowCommand",
+        "method": "process_follow",
+        "retail_va": "0x009479c0",
+        "receiver": "group",
+        "action": "follow",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 31,
+        "name": "GuardCommand",
+        "method": "process_guard",
+        "retail_va": "0x009478a0",
+        "receiver": "group",
+        "action": "guard",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 32,
+        "name": "UnitmaskCommand",
+        "method": "process_unitmask",
+        "retail_va": "0x00947790",
+        "receiver": "group",
+        "action": "unitmask",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 33,
+        "name": "BuildmaskCommand",
+        "method": "process_buildmask",
+        "retail_va": "0x00947680",
+        "receiver": "group",
+        "action": "buildmask",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 34,
+        "name": "HotKeyCommand",
+        "method": "process_hotkey",
+        "retail_va": "0x009474d0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "25",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 35,
+        "name": "RecallCommand",
+        "method": "process_recall",
+        "retail_va": "0x00947bd0",
+        "receiver": "group",
+        "action": "recall",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "unimplemented",
+        "complete": false
+      },
+      {
+        "op": 36,
+        "name": "ScrambleCommand",
+        "method": "process_scramble",
+        "retail_va": "0x00947ae0",
+        "receiver": "group",
+        "action": "scramble",
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "orders_partial",
+        "complete": false
+      },
+      {
+        "op": 37,
+        "name": "TreatyCommand",
+        "method": "process_treaty",
+        "retail_va": "0x009473c0",
+        "receiver": "leader",
+        "action": "treaty",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 38,
+        "name": "DeclareCommand",
+        "method": "process_declare",
+        "retail_va": "0x009472b0",
+        "receiver": "leader",
+        "action": "declare",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 39,
+        "name": "ClearTributesCommand",
+        "method": "process_clear_tributes",
+        "retail_va": "0x009471b0",
+        "receiver": "leader",
+        "action": "clear_tributes",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 40,
+        "name": "ClearAllCommand",
+        "method": "process_clear_all",
+        "retail_va": "0x009470b0",
+        "receiver": "leader",
+        "action": "clear_all",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 41,
+        "name": "AcceptCommand",
+        "method": "process_accept",
+        "retail_va": "0x00946fb0",
+        "receiver": "leader",
+        "action": "respond",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 42,
+        "name": "RejectCommand",
+        "method": "process_reject",
+        "retail_va": "0x00946e90",
+        "receiver": "leader",
+        "action": "respond",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 43,
+        "name": "TributeCommand",
+        "method": "process_tribute",
+        "retail_va": "0x00946d70",
+        "receiver": "leader",
+        "action": "offer",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 44,
+        "name": "DemandTributeCommand",
+        "method": "process_demand_tribute",
+        "retail_va": "0x00946c50",
+        "receiver": "leader",
+        "action": "offer",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 45,
+        "name": "ProposeAttackCommand",
+        "method": "process_propose_attack",
+        "retail_va": "0x00946b30",
+        "receiver": "leader",
+        "action": "propose_attack",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 46,
+        "name": "BuyCommand",
+        "method": "process_buy",
+        "retail_va": "0x00946a20",
+        "receiver": "leader",
+        "action": "buy",
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 47,
+        "name": "SellCommand",
+        "method": "process_sell",
+        "retail_va": "0x009468a0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "13",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 48,
+        "name": "UnqueueCommand",
+        "method": "process_unqueue",
+        "retail_va": "0x009466f0",
+        "receiver": "unit",
+        "action": "unqueue",
+        "wire_bytes": "15",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 49,
+        "name": "ComeOutCommand",
+        "method": "process_come_out",
+        "retail_va": "0x009465d0",
+        "receiver": "unit",
+        "action": "come_out",
+        "wire_bytes": "11",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 50,
+        "name": "PingCommand",
+        "method": "process_ping",
+        "retail_va": "0x009453f0",
+        "receiver": "leader",
+        "action": "ping",
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 51,
+        "name": "SplineCommand",
+        "method": "process_spline",
+        "retail_va": "0x00945140",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "variable",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 52,
+        "name": "SpeedSetCommand",
+        "method": "process_speed_set",
+        "retail_va": "0x00946380",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 53,
+        "name": "SpeedUpCommand",
+        "method": "process_speed_up",
+        "retail_va": "0x009461a0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 54,
+        "name": "SpeedDownCommand",
+        "method": "process_speed_down",
+        "retail_va": "0x00946290",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 55,
+        "name": "MPLogCommand",
+        "method": "process_mp_log",
+        "retail_va": "0x00946080",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 56,
+        "name": "CheckRandomCommand",
+        "method": "process_check_random",
+        "retail_va": "0x00946020",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 57,
+        "name": "CheckSumsCommand",
+        "method": "process_check_sums",
+        "retail_va": "0x009459d0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "65",
+        "class": "lockstep",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 58,
+        "name": "NextCheckSumCommand",
+        "method": "process_next_check_sum",
+        "retail_va": "0x00945e20",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "6",
+        "class": "lockstep",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 59,
+        "name": "CheatViewAllCommand",
+        "method": "process_cheat_view_all",
+        "retail_va": "0x009449b0",
+        "receiver": "game",
+        "action": "cheat_view_all",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 60,
+        "name": "CheatGiveTechsCommand",
+        "method": "process_cheat_give_techs",
+        "retail_va": "0x00945070",
+        "receiver": "game",
+        "action": "cheat_give_techs",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 61,
+        "name": "CheatZeroTechsCommand",
+        "method": "process_cheat_zero_techs",
+        "retail_va": "0x00944fa0",
+        "receiver": "game",
+        "action": "cheat_zero_techs",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 62,
+        "name": "CheatAISpeedIncreaseCommand",
+        "method": "process_cheat_ai_speed_increase",
+        "retail_va": "0x00944ec0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 63,
+        "name": "CheatAISpeedNormalCommand",
+        "method": "process_cheat_ai_speed_normal",
+        "retail_va": "0x00944df0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 64,
+        "name": "CheatAIToggleCommand",
+        "method": "process_cheat_ai_toggle",
+        "retail_va": "0x00944d20",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "1",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 65,
+        "name": "CheatIncreaseBucketsCommand",
+        "method": "process_cheat_increase_buckets",
+        "retail_va": "0x00944c50",
+        "receiver": "game",
+        "action": "cheat_increase_buckets",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 66,
+        "name": "CheatZeroBucketsCommand",
+        "method": "process_cheat_zero_buckets",
+        "retail_va": "0x00944b80",
+        "receiver": "game",
+        "action": "cheat_zero_buckets",
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 67,
+        "name": "CheatInitUnitCommand",
+        "method": "process_cheat_init_unit",
+        "retail_va": "0x00944a80",
+        "receiver": "game",
+        "action": "cheat_init_unit",
+        "wire_bytes": "17",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 68,
+        "name": "ChatCommand",
+        "method": "process_chat",
+        "retail_va": "0x009454f0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "variable",
+        "class": "presentation",
+        "bridge_status": "inert",
+        "complete": true
+      },
+      {
+        "op": 69,
+        "name": "ChatSetCommand",
+        "method": "process_chat_set",
+        "retail_va": "0x009458e0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 70,
+        "name": "ResignCommand",
+        "method": "process_resign",
+        "retail_va": "0x009438c0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "5",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 71,
+        "name": "QuitCommand",
+        "method": "process_quit",
+        "retail_va": "0x009439a0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "7",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 72,
+        "name": "CameraCommand",
+        "method": "process_camera",
+        "retail_va": "0x00943b00",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "10",
+        "class": "presentation",
+        "bridge_status": "inert",
+        "complete": true
+      },
+      {
+        "op": 73,
+        "name": "LeaderOptionsCommand",
+        "method": "process_leader_options",
+        "retail_va": "0x009441d0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "33",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 74,
+        "name": "TurnDataCommand",
+        "method": "process_turn_data",
+        "retail_va": "0x00943d20",
+        "receiver": "game",
+        "action": "cheat_view_all",
+        "wire_bytes": "11",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 75,
+        "name": "RenameCityCommand",
+        "method": "process_rename_city",
+        "retail_va": "0x00944090",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "53",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 76,
+        "name": "PauseCommand",
+        "method": "process_pause",
+        "retail_va": "0x00944160",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "2",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 77,
+        "name": "CannonTimeCommand",
+        "method": "process_cannon_time",
+        "retail_va": "0x009464f0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "2",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 78,
+        "name": "ConsoleCmdCommand",
+        "method": "process_console_cmd",
+        "retail_va": "0x00943f30",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "521",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 79,
+        "name": "PlayerSpeedCommand",
+        "method": "process_player_speed",
+        "retail_va": "0x00943730",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "9",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 80,
+        "name": "UngracefulPlayerDrop",
+        "method": "process_ungraceful_player_drop",
+        "retail_va": "0x00943ea0",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "3",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      },
+      {
+        "op": 81,
+        "name": "MarwanCommand",
+        "method": "process_marwan",
+        "retail_va": "0x00943660",
+        "receiver": "none",
+        "action": null,
+        "wire_bytes": "2",
+        "class": "sim",
+        "bridge_status": "inert",
+        "complete": false
+      }
+    ],
+    "checksums": [
+      {
+        "id": 0,
+        "name": "units",
+        "walker": "CheckSums::check_units",
+        "element_class": "Unit",
+        "producer": "sim_bridge",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 1,
+        "name": "builds",
+        "walker": "CheckSums::check_builds",
+        "element_class": "BuildData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 2,
+        "name": "walls",
+        "walker": "CheckSums::check_walls",
+        "element_class": "WallData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 222938,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 25442,
+        "complete": false
+      },
+      {
+        "id": 3,
+        "name": "ammo",
+        "walker": "CheckSums::check_ammo",
+        "element_class": "AmmoData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 106634,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 3696,
+        "complete": false
+      },
+      {
+        "id": 4,
+        "name": "deaths",
+        "walker": "CheckSums::check_deaths",
+        "element_class": "DeathObjData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 82943,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 5734,
+        "complete": false
+      },
+      {
+        "id": 5,
+        "name": "groups",
+        "walker": "CheckSums::check_groups",
+        "element_class": "Group",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 6,
+        "name": "guys",
+        "walker": "CheckSums::check_guys",
+        "element_class": "GuyData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 7,
+        "name": "leaders",
+        "walker": "LeaderData::walk_data (inlined 8x by check_all)",
+        "element_class": "LeaderData",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 8,
+        "name": "cities",
+        "walker": "CheckSums::check_cities",
+        "element_class": "City",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 9,
+        "name": "items",
+        "walker": "CheckSums::check_items",
+        "element_class": "Item",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 107882,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 10,
+        "name": "goods",
+        "walker": "CheckSums::check_goods",
+        "element_class": "Good",
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 11,
+        "name": "world",
+        "walker": "World::walk_data",
+        "element_class": "World",
+        "producer": "sim_bridge",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 222938,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 12,
+        "name": "rules",
+        "walker": "Game::walk_rules_data",
+        "element_class": "Constants",
+        "producer": "replay_initial_only",
+        "compares": 222938,
+        "matches": 222938,
+        "nontrivial_compares": 222938,
+        "best_survived_turns": 25442,
+        "complete": true
+      },
+      {
+        "id": 13,
+        "name": "scenario_data",
+        "walker": "ScenarioData::walk_data",
+        "element_class": null,
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      },
+      {
+        "id": 14,
+        "name": "script_run_time",
+        "walker": "RunTimeEnv::walk_data",
+        "element_class": null,
+        "producer": "absent",
+        "compares": 222938,
+        "matches": 0,
+        "nontrivial_compares": 0,
+        "best_survived_turns": 0,
+        "complete": false
+      }
+    ],
+    "product_blockers": [
+      {
+        "slug": "env-air-patrol-physics",
+        "title": "don-env lacks the authoritative AIR_PATROL airframe transaction",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::do_air_patrol 0x005EA620; Unit::do_air_physics 0x005E86D0; crates/don-env/src/state.rs::AirPatrolHost",
+        "complete": false
+      },
+      {
+        "slug": "env-air-patrol-unit-target-search",
+        "title": "don-env lacks AIR_PATROL's air/bomber target searches",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::do_air_patrol 0x005EA6EC; find_new_air_target; find_new_bomber_target; crates/don-env/src/state.rs::AirPatrolHost::find_unit_target",
+        "complete": false
+      },
+      {
+        "slug": "env-air-patrol-building-target-search",
+        "title": "don-env lacks AIR_PATROL's building spatial search",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::do_air_patrol 0x005EA84C; ObjectsData::find_building_at; crates/don-env/src/state.rs::AirPatrolHost::find_building_target",
+        "complete": false
+      },
+      {
+        "slug": "arena-construction-schedule-model",
+        "title": "Arena lacks retail construction state, identity and scheduler order",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::add_build_order 0x005E5210; Unit::do_build 0x005EEBF0; crates/don-sim/src/systems/construction.rs",
+        "complete": false
+      },
+      {
+        "slug": "arena-construction-placement-model",
+        "title": "Arena lacks the authoritative blocked-site transaction",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "BuildTypeData::blocked_site; BuildTypeData::blocked_location 0x006375B0; BuildTypeData::blocked_tcoord 0x00636DB0",
+        "complete": false
+      },
+      {
+        "slug": "arena-construction-lifecycle-model",
+        "title": "Arena lacks exact construction start, activation, rejection and completion",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Build::start; Build::activate; Object::disband; Unit::build_done 0x00603BF0",
+        "complete": false
+      },
+      {
+        "slug": "arena-construction-interruption-model",
+        "title": "Arena lacks exact construction death and cancellation transactions",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::do_build 0x005EEBF0; crates/don-sim/src/systems/construction.rs::interrupt_builder",
+        "complete": false
+      },
+      {
+        "slug": "arena-gather-capacity-model",
+        "title": "Arena lacks the authoritative gathering-capacity evaluator",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "BuildTypeData::calc_gather 0x00639E40; BuildTypeData::max_gatherers 0x0063C430",
+        "complete": false
+      },
+      {
+        "slug": "arena-gather-occupancy-model",
+        "title": "Arena lacks persistent retail gathering occupancy and order identity",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Build::add_gatherer 0x0062F640; Build::check_gatherers 0x0062F710; Build::remove_gatherer 0x0062F8D0",
+        "complete": false
+      },
+      {
+        "slug": "arena-gather-reservation-model",
+        "title": "Arena lacks the ordered gathering-terrain reservation lifecycle",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Build::find_gather_tiles 0x00623350; WorldData::is_gathered_from; Unit::do_non_flat_gather",
+        "complete": false
+      },
+      {
+        "slug": "arena-gather-payout-model",
+        "title": "Arena lacks the authoritative gathering-payout transaction",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "BuildTypeData::calc_gather 0x00639E40; Leader::do_gather; crates/don-sim/src/systems/gathering.rs",
+        "complete": false
+      },
+      {
+        "slug": "arena-target-acquisition-model",
+        "title": "Arena MODEL 4 has an incomplete retail target-acquisition host",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Object::find_auto_target 0x0064DDA0; Object::check_target building tail; crates/don-ai/src/arena/world.rs::ArenaTargetAdapter",
+        "complete": false
+      },
+      {
+        "slug": "arena-guy-turret-model",
+        "title": "Arena does not materialize graphics-turret Guys",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::fight 0x005FD4D0; Guy::init_real 0x005DB6B0; Guy::set_all_pivots 0x005D8BC0; don_sim::systems::fight::direct_land_volley_plan; don_sim::systems::graphics_turret",
+        "complete": false
+      },
+      {
+        "slug": "arena-water-model",
+        "title": "Arena MODEL 6a has no retail water terrain/pathing host",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "WorldData water fields and astar_path 0x00683770; crates/don-ai/src/arena/world.rs MODEL 6 declaration",
+        "complete": false
+      },
+      {
+        "slug": "arena-naval-model",
+        "title": "Arena MODEL 6b has no retail naval object/order/production host",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "crates/don-sim/src/systems/naval.rs; crates/don-ai/src/arena/world.rs MODEL 6 declaration",
+        "complete": false
+      },
+      {
+        "slug": "arena-air-model",
+        "title": "Arena MODEL 6c has no complete retail airframe host",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::do_air_physics; Ammo::init 0x0067BBF0; crates/don-ai/src/arena/retail_systems.rs",
+        "complete": false
+      },
+      {
+        "slug": "arena-diplomacy-model",
+        "title": "Arena MODEL 6d has no complete retail diplomacy host",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "LeaderData::get_diplo 0x006EBA50; Leader::set_diplo 0x006EC6A0; Leader::diplomacy 0x006BC950",
+        "complete": false
+      },
+      {
+        "slug": "arena-attrition-model",
+        "title": "Arena MODEL 6e does not execute retail attrition state/damage",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::process_attrition 0x005E11A0; Unit::suffer_attrition 0x005E1A10; UnitData::get_attrition 0x00608FD0",
+        "complete": false
+      },
+      {
+        "slug": "arena-supply-model",
+        "title": "Arena MODEL 6f does not execute retail supply queries/state",
+        "status": "KnownDrift",
+        "seam": null,
+        "retail_evidence": "Unit::process_supply 0x005E0560; Supplies::find_supply 0x0073ABA0",
+        "complete": false
+      }
+    ],
+    "global_stages": [
+      {
+        "slug": "initial_world",
+        "description": "deterministic map, starts, players, nations, teams, diplomacy",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "save_load",
+        "description": "complete save/load and resumed deterministic execution",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "scenario_runtime",
+        "description": "BHS/scenario execution wired into the retail tick",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "victory_endgame",
+        "description": "game modes, victory, defeat, scoring, and end-game transition",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "multiplayer_match",
+        "description": "owned-client setup, launch, lockstep turns, checksums, drop/rejoin",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "frontend_game_flow",
+        "description": "setup through completed match without retail UI",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "rl_complete_dynamics",
+        "description": "honest actions over complete shared game dynamics",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "ai_evaluation",
+        "description": "non-cheating full-game opponents and evaluation matrix",
+        "status": "required",
+        "complete": false
+      },
+      {
+        "slug": "content_release",
+        "description": "legal assets/content path, installer, packaging, release audit",
+        "status": "required",
+        "complete": false
+      }
+    ]
+  }
+}

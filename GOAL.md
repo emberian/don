@@ -40,6 +40,7 @@ Snapshot date: 2026-08-09. Generated records override prose if the tree advances
 ```sh
 cargo check --workspace
 cargo test --workspace --all-targets
+python3 tools/simulation-closure.py --check
 tools/oracle-regress.sh
 tools/replay-validate.sh
 tools/product-readiness.sh
@@ -49,6 +50,12 @@ tools/product-readiness.sh
 workspace test does not promote a fidelity tier; a green oracle case proves only its stated
 finite domain; replay agreement is substantive only when the corresponding channel walks
 non-empty reconstructed state.
+
+`simulation-closure.py` is the exhaustive navigation gate. It reads the compiled 29-step
+tick, 28 order arms, 42 group actions, 82 wire opcodes, 15 checksum channels, and scoped
+product blockers, then joins the replay scoreboard. Partial ports remain red. Work proceeds
+from this inventory in dependency order and uses retail Ghidra structure only after checking
+load-bearing control flow and values against the PDB/disassembly/oracle/live process.
 
 ## Active broad frontier
 

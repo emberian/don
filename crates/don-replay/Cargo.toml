@@ -15,3 +15,7 @@ don-sim = { path = "../don-sim" }
 [[bin]]
 name = "don-replay"
 path = "src/bin/don-replay.rs"
+
+[[bin]]
+name = "don-closure"
+path = "src/bin/don-closure.rs"
