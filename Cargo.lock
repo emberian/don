@@ -152,7 +152,26 @@ dependencies = [
 name = "don-ai"
 version = "0.1.0"
 dependencies = [
+ "don-env",
  "don-sim",
+]
+
+[[package]]
+name = "don-bhs"
+version = "0.1.0"
+
+[[package]]
+name = "don-bhs-cc"
+version = "0.1.0"
+dependencies = [
+ "don-bhs",
+]
+
+[[package]]
+name = "don-content"
+version = "0.1.0"
+dependencies = [
+ "don-rules",
 ]
 
 [[package]]

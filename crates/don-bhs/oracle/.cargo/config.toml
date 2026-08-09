@@ -1,0 +1,11 @@
+# The retail image is MSVC-compiled and guarantees only 4-byte stack alignment at a call
+# site. Rust/LLVM assume the i386 psABI's 16-byte alignment and will happily emit aligned
+# SSE stores in a shim that retail called. That misalignment raises #GP, which Linux
+# delivers as SIGSEGV with si_addr == 0 — a fault that reads exactly like a null
+# dereference in retail code and sent this lane looking in the wrong place once already.
+# `-stackrealign` makes every function we compile realign %esp on entry.
+[build]
+rustflags = ["-C", "llvm-args=-stackrealign"]
+
+[target.i686-unknown-linux-musl]
+rustflags = ["-C", "llvm-args=-stackrealign"]

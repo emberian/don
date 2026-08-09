@@ -1,0 +1,28 @@
+[package]
+name = "bhs-ops-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Differentially test don_bhs::ops against retail's own ScriptType::do_operator, under Linux/i686."
+
+# Its own workspace root: 32-bit-x86 only, so it must never join the repo workspace
+# (arm64 cannot build it). `crates/don-bhs/oracle/` belongs to the compiler-driving
+# lane; this crate re-uses its PE mapper and Win32 shim through `#[path]` includes and
+# never edits them.
+[workspace]
+
+[dependencies]
+don-pe = { path = "../../don-pe" }
+# The whole point: the comparison runs against the SHIPPED crate, not an inline copy
+# of its model. `don-bhs` has no dependencies, so it cross-builds to i686 cleanly.
+don-bhs = { path = ".." }
+libc = "0.2"
+
+[[bin]]
+name = "bhsops"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

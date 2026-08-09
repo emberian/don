@@ -9,8 +9,11 @@ members = [
     "crates/don-ai",
     "crates/don-env",
     "crates/don-replay",
+    "crates/don-bhs",
+    "crates/don-bhs-cc",
     "crates/rontoy-core",
     "crates/rontoy-proto",
+    "crates/don-content",
 ]
 # oracle: 32-bit x86 only; cannot build on arm64. See crates/oracle/README.md.
 # donscan: Windows-only (kernel32 FFI); cross-built with cargo-xwin. See crates/donscan/README.md.

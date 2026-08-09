@@ -1,0 +1,9 @@
+[package]
+name = "don-content"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Retail-compatible content/mod resolution plus the Descent of Nations overlay layer"
+
+[dependencies]
+don-rules = { path = "../don-rules" }

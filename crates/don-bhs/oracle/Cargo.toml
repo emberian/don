@@ -1,0 +1,23 @@
+[package]
+name = "bhs-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Drive Rise of Nations' own BHS script compiler out of the retail image, under Linux/i686."
+
+# Its own workspace root: this crate is 32-bit-x86 only and must never be pulled into the
+# repo workspace (arm64 cannot build it), and `crates/don-bhs/` belongs to another lane.
+[workspace]
+
+[dependencies]
+don-pe = { path = "../../don-pe" }
+libc = "0.2"
+
+[[bin]]
+name = "bhsoracle"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

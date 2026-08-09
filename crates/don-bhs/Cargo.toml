@@ -1,0 +1,11 @@
+[package]
+name = "don-bhs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Big Huge Script (BHS) bytecode VM, recovered from Rise of Nations: Extended Edition"
+# `oracle/` is a standalone i686-only harness that drives retail's own BHS compiler
+# on hbox. It is not part of this package and cannot build on arm64.
+exclude = ["oracle/"]
+
+[dependencies]
