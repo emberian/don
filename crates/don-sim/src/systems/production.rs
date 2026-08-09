@@ -72,6 +72,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
+use crate::systems::tech_cities::{TechSetHost, TechState};
 
 // =======================================================================================
 // Pool geometry
@@ -1395,6 +1396,125 @@ pub trait QueueRoutingHost: QueueCompletionHost {
     fn is_parallel_producer(&mut self, build: &BuildData, slot: usize) -> bool;
     /// The leader-owned parallel-slot limit (`LeaderData::get_building_cities`).
     fn parallel_slot_limit(&mut self, build: &BuildData, slot: usize) -> usize;
+}
+
+/// The three distinguishable unit-production exits from `Build::finished`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitCompletionResult {
+    /// `Build::train(type)` ran and the queue may unqueue the completed record.
+    Trained,
+    /// Population availability rejected the spawn (`Build::finished` returns zero).
+    PopulationBlocked,
+    /// Support/placement/capacity rejected the spawn (`Build::finished` returns `-1`).
+    CapacityBlocked,
+}
+
+/// Exact top-level effect selected by `Build::finished(type)` (`0x00628490`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinishedEffectTransaction {
+    Unit(UnitCompletionResult),
+    SpellCast,
+    BuildingCompleted,
+    TechGained {
+        type_index: i32,
+        was_new: bool,
+        government_hero: Option<i32>,
+    },
+}
+
+impl FinishedEffectTransaction {
+    /// Whether `Build::do_queue` may proceed into `Build::unqueue(slot, 0)`.
+    pub fn allows_unqueue(self) -> bool {
+        !matches!(
+            self,
+            FinishedEffectTransaction::Unit(
+                UnitCompletionResult::PopulationBlocked | UnitCompletionResult::CapacityBlocked
+            )
+        )
+    }
+}
+
+/// Mandatory world/type boundary for the body of `Build::finished` (`0x00628490`).
+///
+/// The predicate methods remain separate because retail evaluates them in order and a
+/// false unit-availability or spell-ownership test falls through to the later classes.
+/// [`TechSetHost::gained_tech`] owns the 15,001-byte `Leader::gain_tech` one-shot body;
+/// [`TechState`] owns the checksum-visible bit and counter mutation that precedes it.
+pub trait FinishedEffectHost: TechSetHost {
+    fn is_unit_type(&mut self, type_index: i32) -> bool;
+    fn can_make_unit(&mut self, type_index: i32) -> bool;
+    fn train_unit(&mut self, build: &BuildData, type_index: i32) -> UnitCompletionResult;
+
+    fn is_spell_type(&mut self, type_index: i32) -> bool;
+    fn has_spell(&mut self, type_index: i32) -> bool;
+    fn cast_spell(&mut self, build: &BuildData, type_index: i32);
+
+    fn is_build_type(&mut self, type_index: i32) -> bool;
+    /// `BuildTypeData::flags +0x2C0 & 4`: set means this queued building-shaped type
+    /// falls through to `Leader::gain_tech` instead of changing the producer's type.
+    fn building_completion_gains_tech(&mut self, type_index: i32) -> bool;
+    /// The ordered `CityData::get_pop_value -> Wall::set_type -> Wall::mask_me -> leader
+    /// flag/city/pop-cap/border` building-completion transaction.
+    fn complete_building(&mut self, build: &BuildData, type_index: i32);
+
+    /// Producer `is(0x1B6)` query, made only after the tech gain transaction.
+    fn producer_is_capitol(&mut self, build: &BuildData) -> bool;
+    /// `LeaderData::get_gov_hero(0)` after a Capitol completes a tech.
+    fn government_hero_type(&mut self) -> Option<i32>;
+    /// Train the government hero or upgrade the existing hero, preserving the world-owned
+    /// branch inside `Build::finished`.
+    fn complete_government_hero(&mut self, build: &BuildData, hero_type: i32);
+}
+
+/// Execute the effect-routing body immediately behind [`QueueCompletionHost::finished`].
+/// [measured, `Build::finished` `0x00628490`]
+///
+/// Routing order is unit -> owned spell -> ordinary building -> tech. A unit type the
+/// player cannot currently make, an unowned spell, or a building-shaped type carrying
+/// `flags & 4` falls through rather than returning. The tech arm sets the TechState bit
+/// and counters before invoking `gained_tech`, then performs the Capitol government-hero
+/// follow-up. `Leader::gain_tech` does not call `set_age`/`set_epoch`; completed age and
+/// epoch type indices therefore use the exact single-tech [`TechState::gain`] transaction,
+/// not the bulk scenario/editor ladder setters.
+pub fn execute_finished_effect<H: FinishedEffectHost>(
+    tech: &mut TechState,
+    build: &BuildData,
+    type_index: i32,
+    host: &mut H,
+) -> FinishedEffectTransaction {
+    if host.is_unit_type(type_index) && host.can_make_unit(type_index) {
+        return FinishedEffectTransaction::Unit(host.train_unit(build, type_index));
+    }
+
+    if host.is_spell_type(type_index) && host.has_spell(type_index) {
+        host.cast_spell(build, type_index);
+        return FinishedEffectTransaction::SpellCast;
+    }
+
+    if host.is_build_type(type_index) && !host.building_completion_gains_tech(type_index) {
+        host.complete_building(build, type_index);
+        return FinishedEffectTransaction::BuildingCompleted;
+    }
+
+    let was_new = !tech.tech.get(type_index);
+    tech.gain(type_index);
+    host.gained_tech(tech, type_index);
+
+    let government_hero = if host.producer_is_capitol(build) {
+        let hero = host.government_hero_type();
+        if let Some(hero_type) = hero {
+            host.complete_government_hero(build, hero_type);
+        }
+        hero
+    } else {
+        None
+    };
+
+    FinishedEffectTransaction::TechGained {
+        type_index,
+        was_new,
+        government_hero,
+    }
 }
 
 /// Stable identity for a building in the player-major object graph.
@@ -3272,6 +3392,159 @@ mod tests {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
+    enum FinishedEvent {
+        IsUnit(i32),
+        CanMakeUnit(i32),
+        TrainUnit(i32),
+        IsSpell(i32),
+        HasSpell(i32),
+        CastSpell(i32),
+        IsBuild(i32),
+        BuildingGainsTech(i32),
+        CompleteBuilding(i32),
+        GainedTech {
+            type_index: i32,
+            held: bool,
+            epochs: i32,
+            science_epochs: i32,
+            discovered: i32,
+        },
+        ProducerIsCapitol(bool),
+        GovernmentHeroType(Option<i32>),
+        CompleteGovernmentHero(i32),
+    }
+
+    struct FinishedProbe {
+        unit_types: Vec<i32>,
+        makeable_units: Vec<i32>,
+        train_result: UnitCompletionResult,
+        spell_types: Vec<i32>,
+        owned_spells: Vec<i32>,
+        build_types: Vec<i32>,
+        tech_build_types: Vec<i32>,
+        capitol: bool,
+        government_hero: Option<i32>,
+        events: Vec<FinishedEvent>,
+    }
+
+    impl Default for FinishedProbe {
+        fn default() -> Self {
+            Self {
+                unit_types: vec![60, 61],
+                makeable_units: vec![60, 61],
+                train_result: UnitCompletionResult::Trained,
+                spell_types: vec![630],
+                owned_spells: vec![630],
+                build_types: vec![414, 415],
+                tech_build_types: vec![415],
+                capitol: false,
+                government_hero: Some(77),
+                events: Vec::new(),
+            }
+        }
+    }
+
+    impl TechSetHost for FinishedProbe {
+        fn has_preq(&mut self, _state: &TechState, _type_index: i32) -> bool {
+            panic!("finished effect must not enter the set-age/set-epoch prerequisite sweep")
+        }
+
+        fn gained_tech(&mut self, state: &TechState, type_index: i32) {
+            self.events.push(FinishedEvent::GainedTech {
+                type_index,
+                held: state.tech.get(type_index),
+                epochs: state.counters.epochs,
+                science_epochs: state.counters.epoch[3],
+                discovered: state.counters.discovered,
+            });
+        }
+
+        fn lost_tech(&mut self, _state: &TechState, _type_index: i32) {
+            panic!("finished effect must not remove a tech")
+        }
+
+        fn reset_obs_flags(&mut self, _state: &TechState) {
+            panic!("finished effect must not run the bulk tech-set tail")
+        }
+
+        fn calc_unit_stats(&mut self, _state: &TechState) {
+            panic!("finished effect must not run the bulk tech-set tail")
+        }
+
+        fn calc_wall_stats(&mut self, _state: &TechState) {
+            panic!("finished effect must not run the bulk tech-set tail")
+        }
+
+        fn outdate_camera(&mut self, _state: &TechState) {
+            panic!("finished effect must not run the bulk tech-set tail")
+        }
+    }
+
+    impl FinishedEffectHost for FinishedProbe {
+        fn is_unit_type(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::IsUnit(type_index));
+            self.unit_types.contains(&type_index)
+        }
+
+        fn can_make_unit(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::CanMakeUnit(type_index));
+            self.makeable_units.contains(&type_index)
+        }
+
+        fn train_unit(&mut self, _build: &BuildData, type_index: i32) -> UnitCompletionResult {
+            self.events.push(FinishedEvent::TrainUnit(type_index));
+            self.train_result
+        }
+
+        fn is_spell_type(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::IsSpell(type_index));
+            self.spell_types.contains(&type_index)
+        }
+
+        fn has_spell(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::HasSpell(type_index));
+            self.owned_spells.contains(&type_index)
+        }
+
+        fn cast_spell(&mut self, _build: &BuildData, type_index: i32) {
+            self.events.push(FinishedEvent::CastSpell(type_index));
+        }
+
+        fn is_build_type(&mut self, type_index: i32) -> bool {
+            self.events.push(FinishedEvent::IsBuild(type_index));
+            self.build_types.contains(&type_index)
+        }
+
+        fn building_completion_gains_tech(&mut self, type_index: i32) -> bool {
+            self.events
+                .push(FinishedEvent::BuildingGainsTech(type_index));
+            self.tech_build_types.contains(&type_index)
+        }
+
+        fn complete_building(&mut self, _build: &BuildData, type_index: i32) {
+            self.events
+                .push(FinishedEvent::CompleteBuilding(type_index));
+        }
+
+        fn producer_is_capitol(&mut self, _build: &BuildData) -> bool {
+            self.events
+                .push(FinishedEvent::ProducerIsCapitol(self.capitol));
+            self.capitol
+        }
+
+        fn government_hero_type(&mut self) -> Option<i32> {
+            self.events
+                .push(FinishedEvent::GovernmentHeroType(self.government_hero));
+            self.government_hero
+        }
+
+        fn complete_government_hero(&mut self, _build: &BuildData, hero_type: i32) {
+            self.events
+                .push(FinishedEvent::CompleteGovernmentHero(hero_type));
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
     enum LibraryEvent {
         Unassimilated(BuildObjectKey),
         IsLibrary(BuildObjectKey),
@@ -3436,6 +3709,175 @@ mod tests {
             ..BuildQueueEntry::default()
         });
         build
+    }
+
+    #[test]
+    fn finished_effect_router_preserves_branch_priority_and_single_tech_mutation_order() {
+        let build = active_city_build(2);
+        let mut tech = TechState::default();
+        let mut host = FinishedProbe::default();
+
+        let trained = execute_finished_effect(&mut tech, &build, 60, &mut host);
+        assert_eq!(
+            trained,
+            FinishedEffectTransaction::Unit(UnitCompletionResult::Trained)
+        );
+        assert!(trained.allows_unqueue());
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(60),
+                FinishedEvent::CanMakeUnit(60),
+                FinishedEvent::TrainUnit(60),
+            ]
+        );
+
+        host.events.clear();
+        host.train_result = UnitCompletionResult::PopulationBlocked;
+        let blocked = execute_finished_effect(&mut tech, &build, 61, &mut host);
+        assert_eq!(
+            blocked,
+            FinishedEffectTransaction::Unit(UnitCompletionResult::PopulationBlocked)
+        );
+        assert!(!blocked.allows_unqueue());
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(61),
+                FinishedEvent::CanMakeUnit(61),
+                FinishedEvent::TrainUnit(61),
+            ]
+        );
+
+        host.events.clear();
+        let spell = execute_finished_effect(&mut tech, &build, 630, &mut host);
+        assert_eq!(spell, FinishedEffectTransaction::SpellCast);
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(630),
+                FinishedEvent::IsSpell(630),
+                FinishedEvent::HasSpell(630),
+                FinishedEvent::CastSpell(630),
+            ]
+        );
+
+        host.events.clear();
+        let building = execute_finished_effect(&mut tech, &build, 414, &mut host);
+        assert_eq!(building, FinishedEffectTransaction::BuildingCompleted);
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(414),
+                FinishedEvent::IsSpell(414),
+                FinishedEvent::IsBuild(414),
+                FinishedEvent::BuildingGainsTech(414),
+                FinishedEvent::CompleteBuilding(414),
+            ]
+        );
+
+        // A building-shaped type with flags&4 takes the same single gain_tech path as
+        // ordinary research. It is not a bulk age/epoch setter and has no revalidation
+        // tail; the TechSetHost implementation above panics if that tail is entered.
+        host.events.clear();
+        let building_tech = execute_finished_effect(&mut tech, &build, 415, &mut host);
+        assert_eq!(
+            building_tech,
+            FinishedEffectTransaction::TechGained {
+                type_index: 415,
+                was_new: true,
+                government_hero: None,
+            }
+        );
+        assert!(tech.tech.get(415));
+        assert_eq!(tech.counters.discovered, 1);
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(415),
+                FinishedEvent::IsSpell(415),
+                FinishedEvent::IsBuild(415),
+                FinishedEvent::BuildingGainsTech(415),
+                FinishedEvent::GainedTech {
+                    type_index: 415,
+                    held: true,
+                    epochs: 0,
+                    science_epochs: 0,
+                    discovered: 1,
+                },
+                FinishedEvent::ProducerIsCapitol(false),
+            ]
+        );
+
+        // Epoch completion mutates the raw bit and exact category counters before the
+        // mandatory one-shot callback, then runs the Capitol hero follow-up.
+        host.events.clear();
+        host.capitol = true;
+        let epoch = execute_finished_effect(&mut tech, &build, 551, &mut host);
+        assert_eq!(
+            epoch,
+            FinishedEffectTransaction::TechGained {
+                type_index: 551,
+                was_new: true,
+                government_hero: Some(77),
+            }
+        );
+        assert!(tech.tech.get(551));
+        assert_eq!(tech.counters.epochs, 1);
+        assert_eq!(tech.counters.epoch, [0, 0, 0, 1]);
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(551),
+                FinishedEvent::IsSpell(551),
+                FinishedEvent::IsBuild(551),
+                FinishedEvent::GainedTech {
+                    type_index: 551,
+                    held: true,
+                    epochs: 1,
+                    science_epochs: 1,
+                    discovered: 1,
+                },
+                FinishedEvent::ProducerIsCapitol(true),
+                FinishedEvent::GovernmentHeroType(Some(77)),
+                FinishedEvent::CompleteGovernmentHero(77),
+            ]
+        );
+
+        // Age completion is likewise one gain_tech call: it sets only the requested age
+        // bit and does not enter set_age's ladder or bump any TechCounters field.
+        host.events.clear();
+        host.capitol = false;
+        let age = execute_finished_effect(&mut tech, &build, 544, &mut host);
+        assert_eq!(
+            age,
+            FinishedEffectTransaction::TechGained {
+                type_index: 544,
+                was_new: true,
+                government_hero: None,
+            }
+        );
+        assert!(tech.tech.get(544));
+        assert!(!tech.tech.get(545));
+        assert_eq!(tech.counters.ages, 0);
+        assert_eq!(tech.counters.epochs, 1);
+        assert_eq!(tech.counters.discovered, 1);
+        assert_eq!(
+            host.events,
+            vec![
+                FinishedEvent::IsUnit(544),
+                FinishedEvent::IsSpell(544),
+                FinishedEvent::IsBuild(544),
+                FinishedEvent::GainedTech {
+                    type_index: 544,
+                    held: true,
+                    epochs: 1,
+                    science_epochs: 1,
+                    discovered: 1,
+                },
+                FinishedEvent::ProducerIsCapitol(false),
+            ]
+        );
     }
 
     #[test]
