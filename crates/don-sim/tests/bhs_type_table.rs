@@ -207,6 +207,124 @@ fn global_enable_restores_the_exact_build_backup() {
 }
 
 #[test]
+fn rename_type_scans_all_806_relations_and_accepts_any_display_string() {
+    let mut state = fixture();
+    state.types.row_mut(544).is_list = vec![544, 50];
+    state.types.row_mut(544).common.display_name = "Barter display".into();
+    let before_names: Vec<_> = [50, 51, 544]
+        .into_iter()
+        .map(|index| state.types.row(index).name.clone())
+        .collect();
+
+    assert_eq!(state.rename_type("cItIzEn", "市民 🛶").unwrap(), 1);
+    for index in [50, 51, 544] {
+        let row = state.types.row(index);
+        assert_eq!(row.common.display_name, "市民 🛶");
+        assert_eq!(row.modified, 0, "registration 288 does not set modified");
+    }
+    let after_names: Vec<_> = [50, 51, 544]
+        .into_iter()
+        .map(|index| state.types.row(index).name.clone())
+        .collect();
+    assert_eq!(after_names, before_names, "lookup names remain unchanged");
+    assert!(state.is_dirty());
+
+    assert_eq!(state.rename_type("Citizen", "").unwrap(), 1);
+    assert_eq!(state.types.row(50).common.display_name, "");
+    assert_eq!(state.types.row(51).common.display_name, "");
+    assert_eq!(state.types.row(544).common.display_name, "");
+}
+
+#[test]
+fn type_build_time_wraps_for_every_non_spell_domain_and_rejects_spells() {
+    let mut state = fixture();
+    state.types.row_mut(544).name = "Barter".into();
+    state.types.row_mut(544).common.job_time = u32::MAX;
+    state.types.row_mut(SPELL_BEGIN).name = "Rally".into();
+    state.types.row_mut(SPELL_BEGIN).common.job_time = 19;
+
+    assert_eq!(state.type_build_time("citizen").unwrap(), 5_000);
+    assert_eq!(
+        state.type_build_time("BARTER").unwrap(),
+        u32::MAX.wrapping_mul(100) as i32
+    );
+    assert_eq!(
+        state.type_build_time("rally"),
+        Err(TypeTableError::SpellTimeRequiresLeaderMinusOne { slot: SPELL_BEGIN })
+    );
+    assert_eq!(state.type_build_time(""), Ok(-1));
+    assert_eq!(state.type_build_time("missing"), Ok(-1));
+    assert!(!state.is_dirty(), "registration 289 is read-only");
+}
+
+#[test]
+fn set_type_build_time_preserves_signed_division_and_wrapped_negative_bits() {
+    for (seconds, expected) in [
+        (i32::MIN, (i32::MIN / 100) as u32),
+        (-100, u32::MAX),
+        (-99, 1),
+        (0, 1),
+        (99, 1),
+        (100, 1),
+        (199, 1),
+        (200, 2),
+    ] {
+        let mut state = fixture();
+        state.types.row_mut(544).is_list = vec![544, 50];
+
+        assert_eq!(
+            state.set_type_build_time("Citizen", seconds).unwrap(),
+            seconds
+        );
+        for index in [50, 51, 544] {
+            let row = state.types.row(index);
+            assert_eq!(row.common.job_time, expected, "seconds={seconds}");
+            assert_eq!(row.modified, 0, "registration 290 leaves modified alone");
+        }
+        assert!(state.is_dirty());
+    }
+}
+
+#[test]
+fn set_type_job_time_has_its_distinct_signed_threshold() {
+    for (seconds, expected) in [
+        (i32::MIN, 1),
+        (-100, 1),
+        (199, 1),
+        (200, 2),
+        (299, 2),
+        (300, 3),
+        (i32::MAX, (i32::MAX / 100) as u32),
+    ] {
+        let mut state = fixture();
+        state.types.row_mut(544).is_list = vec![544, 50];
+
+        assert_eq!(
+            state.set_type_job_time("Citizen", seconds).unwrap(),
+            seconds
+        );
+        for index in [50, 51, 544] {
+            let row = state.types.row(index);
+            assert_eq!(row.common.job_time, expected, "seconds={seconds}");
+            assert_eq!(row.modified, 0, "registration 291 leaves modified alone");
+        }
+        assert!(state.is_dirty());
+    }
+}
+
+#[test]
+fn failed_owner_local_mutations_leave_state_pristine() {
+    let mut state = fixture();
+    let before = state.clone();
+
+    assert_eq!(state.rename_type("", "replacement").unwrap(), -1);
+    assert_eq!(state.set_type_build_time("missing", 200).unwrap(), -1);
+    assert_eq!(state.set_type_job_time("missing", 200).unwrap(), -1);
+    assert_eq!(state, before);
+    assert!(!state.is_dirty());
+}
+
+#[test]
 fn tribe_mutations_update_the_type_and_exact_leader_masks() {
     let mut state = fixture();
     for leader in &mut state.leaders[..3] {

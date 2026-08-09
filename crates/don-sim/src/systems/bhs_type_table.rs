@@ -1,9 +1,9 @@
 //! Canonical mutable type ownership for the retail BHS type builtins.
 //!
 //! This module is intentionally not exported yet.  It freezes the state and mutation
-//! contracts for ScenarioFuncSet registrations 284, 286, and 815..=819 without creating a
-//! second availability facade.  Integration must make [`TypeBuiltinState`] the one owner seen
-//! by rules, checksum channel 13, save/load, and the script runtime.
+//! contracts for ScenarioFuncSet registrations 284, 286, 288..=291, and 815..=819 without
+//! creating a second availability facade.  Integration must make [`TypeBuiltinState`] the one
+//! owner seen by rules, checksum channel 13, save/load, and the script runtime.
 
 #![allow(dead_code)]
 
@@ -19,8 +19,11 @@ pub const REGULAR_UNIT_END: usize = 402;
 pub const UNIT_END: usize = 414;
 pub const BUILD_BEGIN: usize = 414;
 pub const BUILD_END: usize = 543;
+pub const SPELL_BEGIN: usize = 629;
+pub const SPELL_END: usize = 684;
 
 const DISABLED_PREQ: i32 = -2;
+const RETAIL_TIME_SCALE: i32 = 100;
 
 /// The concrete retail class behind a slot in `Types[806]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -264,6 +267,10 @@ pub enum TypeTableError {
         target: usize,
     },
     NonAsciiRetailName,
+    /// `TypeData::time(-1)` asks a spell row to read the anomalous retail `leaders[-1]`.
+    SpellTimeRequiresLeaderMinusOne {
+        slot: usize,
+    },
 }
 
 impl fmt::Display for TypeTableError {
@@ -372,6 +379,14 @@ impl TypeTable {
             TypeDomain::Other => 0..0,
         };
         range
+            .filter(|&candidate| self.rows[candidate].is_non_strict(selected))
+            .collect()
+    }
+
+    /// Registrations 288, 290, and 291 scan every one of the 806 rows, unlike the narrower
+    /// Unit/Build candidate ranges used by registrations 284 and 286.
+    fn all_related_candidates(&self, selected: usize) -> Vec<usize> {
+        (0..NUM_TYPES)
             .filter(|&candidate| self.rows[candidate].is_non_strict(selected))
             .collect()
     }
@@ -522,7 +537,7 @@ impl LeaderTypeMasks {
     }
 }
 
-/// Canonical owner consumed by the seven retail type-mutation registrations.
+/// Canonical owner consumed by the retail type-query and mutation registrations frozen here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeBuiltinState {
     pub types: TypeTable,
@@ -549,6 +564,89 @@ impl TypeBuiltinState {
     /// until DoNSave owns the mutable rows and Leader mask effects.
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Builtin 288, `ScenarioFuncSet::rename_type`, `0x009EA6C0`.
+    ///
+    /// The first argument resolves through the unchanged internal `name`.  Retail then scans
+    /// all 806 rows in ascending order and replaces `display_name` on every non-strict related
+    /// row.  The replacement is deliberately not passed through `validate_query`: empty and
+    /// non-ASCII display strings are valid even though lookup strings currently fail closed to
+    /// the shipped ASCII name domain.
+    pub fn rename_type(&mut self, name: &str, replacement: &str) -> Result<i32, TypeTableError> {
+        let Some(selected) = self.types.find_first(LookupField::Name, name)? else {
+            return Ok(-1);
+        };
+        let targets = self.types.all_related_candidates(selected);
+        for target in targets {
+            self.types.row_mut(target).common.display_name = replacement.to_owned();
+        }
+        // Retail leaves TypeData::modified untouched.  The owner-level bit records that live
+        // display state can no longer be reconstructed from pristine rules during save/load.
+        self.dirty = true;
+        Ok(1)
+    }
+
+    /// Builtin 289, `ScenarioFuncSet::type_build_time`, `0x009EA760`.
+    ///
+    /// Non-spell `TypeData::time(-1)` is exactly wrapping `job_time * 100`.  Spell rows take a
+    /// different retail branch through `LeaderData::has_preq` using `leaders[-1]`; this owner
+    /// rejects that anomalous dependency explicitly rather than guessing between `job_time`
+    /// and the currently unowned `res_time`.
+    pub fn type_build_time(&self, name: &str) -> Result<i32, TypeTableError> {
+        let Some(selected) = self.types.find_first(LookupField::Name, name)? else {
+            return Ok(-1);
+        };
+        if (SPELL_BEGIN..SPELL_END).contains(&selected) {
+            return Err(TypeTableError::SpellTimeRequiresLeaderMinusOne { slot: selected });
+        }
+        Ok(self
+            .types
+            .row(selected)
+            .common
+            .job_time
+            .wrapping_mul(RETAIL_TIME_SCALE as u32) as i32)
+    }
+
+    /// Builtin 290, `ScenarioFuncSet::set_type_build_time`, `0x009EA7D0`.
+    ///
+    /// Retail performs signed division truncating toward zero, stores the quotient into the
+    /// unsigned `job_time`, and substitutes one only when that stored value equals zero.
+    /// Negative nonzero quotients therefore remain their wrapped `u32` bit patterns.
+    pub fn set_type_build_time(&mut self, name: &str, seconds: i32) -> Result<i32, TypeTableError> {
+        let Some(selected) = self.types.find_first(LookupField::Name, name)? else {
+            return Ok(-1);
+        };
+        let quotient = seconds / RETAIL_TIME_SCALE;
+        let job_time = if quotient == 0 { 1 } else { quotient as u32 };
+        let targets = self.types.all_related_candidates(selected);
+        for target in targets {
+            self.types.row_mut(target).common.job_time = job_time;
+        }
+        // The handler does not set TypeData::modified, but job_time is live channel-13 state.
+        self.dirty = true;
+        Ok(seconds)
+    }
+
+    /// Builtin 291, `ScenarioFuncSet::set_type_job_time`, `0x009EA880`.
+    ///
+    /// This is not an alias for registration 290: every signed input below 200, including all
+    /// negative values, becomes one.  Only values at least 200 are divided by 100.
+    pub fn set_type_job_time(&mut self, name: &str, seconds: i32) -> Result<i32, TypeTableError> {
+        let Some(selected) = self.types.find_first(LookupField::Name, name)? else {
+            return Ok(-1);
+        };
+        let job_time = if seconds < 200 {
+            1
+        } else {
+            (seconds / RETAIL_TIME_SCALE) as u32
+        };
+        let targets = self.types.all_related_candidates(selected);
+        for target in targets {
+            self.types.row_mut(target).common.job_time = job_time;
+        }
+        self.dirty = true;
+        Ok(seconds)
     }
 
     /// Builtin 284, `ScenarioFuncSet::disable_type`, `0x009EA130`.

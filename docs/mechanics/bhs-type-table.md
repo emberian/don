@@ -6,9 +6,10 @@ Status: isolated owner validated, not integrated. The implementation is
 
 ## Result and honest coverage
 
-The new owner is sufficient to represent the exact state touched by registrations 284, 286,
-and 815–819: 806 live rows, their non-strict `is` relations, immutable restore records, 24
-tribes, and the relevant masks for exactly eight Leader slots.
+The owner represents the exact state touched by registrations 284, 286, 288–291, and 815–819:
+806 live rows, their non-strict `is` relations, immutable restore records, 24 tribes, and the
+relevant masks for exactly eight Leader slots. Registration 289 is exact for every non-spell
+row and has a typed fail-closed boundary for retail's anomalous spell-only `leaders[-1]` read.
 
 The arity-resolved shipped-script census is:
 
@@ -16,21 +17,30 @@ The arity-resolved shipped-script census is:
 |---:|---|---:|---:|
 | 284 | `disable_type(string)` | 239 | 45 |
 | 286 | `enable_type(string)` | 20 | 4 |
+| 288 | `rename_type(string,string)` | 11 | 10 |
+| 289 | `type_build_time(string)` | 126 | 16 |
+| 290 | `set_type_build_time(string,int)` | 383 | 21 |
+| 291 | `set_type_job_time(string,int)` | 4 | 4 |
 | 815 | `disable_type_by_tribe(string,string)` | 471 | 44 |
 | 816 | `enable_type_by_tribe(string,string)` | 119 | 10 |
 | 817 | `enable_type_by_tribe(string,string,string,int,int)` | 235 | 20 |
 | 818 | `enable_type_by_tribe_with_type_name(string,string)` | 0 | 0 |
 | 819 | `enable_type_by_tribe_with_type_name(string,string,string,int,int)` | 6 | 2 |
-| | **total** | **1,090** | |
+| | **total** | **1,614** | |
 
 The earlier 1,215 roll-up included the 125 calls to registration 247,
-`set_population_cap`; it is not one of these seven registrations. A name-only census also
+`set_population_cap`; it is not one of the registrations above. A name-only census also
 collapses the overloads into 354 calls under 816 and 6 under 818. The table above is the honest
 registration/arity split.
 
+The 288–291 counts are comment/string-stripped and all 524 calls have the exact registered
+arity. Their raw textual counts are respectively 12, 133, 392, and 4.
+
 Because the module is not exported and `script_runtime.rs` has not been changed, immediate BHS
 coverage gained is **zero**. Integration of 815–819 can unlock 831 calls. Integration of the
-canonical relation and exact backups also unlocks 284/286's 259 calls, for 1,090 total.
+canonical relation and exact backups also unlocks 284/286's 259 calls. The new owner-local
+288–291 cohort contributes another 524 calls, for 1,614 total once every external boundary is
+connected.
 
 ## Retail bodies
 
@@ -38,6 +48,10 @@ canonical relation and exact backups also unlocks 284/286's 259 calls, for 1,090
 |---:|---|---:|---:|
 | 284 | `ScenarioFuncSet::disable_type` | `0x009EA130` | 374 B |
 | 286 | `ScenarioFuncSet::enable_type` | `0x009EA3E0` | 423 B |
+| 288 | `ScenarioFuncSet::rename_type` | `0x009EA6C0` | 145 B |
+| 289 | `ScenarioFuncSet::type_build_time` | `0x009EA760` | 100 B |
+| 290 | `ScenarioFuncSet::set_type_build_time` | `0x009EA7D0` | 174 B |
+| 291 | `ScenarioFuncSet::set_type_job_time` | `0x009EA880` | 171 B |
 | 815 | `ScenarioFuncSet::disable_type_by_tribe` | `0x00A006A0` | 764 B |
 | 816 | `ScenarioFuncSet::enable_type_by_tribe` | `0x00A009A0` | 764 B |
 | 817 | five-argument overload | `0x00A00CA0` | 230 B |
@@ -56,6 +70,42 @@ case folding.
 `Tribes::find` at `0x006EF2D0` scans 24 records, in order, with the same String equality.
 Valid targets are concrete Unit rows `50..414` or Build rows `414..543`. Other first matches
 return `-1` rather than continuing to a later duplicate.
+
+### Registrations 288–291
+
+All four handlers reject an empty lookup string and perform the same first-match `name +0x60`
+search across rows 0 through 805. They have no player/Leader gate and no Unit/Build domain gate.
+Registrations 288, 290, and 291 then scan all 806 candidate rows in ascending order and test
+`candidate.is(selected, 0)`; this is intentionally a different candidate range from 284/286.
+None of the three mutations writes `TypeData::modified`.
+
+Registration 288 copies its second String verbatim to `display_name +0x74` on every related
+candidate (`0x009EA713..0x009EA741`). Internal lookup `name +0x60` remains unchanged. Empty and
+non-ASCII replacement display strings are accepted; only the first lookup argument uses the
+current ASCII fail-closed query boundary. Once the selected row is found, the handler returns
+literal 1 even if no relation row was changed.
+
+Registration 289 calls virtual `TypeData::time(-1)` through vtable slot `+0x6C`. The ordinary
+path at `0x00663F43` returns wrapping unsigned `job_time * 100`; the builtin returns that exact
+32-bit pattern as `int`. This covers Unit, Build, Tech, Age, Government, and every other
+non-spell row—shipped calls visibly include names such as `Barter`, `The Art of War`,
+`Despotism`, and `Gunpowder Age`, so an `Other`-domain rejection would be wrong.
+
+Spell rows 629 through 683 take the different branch at `0x00663F4C`: retail calls
+`LeaderData::has_preq` at `0x006E0BC0` and chooses `job_time` when true or `res_time +0x0C`
+when false. Because registration 289 passes `who=-1`, the address calculation uses the
+`leaders` base `0x00E3A390`, stride `0x6EEC`, and reaches pre-array address `0x00E334A4`.
+The owner returns `SpellTimeRequiresLeaderMinusOne { slot }` for that range rather than
+inventing state at this anomalous address.
+
+Registration 290 computes signed `seconds / 100`, truncating toward zero, stores the quotient
+bit pattern into unsigned `job_time +0x08`, and substitutes 1 only when the quotient is exactly
+zero (`0x009EA837..0x009EA861`). Consequently `-100` stores `0xFFFFFFFF`, while `-99..99`
+store 1. The original seconds argument is returned.
+
+Registration 291 is not an alias: signed inputs below 200 store 1; only inputs at least 200 are
+divided by 100 (`0x009EA8E7..0x009EA912`). Thus every negative value stores 1. It also returns
+the original argument.
 
 ### Registration 284
 
@@ -150,9 +200,11 @@ The reversed x/y versus row/column labels and byte truncation are pinned by
 `generated::state::{object_type, unit_type, build_type}` already materialises many scalar
 columns at their PDB offsets. Those stores are useful loader adapters, but they do not provide
 one 806-row table and deliberately omit aggregate String and `SimpleArray` fields. In
-particular, the builtin needs `name`, `type_name`, `display_name`, and the exact non-strict
-`is_list`, which are not materialised there. `systems::tech_cities::TechRule`, production type
-facades, and victory-score `TypeTable` similarly cover narrower read projections.
+particular, the builtins need `name`, `type_name`, `display_name`, `job_time`, and the exact
+non-strict `is_list`, which are not materialised there as one canonical owner.
+`systems::tech_cities::TechRule`, production type facades, and victory-score `TypeTable`
+similarly cover narrower read projections. `res_time` is deliberately not added merely to hide
+registration 289's unowned spell/Leader dependency.
 
 Integration must populate `TypeRow` from those existing scalar projections plus the rules
 String/relation source, then make `TypeBuiltinState` canonical. It must not mirror mutations
@@ -170,6 +222,10 @@ fields. Its Unit and Build tails cover every concrete restore field listed above
 byte. A digest adapter must merge the canonical live fields into the complete existing type
 projection and walk the rows in retail order. The immutable backup is restore input, not live
 mutated rules state.
+
+Registrations 290 and 291 therefore mutate direct channel-13 state even though they leave
+`modified` unchanged. Registration 288 mutates canonical save state, but its `display_name`
+String is not a direct checksum byte. Registration 289 is read-only.
 
 `LeaderData::tech` and `obs_flags` lie outside the retail `LeaderData::walk_data` prefix and
 must not be silently added to checksum channel 8. Their later effects remain deterministic, but
@@ -194,13 +250,14 @@ No item below is performed by this source-only tranche.
 2. During synchronized rules/mod composition, construct exactly 806 rows and 24 tribes, import
    the canonical non-strict relation lists, and capture the immutable backups before scripts run.
 3. Adapt the eight canonical Leader slots' tribe, `tech`, and `obs_flags` fields to this owner.
-4. Route script registrations 284, 286, and 815–819 to the methods with their exact return
-   conventions and overload arities.
+4. Route script registrations 284, 286, 288–291, and 815–819 to the methods with their exact
+   return conventions and overload arities. Keep registration 289 spell queries mapped to its
+   typed fail-closed error until the anomalous dependency is resolved.
 5. Make channel 13 consume these live fields in its complete type projection. Do not fold the
    Leader masks into channel 8.
 6. Extend DoNSave ownership for the mutable rows and Leader masks, or reject save while
    `TypeBuiltinState::is_dirty()` is true.
-7. Only after the script bridge, checksum, and save boundaries are connected may the 1,090
+7. Only after the script bridge, checksum, and save boundaries are connected may the 1,614
    shipped calls be marked handled.
 
 ## Red boundary
@@ -209,15 +266,23 @@ The retail algorithms and the full restore subset they consume are source-comple
 lane remains red end to end because no shared runtime export, canonical Sim field, rules loader,
 channel-13 adapter, script dispatch, or save/load integration was authorized. Non-ASCII mod
 names also remain an explicit typed failure until an exact Windows `_wcsicmp`-compatible fold is
-provided.
+provided. Registration 288 replacement display strings are unrestricted and are not affected by
+that lookup-only boundary. Registration 289 spell rows remain an explicit typed failure.
 
 ## Isolated validation
 
-The exact three-file overlay passed all eight mutation-sensitive tests in both debug and
-release profiles on 2026-08-09:
+The committed 284/286/815–819 baseline passed all eight mutation-sensitive tests in both debug
+and release profiles on 2026-08-09:
 
 - hbox `bhs-type-owner-20260809T211027Z-89382-528-41090dd4ab15`;
 - persvati `bhs-type-owner-release-20260809T211027Z-89384-23210-41090dd4ab15`.
 
-This proves the isolated owner and retail transactions; it does not change the zero immediate
-runtime-coverage claim above.
+The 288–291 extension's five additional mutation tests bring the suite to 13/13 in both debug
+and release profiles:
+
+- hbox `bhs-type-local-2-20260809T212713Z-12027-16124-b1e98fb890c4`;
+- persvati `bhs-type-local-2-release-20260809T212713Z-12021-10960-b1e98fb890c4`.
+
+They cover the all-806 scan, unrestricted display strings, wrapping readback, both distinct
+signed setter boundaries, typed spell failure, and mutation-free error paths. Neither proof
+changes the zero immediate runtime-coverage claim above.
