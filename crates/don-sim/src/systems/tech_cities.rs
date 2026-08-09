@@ -742,7 +742,7 @@ pub struct CaravanLink {
 /// `Array<CaravanLink>` — the checksum walks its **capacity and growth hint too**, not
 /// just its contents, so a reimplementation must track them to match bit for bit.
 /// [measured, `Array<CaravanLink>::walk_data` `0x00489040`]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaravanLinkArray {
     /// `+4 length`
     pub items: Vec<CaravanLink>,
@@ -752,6 +752,19 @@ pub struct CaravanLinkArray {
     pub grow: i16,
     /// `+20 flags`, masked with `0xBF` before walking, **checksummed** as 1 byte.
     pub flags: u8,
+}
+
+impl Default for CaravanLinkArray {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            capacity: 0,
+            // CityData::CityData `0x00488E00` writes -1 at City+0x80. This is the
+            // Array growth hint; zero would make the first increase_size(0) a no-op.
+            grow: -1,
+            flags: 0,
+        }
+    }
 }
 
 impl CaravanLinkArray {
@@ -2813,6 +2826,11 @@ mod tests {
 
     #[test]
     fn caravan_array_capacity_is_checksummed() {
+        let constructor_state = CaravanLinkArray::default();
+        assert_eq!(constructor_state.capacity, 0);
+        assert_eq!(constructor_state.grow, -1);
+        assert!(constructor_state.items.is_empty());
+
         let mut a = CaravanLinkArray {
             items: vec![CaravanLink { cara: 3, who: 1 }],
             capacity: 4,

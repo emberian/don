@@ -75,6 +75,9 @@
 
 #![allow(clippy::needless_range_loop)]
 
+use super::tech_cities::{
+    CaravanLink as CityCaravanLink, CaravanLinkArray as CityCaravanLinkArray, CityPool, CityRecord,
+};
 use crate::deviations::{behaviour as deviation_behaviour, ModeConfig};
 use crate::rng::Random;
 
@@ -2569,6 +2572,16 @@ impl CaravanPool {
     }
 
     #[inline]
+    fn allocated_record(&self, slot: usize) -> Option<&CaravanRouteRecord> {
+        self.records.get(slot)
+    }
+
+    #[inline]
+    fn allocated_record_mut(&mut self, slot: usize) -> Option<&mut CaravanRouteRecord> {
+        self.records.get_mut(slot)
+    }
+
+    #[inline]
     pub fn record(&self, slot: usize) -> Option<&CaravanRouteRecord> {
         (slot < self.high_water).then(|| &self.records[slot])
     }
@@ -2675,6 +2688,36 @@ impl CaravanPools {
         Ok(record)
     }
 
+    /// Pointer-array lookup without the active/high-water predicates.
+    ///
+    /// `Unit::close` closes the caravan pool record before `Unit::close_orders` reaches
+    /// `Unit::end_trade_route`. Retail still dereferences the allocated pointer by the
+    /// unit's saved owner/slot in that interval, so death cleanup must be able to do the
+    /// same even after `close_caravan` reset owner/endpoints and shrank the high-water mark.
+    pub fn allocated_record(
+        &self,
+        link: CaravanLink,
+    ) -> Result<&CaravanRouteRecord, CaravanRouteError> {
+        let pool = self
+            .pools
+            .get(link.owner as usize)
+            .ok_or(CaravanRouteError::InvalidOwner)?;
+        pool.allocated_record(link.slot as usize)
+            .ok_or(CaravanRouteError::InvalidSlot)
+    }
+
+    fn allocated_record_mut(
+        &mut self,
+        link: CaravanLink,
+    ) -> Result<&mut CaravanRouteRecord, CaravanRouteError> {
+        let pool = self
+            .pools
+            .get_mut(link.owner as usize)
+            .ok_or(CaravanRouteError::InvalidOwner)?;
+        pool.allocated_record_mut(link.slot as usize)
+            .ok_or(CaravanRouteError::InvalidSlot)
+    }
+
     fn record_mut(
         &mut self,
         link: CaravanLink,
@@ -2750,6 +2793,9 @@ pub enum CaravanRouteError {
     Inactive,
     AlreadyEstablished,
     NotEstablished,
+    InvalidCity,
+    InactiveCity,
+    CityLinkCannotGrow,
 }
 
 /// Route-creation transaction in `Unit::do_trade` `0x005ED270`.
@@ -2801,7 +2847,7 @@ pub fn end_caravan_route(
     second_city_links: &mut CaravanCityLinks,
 ) -> Result<[CaravanEndpoint; 2], CaravanRouteError> {
     let endpoints = pools.record(link)?.endpoints;
-    let record = pools.record_mut(link)?;
+    let record = pools.allocated_record_mut(link)?;
     record.flags &= !(CARAVAN_ESTABLISHED | CARAVAN_EARNING);
     first_city_links.remove(link);
     second_city_links.remove(link);
@@ -2828,7 +2874,7 @@ where
 {
     let mut routes = Vec::with_capacity(links.as_slice().len());
     for &link in links.as_slice() {
-        let record = pools.record(link)?;
+        let record = pools.allocated_record(link)?;
         routes.push(CaravanTradeRoute {
             linked: record.is_earning(),
             first: resolve_city(record.endpoints[0]).unwrap_or_default(),
@@ -2843,6 +2889,296 @@ where
         &routes,
         trade_val,
     ))
+}
+
+// ---------------------------------------------------------------------------------------
+// Ordinary CityPool / Unit close integration
+// ---------------------------------------------------------------------------------------
+
+/// `City::init` `0x00737050` reserves ten `CaravanLink` entries for every live city.
+pub const INITIAL_CITY_CARAVAN_CAPACITY: i32 = 10;
+
+/// `Unit + 0x68 & 0x200`: the unit currently owns an established trade route.
+pub const UNIT_HAS_TRADE_ROUTE: u32 = 0x200;
+
+/// City-side caravan-array initialization performed by `City::init` `0x00737050`.
+///
+/// The default constructor has capacity zero and grow=-1. Activation keeps an existing
+/// allocation of ten or more, otherwise allocates ten, and resets length/grow/flags.
+pub fn initialize_city_caravan_links(array: &mut CityCaravanLinkArray) {
+    array.items.clear();
+    array.grow = -1;
+    array.flags = 0;
+    if array.capacity < INITIAL_CITY_CARAVAN_CAPACITY {
+        array.capacity = INITIAL_CITY_CARAVAN_CAPACITY;
+    }
+}
+
+/// `ArrayBaseSimpleCopy<CaravanLink>::increase_size` `0x00489280` followed by
+/// `ArrayBase<CaravanLink>::add` `0x0046E550`.
+fn add_city_caravan_link(
+    array: &mut CityCaravanLinkArray,
+    link: CaravanLink,
+) -> Result<(), CaravanRouteError> {
+    if array.items.len() as i32 >= array.capacity {
+        let increase = if array.grow < 0 {
+            if array.capacity == 0 {
+                4
+            } else {
+                array.capacity
+            }
+        } else {
+            i32::from(array.grow)
+        };
+        if increase == 0 {
+            return Err(CaravanRouteError::CityLinkCannotGrow);
+        }
+        array.capacity = array.capacity.wrapping_add(increase);
+    }
+    array.items.push(CityCaravanLink {
+        cara: link.slot,
+        who: link.owner,
+    });
+    Ok(())
+}
+
+/// `Array<CaravanLink>::remove` `0x0046E4E0`: remove the first exact pair and shift the
+/// remaining suffix left without shrinking allocation state.
+fn remove_city_caravan_link(array: &mut CityCaravanLinkArray, link: CaravanLink) -> bool {
+    let Some(index) = array
+        .items
+        .iter()
+        .position(|candidate| candidate.cara == link.slot && candidate.who == link.owner)
+    else {
+        return false;
+    };
+    array.items.remove(index);
+    true
+}
+
+fn city_indices(endpoint: CaravanEndpoint) -> Result<(usize, usize), CaravanRouteError> {
+    if endpoint.owner < 0 || endpoint.city < 0 {
+        return Err(CaravanRouteError::InvalidCity);
+    }
+    Ok((endpoint.owner as usize, endpoint.city as usize))
+}
+
+fn city_record<'a>(
+    cities: &'a CityPool,
+    endpoint: CaravanEndpoint,
+) -> Result<&'a CityRecord, CaravanRouteError> {
+    let (owner, city) = city_indices(endpoint)?;
+    let record = cities
+        .slots
+        .get(owner)
+        .and_then(|slots| slots.get(city))
+        .ok_or(CaravanRouteError::InvalidCity)?;
+    if !record.active() {
+        return Err(CaravanRouteError::InactiveCity);
+    }
+    Ok(record)
+}
+
+fn city_record_mut<'a>(
+    cities: &'a mut CityPool,
+    endpoint: CaravanEndpoint,
+) -> Result<&'a mut CityRecord, CaravanRouteError> {
+    let (owner, city) = city_indices(endpoint)?;
+    let record = cities
+        .slots
+        .get_mut(owner)
+        .and_then(|slots| slots.get_mut(city))
+        .ok_or(CaravanRouteError::InvalidCity)?;
+    if !record.active() {
+        return Err(CaravanRouteError::InactiveCity);
+    }
+    Ok(record)
+}
+
+/// `Unit::do_trade` route creation against the ordinary checksum-owned [`CityPool`].
+///
+/// Both city handles and the active caravan are validated before mutation. The live-city
+/// initialization normalization is necessary because `tech_cities::CityPool` represents
+/// constructor state while retail calls `City::init` before an active city can trade.
+pub fn establish_caravan_route_in_city_pool(
+    pools: &mut CaravanPools,
+    cities: &mut CityPool,
+    link: CaravanLink,
+    first: CaravanEndpoint,
+    second: CaravanEndpoint,
+) -> Result<(), CaravanRouteError> {
+    if pools.record(link)?.is_established() {
+        return Err(CaravanRouteError::AlreadyEstablished);
+    }
+    city_record(cities, first)?;
+    city_record(cities, second)?;
+
+    for endpoint in [first, second] {
+        let city = city_record_mut(cities, endpoint)?;
+        if city.vans.capacity < INITIAL_CITY_CARAVAN_CAPACITY {
+            // This is the missing City::init allocation state, not route-specific growth.
+            city.vans.capacity = INITIAL_CITY_CARAVAN_CAPACITY;
+            city.vans.grow = -1;
+            city.vans.flags = 0;
+        }
+        add_city_caravan_link(&mut city.vans, link)?;
+    }
+
+    let record = pools.record_mut(link)?;
+    record.endpoints = [first, second];
+    record.flags |= CARAVAN_ACTIVE | CARAVAN_ESTABLISHED;
+    Ok(())
+}
+
+/// Execute `City::compute_trade` for a live city using its real checksum-owned link array.
+pub fn recompute_city_pool_caravan_income<F>(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    endpoint: CaravanEndpoint,
+    gates: &CaravanIncomeGates,
+    pools: &CaravanPools,
+    cities: &mut CityPool,
+    mut resolve_city: F,
+) -> Result<bool, CaravanRouteError>
+where
+    F: FnMut(CaravanEndpoint) -> Option<CaravanTradeCity>,
+{
+    let (receiving_owner, links, mut trade_val) = {
+        let city = city_record(cities, endpoint)?;
+        (city.who as i32, city.vans.items.clone(), city.trade_val)
+    };
+    let mut routes = Vec::with_capacity(links.len());
+    for link in links {
+        let route_link = CaravanLink {
+            slot: link.cara,
+            owner: link.who,
+        };
+        let record = pools.allocated_record(route_link)?;
+        routes.push(CaravanTradeRoute {
+            linked: record.is_earning(),
+            first: resolve_city(record.endpoints[0]).unwrap_or_default(),
+            second: resolve_city(record.endpoints[1]).unwrap_or_default(),
+        });
+    }
+    let changed = recompute_city_caravan_income(
+        rules,
+        map_width_wcells,
+        receiving_owner,
+        gates,
+        &routes,
+        &mut trade_val,
+    );
+    city_record_mut(cities, endpoint)?.trade_val = trade_val;
+    Ok(changed)
+}
+
+/// Observable result of the order-side half of route teardown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanRouteEndReceipt {
+    pub endpoints: [CaravanEndpoint; 2],
+    pub links_removed: [bool; 2],
+    pub income_changed: [bool; 2],
+}
+
+/// `Unit::end_trade_route` using the endpoints retained by the current `TradeOrder`.
+///
+/// The order payload is load-bearing: `Caravans::close_caravan` has already reset the
+/// record's endpoint fields when this function is reached from `Unit::close`.
+pub fn end_caravan_route_in_city_pool_from_order<F, G>(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    pools: &mut CaravanPools,
+    cities: &mut CityPool,
+    link: CaravanLink,
+    order_endpoints: [CaravanEndpoint; 2],
+    unit_flags: &mut u32,
+    resolve_city: &mut F,
+    gates_for_owner: &mut G,
+) -> Result<CaravanRouteEndReceipt, CaravanRouteError>
+where
+    F: FnMut(CaravanEndpoint) -> Option<CaravanTradeCity>,
+    G: FnMut(i32) -> CaravanIncomeGates,
+{
+    *unit_flags &= !UNIT_HAS_TRADE_ROUTE;
+    let record = pools.allocated_record_mut(link)?;
+    record.flags &= !(CARAVAN_ESTABLISHED | CARAVAN_EARNING);
+
+    let mut receipt = CaravanRouteEndReceipt {
+        endpoints: order_endpoints,
+        ..Default::default()
+    };
+    for (index, endpoint) in order_endpoints.into_iter().enumerate() {
+        // Retail skips a stale/closed endpoint after object and city-validity checks.
+        if city_record(cities, endpoint).is_err() {
+            continue;
+        }
+        receipt.links_removed[index] =
+            remove_city_caravan_link(&mut city_record_mut(cities, endpoint)?.vans, link);
+        let gates = gates_for_owner(endpoint.owner as i32);
+        receipt.income_changed[index] = recompute_city_pool_caravan_income(
+            rules,
+            map_width_wcells,
+            endpoint,
+            &gates,
+            pools,
+            cities,
+            &mut *resolve_city,
+        )?;
+    }
+    Ok(receipt)
+}
+
+/// Result of the caravan-specific portions of `Unit::close` `0x0060EE50`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanUnitCloseReceipt {
+    pub pool_closed: bool,
+    pub route_end: Option<CaravanRouteEndReceipt>,
+}
+
+/// Close a caravan unit in retail order: pool record first, current orders later.
+///
+/// `simulation_active` is the exact `game+0x558 != 0 && game+0x55C == 0` gate around
+/// `Unit::end_trade_route`. `current_trade_order` supplies the route endpoints retained by
+/// order index 15; `None` represents a unit whose close-order pass has no trade action.
+pub fn close_caravan_unit_in_city_pool<F, G>(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    pools: &mut CaravanPools,
+    cities: &mut CityPool,
+    link: CaravanLink,
+    current_trade_order: Option<[CaravanEndpoint; 2]>,
+    simulation_active: bool,
+    unit_flags: &mut u32,
+    mut resolve_city: F,
+    mut gates_for_owner: G,
+) -> Result<CaravanUnitCloseReceipt, CaravanRouteError>
+where
+    F: FnMut(CaravanEndpoint) -> Option<CaravanTradeCity>,
+    G: FnMut(i32) -> CaravanIncomeGates,
+{
+    // Unit::close +0xA3D: the record becomes inactive and its owner/endpoints are reset.
+    pools.close_caravan(link)?;
+    let mut receipt = CaravanUnitCloseReceipt {
+        pool_closed: true,
+        route_end: None,
+    };
+    // Unit::close +0xB8D -> close_orders -> kill_current_order -> end_trade_route.
+    if simulation_active {
+        if let Some(endpoints) = current_trade_order {
+            receipt.route_end = Some(end_caravan_route_in_city_pool_from_order(
+                rules,
+                map_width_wcells,
+                pools,
+                cities,
+                link,
+                endpoints,
+                unit_flags,
+                &mut resolve_city,
+                &mut gates_for_owner,
+            )?);
+        }
+    }
+    Ok(receipt)
 }
 
 /// Per-leader gates for [`caravan_limit`].

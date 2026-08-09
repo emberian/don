@@ -1,7 +1,7 @@
 # economy — the tick, executed
 
-Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,649 lines,
-90 in-module tests plus 10 caravan integration tests, **100 passed / 0 failed**). Checksum
+Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,985 lines,
+90 in-module tests plus 13 caravan integration tests, **103 passed / 0 failed**). Checksum
 channels served: **leaders** (channel 8),
 **goods** (channel 11).
 
@@ -18,7 +18,7 @@ and nothing here has been executed against retail. See §7 for the honest tier.
 The economy **tick** runs, end to end, as ported integer code: compose gross income →
 cap it → pay it out through the fractional accumulator → move the market → quote prices →
 trade → create, activate, recompute, tear down, and recycle caravan routes. The focused
-caravan transactions add ten integration tests, including a complete
+caravan transactions add thirteen integration tests, including a complete
 route-to-city-to-gather-to-stockpile execution.
 
 | mechanic | engine function | VA | state |
@@ -46,6 +46,7 @@ route-to-city-to-gather-to-stockpile execution.
 | first-route wealth award | `City::new_caravan` | `0x00739750` | **ported** |
 | caravan pool allocation/recycling | `Caravans::init_caravan` / `close_caravan` | `0x0073E1F0` / `0x0073E350` | **ported** |
 | city route link creation/teardown | `Unit::do_trade` / `end_trade_route` | `0x005ED270` / `0x005E3BD0` | **ported** |
+| caravan death cleanup | `Unit::close` → `close_orders` | `0x0060EE50` / `0x005E37F0` | **ported** |
 | per-worker gather rate | `BuildTypeData::calc_gather` fragment | `0x00639E40` | **partial** — see §5.2 |
 | resource substitution | inside `calc_gather` | `0x006CF64C` | **ported** |
 | checksum images | `Leader::walk_data` / `Good::walk_data` | `0x006D6750` / `0x0066E5D0` | **framed**, see §6 |
@@ -71,7 +72,8 @@ route-to-city-to-gather-to-stockpile execution.
 cd /Users/ember/dev/don && cargo test -p don-sim --lib systems::economy
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_trade_transaction
 cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_route_lifecycle
-# -> 90 in-module + 10 integration tests passed; 0 failed.
+cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_city_unit_lifecycle
+# -> 90 in-module + 13 integration tests passed; 0 failed.
 
 # constants cross-check (0 mismatches)
 cd /Users/ember/dev/don && python3 - <<'PY'
@@ -313,8 +315,20 @@ the `{caravan slot, owner}` identity to both cities in order, writes both endpoi
 handles, and marks the route established. Destination arrival independently marks it
 earning. `Unit::end_trade_route` clears established/earning, removes the first exact link
 from each city while preserving suffix order, and feeds the resulting arrays directly
-back into `City::compute_trade`. The city arrays also retain retail's logical allocation
-sequence: capacity 0 → 4 → 8 → 16, with no shrink on removal.
+back into `City::compute_trade`. Constructor state is capacity 0 / grow -1, but an ordinary
+active `City::init` preallocates ten links; full live-city arrays therefore grow 10 → 20 →
+40 and never shrink on removal.
+
+Unit death now executes against `tech_cities::CityPool`, the ordinary checksum owner,
+rather than a parallel fixture. The order is surprising and observable: `Unit::close`
+calls `Caravans::close_caravan` first, resetting owner/endpoints and possibly shrinking the
+pool high-water mark; only near its tail does `close_orders` kill order 15 and call
+`end_trade_route`. The endpoint identities must consequently come from the still-live
+`TradeOrder`, while the caravan is found through its allocated pointer-array slot without
+an active/high-water predicate. That second phase clears unit flag `0x200` and caravan
+flags `0x02/0x04`, removes the exact ordered link from both real City arrays, and recomputes
+both `trade_val` fields. A focused test proves the Cities checksum returns to its baseline
+after route creation, income activation, unit death, and teardown.
 
 ---
 
@@ -468,9 +482,9 @@ may remove a rare Good object.
 
 ### 5.4 Remaining caravan movement and merchant targeting
 
-Caravan ownership, link establishment, income activation, city recomputation, teardown,
-record recycling, both `distance` overloads, `trade_value`, and the `City::new_caravan`
-first-contact award execute. What remains is autonomous route selection and physical unit
+Caravan ownership, checksum-owned City links, income activation, city recomputation,
+unit-death teardown, record recycling, both `distance` overloads, `trade_value`, and the
+`City::new_caravan` first-contact award execute. What remains is autonomous route selection and physical unit
 choreography: `Caravan::restart_trade_route` `0x0073D070`, `Unit::think_caravan`
 `0x005F5650`, the movement arms of `Unit::do_trade` `0x005ED270`, road construction, and
 `PathFinder::astar_caravan_road` `0x00685990`. The road A\* draws RNG **per edge
@@ -594,11 +608,13 @@ lets a divergence be localised to the market instead of hunted through stockpile
 
 | path | what |
 |---|---|
-| `crates/don-sim/src/systems/economy.rs` | the module: 4,649 lines, 90 in-module tests, 144 cited VAs |
+| `crates/don-sim/src/systems/economy.rs` | the module: 4,985 lines, 90 in-module tests, 149 cited VAs |
+| `crates/don-sim/src/systems/tech_cities.rs` | fixes constructor `CaravanLinkArray::grow = -1` for the real Cities checksum state |
 | `crates/don-sim/tests/caravan_trade_transaction.rs` | 5 executable caravan route, award, and stockpile integration tests |
 | `crates/don-sim/tests/caravan_route_lifecycle.rs` | 5 executable pool, ordered-link, route lifecycle, and income reachability tests |
+| `crates/don-sim/tests/caravan_city_unit_lifecycle.rs` | 3 executable ordinary-CityPool, checksum-restoration, and unit-death-order tests |
 | `docs/mechanics/economy.md` | this report |
 
 Nothing else was written, nothing staged, nothing committed. The module is wired
 (`lib.rs` → `pub mod systems;`, `systems/mod.rs` → `pub mod economy;`, both landed by
-sibling lanes) and green in-tree: the three focused commands above pass **100 tests, 0 failed**.
+sibling lanes) and green in-tree: the four focused commands above pass **103 tests, 0 failed**.
