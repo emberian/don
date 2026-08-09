@@ -246,10 +246,7 @@ impl ArenaGatherRuntime {
 
         self.sites.get_mut(&site_key).expect("validated site").site = trial_site;
         self.workers = trial_workers;
-        if matches!(
-            outcome.disposition,
-            FarmFirstTickDisposition::Active { .. }
-        ) {
+        if matches!(outcome.disposition, FarmFirstTickDisposition::Active { .. }) {
             self.orders.insert(worker_key, trial_order);
         }
         *rng = trial_rng;
