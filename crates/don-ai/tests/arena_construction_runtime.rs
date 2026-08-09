@@ -8,6 +8,7 @@ use don_ai::OrderResult;
 use don_sim::objects::{BANDED_SLOTS, BUILD_BAND_BASE, OWNER_SLOTS, WALL_BAND_BASE};
 use don_sim::systems::construction::{BuildOutcome, ChecksumEffects, ObjectKey};
 use don_sim::systems::construction_lifecycle::LEADER_ACTIVATION_DIRTY;
+use don_sim::systems::map_terrain::tflag;
 use don_sim::systems::production::{flag, mask};
 
 fn world(mode: ConstructionMode) -> Option<don_ai::arena::World> {
@@ -89,6 +90,30 @@ fn place_building(w: &mut don_ai::arena::World, worker: EntId, type_id: i32) -> 
         OrderResult::Ok(raw) => EntId(raw as u32),
         other => panic!("legal paid building command was not accepted: {other:?}"),
     }
+}
+
+fn put_builder_at(w: &mut World, builder: EntId, x: i32, y: i32) {
+    let builder_index = builder.index().expect("builder has a dense Arena handle");
+    w.ents[builder_index].x = x;
+    w.ents[builder_index].y = y;
+    if let Some(motion) = w.ents[builder_index].motion.as_mut() {
+        motion.body.x = x;
+        motion.body.y = y;
+    }
+    for guy in w.ents[builder_index].guys.guys.iter_mut().flatten() {
+        guy.x = x;
+        guy.y = y;
+        guy.des_x = x;
+        guy.des_y = y;
+    }
+}
+
+fn put_builder_in_construction_range(w: &mut World, builder: EntId, site: EntId) {
+    let (site_x, site_y) = {
+        let site = w.ent(site).expect("construction site is live");
+        (site.x, site.y)
+    };
+    put_builder_at(w, builder, site_x + 192, site_y);
 }
 
 #[test]
@@ -579,4 +604,145 @@ fn plain_site_start_reject_and_completion_keep_live_identities_and_effects() {
             "good {good} did not receive the exact full-cost rejection refund"
         );
     }
+}
+
+#[test]
+fn tower_profile_rejects_one_unstarted_competitor_then_admits_the_survivor() {
+    let Some(mut w) = world(ConstructionMode::ResearchModel) else {
+        return;
+    };
+    w.players[0].techs.insert(572);
+    w.players[0].stock = [10_000; 6];
+    let workers: Vec<_> = w
+        .own_ents(0)
+        .filter(|ent| ent.type_id == w.ids.citizen)
+        .take(2)
+        .map(|ent| ent.id)
+        .collect();
+    assert_eq!(workers.len(), 2);
+
+    let tower = w.ids.tower;
+    let tower_ty = w.types.get(tower).expect("live Tower row").clone();
+    assert_eq!(
+        (
+            tower_ty.id,
+            tower_ty.domain,
+            tower_ty.build_flags,
+            tower_ty.x_size,
+            tower_ty.y_size,
+        ),
+        (439, 0, 0x0C00_2011, 2, 2),
+        "the executable cohort must remain pinned to the shipped Tower profile"
+    );
+    let survivor = place_building(&mut w, workers[0], tower);
+    let survivor_index = survivor.index().unwrap();
+    let survivor_key = {
+        let site = w.ent(survivor).unwrap();
+        ObjectKey {
+            who: i32::from(site.who),
+            o: i32::from(site.object_o),
+            uid: site.object_uid,
+        }
+    };
+
+    // Temporarily move the first paid site away without moving its `Wall::start_me(1)`
+    // footprint. This makes the same tile command-time legal, so spawning the second site
+    // there takes STARTED -> STARTED|STARTED2. Restoring the first live object before the
+    // unit tick makes that stale decision fail through the exact generational identity.
+    let (survivor_x, survivor_y, survivor_tx, survivor_ty) = {
+        let site = w.ent(survivor).unwrap();
+        let (tx, ty) = site.tile();
+        (site.x, site.y, tx, ty)
+    };
+    let far_y = w.map.h.saturating_sub(3) * 192;
+    w.ents[survivor_index].x = 2 * 192;
+    w.ents[survivor_index].y = far_y;
+    let rejected_site = match w.submit(
+        0,
+        Cmd::Build {
+            worker: workers[1],
+            type_id: tower,
+            tx: survivor_tx,
+            ty: survivor_ty,
+        },
+    ) {
+        OrderResult::Ok(raw) => EntId(raw as u32),
+        other => panic!("temporarily unclaimed Tower footprint was not accepted: {other:?}"),
+    };
+    let rejected_index = rejected_site.index().unwrap();
+    w.ents[survivor_index].x = survivor_x;
+    w.ents[survivor_index].y = survivor_y;
+    put_builder_at(&mut w, workers[0], 2 * 192, far_y);
+    put_builder_in_construction_range(&mut w, workers[1], rejected_site);
+
+    let cost = tower_ty.cost;
+    let stock_before = w.players[0].stock;
+    w.step();
+
+    assert!(w.ent(rejected_site).is_none());
+    let rejected = &w.ents[rejected_index];
+    let rejected_placement = rejected
+        .last_construction_placement_receipt
+        .as_ref()
+        .expect("the overlapping Tower did not retain its competing-site claim");
+    assert_eq!(rejected_placement.raw_code, 1);
+    assert_eq!(rejected_placement.claims.len(), 4);
+    assert!(rejected_placement.claims.iter().all(|claim| {
+        claim.terrain_mask & tflag::STARTED != 0 && claim.terrain_mask & tflag::STARTED2 != 0
+    }));
+    assert!(matches!(
+        rejected_placement.verdict,
+        ArenaPlacementVerdict::Occupied { object, .. } if object == survivor_key
+    ));
+    assert!(matches!(
+        rejected.last_construction_receipt.unwrap().receipt.outcome,
+        BuildOutcome::SiteRejected
+    ));
+    for good in 0..6 {
+        assert_eq!(
+            w.players[0].stock[good],
+            stock_before[good].wrapping_add(cost[good]),
+            "good {good} did not receive the overlapping Tower's exact rejection refund"
+        );
+    }
+
+    assert!(w.ent(survivor).is_some());
+    // `Wall::start_me(0)` preserves both bits while this original claimant remains. Let
+    // its generational BUILD_AT order enter the same live placement/lifecycle path.
+    put_builder_in_construction_range(&mut w, workers[0], survivor);
+    w.step();
+
+    let surviving = w
+        .ent(survivor)
+        .expect("the later unstarted Tower should survive and start");
+    let admitted = surviving
+        .last_construction_placement_receipt
+        .as_ref()
+        .expect("the surviving Tower did not enter the live placement cohort");
+    assert_eq!(admitted.site, survivor_key);
+    assert_eq!(admitted.type_id, tower);
+    assert_eq!((admitted.x_size, admitted.y_size), (2, 2));
+    assert_eq!(admitted.claims.len(), 4);
+    assert_eq!(admitted.raw_code, 0);
+    assert_eq!(admitted.verdict, ArenaPlacementVerdict::Admitted);
+    for (index, claim) in admitted.claims.iter().enumerate() {
+        assert_eq!(
+            (claim.tile.x, claim.tile.y),
+            (
+                admitted.corner.x + (index / 2) as i32,
+                admitted.corner.y + (index % 2) as i32,
+            ),
+            "Tower blocked_site did not retain its 2x2 x-outer/y-inner walk"
+        );
+        assert!(claim.occupant.is_none());
+        assert_ne!(claim.terrain_mask & tflag::STARTED, 0);
+        assert_ne!(claim.terrain_mask & tflag::STARTED2, 0);
+    }
+    assert!(matches!(
+        surviving.last_construction_receipt.unwrap().receipt.outcome,
+        BuildOutcome::Progressed {
+            started_this_call: true,
+            ..
+        }
+    ));
 }

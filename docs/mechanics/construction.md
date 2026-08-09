@@ -176,14 +176,15 @@ Arena can remove MODEL 2 only after its adapter provides all of the following:
 Until these are satisfied, Arena should keep a loud fidelity blocker rather than adapting
 `build_left -= 1` to the new result enum.
 
-Arena's playable `ResearchModel` now exercises this boundary for the shipped Barracks
-profile rather than duplicating its state machine. Before lifecycle entry it snapshots the
-live 4x4 footprint in `blocked_site`'s x-outer/y-inner order, retaining every TData terrain
+Arena's playable `ResearchModel` now exercises this boundary for the shipped Barracks/Tower
+outside-city land cohort rather than duplicating its state machine. Before lifecycle entry
+it snapshots the live 4x4 or 2x2 footprint in `blocked_site`'s x-outer/y-inner order,
+retaining every TData terrain
 mask, explored bit, WData/diplomacy territory class and overlapping building identity in an
 `ArenaPlacementReceipt`. It then executes the recovered admission, `Wall::start`, progress,
 `Build::activate`, and builder-finish ordering and stores an `ArenaConstructionReceipt`
 containing the site, builder, BUILD_AT target, outcome, RNG count, and checksum-effect set.
-An occupied Barracks footprint takes the recovered rejected-disband/refund loop and
+An occupied ordinary-family footprint takes the recovered rejected-disband/refund loop and
 invalidates the actual Arena target slot.
 
 That is an executable integration result, not a fidelity promotion. Command-time
@@ -192,9 +193,15 @@ real completed building into the footprint after command acceptance and the cons
 call rejects the stale decision using that blocker's `(who,o,uid)`. Arena's generated map
 is still a declared map model, and initial capital territory is settled through the
 recovered border scorer rather than establishing whole-game border lifecycle fidelity.
+`Wall::start_me`'s transient STARTED/STARTED2 tile pair is also live: the first unstarted
+site owns STARTED and a second overlap raises STARTED2. For the ordinary `ean` cohort the
+other site's exact `(who,o,uid)` produces blocker code 1, so the attempted site disbands and
+refunds before the surviving claimant is admitted. Market/Temple's accepted `0x27/0x28` city-linked
+arms are the first families that can reach `kill_competing_at` with a remaining site and
+stay separate until their town transaction exists.
 Missing reswarm/animation bodies remain compact projections and the activation host does
 not implement the full retail graph. `FailClosedRetail` still stops before those inputs.
-Tower/Temple/Market, gather buildings, cities, Wonders, captured sites, Farm animals,
+Market/Temple, gather buildings, cities, Wonders, captured sites, Farm animals,
 alternate-site `build_done`, incremental border invalidation and cancellation/death remain
 outside the integrated subdomain.
 
@@ -202,8 +209,9 @@ outside the integrated subdomain.
 
 - The remaining `BuildTypeData::blocked_location` `0x006375B0` and `blocked_tcoord`
   `0x00636DB0` type families: fort/city spacing, cliffs/water, adjacency, dock, gather and
-  city-limit graphs. The shipped Barracks terrain/occupancy/visibility/territory footprint
-  is executable and identity-bearing.
+  city-limit graphs. The shipped Barracks/Tower outside-city land terrain/occupancy/
+  visibility/territory footprints are executable and identity-bearing; Market/Temple still
+  require the linked-town and max-one-per-city arms.
 - A claim-bearing Arena host for the ordered `construction_lifecycle` start, activation,
   rejection/refund, terrain, registry, city, leader, Farm-spawn and visibility calls. The
   live ResearchModel host covers a compact gameplay projection only.
@@ -232,7 +240,7 @@ capture accepted for promotion. A case must bracket the exact transaction with:
 The verifier advances the measured LCG exactly `receipt.rng_draws` times and requires the
 captured post-seed to agree. It also requires the reported checksum-effect set to equal the
 channels which changed. A UI-only video, a wall-clock completion time, the current negative
-Barracks attempt, or a capture without the RNG seed/channel split is not an oracle.
+ordinary-building attempt, or a capture without the RNG seed/channel split is not an oracle.
 
 The currently deployed retail hook cannot expose these fields or callback sequence, so no
 Cycle 6 test is promoted above Tier C. The boundary is executable and tested so a future

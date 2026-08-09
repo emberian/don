@@ -66,10 +66,12 @@ pub const LIFECYCLE_INVENTORY: &[LifecycleIntegrationItem] = &[
         status: IntegrationStatus::AdapterOnly,
         recovered: &[
             "blocked_site x-outer/y-inner footprint walk and result precedence",
-            "identity-bearing Arena Barracks terrain, occupancy, visibility and territory claims",
+            "identity-bearing Arena Barracks/Tower terrain, occupancy, visibility and territory claims",
         ],
         missing: &[
-            "non-Barracks blocked_location type families and competing unstarted-site close",
+            "Market/Temple town identity, city membership and max-one-per-city graph",
+            "accepted-code competing unfinished-site close reached by city-linked families",
+            "remaining non-ordinary blocked_location type families",
             "incremental border invalidation, cliff/water, adjacency, dock and city-limit graphs",
             "retail oracle over the complete placement return-code domain",
         ],
@@ -280,7 +282,7 @@ pub enum ArenaPlacementVerdict {
     EnemyTerritory,
 }
 
-/// Identity-bearing result of the currently complete shipped Barracks placement family.
+/// Identity-bearing result of the currently complete shipped outside-city land family.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArenaPlacementReceipt {
     pub site: construction::ObjectKey,
@@ -320,13 +322,16 @@ pub enum ArenaPlacementError {
     },
 }
 
-/// Shipped Barracks (`TypeIndex 427`) placement over Arena's authoritative tile and object
-/// claims. The supported profile is deliberately literal: widening it to another building
-/// would silently skip that type's `blocked_location` city/fort/gather/dock arms.
+/// Shipped outside-city land placement over Arena's authoritative tile and object claims.
+/// Barracks (`TypeIndex 427`, 4x4) and Tower (`TypeIndex 439`, 2x2) share the complete
+/// `ean` graph: neither is a city, fort, gatherer or dock, both have land domain zero and
+/// build flag `e`, and both therefore take only the ordinary territory and zero-water
+/// `blocked_location` arms after the common tile walk. The literal live profiles below
+/// prevent Market/Temple's city-linked `jam` graph from entering through resemblance.
 ///
 /// Provenance is `BuildTypeData::blocked_site` `0x00636A50`,
 /// `blocked_tcoord` `0x00636DB0`, and `non_friendly_territory` `0x006389C0`.
-pub fn evaluate_barracks_blocked_site(
+pub fn evaluate_outside_city_land_blocked_site(
     site: construction::ObjectKey,
     ty: &TypeRow,
     corner: construction_lifecycle::TCoord,
@@ -335,13 +340,13 @@ pub fn evaluate_barracks_blocked_site(
 ) -> Result<ArenaPlacementReceipt, ArenaPlacementError> {
     const BARRACKS_TYPE: i32 = 427;
     const BARRACKS_BUILD_FLAGS: u32 = 0xC000_2011;
-    const BARRACKS_SIZE: i32 = 4;
-    if ty.id != BARRACKS_TYPE
-        || ty.domain != 0
-        || ty.build_flags != BARRACKS_BUILD_FLAGS
-        || ty.x_size != BARRACKS_SIZE
-        || ty.y_size != BARRACKS_SIZE
-    {
+    const TOWER_TYPE: i32 = 439;
+    const TOWER_BUILD_FLAGS: u32 = 0x0C00_2011;
+    let supported_profile = matches!(
+        (ty.id, ty.domain, ty.build_flags, ty.x_size, ty.y_size),
+        (BARRACKS_TYPE, 0, BARRACKS_BUILD_FLAGS, 4, 4) | (TOWER_TYPE, 0, TOWER_BUILD_FLAGS, 2, 2)
+    );
+    if !supported_profile {
         return Err(ArenaPlacementError::UnsupportedTypeProfile {
             type_id: ty.id,
             domain: ty.domain,
@@ -396,13 +401,10 @@ pub fn evaluate_barracks_blocked_site(
         if !claim.explored {
             unseen += 1;
         }
-        if claim.terrain_mask
-            & (tflag::STARTED
-                | tflag::STARTED2
-                | tflag::CITY
-                | tflag::RESOURCE
-                | tflag::RIVER
-                | tflag::GATHERED)
+        // Wall::start_me uses STARTED/STARTED2 as a two-bit occupancy count for
+        // unstarted sites. The current site owns one such claim; a distinct object
+        // identity below is what turns the tile into retail code 1.
+        if claim.terrain_mask & (tflag::CITY | tflag::RESOURCE | tflag::RIVER | tflag::GATHERED)
             != 0
             && claim.occupant.is_none()
         {
