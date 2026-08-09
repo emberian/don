@@ -5,8 +5,9 @@ explicitly open.**
 
 This note covers the exclusive adapter in
 `crates/don-sim/src/systems/direct_entity_command_integration.rs` and its path-import pins in
-`crates/don-sim/tests/direct_entity_command_integration.rs`.  The lane does not edit
-`command.rs`, `tick.rs`, `world.rs`, or the shared systems module map.
+`crates/don-sim/tests/direct_entity_command_integration.rs`.  That frozen source-proof lane
+did not edit the dispatcher.  The subsequent executable wiring is recorded separately in
+`docs/assembly/direct-entity-command-dispatch.md`.
 
 ## Closure classification
 
@@ -68,11 +69,11 @@ Consequently the adapter returns one of four typed open tails:
 These names identify the next owner; they are not applied receipts.  This prevents the
 dispatcher from relabelling a partial queue/containment primitive as a complete opcode.
 
-## Frozen Fleet handoff
+## Fleet handoff
 
-The dispatcher lane needs one new fail-closed method on `command::Fleet`, with the types from
-this adapter after it is exported by the systems module map.  The standalone
-`DirectEntityFleetHandoff` trait compile-checks the signature and its default:
+`command::Fleet` now carries the fail-closed method below, using the adapter as a nested
+public command module.  The standalone `DirectEntityFleetHandoff` trait still compile-checks
+the signature and its default independently:
 
 ```rust
 fn apply_direct_entity_command_transaction(
@@ -97,8 +98,7 @@ Dispatcher treatment is deliberately narrow:
 - `OpenTail` remains unported and must not increment the applied/acted counter;
 - `Unavailable` or any invalid receipt performs no bridge-side success transition.
 
-The method should be copied directly onto the existing `Fleet` trait rather than making
-`Fleet` inherit a new supertrait, which would force every external Fleet implementation to
-add an otherwise empty impl.
+The method was copied directly onto the existing `Fleet` trait rather than making `Fleet`
+inherit a new supertrait, so external Fleet implementations retain the fail-closed default.
 
 Per lane constraint, no compiler, test runner, formatter, or remote job was invoked.

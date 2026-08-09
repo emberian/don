@@ -420,7 +420,7 @@ pub static GROUP_ACTIONS: [ActionDef; NUM_GROUP_ACTIONS] = [
     },
 ];
 
-pub const NUM_INLINE_COMMANDS: usize = 37;
+pub const NUM_INLINE_COMMANDS: usize = 41;
 
 /// Non-group state/receipt/transaction handlers recovered beyond the group-action table.
 #[rustfmt::skip]
@@ -435,6 +435,10 @@ pub static INLINE_COMMANDS: [InlineDef; NUM_INLINE_COMMANDS] = [
     InlineDef { op: 43, name: "tribute", port: InlinePort::Complete },
     InlineDef { op: 44, name: "demand_tribute", port: InlinePort::Complete },
     InlineDef { op: 45, name: "propose_attack", port: InlinePort::Complete },
+    InlineDef { op: 46, name: "buy", port: InlinePort::Complete },
+    InlineDef { op: 47, name: "sell", port: InlinePort::Complete },
+    InlineDef { op: 48, name: "unqueue", port: InlinePort::StateWired },
+    InlineDef { op: 49, name: "come_out", port: InlinePort::StateWired },
     InlineDef { op: 50, name: "ping", port: InlinePort::Complete },
     InlineDef { op: 51, name: "spline", port: InlinePort::Complete },
     InlineDef { op: 52, name: "speed_set", port: InlinePort::Complete },

@@ -1,8 +1,9 @@
 //! Fail-closed plans for the adjacent market/entity command rows 46 through 49.
 //!
-//! This module is deliberately not exported from `systems/mod.rs` and is not wired into
-//! `command.rs`.  It freezes the deterministic command-prefix ABI while leaving every
-//! state-writing tail behind an explicit typed delegation:
+//! This module is deliberately not exported from `systems/mod.rs`.  It first froze the
+//! deterministic command-prefix ABI outside the dispatcher; `command.rs` now reaches it
+//! through the sibling atomic integration module while leaving incomplete state-writing
+//! tails behind an explicit typed delegation:
 //!
 //! * opcodes 46/47 delegate the successful market loop to the existing
 //!   `economy::{do_buy, do_sell}` primitives;

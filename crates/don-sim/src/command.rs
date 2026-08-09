@@ -129,6 +129,8 @@ use crate::systems::order_dispatch::{
 // world systems.
 #[path = "systems/diplomacy_command_plans.rs"]
 pub mod diplomacy_command_plans;
+#[path = "systems/direct_entity_command_integration.rs"]
+pub mod direct_entity_command_integration;
 #[path = "systems/late_command_plans.rs"]
 pub mod late_command_plans;
 #[path = "systems/object_command_plans.rs"]
@@ -139,6 +141,7 @@ pub mod setup_diplomacy;
 use self::diplomacy_command_plans::{
     DiplomacyCommandReceipt, DiplomacyCommandRequest, DiplomacyCommandState,
 };
+use self::direct_entity_command_integration::{DirectEntityFleetReceipt, DirectEntityFleetRequest};
 use self::late_command_plans::{
     CannonTimeFacts, CannonTimeReceipt, CannonTimeRequest, PlanStatus as LateCommandPlanStatus,
 };
@@ -655,6 +658,18 @@ pub struct CheatInitUnitReceiptRecord {
     pub valid: bool,
 }
 
+/// Bridge-owned evidence for one addressed market/entity command transaction.
+///
+/// The callback owns the atomic host mutation.  Retaining both the expected request and
+/// returned receipt makes a forged identity or frame visible without treating an invalid
+/// receipt as command completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectEntityReceiptRecord {
+    pub expected: DirectEntityFleetRequest,
+    pub observed: DirectEntityFleetReceipt,
+    pub valid: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupHaltTransactionRequest {
     pub group: GroupData,
@@ -961,6 +976,18 @@ pub trait Fleet {
         request: CheatInitUnitRequest,
     ) -> CheatInitUnitTransactionReceipt {
         CheatInitUnitTransactionReceipt::unavailable(request)
+    }
+
+    /// Atomic host boundary for command rows 46 through 49.
+    ///
+    /// Buy and sell hosts may return a validated complete economy transaction.  Unqueue
+    /// and come-out can prove their inactive/stale no-op arm, but their reached
+    /// production/containment action tails deliberately remain open.
+    fn apply_direct_entity_command_transaction(
+        &mut self,
+        request: DirectEntityFleetRequest,
+    ) -> DirectEntityFleetReceipt {
+        DirectEntityFleetReceipt::unavailable(request)
     }
 
     fn apply_group_halt_transaction(
@@ -2392,6 +2419,8 @@ pub struct InlineCommandState {
     pub cheat_warning_receipts: Vec<CheatWarningReceipt>,
     /// Validated world transaction evidence for opcode 67.
     pub cheat_init_unit_receipts: Vec<CheatInitUnitReceiptRecord>,
+    /// Validated host transaction evidence for opcodes 46 through 49.
+    pub direct_entity_receipts: Vec<DirectEntityReceiptRecord>,
     pub command_side_effect_receipts: Vec<CommandSideEffectReceipt>,
     pub turn_data: TurnDataState,
     pub mp_log: bool,
@@ -2437,6 +2466,7 @@ impl Default for InlineCommandState {
             cheat_response_receipts: Vec::new(),
             cheat_warning_receipts: Vec::new(),
             cheat_init_unit_receipts: Vec::new(),
+            direct_entity_receipts: Vec::new(),
             command_side_effect_receipts: Vec::new(),
             turn_data: TurnDataState::default(),
             mp_log: false,
@@ -2520,6 +2550,10 @@ impl Bridge {
         std::mem::take(&mut self.inline.cheat_init_unit_receipts)
     }
 
+    pub fn take_direct_entity_receipts(&mut self) -> Vec<DirectEntityReceiptRecord> {
+        std::mem::take(&mut self.inline.direct_entity_receipts)
+    }
+
     pub fn take_command_side_effect_receipts(&mut self) -> Vec<CommandSideEffectReceipt> {
         std::mem::take(&mut self.inline.command_side_effect_receipts)
     }
@@ -2601,6 +2635,7 @@ impl Bridge {
         match cmd[0] {
             34 => self.process_hotkey(pkg, cmd),
             37..=45 => self.process_diplomacy(cmd, f),
+            46..=49 => self.process_direct_entity_command(cmd, f),
             50 => self.process_ping(pkg, cmd),
             51 => self.process_spline(pkg, cmd),
             // SpeedSetCommand: signed speed dword @+1. Presentation callbacks update
@@ -3242,6 +3277,49 @@ impl Bridge {
         if !receipt.validates(&request) {
             return;
         }
+    }
+
+    /// Rows 46 through 49 through the frozen direct market/entity transaction boundary.
+    ///
+    /// Market rows carry a complete deterministic economy tail.  Addressed unqueue and
+    /// come-out rows use the same exact decoder and callback, but their receipt protocol
+    /// can report completion only for the inactive/stale no-op arm; a reached action is
+    /// retained as an open tail and therefore remains closure-red.
+    fn process_direct_entity_command(&mut self, cmd: &[u8], f: &mut dyn Fleet) {
+        let expected = match cmd.first().copied() {
+            Some(46 | 47) => {
+                let Some(request) =
+                    direct_entity_command_integration::plans::decode_market_command(cmd)
+                else {
+                    return;
+                };
+                DirectEntityFleetRequest::Market {
+                    request,
+                    frame: self.frame,
+                }
+            }
+            Some(48 | 49) => {
+                let Some(request) =
+                    direct_entity_command_integration::plans::decode_direct_entity_command(cmd)
+                else {
+                    return;
+                };
+                DirectEntityFleetRequest::Entity {
+                    request,
+                    frame: self.frame,
+                }
+            }
+            _ => return,
+        };
+        let observed = f.apply_direct_entity_command_transaction(expected);
+        let valid = observed.validates(expected);
+        self.inline
+            .direct_entity_receipts
+            .push(DirectEntityReceiptRecord {
+                expected,
+                observed,
+                valid,
+            });
     }
 
     /// `CommandPackage::process_group` `0x0094A0C0`, opcode 0.
