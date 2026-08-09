@@ -20,7 +20,7 @@ departures. Reachable approximations are drift, not features, and block readines
 
 ## Current measured snapshot
 
-Snapshot date: 2026-08-08. Generated records override prose if the tree advances.
+Snapshot date: 2026-08-09. Generated records override prose if the tree advances.
 
 | Surface | State | Evidence |
 |---|---|---|
@@ -31,7 +31,7 @@ Snapshot date: 2026-08-08. Generated records override prose if the tree advances
 | RL environment | working over incomplete dynamics | native/Gymnasium/VectorEnv/PettingZoo APIs, derived action taxonomy, parameter masks, zero-copy observations, deterministic batch stepping; performance remeasurement is active |
 | AI / playable arena | working integration, not release-ready | deterministic observation-driven Marshal, real command path and A* movement; remaining arena world models are declared product blockers |
 | Browser | working integration build | WebGPU/WebGL2/Canvas2D, responsive touch/desktop command dock, cluster/replay views, wasm/native digest paths; labels do not claim whole-game fidelity |
-| Live retail | gameplay-validated | RoNtoy coach/overlay plus reversible versioned command hook, exact movement trajectory, and fog-safe player-observation work |
+| Live retail | tactical move gameplay-validated; stop recheck pending | RoNtoy plus versioned main-thread command ingress, current-visible v4 observation, and supervised Marshal scout proof; the hardened STOP fallback is validated, while its new active-match acknowledgement awaits a fresh match |
 | BHS / content | substantial, fail-closed | compiler, decoder, VM, aggregate execution, builtin registry, overlays and mod paths; current fidelity work is resolving retail type/member quirks rather than guessing |
 | License/workflow | established | GPL-3.0-or-later; permanent `dev` branch; no branches or worktrees |
 
@@ -145,6 +145,8 @@ current record is `schema/replay-validation.json`; caveats are in
 - Keep retail-control main-thread-only, target-hash/call-site gated, generation-isolated, and
   byte-restoring on every exit.
 - Extend fog-safe observations and bounded action batches into a supervised policy loop.
+- Re-exercise the hardened main-thread STOP acknowledgement in a fresh active match before
+  calling the current controller lifecycle fully converged.
 - Capture stable trajectories and state deltas that can become retail-vs-DoN differential
   fixtures without redistributing proprietary content.
 

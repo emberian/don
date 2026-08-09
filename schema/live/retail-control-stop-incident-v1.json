@@ -1,0 +1,58 @@
+{
+  "schema": "don.retail-control-incident.v1",
+  "recorded_at": "2026-08-09T02:50:00-04:00",
+  "incident": {
+    "time": "2026-08-09T02:43:31-04:00",
+    "pid": 12324,
+    "controller_generation": "tactical-v19",
+    "last_completed_request": {
+      "verb": "find-gather-build",
+      "mode": "validation-only",
+      "frame": 1062,
+      "paused": 1,
+      "note": 0,
+      "placement_tested": 40,
+      "placement_seen": 32,
+      "placement_legal": 0,
+      "validation_result": 0
+    },
+    "next_operation": "host wrote STOP; no parked ready record arrived before the process exited",
+    "windows_error_reporting": {
+      "provider": "Application Error",
+      "event_id": 1000,
+      "report_id": "6ffa479c-824d-4895-8bc6-df35ae9ddc8b",
+      "event_name": "BEX",
+      "exception_code": "0xc0000005",
+      "exception_data": "0x00000008 (execute access)",
+      "fault_offset": "0x00000000",
+      "fault_module": "StackHash_f28e",
+      "dump_retained": false
+    },
+    "causality": "The exit is temporally associated with the STOP sequence, but no dump survived and the exact faulting stack is unavailable. The record does not claim that the preceding read-only query or the worker-thread unhook was uniquely proven causal."
+  },
+  "retired_behavior": [
+    "normal live STOP restoring the five-byte call site first from the controller worker thread",
+    "continuing after any failure to enumerate, suspend, or read the context of an owned thread",
+    "a redundant WriteProcessMemory after the same-process protected memcpy"
+  ],
+  "remediation": [
+    "an active Game::loop now restores its future call site from the retail main-thread callback and acknowledges completion to the worker",
+    "the dormant-process fallback requires every enumerated owned thread to suspend and every context read to succeed before writing",
+    "failure publishes refused-stop and exits the worker instead of claiming parked",
+    "same-process code writes use one protected memcpy plus instruction-cache flush and exact byte comparison"
+  ],
+  "post_fix_validation": {
+    "controller_generation": "tactical-v21",
+    "pid": 7804,
+    "process_scope": "fresh dormant session-0 retail process, explicitly terminated after the test",
+    "checks": [
+      "fresh deploy armed against the pinned executable identity",
+      "dormant STOP fallback reported parked",
+      "external read reproduced E8 45 67 3C 00",
+      "rearm plus expected no-main-thread-response timeout followed by a second successful park",
+      "second external read reproduced E8 45 67 3C 00",
+      "no new Windows Application Error event"
+    ],
+    "remaining_boundary": "The new main-thread STOP acknowledgement path has not yet been re-exercised in an active match because the incident ended the only interactive retail process."
+  }
+}

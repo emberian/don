@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import http.server
 import json
 import os
@@ -159,9 +160,10 @@ def validate_words(words: list[str]) -> None:
     if not words:
         raise SystemExit("a retail command is required")
     allowed = {"observe", "pause", "speed", "speed-up", "speed-down", "checksum",
-               "move", "halt", "attack", "trace-move", "observe-guys",
+               "move", "halt", "attack", "attack-visible", "trace-move", "observe-guys",
                "observe-player", "validate-queue", "validate-build", "gather",
-               "queue", "build", "run-frames", "find-build", "find-gather-build"}
+               "queue", "build", "run-frames", "find-build", "find-gather-build",
+               "find-scout-step", "validate-attack"}
     if words[0] not in allowed:
         raise SystemExit(f"unsupported verb {words[0]!r}")
     for word in words:
@@ -195,7 +197,8 @@ def send(words: list[str], timeout: float, root: str) -> list[dict]:
                 seen[event["phase"]] = event
         if "rejected" in seen or "observed" in seen or "applied" in seen:
             break
-        if "queued" in seen and words[0] not in {"pause", "speed", "move", "halt", "attack"}:
+        if "queued" in seen and words[0] not in {
+                "pause", "speed", "move", "halt", "attack", "attack-visible"}:
             break
         time.sleep(0.05)
     if not seen:
@@ -413,18 +416,54 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
         }
         for item in event["player_queued_types"]
     ]
+    visible_enemies = []
+    for item in event.get("visible_enemy_objects", []):
+        runtime_class_vtable = int(item["class_vtable"], 16)
+        class_vtable = runtime_class_vtable - base + 0x00400000
+        category = categories.get(item["category"], "unknown")
+        type_valid = bool(item["type_valid"])
+        visible = {
+            "id": {
+                "slot": item["owner"], "band": category,
+                "o": item["id"], "uid": item["uid"],
+            },
+            "owner": item["owner"],
+            "object_id": item["id"],
+            "category": category,
+            "runtime_class": PUBLIC_OBJECT_VTABLES.get(class_vtable, "unknown"),
+            "preferred_class_vtable": f"0x{class_vtable:08x}",
+            "type_index": item["type"] if type_valid else None,
+            "type_valid": type_valid,
+            "type_name": (names.get(item["type"], f"TypeIndex({item['type']})")
+                          if type_valid else "unresolved"),
+            "position": {"x": item["x"], "y": item["y"], "z": item["z"]},
+            "hits": item["hits"],
+            "flags": item["flags"],
+            "visibility": "shipped ObjectData::is_seen(local_who,0)",
+        }
+        if category == "unit":
+            visible["heading_u32"] = item["angle"]
+        elif category == "build":
+            visible["complete"] = bool(item["flags"] & 4)
+        visible_enemies.append(visible)
+    protocol_v4 = "visible_enemy_objects" in event
+    protocol = "don.retail-player.v4" if protocol_v4 else "don.retail-player.v3"
     return {
-        "schema": "don.retail-player-observation.v3",
-        "protocol": "don.retail-player.v3",
+        "schema": ("don.retail-player-observation.v4" if protocol_v4 else
+                   "don.retail-player-observation.v3"),
+        "protocol": protocol,
         "retail_executable_sha256": EXPECTED_SHA256,
         "controller_generation": generation,
         "public_scope": {
             "owner": event["local_player"],
             "includes": ["own active object bands", "own stockpile", "own commerce cap",
-                         "own population", "own building gather capacity", "public game clock"],
-            "excludes": ["enemy and neutral object tables", "enemy resources",
-                         "fog-hidden map state", "target-object dereferences",
-                         "visibility flags not proven local-slot-specific"],
+                         "own population", "own building gather capacity", "public game clock"] +
+                        (["enemy objects accepted by shipped is_seen(local_who,0)"]
+                         if protocol_v4 else []),
+            "excludes": (["enemy and neutral object tables"] if not protocol_v4 else
+                         ["fog-hidden enemy objects and all neutral object tables"]) +
+                        ["enemy resources", "fog-hidden map state",
+                         "unproven target-object dereferences"],
         },
         "frame": event["frame"],
         "seconds": event["seconds"],
@@ -465,6 +504,10 @@ def normalize_player_observation(event: dict, generation: str, base: int) -> dic
             "wall": event["player_wall_mark"],
         },
         "objects": sorted(objects, key=lambda item: item["object_id"]),
+        **({"visible_enemies": sorted(
+                visible_enemies,
+                key=lambda item: (item["owner"], item["category"], item["object_id"]),
+            )} if protocol_v4 else {}),
     }
 
 
@@ -479,6 +522,8 @@ def player_observation(root: str, generation: str) -> dict:
         raise RuntimeError("retail player observation exceeded MAX_PUBLIC_OBJECTS")
     if event.get("player_queued_type_truncated"):
         raise RuntimeError("retail queued-type observation exceeded MAX_QUEUED_TYPES")
+    if event.get("visible_enemy_truncated"):
+        raise RuntimeError("retail visible-enemy observation exceeded MAX_VISIBLE_ENEMIES")
     if event.get("paused") != 1:
         raise RuntimeError("REFUSING player observation unless the supervised match is paused")
     observation = normalize_player_observation(event, generation, executable_base(root))
@@ -501,6 +546,9 @@ def player_observation(root: str, generation: str) -> dict:
     if any(obj["production_queue"]["truncated"]
            for obj in observation["objects"] if obj["category"] == "build"):
         raise RuntimeError("retail player observation contains a truncated production queue")
+    if any(not obj["type_valid"] or obj["runtime_class"] == "unknown"
+           for obj in observation.get("visible_enemies", [])):
+        raise RuntimeError("retail player observation contains an unresolved visible enemy")
     return observation
 
 
@@ -572,7 +620,65 @@ def exact_validation(root: str, words: list[str]) -> dict:
     event = next((item for item in events if item.get("phase") == "observed"), None)
     if not event or event.get("paused") != 1:
         raise RuntimeError("retail legality query did not run in the paused main-thread callback")
+    if event.get("note"):
+        raise RuntimeError(f"retail legality query failed closed (note={event['note']})")
     return event
+
+
+def scout_step_validation(root: str, observation: dict, unit_id: int,
+                          goal_x: int, goal_y: int) -> dict:
+    owner = observation["player"]["owner"]
+    event = exact_validation(
+        root, ["find-scout-step", str(owner), str(unit_id), str(goal_x), str(goal_y)]
+    )
+    return {
+        "accepted": bool(event["validation_result"]),
+        "retail_result": event["validation_result"],
+        "currently_visible": bool(event["placement_seen"]),
+        "retail_passable": bool(event["placement_legal"]),
+        "target": ({"x": event["placement_x"], "y": event["placement_y"]}
+                   if event["validation_result"] else None),
+        "oracle": ("current local-slot WorldData::is_really_seen precedes shipped "
+                   "WorldData::is_passable for each diagonal-then-cardinal candidate; "
+                   "target is one 192-Coord frontier step"),
+    }
+
+
+def visible_attack_validation(root: str, observation: dict, actor_id: int,
+                              target: dict) -> dict:
+    owner = observation["player"]["owner"]
+    event = exact_validation(root, [
+        "validate-attack", str(owner), str(actor_id), str(target["owner"]),
+        str(target["object_id"]), str(target["id"]["uid"]),
+    ])
+    return {
+        "accepted": bool(event["validation_result"]),
+        "retail_result": event["validation_result"],
+        "target": target["id"],
+        "oracle": ("LeaderData::is_enemy plus category-specific shipped "
+                   "ObjectData::is_seen(local_who,0) and exact {who,o,uid}"),
+    }
+
+
+def live_unit_policy_rows() -> dict[int, dict]:
+    lines = (HERE.parents[1] / "schema/live/live-tables-unit.tsv").read_text().splitlines()
+    header = lines[0].split("\t")
+    columns = {name: header.index(name) for name in
+               ["type_id", "cat", "attack", "cost0", "cost1", "cost2",
+                "cost3", "cost4", "cost5"]}
+    rows = {}
+    for line in lines[1:]:
+        fields = line.split("\t")
+        type_index = int(fields[columns["type_id"]])
+        cat = int(fields[columns["cat"]])
+        attack = int(fields[columns["attack"]])
+        rows[type_index] = {
+            "cat": cat,
+            "attack": attack,
+            "is_military": attack > 0 and cat not in {5, 8},
+            "value": sum(int(fields[columns[f"cost{i}"]]) for i in range(6)),
+        }
+    return rows
 
 
 def queue_validation(root: str, owner: int, producer_id: int, type_index: int) -> dict:
@@ -668,9 +774,9 @@ def gather_build_query(root: str, observation: dict, worker_id: int,
 
 
 def marshal_gather_state(observation: dict) -> dict:
-    """Reproduce Marshal's exact useful-slot and seat-gap predicates from retail v3."""
-    if observation.get("protocol") != "don.retail-player.v3":
-        raise RuntimeError("gather-state planning requires retail-player.v3")
+    """Reproduce Marshal's useful-slot and seat-gap predicates from retail v3/v4."""
+    if observation.get("protocol") not in {"don.retail-player.v3", "don.retail-player.v4"}:
+        raise RuntimeError("gather-state planning requires retail-player.v3/v4")
     city_gather, peasant_rate, _ = arena_rule_ints()
     complete_cities = sum(1 for obj in observation["objects"]
                           if obj["category"] == "build" and obj.get("complete") and
@@ -698,7 +804,7 @@ def marshal_gather_state(observation: dict) -> dict:
 
 
 def marshal_builder_for(observation: dict, site: dict) -> int | None:
-    """Retail-v3 form of Arena builder_for_except with no active scout exclusion."""
+    """Retail-v3/v4 form of Arena builder_for_except with no active scout exclusion."""
     by_id = {obj["object_id"]: obj for obj in observation["objects"]}
     citizens = [obj for obj in observation["objects"]
                 if obj["category"] == "unit" and obj.get("type_index") in {50, 51}]
@@ -945,14 +1051,217 @@ def live_tech_raw_food_cost(type_index: int) -> int:
     raise RuntimeError(f"live tech table has no TypeIndex {type_index}")
 
 
+MARSHAL_RING_DIRECTIONS = [
+    (4096, 0), (3547, 2048), (2048, 3547), (0, 4096),
+    (-2048, 3547), (-3547, 2048), (-4096, 0), (-3547, -2048),
+    (-2048, -3547), (0, -4096), (2048, -3547), (3547, -2048),
+]
+
+
+def marshal_ring_goals(observation: dict, unit: dict, leg: int) -> list[dict]:
+    """Arena Marshal's 12-leg integer ring geometry, before retail fog/path gates."""
+    width = observation["world"]["tile_xs"]
+    height = observation["world"]["tile_ys"]
+    cx, cy = width // 2, height // 2
+    radius = min(width, height) * 3 // 8
+    sx = unit["position"]["x"] // 192
+    sy = unit["position"]["y"] // 192
+    offsets = [(radius * dx // 4096, radius * dy // 4096)
+               for dx, dy in MARSHAL_RING_DIRECTIONS]
+    start = min(range(12), key=lambda k: (
+        max(abs(offsets[k][0] - (sx - cx)), abs(offsets[k][1] - (sy - cy))), k
+    ))
+    goals = []
+    for extra in range(12):
+        k = (start + leg + extra) % 12
+        tx = min(max(cx + offsets[k][0], 1), width - 2)
+        ty = min(max(cy + offsets[k][1], 1), height - 2)
+        goals.append({
+            "tile_x": tx, "tile_y": ty, "ring_index": k,
+            "coord_x": tx * 192 + 96, "coord_y": ty * 192 + 96,
+        })
+    return goals
+
+
+def marshal_scout_tactical_action(observation: dict, root: str, state: dict,
+                                   already_supported: list[dict]) -> tuple[dict, dict | None]:
+    owner = observation["player"]["owner"]
+    visible = observation.get("visible_enemies", [])
+    enemy_building = next((obj for obj in visible if obj["category"] == "build"), None)
+    if enemy_building and state.get("enemy_base") is None:
+        state["enemy_base"] = {
+            "tile_x": enemy_building["position"]["x"] // 192,
+            "tile_y": enemy_building["position"]["y"] // 192,
+            "target": enemy_building["id"],
+        }
+    if state.get("enemy_base") is not None or observation["frame"] > 420 * 15:
+        return ({
+            "stage": "scout", "source": "Marshal::do_scout", "result": "suppressed",
+            "reason": ("visible enemy building fixed enemy_base; Halt remains an explicit "
+                       "unsupported tactical verb" if state.get("enemy_base") else
+                       "past Marshal scout_until horizon"),
+        }, None)
+
+    objects = observation["objects"]
+    citizens = [obj for obj in objects if obj["category"] == "unit" and
+                obj["type_index"] in {50, 51} and obj["hits"] > 0]
+    cities = [obj for obj in objects if obj["category"] == "build" and
+              obj["type_index"] in {414, 415, 416} and obj.get("complete")]
+    if not citizens or not cities:
+        return ({"stage": "scout", "source": "Marshal::do_scout",
+                 "result": "suppressed", "reason": "no own Citizen or complete capital"}, None)
+    capital = min(cities, key=lambda obj: obj["object_id"])
+    if "reserved_builder_ids" not in state:
+        idle = [obj for obj in citizens if obj["order"]["length"] == 0]
+        state["reserved_builder_ids"] = ([min(idle, key=lambda obj: obj["object_id"])["object_id"]]
+                                          if idle else [])
+    blocked_actors = {
+        (action.get("worker_ids") or [action.get("worker_id")])[0]
+        for action in already_supported
+        if action.get("worker_ids") or action.get("worker_id") is not None
+    }
+    blocked_actors.update(state["reserved_builder_ids"])
+    by_id = {obj["object_id"]: obj for obj in citizens}
+    scout = by_id.get(state.get("scout_id"))
+    if scout is None:
+        candidates = [obj for obj in citizens if obj["object_id"] not in blocked_actors]
+        if not candidates:
+            return ({"stage": "scout", "source": "Marshal::do_scout",
+                     "result": "suppressed", "reason": "all own Citizens are protected actors"},
+                    None)
+        cx = capital["position"]["x"] // 192
+        cy = capital["position"]["y"] // 192
+        scout = max(candidates, key=lambda obj: (
+            max(abs(obj["position"]["x"] // 192 - cx),
+                abs(obj["position"]["y"] // 192 - cy)),
+            obj["object_id"],
+        ))
+        state["scout_id"] = scout["object_id"]
+
+    goal = state.get("scout_goal")
+    sx, sy = scout["position"]["x"] // 192, scout["position"]["y"] // 192
+    arrived = (goal is None or
+               max(abs(goal["tile_x"] - sx), abs(goal["tile_y"] - sy)) <= 3)
+    if not arrived and scout["order"]["kind"] == "MoveOrder":
+        return ({
+            "stage": "scout", "source": "Marshal::do_scout", "result": "in-flight",
+            "scout_id": scout["object_id"], "goal": goal,
+            "reason": "existing exact MoveOrder continues toward the persistent ring goal",
+        }, None)
+    if not arrived and scout["order"]["length"] != 0:
+        return ({
+            "stage": "scout", "source": "Marshal::do_scout", "result": "suppressed",
+            "scout_id": scout["object_id"], "goal": goal,
+            "reason": "persistent scout is busy and has not reached its goal",
+        }, None)
+
+    state["scout_leg"] = int(state.get("scout_leg", 0)) + 1
+    attempts = []
+    for candidate in marshal_ring_goals(observation, scout, state["scout_leg"]):
+        query = scout_step_validation(
+            root, observation, scout["object_id"],
+            candidate["coord_x"], candidate["coord_y"],
+        )
+        attempts.append({"goal": candidate, "retail_frontier": query})
+        if not query["accepted"]:
+            continue
+        state["scout_goal"] = candidate
+        target = query["target"]
+        action = {
+            "verb": "move", "owner": owner, "object_ids": [scout["object_id"]],
+            "actor": scout["id"],
+            "target": target, "queue": 2, "order": 1,
+            "form": -1, "width": -1, "disembark": 0,
+            "scout_evidence": {
+                "policy_goal": candidate,
+                "frontier": query,
+                "selection": ("Arena 12-leg ring geometry; one retail-fog-visible, shipped-"
+                              "passable 192-Coord frontier step toward the persistent goal"),
+            },
+        }
+        return ({
+            "stage": "scout", "source": "Marshal::do_scout", "result": "emit",
+            "scout_id": scout["object_id"], "goal": candidate,
+            "attempts": attempts,
+        }, action)
+    return ({
+        "stage": "scout", "source": "Marshal::do_scout", "result": "suppressed",
+        "scout_id": scout["object_id"], "attempts": attempts,
+        "reason": "no adjacent step was both currently visible and shipped-passable",
+    }, None)
+
+
+def marshal_army_tactical_action(observation: dict, root: str,
+                                 state: dict) -> tuple[dict, dict | None]:
+    rows = live_unit_policy_rows()
+    army = [obj for obj in observation["objects"] if obj["category"] == "unit" and
+            rows.get(obj["type_index"], {}).get("is_military") and obj["hits"] > 0]
+    if not army:
+        return ({"stage": "army_control", "source": "Marshal::army_control",
+                 "result": "suppressed", "reason": "no own live military unit"}, None)
+    value = sum(rows[obj["type_index"]]["value"] for obj in army)
+    mode = state.setdefault("mode", "Massing")
+    if mode == "Pushing" and value * 100 < int(state.get("push_value", 0)) * 40:
+        state["mode"] = "Massing"
+        return ({
+            "stage": "army_control", "source": "Marshal::army_control",
+            "result": "suppressed", "mode": "Massing", "army_value": value,
+            "reason": "the observed own army fell below Marshal's 60-percent-loss retreat gate",
+        }, None)
+    if mode == "Massing" and state.get("enemy_base") is not None and value >= 420:
+        state["mode"] = "Pushing"
+        state["push_value"] = value
+        state["pushes"] = int(state.get("pushes", 0)) + 1
+        return ({
+            "stage": "army_control", "source": "Marshal::army_control",
+            "result": "state-transition", "mode": "Pushing", "army_value": value,
+            "reason": "observed own army reached Level::MARSHAL.push_threshold=420",
+        }, None)
+    visible = observation.get("visible_enemies", [])
+    if state.get("mode") == "Pushing" and visible:
+        actor = min(army, key=lambda obj: obj["object_id"])
+        ax, ay = actor["position"]["x"], actor["position"]["y"]
+        target = min(visible, key=lambda obj: (
+            0 if (obj["category"] == "unit" and
+                  rows.get(obj["type_index"], {}).get("cat") == 5) else
+            1 if (obj["category"] == "unit" and
+                  rows.get(obj["type_index"], {}).get("is_military")) else
+            2 if obj["category"] == "build" else 3,
+            max(abs(obj["position"]["x"] - ax), abs(obj["position"]["y"] - ay)),
+            obj["owner"], obj["object_id"],
+        ))
+        validation = visible_attack_validation(root, observation, actor["object_id"], target)
+        if validation["accepted"]:
+            return ({
+                "stage": "army_control", "source": "Marshal::army_control",
+                "result": "emit", "mode": "Pushing", "actor_id": actor["object_id"],
+                "target": target["id"], "retail_visibility_replay": validation,
+            }, {
+                "verb": "attack", "owner": observation["player"]["owner"],
+                "object_ids": [actor["object_id"]],
+                "actor": actor["id"],
+                "target": target["id"], "target_owner": target["owner"],
+                "target_id": target["object_id"], "target_uid": target["id"]["uid"],
+                "flags": 0, "queue": 2,
+                "visibility_evidence": validation,
+            })
+    return ({
+        "stage": "army_control", "source": "Marshal::army_control",
+        "result": "suppressed", "mode": state.get("mode", "Massing"),
+        "reason": "no observation-safe attack emitted in the current mode",
+    }, None)
+
+
 def arena_marshal_extracted_plan(observation: dict, root: str,
                                  queue_query=queue_validation,
                                  gather_site_query=find_visible_gather_site,
-                                 ordinary_site_query=find_visible_ordinary_site) -> dict:
+                                 ordinary_site_query=find_visible_ordinary_site,
+                                 tactical_state: dict | None = None) -> dict:
     """Faithful supported subsequence of Marshal::act, in its source command order."""
     protocol = observation.get("protocol")
-    if protocol not in {"don.retail-player.v2", "don.retail-player.v3"}:
-        raise RuntimeError("Arena Marshal adapter requires fog-safe retail-player.v2/v3")
+    if protocol not in {"don.retail-player.v2", "don.retail-player.v3",
+                        "don.retail-player.v4"}:
+        raise RuntimeError("Arena Marshal adapter requires fog-safe retail-player.v2/v3/v4")
     owner = observation["player"]["owner"]
     objects = observation["objects"]
     by_type: dict[int, list[dict]] = {}
@@ -967,11 +1276,25 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
     # Marshal::sense cannot infer threat or an enemy base: no enemy list and no
     # last-damaged timestamp are exposed.  Missing evidence means initial Massing, not a
     # fabricated peaceful enemy observation.
+    visible = observation.get("visible_enemies", [])
+    first_enemy_building = next((obj for obj in visible if obj["category"] == "build"), None)
+    if tactical_state is not None:
+        tactical_state.setdefault("mode", "Massing")
+        if first_enemy_building and tactical_state.get("enemy_base") is None:
+            tactical_state["enemy_base"] = {
+                "tile_x": first_enemy_building["position"]["x"] // 192,
+                "tile_y": first_enemy_building["position"]["y"] // 192,
+                "target": first_enemy_building["id"],
+            }
     trace.append({
         "stage": "sense",
         "source": "Marshal::sense",
-        "result": "Massing",
-        "reason": f"{protocol} contains no fog-approved enemy sightings or last-damaged field",
+        "result": tactical_state.get("mode", "Massing") if tactical_state else "Massing",
+        "visible_enemy_count": len(visible),
+        "enemy_base": tactical_state.get("enemy_base") if tactical_state else None,
+        "reason": ("shipped is_seen(local_who,0) supplied current fog-approved enemies"
+                   if protocol == "don.retail-player.v4" else
+                   f"{protocol} contains no fog-approved enemy sightings or last-damaged field"),
     })
 
     # Marshal::economy calls next_tech in this exact order. next_tech does not skip an
@@ -1169,27 +1492,62 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
             "result": "suppressed",
         })
 
+    if tactical_state is None or protocol != "don.retail-player.v4":
+        scout_trace = {
+            "stage": "scout", "source": "Marshal::do_scout", "result": "unsupported",
+            "reason": "retail-player.v4 current-visibility/passability oracle is required",
+        }
+        scout_action = None
+        army_trace = {
+            "stage": "army_control", "source": "Marshal::army_control",
+            "result": "suppressed", "reason": "tactical controller is not enabled",
+        }
+        army_action = None
+    else:
+        scout_trace, scout_action = marshal_scout_tactical_action(
+            observation, root, tactical_state, supported
+        )
+        if scout_action:
+            supported.append(scout_action)
+        army_trace, army_action = marshal_army_tactical_action(
+            observation, root, tactical_state
+        )
+        if army_action:
+            supported.append(army_action)
     trace.extend([
-        {"stage": "scout", "source": "Marshal::do_scout", "result": "unsupported",
-         "reason": "nearest-unexplored waypoint requires a fog-safe explored map plane"},
+        scout_trace,
         {"stage": "military", "source": "Marshal::military", "result": "suppressed",
          "reason": ("before Marshal military_from horizon" if observation["frame"] < 2250
-                    else "no supported public candidate selected")},
-        {"stage": "army_control", "source": "Marshal::army_control", "result": "suppressed",
-         "reason": "no own live unit satisfies Arena TypeRow::is_military"},
+                    else "no supported public production candidate selected")},
+        army_trace,
         {"stage": "employ", "source": "Marshal::employ_except", "result": "unsupported",
          "reason": ("v2 omits exact gather_max needed to allocate a free seat"
                     if protocol.endswith(".v2") else
-                    "v3 exposes capacity but not the complete exact free-seat chain")},
+                    f"{protocol} exposes capacity but not the complete exact free-seat chain")},
     ])
 
-    action = supported[0] if supported else None
+    tactical = [candidate for candidate in supported
+                if candidate["verb"] in {"move", "attack"}]
+    action = (tactical[0] if tactical and tactical_state is not None else
+              supported[0] if supported else None)
     if action and action["verb"] == "queue":
         heads = [23, 0, 0, 0, action["type_index"], 0, 0, 0, 0, action["count"]]
     elif action and action["verb"] == "build":
         heads = [24, action["placement_evidence"]["snapped_x"] // 192,
                  action["placement_evidence"]["snapped_y"] // 192, 0,
                  action["type_index"], 0, 0, 0, 0, 0]
+    elif action and action["verb"] == "move":
+        heads = [6, action["target"]["x"] // 192,
+                 action["target"]["y"] // 192, 0, 0, 0, 0, 0, 0, 0]
+    elif action and action["verb"] == "attack":
+        visible_slots = {
+            (obj["owner"], obj["object_id"], obj["id"]["uid"]): i + 1
+            for i, obj in enumerate(observation.get("visible_enemies", []))
+        }
+        target_slot = visible_slots.get(
+            (action["target_owner"], action["target_id"], action["target_uid"]), 0
+        )
+        heads = [3, 0, 0, target_slot, 0, 0, 0, 0, 0, 0]
     else:
         heads = None
     return {
@@ -1203,7 +1561,12 @@ def arena_marshal_extracted_plan(observation: dict, root: str,
         "supported_actions": supported,
         "selected_action": action,
         "selected_don_env_heads": heads,
-        "selection_rule": "first supported emitted command in Marshal source order; max one live action",
+        "selection_rule": (
+            "one-action supervisor preserves an emitted tactical command before deferred "
+            "economy commands; otherwise first supported command in Marshal source order"
+            if tactical_state is not None else
+            "first supported emitted command in Marshal source order; max one live action"
+        ),
     }
 
 
@@ -1286,6 +1649,64 @@ def economy_action_words(action: dict) -> list[str]:
     raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
 
 
+def validate_tactical_action(action: dict, observation: dict, root: str) -> dict:
+    owner = observation["player"]["owner"]
+    owned = {obj["object_id"]: obj for obj in observation["objects"]}
+    ids = action.get("object_ids", [])
+    if action.get("owner") != owner or len(ids) != 1:
+        raise RuntimeError("tactical action requires exactly one actor from the observed slot")
+    actor = owned.get(ids[0])
+    if not actor or actor["category"] != "unit" or actor["hits"] <= 0:
+        raise RuntimeError("tactical actor is not an observed own live unit")
+    if action.get("actor") != actor["id"]:
+        raise RuntimeError("tactical actor identity changed since planning")
+    if action["verb"] == "move":
+        if (action.get("queue"), action.get("order"), action.get("form"),
+                action.get("width"), action.get("disembark")) != (2, 1, -1, -1, 0):
+            raise RuntimeError("scout move differs from the bounded Marshal command shape")
+        evidence = action.get("scout_evidence") or {}
+        goal = evidence.get("policy_goal") or {}
+        if not all(isinstance(goal.get(key), int) for key in ("coord_x", "coord_y")):
+            raise RuntimeError("scout move lacks its public ring goal")
+        replay = scout_step_validation(
+            root, observation, actor["object_id"], goal["coord_x"], goal["coord_y"]
+        )
+        if not replay["accepted"] or replay["target"] != action.get("target"):
+            return {"validation_result": 0, "frontier_replay": replay,
+                    "validation": "current-fog/passability scout frontier changed"}
+        return {"validation_result": 1, "frontier_replay": replay,
+                "validation": "exact current-fog/passability scout frontier replay"}
+    if action["verb"] == "attack":
+        if action.get("flags") != 0 or action.get("queue") not in {0, 1, 2}:
+            raise RuntimeError("visible attack differs from the bounded retail command shape")
+        target_key = (action.get("target_owner"), action.get("target_id"),
+                      action.get("target_uid"))
+        target = next((obj for obj in observation.get("visible_enemies", [])
+                       if (obj["owner"], obj["object_id"], obj["id"]["uid"]) == target_key),
+                      None)
+        if target is None or action.get("target") != target["id"]:
+            raise RuntimeError("attack target is not in the same paused visible-enemy set")
+        replay = visible_attack_validation(root, observation, actor["object_id"], target)
+        return {"validation_result": int(replay["accepted"]),
+                "visibility_replay": replay,
+                "validation": "exact enemy/identity/shipped-visibility replay"}
+    raise RuntimeError(f"unsupported tactical verb {action['verb']!r}")
+
+
+def tactical_action_words(action: dict) -> list[str]:
+    actor = str(action["object_ids"][0])
+    if action["verb"] == "move":
+        return ["move", str(action["owner"]), str(action["target"]["x"]),
+                str(action["target"]["y"]), str(action["queue"]),
+                str(action["order"]), str(action["form"]), str(action["width"]),
+                str(action["disembark"]), actor]
+    if action["verb"] == "attack":
+        return ["attack-visible", str(action["owner"]), str(action["target_owner"]),
+                str(action["target_id"]), str(action["target_uid"]),
+                str(action["flags"]), str(action["queue"]), actor]
+    raise RuntimeError(f"unsupported tactical verb {action['verb']!r}")
+
+
 def observation_identity(observation: dict) -> dict:
     """Fields that must remain stable across one supervised live-player transaction."""
     return {
@@ -1309,6 +1730,7 @@ def paused_observation_token(observation: dict) -> dict:
         "object_slots": observation["object_slots"],
         "object_marks": observation["object_marks"],
         "objects": observation["objects"],
+        "visible_enemies": observation.get("visible_enemies", []),
     }
 
 
@@ -1415,6 +1837,77 @@ def prove_economy_action(root: str, generation: str, action: dict, output: Path,
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(artifact, indent=2) + "\n")
     return artifact
+
+
+def prove_tactical_action(root: str, generation: str, action: dict, output: Path,
+                          expected_before: dict | None = None) -> dict:
+    """Apply one paused move/visible-attack transaction with exact identity replay."""
+    before = player_observation(root, generation)
+    if (expected_before is not None and
+            paused_observation_token(before) != paused_observation_token(expected_before)):
+        raise RuntimeError("public state/identity changed between tactical plan and apply")
+    validation = validate_tactical_action(action, before, root)
+    if not validation.get("validation_result"):
+        raise RuntimeError("retail visibility/legality replay rejected tactical action")
+    command_events = send(tactical_action_words(action), 8.0, root)
+    queued = next((event for event in command_events if event.get("phase") == "queued"), None)
+    applied = next((event for event in command_events if event.get("phase") == "applied"), None)
+    if not queued or not queued.get("command_hex") or not applied:
+        raise RuntimeError("retail did not serialize and apply the tactical command")
+    if queued.get("paused") != 1 or applied.get("paused") != 1:
+        raise RuntimeError("tactical command escaped the paused main-thread boundary")
+    if action["verb"] == "move":
+        target = action["target"]
+        if (not applied.get("move_valid") or applied.get("move_x") != target["x"] or
+                applied.get("move_y") != target["y"]):
+            raise RuntimeError("retail applied a different MoveOrder destination")
+        expected_order = "MoveOrder"
+    else:
+        if (not applied.get("attack_valid") or
+                applied.get("attack_target_who") != action["target_owner"] or
+                applied.get("attack_target_id") != action["target_id"] or
+                applied.get("attack_target_uid") != action["target_uid"]):
+            raise RuntimeError("retail applied a different AttackOrder target identity")
+        expected_order = "AttackOrder"
+    after = player_observation(root, generation)
+    if before["paused"] != 1 or after["paused"] != 1 or before["frame"] != after["frame"]:
+        raise RuntimeError("tactical transaction escaped its paused zero-frame boundary")
+    if observation_identity(after) != observation_identity(before):
+        raise RuntimeError("retail executable/player/world identity changed during tactical apply")
+    actor = next((obj for obj in after["objects"]
+                  if obj["object_id"] == action["object_ids"][0]), None)
+    if actor is None or actor["id"] != action["actor"] or actor["order"]["kind"] != expected_order:
+        raise RuntimeError(f"retail did not retain the exact {expected_order} on the actor")
+    artifact = {
+        "schema": "don.retail-tactical-action-proof.v1",
+        "protocol": before["protocol"],
+        "controller_generation": generation,
+        "mode": "apply",
+        "action": action,
+        "retail_validation": validation,
+        "retail_command_hex": queued["command_hex"],
+        "retail_applied_event": applied,
+        "frame_boundary": {"before": before["frame"], "after": after["frame"]},
+        "pause_before_after": [before["paused"], after["paused"]],
+        "bounded_settlement": [],
+        "before": before,
+        "after": after,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2) + "\n")
+    return artifact
+
+
+def prove_supported_action(root: str, generation: str, action: dict, output: Path,
+                           expected_before: dict | None = None,
+                           settlement_frames: int = 30,
+                           settlement_limit_frames: int = 180) -> dict:
+    if action.get("verb") in {"move", "attack"}:
+        return prove_tactical_action(root, generation, action, output, expected_before)
+    return prove_economy_action(
+        root, generation, action, output, expected_before,
+        settlement_frames, settlement_limit_frames,
+    )
 
 
 def recover_build_action_proof(root: str, generation: str, action: dict,
@@ -1675,7 +2168,7 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
         raise RuntimeError("dry-run Marshal loop is one decision; repeated decisions require --apply")
     artifact: dict = {
         "schema": "don.retail-arena-marshal-supervised-loop.v1",
-        "protocol": "don.retail-player.v3",
+        "protocol": "don.retail-player.v4",
         "controller_generation": generation,
         "mode": "apply" if apply else "dry-run",
         "requested_decisions": decisions,
@@ -1683,9 +2176,10 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
         "status": "running",
         "safety": {
             "max_actions_per_decision": 1,
-            "proven_action_verbs": ["queue", "build"],
+            "proven_action_verbs": ["queue", "build", "move", "attack-visible"],
             "unsupported_action": "explicit no-op",
-            "fog": "retail-player.v3 own-state only; placement oracle is current-fog gated",
+            "fog": ("retail-player.v4 own state plus shipped-current-visible enemies; "
+                    "placement, scout, and attack queries replay visibility before hidden state"),
             "identity": "exact executable/player/world every decision; same-frame object uid token before apply",
             "pause": "every decision begins and ends paused",
             "stop": "STOP restores the original five retail call-site bytes on every exit",
@@ -1701,12 +2195,15 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
 
     failure: BaseException | None = None
     stable_identity: dict | None = None
+    tactical_state: dict = {"mode": "Massing", "scout_leg": 0}
     try:
         for index in range(decisions):
             step: dict = {"index": index, "status": "observing"}
             artifact["decisions"].append(step)
             checkpoint()
             before = player_observation(root, generation)
+            if before["protocol"] != "don.retail-player.v4":
+                raise RuntimeError("tactical Marshal loop requires retail-player.v4")
             identity = observation_identity(before)
             if stable_identity is None:
                 stable_identity = identity
@@ -1717,12 +2214,17 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
             step["status"] = "planning"
             checkpoint()
 
-            plan = arena_marshal_extracted_plan(before, root)
+            step["tactical_state_before"] = copy.deepcopy(tactical_state)
+            plan = arena_marshal_extracted_plan(
+                before, root, tactical_state=tactical_state
+            )
+            step["tactical_state_after_plan"] = copy.deepcopy(tactical_state)
             action = plan["selected_action"]
             step["plan"] = plan
             step["selected_action"] = action
             step["action_mode"] = (
-                "apply" if action and action.get("verb") in {"queue", "build"} and apply else
+                "apply" if action and action.get("verb") in
+                {"queue", "build", "move", "attack"} and apply else
                 "dry-run" if action and not apply else
                 "no-op-unsupported" if action else "no-op-no-supported-action"
             )
@@ -1731,15 +2233,17 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
 
             proof = None
             advance = None
-            proven = action and action.get("verb") in {"queue", "build"}
+            proven = action and action.get("verb") in {"queue", "build", "move", "attack"}
             if apply and proven:
                 proof_path = output.with_name(
                     f"{output.stem}-step-{index:02d}-action-proof.json"
                 )
-                proof = prove_economy_action(root, generation, action, proof_path,
-                                              expected_before=before,
-                                              settlement_frames=frames_per_decision,
-                                              settlement_limit_frames=frames_per_decision)
+                proof = prove_supported_action(
+                    root, generation, action, proof_path,
+                    expected_before=before,
+                    settlement_frames=frames_per_decision,
+                    settlement_limit_frames=frames_per_decision,
+                )
                 step["proof"] = {
                     "artifact": proof_path.name,
                     "schema": proof["schema"],
@@ -1791,6 +2295,7 @@ def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
             checkpoint()
         artifact["status"] = "complete"
         artifact["status_detail"] = f"completed {decisions} finite decisions"
+        artifact["tactical_state"] = tactical_state
     except BaseException as exc:
         failure = exc
         artifact["status"] = "failed"
@@ -2053,7 +2558,7 @@ def status(root: str) -> None:
 
 def stop(root: str) -> None:
     guest_cmd(f'(echo stop)>"{root}\\STOP"')
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
         ready = guest_cmd(f'type "{root}\\ready.txt"', check=False)
         if "state=parked" in ready:

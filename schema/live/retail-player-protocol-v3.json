@@ -2,6 +2,11 @@
   "schema": "don.retail-player-protocol.v3",
   "protocol": "don.retail-player.v3",
   "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "erratum_2026_08_09": {
+    "scope": "The economy-v15 artifact remains positive evidence for retail BUILD_AT serialization, building materialization, and exact queued BuildOrder identity.",
+    "retired_claim": "That capture cannot prove its pre-validation fog footprint used the exact div_3_table conversion: the controller indexed neighboring globals instead of dereferencing the shipped int *div_3_table at 0x00CAE5FC.",
+    "correction": "Current source dereferences the global before every WCoord/TCoord/FCoord lookup and has a source regression test. A tactical-v19 validation-only query exercised the corrected gather visibility loop, but no new positive gather-building materialization is claimed."
+  },
   "observation_delta_from_v2": {
     "own_buildings": [
       "completion from ObjectData flags bit 2",

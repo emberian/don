@@ -13,7 +13,9 @@ game:
   frame/pause state, and the first controlled unit's order-list state/vtable.
 - `observe-guys WHO ID` coherently reads the PDB-defined inline `PtrArray<Guy>` and the exact
   position/heading/destination/offset tuple for each physical body in a retail unit.
-- `STOP` restores the five original bytes. The DLL then parks; deleting `STOP` re-arms it.
+- `STOP` asks an active retail callback to restore the five original bytes before acknowledging
+  park. A dormant-process fallback suspends every owned thread and refuses on any enumeration,
+  suspension, context, or byte-write failure. Deleting `STOP` re-arms a successfully parked DLL.
 - A mapped generation is never overwritten or unloaded. `upgrade` parks it and loads a uniquely
   named next generation with an independent request/event/STOP directory in the same live PID.
 - `trajectory` drives one bounded retail move, records every distinct simulation frame, restores
@@ -36,11 +38,18 @@ game:
   gates every prospective gather footprint through current fog before retail validation/capacity,
   and replays the selected site immediately before one bounded BUILD_AT. It emits the same ten
   `don-env` heads, records unsupported branches as no-ops, and is dry-run by default.
+- `don.retail-player.v4` adds only current-visible enemy identities. Enemy relation and visibility
+  are replayed through shipped methods on the main thread; direct visibility leaf calls are
+  restricted to measured Unit, Animal, Build, and Wall vtables, and unknown classes fail closed.
+- `find-scout-step` tests a diagonal and two cardinal 192-Coord frontier candidates. Each candidate
+  must be currently visible before shipped passability is called. `attack-visible` similarly
+  requires an exact visible target `{owner,o,uid}` and replays that visibility immediately before
+  issuing retail's attack command.
 - `marshal-loop` repeats that adapter for 1–8 supervised decisions with an exact 1–30-frame
-  horizon. Each decision starts and ends paused, applies at most one already-proven queue/build
-  verb, records unsupported branches as literal no-ops, and rejects executable/player/world or
-  same-frame own-object identity changes. Its final fail-safe always restores pause and STOP-parks
-  the immutable controller generation.
+  horizon. Each decision starts and ends paused, carries Marshal's scout and Massing/Pushing state
+  across decisions, applies at most one already-proven queue/build/move/attack-visible verb, and
+  rejects executable/player/world or same-frame public-object identity changes. Its final
+  fail-safe always restores pause and STOP-parks the immutable controller generation.
 
 Build and attach:
 
@@ -73,6 +82,9 @@ python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v1
 python3 tools/retail-control/retailctl.py rearm --generation marshal-loop-v16
 python3 tools/retail-control/retailctl.py marshal-loop --apply --decisions 8 \
   --frames-per-decision 30 --generation marshal-loop-v16
+python3 tools/retail-control/retailctl.py rearm --generation tactical-v19
+python3 tools/retail-control/retailctl.py marshal-loop --apply --decisions 1 \
+  --frames-per-decision 15 --generation tactical-v19
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

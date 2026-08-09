@@ -1,7 +1,8 @@
 # Bidirectional live retail control
 
 Status: **live-validated for pause, unit movement, exact own-state observation, and a
-bounded supervised scout policy against a retail solo skirmish.**
+bounded supervised scout policy against a retail solo skirmish. The current STOP hardening is
+dormant-process validated; its new active-main-thread acknowledgement still needs a fresh match.**
 Target: the one supported `riseofnations.exe`, SHA-256
 `30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079`.
 
@@ -37,6 +38,7 @@ on the game thread.
 | `halt WHO IDS...` | `issue_halt` `0x009418D0` | retail-generated group+halt bytes; selected unit order list becomes empty |
 | `move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK IDS...` | `issue_move_to` `0x00941720` | retail-generated group+move bytes; current order pointer/vtable transition |
 | `attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED IDS...` | `issue_attack` `0x009415E0` | retail-generated group+attack bytes; current order pointer/vtable transition |
+| `attack-visible WHO TARGET_WHO TARGET_ID TARGET_UID FLAGS QUEUED IDS...` | `issue_attack` `0x009415E0` after current-visibility replay | exact visible target identity; retail packet; applied `AttackOrder` owner/index/uid |
 
 `WHO` and IDs are retail object owner/index coordinates, not DoN entity IDs. `X` and `Y`
 are retail `Coord` integers, exactly as exposed by `donscan`; the control layer performs no
@@ -346,6 +348,12 @@ post-state are `schema/live/retail-player-protocol-v3.json`,
 `retail-arena-marshal-camp-action-proof-v1.json`, and
 `retail-player-observation-v3-post-camp.json`.
 
+Erratum (2026-08-09): the economy-v15 capture remains positive evidence for retail's BUILD_AT
+packet, materialized Camp, and exact queued BuildOrder identity. It does **not** prove that its
+pre-validation fog footprint used the exact coordinate conversion. That generation indexed from
+the `div_3_table` pointer variable instead of dereferencing it. Current source corrects the lookup
+and has a regression test; the v3 protocol record carries the same scoped erratum.
+
 ### Finite supervised Marshal loop
 
 Generation `marshal-loop-v16` turns the single-decision adapter into a finite transaction loop,
@@ -387,6 +395,63 @@ pause `[1,1]`, frame delta 30, and `unsupported_substitution=false`. The full lo
 command proofs are `schema/live/retail-arena-marshal-supervised-loop-v1.json` and sibling
 `step-00`/`step-01-action-proof.json` files. The terminal ready record is `state=parked` for PID
 12324 at frame 1047.
+
+### Current-visible tactical Marshal loop (v4)
+
+`don.retail-player.v4` extends v3 with a deliberately narrow enemy surface: exact objects that are
+enemies of the unique local human and are visible *now*. The callback uses shipped
+`LeaderData::is_enemy`, then dispatches only to the measured concrete `UnitData`, `AnimalData`,
+`BuildData`, or `WallData` `is_seen` leaf. An unknown class fails the whole observation closed;
+there is no layout-based cast. The public record contains stable `{slot,band,o,uid}` identity and
+ordinary visible type/class/position/hits fields. It still excludes enemy economy, queues, orders,
+remembered-but-hidden objects, and every raw fog or terrain plane. The complete additive contract
+is [`schema/live/retail-player-protocol-v4.json`](../../schema/live/retail-player-protocol-v4.json).
+
+The v4 scout adapter preserves Marshal's persistent citizen, ring leg, and waypoint. It tests at
+most three one-tile frontier candidates toward that waypoint: diagonal, X-only, then Y-only. For
+each candidate, `WorldData::is_really_seen` for the local F cell runs before the shipped
+`WorldData::is_passable` W-cell query. Only the accepted destination leaves the process. The
+coordinate conversion dereferences the shipped `int *div_3_table` at `0x00CAE5FC` before indexing;
+the same correction was applied to the older gather-footprint gate and is protected by a source
+regression test. Apply replays the entire query against an identical paused public-state token.
+
+The tactical supervisor also carries Marshal's `Massing`/`Pushing` state between decisions. It
+enters `Pushing` only after a currently observed enemy base and observed own live military value
+at least 420, returns to `Massing` after a greater-than-60-percent observed loss, and attacks only a
+target still present in the current-visible list. `validate-attack` replays enemy relation, active
+object index, uid, concrete class, and current visibility immediately before `attack-visible`.
+The executor then requires retail's exact applied `AttackOrder` target owner/index/uid. With no
+visible enemy or military unit in the current match, that positive attack lifecycle remains
+validation- and unit-tested rather than claimed as a live attack.
+
+Generation `tactical-v19` was exercised in the existing paused solo match. The dry transaction at
+frame 1047 selected Citizen `{slot:0,o:4,uid:11}`. Its diagonal and east candidates entered a
+shipped-impassable W cell; the third, currently visible cardinal candidate `(1368,32520)` was
+accepted. The bounded apply replayed the same result, and retail serialized MOVE_TO as
+`00010004000758050000087f000000000000000000000102ffff00`. At the unchanged paused frame, the
+front order was the exact rebased `MoveOrder` vtable `0x00B4A12C` with that destination. One exact
+15-frame boundary advanced 1047→1062, preserved actor uid 11, and ended paused. The controller then
+reported `state=parked`; an external read again found the original call bytes
+`E8 45 67 3C 00`. The full transaction and its zero-frame command proof are
+[`schema/live/retail-arena-marshal-tactical-v19-live-proof.json`](../../schema/live/retail-arena-marshal-tactical-v19-live-proof.json)
+and its sibling `retail-arena-marshal-tactical-v19-live-proof-step-00-action-proof.json`.
+
+A later validation-only corrected gather query completed coherently at paused frame 1062
+(`tested=40`, `currently-visible=32`, no legal site, `note=0`). The immediately following STOP did
+not publish `parked`; PID 12324 then exited with Windows Error Reporting event 1000, BEX execute
+access violation `0xC0000005` at null. No dump survived, so this record does not pretend to prove
+whether the query or the old worker-thread unhook was uniquely causal. The temporal association was
+enough to retire that normal unhook path.
+
+Current source asks the active retail main-thread callback to restore the future call site and
+acknowledge it before the worker reports `parked`. Its dormant fallback refuses unless every owned
+thread suspends and every context read succeeds, and the redundant post-protection
+`WriteProcessMemory` is gone. Generation `tactical-v21` validated that fallback twice against a
+fresh dormant pinned process, including rearm and the expected no-loop timeout; both external reads
+found `E8 45 67 3C 00`, and no new Application Error was recorded. That deliberately does not stand
+in for an active-match exercise of the new acknowledgement path. The incident and remediation are
+captured in
+[`schema/live/retail-control-stop-incident-v1.json`](../../schema/live/retail-control-stop-incident-v1.json).
 
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 

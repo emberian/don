@@ -1,0 +1,63 @@
+{
+  "schema": "don.retail-player-protocol.v4",
+  "protocol": "don.retail-player.v4",
+  "retail_executable_sha256": "30478a44b577cb11ebcbbbf53d3e93ba02fd2aacf3bdefa6552c9b6449625079",
+  "observation_delta_from_v3": {
+    "visible_enemies": [
+      "only live enemy objects accepted by LeaderData::is_enemy for the unique local human",
+      "only objects currently accepted by the shipped concrete UnitData, AnimalData, BuildData, or WallData is_seen leaf",
+      "stable identity {slot,band,o,uid}, public type/class, position, hits, flags, and unit heading"
+    ],
+    "fog_rule": "no remembered-but-currently-hidden object, enemy economy/order/queue, raw fog plane, or terrain cell is published",
+    "class_gate": "unknown or layout-compatible-looking object classes fail the entire observation closed before a direct shipped leaf call"
+  },
+  "scout_frontier": {
+    "policy": "Arena Marshal's persistent 12-leg citizen ring geometry",
+    "candidate_order": "one 192-Coord diagonal step toward the goal, then its X-only and Y-only cardinal fallbacks",
+    "oracle_order": [
+      "convert the candidate through the shipped div_3_table pointer",
+      "require WorldData::is_really_seen for the candidate F cell and local slot",
+      "only then call shipped WorldData::is_passable for its W cell"
+    ],
+    "apply_replay": "repeat the same current-fog/passability query at the identical paused public-state token and require the same destination before MOVE_TO"
+  },
+  "visible_attack": {
+    "target": "exact currently visible enemy {slot,band,o,uid}",
+    "apply_replay": "repeat owner/enemy relation, active object identity, concrete class, uid, and current shipped visibility in the paused main-thread callback",
+    "command": "attack-visible calls shipped CommandManager::issue_attack and requires a front AttackOrder resolving to the same owner/o/uid"
+  },
+  "supervised_marshal_state": {
+    "persistent": [
+      "Massing or Pushing mode",
+      "reserved builder identities",
+      "scout identity, leg, and goal",
+      "observed enemy-base identity",
+      "push value and push count"
+    ],
+    "push_gate": "Massing enters Pushing only with an observed enemy base and own live military value at least Level::MARSHAL.push_threshold=420",
+    "retreat_gate": "Pushing returns to Massing after an observed loss greater than 60 percent of the push value",
+    "transaction": "one queue, build, move, or attack-visible command per decision; exact 1..30-frame boundary; every decision starts and ends paused"
+  },
+  "proof": {
+    "move": "retail-generated opcode 0x07, exact applied MoveOrder destination, stable actor identity, and same-frame post-command public observation",
+    "attack": "retail-generated attack opcode, exact applied AttackOrder owner/o/uid, stable actor/target identities, and same-frame post-command public observation",
+    "loop": "pinned executable/player/world identity, persistent tactical state, exact frame delta, pause restoration, and STOP-restored call-site bytes"
+  },
+  "excluded": [
+    "remembered but currently hidden enemies",
+    "enemy and neutral economy, queues, orders, diplomacy internals, or private targets",
+    "raw fog, terrain, passability, ownership, blocker, danger, or resource planes",
+    "passability or attack validation before current-visibility replay",
+    "unsupported object classes or unresolved object/order identities",
+    "direct state writes, guessed targets, or substituted commands"
+  ],
+  "fail_closed": [
+    "wrong executable identity or call-site bytes",
+    "ambiguous local human or torn public observation",
+    "unknown concrete object or order vtable",
+    "truncated own or visible-enemy object set",
+    "changed frame, pause, public state, actor uid, target uid, visibility, or legality replay",
+    "wrong serialized opcode or missing exact applied order",
+    "frame/pause/STOP mismatch"
+  ]
+}

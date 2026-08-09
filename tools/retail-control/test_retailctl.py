@@ -14,6 +14,24 @@ SPEC.loader.exec_module(retailctl)
 
 
 class RetailCtlTests(unittest.TestCase):
+    def test_coord_lookup_global_is_dereferenced_before_indexing(self):
+        source = Path(__file__).with_name("retail_control.c").read_text()
+        self.assertNotIn("g_base + RVA_COORD_LOOKUP +", source)
+        self.assertIn(
+            "rd32(g_base + RVA_COORD_LOOKUP, &coord_lookup)", source
+        )
+
+    def test_live_stop_restores_on_the_retail_callback_before_worker_fallback(self):
+        source = Path(__file__).with_name("retail_control.c").read_text()
+        callback = source[source.index("static void __cdecl on_turn_frame"):
+                          source.index("static BYTE *emit8")]
+        removal = source[source.index("static int remove_hook(void)"):
+                         source.index("static int image_supported")]
+        self.assertIn("write_code(g_hook_addr, g_hook_orig, 5)", callback)
+        self.assertIn("InterlockedExchange(&g_stop_ack, 1)", callback)
+        self.assertLess(removal.index("g_stop_ack"), removal.index("quiesce"))
+        self.assertNotIn("WriteProcessMemory", source)
+
     def test_controller_generations_have_isolated_paths_and_unique_dll_names(self):
         self.assertEqual(
             retailctl.generation_root("v1"), r"C:\Users\Public\don-retail-control"
@@ -38,6 +56,7 @@ class RetailCtlTests(unittest.TestCase):
             ["checksum"], ["halt", "0", "12", "13"],
             ["move", "0", "100", "200", "2", "1", "-1", "-1", "0", "12"],
             ["attack", "0", "1", "22", "0", "2", "12", "13"],
+            ["attack-visible", "0", "1", "22", "37", "0", "2", "12"],
             ["trace-move", "0", "12", "100", "200", "120"],
             ["observe-guys", "0", "12"],
             ["observe-player"], ["validate-queue", "0", "2000", "50"],
@@ -47,6 +66,8 @@ class RetailCtlTests(unittest.TestCase):
             ["build", "0", "1", "2", "3", "4", "427", "2", "3"],
             ["find-build", "0", "1488", "32544", "8", "417", "3"],
             ["find-gather-build", "0", "2496", "30144", "12", "12", "418", "3"],
+            ["find-scout-step", "0", "3", "2496", "30144"],
+            ["validate-attack", "0", "12", "1", "22", "37"],
             ["run-frames", "30"],
         ]:
             retailctl.validate_words(words)
@@ -59,6 +80,119 @@ class RetailCtlTests(unittest.TestCase):
     def test_unknown_verb_is_refused(self):
         with self.assertRaises(SystemExit):
             retailctl.validate_words(["cheat"])
+
+    def test_tactical_move_and_attack_replay_exact_public_identities(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        observation["protocol"] = "don.retail-player.v4"
+        actor = next(obj for obj in observation["objects"] if obj["category"] == "unit")
+        move = {
+            "verb": "move", "owner": 0, "object_ids": [actor["object_id"]],
+            "actor": actor["id"], "target": {"x": 1920, "y": 2112},
+            "queue": 2, "order": 1, "form": -1, "width": -1, "disembark": 0,
+            "scout_evidence": {"policy_goal": {"coord_x": 3000, "coord_y": 4000}},
+        }
+        frontier = {"accepted": True, "target": move["target"]}
+        with mock.patch.object(retailctl, "scout_step_validation",
+                               return_value=frontier) as replay:
+            result = retailctl.validate_tactical_action(move, observation, "unused")
+        self.assertEqual(result["validation_result"], 1)
+        replay.assert_called_once_with(
+            "unused", observation, actor["object_id"], 3000, 4000
+        )
+        self.assertEqual(retailctl.tactical_action_words(move), [
+            "move", "0", "1920", "2112", "2", "1", "-1", "-1", "0",
+            str(actor["object_id"]),
+        ])
+
+        target = {
+            "id": {"slot": 1, "band": "unit", "o": 7, "uid": 91},
+            "owner": 1, "object_id": 7, "category": "unit",
+        }
+        observation["visible_enemies"] = [target]
+        attack = {
+            "verb": "attack", "owner": 0, "object_ids": [actor["object_id"]],
+            "actor": actor["id"], "target": target["id"], "target_owner": 1,
+            "target_id": 7, "target_uid": 91, "flags": 0, "queue": 2,
+        }
+        with mock.patch.object(retailctl, "visible_attack_validation",
+                               return_value={"accepted": True}) as replay:
+            result = retailctl.validate_tactical_action(attack, observation, "unused")
+        self.assertEqual(result["validation_result"], 1)
+        replay.assert_called_once_with("unused", observation, actor["object_id"], target)
+        self.assertEqual(retailctl.tactical_action_words(attack), [
+            "attack-visible", "0", "1", "7", "91", "0", "2",
+            str(actor["object_id"]),
+        ])
+
+    def test_tactical_proof_requires_exact_applied_move_order(self):
+        before = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        before["protocol"] = "don.retail-player.v4"
+        before["visible_enemies"] = []
+        actor = next(obj for obj in before["objects"] if obj["category"] == "unit")
+        action = {
+            "verb": "move", "owner": 0, "object_ids": [actor["object_id"]],
+            "actor": actor["id"], "target": {"x": 1920, "y": 2112},
+        }
+        after = copy.deepcopy(before)
+        next(obj for obj in after["objects"]
+             if obj["object_id"] == actor["object_id"])["order"]["kind"] = "MoveOrder"
+        events = [
+            {"phase": "queued", "paused": 1, "command_hex": "0007"},
+            {"phase": "applied", "paused": 1, "move_valid": 1,
+             "move_x": 1920, "move_y": 2112},
+        ]
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(retailctl, "player_observation",
+                                  side_effect=[before, after]), \
+                mock.patch.object(retailctl, "validate_tactical_action",
+                                  return_value={"validation_result": 1}), \
+                mock.patch.object(retailctl, "tactical_action_words",
+                                  return_value=["move"]), \
+                mock.patch.object(retailctl, "send", return_value=events):
+            proof = retailctl.prove_tactical_action(
+                "unused", "test-generation", action, Path(td) / "proof.json", before
+            )
+        self.assertEqual(proof["schema"], "don.retail-tactical-action-proof.v1")
+        self.assertEqual(proof["frame_boundary"]["before"], proof["frame_boundary"]["after"])
+        self.assertEqual(proof["pause_before_after"], [1, 1])
+
+    def test_marshal_attack_requires_persistent_push_state_and_visible_target(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        actor = next(obj for obj in observation["objects"] if obj["category"] == "unit")
+        actor["type_index"] = 351
+        target = {
+            "id": {"slot": 1, "band": "build", "o": 2000, "uid": 44},
+            "owner": 1, "object_id": 2000, "category": "build", "type_index": 414,
+            "position": {"x": 30000, "y": 30000},
+        }
+        observation["visible_enemies"] = [target]
+        state = {"mode": "Massing", "enemy_base": {"tile_x": 156, "tile_y": 156}}
+        rows = {351: {"is_military": True, "value": 420, "cat": 0},
+                414: {"is_military": False, "value": 0, "cat": 0}}
+        with mock.patch.object(retailctl, "live_unit_policy_rows", return_value=rows), \
+                mock.patch.object(retailctl, "visible_attack_validation",
+                                  return_value={"accepted": True}):
+            trace, action = retailctl.marshal_army_tactical_action(
+                observation, "unused", state
+            )
+            self.assertEqual(trace["result"], "state-transition")
+            self.assertIsNone(action)
+            self.assertEqual(state["mode"], "Pushing")
+            trace, action = retailctl.marshal_army_tactical_action(
+                observation, "unused", state
+            )
+        self.assertEqual(trace["result"], "emit")
+        self.assertEqual(action["verb"], "attack")
+        self.assertEqual(action["target"], target["id"])
 
     def test_live_trajectory_artifact_is_bounded_and_aslr_normalized(self):
         artifact = json.loads(
@@ -384,6 +518,9 @@ class RetailCtlTests(unittest.TestCase):
             (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
             .read_text()
         )
+        template["protocol"] = "don.retail-player.v4"
+        template["schema"] = "don.retail-player-observation.v4"
+        template["visible_enemies"] = []
         observations = []
         for frame in [717, 747, 747, 777, 777, 807]:
             obs = copy.deepcopy(template)
@@ -391,9 +528,9 @@ class RetailCtlTests(unittest.TestCase):
             observations.append(obs)
         queue = {"verb": "queue", "owner": 0, "producer_id": 2000,
                  "type_index": 50, "count": 1}
-        unsupported = {"verb": "move", "owner": 0, "object_ids": [0]}
+        move = {"verb": "move", "owner": 0, "object_ids": [0]}
         plans = [{"selected_action": queue}, {"selected_action": None},
-                 {"selected_action": unsupported}]
+                 {"selected_action": move}]
         proof = {
             "schema": "don.retail-economy-action-proof.v1",
             "retail_validation": {"validation_result": 1},
@@ -412,8 +549,8 @@ class RetailCtlTests(unittest.TestCase):
                 mock.patch.object(retailctl, "player_observation",
                                   side_effect=observations), \
                 mock.patch.object(retailctl, "arena_marshal_extracted_plan",
-                                  side_effect=plans), \
-                mock.patch.object(retailctl, "prove_economy_action",
+                                  side_effect=plans) as planner, \
+                mock.patch.object(retailctl, "prove_supported_action",
                                   return_value=proof) as apply_action, \
                 mock.patch.object(retailctl, "advance_frames", side_effect=advances), \
                 mock.patch.object(retailctl, "send", return_value=[]), \
@@ -426,13 +563,16 @@ class RetailCtlTests(unittest.TestCase):
             run = json.loads(path.read_text())
         self.assertEqual(run["status"], "complete")
         self.assertEqual([step["action_mode"] for step in run["decisions"]],
-                         ["apply", "no-op-no-supported-action", "no-op-unsupported"])
+                         ["apply", "no-op-no-supported-action", "apply"])
         self.assertEqual([step["invariants"]["actions_applied"]
-                          for step in run["decisions"]], [1, 0, 0])
+                          for step in run["decisions"]], [1, 0, 1])
         self.assertEqual([step["invariants"]["frame_delta"]
                           for step in run["decisions"]], [30, 30, 30])
-        apply_action.assert_called_once()
-        self.assertEqual(apply_action.call_args.kwargs["settlement_limit_frames"], 30)
+        self.assertEqual(apply_action.call_count, 2)
+        self.assertTrue(all(call.kwargs["settlement_limit_frames"] == 30
+                            for call in apply_action.call_args_list))
+        tactical_states = [call.kwargs["tactical_state"] for call in planner.call_args_list]
+        self.assertTrue(all(state is tactical_states[0] for state in tactical_states))
 
     def test_same_frame_apply_token_covers_complete_public_own_object_state(self):
         observation = json.loads(
@@ -451,6 +591,9 @@ class RetailCtlTests(unittest.TestCase):
             (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
             .read_text()
         )
+        template["protocol"] = "don.retail-player.v4"
+        template["schema"] = "don.retail-player-observation.v4"
+        template["visible_enemies"] = []
         changed = copy.deepcopy(template)
         changed["frame"] += 30
         changed["player"]["tribe"] += 1

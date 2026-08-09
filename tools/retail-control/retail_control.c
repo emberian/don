@@ -56,11 +56,21 @@
 #define RVA_BUILD_GATHER_RADIUS (0x0063bc60u - PREFERRED_BASE)
 #define RVA_BUILD_MAX_GATHERERS (0x0063c430u - PREFERRED_BASE)
 #define RVA_WORLD_IS_REALLY_SEEN (0x006b42c0u - PREFERRED_BASE)
+#define RVA_WORLD_IS_PASSABLE (0x006b23c0u - PREFERRED_BASE)
+#define RVA_UNIT_IS_SEEN    (0x00607a60u - PREFERRED_BASE)
+#define RVA_ANIMAL_IS_SEEN  (0x005d8160u - PREFERRED_BASE)
+#define RVA_BUILD_IS_SEEN   (0x0062e1a0u - PREFERRED_BASE)
+#define RVA_WALL_IS_SEEN    (0x00642bd0u - PREFERRED_BASE)
+#define RVA_LEADER_IS_ENEMY (0x006ebaa0u - PREFERRED_BASE)
 #define RVA_VECTOR_DIST_COORDS (0x0046d060u - PREFERRED_BASE)
 #define RVA_MOVE_ORDER_VTABLE (0x00b4a12cu - PREFERRED_BASE)
+#define RVA_ATTACK_ORDER_VTABLE (0x00b47628u - PREFERRED_BASE)
 #define RVA_GATHER_ORDER_VTABLE (0x00b49c1cu - PREFERRED_BASE)
 #define RVA_BUILD_ORDER_VTABLE (0x00b4834cu - PREFERRED_BASE)
+#define RVA_UNIT_VTABLE  (0x00b417d0u - PREFERRED_BASE)
 #define RVA_BUILD_VTABLE (0x00b42174u - PREFERRED_BASE)
+#define RVA_ANIMAL_VTABLE (0x00b4145cu - PREFERRED_BASE)
+#define RVA_WALL_VTABLE  (0x00b42cf8u - PREFERRED_BASE)
 
 #define OFF_GAME_FRAME 0x550u
 #define OFF_GAME_SECONDS 0x560u
@@ -79,6 +89,7 @@
 #define OFF_UNIT_ORDERS_Y 0x74u
 #define OBJECT_COORD_XOR 0x00063637u
 #define MOVE_ORDER_VBASE_OFFSET 84u
+#define ATTACK_ORDER_VBASE_OFFSET 40u
 
 #define PACKAGE_LENGTH 0x10u
 #define PACKAGE_BYTES  0x12u
@@ -91,6 +102,7 @@
 #define MAX_IDS 128
 #define MAX_GUYS 32
 #define MAX_PUBLIC_OBJECTS 256
+#define MAX_VISIBLE_ENEMIES 128
 #define MAX_BUILD_QUEUE 16
 #define MAX_QUEUED_TYPES 128
 #define MAX_COMMAND_CAPTURE 160
@@ -107,6 +119,7 @@ enum Verb {
     V_MOVE,
     V_HALT,
     V_ATTACK,
+    V_ATTACK_VISIBLE,
     V_TRACE_MOVE,
     V_OBSERVE_GUYS,
     V_OBSERVE_PLAYER,
@@ -117,7 +130,9 @@ enum Verb {
     V_VALIDATE_BUILD,
     V_RUN_FRAMES,
     V_FIND_BUILD,
-    V_FIND_GATHER_BUILD
+    V_FIND_GATHER_BUILD,
+    V_FIND_SCOUT_STEP,
+    V_VALIDATE_ATTACK
 };
 
 typedef struct {
@@ -148,6 +163,7 @@ typedef struct {
 } queued_type_sample_t;
 
 typedef struct {
+    int owner;
     int id;
     unsigned pointer;
     unsigned category;          /* 1 unit, 2 building, 3 wall */
@@ -245,6 +261,10 @@ typedef struct {
     int move_orig_y;
     short move_off_x;
     short move_off_y;
+    int attack_valid;
+    int attack_target_who;
+    int attack_target_id;
+    unsigned attack_target_uid;
     int guy_length;
     int guy_capacity;
     int guy_count;
@@ -275,6 +295,9 @@ typedef struct {
     int player_object_count;
     int player_object_truncated;
     public_object_t player_objects[MAX_PUBLIC_OBJECTS];
+    int visible_enemy_count;
+    int visible_enemy_truncated;
+    public_object_t visible_enemies[MAX_VISIBLE_ENEMIES];
     int validation_result;
     int placement_x;
     int placement_y;
@@ -316,6 +339,7 @@ static char g_stop_path[MAX_PATH];
 static char g_log_path[MAX_PATH];
 static volatile LONG g_pending;
 static volatile LONG g_stopping;
+static volatile LONG g_stop_ack;
 static request_t g_request;
 static verify_t g_verify;
 static trace_t g_trace;
@@ -328,6 +352,8 @@ static BYTE *g_hook_addr;
 static BYTE g_hook_orig[5];
 static BYTE *g_trampoline;
 static int g_hook_installed;
+
+static int write_code(BYTE *dst, const BYTE *src, unsigned n);
 
 static int join_path(char out[MAX_PATH], const char *root, const char *leaf) {
     int n = _snprintf(out, MAX_PATH, "%s\\%s", root, leaf);
@@ -400,6 +426,185 @@ static unsigned object_ptr(unsigned who, int id, int *is_unit) {
         if (is_unit) *is_unit = 1;
     }
     return object;
+}
+
+static int object_category(unsigned who, int id) {
+    unsigned objects = 0, mark = 0;
+    if (who >= 10 || id < 0 ||
+        !rd32(g_base + RVA_OBJECTS_PTR, &objects) || !objects)
+        return 0;
+    if (rd32(objects + OFF_UNIT_MARK + who * 4u, &mark) && (unsigned)id < mark)
+        return 1;
+    if (rd32(objects + 0x184u + who * 4u, &mark) && id >= 2000 && (unsigned)id < mark)
+        return 2;
+    if (rd32(objects + 0x1acu + who * 4u, &mark) && id >= 3000 && (unsigned)id < mark)
+        return 3;
+    return 0;
+}
+
+typedef int (__attribute__((thiscall)) *fn_seen_object)(const void *self,
+                                                        int who, int force);
+typedef int (__attribute__((thiscall)) *fn_is_enemy)(const void *self, int who);
+
+static int object_is_seen(unsigned object, int category, unsigned class_vtable,
+                          int local_who) {
+    unsigned rva;
+    if (category == 1) {
+        if (class_vtable == g_base + RVA_UNIT_VTABLE)
+            rva = RVA_UNIT_IS_SEEN;
+        else if (class_vtable == g_base + RVA_ANIMAL_VTABLE)
+            rva = RVA_ANIMAL_IS_SEEN;
+        else
+            return -1;
+    } else if (category == 2 && class_vtable == g_base + RVA_BUILD_VTABLE) {
+        rva = RVA_BUILD_IS_SEEN;
+    } else if (category == 3 && class_vtable == g_base + RVA_WALL_VTABLE) {
+        rva = RVA_WALL_IS_SEEN;
+    } else {
+        /* Direct leaf calls are valid only for the measured concrete pool classes.
+           GoodData/ItemData and any future class must fail closed instead of being
+           passed to a layout-compatible-looking UnitData leaf. */
+        return -1;
+    }
+    /* The second argument remains zero: UnitData::is_seen then executes the
+       shipped cloak/detection and local-slot fog path instead of its bypass. */
+    return ((fn_seen_object)(g_base + rva))((const void *)object, local_who, 0) != 0;
+}
+
+static int sample_visible_identity(public_object_t *out, unsigned object,
+                                   int owner, int id, int category) {
+    unsigned ptype = 0, raw = 0, vtable = 0;
+    unsigned char flags = 0, live_owner = 0;
+    unsigned short uid = 0;
+    short live_id = -1;
+    memset(out, 0, sizeof(*out));
+    if (!safe_read(object + OFF_OBJ_FLAGS, &flags, 1) || !(flags & 1u) ||
+        !safe_read(object + 9u, &live_owner, 1) || live_owner != (unsigned char)owner ||
+        !rd16(object + 0x0au, &live_id) || live_id != (short)id ||
+        !safe_read(object + 0x30u, &uid, 2) ||
+        !rd32(object, &vtable) ||
+        !rd32(object + 0x18u, &ptype) || !ptype ||
+        !safe_read(ptype + 4u, &out->type, 4) ||
+        !rd32(object + 0x0cu, &raw))
+        return 0;
+    out->z = (int)(raw ^ OBJECT_COORD_XOR);
+    if (!rd32(object + 0x10u, &raw)) return 0;
+    out->x = (int)(raw ^ OBJECT_COORD_XOR);
+    if (!rd32(object + 0x14u, &raw)) return 0;
+    out->y = (int)(raw ^ OBJECT_COORD_XOR);
+    if (!safe_read(object + 0x20u, &out->hits, 4)) return 0;
+    out->owner = owner;
+    out->id = id;
+    out->pointer = object;
+    out->category = (unsigned)category;
+    out->flags = flags;
+    out->uid = uid;
+    out->type_valid = 1;
+    out->class_vtable = vtable;
+    if (category == 1) rd32(object + OFF_UNIT_ANGLE, &out->angle);
+    return 1;
+}
+
+static void observe_visible_enemies(event_t *e, unsigned leaders, unsigned leader,
+                                    unsigned objects, int local_who) {
+    int enemy_who;
+    for (enemy_who = 0; enemy_who < 8; enemy_who++) {
+        unsigned enemy_leader, array, list = 0;
+        unsigned enemy_flags = 0;
+        int length = -1, capacity = -1, unit_mark = -1, build_mark = -1, wall_mark = -1;
+        int starts[3], ends[3], categories[3], band, id;
+        if (enemy_who == local_who) continue;
+        enemy_leader = leaders + (unsigned)enemy_who * 0x6eecu;
+        if (!rd32(enemy_leader, &enemy_flags)) {
+            e->note = 20;
+            return;
+        }
+        if (!(enemy_flags & 1u) ||
+            !((fn_is_enemy)(g_base + RVA_LEADER_IS_ENEMY))(
+                (const void *)leader, enemy_who))
+            continue;
+        array = objects + OFF_OBJECTS_LISTS + (unsigned)enemy_who * OBJECTS_ARRAY_STRIDE;
+        if (!safe_read(array + 4u, &length, 4) ||
+            !safe_read(array + 8u, &capacity, 4) ||
+            !rd32(array + OFF_ARRAY_LIST, &list) ||
+            !safe_read(objects + 0x15cu + (unsigned)enemy_who * 4u, &unit_mark, 4) ||
+            !safe_read(objects + 0x184u + (unsigned)enemy_who * 4u, &build_mark, 4) ||
+            !safe_read(objects + 0x1acu + (unsigned)enemy_who * 4u, &wall_mark, 4) ||
+            length < 0 || capacity < length || length > 32768 || capacity > 32768 ||
+            (length && !list) || unit_mark < 0 || unit_mark > length ||
+            build_mark < 2000 || build_mark > length ||
+            wall_mark < 3000 || wall_mark > length) {
+            e->note = 20;
+            return;
+        }
+        starts[0] = 0; ends[0] = unit_mark; categories[0] = 1;
+        starts[1] = 2000; ends[1] = build_mark; categories[1] = 2;
+        starts[2] = 3000; ends[2] = wall_mark; categories[2] = 3;
+        for (band = 0; band < 3; band++) {
+            for (id = starts[band]; id < ends[band]; id++) {
+                unsigned object = 0, vtable = 0;
+                int seen;
+                public_object_t *out;
+                if (!rd32(list + (unsigned)id * 4u, &object) || !object ||
+                    !rd32(object, &vtable))
+                    continue;
+                seen = object_is_seen(object, categories[band], vtable, local_who);
+                if (seen < 0) {
+                    e->note = 20;
+                    e->visible_enemy_count = 0;
+                    return;
+                }
+                if (!seen)
+                    continue;
+                if (e->visible_enemy_count >= MAX_VISIBLE_ENEMIES) {
+                    e->visible_enemy_truncated = 1;
+                    continue;
+                }
+                out = &e->visible_enemies[e->visible_enemy_count];
+                if (!sample_visible_identity(out, object, enemy_who, id,
+                                             categories[band])) {
+                    e->note = 20;
+                    e->visible_enemy_count = 0;
+                    return;
+                }
+                e->visible_enemy_count++;
+            }
+        }
+    }
+}
+
+static int validate_visible_attack_target(event_t *e, int owner, int target_who,
+                                          int target_id, unsigned target_uid) {
+    unsigned leaders = 0, leader = 0, target = 0, vtable = 0;
+    unsigned short uid = 0;
+    int category, seen;
+    if (!e->first_object || e->paused != 1 || owner < 0 || owner >= 8 ||
+        target_who < 0 || target_who >= 8 ||
+        !rd32(g_base + RVA_LEADERS_PTR, &leaders) || !leaders) {
+        e->note = 22;
+        return -1;
+    }
+    leader = leaders + (unsigned)owner * 0x6eecu;
+    if (!((fn_is_enemy)(g_base + RVA_LEADER_IS_ENEMY))(
+            (const void *)leader, target_who))
+        return 0;
+    target = object_ptr((unsigned)target_who, target_id, NULL);
+    category = object_category((unsigned)target_who, target_id);
+    if (!target || !category || !safe_read(target + 0x30u, &uid, 2) ||
+        uid != (unsigned short)target_uid || !rd32(target, &vtable))
+        return 0;
+    seen = object_is_seen(target, category, vtable, owner);
+    if (seen < 0) {
+        e->note = 22;
+        return -1;
+    }
+    if (!seen) return 0;
+    e->validation_result = 1;
+    e->attack_valid = 1;
+    e->attack_target_who = target_who;
+    e->attack_target_id = target_id;
+    e->attack_target_uid = uid;
+    return 1;
 }
 
 static void observe_public_order(unsigned unit, unsigned who, public_object_t *out) {
@@ -641,6 +846,7 @@ static void observe_player_public(event_t *e) {
                 continue;
             }
             out = &e->player_objects[e->player_object_count++];
+            out->owner = who;
             out->id = i;
             out->pointer = p;
             out->category = (unsigned)band_category[band];
@@ -689,6 +895,12 @@ static void observe_player_public(event_t *e) {
                 }
             }
         }
+    }
+    observe_visible_enemies(e, leaders, leader, objects, who);
+    if (e->note) {
+        e->player_object_count = 0;
+        e->visible_enemy_count = 0;
+        return;
     }
     /* Although this callback is on the main thread, reject any load-transition or
        torn root/metadata sample instead of publishing a best-effort observation. */
@@ -781,6 +993,20 @@ static void observe_unit(event_t *e, const request_t *r) {
         safe_read(complete + 0x48u, &e->move_orig_y, 4);
         safe_read(complete + 0x4cu, &e->move_off_x, 2);
         safe_read(complete + 0x4eu, &e->move_off_y, 2);
+    }
+    if (vtable == g_base + RVA_ATTACK_ORDER_VTABLE &&
+        order >= ATTACK_ORDER_VBASE_OFFSET) {
+        unsigned complete = order - ATTACK_ORDER_VBASE_OFFSET;
+        unsigned short uid = 0;
+        int target_who = -1, target_id = -1;
+        if (safe_read(complete + 0x08u, &target_id, 4) &&
+            safe_read(complete + 0x0cu, &target_who, 4) &&
+            safe_read(complete + 0x10u, &uid, 2)) {
+            e->attack_valid = 1;
+            e->attack_target_who = target_who;
+            e->attack_target_id = target_id;
+            e->attack_target_uid = uid;
+        }
     }
     if (r->verb == V_OBSERVE_GUYS) {
         int length = -1, capacity = -1, count, i;
@@ -884,6 +1110,9 @@ typedef int (__attribute__((fastcall)) *fn_vector_dist_coords)(const int *x1,
                                                                const int *y1,
                                                                const int *x2,
                                                                const int *y2);
+typedef int (__attribute__((thiscall)) *fn_world_passable)(const void *self,
+                                                           const int *x,
+                                                           const int *y);
 
 static void make_group(unsigned char group[GROUP_SIZE], const request_t *r) {
     int i;
@@ -914,6 +1143,7 @@ static int fcell_is_really_seen(unsigned world, int fx, int fy, int who) {
 
 static int gather_candidate_is_visible(unsigned world, unsigned ptype,
                                        int snap_x, int snap_y, int who) {
+    unsigned coord_lookup = 0;
     unsigned circle_x = g_base + RVA_CIRCLE_X;
     unsigned circle_y = g_base + RVA_CIRCLE_Y;
     unsigned circle_radius = g_base + RVA_CIRCLE_RADIUS;
@@ -930,17 +1160,18 @@ static int gather_candidate_is_visible(unsigned world, unsigned ptype,
         !safe_read(world + 0x04u, &world_ys, 4) ||
         !safe_read(world + 0x18u, &tile_xs, 4) ||
         !safe_read(world + 0x1cu, &tile_ys, 4) ||
+        !rd32(g_base + RVA_COORD_LOOKUP, &coord_lookup) || !coord_lookup ||
         world_xs <= 0 || world_ys <= 0 ||
         tile_xs != world_xs * 4 || tile_ys != world_ys * 4 ||
         snap_x < 0 || snap_y < 0 || snap_x >= tile_xs * 192 ||
         snap_y >= tile_ys * 192 ||
-        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_x >> 8) * 4u,
+        !safe_read(coord_lookup + (unsigned)(snap_x >> 8) * 4u,
                    &center_wx, 4) ||
-        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_y >> 8) * 4u,
+        !safe_read(coord_lookup + (unsigned)(snap_y >> 8) * 4u,
                    &center_wy, 4) ||
-        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_x >> 6) * 4u,
+        !safe_read(coord_lookup + (unsigned)(snap_x >> 6) * 4u,
                    &center_tx, 4) ||
-        !safe_read(g_base + RVA_COORD_LOOKUP + (unsigned)(snap_y >> 6) * 4u,
+        !safe_read(coord_lookup + (unsigned)(snap_y >> 6) * 4u,
                    &center_ty, 4) ||
         !safe_read(circle_radius + (unsigned)circle_index * 4u, &circle_count, 4) ||
         circle_count < 1 || circle_count > 12873)
@@ -1129,6 +1360,85 @@ static int dispatch(const request_t *r, event_t *e) {
             }
             return 1;
         }
+        case V_FIND_SCOUT_STEP: {
+            unsigned world = 0, coord_lookup = 0;
+            int tile_xs = 0, tile_ys = 0;
+            int step_x = 0, step_y = 0, candidate_x[3], candidate_y[3];
+            int fx, fy, wx, wy, i;
+            long long max_x, max_y;
+            if (!e->first_object || e->paused != 1 ||
+                !rd32(g_base + RVA_WORLD_PTR, &world) || !world ||
+                !rd32(g_base + RVA_COORD_LOOKUP, &coord_lookup) || !coord_lookup ||
+                !safe_read(world + 0x18u, &tile_xs, 4) ||
+                !safe_read(world + 0x1cu, &tile_ys, 4) ||
+                tile_xs <= 0 || tile_ys <= 0) {
+                e->note = 21;
+                return 1;
+            }
+            max_x = (long long)tile_xs * 192ll;
+            max_y = (long long)tile_ys * 192ll;
+            if (r->arg[1] < 0 || r->arg[2] < 0 ||
+                (long long)r->arg[1] >= max_x || (long long)r->arg[2] >= max_y)
+                return 1;
+            if (r->arg[1] > e->unit_x) step_x = 192;
+            else if (r->arg[1] < e->unit_x) step_x = -192;
+            if (r->arg[2] > e->unit_y) step_y = 192;
+            else if (r->arg[2] < e->unit_y) step_y = -192;
+            candidate_x[0] = e->unit_x + step_x;
+            candidate_y[0] = e->unit_y + step_y;
+            candidate_x[1] = e->unit_x + step_x;
+            candidate_y[1] = e->unit_y;
+            candidate_x[2] = e->unit_x;
+            candidate_y[2] = e->unit_y + step_y;
+            for (i = 0; i < 3; i++) {
+                int target_x = candidate_x[i], target_y = candidate_y[i];
+                int j, duplicate = 0;
+                for (j = 0; j < i; j++)
+                    if (candidate_x[j] == target_x && candidate_y[j] == target_y)
+                        duplicate = 1;
+                if (duplicate || target_x < 0 || target_y < 0 ||
+                    (long long)target_x >= max_x || (long long)target_y >= max_y ||
+                    (target_x == e->unit_x && target_y == e->unit_y))
+                    continue;
+                e->placement_tested++;
+                if (!safe_read(coord_lookup + (unsigned)(target_x >> 7) * 4u,
+                               &fx, 4) ||
+                    !safe_read(coord_lookup + (unsigned)(target_y >> 7) * 4u,
+                               &fy, 4)) {
+                    e->note = 21;
+                    return 1;
+                }
+                /* Confidentiality boundary: shipped passability reads terrain, so
+                   invoke it only after this candidate's F cell is currently visible. */
+                if (!fcell_is_really_seen(world, fx, fy, r->arg[0]))
+                    continue;
+                e->placement_seen++;
+                if (!safe_read(coord_lookup + (unsigned)(target_x >> 8) * 4u,
+                               &wx, 4) ||
+                    !safe_read(coord_lookup + (unsigned)(target_y >> 8) * 4u,
+                               &wy, 4)) {
+                    e->note = 21;
+                    return 1;
+                }
+                if (!((fn_world_passable)(g_base + RVA_WORLD_IS_PASSABLE))(
+                        (const void *)world, &wx, &wy))
+                    continue;
+                e->placement_legal++;
+                e->validation_result = 1;
+                e->placement_x = target_x;
+                e->placement_y = target_y;
+                e->placement_snap_x = wx;
+                e->placement_snap_y = wy;
+                e->placement_ring = i;
+                break;
+            }
+            return 1;
+        }
+        case V_VALIDATE_ATTACK: {
+            validate_visible_attack_target(e, r->arg[0], r->arg[1],
+                                           r->arg[2], (unsigned)r->arg[3]);
+            return 1;
+        }
         case V_PAUSE:
             ((fn_int1)(g_base + RVA_ISSUE_PAUSE))(manager, r->arg[0]);
             break;
@@ -1158,6 +1468,16 @@ static int dispatch(const request_t *r, event_t *e) {
             make_group(group, r);
             ((fn_attack)(g_base + RVA_ISSUE_ATTACK))(manager, group,
                 r->arg[1], r->arg[2], r->arg[3], r->arg[4]);
+            break;
+        case V_ATTACK_VISIBLE:
+            /* Replay exact enemy diplomacy, {who,o,uid}, and shipped
+               Object::is_seen(observer,0) in the same callback that issues. */
+            if (validate_visible_attack_target(e, r->arg[0], r->arg[1],
+                                               r->arg[2], (unsigned)r->arg[3]) <= 0)
+                return 0;
+            make_group(group, r);
+            ((fn_attack)(g_base + RVA_ISSUE_ATTACK))(manager, group,
+                r->arg[1], r->arg[2], r->arg[4], r->arg[5]);
             break;
         case V_GATHER:
             make_group(group, r);
@@ -1248,10 +1568,20 @@ static int verify_applied(event_t *e, const verify_t *v) {
         case V_HALT:
             return e->order_length == 0 && v->initial_order_length != 0;
         case V_MOVE:
+            return e->order_length > 0 && e->move_valid &&
+                   e->current_order_vtable == g_base + RVA_MOVE_ORDER_VTABLE &&
+                   e->move_x == v->req.arg[1] && e->move_y == v->req.arg[2];
         case V_ATTACK:
-            return e->order_length >= 0 &&
-                   (e->order_length != v->initial_order_length ||
-                    e->current_order_vtable != v->initial_order_vtable);
+            return e->order_length > 0 && e->attack_valid &&
+                   e->current_order_vtable == g_base + RVA_ATTACK_ORDER_VTABLE &&
+                   e->attack_target_who == v->req.arg[1] &&
+                   e->attack_target_id == v->req.arg[2];
+        case V_ATTACK_VISIBLE:
+            return e->order_length > 0 && e->attack_valid &&
+                   e->current_order_vtable == g_base + RVA_ATTACK_ORDER_VTABLE &&
+                   e->attack_target_who == v->req.arg[1] &&
+                   e->attack_target_id == v->req.arg[2] &&
+                   e->attack_target_uid == (unsigned)v->req.arg[3];
         default:
             return 0;
     }
@@ -1262,7 +1592,21 @@ static void __cdecl on_turn_frame(void) {
     event_t e;
     request_t r;
     LONG verb;
-    if (g_stopping) return;
+    if (g_stopping) {
+        /* The active game thread has already followed the patched call into this
+           trampoline, so it can restore the future call site without racing its
+           own instruction fetch.  The trampoline stays mapped until process exit. */
+        if (g_hook_installed &&
+            InterlockedCompareExchange(&g_stop_ack, 0, 0) == 0) {
+            if (write_code(g_hook_addr, g_hook_orig, 5)) {
+                g_hook_installed = 0;
+                InterlockedExchange(&g_stop_ack, 1);
+            } else {
+                InterlockedExchange(&g_stop_ack, -1);
+            }
+        }
+        return;
+    }
 
     trace_tick();
 
@@ -1300,10 +1644,13 @@ static void __cdecl on_turn_frame(void) {
         e.phase = (r.verb == V_OBSERVE || r.verb == V_OBSERVE_GUYS ||
                    r.verb == V_OBSERVE_PLAYER || r.verb == V_VALIDATE_QUEUE ||
                    r.verb == V_VALIDATE_BUILD || r.verb == V_FIND_BUILD ||
-                   r.verb == V_FIND_GATHER_BUILD) ? 0 : 1;
+                   r.verb == V_FIND_GATHER_BUILD ||
+                   r.verb == V_FIND_SCOUT_STEP ||
+                   r.verb == V_VALIDATE_ATTACK) ? 0 : 1;
         push_event(&e);
         if (r.verb == V_PAUSE || r.verb == V_SPEED_SET || r.verb == V_MOVE ||
-            r.verb == V_HALT || r.verb == V_ATTACK) {
+            r.verb == V_HALT || r.verb == V_ATTACK ||
+            r.verb == V_ATTACK_VISIBLE) {
             g_verify.active = 1;
             g_verify.req = r;
             g_verify.started = GetTickCount();
@@ -1354,20 +1701,36 @@ static BYTE *build_trampoline(void) {
     return m;
 }
 
+static void resume_all(HANDLE *threads, int n);
+
 static int suspend_others(HANDLE *threads, int cap) {
     HANDLE snap;
     THREADENTRY32 te;
     DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
     int n = 0;
     snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) return 0;
+    if (snap == INVALID_HANDLE_VALUE) return -1;
     te.dwSize = sizeof(te);
-    if (Thread32First(snap, &te)) do {
+    if (!Thread32First(snap, &te)) {
+        CloseHandle(snap);
+        return -1;
+    }
+    do {
         HANDLE h;
-        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self || n >= cap) continue;
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+        if (n >= cap) {
+            CloseHandle(snap);
+            resume_all(threads, n);
+            return -1;
+        }
         h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, te.th32ThreadID);
-        if (h && SuspendThread(h) != (DWORD)-1) threads[n++] = h;
-        else if (h) CloseHandle(h);
+        if (!h || SuspendThread(h) == (DWORD)-1) {
+            if (h) CloseHandle(h);
+            CloseHandle(snap);
+            resume_all(threads, n);
+            return -1;
+        }
+        threads[n++] = h;
     } while (Thread32Next(snap, &te));
     CloseHandle(snap);
     return n;
@@ -1384,8 +1747,9 @@ static int eip_in_patch(HANDLE *threads, int n) {
     for (i = 0; i < n; i++) {
         memset(&c, 0, sizeof(c));
         c.ContextFlags = CONTEXT_CONTROL;
-        if (GetThreadContext(threads[i], &c) &&
-            c.Eip >= (DWORD)g_hook_addr && c.Eip < (DWORD)g_hook_addr + 5)
+        if (!GetThreadContext(threads[i], &c))
+            return -1;
+        if (c.Eip >= (DWORD)g_hook_addr && c.Eip < (DWORD)g_hook_addr + 5)
             return 1;
     }
     return 0;
@@ -1394,9 +1758,13 @@ static int eip_in_patch(HANDLE *threads, int n) {
 static int quiesce(HANDLE *threads, int cap) {
     int n = 0, tries;
     for (tries = 0; tries < 30; tries++) {
+        int in_patch;
         n = suspend_others(threads, cap);
-        if (!eip_in_patch(threads, n)) return n;
+        if (n < 0) return -1;
+        in_patch = eip_in_patch(threads, n);
+        if (in_patch == 0) return n;
         resume_all(threads, n);
+        if (in_patch < 0) return -1;
         Sleep(2);
     }
     return -1;
@@ -1404,14 +1772,12 @@ static int quiesce(HANDLE *threads, int cap) {
 
 static int write_code(BYTE *dst, const BYTE *src, unsigned n) {
     DWORD old;
-    SIZE_T wrote = 0;
     if (!VirtualProtect(dst, n, PAGE_EXECUTE_READWRITE, &old)) return 0;
     memcpy(dst, src, n);
-    VirtualProtect(dst, n, old, &old);
     FlushInstructionCache(g_self_process, dst, n);
-    WriteProcessMemory(g_self_process, dst, src, n, &wrote);
+    if (!VirtualProtect(dst, n, old, &old)) return 0;
     FlushInstructionCache(g_self_process, dst, n);
-    return wrote == n;
+    return memcmp(dst, src, n) == 0;
 }
 
 static int install_hook(void) {
@@ -1439,10 +1805,22 @@ static int install_hook(void) {
 
 static int remove_hook(void) {
     HANDLE threads[128];
-    int n, ok;
+    int n, ok, tries;
     if (!g_hook_installed) return 1;
+    InterlockedExchange(&g_stop_ack, 0);
     InterlockedExchange(&g_stopping, 1);
-    Sleep(30);
+    /* Normal live removal is acknowledged by the retail main-thread callback.
+       This avoids rewriting an instruction from the worker while Game::loop is
+       active.  Dormant targets retain the all-threads-suspended fallback. */
+    for (tries = 0; tries < 100; tries++) {
+        LONG ack = InterlockedCompareExchange(&g_stop_ack, 0, 0);
+        if (ack > 0) {
+            log_line("hook removed on retail main thread; DLL parked");
+            return 1;
+        }
+        if (ack < 0) return 0;
+        Sleep(20);
+    }
     n = quiesce(threads, 128);
     if (n < 0) return 0;
     ok = write_code(g_hook_addr, g_hook_orig, 5);
@@ -1490,6 +1868,7 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq halt WHO ID...
  * seq move WHO X Y QUEUED ORDER FORM WIDTH DISEMBARK ID...
  * seq attack WHO TARGET_WHO TARGET_ID FLAGS QUEUED ID...
+ * seq attack-visible WHO TARGET_WHO TARGET_ID TARGET_UID FLAGS QUEUED ID...
  * seq trace-move WHO ID X Y MAX_FRAMES
  * seq run-frames FRAMES
  * seq observe-guys WHO ID
@@ -1498,6 +1877,8 @@ static int tokenize(char *line, char **tok, int cap) {
  * seq validate-build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
  * seq find-build WHO ORIGIN_X ORIGIN_Y RADIUS TYPE WORKER_ID
  * seq find-gather-build WHO ORIGIN_X ORIGIN_Y FIRST_RING LAST_RING TYPE WORKER_ID
+ * seq find-scout-step WHO UNIT_ID GOAL_X GOAL_Y
+ * seq validate-attack WHO UNIT_ID TARGET_WHO TARGET_ID TARGET_UID
  * seq gather WHO TARGET_ID QUEUED ID...
  * seq queue WHO TYPE COUNT PRODUCER_ID...
  * seq build WHO X1 Y1 X2 Y2 TYPE QUEUED ID...
@@ -1530,6 +1911,31 @@ static int parse_request(char *line, request_t *r) {
         r->num_ids = 1;
         r->ids[0] = (short)id;
     }
+    else if (!strcmp(t[1], "find-scout-step") && n == 6) {
+        int id;
+        r->verb = V_FIND_SCOUT_STEP;
+        r->arg[0] = parse_int(t[2], &ok);
+        id = parse_int(t[3], &ok);
+        r->arg[1] = parse_int(t[4], &ok);
+        r->arg[2] = parse_int(t[5], &ok);
+        if (id < 0 || id > 32767) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
+    }
+    else if (!strcmp(t[1], "validate-attack") && n == 7) {
+        int id;
+        r->verb = V_VALIDATE_ATTACK;
+        r->arg[0] = parse_int(t[2], &ok);
+        id = parse_int(t[3], &ok);
+        r->arg[1] = parse_int(t[4], &ok);
+        r->arg[2] = parse_int(t[5], &ok);
+        r->arg[3] = parse_int(t[6], &ok);
+        if (id < 0 || id > 32767 || r->arg[1] < 0 || r->arg[1] >= 8 ||
+            r->arg[2] < 0 || r->arg[2] > 32767 ||
+            r->arg[3] < 0 || r->arg[3] > 65535) ok = 0;
+        r->num_ids = 1;
+        r->ids[0] = (short)id;
+    }
     else if (!strcmp(t[1], "pause") && n == 3) {
         r->verb = V_PAUSE; r->arg[0] = parse_int(t[2], &ok);
         if (r->arg[0] != 0 && r->arg[0] != 1) ok = 0;
@@ -1553,6 +1959,16 @@ static int parse_request(char *line, request_t *r) {
         r->verb = V_ATTACK;
         for (i = 0; i < 5; i++) r->arg[i] = parse_int(t[2 + i], &ok);
         first = 7;
+    } else if (!strcmp(t[1], "attack-visible") && n >= 9) {
+        r->verb = V_ATTACK_VISIBLE;
+        for (i = 0; i < 6; i++) r->arg[i] = parse_int(t[2 + i], &ok);
+        if (r->arg[0] < 0 || r->arg[0] >= 8 ||
+            r->arg[1] < 0 || r->arg[1] >= 8 ||
+            r->arg[2] < 0 || r->arg[2] > 32767 ||
+            r->arg[3] < 0 || r->arg[3] > 65535 ||
+            r->arg[4] != 0 ||
+            r->arg[5] < 0 || r->arg[5] > 2) ok = 0;
+        first = 8;
     } else if (!strcmp(t[1], "gather") && n >= 6) {
         r->verb = V_GATHER;
         r->arg[0] = parse_int(t[2], &ok);
@@ -1624,9 +2040,11 @@ static int parse_request(char *line, request_t *r) {
     } else return 0;
     if (!ok) return 0;
     if ((r->verb == V_MOVE || r->verb == V_HALT || r->verb == V_ATTACK ||
+         r->verb == V_ATTACK_VISIBLE ||
          r->verb == V_TRACE_MOVE || r->verb == V_OBSERVE_GUYS ||
          r->verb == V_VALIDATE_QUEUE || r->verb == V_VALIDATE_BUILD ||
          r->verb == V_FIND_BUILD || r->verb == V_FIND_GATHER_BUILD ||
+         r->verb == V_FIND_SCOUT_STEP || r->verb == V_VALIDATE_ATTACK ||
          r->verb == V_GATHER || r->verb == V_QUEUE_UP || r->verb == V_BUILD) &&
         (r->arg[0] < 0 || r->arg[0] >= 10)) return 0;
     if (first) {
@@ -1659,7 +2077,8 @@ static const char *verb_name(unsigned verb) {
         case V_SPEED_SET: return "speed"; case V_SPEED_UP: return "speed-up";
         case V_SPEED_DOWN: return "speed-down"; case V_CHECKSUM: return "checksum";
         case V_MOVE: return "move"; case V_HALT: return "halt";
-        case V_ATTACK: return "attack"; case V_TRACE_MOVE: return "trace-move";
+        case V_ATTACK: return "attack"; case V_ATTACK_VISIBLE: return "attack-visible";
+        case V_TRACE_MOVE: return "trace-move";
         case V_OBSERVE_GUYS: return "observe-guys";
         case V_OBSERVE_PLAYER: return "observe-player";
         case V_GATHER: return "gather"; case V_QUEUE_UP: return "queue";
@@ -1669,6 +2088,8 @@ static const char *verb_name(unsigned verb) {
         case V_RUN_FRAMES: return "run-frames";
         case V_FIND_BUILD: return "find-build";
         case V_FIND_GATHER_BUILD: return "find-gather-build";
+        case V_FIND_SCOUT_STEP: return "find-scout-step";
+        case V_VALIDATE_ATTACK: return "validate-attack";
         default: return "unknown";
     }
 }
@@ -1717,6 +2138,8 @@ static void write_event(const event_t *e) {
         "\"move_coll_x\":%d,\"move_coll_y\":%d,"
         "\"move_orig_x\":%d,\"move_orig_y\":%d,"
         "\"move_off_x\":%d,\"move_off_y\":%d,"
+        "\"attack_valid\":%d,\"attack_target_who\":%d,"
+        "\"attack_target_id\":%d,\"attack_target_uid\":%u,"
         "\"note\":%u,\"guy_length\":%d,\"guy_capacity\":%d,"
         "\"guy_count\":%d,\"guy_truncated\":%d,\"guys\":[",
         e->seq, verb_name(e->verb), phase_name(e->phase), e->win_tick, e->game,
@@ -1731,7 +2154,9 @@ static void write_event(const event_t *e) {
         e->move_tolerance, e->move_pause, e->move_retry, e->move_attempts,
         e->move_timer, e->move_facing, e->move_dest_x, e->move_dest_y,
         e->move_last_x, e->move_last_y, e->move_coll_x, e->move_coll_y,
-        e->move_orig_x, e->move_orig_y, e->move_off_x, e->move_off_y, e->note,
+        e->move_orig_x, e->move_orig_y, e->move_off_x, e->move_off_y,
+        e->attack_valid, e->attack_target_who, e->attack_target_id,
+        e->attack_target_uid, e->note,
         e->guy_length, e->guy_capacity, e->guy_count, e->guy_truncated);
     line[sizeof(line) - 1] = 0;
     used = strlen(line);
@@ -1765,6 +2190,7 @@ static void write_event(const event_t *e) {
             "\"player_slots\":%d,\"player_unit_mark\":%d,"
             "\"player_build_mark\":%d,\"player_wall_mark\":%d,"
             "\"player_object_count\":%d,\"player_object_truncated\":%d,"
+            "\"visible_enemy_count\":%d,\"visible_enemy_truncated\":%d,"
             "\"validation_result\":%d,\"placement_x\":%d,"
             "\"placement_y\":%d,\"placement_tested\":%d,"
             "\"placement_legal\":%d,\"placement_seen\":%d,"
@@ -1786,7 +2212,8 @@ static void write_event(const event_t *e) {
             e->player_queued_type_count, e->player_queued_type_truncated,
             e->player_slots, e->player_unit_mark,
             e->player_build_mark, e->player_wall_mark, e->player_object_count,
-            e->player_object_truncated, e->validation_result,
+            e->player_object_truncated, e->visible_enemy_count,
+            e->visible_enemy_truncated, e->validation_result,
             e->placement_x, e->placement_y, e->placement_tested,
             e->placement_legal, e->placement_seen, e->placement_capacity,
             e->placement_snap_x, e->placement_snap_y, e->placement_ring);
@@ -1808,7 +2235,7 @@ static void write_event(const event_t *e) {
         const public_object_t *o = &e->player_objects[i];
         unsigned q;
         int n = _snprintf(line + used, sizeof(line) - used,
-            "%s{\"id\":%d,\"pointer\":\"0x%08x\",\"category\":%u,"
+            "%s{\"owner\":%d,\"id\":%d,\"pointer\":\"0x%08x\",\"category\":%u,"
             "\"flags\":%u,\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
             "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
             "\"class_vtable\":\"0x%08x\",\"angle\":%u,\"order_length\":%d,"
@@ -1820,7 +2247,7 @@ static void write_event(const event_t *e) {
             "\"guy_length\":%d,\"gather_max\":%d,"
             "\"queue_logical\":%d,\"queue_size\":%d,"
             "\"queue_count\":%d,\"queue_truncated\":%d,\"queue\":[",
-            i ? "," : "", o->id, o->pointer, o->category, o->flags, o->uid,
+            i ? "," : "", o->owner, o->id, o->pointer, o->category, o->flags, o->uid,
             o->type, o->type_valid, o->x, o->y, o->z, o->hits,
             o->class_vtable, o->angle, o->order_length, o->order_vtable,
             o->order_flags, o->order_metric, o->order_target_id,
@@ -1839,6 +2266,24 @@ static void write_event(const event_t *e) {
             used += (size_t)n;
         }
         n = _snprintf(line + used, sizeof(line) - used, "]}");
+        if (n < 0 || (size_t)n >= sizeof(line) - used) break;
+        used += (size_t)n;
+    }
+    {
+        int n = _snprintf(line + used, sizeof(line) - used,
+                          "],\"visible_enemy_objects\":[");
+        if (n > 0 && (size_t)n < sizeof(line) - used) used += (size_t)n;
+    }
+    for (i = 0; i < (unsigned)e->visible_enemy_count && i < MAX_VISIBLE_ENEMIES; i++) {
+        const public_object_t *o = &e->visible_enemies[i];
+        int n = _snprintf(line + used, sizeof(line) - used,
+            "%s{\"owner\":%d,\"id\":%d,\"category\":%u,\"flags\":%u,"
+            "\"uid\":%u,\"type\":%d,\"type_valid\":%d,"
+            "\"x\":%d,\"y\":%d,\"z\":%d,\"hits\":%d,"
+            "\"class_vtable\":\"0x%08x\",\"angle\":%u}",
+            i ? "," : "", o->owner, o->id, o->category, o->flags, o->uid,
+            o->type, o->type_valid, o->x, o->y, o->z, o->hits,
+            o->class_vtable, o->angle);
         if (n < 0 || (size_t)n >= sizeof(line) - used) break;
         used += (size_t)n;
     }
@@ -1898,12 +2343,17 @@ static DWORD WINAPI worker(LPVOID unused) {
         request_t r;
         drain_events();
         if (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
-            remove_hook();
+            if (!remove_hook()) {
+                log_line("REFUSED: could not restore hook bytes safely");
+                write_ready("refused-stop");
+                return 0;
+            }
             write_ready("parked");
             while (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
                 drain_events(); Sleep(100);
             }
             InterlockedExchange(&g_stopping, 0);
+            InterlockedExchange(&g_stop_ack, 0);
             if (!install_hook()) { write_ready("refused-rearm"); return 0; }
             write_ready("armed");
         }
