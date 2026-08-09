@@ -357,10 +357,11 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "live UnitData::in_supply query at the post-volley siege recharge call site",
             "French and completed-Versailles supply-healing arm with full repair postlude",
             "same-owner land-worker healing, marker clock and singleton repair mutation",
+            "same-owner Iroquois ordinary-unit healing with live age and composition preflight",
         ],
         missing: &[
-            "foreign/allied worker healing needs the diplomacy matrix",
-            "hero, Iroquois, caravan and merchant healing families and their composition",
+            "foreign/allied worker and Iroquois healing need the diplomacy matrix",
+            "hero, caravan and merchant healing families and their composition",
             "multi-slot captain repair for ObjectType uber_size greater than one",
         ],
     },
@@ -1044,12 +1045,14 @@ pub struct SupplyAttritionUnitState {
     pub unit: SupplyUnitKey,
     pub unit_id: i16,
     pub type_id: i32,
+    pub type_category: i32,
     pub attrition_period: i16,
     pub damage: i32,
     pub healing: i16,
     pub unit_masks: u32,
     pub unit_masks2: u32,
     pub is_supply: bool,
+    pub is_hero: bool,
     pub militia: bool,
     pub domain: i32,
     pub type_308: i32,
@@ -1131,12 +1134,31 @@ pub trait ArenaSupplyHealingHost: ArenaSupplyAttritionHost {
     ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
+/// Live facts and the atomic repair write for the Iroquois healing arm at
+/// `0x005E0B49..0x005E0C90`. The optional scenario TypeIndex is a mandatory game-mode
+/// fact: `None` means the retail scenario flag is disabled, not that its type lookup was
+/// unavailable.
+pub trait ArenaIroquoisHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHost {
+    fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error>;
+    fn healing_age(&self, who: i32) -> Result<usize, Self::Error>;
+    fn scenario_healing_type(&self) -> Result<Option<i32>, Self::Error>;
+    fn repair_iroquois_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error>;
+}
+
 /// Live facts and the atomic repair write for the final worker arm of
 /// `Unit::process_healing` (`0x005E1000..0x005E110D`). The worker predicate is recovered
 /// as the four literal TypeIndexes `0x32..=0x35`; caravan and merchant virtual predicates
 /// deliberately remain outside this boundary.
-pub trait ArenaWorkerHealingHost: ArenaSupplyHealingHost + ArenaReloadSupplyHost {
-    fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error>;
+pub trait ArenaWorkerHealingHost: ArenaIroquoisHealingHost {
     fn repair_worker_damage(
         &mut self,
         who: i32,
@@ -1230,8 +1252,9 @@ pub enum SupplyHealingTransaction {
 }
 
 /// Compare-and-swap-shaped receipt for `Unit::repair_damage` plus the caller's exact
-/// `ObjectData::healing = max(healing, rate)` postlude. Only the supply arm clears
-/// `unit_masks & 0x4000` after a root unit reaches zero damage; the worker arm retains it.
+/// `ObjectData::healing = max(healing, rate)` postlude. The supply and supported Iroquois
+/// arms clear `unit_masks & 0x4000` after a root unit reaches zero damage; the worker arm
+/// retains it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HealingRepairMutation {
     pub damage_before: i32,
@@ -1275,6 +1298,60 @@ pub enum WorkerHealingTransaction {
     BlockedPriorFamily {
         rate: i32,
         blocker: WorkerHealingBlocker,
+    },
+    Healed {
+        rate: i32,
+        repair: HealingRepairMutation,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IroquoisHealingBlocker {
+    CivilianOrMerchant {
+        type_id: i32,
+        type_category: i32,
+    },
+    MultiSlot {
+        type_id: i32,
+        uber_size: i32,
+    },
+    LiveHeroRegistry,
+    EarlierHeroSourceType {
+        source_type_id: i32,
+    },
+    ScenarioHealing {
+        scenario_type_id: i32,
+    },
+    LaterPatriotFamily {
+        unit_type_id: i32,
+        source_type_id: i32,
+    },
+    SupplyHealing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IroquoisHealingTransaction {
+    NoDamage,
+    OtherNation,
+    Suppressed,
+    HeroUnit,
+    NotLand,
+    InvalidAge {
+        age: usize,
+    },
+    NotDue {
+        rate: i32,
+    },
+    UnownedTerritory {
+        rate: i32,
+    },
+    BlockedForeignTerritory {
+        rate: i32,
+        territory_owner: i32,
+    },
+    BlockedComposition {
+        rate: i32,
+        blocker: IroquoisHealingBlocker,
     },
     Healed {
         rate: i32,
@@ -1634,6 +1711,175 @@ pub fn execute_supply_healing<H: ArenaSupplyHealingHost>(
         source_index,
         repair,
     })
+}
+
+/// Execute the exact same-owner, ordinary-unit subdomain of the Iroquois healing arm in
+/// `Unit::process_healing` (`0x005E0B49..0x005E0C90`).
+///
+/// `LeaderData::get_age` selects the shipped `{20,15,10,5}` frame rate. Before mutating,
+/// this transaction preflights every earlier/later healing family which can compose in
+/// Arena's supported object shape. Civilian/merchant and multi-slot shapes remain typed
+/// blockers; foreign territory still needs the absent mutual diplomacy matrix.
+pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<IroquoisHealingTransaction, SupplyAttritionTransactionError<H::Error>> {
+    const RATES: [i32; 4] = [20, 15, 10, 5];
+
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.damage <= 0 {
+        return Ok(IroquoisHealingTransaction::NoDamage);
+    }
+    if !host
+        .iroquois_healing_bonus(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(IroquoisHealingTransaction::OtherNation);
+    }
+    if state.unit_masks & 0x1000 != 0 {
+        return Ok(IroquoisHealingTransaction::Suppressed);
+    }
+    if state.is_hero {
+        return Ok(IroquoisHealingTransaction::HeroUnit);
+    }
+    if state.domain != 0 {
+        return Ok(IroquoisHealingTransaction::NotLand);
+    }
+
+    let age = host
+        .healing_age(who)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    let Some(&rate) = RATES.get(age) else {
+        return Ok(IroquoisHealingTransaction::InvalidAge { age });
+    };
+    if frame.wrapping_add(i32::from(state.unit_id)) % rate != 0 {
+        return Ok(IroquoisHealingTransaction::NotDue { rate });
+    }
+
+    if matches!(state.type_category, 5 | 8) || state.type_id == 0x13D {
+        return Ok(IroquoisHealingTransaction::BlockedComposition {
+            rate,
+            blocker: IroquoisHealingBlocker::CivilianOrMerchant {
+                type_id: state.type_id,
+                type_category: state.type_category,
+            },
+        });
+    }
+    if state.type_308 != 1 || state.curr_uber_size != 1 {
+        return Ok(IroquoisHealingTransaction::BlockedComposition {
+            rate,
+            blocker: IroquoisHealingBlocker::MultiSlot {
+                type_id: state.type_id,
+                uber_size: state.type_308,
+            },
+        });
+    }
+    if host
+        .hero_records(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .iter()
+        .any(|record| record.hero_flags & SUPPORT_REGISTRY_ACTIVE != 0)
+    {
+        return Ok(IroquoisHealingTransaction::BlockedComposition {
+            rate,
+            blocker: IroquoisHealingBlocker::LiveHeroRegistry,
+        });
+    }
+    for source_type_id in [0x137, 0x13E] {
+        if host
+            .owned_type_count(who, source_type_id)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            > 0
+        {
+            return Ok(IroquoisHealingTransaction::BlockedComposition {
+                rate,
+                blocker: IroquoisHealingBlocker::EarlierHeroSourceType { source_type_id },
+            });
+        }
+    }
+    if let Some(scenario_type_id) = host
+        .scenario_healing_type()
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        if host
+            .object_is(who, o, scenario_type_id, 0)
+            .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            return Ok(IroquoisHealingTransaction::BlockedComposition {
+                rate,
+                blocker: IroquoisHealingBlocker::ScenarioHealing { scenario_type_id },
+            });
+        }
+    }
+    for (unit_type_id, source_type_id) in [(0x161, 0x12F), (0x163, 0x131), (0x165, 0x133)] {
+        if host
+            .owned_type_count(who, source_type_id)
+            .map_err(SupplyAttritionTransactionError::Host)?
+            > 0
+            && host
+                .object_is(who, o, unit_type_id, 0)
+                .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            return Ok(IroquoisHealingTransaction::BlockedComposition {
+                rate,
+                blocker: IroquoisHealingBlocker::LaterPatriotFamily {
+                    unit_type_id,
+                    source_type_id,
+                },
+            });
+        }
+    }
+    if host
+        .completed_versailles(who)
+        .map_err(SupplyAttritionTransactionError::Host)?
+    {
+        return Ok(IroquoisHealingTransaction::BlockedComposition {
+            rate,
+            blocker: IroquoisHealingBlocker::SupplyHealing,
+        });
+    }
+
+    let territory_owner = host
+        .territory_owner_at(state.unit.x, state.unit.y)
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    if territory_owner < 0 {
+        return Ok(IroquoisHealingTransaction::UnownedTerritory { rate });
+    }
+    if territory_owner != who {
+        return Ok(IroquoisHealingTransaction::BlockedForeignTerritory {
+            rate,
+            territory_owner,
+        });
+    }
+
+    let repair = host
+        .repair_iroquois_damage(
+            who,
+            o,
+            state.damage,
+            state.healing,
+            state.unit_masks,
+            1,
+            rate,
+        )
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    Ok(IroquoisHealingTransaction::Healed { rate, repair })
 }
 
 /// Execute the exact friendly-land worker subdomain of the final civilian arm in
@@ -2726,12 +2972,14 @@ mod tests {
                 unit,
                 unit_id: 0,
                 type_id: 0x32,
+                type_category: 5,
                 attrition_period: 48,
                 damage: 0,
                 healing: 0,
                 unit_masks: 0,
                 unit_masks2: 0x20,
                 is_supply: false,
+                is_hero: false,
                 militia: false,
                 domain: 0,
                 type_308: 0,

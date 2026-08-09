@@ -401,6 +401,15 @@ now executes the same-owner land-worker singleton and that marker clock. Foreign
 stops at a typed diplomacy boundary; the caravan, merchant and earlier healing families
 remain separate inputs.
 
+The Iroquois arm at `0x005E0B49..0x005E0C90` runs earlier. It rejects
+`unit_masks & 0x1000`, heroes and non-land units, selects `{20,15,10,5}` frames using
+`LeaderData::get_age`'s exact `0x2EF..0x2F1` tech walk, and repairs one point on allied
+territory with the root-mask/healing-marker postlude. Arena executes the same-owner
+ordinary-singleton subdomain. Before repair it checks the live hero registry, the earlier
+`num_units[0x137/0x13E]` sources, the later `0x161/0x163/0x165` families paired with
+`num_units[0x12F/0x131/0x133]`, the scenario-type fact and Versailles supply healing.
+Civilian/merchant, foreign-owner and multi-slot cases stop before mutation.
+
 ---
 
 ## 7. The `world` checksum channel
@@ -462,9 +471,9 @@ still useful but the combination is not.
    provide the same ordered object lookup.
 4. **Non-friendly attrition-period selection and the remaining healing families remain open.**
    Arena executes the exact 32-frame reset/friendly-territory return and fails closed at
-   the diplomacy/leader/object-graph boundary. Its healing host executes the same-owner
-   singleton-worker arm, but rejects foreign/allied worker decisions, unintegrated
-   hero/Iroquois/caravan/merchant composition and multi-slot objects.
+   the diplomacy/leader/object-graph boundary. Its healing host executes same-owner
+   singleton worker and ordinary Iroquois arms, but rejects foreign/allied decisions,
+   unintegrated hero/caravan/merchant composition and multi-slot objects.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.

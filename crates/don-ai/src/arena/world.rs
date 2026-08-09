@@ -40,10 +40,10 @@
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
 //! 6. No water, naval, air or diplomacy. Supply source traversal, siege reload selection,
-//!    isolated French/Versailles healing, same-owner worker healing, the 32-frame attrition
-//!    reset/friendly return and due-frame attrition mutation are wired into the live unit
-//!    band. Non-friendly period selection and the remaining healing families stay explicit
-//!    blockers.
+//!    isolated French/Versailles healing, same-owner worker/Iroquois healing, the 32-frame
+//!    attrition reset/friendly return and due-frame attrition mutation are wired into the
+//!    live unit band. Non-friendly period selection and the remaining healing families stay
+//!    explicit blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -102,12 +102,12 @@ use super::gather_runtime::{
 };
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
-    self, ArenaAttritionRecomputeHost, ArenaReloadSupplyHost, ArenaSupplyAttritionHost,
-    ArenaSupplyHealingHost, ArenaWorkerHealingHost, AttritionRecomputeTransaction,
-    HealingRepairMutation, HeroRadiusFacts, HeroRegistryRecord, ReloadSupplyState,
-    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyHealingTransaction,
-    SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject, WorkerHealingTransaction,
-    SUPPORT_REGISTRY_ACTIVE,
+    self, ArenaAttritionRecomputeHost, ArenaIroquoisHealingHost, ArenaReloadSupplyHost,
+    ArenaSupplyAttritionHost, ArenaSupplyHealingHost, ArenaWorkerHealingHost,
+    AttritionRecomputeTransaction, HealingRepairMutation, HeroRadiusFacts, HeroRegistryRecord,
+    IroquoisHealingTransaction, ReloadSupplyState, SupplyAttritionTransaction,
+    SupplyAttritionUnitState, SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord,
+    SupplySearchObject, WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -746,12 +746,14 @@ impl ArenaSupplyAttritionHost for ArenaSupplyHost<'_> {
             },
             unit_id: ent.object_o,
             type_id: ent.type_id,
+            type_category: ty.cat,
             attrition_period: ent.attrition_period,
             damage: ent.hp.damage,
             healing: ent.healing,
             unit_masks: motion.unit_masks,
             unit_masks2: motion.unit_masks2,
             is_supply: ty.unit_flags2 & 0x40 != 0,
+            is_hero: ty.unit_flags2 & 0x20 != 0,
             // `get_bonus(0x42)` devirtualizes to ObjectTypeData::is(TypeIndex 66, 0).
             militia: type_is(self.types, ent.type_id, 0x42),
             domain: ty.domain,
@@ -974,12 +976,48 @@ impl ArenaSupplyHealingHost for ArenaSupplyHost<'_> {
     }
 }
 
-impl ArenaWorkerHealingHost for ArenaSupplyHost<'_> {
+impl ArenaIroquoisHealingHost for ArenaSupplyHost<'_> {
     fn iroquois_healing_bonus(&self, who: i32) -> Result<bool, Self::Error> {
         let owner = self.owner(who)?;
         Ok(self.players[owner].tribe == 0x12)
     }
 
+    fn healing_age(&self, who: i32) -> Result<usize, Self::Error> {
+        self.owner(who)?;
+        // LeaderData::get_age 0x006E12E0 walks these three shipped TypeIndexes.
+        Ok(self.upgrade_count(who, 0x2EF..=0x2F1) as usize)
+    }
+
+    fn scenario_healing_type(&self) -> Result<Option<i32>, Self::Error> {
+        // Arena has no scenario mode or scenario TypeData override. Its normal-match
+        // GameData flag corresponding to 0x005E0AE4 is therefore exactly disabled.
+        Ok(None)
+    }
+
+    fn repair_iroquois_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error> {
+        self.repair_and_mark_healing(
+            who,
+            o,
+            damage_before,
+            healing_before,
+            unit_masks_before,
+            amount,
+            healing_rate,
+            true,
+        )
+    }
+}
+
+impl ArenaWorkerHealingHost for ArenaSupplyHost<'_> {
     fn repair_worker_damage(
         &mut self,
         who: i32,
@@ -2577,6 +2615,7 @@ impl World {
             self.tick_cycle(i);
             self.tick_job(i);
             if !buildings && self.ents[i].alive {
+                self.tick_iroquois_healing(i);
                 self.tick_supply_healing(i);
                 self.tick_worker_healing(i);
                 self.tick_attrition_recompute(i);
@@ -2584,6 +2623,36 @@ impl World {
                 self.tick_healing_clock(i);
             }
         }
+    }
+
+    /// The exact same-owner ordinary-unit subdomain of the Iroquois healing family,
+    /// sequenced before the supply and civilian arms as in `Unit::process_healing`.
+    fn tick_iroquois_healing(&mut self, i: usize) -> IroquoisHealingTransaction {
+        if self.ents[i].hp.damage <= 0 {
+            return IroquoisHealingTransaction::NoDamage;
+        }
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let id = self.ents[i].id;
+        let transaction = {
+            let mut host = ArenaSupplyHost {
+                ents: &mut self.ents,
+                types: &self.types,
+                players: &self.players,
+                supply_records: &self.supply_records,
+                hero_records: &self.hero_records,
+                territory: &self.collision_world,
+                frame: self.frame,
+            };
+            retail_systems::execute_iroquois_healing(self.frame as i32, who, o, &mut host)
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena Iroquois-healing transaction failed for ({who},{o}): {error:?}")
+        });
+        if matches!(transaction, IroquoisHealingTransaction::Healed { .. }) {
+            self.sync_target_damage(id);
+        }
+        transaction
     }
 
     /// The supply-specific land arm of `Unit::process_healing`, immediately before the
@@ -3384,6 +3453,7 @@ impl World {
                 MoveProgress::Working
             }
             ArmResult::NotPorted
+            | ArmResult::HostUnavailable
             | ArmResult::Empty
             | ArmResult::Fired(_)
             | ArmResult::Gathered(_)
@@ -4529,7 +4599,9 @@ impl WorkWorld for ArenaMoveWorld<'_> {
 mod supply_attrition_integration {
     use super::*;
     use crate::arena::match_run::{load_world, MatchConfig};
-    use crate::arena::retail_systems::{WorkerHealingBlocker, RESUPPLIED_THIS_TICK};
+    use crate::arena::retail_systems::{
+        IroquoisHealingBlocker, WorkerHealingBlocker, RESUPPLIED_THIS_TICK,
+    };
 
     #[test]
     fn live_unit_band_applies_reload_healing_attrition_and_source_lifetime() {
@@ -4785,6 +4857,109 @@ mod supply_attrition_integration {
         );
         assert_eq!(world.ents[wi].hp.damage, 2);
         assert_eq!(world.ents[wi].healing, 0);
+    }
+
+    #[test]
+    fn iroquois_healing_uses_live_age_phase_and_preflights_unsupported_composition() {
+        let Ok(mut world) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        const CATAPULT: i32 = 0x109;
+        let ty = world.types.get(CATAPULT).expect("live Catapult TypeRow");
+        assert_eq!(ty.domain, 0);
+        assert_eq!(ty.uber_size, 1);
+        assert_eq!(ty.unit_flags2 & 0x20, 0);
+        assert!(!matches!(ty.cat, 5 | 8));
+
+        let center = world.map.w / 2;
+        let unit = world.spawn(0, CATAPULT, center, center, true);
+        let ui = unit.index().expect("spawn returned a dense Arena handle");
+        let unit_o = world.ents[ui].object_o;
+        let (tx, ty) = world.ents[ui].tile();
+        let (wx, wy) = (tx.div_euclid(4), ty.div_euclid(4));
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        world.players[0].tribe = 0x12;
+        world.hero_records[0].clear();
+        for type_id in 0x2EF..=0x2F1 {
+            world.players[0].techs.remove(&type_id);
+        }
+        assert!([0x137, 0x13E]
+            .into_iter()
+            .all(|type_id| world.count_type(0, type_id, true) == 0));
+
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 2;
+        world.ents[ui].motion.as_mut().unwrap().unit_masks |= 0x4000;
+        world.frame = (-i64::from(unit_o)).rem_euclid(20);
+        world.step();
+
+        assert_eq!(world.ents[ui].hp.damage, 0);
+        assert_eq!(world.ents[ui].healing, 19);
+        assert_eq!(
+            world.ents[ui].motion.as_ref().unwrap().unit_masks & 0x4000,
+            0
+        );
+
+        // The first age TypeIndex changes the live get_age result and therefore the due
+        // divisor from 20 to 15; call the transaction directly to observe its pre-clock
+        // mutation receipt.
+        world.players[0].techs.insert(0x2EF);
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.ents[ui].motion.as_mut().unwrap().unit_masks |= 0x4000;
+        let age_one_due = (-i64::from(unit_o)).rem_euclid(15);
+        world.frame = age_one_due;
+        assert!(matches!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::Healed {
+                rate: 15,
+                repair: HealingRepairMutation {
+                    damage_before: 1,
+                    damage_after: 0,
+                    healing_after: 15,
+                    unit_masks_after,
+                    ..
+                },
+            } if unit_masks_after & 0x4000 == 0
+        ));
+
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.ents[ui].motion.as_mut().unwrap().unit_masks |= 0x1000;
+        world.frame = age_one_due + 15;
+        assert_eq!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::Suppressed
+        );
+        assert_eq!(world.ents[ui].hp.damage, 1);
+
+        world.ents[ui].motion.as_mut().unwrap().unit_masks &= !0x1000;
+        world.collision_world.wdata_mut(wx, wy).who = 1;
+        world.frame = age_one_due + 30;
+        assert_eq!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::BlockedForeignTerritory {
+                rate: 15,
+                territory_owner: 1,
+            }
+        );
+        assert_eq!(world.ents[ui].hp.damage, 1);
+
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 2;
+        world.frame = age_one_due + 45;
+        assert_eq!(
+            world.tick_iroquois_healing(ui),
+            IroquoisHealingTransaction::BlockedComposition {
+                rate: 15,
+                blocker: IroquoisHealingBlocker::MultiSlot {
+                    type_id: CATAPULT,
+                    uber_size: 2,
+                },
+            }
+        );
+        assert_eq!(world.ents[ui].hp.damage, 1);
+        assert_eq!(world.ents[ui].healing, 0);
     }
 }
 
