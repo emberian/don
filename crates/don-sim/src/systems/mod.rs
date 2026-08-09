@@ -99,6 +99,9 @@ pub mod map_terrain;
 /// the return-then-advance `get_range` primitive used by terrain placement.
 pub mod mountains;
 pub mod movement;
+/// Typed, fail-closed transaction joining `Unit::move_step`'s event sequence to the recovered
+/// unit collision detector/resolver, including actor-store, pathfinder and RNG writeback.
+pub mod movement_driver;
 /// Recovered from an interrupted lane and audited as Tier-C naval primitives and guardrail
 /// proxies. It is intentionally not a retail-complete naval executor; see
 /// `docs/mechanics/naval.md`.
