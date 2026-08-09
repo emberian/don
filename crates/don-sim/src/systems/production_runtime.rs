@@ -7,6 +7,7 @@
 use super::*;
 use crate::objects::Band;
 use crate::order::{Order, OrderIndex};
+use crate::systems::gathering::{self, GatherAssignment, GatherSite, GatherWorker};
 use crate::systems::tech_cities::{
     GainTechCohortContext, TechAutoUnlockHost, TechAutoUnlockMutation,
     TechAutoUnlockMutationReceipt, TechOneShotHost, TechOneShotMutation,
@@ -14,6 +15,7 @@ use crate::systems::tech_cities::{
     TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK, TECH_AUTO_UNLOCK_UNIT_FLAG, TECH_RESOURCE_SELL_FLOOR,
 };
 use crate::tick::Sim;
+use crate::world::OBJ_FLAG_ACTIVE;
 
 /// Runtime classification of one installed global type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,8 +36,12 @@ pub enum LiveUnitPlacement {
     /// AirPatrol order and its exact dynamic waypoint payload; empty rally remains inside
     /// or executes the recovered capacity-destruction tail.
     HostedAir,
-    /// Carrier payload, University Scholar, missile/Helicopter single-rally, and strafe
-    /// effects still require facts outside the bounded runtime cohort.
+    /// Scholar/Korean Scholar trained by a University. Within `gather_max`, retail keeps
+    /// the unit inside and immediately prunes the producer's intrusive gatherer chain;
+    /// overflow Scholars come out through the ordinary placement tail.
+    UniversityScholar,
+    /// Carrier payload, missile/Helicopter single-rally, and strafe effects still require
+    /// facts outside the bounded runtime cohort.
     Unsupported,
 }
 
@@ -140,6 +146,13 @@ impl LiveProductionType {
         }
     }
 
+    pub fn university_scholar(type_index: i32, train_time: i32, control_cost: i32) -> Self {
+        Self {
+            unit_placement: LiveUnitPlacement::UniversityScholar,
+            ..Self::ordinary_unit(type_index, train_time, control_cost)
+        }
+    }
+
     pub fn in_place_building(type_index: i32, train_time: i32) -> Self {
         Self {
             class: LiveTypeClass::Building,
@@ -215,6 +228,9 @@ pub struct LiveProductionRuntime {
     /// Concrete simulation-side receipts for the UI/event boundary. The deterministic
     /// stage and placement identity remain available even when no product UI is attached.
     pub unit_presentations: Vec<LiveUnitPresentation>,
+    /// Atomic projections of `Build::check_gatherers` performed by University Scholar
+    /// completion. Each receipt pins the producer head transition and exact prune count.
+    pub university_gather_checks: Vec<LiveUniversityGatherCheck>,
 }
 
 impl Default for LiveProductionRuntime {
@@ -232,6 +248,7 @@ impl Default for LiveProductionRuntime {
             mask_effects: 0,
             air_patrol_orders: Vec::new(),
             unit_presentations: Vec::new(),
+            university_gather_checks: Vec::new(),
         }
     }
 }
@@ -246,6 +263,14 @@ pub struct LiveAirPatrolOrder {
 pub struct LiveUnitPresentation {
     pub placement: UnitPlacementRequest,
     pub stage: UnitPresentationStage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveUniversityGatherCheck {
+    pub placement: UnitPlacementRequest,
+    pub head_before: i16,
+    pub head_after: i16,
+    pub removed: usize,
 }
 
 impl LiveProductionRuntime {
@@ -371,6 +396,7 @@ pub enum LiveProductionError {
     CapturedBuildingCompletion(i32),
     RecursiveTechUnlock(i32),
     MissingQueuedCounter(i32),
+    MalformedUniversityGatherChain(&'static str),
     UnsupportedCallback(&'static str),
     Queue(QueueTransactionError),
     Finished(FinishedEffectError),
@@ -448,6 +474,138 @@ fn rebuild_queued_counts(sim: &Sim, runtime: &mut LiveProductionRuntime, owner: 
     }
 }
 
+#[derive(Clone, Debug)]
+struct UniversityGatherProjection {
+    site: GatherSite,
+    rows: Vec<usize>,
+    workers: Vec<GatherWorker>,
+}
+
+fn university_gather_site(build: &BuildData) -> GatherSite {
+    GatherSite {
+        owner: build.who,
+        build_o: build.object_id(),
+        uid: build.uid,
+        gather_max: build.gather_max,
+        gather_down: build.gather_down,
+        build_masks: build.build_masks,
+        recharging: build.recharging,
+    }
+}
+
+/// Materialize the exact Sim-owned fields consumed by `Build::check_gatherers`. The
+/// flattened generic order does not yet carry `TargetOrder::uid`; that value is not read
+/// by `is_gathering_at(site, false)`, which is the retail predicate used by this routine.
+fn university_gather_projection(
+    sim: &Sim,
+    site: GatherSite,
+) -> Result<UniversityGatherProjection, LiveProductionError> {
+    let mut rows = Vec::new();
+    let mut workers = Vec::new();
+    for &row in sim.world.objects.slot(site.owner as usize).band(Band::Unit) {
+        let row = row as usize;
+        let Some(&type_index) = sim.unit_type.get(row) else {
+            return Err(LiveProductionError::MalformedUniversityGatherChain(
+                "owner Unit band references a row without a live type",
+            ));
+        };
+        let Some((&unit_o, &unit_owner)) = sim
+            .world
+            .units
+            .o()
+            .get(row)
+            .zip(sim.world.units.who().get(row))
+        else {
+            return Err(LiveProductionError::MalformedUniversityGatherChain(
+                "owner Unit band references a missing unit row",
+            ));
+        };
+        let owner = u8::try_from(unit_owner).map_err(|_| {
+            LiveProductionError::MalformedUniversityGatherChain(
+                "gather-chain unit has an invalid owner",
+            )
+        })?;
+        let inside_target = sim
+            .world
+            .units
+            .inside_up()
+            .get(row)
+            .zip(sim.world.units.inside_up_who().get(row))
+            .and_then(|(&inside, &who)| {
+                (inside >= 0)
+                    .then(|| u8::try_from(who).ok().map(|owner| (owner, inside)))
+                    .flatten()
+            });
+        let assignment = sim.world.orders(row).current().and_then(|order| {
+            (order.kind == OrderIndex::Gather).then_some(GatherAssignment {
+                target_owner: i32::from(order.target_who),
+                target_build: i32::from(order.target_o),
+                target_uid: site.uid,
+                been_there: false,
+                inside_target,
+            })
+        });
+        let Some(((((gather_down, good_obj), group), unit_masks), hold_doober)) = sim
+            .world
+            .units
+            .gather_down()
+            .get(row)
+            .copied()
+            .zip(sim.world.units.good_obj().get(row).copied())
+            .zip(sim.world.units.group().get(row).copied())
+            .zip(
+                sim.world
+                    .units
+                    .unit_masks()
+                    .get(row)
+                    .map(|&value| value as u32),
+            )
+            .zip(sim.world.units.doober().get(row).copied())
+        else {
+            return Err(LiveProductionError::MalformedUniversityGatherChain(
+                "gather-chain unit projection is incomplete",
+            ));
+        };
+        rows.push(row);
+        workers.push(GatherWorker {
+            owner,
+            unit_o,
+            type_index,
+            valid_unit: sim.world.units.get_flags(row) & OBJ_FLAG_ACTIVE != 0,
+            assignment,
+            gather_down,
+            good_obj,
+            group,
+            unit_masks,
+            hold_doober,
+        });
+    }
+    Ok(UniversityGatherProjection {
+        site,
+        rows,
+        workers,
+    })
+}
+
+fn scholar_count_inside(sim: &Sim, build: &BuildData) -> i32 {
+    let producer_o = build.object_id();
+    sim.world
+        .units
+        .inside_up()
+        .iter()
+        .zip(sim.world.units.inside_up_who())
+        .enumerate()
+        .filter(|(row, (inside, who))| {
+            **inside == producer_o
+                && **who == build.who as i8
+                && matches!(
+                    sim.unit_type.get(*row).copied(),
+                    Some(UNIT_PLACEMENT_TYPE_SCHOLAR | UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR)
+                )
+        })
+        .count() as i32
+}
+
 fn preflight(
     sim: &Sim,
     runtime: &LiveProductionRuntime,
@@ -490,7 +648,7 @@ fn preflight(
                 let university =
                     producer.is_university || producer.type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY;
                 let placement_supported = match facts.unit_placement {
-                    LiveUnitPlacement::OrdinaryGround => !producer.holds_air,
+                    LiveUnitPlacement::OrdinaryGround => !producer.holds_air && !university,
                     LiveUnitPlacement::HostedAir => {
                         if !producer.holds_air {
                             false
@@ -501,9 +659,17 @@ fn preflight(
                                 && facts.unit_flags & UNIT_PLACEMENT_FLAG_HELICOPTER == 0
                         }
                     }
+                    LiveUnitPlacement::UniversityScholar => {
+                        university
+                            && !producer.holds_air
+                            && matches!(
+                                facts.type_index,
+                                UNIT_PLACEMENT_TYPE_SCHOLAR | UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR
+                            )
+                    }
                     LiveUnitPlacement::Unsupported => false,
                 };
-                if carrier_unit || university || !placement_supported {
+                if carrier_unit || !placement_supported {
                     return Err(LiveProductionError::UnsupportedUnitPlacement(type_index));
                 }
             }
@@ -534,6 +700,26 @@ fn preflight(
             }
         }
     }
+    let university =
+        producer.is_university || producer.type_index == UNIT_PLACEMENT_TYPE_UNIVERSITY;
+    let scholar_completion = build
+        .queue
+        .entries
+        .iter()
+        .take(build.queue.queued as usize)
+        .any(|entry| {
+            runtime
+                .facts(i32::from(entry.type_index))
+                .is_some_and(|facts| facts.unit_placement == LiveUnitPlacement::UniversityScholar)
+        });
+    if university
+        && scholar_completion
+        && scholar_count_inside(sim, build).wrapping_add(1) <= i32::from(build.gather_max)
+    {
+        let mut projection = university_gather_projection(sim, university_gather_site(build))?;
+        gathering::check_gatherers(&mut projection.site, &mut projection.workers)
+            .map_err(LiveProductionError::MalformedUniversityGatherChain)?;
+    }
     Ok((owner, producer_type))
 }
 
@@ -547,6 +733,11 @@ struct SimFinishedHost<'a> {
     producer_row: usize,
     producer_type: i32,
     producer_position: (i32, i32),
+    producer_uid: u16,
+    producer_gather_max: i8,
+    producer_gather_down: i16,
+    producer_build_masks: u16,
+    producer_recharging: i16,
     finishing_type: i32,
     live_tech: TechState,
     error: Option<LiveProductionError>,
@@ -857,7 +1048,7 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         type_index
     }
 
-    fn producer_num_inside(&mut self, build: &BuildData, _mode: i32) -> i32 {
+    fn producer_num_inside(&mut self, build: &BuildData, mode: i32) -> i32 {
         let producer_o = build.object_id();
         self.sim
             .world
@@ -865,7 +1056,16 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
             .inside_up()
             .iter()
             .zip(self.sim.world.units.inside_up_who())
-            .filter(|(inside, who)| **inside == producer_o && **who == build.who as i8)
+            .enumerate()
+            .filter(|(row, (inside, who))| {
+                **inside == producer_o
+                    && **who == build.who as i8
+                    && (mode != 1
+                        || matches!(
+                            self.sim.unit_type.get(*row).copied(),
+                            Some(UNIT_PLACEMENT_TYPE_SCHOLAR | UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR)
+                        ))
+            })
             .count() as i32
     }
 
@@ -971,10 +1171,50 @@ impl UnitCompletionHost for SimFinishedHost<'_> {
         &mut self,
         request: UnitPlacementRequest,
     ) -> UnitPlacementMutationReceipt {
-        self.matching_placement(
-            "University gatherer placement",
-            UnitPlacementMutation::CheckProducerGatherers(request),
-        )
+        let mutation = UnitPlacementMutation::CheckProducerGatherers(request);
+        let mut projection = match university_gather_projection(
+            self.sim,
+            GatherSite {
+                owner: request.producer_owner,
+                build_o: request.producer_object_id as i16,
+                uid: self.producer_uid,
+                gather_max: self.producer_gather_max,
+                gather_down: self.producer_gather_down,
+                build_masks: self.producer_build_masks,
+                recharging: self.producer_recharging,
+            },
+        ) {
+            Ok(projection) => projection,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return UnitPlacementMutationReceipt { mutation };
+            }
+        };
+        let head_before = projection.site.gather_down;
+        let removed =
+            match gathering::check_gatherers(&mut projection.site, &mut projection.workers) {
+                Ok(removed) => removed,
+                Err(error) => {
+                    self.error
+                        .get_or_insert(LiveProductionError::MalformedUniversityGatherChain(error));
+                    return UnitPlacementMutationReceipt { mutation };
+                }
+            };
+        // The algorithm ran against a detached projection, so a malformed chain leaves
+        // every live link untouched. Commit the complete head/link transaction only now.
+        for (&row, worker) in projection.rows.iter().zip(&projection.workers) {
+            self.sim.world.units.gather_down_mut()[row] = worker.gather_down;
+        }
+        self.producer_gather_down = projection.site.gather_down;
+        self.runtime
+            .university_gather_checks
+            .push(LiveUniversityGatherCheck {
+                placement: request,
+                head_before,
+                head_after: projection.site.gather_down,
+                removed,
+            });
+        UnitPlacementMutationReceipt { mutation }
     }
 
     fn destroy_at_air_capacity(
@@ -1347,6 +1587,7 @@ pub fn process_sim_build_queue(
     };
     let queue_result = execute_routed_queue_slots(&mut build, 0, ai_speed, &rules, &mut host);
     let callback_error = host.error;
+    build.gather_down = host.producer_snapshot.gather_down;
     host.sim.builds[row] = build;
     let queue = queue_result?;
     if let Some(error) = callback_error {
@@ -1405,6 +1646,11 @@ impl QueueCompletionHost for SimQueueHost<'_> {
             producer_row: self.producer_row,
             producer_type: self.producer_type,
             producer_position: self.producer_snapshot.position(),
+            producer_uid: self.producer_snapshot.uid,
+            producer_gather_max: self.producer_snapshot.gather_max,
+            producer_gather_down: self.producer_snapshot.gather_down,
+            producer_build_masks: self.producer_snapshot.build_masks,
+            producer_recharging: self.producer_snapshot.recharging,
             finishing_type: type_index,
             live_tech: tech.clone(),
             error: None,
@@ -1412,6 +1658,7 @@ impl QueueCompletionHost for SimQueueHost<'_> {
         let result =
             execute_finished_effect(&mut tech, &self.producer_snapshot, type_index, &mut host);
         let nested_error = host.error;
+        self.producer_snapshot.gather_down = host.producer_gather_down;
         host.runtime.leaders[owner].tech = tech;
         if let Some(error) = nested_error {
             self.error = Some(error);
@@ -1626,6 +1873,121 @@ mod tests {
         assert_eq!(runtime.leaders[0].last_unit_built, 0);
         assert_eq!(runtime.leaders[0].last_unit_finished[unit_type as usize], 0);
         assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn university_scholar_completion_atomically_prunes_the_live_gather_chain() {
+        let scholar = UNIT_PLACEMENT_TYPE_SCHOLAR;
+        let (mut sim, mut runtime, row) = harness(&[scholar]);
+        runtime.register_build(row, UNIT_PLACEMENT_TYPE_UNIVERSITY);
+        let mut university =
+            LiveProductionType::in_place_building(UNIT_PLACEMENT_TYPE_UNIVERSITY, 1);
+        university.is_university = true;
+        runtime.install_type(university);
+        runtime.install_type(LiveProductionType::university_scholar(scholar, 1, 1));
+        sim.builds[row].gather_max = 2;
+
+        let valid = sim.spawn_unit(0, scholar, 500, 500, 0).unwrap();
+        let valid_row = sim.world.row_of(valid).unwrap();
+        let valid_o = sim.world.units.o()[valid_row];
+        sim.world.units.gather_down_mut()[valid_row] = -1;
+        sim.world.orders_mut(valid_row).replace(Order {
+            kind: OrderIndex::Gather,
+            target_who: 0,
+            target_o: sim.builds[row].object_id(),
+            ..Order::default()
+        });
+
+        let stale = sim.spawn_unit(0, scholar, 600, 600, 0).unwrap();
+        let stale_row = sim.world.row_of(stale).unwrap();
+        let stale_o = sim.world.units.o()[stale_row];
+        sim.world.units.gather_down_mut()[stale_row] = valid_o;
+        sim.world.orders_mut(stale_row).replace(Order {
+            kind: OrderIndex::Gather,
+            target_who: 0,
+            target_o: sim.builds[row].object_id() - 1,
+            ..Order::default()
+        });
+        sim.builds[row].gather_down = stale_o;
+        let rng_before = sim.world.random.state();
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.builds[row].gather_down, valid_o);
+        assert_eq!(sim.world.units.gather_down()[stale_row], -1);
+        assert_eq!(sim.world.units.gather_down()[valid_row], -1);
+        assert_eq!(
+            runtime.university_gather_checks,
+            vec![LiveUniversityGatherCheck {
+                placement: UnitPlacementRequest {
+                    owner: 0,
+                    object_id: 2,
+                    type_index: scholar,
+                    producer_owner: 0,
+                    producer_object_id: sim.builds[row].object_id() as i32,
+                    producer_holds_air: false,
+                },
+                head_before: stale_o,
+                head_after: valid_o,
+                removed: 1,
+            }]
+        );
+        let trained_row = sim.world.objects.slot(0).band(Band::Unit)[2] as usize;
+        assert_eq!(sim.world.units.inside_up()[trained_row], 2_000);
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn university_scholar_overflow_comes_out_without_touching_the_gather_chain() {
+        let scholar = UNIT_PLACEMENT_TYPE_KOREAN_SCHOLAR;
+        let (mut sim, mut runtime, row) = harness(&[scholar]);
+        runtime.register_build(row, UNIT_PLACEMENT_TYPE_UNIVERSITY);
+        let mut university =
+            LiveProductionType::in_place_building(UNIT_PLACEMENT_TYPE_UNIVERSITY, 1);
+        university.is_university = true;
+        runtime.install_type(university);
+        runtime.install_type(LiveProductionType::university_scholar(scholar, 1, 1));
+        sim.builds[row].gather_max = 0;
+        sim.builds[row].gather_down = 77;
+
+        process_sim_build_queue(&mut sim, &mut runtime, row).unwrap();
+
+        let trained_row = sim.world.objects.slot(0).band(Band::Unit)[0] as usize;
+        assert_eq!(sim.world.units.inside_up()[trained_row], -1);
+        assert_eq!(sim.builds[row].gather_down, 77);
+        assert!(runtime.university_gather_checks.is_empty());
+        assert_eq!(sim.builds[row].queue.queued, 0);
+    }
+
+    #[test]
+    fn malformed_university_gather_chain_fails_before_allocation_progress_or_rng() {
+        let scholar = UNIT_PLACEMENT_TYPE_SCHOLAR;
+        let (mut sim, mut runtime, row) = harness(&[scholar]);
+        runtime.register_build(row, UNIT_PLACEMENT_TYPE_UNIVERSITY);
+        let mut university =
+            LiveProductionType::in_place_building(UNIT_PLACEMENT_TYPE_UNIVERSITY, 1);
+        university.is_university = true;
+        runtime.install_type(university);
+        runtime.install_type(LiveProductionType::university_scholar(scholar, 1, 1));
+        sim.builds[row].gather_max = 2;
+        sim.builds[row].gather_down = 7;
+        let queue_before = sim.builds[row].queue.clone();
+        let rng_before = sim.world.random.state();
+
+        assert_eq!(
+            process_sim_build_queue(&mut sim, &mut runtime, row),
+            Err(LiveProductionError::MalformedUniversityGatherChain(
+                "gather chain contains a cycle"
+            ))
+        );
+        assert_eq!(sim.world.live_count(), 0);
+        assert_eq!(sim.world.random.state(), rng_before);
+        assert_eq!(sim.builds[row].queue.entries, queue_before.entries);
+        assert_eq!(sim.builds[row].queue.queued, queue_before.queued);
+        assert_eq!(sim.builds[row].gather_down, 7);
+        assert!(runtime.university_gather_checks.is_empty());
+        assert!(!runtime.leaders[0].queue_dirty);
     }
 
     #[test]

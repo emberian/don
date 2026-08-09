@@ -423,6 +423,13 @@ all 15 channels, so the isolated value is a debugging aid, not the wire value).
   missile-defense early returns. The host still owns actual object/order writes, `die`,
   Aircraft Carrier payload allocations, and local message/sound/event mutations; each is
   receipt-checked before the executor advances.
+  The live Sim adapter now closes the University Scholar subfamily without an opaque
+  callback: explicit Scholar/Korean Scholar profiles count only those two contained types,
+  choose `come_out` when the post-allocation count exceeds `gather_max`, and otherwise run
+  recovered `Build::check_gatherers` over the owner Unit band. The producer head and every
+  worker link are projected and validated before allocation, then committed atomically in
+  retail traversal order; malformed/missing/cyclic links leave queue, world, and RNG
+  untouched. Carrier payload construction remains fail-closed.
   `can_queue` / `could_queue` / `can_make` were read (they gate on `queued < num` and a
   scholar cap of 7 via `count_queue(1, 0x34) + num_gatherers > 6`) but are type-tree
   dependent.
@@ -531,10 +538,12 @@ re-exports the crate's shared checksum implementation.
 The remaining wiring is deliberately at typed world boundaries, not module visibility:
 queue completion now owns top-level effect selection, tech mutation, ordinary-building
 callback order, the unit allocation spine, executable placement classification, and the
-placement/rally mutation transaction, but still needs the live object graph behind its
-typed fact/effect boundaries plus the
-cast, building-leaf, and one-shot world owners. Parallel production needs
-the live leader slot limit, and Library aggregation needs city assimilation, type-tree,
-stockpile, and queued-counter hosts. `production::train_time_ramp` also supersedes
+placement/rally mutation transaction. The live adapter executes ordinary ground,
+Holds-Air patrol/containment/capacity, gather-inside, and University Scholar placement;
+Carrier payload, single-rally missile/Helicopter, strafe/carry target lookup, cast,
+building-leaf, and one-shot world owners remain typed fail-closed boundaries. Parallel
+production needs the live leader slot limit, and Library aggregation needs city
+assimilation, type-tree, stockpile, and queued-counter hosts. `production::train_time_ramp`
+also supersedes
 `mechanics::ramped_rate` (§3.5); the latter should be retired when its remaining callers
 move to the production API.
