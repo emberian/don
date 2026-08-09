@@ -181,6 +181,7 @@ fn run() -> Result<String, String> {
     env::set_var("DON_NET_LOAD_ONLY", "1");
     env::set_var("DON_NET_NAME", "Ai");
     env::set_var("DON_NET_TRACE", &trace);
+    env::set_var("DON_NET_CONNECTIVITY_OVERRIDE", "1");
 
     let wide = wide_path(&dll);
     let raw_module = unsafe { LoadLibraryW(wide.as_ptr()) };
@@ -498,18 +499,31 @@ fn run() -> Result<String, String> {
         unsafe { std::mem::transmute(resolve(&module, IS_CONNECTED)?) };
     let set_connected: unsafe extern "C" fn(bool) =
         unsafe { std::mem::transmute(resolve(&module, SET_CONNECTED)?) };
-    checked_call(
-        "export set_network_connection_state",
-        &mut stack_pointer_checks,
-        || unsafe { set_connected(true) },
-    )?;
-    let connected = checked_call(
-        "export is_connected_to_network",
+    let connected_before = checked_call(
+        "export is_connected_to_network before setter",
         &mut stack_pointer_checks,
         || unsafe { is_connected() },
     )?;
-    if connected {
-        return Err("load-only mode accepted set_network_connection_state(true)".into());
+    checked_call(
+        "export set_network_connection_state",
+        &mut stack_pointer_checks,
+        || unsafe { set_connected(false) },
+    )?;
+    let connected_after = checked_call(
+        "export is_connected_to_network after setter",
+        &mut stack_pointer_checks,
+        || unsafe { is_connected() },
+    )?;
+    env::set_var("DON_NET_CONNECTIVITY_OVERRIDE", "0");
+    let connected_forced_offline = checked_call(
+        "export is_connected_to_network forced offline",
+        &mut stack_pointer_checks,
+        || unsafe { is_connected() },
+    )?;
+    if !connected_before || !connected_after || connected_forced_offline {
+        return Err(format!(
+            "connectivity export remained coupled to session/setter state: before={connected_before} after={connected_after} forced_offline={connected_forced_offline}"
+        ));
     }
 
     let send_ready: unsafe extern "thiscall" fn(*mut NetSysPrefix, bool) =
@@ -820,7 +834,7 @@ fn run() -> Result<String, String> {
 
     drop(module);
     Ok(format!(
-        "{{\"schema\":\"don.netsys-load-smoke.v2\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"stack_pointer_checks\":{stack_pointer_checks},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"connected\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
+        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
     ))
 }
 

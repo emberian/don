@@ -29,6 +29,11 @@ extern "system" {
     fn GetModuleHandleW(name: *const u16) -> *mut c_void;
 }
 
+#[link(name = "wininet")]
+extern "system" {
+    fn InternetGetConnectedState(flags: *mut u32, reserved: u32) -> i32;
+}
+
 /// Exact extent of `NetDaemon::data`, the destination passed to `NetSys::get`.
 ///
 /// `rise.pdb` type `0x9C28` gives `NetDaemon::data` type `0x8912` at offset
@@ -152,8 +157,23 @@ const _: () = {
     assert!(core::mem::offset_of!(NetSysObj, state) == 0x3d0);
 };
 
-pub fn connected() -> bool {
-    CONNECTED.load(Ordering::Relaxed)
+/// Match shipped `CrossplayNetLib::is_connected_to_network` at VA
+/// `0x10018550`: call `InternetGetConnectedState(&flags, 0)` and return whether
+/// its BOOL result is nonzero. This is pre-session OS availability, not the
+/// later NetSys roster/session state tracked by `CONNECTED`.
+pub fn network_available() -> bool {
+    // The disposable PE32 smoke cannot rely on Wine's WinINet implementation
+    // completing. An explicit load-only-only override gives it a bounded
+    // regression for the pre-session gate without changing retail semantics.
+    if load_only_mode() {
+        match env("DON_NET_CONNECTIVITY_OVERRIDE").as_deref() {
+            Some("0") | Some("false") => return false,
+            Some("1") | Some("true") => return true,
+            _ => {}
+        }
+    }
+    let mut flags = 0u32;
+    unsafe { InternetGetConnectedState(&mut flags, 0) != 0 }
 }
 
 pub fn set_connected(v: bool) {

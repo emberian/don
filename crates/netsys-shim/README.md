@@ -137,8 +137,13 @@ all 20 non-destructor `NetPlayer` slots including hidden `String` and
 `wstring` return buffers.
 
 The host sets `DON_NET_LOAD_ONLY=1` before loading. It requires host/join to
-return `LIBERR_NOT_AVAILABLE` (26), send/get to return false, connected state to
-remain false, and the flushed trace to prove the only listener is
+return `LIBERR_NOT_AVAILABLE` (26) and send/get to return false. Separately, it
+uses the explicit load-only-only `DON_NET_CONNECTIVITY_OVERRIDE` to prove
+`is_connected_to_network` reports online before and after the shipped no-op
+setter, then reports offline when the override changes. Production uses the
+exact shipped `InternetGetConnectedState(&flags, 0)` pre-session availability
+test recovered at `0x10018550`; it is deliberately independent of NetSys roster
+state. The flushed trace must prove the only listener is
 `127.0.0.1:ephemeral`. The host refuses an existing trace instead of appending
 ambiguous evidence. No ticket, lobby id, credential, game directory, or
 running retail process is read.

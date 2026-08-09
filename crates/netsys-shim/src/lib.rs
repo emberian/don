@@ -73,10 +73,14 @@ pub extern "C" fn get_netsys_object_ptr(
 // ---------------------------------------------------------------------------
 
 /// `bool CrossplayNetLib::is_connected_to_network()` — `__cdecl`.
+///
+/// Shipped VA `0x10018550` calls WinINet's `InternetGetConnectedState` and
+/// returns its nonzero result. Retail uses this before `NetSys::host`, so it
+/// must not be coupled to our later roster/session-connected bit.
 #[no_mangle]
 pub extern "C" fn shim_is_connected_to_network() -> bool {
     netsys::trace_once("export.is_connected_to_network");
-    netsys::connected()
+    netsys::network_available()
 }
 
 /// Shim-only diagnostic marker/action. The PE32 smoke resolves this before it
