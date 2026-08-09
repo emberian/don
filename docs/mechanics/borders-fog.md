@@ -398,8 +398,8 @@ due call rejects `unit_masks2 & 1`, accepts the four literal worker TypeIndexes
 healing maximum but does **not** clear `0x4000`. `Unit::execute_events` at
 `0x00610BC0..0x00610C30` decrements a non-zero healing word later in the same frame. Arena
 now executes the same-owner land-worker singleton and that marker clock. Foreign ownership
-stops at a typed diplomacy boundary; caravan, merchant, patriot and captain composition
-remain separate inputs.
+stops at a typed adapter boundary even though World now owns the mutual relation matrix;
+caravan, merchant and captain composition remain separate inputs.
 
 The earlier Antipater/Wellington aura arm at `0x005E09ED..0x005E0AE4` skips sea and
 supply units. Its optimized `LeaderData::num_units[0x137/0x13E]` reads are unit-table
@@ -419,10 +419,22 @@ territory with the root-mask/healing-marker postlude. Arena executes the same-ow
 ordinary-singleton subdomain; the Antipater/Wellington family has already executed. The
 later optimized
 `num_units[0x12F/0x131/0x133]` reads likewise map through the `0x32` table base to The
-Senator (`0x161`), The President (`0x163`) and The CEO (`0x165`); Arena blocks those
-unintegrated aura compositions, the scenario-type fact and Versailles supply healing
-before the Iroquois mutation. Civilian/merchant, foreign-owner and multi-slot cases stop
-before mutation.
+Senator (`0x161`), The President (`0x163`) and The CEO (`0x165`). Arena executes those
+three arms after Iroquois in retail order. The scenario-type fact and Versailles supply
+composition still stop before the Iroquois mutation; civilian/merchant, foreign-owner and
+multi-slot cases likewise remain typed boundaries.
+
+The patriot family at `0x005E0C90..0x005E0F1A` uses the 20-frame scalar at
+`Rules +0x698`; all three qualifying arms may repair one point in the same due call.
+Senator requires owned allied territory. President accepts unowned or allied territory.
+CEO performs no territory read and instead accepts a clear `unit_masks & 0x80`, the exact
+`unit_masks2 & 0x40000` resupplied bit, or a supply target. Each arm calls
+`ObjectData::has_general(0, type)` and performs the root-mask/healing-marker postlude.
+Arena preflights all three registry/relation decisions before mutation, then applies their
+repairs in Senator → President → CEO order using a fresh target snapshot per write. Its
+authoritative `DiplomacyState` starts with retail's all-war declarations and uses the
+mutual-minimum `LeaderData::is_ally` relation; target acquisition now reads the same matrix
+instead of owner inequality.
 
 ---
 
@@ -481,14 +493,15 @@ still useful but the combination is not.
    `reveal_fog`** — so it must be ported before a replay comparison is trusted.
 3. **`don-sim` still does not own the walked `Supplies`/`HeroData` registries.** Its local
    kernels take resolved inputs. The Arena world now owns and walks those live registries
-   for process-supply, recharge and the isolated supply-healing arm; other hosts must still
-   provide the same ordered object lookup.
+   for process-supply, recharge, supply healing and the hero/patriot aura arms; other hosts
+   must still provide the same ordered object lookup.
 4. **Non-friendly attrition-period selection and the remaining healing families remain open.**
    Arena executes the exact 32-frame reset/friendly-territory return and fails closed at
-   the diplomacy/leader/object-graph boundary. Its healing host executes same-owner
-   singleton Antipater/Wellington, worker and ordinary Iroquois arms, but rejects
-   foreign/allied decisions, unintegrated patriot/caravan/merchant composition and
-   multi-slot objects.
+   the remaining leader/object-graph boundary. Its healing host executes singleton
+   Antipater/Wellington and Senator/President/CEO auras (including allied patriot
+   territory), plus same-owner worker and ordinary Iroquois arms. Worker/Iroquois still do
+   not consume the live relation matrix; caravan/merchant/captain composition and
+   multi-slot objects remain open.
 5. **`reveal_fog` `0x006B3D30` is only partly understood.** The module records *which* cells
    newly explored; the function's own body (goodie-hut pickup, first-sighting messages,
    `Good` reveal) is not ported.

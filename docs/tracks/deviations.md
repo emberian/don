@@ -294,9 +294,9 @@ playable surface while their runtime path remains incomplete:
 | `arena-water-model` | 6a | water generation/regions plus tile/water A* domains |
 | `arena-naval-model` | 6b | exact water path, dock/queue, boarding, containment, fishing, territory and supply runtime |
 | `arena-air-model` | 6c | `do_air_physics`, target/host scans, Ammo RNG insertion, orders and walked state |
-| `arena-diplomacy-model` | 6d | declaration command plus retargeting, shared vision, event/chat and strategy side effects |
+| `arena-diplomacy-model` | 6d | authoritative mutual relation state is live; declaration command plus retargeting, shared vision, event/chat and strategy side effects remain |
 | `arena-attrition-model` | 6e | non-friendly period selection (diplomacy/leader/object graphs) and multi-slot damage cascade; the live 32-frame reset/friendly return and singleton due-damage path are resolved |
-| `arena-supply-model` | 6f | foreign/allied worker/Iroquois diplomacy, patriot/caravan/merchant/captain composition and multi-slot repair; live registry traversal, Antipater/Wellington aura, reload selection, full supply postlude and same-owner singleton worker/Iroquois healing are resolved |
+| `arena-supply-model` | 6f | worker/Iroquois foreign-relation consumption, caravan/merchant/captain composition and multi-slot repair; live registry traversal, Antipater/Wellington and Senator/President/CEO auras, reload selection, full supply postlude and same-owner singleton worker/Iroquois healing are resolved |
 
 MODEL 4's focused unit-target integration is substantially narrower: five exact target tests
 cover stable traversal, spatial lifecycle, stance, visibility, region and priority. The

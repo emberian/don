@@ -39,11 +39,13 @@
 //!
 //! 3. Gather slots come from the terrain under the building, capped at the numbers the
 //!    shipped script's own arithmetic implies (Farm 1, Camp 5).
-//! 6. No water, naval, air or diplomacy. Supply source traversal, siege reload selection,
-//!    isolated French/Versailles healing, live Antipater/Wellington hero-aura healing,
-//!    same-owner worker/Iroquois healing, the 32-frame attrition reset/friendly return and
-//!    due-frame attrition mutation are wired into the live unit band. Non-friendly period
-//!    selection and the remaining healing families stay explicit blockers.
+//! 6. No water, naval, air or diplomacy command/side-effect runtime. Arena now owns the
+//!    retail all-war declaration matrix, and healing consumes its mutual ally relation.
+//!    Supply source traversal, siege reload selection, French/Versailles healing, live
+//!    Antipater/Wellington and Senator/President/CEO aura healing, same-owner
+//!    worker/Iroquois healing, the 32-frame attrition reset/friendly return and due-frame
+//!    attrition mutation are wired into the live unit band. Non-friendly period selection
+//!    and the remaining healing families stay explicit blockers.
 //!
 //! Construction no longer fabricates a builder-frame countdown.  Arena persists the
 //! recovered `BuildData` and `(who,o,uid)` order identity, installs `BUILD_AT` through
@@ -103,12 +105,13 @@ use super::gather_runtime::{
 use super::map::{Map, Spatial, Terrain};
 use super::retail_systems::{
     self, ArenaAttritionRecomputeHost, ArenaHeroAuraHealingHost, ArenaIroquoisHealingHost,
-    ArenaReloadSupplyHost, ArenaSupplyAttritionHost, ArenaSupplyHealingHost,
-    ArenaWorkerHealingHost, AttritionRecomputeTransaction, HealingRepairMutation,
-    HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord, IroquoisHealingTransaction,
-    ReloadSupplyState, SupplyAttritionTransaction, SupplyAttritionUnitState,
-    SupplyHealingTransaction, SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject,
-    WorkerHealingTransaction, SUPPORT_REGISTRY_ACTIVE,
+    ArenaPatriotHealingHost, ArenaReloadSupplyHost, ArenaSupplyAttritionHost,
+    ArenaSupplyHealingHost, ArenaWorkerHealingHost, AttritionRecomputeTransaction, DiplomacyState,
+    HealingRepairMutation, HeroAuraHealingTransaction, HeroRadiusFacts, HeroRegistryRecord,
+    IroquoisHealingTransaction, PatriotHealingTransaction, ReloadSupplyState,
+    SupplyAttritionTransaction, SupplyAttritionUnitState, SupplyHealingTransaction,
+    SupplyRadiusFacts, SupplyRegistryRecord, SupplySearchObject, WorkerHealingTransaction,
+    SUPPORT_REGISTRY_ACTIVE,
 };
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -490,6 +493,10 @@ pub struct World {
     /// arrays grow, matching the retail init/close transactions.
     supply_records: Vec<Vec<SupplyRegistryRecord>>,
     hero_records: Vec<Vec<HeroRegistryRecord>>,
+    /// Authoritative mutual `LeaderData::diplos` image. Arena starts in retail's all-war
+    /// declaration state; relation consumers must query this matrix rather than infer
+    /// hostility from unequal owner ids.
+    pub diplomacy: DiplomacyState,
     age_techs: Vec<i32>,
     /// Per-owner source for `ObjectData::uid`. `Objects::clear`/`Objects::init` zero the
     /// ten counters and `Object::init` 0x00647750 increments the selected `u16` counter.
@@ -605,6 +612,7 @@ struct ArenaSupplyHost<'a> {
     players: &'a [PlayerState],
     supply_records: &'a [Vec<SupplyRegistryRecord>],
     hero_records: &'a [Vec<HeroRegistryRecord>],
+    diplomacy: &'a DiplomacyState,
     territory: &'a don_sim::systems::map_terrain::World,
     frame: i64,
 }
@@ -941,16 +949,10 @@ impl ArenaSupplyHealingHost for ArenaSupplyHost<'_> {
             .types
             .get(ent.type_id)
             .ok_or(ArenaSupplyHostError::MissingType(ent.type_id))?;
-        let has_unsupported_patriot = self.ents.iter().any(|candidate| {
-            candidate.alive
-                && i32::from(candidate.who) == who
-                && matches!(candidate.type_id, 0x161 | 0x163 | 0x165)
-        });
         // The rest of Unit::process_healing can pre-empt or add to this supply arm for
-        // unsupported patriots, Iroquois, civilians/caravans/merchants, and multi-slot
-        // captain objects. Antipater/Wellington already ran through the exact prior arm.
-        Ok(has_unsupported_patriot
-            || self.players[owner].tribe == 0x12
+        // Iroquois, civilians/caravans/merchants, and multi-slot captain objects. The hero
+        // and patriot aura families already ran through their exact prior arms.
+        Ok(self.players[owner].tribe == 0x12
             || ty.cat == 5
             || ent.type_id == 0x13D
             || ty.uber_size != 1)
@@ -1022,6 +1024,39 @@ impl ArenaIroquoisHealingHost for ArenaSupplyHost<'_> {
     }
 
     fn repair_iroquois_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error> {
+        self.repair_and_mark_healing(
+            who,
+            o,
+            damage_before,
+            healing_before,
+            unit_masks_before,
+            amount,
+            healing_rate,
+            true,
+        )
+    }
+}
+
+impl ArenaPatriotHealingHost for ArenaSupplyHost<'_> {
+    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error> {
+        let who = usize::try_from(who).map_err(|_| ArenaSupplyHostError::InvalidOwner(who))?;
+        let other =
+            usize::try_from(other).map_err(|_| ArenaSupplyHostError::InvalidOwner(other))?;
+        self.diplomacy
+            .is_ally(who, other)
+            .map_err(|slot| ArenaSupplyHostError::InvalidOwner(slot.0 as i32))
+    }
+
+    fn repair_patriot_damage(
         &mut self,
         who: i32,
         o: i32,
@@ -1563,6 +1598,7 @@ impl World {
             target_circle: circle_table(),
             supply_records: vec![Vec::new(); tribes.len()],
             hero_records: vec![Vec::new(); tribes.len()],
+            diplomacy: DiplomacyState::at_war(),
             age_techs,
             next_object_uid: vec![0; tribes.len()],
         };
@@ -2033,7 +2069,9 @@ impl World {
     }
 
     pub fn is_hostile(&self, a: u8, b: u8) -> bool {
-        a != b
+        self.diplomacy
+            .is_enemy(usize::from(a), usize::from(b))
+            .expect("Arena owner ids fit the ten retail Leader slots")
     }
 
     fn tile_index(&self, tx: i32, ty: i32) -> Option<usize> {
@@ -2642,8 +2680,10 @@ impl World {
             self.tick_cycle(i);
             self.tick_job(i);
             if !buildings && self.ents[i].alive {
+                let process_healing_active = self.ents[i].hp.damage > 0;
                 self.tick_hero_aura_healing(i);
                 self.tick_iroquois_healing(i);
+                self.tick_patriot_healing(i, process_healing_active);
                 self.tick_supply_healing(i);
                 self.tick_worker_healing(i);
                 self.tick_attrition_recompute(i);
@@ -2669,6 +2709,7 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
                 territory: &self.collision_world,
                 frame: self.frame,
             };
@@ -2699,6 +2740,7 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
                 territory: &self.collision_world,
                 frame: self.frame,
             };
@@ -2708,6 +2750,53 @@ impl World {
             panic!("Arena Iroquois-healing transaction failed for ({who},{o}): {error:?}")
         });
         if matches!(transaction, IroquoisHealingTransaction::Healed { .. }) {
+            self.sync_target_damage(id);
+        }
+        transaction
+    }
+
+    /// The complete singleton Senator/President/CEO family, sequenced after Iroquois and
+    /// before supply healing as in `Unit::process_healing`.
+    fn tick_patriot_healing(
+        &mut self,
+        i: usize,
+        process_entered_with_damage: bool,
+    ) -> PatriotHealingTransaction {
+        if !process_entered_with_damage {
+            return PatriotHealingTransaction::NoDamage;
+        }
+        let who = i32::from(self.ents[i].who);
+        let o = i32::from(self.ents[i].object_o);
+        let id = self.ents[i].id;
+        let transaction = {
+            let mut host = ArenaSupplyHost {
+                ents: &mut self.ents,
+                types: &self.types,
+                players: &self.players,
+                supply_records: &self.supply_records,
+                hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
+                territory: &self.collision_world,
+                frame: self.frame,
+            };
+            retail_systems::execute_patriot_healing(
+                self.frame as i32,
+                who,
+                o,
+                process_entered_with_damage,
+                &mut host,
+            )
+        }
+        .unwrap_or_else(|error| {
+            panic!("Arena patriot-healing transaction failed for ({who},{o}): {error:?}")
+        });
+        if matches!(
+            transaction,
+            PatriotHealingTransaction::Processed { senator, president, ceo, .. }
+                if matches!(senator, retail_systems::PatriotHealingArmTransaction::Healed { .. })
+                    || matches!(president, retail_systems::PatriotHealingArmTransaction::Healed { .. })
+                    || matches!(ceo, retail_systems::PatriotHealingArmTransaction::Healed { .. })
+        ) {
             self.sync_target_damage(id);
         }
         transaction
@@ -2731,6 +2820,7 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
                 territory: &self.collision_world,
                 frame: self.frame,
             };
@@ -2762,6 +2852,7 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
                 territory: &self.collision_world,
                 frame: self.frame,
             };
@@ -2799,6 +2890,7 @@ impl World {
             players: &self.players,
             supply_records: &self.supply_records,
             hero_records: &self.hero_records,
+            diplomacy: &self.diplomacy,
             territory: &self.collision_world,
             frame: self.frame,
         };
@@ -2829,6 +2921,7 @@ impl World {
                 players: &self.players,
                 supply_records: &self.supply_records,
                 hero_records: &self.hero_records,
+                diplomacy: &self.diplomacy,
                 territory: &self.collision_world,
                 frame: self.frame,
             };
@@ -3709,6 +3802,7 @@ impl World {
             players: &self.players,
             supply_records: &self.supply_records,
             hero_records: &self.hero_records,
+            diplomacy: &self.diplomacy,
             territory: &self.collision_world,
             frame: self.frame,
         };
@@ -4658,8 +4752,10 @@ mod supply_attrition_integration {
     use super::*;
     use crate::arena::match_run::{load_world, MatchConfig};
     use crate::arena::retail_systems::{
-        HeroAuraHealingBlocker, IroquoisHealingBlocker, WorkerHealingBlocker, RESUPPLIED_THIS_TICK,
+        HeroAuraHealingBlocker, IroquoisHealingBlocker, PatriotHealingArmTransaction,
+        PatriotHealingBlocker, WorkerHealingBlocker, RESUPPLIED_THIS_TICK,
     };
+    use don_sim::systems::victory_score::Diplo;
 
     #[test]
     fn live_unit_band_applies_reload_healing_attrition_and_source_lifetime() {
@@ -5019,23 +5115,23 @@ mod supply_attrition_integration {
         assert_eq!(world.ents[ui].hp.damage, 1);
         assert_eq!(world.ents[ui].healing, 0);
 
-        // The optimized retail counter slot 0x12F maps to TypeIndex 0x161 after the
-        // unit-table 0x32 base. A live Senator therefore blocks the unintegrated later
-        // aura family; an aircraft with raw TypeIndex 0x12F would not be this source.
+        // The later patriot family is sequenced separately, so its live source no longer
+        // prevents the exact earlier Iroquois mutation.
         world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 1;
         world.spawn(0, 0x161, center + 8, center, true);
         world.frame = age_one_due + 60;
-        assert_eq!(
+        assert!(matches!(
             world.tick_iroquois_healing(ui),
-            IroquoisHealingTransaction::BlockedComposition {
+            IroquoisHealingTransaction::Healed {
                 rate: 15,
-                blocker: IroquoisHealingBlocker::LaterPatriotFamily {
-                    patriot_type_id: 0x161,
+                repair: HealingRepairMutation {
+                    damage_before: 1,
+                    damage_after: 0,
+                    ..
                 },
             }
-        );
-        assert_eq!(world.ents[ui].hp.damage, 1);
-        assert_eq!(world.ents[ui].healing, 0);
+        ));
+        assert_eq!(world.ents[ui].hp.damage, 0);
     }
 
     #[test]
@@ -5129,6 +5225,230 @@ mod supply_attrition_integration {
             HeroAuraHealingTransaction::BlockedComposition {
                 rate: 20,
                 blocker: HeroAuraHealingBlocker::MultiSlot {
+                    type_id: CATAPULT,
+                    uber_size: 2,
+                },
+            }
+        );
+        assert_eq!(world.ents[ui].hp.damage, 1);
+        assert_eq!(world.ents[ui].healing, 0);
+    }
+
+    #[test]
+    fn patriot_healing_composes_in_branch_order_and_reads_live_diplomacy() {
+        let Ok(mut world) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        const CATAPULT: i32 = 0x109;
+        const SENATOR: i32 = 0x161;
+        const PRESIDENT: i32 = 0x163;
+        const CEO: i32 = 0x165;
+        for (type_id, expected_name) in [
+            (SENATOR, "The Senator"),
+            (PRESIDENT, "The President"),
+            (CEO, "The CEO"),
+        ] {
+            let ty = world.types.get(type_id).expect("live patriot TypeRow");
+            assert_eq!(ty.name, expected_name);
+            assert_eq!(ty.unit_flags2 & 0x20, 0x20);
+            assert_eq!(ty.uber_size, 1);
+        }
+
+        let center = world.map.w / 2;
+        let unit = world.spawn(0, CATAPULT, center, center, true);
+        let ui = unit.index().expect("target has a dense Arena handle");
+        let unit_o = world.ents[ui].object_o;
+        let senator = world.spawn(0, SENATOR, center + 1, center, true);
+        let president = world.spawn(0, PRESIDENT, center + 2, center, true);
+        let ceo = world.spawn(0, CEO, center + 3, center, true);
+        let si = senator.index().expect("Senator has a dense Arena handle");
+        let pi = president
+            .index()
+            .expect("President has a dense Arena handle");
+        let ci = ceo.index().expect("CEO has a dense Arena handle");
+        let (tx, ty) = world.ents[ui].tile();
+        let (wx, wy) = (tx.div_euclid(4), ty.div_euclid(4));
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        assert!(world.diplomacy.is_ally(0, 0).unwrap());
+        assert!(world.is_hostile(0, 1));
+
+        // Retail executes all three due arms independently. Their receipts pin the
+        // mutation order and prove that each sees the preceding repair's live state.
+        world.ents[ui].hp.damage = 3;
+        world.ents[ui].healing = 0;
+        world.ents[ui].motion.as_mut().unwrap().unit_masks |= 0x4000;
+        let due = (-i64::from(unit_o)).rem_euclid(20);
+        world.frame = due;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                rate: 20,
+                senator: PatriotHealingArmTransaction::Healed {
+                    hero_object_index: senator_o,
+                    repair: HealingRepairMutation {
+                        damage_before: 3,
+                        damage_after: 2,
+                        ..
+                    },
+                },
+                president: PatriotHealingArmTransaction::Healed {
+                    hero_object_index: president_o,
+                    repair: HealingRepairMutation {
+                        damage_before: 2,
+                        damage_after: 1,
+                        ..
+                    },
+                },
+                ceo: PatriotHealingArmTransaction::Healed {
+                    hero_object_index: ceo_o,
+                    repair: HealingRepairMutation {
+                        damage_before: 1,
+                        damage_after: 0,
+                        healing_after: 20,
+                        unit_masks_after,
+                        ..
+                    },
+                },
+            } if senator_o == i32::from(world.ents[si].object_o)
+                && president_o == i32::from(world.ents[pi].object_o)
+                && ceo_o == i32::from(world.ents[ci].object_o)
+                && unit_masks_after & 0x4000 == 0
+        ));
+        assert_eq!(world.ents[ui].hp.damage, 0);
+
+        let far = 100 * RANGE_UNITS_PER_TILE;
+        world.ents[ci].x += far;
+        world.collision_world.wdata_mut(wx, wy).who = -1;
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.frame = due + 20;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                senator: PatriotHealingArmTransaction::UnownedTerritory,
+                president: PatriotHealingArmTransaction::Healed {
+                    repair: HealingRepairMutation {
+                        damage_before: 1,
+                        damage_after: 0,
+                        ..
+                    },
+                    ..
+                },
+                ceo: PatriotHealingArmTransaction::OutsideAura,
+                ..
+            }
+        ));
+
+        // Default retail declarations are mutual war. Foreign territory therefore blocks
+        // both territory-sensitive arms without relying on `owner_a != owner_b`.
+        world.ents[pi].x += far;
+        world.collision_world.wdata_mut(wx, wy).who = 1;
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.frame = due + 40;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                senator: PatriotHealingArmTransaction::NonAlliedTerritory { territory_owner: 1 },
+                president: PatriotHealingArmTransaction::NonAlliedTerritory { territory_owner: 1 },
+                ceo: PatriotHealingArmTransaction::OutsideAura,
+                ..
+            }
+        ));
+        assert_eq!(world.ents[ui].hp.damage, 1);
+
+        world
+            .diplomacy
+            .write_declaration_state_only(0, 1, Diplo::Ally)
+            .unwrap();
+        world
+            .diplomacy
+            .write_declaration_state_only(1, 0, Diplo::Ally)
+            .unwrap();
+        assert!(!world.is_hostile(0, 1));
+        world.frame = due + 60;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                senator: PatriotHealingArmTransaction::Healed {
+                    repair: HealingRepairMutation {
+                        damage_before: 1,
+                        damage_after: 0,
+                        ..
+                    },
+                    ..
+                },
+                president: PatriotHealingArmTransaction::OutsideAura,
+                ceo: PatriotHealingArmTransaction::OutsideAura,
+                ..
+            }
+        ));
+
+        // CEO ignores territory but requires either a clear 0x80 mask, the exact
+        // resupplied bit, or a supply target. Exercise the non-supply resupplied escape.
+        world.ents[si].x += far;
+        world.ents[ci].x -= far;
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        {
+            let motion = world.ents[ui].motion.as_mut().unwrap();
+            motion.unit_masks |= 0x80;
+            motion.unit_masks2 &= !RESUPPLIED_THIS_TICK;
+        }
+        world.frame = due + 80;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                senator: PatriotHealingArmTransaction::OutsideAura,
+                president: PatriotHealingArmTransaction::OutsideAura,
+                ceo: PatriotHealingArmTransaction::GuardedCeoTarget,
+                ..
+            }
+        ));
+        assert_eq!(world.ents[ui].hp.damage, 1);
+
+        world.ents[ui].motion.as_mut().unwrap().unit_masks2 |= RESUPPLIED_THIS_TICK;
+        world.frame = due + 100;
+        assert!(matches!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::Processed {
+                ceo: PatriotHealingArmTransaction::Healed {
+                    repair: HealingRepairMutation {
+                        damage_before: 1,
+                        damage_after: 0,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
+
+        // `process_healing` checks damage only once at entry. Age-one Iroquois healing
+        // reaches zero first at this shared due phase, but the later Senator arm still
+        // runs and raises the marker from 15 to 20 before execute_events decrements it.
+        world.ents[si].x -= far;
+        world.ents[ci].x += far;
+        world.collision_world.wdata_mut(wx, wy).who = 0;
+        world.players[0].tribe = 0x12;
+        world.players[0].techs.insert(0x2EF);
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 1;
+        world.frame = (-i64::from(unit_o)).rem_euclid(60);
+        world.step();
+        assert_eq!(world.ents[ui].hp.damage, 0);
+        assert_eq!(world.ents[ui].healing, 19);
+
+        world.ents[ui].hp.damage = 1;
+        world.ents[ui].healing = 0;
+        world.types.rows.get_mut(&CATAPULT).unwrap().uber_size = 2;
+        world.frame = due + 120;
+        assert_eq!(
+            world.tick_patriot_healing(ui, true),
+            PatriotHealingTransaction::BlockedComposition {
+                rate: 20,
+                blocker: PatriotHealingBlocker::MultiSlot {
                     type_id: CATAPULT,
                     uber_size: 2,
                 },

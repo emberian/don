@@ -359,10 +359,11 @@ pub const MODEL6_INVENTORY: &[IntegrationItem] = &[
             "same-owner land-worker healing, marker clock and singleton repair mutation",
             "same-owner Iroquois ordinary-unit healing with live age and composition preflight",
             "Antipater/Wellington singleton healing through the live hero registry and radius",
+            "Senator/President/CEO singleton healing with live relations, masks and ordered composition",
         ],
         missing: &[
-            "foreign/allied worker and Iroquois healing need the diplomacy matrix",
-            "patriot, caravan, merchant and captain healing-family composition",
+            "foreign/allied worker and Iroquois healing do not yet consume the live diplomacy matrix",
+            "caravan, merchant and captain healing-family composition",
             "multi-slot captain repair for ObjectType uber_size greater than one",
         ],
     },
@@ -1171,11 +1172,28 @@ pub trait ArenaIroquoisHealingHost: ArenaHeroAuraHealingHost {
     ) -> Result<HealingRepairMutation, Self::Error>;
 }
 
+/// Live relations and the atomic repair write for the consecutive Senator, President and
+/// CEO aura arms at `0x005E0C90..0x005E0F1A`. `is_allied` must expose the mutual
+/// `LeaderData::is_ally` result; owner inequality is not sufficient.
+pub trait ArenaPatriotHealingHost: ArenaIroquoisHealingHost {
+    fn is_allied(&self, who: i32, other: i32) -> Result<bool, Self::Error>;
+    fn repair_patriot_damage(
+        &mut self,
+        who: i32,
+        o: i32,
+        damage_before: i32,
+        healing_before: i16,
+        unit_masks_before: u32,
+        amount: i32,
+        healing_rate: i32,
+    ) -> Result<HealingRepairMutation, Self::Error>;
+}
+
 /// Live facts and the atomic repair write for the final worker arm of
 /// `Unit::process_healing` (`0x005E1000..0x005E110D`). The worker predicate is recovered
 /// as the four literal TypeIndexes `0x32..=0x35`; caravan and merchant virtual predicates
 /// deliberately remain outside this boundary.
-pub trait ArenaWorkerHealingHost: ArenaIroquoisHealingHost {
+pub trait ArenaWorkerHealingHost: ArenaPatriotHealingHost {
     fn repair_worker_damage(
         &mut self,
         who: i32,
@@ -1269,9 +1287,9 @@ pub enum SupplyHealingTransaction {
 }
 
 /// Compare-and-swap-shaped receipt for `Unit::repair_damage` plus the caller's exact
-/// `ObjectData::healing = max(healing, rate)` postlude. The supply, hero-aura and supported
-/// Iroquois arms clear `unit_masks & 0x4000` after a root unit reaches zero damage; the
-/// worker arm retains it.
+/// `ObjectData::healing = max(healing, rate)` postlude. The supply, hero/patriot-aura and
+/// supported Iroquois arms clear `unit_masks & 0x4000` after a root unit reaches zero
+/// damage; the worker arm retains it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HealingRepairMutation {
     pub damage_before: i32,
@@ -1284,7 +1302,6 @@ pub struct HealingRepairMutation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkerHealingBlocker {
-    PatriotHealing { patriot_type_id: i32 },
     IroquoisHealing,
     SupplyHealing,
     MultiSlot { type_id: i32, uber_size: i32 },
@@ -1352,11 +1369,51 @@ pub enum HeroAuraHealingTransaction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatriotHealingBlocker {
+    MultiSlot { type_id: i32, uber_size: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatriotHealingArmTransaction {
+    NoSource,
+    UnownedTerritory,
+    NonAlliedTerritory {
+        territory_owner: i32,
+    },
+    GuardedCeoTarget,
+    OutsideAura,
+    Healed {
+        hero_object_index: i32,
+        repair: HealingRepairMutation,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatriotHealingTransaction {
+    NoDamage,
+    SeaUnit,
+    SupplyUnit,
+    Disabled,
+    NotDue {
+        rate: i32,
+    },
+    BlockedComposition {
+        rate: i32,
+        blocker: PatriotHealingBlocker,
+    },
+    Processed {
+        rate: i32,
+        senator: PatriotHealingArmTransaction,
+        president: PatriotHealingArmTransaction,
+        ceo: PatriotHealingArmTransaction,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IroquoisHealingBlocker {
     CivilianOrMerchant { type_id: i32, type_category: i32 },
     MultiSlot { type_id: i32, uber_size: i32 },
     ScenarioHealing { scenario_type_id: i32 },
-    LaterPatriotFamily { patriot_type_id: i32 },
     SupplyHealing,
 }
 
@@ -1895,10 +1952,10 @@ pub fn execute_hero_aura_healing<H: ArenaHeroAuraHealingHost>(
 /// `Unit::process_healing` (`0x005E0B49..0x005E0C90`).
 ///
 /// `LeaderData::get_age` selects the shipped `{20,15,10,5}` frame rate. The exact
-/// Antipater/Wellington family is sequenced by the live World before this call; this
-/// transaction preflights the remaining later patriot families before mutating.
-/// Civilian/merchant and multi-slot shapes remain typed blockers; foreign territory still
-/// needs the absent mutual diplomacy matrix.
+/// Antipater/Wellington family is sequenced by the live World before this call and the
+/// exact patriot family after it. Civilian/merchant and multi-slot shapes remain typed
+/// blockers; foreign territory consumes the live World's mutual diplomacy matrix outside
+/// this bounded same-owner transaction.
 pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     frame: i32,
     who: i32,
@@ -1983,22 +2040,6 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
             });
         }
     }
-    // These optimized num_units loads use unit-table slots 0x12F/0x131/0x133. Adding
-    // the table's TypeIndex base 0x32 identifies the Senator/President/CEO themselves.
-    // Their later aura family is not yet integrated, so any live source blocks before
-    // the Iroquois mutation rather than being mistaken for an aircraft TypeIndex.
-    for patriot_type_id in [0x161, 0x163, 0x165] {
-        if host
-            .owned_type_count(who, patriot_type_id)
-            .map_err(SupplyAttritionTransactionError::Host)?
-            > 0
-        {
-            return Ok(IroquoisHealingTransaction::BlockedComposition {
-                rate,
-                blocker: IroquoisHealingBlocker::LaterPatriotFamily { patriot_type_id },
-            });
-        }
-    }
     if host
         .completed_versailles(who)
         .map_err(SupplyAttritionTransactionError::Host)?
@@ -2036,6 +2077,213 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
     Ok(IroquoisHealingTransaction::Healed { rate, repair })
 }
 
+#[derive(Clone, Copy)]
+enum PatriotArmPreflight {
+    NoSource,
+    UnownedTerritory,
+    NonAlliedTerritory(i32),
+    GuardedCeoTarget,
+    OutsideAura,
+    Aura(i32),
+}
+
+fn commit_patriot_arm<H: ArenaPatriotHealingHost>(
+    preflight: PatriotArmPreflight,
+    rate: i32,
+    who: i32,
+    o: i32,
+    host: &mut H,
+) -> Result<PatriotHealingArmTransaction, SupplyAttritionTransactionError<H::Error>> {
+    let hero_object_index = match preflight {
+        PatriotArmPreflight::NoSource => return Ok(PatriotHealingArmTransaction::NoSource),
+        PatriotArmPreflight::UnownedTerritory => {
+            return Ok(PatriotHealingArmTransaction::UnownedTerritory);
+        }
+        PatriotArmPreflight::NonAlliedTerritory(territory_owner) => {
+            return Ok(PatriotHealingArmTransaction::NonAlliedTerritory { territory_owner });
+        }
+        PatriotArmPreflight::GuardedCeoTarget => {
+            return Ok(PatriotHealingArmTransaction::GuardedCeoTarget);
+        }
+        PatriotArmPreflight::OutsideAura => return Ok(PatriotHealingArmTransaction::OutsideAura),
+        PatriotArmPreflight::Aura(hero_object_index) => hero_object_index,
+    };
+
+    // Every arm preflights before the first write. Reload only the target mutation fields
+    // here so consecutive qualifying patriots compose exactly rather than using a stale
+    // damage/healing/mask snapshot from the beginning of the family.
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    let repair = host
+        .repair_patriot_damage(
+            who,
+            o,
+            state.damage,
+            state.healing,
+            state.unit_masks,
+            1,
+            rate,
+        )
+        .map_err(SupplyAttritionTransactionError::Host)?;
+    Ok(PatriotHealingArmTransaction::Healed {
+        hero_object_index,
+        repair,
+    })
+}
+
+/// Execute the complete singleton Senator/President/CEO aura family at
+/// `Unit::process_healing` `0x005E0C90..0x005E0F1A`.
+///
+/// The three optimized count slots `0x12F/0x131/0x133` map through the live UnitType-table
+/// base `0x32` to TypeIndexes `0x161/0x163/0x165`. Senator requires owned allied
+/// territory; President accepts unowned or allied territory; CEO has no territory read
+/// and instead applies the recovered `unit_masks`/`unit_masks2` guard. All three use the
+/// 20-frame scalar at `Rules +0x698`, walk `ObjectData::has_general(0, type)` in branch
+/// order, and may each repair one point in the same call. `process_entered_with_damage`
+/// retains the single damage gate at the top of `Unit::process_healing`; an earlier family
+/// reaching zero does not suppress these later branches in retail.
+pub fn execute_patriot_healing<H: ArenaPatriotHealingHost>(
+    frame: i32,
+    who: i32,
+    o: i32,
+    process_entered_with_damage: bool,
+    host: &mut H,
+) -> Result<PatriotHealingTransaction, SupplyAttritionTransactionError<H::Error>> {
+    const PATRIOT_HEAL_RATE: i32 = 20;
+    const SENATOR: i32 = 0x161;
+    const PRESIDENT: i32 = 0x163;
+    const CEO: i32 = 0x165;
+
+    if o < 0 || !(0..NUM_LEADERS as i32).contains(&who) {
+        return Err(SupplyAttritionTransactionError::InvalidUnit { who, o });
+    }
+    if !process_entered_with_damage {
+        return Ok(PatriotHealingTransaction::NoDamage);
+    }
+    let state = host
+        .unit_state(who, o)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        .ok_or(SupplyAttritionTransactionError::MissingUnit { who, o })?;
+    if state.unit.who != who || state.unit.o != o {
+        return Err(SupplyAttritionTransactionError::UnitIdentityChanged {
+            requested_who: who,
+            requested_o: o,
+            found_who: state.unit.who,
+            found_o: state.unit.o,
+        });
+    }
+    if state.domain == 1 {
+        return Ok(PatriotHealingTransaction::SeaUnit);
+    }
+    if state.is_supply {
+        return Ok(PatriotHealingTransaction::SupplyUnit);
+    }
+    if PATRIOT_HEAL_RATE == 0 {
+        return Ok(PatriotHealingTransaction::Disabled);
+    }
+    if frame.wrapping_add(i32::from(state.unit_id)) % PATRIOT_HEAL_RATE != 0 {
+        return Ok(PatriotHealingTransaction::NotDue {
+            rate: PATRIOT_HEAL_RATE,
+        });
+    }
+    if state.type_308 != 1 || state.curr_uber_size != 1 {
+        return Ok(PatriotHealingTransaction::BlockedComposition {
+            rate: PATRIOT_HEAL_RATE,
+            blocker: PatriotHealingBlocker::MultiSlot {
+                type_id: state.type_id,
+                uber_size: state.type_308,
+            },
+        });
+    }
+
+    let senator = if host
+        .owned_type_count(who, SENATOR)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        <= 0
+    {
+        PatriotArmPreflight::NoSource
+    } else {
+        let territory_owner = host
+            .territory_owner_at(state.unit.x, state.unit.y)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        if territory_owner < 0 {
+            PatriotArmPreflight::UnownedTerritory
+        } else if !host
+            .is_allied(who, territory_owner)
+            .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            PatriotArmPreflight::NonAlliedTerritory(territory_owner)
+        } else {
+            match find_registered_hero_aura(state, SENATOR, host)? {
+                Some(source) => PatriotArmPreflight::Aura(source),
+                None => PatriotArmPreflight::OutsideAura,
+            }
+        }
+    };
+
+    let president = if host
+        .owned_type_count(who, PRESIDENT)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        <= 0
+    {
+        PatriotArmPreflight::NoSource
+    } else {
+        let territory_owner = host
+            .territory_owner_at(state.unit.x, state.unit.y)
+            .map_err(SupplyAttritionTransactionError::Host)?;
+        if territory_owner >= 0
+            && !host
+                .is_allied(who, territory_owner)
+                .map_err(SupplyAttritionTransactionError::Host)?
+        {
+            PatriotArmPreflight::NonAlliedTerritory(territory_owner)
+        } else {
+            match find_registered_hero_aura(state, PRESIDENT, host)? {
+                Some(source) => PatriotArmPreflight::Aura(source),
+                None => PatriotArmPreflight::OutsideAura,
+            }
+        }
+    };
+
+    let ceo = if host
+        .owned_type_count(who, CEO)
+        .map_err(SupplyAttritionTransactionError::Host)?
+        <= 0
+    {
+        PatriotArmPreflight::NoSource
+    } else if state.unit_masks & 0x80 != 0
+        && state.unit_masks2 & RESUPPLIED_THIS_TICK == 0
+        && !state.is_supply
+    {
+        PatriotArmPreflight::GuardedCeoTarget
+    } else {
+        match find_registered_hero_aura(state, CEO, host)? {
+            Some(source) => PatriotArmPreflight::Aura(source),
+            None => PatriotArmPreflight::OutsideAura,
+        }
+    };
+
+    let senator = commit_patriot_arm(senator, PATRIOT_HEAL_RATE, who, o, host)?;
+    let president = commit_patriot_arm(president, PATRIOT_HEAL_RATE, who, o, host)?;
+    let ceo = commit_patriot_arm(ceo, PATRIOT_HEAL_RATE, who, o, host)?;
+    Ok(PatriotHealingTransaction::Processed {
+        rate: PATRIOT_HEAL_RATE,
+        senator,
+        president,
+        ceo,
+    })
+}
+
 /// Execute the exact friendly-land worker subdomain of the final civilian arm in
 /// `Unit::process_healing` (`0x005E1000..0x005E110D`).
 ///
@@ -2043,8 +2291,8 @@ pub fn execute_iroquois_healing<H: ArenaIroquoisHealingHost>(
 /// four literal worker TypeIndexes, then repairs on sea or allied territory. Arena has no
 /// diplomacy matrix, so same-owner land is exact, unowned land is an exact no-op, and a
 /// foreign owner is a typed authority boundary. The live World sequences the supported
-/// hero aura first; Iroquois/supply, unintegrated patriot and multi-slot composition remain
-/// explicit instead of being silently combined here.
+/// hero and patriot auras first; Iroquois/supply and multi-slot composition remain explicit
+/// instead of being silently combined here.
 pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
     frame: i32,
     who: i32,
@@ -2099,18 +2347,6 @@ pub fn execute_worker_healing<H: ArenaWorkerHealingHost>(
                 uber_size: state.type_308,
             },
         });
-    }
-    for patriot_type_id in [0x161, 0x163, 0x165] {
-        if host
-            .owned_type_count(who, patriot_type_id)
-            .map_err(SupplyAttritionTransactionError::Host)?
-            > 0
-        {
-            return Ok(WorkerHealingTransaction::BlockedPriorFamily {
-                rate: CIVILIAN_HEAL_RATE,
-                blocker: WorkerHealingBlocker::PatriotHealing { patriot_type_id },
-            });
-        }
     }
     if host
         .iroquois_healing_bonus(who)
