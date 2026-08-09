@@ -1,0 +1,100 @@
+{
+  "schema": "don.retail-arena-marshal-supervised-loop-protocol.v1",
+  "observation_protocol": "don.retail-player.v3",
+  "policy": "Arena Marshal faithful-supported-subsequence",
+  "bounds": {
+    "decisions": {
+      "minimum": 1,
+      "maximum": 8
+    },
+    "frames_per_decision": {
+      "minimum": 1,
+      "maximum": 30
+    },
+    "actions_per_decision": {
+      "maximum": 1
+    },
+    "dry_run_decisions": 1
+  },
+  "transaction": [
+    "coherent own-state observation while paused",
+    "source-ordered Marshal plan",
+    "same-frame own-state identity comparison",
+    "retail legality revalidation",
+    "at most one proven retail action or literal no-op",
+    "exact bounded frame advance with automatic re-pause",
+    "coherent own-state reobservation",
+    "checkpointed trace write"
+  ],
+  "proven_actions": {
+    "queue": {
+      "packed_opcode": "0x18",
+      "legality": "BuildData::can_queue",
+      "proof": "aggregate type queue and exact producer logical queue both change by count at a zero-frame paused boundary"
+    },
+    "build": {
+      "packed_opcode": "0x19",
+      "legality": "current-fog footprint gate before GroupData::validate_build and prospective capacity query",
+      "proof": "a new own building {o,uid,type} materializes and the selected worker resolves a BuildOrder target to that identity"
+    }
+  },
+  "unsupported_action": {
+    "behavior": "literal no-op",
+    "substitution": false,
+    "time": "the configured finite frame horizon still advances in apply mode"
+  },
+  "stable_identity": [
+    "supported executable SHA-256",
+    "local player owner/slot/who/tribe/team",
+    "world tile dimensions and 192 Coord units per tile"
+  ],
+  "same_frame_apply_token": [
+    "stable identity",
+    "Game.frame",
+    "pause bit",
+    "complete own economy, population, and technology records",
+    "own queued type summary",
+    "own object slot metadata",
+    "own object marks",
+    "complete public own object sequence, including positions, orders, hits, flags, capacities, and queues"
+  ],
+  "fail_closed_on": [
+    "executable/player/world identity change",
+    "own object recycle or state change between plan and apply",
+    "retail legality rejection",
+    "missing or unexpected serialized command opcode",
+    "unaccounted simulation frame",
+    "unpaused transaction boundary",
+    "missing expected queue/order/materialization delta"
+  ],
+  "fog_scope": {
+    "includes": "local human slot own-state only",
+    "placement": "prospective terrain result is queried only after every retail calc_gather W block's four F cells are currently visible",
+    "excludes": [
+      "enemy and neutral object tables",
+      "hidden terrain or blockers",
+      "enemy economy, orders, and targets",
+      "unsupported sighting and explored-map inference"
+    ]
+  },
+  "terminal_fail_safe": [
+    "request retail pause=1",
+    "STOP restores the exact original five Game::loop call-site bytes",
+    "leave the immutable DLL generation mapped and parked"
+  ],
+  "live_trace": {
+    "generation": "marshal-loop-v16",
+    "pid": 12324,
+    "frame_range": [
+      807,
+      1047
+    ],
+    "decisions": 8,
+    "applied_verbs": [
+      "queue",
+      "build"
+    ],
+    "no_op_decisions": 6,
+    "terminal_state": "parked"
+  }
+}

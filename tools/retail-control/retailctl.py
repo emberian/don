@@ -1286,8 +1286,44 @@ def economy_action_words(action: dict) -> list[str]:
     raise RuntimeError(f"unsupported economy verb {action['verb']!r}")
 
 
-def prove_economy_action(root: str, generation: str, action: dict, output: Path) -> dict:
+def observation_identity(observation: dict) -> dict:
+    """Fields that must remain stable across one supervised live-player transaction."""
+    return {
+        "retail_executable_sha256": observation["retail_executable_sha256"],
+        "player": {key: observation["player"][key]
+                   for key in ["owner", "slot", "who", "tribe", "team"]},
+        "world": observation["world"],
+    }
+
+
+def paused_observation_token(observation: dict) -> dict:
+    """Complete public own-state token compared between paused plan and apply."""
+    return {
+        "identity": observation_identity(observation),
+        "frame": observation["frame"],
+        "paused": observation["paused"],
+        "economy": observation["economy"],
+        "population": observation["population"],
+        "technology": observation["technology"],
+        "queued_types": observation["queued_types"],
+        "object_slots": observation["object_slots"],
+        "object_marks": observation["object_marks"],
+        "objects": observation["objects"],
+    }
+
+
+def prove_economy_action(root: str, generation: str, action: dict, output: Path,
+                         expected_before: dict | None = None,
+                         settlement_frames: int = 30,
+                         settlement_limit_frames: int = 180) -> dict:
+    if not 1 <= settlement_frames <= 30:
+        raise RuntimeError("economy proof settlement boundary must be 1..30 frames")
+    if not 1 <= settlement_limit_frames <= 180:
+        raise RuntimeError("economy proof settlement limit must be 1..180 frames")
     before = player_observation(root, generation)
+    if (expected_before is not None and
+            paused_observation_token(before) != paused_observation_token(expected_before)):
+        raise RuntimeError("own public state/identity changed between Marshal plan and apply")
     validation = validate_economy_action(action, before, root)
     if not validation.get("validation_result"):
         raise RuntimeError("shipped retail legality predicate rejected economy action")
@@ -1311,8 +1347,11 @@ def prove_economy_action(root: str, generation: str, action: dict, output: Path)
     if action["verb"] == "build":
         before_ids = {(obj["object_id"], obj["id"]["uid"]) for obj in before["objects"]}
         after = before
-        for _ in range(6):
-            settlements.append(advance_frames(root, 30))
+        elapsed = 0
+        while elapsed < settlement_limit_frames:
+            boundary = min(settlement_frames, settlement_limit_frames - elapsed)
+            settlements.append(advance_frames(root, boundary))
+            elapsed += boundary
             after = player_observation(root, generation)
             if any(obj["type_index"] == action["type_index"] and
                    (obj["object_id"], obj["id"]["uid"]) not in before_ids
@@ -1620,6 +1659,161 @@ def arena_marshal_policy_run(root: str, generation: str, output: Path, apply: bo
         except BaseException as exc:
             if failure is None:
                 failure = exc
+    if failure is not None:
+        raise failure
+
+
+def arena_marshal_supervised_loop(root: str, generation: str, output: Path,
+                                  decisions: int, frames_per_decision: int,
+                                  apply: bool) -> None:
+    """Finite observe/plan/apply/advance/reobserve loop over proven retail verbs."""
+    if not 1 <= decisions <= 8:
+        raise RuntimeError("Marshal loop requires 1..8 bounded decisions")
+    if not 1 <= frames_per_decision <= 30:
+        raise RuntimeError("Marshal loop frame boundary must be 1..30")
+    if not apply and decisions != 1:
+        raise RuntimeError("dry-run Marshal loop is one decision; repeated decisions require --apply")
+    artifact: dict = {
+        "schema": "don.retail-arena-marshal-supervised-loop.v1",
+        "protocol": "don.retail-player.v3",
+        "controller_generation": generation,
+        "mode": "apply" if apply else "dry-run",
+        "requested_decisions": decisions,
+        "frames_per_decision": frames_per_decision,
+        "status": "running",
+        "safety": {
+            "max_actions_per_decision": 1,
+            "proven_action_verbs": ["queue", "build"],
+            "unsupported_action": "explicit no-op",
+            "fog": "retail-player.v3 own-state only; placement oracle is current-fog gated",
+            "identity": "exact executable/player/world every decision; same-frame object uid token before apply",
+            "pause": "every decision begins and ends paused",
+            "stop": "STOP restores the original five retail call-site bytes on every exit",
+        },
+        "decisions": [],
+        "status_detail": None,
+        "parked_ready_record": None,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    def checkpoint() -> None:
+        output.write_text(json.dumps(artifact, indent=2) + "\n")
+
+    failure: BaseException | None = None
+    stable_identity: dict | None = None
+    try:
+        for index in range(decisions):
+            step: dict = {"index": index, "status": "observing"}
+            artifact["decisions"].append(step)
+            checkpoint()
+            before = player_observation(root, generation)
+            identity = observation_identity(before)
+            if stable_identity is None:
+                stable_identity = identity
+                artifact["stable_identity"] = identity
+            elif identity != stable_identity:
+                raise RuntimeError("retail executable/player/world identity changed between decisions")
+            step["before"] = before
+            step["status"] = "planning"
+            checkpoint()
+
+            plan = arena_marshal_extracted_plan(before, root)
+            action = plan["selected_action"]
+            step["plan"] = plan
+            step["selected_action"] = action
+            step["action_mode"] = (
+                "apply" if action and action.get("verb") in {"queue", "build"} and apply else
+                "dry-run" if action and not apply else
+                "no-op-unsupported" if action else "no-op-no-supported-action"
+            )
+            step["status"] = "planned"
+            checkpoint()
+
+            proof = None
+            advance = None
+            proven = action and action.get("verb") in {"queue", "build"}
+            if apply and proven:
+                proof_path = output.with_name(
+                    f"{output.stem}-step-{index:02d}-action-proof.json"
+                )
+                proof = prove_economy_action(root, generation, action, proof_path,
+                                              expected_before=before,
+                                              settlement_frames=frames_per_decision,
+                                              settlement_limit_frames=frames_per_decision)
+                step["proof"] = {
+                    "artifact": proof_path.name,
+                    "schema": proof["schema"],
+                    "retail_validation": proof["retail_validation"],
+                    "retail_command_hex": proof["retail_command_hex"],
+                    "frame_boundary": proof["frame_boundary"],
+                    "pause_before_after": proof["pause_before_after"],
+                }
+                checkpoint()
+                if action["verb"] == "build":
+                    delta = proof["after"]["frame"] - proof["before"]["frame"]
+                    if delta != frames_per_decision:
+                        raise RuntimeError("BUILD_AT proof crossed a non-decision frame boundary")
+                    advance = {
+                        "source": "bounded build settlement",
+                        "requested": frames_per_decision,
+                        "frame_before": proof["before"]["frame"],
+                        "frame_after": proof["after"]["frame"],
+                        "pause_after": proof["after"]["paused"],
+                        "boundaries": proof["bounded_settlement"],
+                    }
+                else:
+                    advance = advance_frames(root, frames_per_decision)
+            elif apply:
+                # Unsupported or absent commands are literal no-ops. Time still advances
+                # to the next finite decision horizon; no substitute command is issued.
+                advance = advance_frames(root, frames_per_decision)
+
+            if apply:
+                after = player_observation(root, generation)
+                if after["frame"] != before["frame"] + frames_per_decision:
+                    raise RuntimeError("Marshal decision escaped its exact frame horizon")
+                if observation_identity(after) != stable_identity:
+                    raise RuntimeError("retail executable/player/world identity changed after action")
+                if before["paused"] != 1 or after["paused"] != 1:
+                    raise RuntimeError("Marshal decision escaped its paused boundaries")
+            else:
+                after = before
+            step["advance"] = advance
+            step["after"] = after
+            step["invariants"] = {
+                "identity_stable": observation_identity(after) == stable_identity,
+                "pause_before_after": [before["paused"], after["paused"]],
+                "frame_delta": after["frame"] - before["frame"],
+                "actions_applied": 1 if apply and proven else 0,
+                "unsupported_substitution": False,
+            }
+            step["status"] = "complete"
+            checkpoint()
+        artifact["status"] = "complete"
+        artifact["status_detail"] = f"completed {decisions} finite decisions"
+    except BaseException as exc:
+        failure = exc
+        artifact["status"] = "failed"
+        artifact["status_detail"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        try:
+            send(["pause", "1"], 5.0, root)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+                artifact["status"] = "failed"
+                artifact["status_detail"] = f"pause restore failed: {exc}"
+        try:
+            stop(root)
+            artifact["parked_ready_record"] = guest_cmd(
+                f'if exist "{root}\\ready.txt" type "{root}\\ready.txt"', check=False
+            )
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+                artifact["status"] = "failed"
+                artifact["status_detail"] = f"STOP restore failed: {exc}"
+        checkpoint()
     if failure is not None:
         raise failure
 
@@ -1934,6 +2128,14 @@ def main() -> None:
     mp.add_argument("--output", type=Path,
                     default=HERE.parents[1] / "schema/live/retail-arena-marshal-run-v1.json")
     add_generation(mp)
+    ml = sub.add_parser("marshal-loop")
+    ml.add_argument("--apply", action="store_true")
+    ml.add_argument("--decisions", type=int, default=1)
+    ml.add_argument("--frames-per-decision", type=int, default=30)
+    ml.add_argument("--output", type=Path,
+                    default=HERE.parents[1] /
+                    "schema/live/retail-arena-marshal-supervised-loop-v1.json")
+    add_generation(ml)
     ea = sub.add_parser("economy-action")
     ea.add_argument("verb", choices=["queue", "gather", "build"])
     ea.add_argument("--owner", type=int, default=0)
@@ -2008,6 +2210,11 @@ def main() -> None:
     elif a.action == "marshal-policy":
         arena_marshal_policy_run(generation_root(a.generation), a.generation,
                                  a.output.resolve(), a.apply)
+    elif a.action == "marshal-loop":
+        arena_marshal_supervised_loop(
+            generation_root(a.generation), a.generation, a.output.resolve(),
+            a.decisions, a.frames_per_decision, a.apply,
+        )
     elif a.action == "stop": stop(generation_root(a.generation))
     elif a.action == "rearm": rearm(generation_root(a.generation))
 

@@ -36,6 +36,11 @@ game:
   gates every prospective gather footprint through current fog before retail validation/capacity,
   and replays the selected site immediately before one bounded BUILD_AT. It emits the same ten
   `don-env` heads, records unsupported branches as no-ops, and is dry-run by default.
+- `marshal-loop` repeats that adapter for 1–8 supervised decisions with an exact 1–30-frame
+  horizon. Each decision starts and ends paused, applies at most one already-proven queue/build
+  verb, records unsupported branches as literal no-ops, and rejects executable/player/world or
+  same-frame own-object identity changes. Its final fail-safe always restores pause and STOP-parks
+  the immutable controller generation.
 
 Build and attach:
 
@@ -65,6 +70,9 @@ python3 tools/retail-control/retailctl.py placement-query --generation economy-v
   --worker-id 8 --type-index 417
 python3 tools/retail-control/retailctl.py rearm --generation economy-v15
 python3 tools/retail-control/retailctl.py marshal-policy --generation economy-v15
+python3 tools/retail-control/retailctl.py rearm --generation marshal-loop-v16
+python3 tools/retail-control/retailctl.py marshal-loop --apply --decisions 8 \
+  --frames-per-decision 30 --generation marshal-loop-v16
 ```
 
 The process must be in a match (or another loop that calls `TurnControl::do_frame`) before

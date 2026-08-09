@@ -346,6 +346,48 @@ post-state are `schema/live/retail-player-protocol-v3.json`,
 `retail-arena-marshal-camp-action-proof-v1.json`, and
 `retail-player-observation-v3-post-camp.json`.
 
+### Finite supervised Marshal loop
+
+Generation `marshal-loop-v16` turns the single-decision adapter into a finite transaction loop,
+not a background bot. A run is limited to eight decisions and 30 simulation frames per decision.
+Each iteration takes a coherent `don.retail-player.v3` observation, preserves Marshal source order,
+selects at most one action, re-runs the shipped legality query at the same paused frame, applies
+only the already-proven queue or build ingress, advances exactly the requested horizon, and takes
+a second coherent observation. Missing or unsupported actions are literal no-ops; the controller
+does not fall through to a lower-priority substitute.
+
+The loop pins the supported executable hash, local owner/who/tribe/team, and world dimensions for
+its entire lifetime. Immediately before a command it also compares the exact frame, pause bit,
+economy, population, technology, queue summary, object metadata, and every complete public own
+object record against the plan observation. A changed identity, recycled object, order/position
+change, failed retail predicate, unexpected packet opcode, frame delta, or pause boundary aborts
+the artifact. Build materialization is capped at that decision's single frame horizon; the generic
+one-action proof's longer settlement cap is not inherited by the loop. The `finally` path
+explicitly requests pause and runs `STOP`, restoring the original five call-site bytes even after
+failure. The complete contract is recorded in
+`schema/live/retail-arena-marshal-supervised-loop-protocol-v1.json`.
+
+The live apply run stayed in the existing solo match and covered eight 30-frame decisions,
+frame 807→1047. At frame 807, retail's `can_queue` accepted one Citizen at City 2000. Retail
+serialized `000100d007183200000001000000` (packed opcode `0x18`) without advancing a frame; the
+City and aggregate queue both gained exactly one Citizen. The decision then advanced 807→837.
+
+At frame 837, Marshal's food-locked placement branch selected a Farm. The adapter chose Citizen 9
+by the fog-safe own observation, re-ran the current-fog-gated site search, and got the same legal
+capacity-one site `(3456,29184)` on ring five. Retail serialized
+`000100090019800d000000720000ffffffffffffffffa101000002000000` (packed opcode `0x19`). One
+30-frame boundary materialized own Farm `{o:2009,uid:20}` at that exact snapped anchor with signed
+capacity one; Citizen 9 had a front `MoveOrder` and a queued `BuildOrder` resolving to the new
+Farm's exact own identity.
+
+The remaining six decisions issued no action. They still advanced through exact paused boundaries,
+including completion of the queued Citizen (population 11→12), and did not substitute the
+unsupported City, scout, enemy, or employment branches. Every decision recorded identity stable,
+pause `[1,1]`, frame delta 30, and `unsupported_substitution=false`. The full loop trace and its two
+command proofs are `schema/live/retail-arena-marshal-supervised-loop-v1.json` and sibling
+`step-00`/`step-01-action-proof.json` files. The terminal ready record is `state=parked` for PID
+12324 at frame 1047.
+
 On 2026-08-08, PID `5236` was inspected read-only before this probe was built:
 
 - module base `0x00D60000`, ASLR delta `0x00960000`;

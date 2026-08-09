@@ -2,6 +2,7 @@ import importlib.util
 import json
 import copy
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -377,6 +378,166 @@ class RetailCtlTests(unittest.TestCase):
         self.assertEqual(worker["order"]["kind"], "MoveOrder")
         self.assertEqual(worker["order"]["queued_build_target"],
                          {"object_id": 2008, "uid": 19})
+
+    def test_supervised_marshal_loop_applies_only_proven_verbs_and_records_noops(self):
+        template = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        observations = []
+        for frame in [717, 747, 747, 777, 777, 807]:
+            obs = copy.deepcopy(template)
+            obs["frame"] = frame
+            observations.append(obs)
+        queue = {"verb": "queue", "owner": 0, "producer_id": 2000,
+                 "type_index": 50, "count": 1}
+        unsupported = {"verb": "move", "owner": 0, "object_ids": [0]}
+        plans = [{"selected_action": queue}, {"selected_action": None},
+                 {"selected_action": unsupported}]
+        proof = {
+            "schema": "don.retail-economy-action-proof.v1",
+            "retail_validation": {"validation_result": 1},
+            "retail_command_hex": "18",
+            "frame_boundary": {"before": 717, "after": 717},
+            "pause_before_after": [1, 1],
+            "before": observations[0], "after": observations[0],
+            "bounded_settlement": [],
+        }
+        advances = [
+            {"requested": 30, "frame_before": 717, "frame_after": 747, "pause_after": 1},
+            {"requested": 30, "frame_before": 747, "frame_after": 777, "pause_after": 1},
+            {"requested": 30, "frame_before": 777, "frame_after": 807, "pause_after": 1},
+        ]
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(retailctl, "player_observation",
+                                  side_effect=observations), \
+                mock.patch.object(retailctl, "arena_marshal_extracted_plan",
+                                  side_effect=plans), \
+                mock.patch.object(retailctl, "prove_economy_action",
+                                  return_value=proof) as apply_action, \
+                mock.patch.object(retailctl, "advance_frames", side_effect=advances), \
+                mock.patch.object(retailctl, "send", return_value=[]), \
+                mock.patch.object(retailctl, "stop"), \
+                mock.patch.object(retailctl, "guest_cmd", return_value="state=parked"):
+            path = Path(td) / "loop.json"
+            retailctl.arena_marshal_supervised_loop(
+                "unused", "test-generation", path, 3, 30, True
+            )
+            run = json.loads(path.read_text())
+        self.assertEqual(run["status"], "complete")
+        self.assertEqual([step["action_mode"] for step in run["decisions"]],
+                         ["apply", "no-op-no-supported-action", "no-op-unsupported"])
+        self.assertEqual([step["invariants"]["actions_applied"]
+                          for step in run["decisions"]], [1, 0, 0])
+        self.assertEqual([step["invariants"]["frame_delta"]
+                          for step in run["decisions"]], [30, 30, 30])
+        apply_action.assert_called_once()
+        self.assertEqual(apply_action.call_args.kwargs["settlement_limit_frames"], 30)
+
+    def test_same_frame_apply_token_covers_complete_public_own_object_state(self):
+        observation = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        changed = copy.deepcopy(observation)
+        next(obj for obj in changed["objects"] if obj["category"] == "unit")["order"][
+            "length"
+        ] += 1
+        self.assertNotEqual(retailctl.paused_observation_token(observation),
+                            retailctl.paused_observation_token(changed))
+
+    def test_supervised_marshal_loop_fails_closed_on_player_identity_change(self):
+        template = json.loads(
+            (Path(__file__).parents[2] / "schema/live/retail-player-observation-v3-post-camp.json")
+            .read_text()
+        )
+        changed = copy.deepcopy(template)
+        changed["frame"] += 30
+        changed["player"]["tribe"] += 1
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(retailctl, "player_observation",
+                                  side_effect=[template, changed]), \
+                mock.patch.object(retailctl, "arena_marshal_extracted_plan",
+                                  return_value={"selected_action": None}), \
+                mock.patch.object(retailctl, "advance_frames",
+                                  return_value={"requested": 30}), \
+                mock.patch.object(retailctl, "send", return_value=[]), \
+                mock.patch.object(retailctl, "stop"), \
+                mock.patch.object(retailctl, "guest_cmd", return_value="state=parked"):
+            path = Path(td) / "failed.json"
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                retailctl.arena_marshal_supervised_loop(
+                    "unused", "test-generation", path, 1, 30, True
+                )
+            run = json.loads(path.read_text())
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("identity changed", run["status_detail"])
+
+    def test_live_supervised_marshal_loop_has_exact_actions_noops_and_parked_boundary(self):
+        live = Path(__file__).parents[2] / "schema/live"
+        run = json.loads(
+            (live / "retail-arena-marshal-supervised-loop-v1.json").read_text()
+        )
+        self.assertEqual(run["schema"], "don.retail-arena-marshal-supervised-loop.v1")
+        self.assertEqual(run["status"], "complete")
+        self.assertEqual(run["controller_generation"], "marshal-loop-v16")
+        self.assertEqual(len(run["decisions"]), 8)
+        self.assertEqual(
+            [(step["before"]["frame"], step["after"]["frame"])
+             for step in run["decisions"]],
+            [(807, 837), (837, 867), (867, 897), (897, 927),
+             (927, 957), (957, 987), (987, 1017), (1017, 1047)],
+        )
+        self.assertEqual(
+            [step["action_mode"] for step in run["decisions"]],
+            ["apply", "apply"] + ["no-op-no-supported-action"] * 6,
+        )
+        self.assertEqual(
+            [step["invariants"]["actions_applied"] for step in run["decisions"]],
+            [1, 1, 0, 0, 0, 0, 0, 0],
+        )
+        self.assertTrue(all(
+            step["invariants"]["identity_stable"] and
+            step["invariants"]["pause_before_after"] == [1, 1] and
+            step["invariants"]["frame_delta"] == 30 and
+            not step["invariants"]["unsupported_substitution"]
+            for step in run["decisions"]
+        ))
+
+        queue = json.loads(
+            (live / "retail-arena-marshal-supervised-loop-v1-step-00-action-proof.json")
+            .read_text()
+        )
+        self.assertEqual(queue["action"]["type_name"], "Citizen")
+        self.assertEqual(bytes.fromhex(queue["retail_command_hex"])[-9], 0x18)
+        self.assertEqual(queue["frame_boundary"], {"before": 807, "after": 807})
+        self.assertEqual(queue["pause_before_after"], [1, 1])
+
+        build = json.loads(
+            (live / "retail-arena-marshal-supervised-loop-v1-step-01-action-proof.json")
+            .read_text()
+        )
+        self.assertEqual(build["action"]["type_name"], "Farm")
+        self.assertEqual(build["action"]["worker_ids"], [9])
+        self.assertEqual(bytes.fromhex(build["retail_command_hex"])[-25], 0x19)
+        self.assertEqual(build["frame_boundary"], {"before": 837, "after": 867})
+        before_ids = {(obj["object_id"], obj["id"]["uid"])
+                      for obj in build["before"]["objects"]}
+        new_farms = [obj for obj in build["after"]["objects"]
+                     if obj["category"] == "build" and obj["type_index"] == 417 and
+                     (obj["object_id"], obj["id"]["uid"]) not in before_ids]
+        self.assertEqual(
+            [(obj["object_id"], obj["id"]["uid"], obj["position"]["x"],
+              obj["position"]["y"], obj["gathering"]["capacity"])
+             for obj in new_farms],
+            [(2009, 20, 3456, 29184, 1)],
+        )
+        worker = next(obj for obj in build["after"]["objects"]
+                      if obj["object_id"] == 9)
+        self.assertEqual(worker["order"]["queued_build_target"],
+                         {"object_id": 2009, "uid": 20})
+        self.assertIn("state=parked", run["parked_ready_record"])
+        self.assertIn("pid=12324", run["parked_ready_record"])
 
 
 if __name__ == "__main__":
