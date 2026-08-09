@@ -243,6 +243,13 @@ try {
         .every(button => button.disabled),
       replayCapabilities: document.getElementById('replay-capabilities')?.textContent ?? '',
       replayPauseWorked, replaySpeedWorked,
+      controlGroupSlots: document.querySelectorAll('#group-slots .group-slot').length,
+      controlGroupActions: document.querySelectorAll('#group-actions button').length,
+      controlGroupLive: document.getElementById('group-status')?.getAttribute('aria-live') ?? '',
+      controlGroupBoundary: document.getElementById('control-groups')?.textContent ?? '',
+      commandHistoryRecords: document.querySelectorAll('#command-history-list .command-record').length,
+      commandHistorySummary: document.getElementById('command-history-summary')?.textContent ?? '',
+      commandFeedbackBoundary: document.getElementById('command-history')?.textContent ?? '',
       targetButtonsDisabledWithoutSelection: ['cmd-move', 'cmd-attack', 'cmd-gather']
         .every(id => document.getElementById(id)?.disabled),
       toastLiveRegion: document.getElementById('toast')?.getAttribute('aria-live') ?? '',
@@ -306,6 +313,17 @@ try {
       out.ui.replayUnavailableDisabled && out.ui.replayCapabilities.includes('no state serializer') &&
       out.ui.replayCapabilities.includes('no state deserializer') &&
       out.ui.replayCapabilities.includes('no retail replay playback bridge')],
+    ['nine touch control-group slots expose replace, add, remove, clear, and announced feedback',
+      out.ui.controlGroupSlots === 9 && out.ui.controlGroupActions === 4 &&
+      out.ui.controlGroupLive === 'polite'],
+    ['control groups disclose browser-local IDs and unavailable native persistence',
+      out.ui.controlGroupBoundary.includes('exported object IDs') &&
+      out.ui.controlGroupBoundary.includes('not exported') &&
+      out.ui.controlGroupBoundary.includes('stale IDs are pruned')],
+    ['issued packet feedback is visible before the next tick',
+      out.ui.commandHistoryRecords > 0 && out.ui.commandHistorySummary.includes('pending') &&
+      out.ui.commandFeedbackBoundary.includes('ABI cannot') &&
+      out.ui.commandFeedbackBoundary.includes('batch is labelled')],
     ['target commands require a selection', out.ui.targetButtonsDisabledWithoutSelection],
     ['command feedback is announced', out.ui.toastLiveRegion === 'polite'],
   ]) {
@@ -331,6 +349,10 @@ try {
     const replay = document.getElementById('replay').getBoundingClientRect();
     const replayControls = [...document.querySelectorAll('#replay .replay-controls button')]
       .map(button => button.getBoundingClientRect().height);
+    const groups = document.getElementById('control-groups').getBoundingClientRect();
+    const groupControls = [...document.querySelectorAll('#group-slots button, #group-actions button')]
+      .map(button => button.getBoundingClientRect().height);
+    const commands = document.getElementById('command-history').getBoundingClientRect();
     return {
       viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
       sideBelowStage: side.top >= stage.bottom - 1,
@@ -340,6 +362,8 @@ try {
       objectivePanel: [objectives.left, objectives.right], focusTouchHeight: focus.height,
       replayPanel: [replay.left, replay.right], replayControlHeights: replayControls, coverageVisible:
         getComputedStyle(document.getElementById('coverage')).display !== 'none',
+      groupPanel: [groups.left, groups.right], groupControlHeights: groupControls,
+      commandPanel: [commands.left, commands.right],
     };
   })()`);
   for (const [name, ok] of [
@@ -355,6 +379,10 @@ try {
     ['narrow replay controls stay in the page and remain touch-sized',
       out.narrow.replayPanel[0] >= 0 && out.narrow.replayPanel[1] <= out.narrow.viewport[0] &&
       out.narrow.replayControlHeights.every(height => height >= 40)],
+    ['narrow group and command feedback panels stay in-page with touch-sized controls',
+      out.narrow.groupPanel[0] >= 0 && out.narrow.groupPanel[1] <= out.narrow.viewport[0] &&
+      out.narrow.commandPanel[0] >= 0 && out.narrow.commandPanel[1] <= out.narrow.viewport[0] &&
+      out.narrow.groupControlHeights.every(height => height >= 40)],
     ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
@@ -530,6 +558,121 @@ try {
     ['step from a restored head resumes simulation and returns to recording',
       out.journal.resumed.frame === out.journal.headFrame + 1 && !out.journal.resumed.playback &&
       out.journal.status.includes('recording resumed') && out.journal.time.includes('head')],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // Control-group membership is browser state over exact exported object IDs; recall is
+  // still an engine GroupCommand. Exercise replace/add/remove with keyboard, the identical
+  // touch toolbar, invalid/foreign-ID filtering, and packet lifecycle feedback from issued
+  // through pending, applied, and an exactly-attributable refusal.
+  out.controlGroups = await c.eval(`(() => {
+    const d = window.don;
+    d.session.restart('0x1234abcd');
+    d.replay.pause();
+    const m = d.state.mod, views = m.views();
+    const mine = [], foreign = [];
+    for (let row = 0; row < m.live; row++) {
+      const tag = views.tag[row];
+      if (!(tag & 0x80000000) || ((tag >>> 29) & 1)) continue;
+      const id = m.idAtRow(row), owner = tag & 0xf;
+      if (owner === 0 && mine.length < 3) mine.push(id);
+      if (owner === 1 && foreign.length < 1) foreign.push(id);
+    }
+    d.select(mine.slice(0, 2));
+    d.key('Digit1', { ctrlKey: true });
+    d.select([mine[2]]);
+    d.key('Digit1', { ctrlKey: true, shiftKey: true });
+    d.select([mine[1]]);
+    d.key('Digit1', { altKey: true });
+    d.key('Digit1');
+    const keyboard = d.controlGroups.snapshot();
+
+    document.querySelector('.group-slot[data-group="2"]').click();
+    d.select([mine[0]]);
+    document.getElementById('group-set').click();
+    d.select([mine[2]]);
+    document.getElementById('group-add').click();
+    d.select([mine[0]]);
+    document.getElementById('group-remove').click();
+    document.querySelector('.group-slot[data-group="2"]').click();
+    const touch = d.controlGroups.snapshot();
+
+    d.controlGroups.replace(3, [mine[0], foreign[0], 0x7fffffff]);
+    const filtered = d.controlGroups.snapshot();
+    document.querySelector('.group-slot[data-group="2"]').click();
+    document.getElementById('group-clear').click();
+    const cleared = d.controlGroups.snapshot();
+    const pendingGroups = d.commands.snapshot();
+    d.replay.step();
+    const appliedGroups = d.commands.snapshot();
+
+    d.controlGroups.recall(1);
+    const unit = m.info(mine[0]);
+    m.moveTo(0, unit.x + m.subtile * 4, unit.y);
+    const pendingMove = d.commands.snapshot();
+    d.replay.step();
+    const appliedMove = d.commands.snapshot();
+
+    d.select([]);
+    m.moveTo(0, unit.x, unit.y);
+    const pendingRefusal = d.commands.snapshot();
+    d.replay.step();
+    const refused = d.commands.snapshot();
+    const dom = {
+      summary: document.getElementById('command-history-summary').textContent,
+      refusedRows: document.querySelectorAll('#command-history-list [data-status="refused"]').length,
+      appliedRows: document.querySelectorAll('#command-history-list [data-status="applied"]').length,
+      groupStatus: document.getElementById('group-status').textContent,
+      activeSlot: document.querySelector('#group-slots .active')?.dataset.group ?? '',
+    };
+    d.session.restart('0x1234abcd');
+    d.replay.play();
+    return JSON.stringify({
+      mine, foreign, keyboard, touch, filtered, cleared,
+      pendingGroups, appliedGroups, pendingMove, appliedMove, pendingRefusal, refused, dom,
+    });
+  })()`).then(JSON.parse);
+  const packetEntries = (snapshot) => snapshot.entries.filter(entry => entry.kind === 'packet');
+  for (const [name, ok] of [
+    ['keyboard replace/add/remove/recall preserves exact current IDs',
+      out.controlGroups.mine.length === 3 &&
+      JSON.stringify(out.controlGroups.keyboard.groups['1']) ===
+        JSON.stringify([out.controlGroups.mine[0], out.controlGroups.mine[2]]) &&
+      JSON.stringify(out.controlGroups.keyboard.selection) ===
+        JSON.stringify([out.controlGroups.mine[0], out.controlGroups.mine[2]])],
+    ['touch slot and toolbar perform the same add/remove/recall semantics',
+      JSON.stringify(out.controlGroups.touch.groups['2']) === JSON.stringify([out.controlGroups.mine[2]]) &&
+      JSON.stringify(out.controlGroups.touch.selection) === JSON.stringify([out.controlGroups.mine[2]])],
+    ['foreign, invalid, and cleared group IDs never survive membership validation',
+      JSON.stringify(out.controlGroups.filtered.groups['3']) === JSON.stringify([out.controlGroups.mine[0]]) &&
+      out.controlGroups.cleared.groups['2'].length === 0 &&
+      out.controlGroups.filtered.nativePersistence === 'unavailable' &&
+      out.controlGroups.filtered.objectGeneration === 'unavailable'],
+    ['issued selection packets remain visibly pending until a tick drains them',
+      out.controlGroups.pendingGroups.pending > 0 &&
+      packetEntries(out.controlGroups.pendingGroups).every(entry =>
+        entry.status === 'pending' && entry.hex.length >= 2 && entry.issuedFrame === 0)],
+    ['drained GroupCommands are visibly applied from exported counters',
+      out.controlGroups.appliedGroups.pending === 0 &&
+      packetEntries(out.controlGroups.appliedGroups).every(entry =>
+        entry.struct === 'GroupCommand' && entry.status === 'applied')],
+    ['a real MoveTo packet transitions from pending to applied after one tick',
+      packetEntries(out.controlGroups.pendingMove).some(entry =>
+        entry.struct === 'MoveToCommand' && entry.status === 'pending') &&
+      packetEntries(out.controlGroups.appliedMove).some(entry =>
+        entry.struct === 'MoveToCommand' && entry.status === 'applied')],
+    ['a no-selection MoveTo refusal is attributed and rendered without guessing',
+      packetEntries(out.controlGroups.pendingRefusal).some(entry =>
+        entry.struct === 'MoveToCommand' && entry.status === 'pending') &&
+      packetEntries(out.controlGroups.refused).some(entry =>
+        entry.struct === 'MoveToCommand' && entry.status === 'refused' &&
+        entry.reason.includes('nothing selected')) &&
+      out.controlGroups.dom.refusedRows >= 1 && out.controlGroups.dom.appliedRows >= 1 &&
+      out.controlGroups.dom.summary.includes('refused')],
+    ['group actions and lifecycle feedback remain visible and announced',
+      out.controlGroups.cleared.status.includes('cleared') && out.controlGroups.cleared.active === '2' &&
+      out.controlGroups.dom.groupStatus.includes('recalled group 1') && out.controlGroups.dom.activeSlot === '1'],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

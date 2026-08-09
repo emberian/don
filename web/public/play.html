@@ -194,6 +194,24 @@
     align-items:center; color:var(--dim); font:9px/1.35 var(--mono); }
   .replay-capability button:disabled { opacity:.55; cursor:not-allowed; border-style:dashed; }
   #replay-file { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  #group-slots { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:3px; margin:5px 0; }
+  .group-slot { min-width:0; padding:5px 2px; font:600 9px var(--mono); }
+  .group-slot.active { border-color:var(--accent); color:var(--accent); background:#14202b; }
+  .group-slot .group-count { display:block; margin-top:2px; color:var(--dim); font-weight:400; }
+  #group-actions { display:grid; grid-template-columns:1fr 1fr; gap:4px; }
+  #group-status { margin-top:5px; color:var(--dim); font:9.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  #command-history-summary { color:var(--dim); font:9.5px/1.4 var(--mono); }
+  #command-history-list { display:grid; gap:4px; max-height:250px; margin-top:6px; overflow:auto; }
+  .command-record { padding:5px 6px; border:1px solid var(--line); border-radius:4px;
+    background:#0d1118; font:9px/1.35 var(--mono); }
+  .command-record .command-head { display:flex; justify-content:space-between; gap:6px; }
+  .command-record .command-state { text-transform:uppercase; letter-spacing:.05em; }
+  .command-record[data-status="pending"] .command-state { color:var(--warn); }
+  .command-record[data-status="applied"] .command-state { color:var(--good); }
+  .command-record[data-status="refused"] .command-state,
+  .command-record[data-status="partial"] .command-state { color:var(--bad); }
+  .command-record[data-status="drained"] .command-state { color:var(--accent); }
+  .command-detail { margin-top:2px; color:var(--dim); overflow-wrap:anywhere; user-select:text; }
 
   @media (max-width:900px) {
     #app { grid-template-columns:minmax(400px,1fr) 290px; }
@@ -222,6 +240,7 @@
     .tab,.pal { min-height:42px; }
     .world-player button { min-height:42px; }
     .replay-controls button { min-height:42px; }
+    .group-slot,#group-actions button { min-height:42px; }
     #dock-state { display:none; }
     #coverage { top:54px; right:6px; bottom:auto; max-width:190px; padding:4px 6px;
       overflow:hidden; border-radius:5px; background:rgba(8,10,14,.68); font-size:9px; }
@@ -459,6 +478,34 @@
       <div id="sel"><div class="hint">nothing selected</div></div>
     </fieldset>
 
+    <fieldset id="control-groups">
+      <legend>control groups</legend>
+      <div id="group-slots" aria-label="Control group slots"></div>
+      <div id="group-actions">
+        <button id="group-set" type="button">replace with selection</button>
+        <button id="group-add" type="button">add selection</button>
+        <button id="group-remove" type="button">remove selection</button>
+        <button id="group-clear" type="button">clear group</button>
+      </div>
+      <div id="group-status" role="status" aria-live="polite">group 1 empty</div>
+      <div class="hint" style="margin-top:4px">
+        Browser control groups store exported object IDs and recall through an exact
+        <code>GroupCommand</code>. Native retail group persistence and object-generation IDs
+        are not exported, so groups reset with a new or restored session and stale IDs are pruned.
+      </div>
+    </fieldset>
+
+    <fieldset id="command-history">
+      <legend>command feedback</legend>
+      <div id="command-history-summary">0 issued · 0 pending · 0 applied · 0 refused</div>
+      <div id="command-history-list" aria-label="Issued command history"></div>
+      <div class="hint" style="margin-top:5px">
+        Applied means the packet drained without an exported refusal-counter increase.
+        When several non-group packets drain with a refusal in one tick, the ABI cannot
+        attribute that counter to one packet; the batch is labelled rather than guessed.
+      </div>
+    </fieldset>
+
     <fieldset>
       <legend>runtime</legend>
       <label>speed <input id="speed" type="range" min="0.25" max="8" step="0.25" value="1" style="width:150px"></label>
@@ -473,7 +520,8 @@
         <b>Home</b> jump to base<br>
         <b>click</b> select &middot; <b>drag</b> box &middot; <b>double-click</b> all of type
         &middot; <b>shift</b> add &middot; <b>Ctrl+A</b> all units<br>
-        <b>Ctrl+1..9</b> set control group &middot; <b>1..9</b> recall &middot;
+        <b>Ctrl+1..9</b> replace group &middot; <b>Ctrl+Shift+1..9</b> add &middot;
+        <b>Alt+1..9</b> remove &middot; <b>1..9</b> recall &middot;
         <b>same key twice</b> jump to it &middot; <b>.</b> next idle worker<br>
         <b>right click</b> move / attack / gather &middot; <b>B</b> build &middot;
         <b>Shift+T</b> train &middot; <b>Shift+R</b> research &middot;

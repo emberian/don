@@ -44,6 +44,8 @@ const state = {
   cam: { x: 0, y: 0, tilePx: 22 },
   drag: null, panning: null,
   groups: new Map(),
+  activeGroup: '1',
+  groupStatus: 'group 1 empty',
   lastGroupKey: { key: null, t: 0 },
   buildType: null,
   speed: 1, paused: false,
@@ -63,6 +65,10 @@ const state = {
     events: [], baseline: null, headFrame: 0,
     applying: false, playback: false, restoring: false,
     status: 'recording exact browser command packets',
+  },
+  commandFeedback: {
+    nextId: 1, entries: [],
+    lastTransport: null, lastGaps: null,
   },
 };
 
@@ -120,6 +126,8 @@ async function boot() {
   wirePanels();
   initializeSessionPanel();
   initializeObjectivesPanel();
+  initializeControlGroupsPanel();
+  initializeCommandFeedbackPanel();
   initializeReplayPanel();
   buildPalette();
   renderMenus();
@@ -367,6 +375,169 @@ function wireInput(canvas) {
   });
 }
 
+function normalizeGroupSlot(slot) {
+  const key = String(slot);
+  if (!/^[1-9]$/.test(key)) throw new Error(`control group must be 1..9, got ${JSON.stringify(slot)}`);
+  return key;
+}
+
+function selectionRecords(ids = state.selection) {
+  const seen = new Set();
+  const records = [];
+  for (const value of ids) {
+    const id = Number(value);
+    if (!Number.isInteger(id) || seen.has(id)) continue;
+    const info = state.mod.info(id);
+    if (!info || info.owner !== state.who) continue;
+    seen.add(id);
+    records.push(Object.freeze({ id, owner: info.owner, typeId: info.typeId }));
+    if (records.length === 255) break;
+  }
+  return records;
+}
+
+function liveControlGroup(slot, prune = true) {
+  const key = normalizeGroupSlot(slot);
+  const stored = state.groups.get(key) ?? [];
+  const live = stored.filter((record) => {
+    const info = state.mod.info(record.id);
+    return info && info.owner === record.owner && info.typeId === record.typeId && info.owner === state.who;
+  });
+  if (prune && live.length !== stored.length) state.groups.set(key, live);
+  return live;
+}
+
+function setGroupStatus(message) {
+  state.groupStatus = message;
+  const status = $('group-status');
+  if (status) status.textContent = message;
+}
+
+function replaceControlGroup(slot, ids = state.selection) {
+  const key = normalizeGroupSlot(slot);
+  state.activeGroup = key;
+  const records = selectionRecords(ids);
+  state.groups.set(key, records);
+  setGroupStatus(records.length
+    ? `group ${key} replaced with ${records.length} current object ID(s)`
+    : `group ${key} cleared; the current selection has no commandable IDs`);
+  renderControlGroups();
+  return controlGroupsSnapshot();
+}
+
+function addToControlGroup(slot, ids = state.selection) {
+  const key = normalizeGroupSlot(slot);
+  state.activeGroup = key;
+  const records = liveControlGroup(key);
+  const known = new Set(records.map((record) => record.id));
+  for (const record of selectionRecords(ids)) {
+    if (!known.has(record.id) && records.length < 255) {
+      known.add(record.id);
+      records.push(record);
+    }
+  }
+  state.groups.set(key, records);
+  setGroupStatus(`group ${key} now has ${records.length} current object ID(s)`);
+  renderControlGroups();
+  return controlGroupsSnapshot();
+}
+
+function removeFromControlGroup(slot, ids = state.selection) {
+  const key = normalizeGroupSlot(slot);
+  state.activeGroup = key;
+  const removing = new Set(selectionRecords(ids).map((record) => record.id));
+  const records = liveControlGroup(key).filter((record) => !removing.has(record.id));
+  state.groups.set(key, records);
+  setGroupStatus(`group ${key} now has ${records.length} current object ID(s)`);
+  renderControlGroups();
+  return controlGroupsSnapshot();
+}
+
+function clearControlGroup(slot) {
+  return replaceControlGroup(slot, []);
+}
+
+function recallControlGroup(slot, { jumpOnRepeat = false, source = 'control group' } = {}) {
+  const key = normalizeGroupSlot(slot);
+  state.activeGroup = key;
+  const before = (state.groups.get(key) ?? []).length;
+  const records = liveControlGroup(key);
+  const pruned = before - records.length;
+  const now = performance.now();
+  const repeated = state.lastGroupKey.key === key && now - state.lastGroupKey.t < 500;
+  state.lastGroupKey = { key, t: now };
+  if (!records.length) {
+    setGroupStatus(`group ${key} is empty${pruned ? `; pruned ${pruned} stale ID(s)` : ''}`);
+    renderControlGroups();
+    return [];
+  }
+  const ids = records.map((record) => record.id);
+  selectIds(ids);
+  if (jumpOnRepeat && repeated) {
+    jumpToSelection();
+    state.cameraSource = `${source} ${key} repeat`;
+  }
+  setGroupStatus(
+    `recalled group ${key}: ${ids.length} exact object ID(s)` +
+    (pruned ? `; pruned ${pruned} stale ID(s)` : '') +
+    (jumpOnRepeat && repeated ? '; camera centred' : ''));
+  renderControlGroups();
+  return ids;
+}
+
+function controlGroupsSnapshot() {
+  const groups = {};
+  for (let slot = 1; slot <= 9; slot++) {
+    groups[String(slot)] = liveControlGroup(slot).map((record) => record.id);
+  }
+  return Object.freeze({
+    active: state.activeGroup,
+    selection: state.selection.slice(),
+    groups: Object.freeze(groups),
+    status: state.groupStatus,
+    nativePersistence: 'unavailable',
+    objectGeneration: 'unavailable',
+  });
+}
+
+function renderControlGroups() {
+  const host = $('group-slots');
+  if (!host || !state.mod) return;
+  if (!host.childElementCount) {
+    for (let slot = 1; slot <= 9; slot++) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'group-slot';
+      button.dataset.group = String(slot);
+      button.addEventListener('click', () => recallControlGroup(slot, {
+        jumpOnRepeat: true, source: 'touch control group',
+      }));
+      host.appendChild(button);
+    }
+  }
+  for (const button of host.children) {
+    const key = button.dataset.group;
+    const count = liveControlGroup(key).length;
+    button.classList.toggle('active', key === state.activeGroup);
+    button.setAttribute('aria-pressed', String(key === state.activeGroup));
+    button.setAttribute('aria-label', `Recall control group ${key}, ${count} objects`);
+    button.innerHTML = `${key}<span class="group-count">${count || '—'}</span>`;
+  }
+  const hasSelection = selectionRecords().length > 0;
+  $('group-add').disabled = !hasSelection;
+  $('group-remove').disabled = !hasSelection;
+  $('group-clear').disabled = liveControlGroup(state.activeGroup).length === 0;
+  setGroupStatus(state.groupStatus);
+}
+
+function initializeControlGroupsPanel() {
+  $('group-set').addEventListener('click', () => replaceControlGroup(state.activeGroup));
+  $('group-add').addEventListener('click', () => addToControlGroup(state.activeGroup));
+  $('group-remove').addEventListener('click', () => removeFromControlGroup(state.activeGroup));
+  $('group-clear').addEventListener('click', () => clearControlGroup(state.activeGroup));
+  renderControlGroups();
+}
+
 function onKeyDown(e) {
   const tag = e.target && e.target.tagName;
   if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tag) || e.target?.isContentEditable) return;
@@ -391,20 +562,17 @@ function onKeyDown(e) {
     return;
   }
 
-  // control groups: Ctrl+N assigns, N recalls, NN jumps
+  // Control groups live over exact currently-exported object IDs. Membership edits do not
+  // fabricate engine commands; recall goes through the same GroupCommand as mouse selection.
   if (/^Digit[1-9]$/.test(e.code)) {
     const k = e.code.slice(5);
     if (e.ctrlKey || e.metaKey) {
-      state.groups.set(k, state.selection.slice());
-      say(`control group ${k} = ${state.selection.length} objects`);
+      if (e.shiftKey) addToControlGroup(k);
+      else replaceControlGroup(k);
+    } else if (e.altKey) {
+      removeFromControlGroup(k);
     } else {
-      const g = state.groups.get(k);
-      if (g && g.length) {
-        selectIds(g);
-        const now = performance.now();
-        if (state.lastGroupKey.key === k && now - state.lastGroupKey.t < 400) jumpToSelection();
-        state.lastGroupKey = { key: k, t: now };
-      }
+      recallControlGroup(k, { jumpOnRepeat: true, source: 'keyboard control group' });
     }
     e.preventDefault();
     return;
@@ -444,6 +612,7 @@ function selectIds(ids) {
   }
   logPacket('GROUP', bytes);
   renderMenus();
+  renderControlGroups();
 }
 
 function clickSelect(w, add, doubleClick) {
@@ -717,6 +886,8 @@ function resetClientForWorld(seed, paused, cameraSource) {
   state.sessionSeed = seed;
   state.selection = [];
   state.groups.clear();
+  state.activeGroup = '1';
+  state.groupStatus = 'group 1 empty';
   state.lastGroupKey = { key: null, t: 0 };
   state.buildType = null;
   state.commandMode = null;
@@ -728,6 +899,7 @@ function resetClientForWorld(seed, paused, cameraSource) {
   state.mod.setIncomeMode(state.sessionIncomeMode);
   state.mod.setPopSetting(state.sessionPopSetting);
   state.sessionInitialDigest = state.mod.digest();
+  resetCommandFeedback();
   miniVersion = -1;
   miniTerrain = null;
   previousGaps = null;
@@ -753,6 +925,9 @@ function switchPlayer(player) {
   state.mod.group(state.who, []);
   state.who = next;
   state.selection = [];
+  state.groups.clear();
+  state.activeGroup = '1';
+  state.groupStatus = `groups reset for player ${state.who} perspective`;
   state.mod.group(state.who, []);
   state.buildType = null;
   state.commandMode = null;
@@ -762,6 +937,7 @@ function switchPlayer(player) {
   syncSessionUrl();
   renderMenus();
   renderSelection();
+  renderControlGroups();
   refreshPaletteAvailability();
   renderPaletteFeedback();
   renderSessionStatus();
@@ -990,6 +1166,200 @@ function renderObjectivesPanel() {
 }
 
 // ---------------------------------------------------------------------------------------
+// exact packet lifecycle feedback
+// ---------------------------------------------------------------------------------------
+
+function resetCommandFeedback() {
+  const transport = state.mod.transport();
+  state.commandFeedback.nextId = 1;
+  state.commandFeedback.entries = [];
+  state.commandFeedback.issuedTotal = 0;
+  state.commandFeedback.appliedTotal = 0;
+  state.commandFeedback.refusedTotal = 0;
+  state.commandFeedback.drainedTotal = 0;
+  state.commandFeedback.lastTransport = { ...transport };
+  state.commandFeedback.lastGaps = state.mod.gaps();
+  renderCommandFeedback();
+}
+
+function recordCommandIssued({ frame, who, bytes }, source = 'player') {
+  reconcileCommandFeedback();
+  const decoded = decode(bytes);
+  const entry = {
+    id: state.commandFeedback.nextId++,
+    kind: 'packet',
+    issuedFrame: frame,
+    drainedFrame: null,
+    who,
+    op: decoded.op,
+    struct: decoded.struct ?? `unknown opcode 0x${decoded.op.toString(16).padStart(2, '0')}`,
+    bytes: bytes.length,
+    hex: bytesToHex(bytes),
+    selection: state.selection.slice(),
+    source,
+    status: 'pending',
+    reason: 'issued to the exported command buffer; waiting for a tick',
+  };
+  state.commandFeedback.entries.push(entry);
+  state.commandFeedback.issuedTotal++;
+  trimCommandFeedback();
+  renderCommandFeedback();
+  return entry;
+}
+
+function refusalDelta(before, after) {
+  const reasons = [];
+  let total = 0;
+  for (let i = 0; i < Math.max(before.length, after.length); i++) {
+    const delta = (after[i] ?? 0) - (before[i] ?? 0);
+    if (delta > 0) {
+      total += delta;
+      reasons.push(`${GAP_NAMES[i] ?? `gap ${i}`} +${delta}`);
+    }
+  }
+  return { total, reasons };
+}
+
+function settleCommandEntry(entry, status, frame, reason) {
+  if (!entry || entry.status !== 'pending') return;
+  entry.status = status;
+  entry.drainedFrame = frame;
+  entry.reason = reason;
+  state.commandFeedback.drainedTotal++;
+  if (status === 'applied') state.commandFeedback.appliedTotal++;
+  if (status === 'refused' || status === 'partial') state.commandFeedback.refusedTotal++;
+}
+
+function reconcileCommandFeedback() {
+  if (!state.mod || !state.commandFeedback.lastTransport || !state.commandFeedback.lastGaps) return;
+  const current = state.mod.transport();
+  const currentGaps = state.mod.gaps();
+  const prior = state.commandFeedback.lastTransport;
+  if (current.drained < prior.drained || current.submitted < prior.submitted) {
+    // A world replacement owns a new set of transport counters.
+    state.commandFeedback.lastTransport = { ...current };
+    state.commandFeedback.lastGaps = currentGaps;
+    return;
+  }
+  const drained = current.drained - prior.drained;
+  const ordersApplied = current.ordersApplied - prior.ordersApplied;
+  const refusal = refusalDelta(state.commandFeedback.lastGaps, currentGaps);
+  if (drained > 0) {
+    const pending = state.commandFeedback.entries.filter((entry) =>
+      entry.kind === 'packet' && entry.status === 'pending').slice(0, drained);
+    const groupPackets = pending.filter((entry) => entry.op === OP.GROUP);
+    const orderPackets = pending.filter((entry) => entry.op !== OP.GROUP);
+    for (const entry of groupPackets) {
+      settleCommandEntry(entry, 'applied', state.mod.frame,
+        'GroupCommand drained; membership was accepted through the exported selection packet');
+    }
+    if (refusal.total === 0) {
+      for (const entry of orderPackets) {
+        settleCommandEntry(entry, 'applied', state.mod.frame,
+          'packet drained and no exported refusal counter increased');
+      }
+    } else if (orderPackets.length === 1) {
+      const status = ordersApplied > 0 ? 'partial' : 'refused';
+      settleCommandEntry(orderPackets[0], status, state.mod.frame,
+        `${refusal.reasons.join(' · ')}${ordersApplied > 0 ? ` · ${ordersApplied} object order(s) also applied` : ''}`);
+    } else {
+      for (const entry of orderPackets) {
+        settleCommandEntry(entry, 'drained', state.mod.frame,
+          'drained in a multi-packet tick; per-packet refusal attribution is not exported');
+      }
+      state.commandFeedback.entries.push({
+        id: state.commandFeedback.nextId++, kind: 'batch', issuedFrame: state.mod.frame,
+        drainedFrame: state.mod.frame, who: null, op: null, struct: 'tick refusal batch',
+        bytes: 0, hex: '', selection: [], source: 'exported counters', status: 'refused',
+        reason: `${refusal.reasons.join(' · ')} across ${orderPackets.length} non-group packets; attribution unavailable`,
+      });
+      state.commandFeedback.refusedTotal++;
+    }
+  } else if (refusal.total > 0) {
+    state.commandFeedback.entries.push({
+      id: state.commandFeedback.nextId++, kind: 'batch', issuedFrame: state.mod.frame,
+      drainedFrame: state.mod.frame, who: null, op: null, struct: 'unattributed refusal counters',
+      bytes: 0, hex: '', selection: [], source: 'exported counters', status: 'refused',
+      reason: `${refusal.reasons.join(' · ')}; no newly drained observed browser packet`,
+    });
+    state.commandFeedback.refusedTotal++;
+  }
+  state.commandFeedback.lastTransport = { ...current };
+  state.commandFeedback.lastGaps = currentGaps;
+  trimCommandFeedback();
+}
+
+function trimCommandFeedback() {
+  const entries = state.commandFeedback.entries;
+  while (entries.length > 60) {
+    const resolved = entries.findIndex((entry) => entry.status !== 'pending');
+    if (resolved < 0) break;
+    entries.splice(resolved, 1);
+  }
+}
+
+function commandFeedbackSnapshot() {
+  reconcileCommandFeedback();
+  const feedback = state.commandFeedback;
+  return Object.freeze({
+    issued: feedback.issuedTotal,
+    pending: feedback.entries.filter((entry) => entry.status === 'pending').length,
+    applied: feedback.appliedTotal,
+    refused: feedback.refusedTotal,
+    drained: feedback.drainedTotal,
+    entries: Object.freeze(feedback.entries.map((entry) => Object.freeze({
+      ...entry, selection: entry.selection.slice(),
+    }))),
+    refusalAttribution: 'exact for a single non-group packet; batch-labelled otherwise',
+  });
+}
+
+function renderCommandFeedback() {
+  const host = $('command-history-list');
+  if (!host || !state.mod || !state.commandFeedback.lastTransport) return;
+  reconcileCommandFeedback();
+  const snapshot = commandFeedbackSnapshot();
+  $('command-history-summary').textContent =
+    `${snapshot.issued} issued · ${snapshot.pending} pending · ${snapshot.applied} applied · ` +
+    `${snapshot.refused} refused/partial`;
+  host.replaceChildren();
+  for (const entry of snapshot.entries.slice(-20).reverse()) {
+    const record = document.createElement('div');
+    record.className = 'command-record';
+    record.dataset.status = entry.status;
+    const head = document.createElement('div');
+    head.className = 'command-head';
+    const name = document.createElement('b');
+    name.textContent = entry.kind === 'packet'
+      ? `#${entry.id} P${entry.who} ${entry.struct}` : `#${entry.id} ${entry.struct}`;
+    const status = document.createElement('span');
+    status.className = 'command-state';
+    status.textContent = entry.status;
+    head.append(name, status);
+    const detail = document.createElement('div');
+    detail.className = 'command-detail';
+    const frames = entry.drainedFrame === null
+      ? `issued f${entry.issuedFrame}` : `issued f${entry.issuedFrame} → drained f${entry.drainedFrame}`;
+    detail.textContent = entry.kind === 'packet'
+      ? `${frames} · op 0x${entry.op.toString(16).padStart(2, '0')} · ${entry.bytes} B · ` +
+        `${entry.source} · ${entry.hex.slice(0, 48)}${entry.hex.length > 48 ? '…' : ''} · ${entry.reason}`
+      : `${frames} · ${entry.reason}`;
+    record.append(head, detail);
+    host.appendChild(record);
+  }
+  if (!snapshot.entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = 'No command packets issued in this session.';
+    host.appendChild(empty);
+  }
+}
+
+function initializeCommandFeedbackPanel() {
+  resetCommandFeedback();
+}
+
+// ---------------------------------------------------------------------------------------
 // deterministic browser command journal
 // ---------------------------------------------------------------------------------------
 
@@ -1025,6 +1395,7 @@ function startReplayJournal() {
   state.replay.restoring = false;
   state.replay.status = 'recording exact browser command packets from this new-session baseline';
   state.mod.observeCommands(({ frame: at, who, bytes }) => {
+    recordCommandIssued({ frame: at, who, bytes }, state.replay.applying ? 'journal replay' : 'player');
     if (state.replay.applying) return;
     recordReplayEvent({
       frame: at,
@@ -1262,6 +1633,7 @@ async function restoreReplayFrame(targetFrame) {
     for (let frame = 0; frame < target; frame++) {
       applyReplayEventsAt(frame);
       state.mod.step(1);
+      reconcileCommandFeedback();
       if (frame && frame % 2048 === 0) await new Promise(requestAnimationFrame);
     }
     // Rule setters are immediate and idempotent. Reconstruct them at the selected boundary;
@@ -1332,6 +1704,7 @@ function advanceSimulationFrame() {
     try { applyReplayEventsAt(state.mod.frame); } finally { state.replay.applying = false; }
   }
   state.mod.step(1);
+  reconcileCommandFeedback();
   if (state.replay.playback && state.mod.frame > state.replay.headFrame) {
     state.replay.playback = false;
     state.replay.headFrame = state.mod.frame;
@@ -1886,8 +2259,10 @@ function renderHud() {
   renderSessionStatus();
   renderObjectivesPanel();
   renderReplayPanel();
+  renderControlGroups();
   renderCoverage();
   renderTransport();
+  renderCommandFeedback();
 }
 
 function renderSelection() {
@@ -2276,6 +2651,17 @@ window.don = {
     camera: () => cameraSnapshot(),
     focusPlayer: (player) => focusPlayerStart(player, 'automation/player panel'),
   },
+  controlGroups: {
+    snapshot: () => controlGroupsSnapshot(),
+    replace: (slot, ids = state.selection) => replaceControlGroup(slot, ids),
+    add: (slot, ids = state.selection) => addToControlGroup(slot, ids),
+    remove: (slot, ids = state.selection) => removeFromControlGroup(slot, ids),
+    recall: (slot) => recallControlGroup(slot),
+    clear: (slot) => clearControlGroup(slot),
+  },
+  commands: {
+    snapshot: () => commandFeedbackSnapshot(),
+  },
   replay: {
     snapshot: () => replaySnapshot(),
     export: () => exportReplayJournal(),
@@ -2285,6 +2671,7 @@ window.don = {
       setPaused(true, false);
       advanceSimulationFrame();
       renderReplayPanel();
+      renderCommandFeedback();
       return replaySnapshot();
     },
     play() { setPaused(false, false); return replaySnapshot(); },
@@ -2315,6 +2702,7 @@ window.don = {
     sessionSeed: state.sessionSeed, playerPerspective: state.who,
     sessionSetup: sessionDescriptor(),
     objectives: exportedWorldSnapshot(), camera: cameraSnapshot(), replay: replaySnapshot(),
+    controlGroups: controlGroupsSnapshot(), commands: commandFeedbackSnapshot(),
     selection: state.selection.length, digest: state.mod.digest(),
     gaps: state.mod.gaps(), player: state.mod.player(state.who),
     transport: state.mod.transport(),
@@ -2349,6 +2737,7 @@ window.don = {
     shiftKey: !!modifiers.shiftKey,
     ctrlKey: !!modifiers.ctrlKey,
     metaKey: !!modifiers.metaKey,
+    altKey: !!modifiers.altKey,
     preventDefault() {},
     target: {},
   }),
