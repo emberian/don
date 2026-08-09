@@ -63,19 +63,19 @@
    }
   ]
  },
- {
-  "name": "unit_block_radius",
+  {
+    "name": "unit_block_radius",
   "offset": 16,
   "count": 1,
-  "parser": null,
-  "scale": null,
+    "parser": "wtoi_times",
+    "scale": 48,
   "binder_ea": "005703d9",
   "entries": [
    {
     "index": 0,
     "offset": 16,
     "xml_value": "1 UCoord (master calibration for unit blocking)",
-    "stored": null
+      "stored": 48
    }
   ]
  },
@@ -1955,43 +1955,49 @@
    }
   ]
  },
- {
-  "name": "scholar_rate",
-  "offset": 644,
-  "count": 5,
-  "parser": "wtoi",
-  "scale": null,
+  {
+    "name": "scholar_rate",
+    "offset": 644,
+    "count": 6,
+    "parser": "scaled",
+    "scale": 256,
   "binder_ea": "00573da6",
   "entries": [
    {
     "index": 0,
     "offset": 644,
     "xml_value": "5",
-    "stored": 5
+      "stored": 1280
    },
    {
     "index": 1,
     "offset": 648,
     "xml_value": "7",
-    "stored": 7
+      "stored": 1792
    },
    {
     "index": 2,
     "offset": 652,
     "xml_value": "10",
-    "stored": 10
+      "stored": 2560
    },
    {
     "index": 3,
     "offset": 656,
     "xml_value": "15",
-    "stored": 15
+      "stored": 3840
    },
    {
     "index": 4,
     "offset": 660,
     "xml_value": "20",
-    "stored": 20
+      "stored": 5120
+    },
+    {
+      "index": 5,
+      "offset": 664,
+      "xml_value": "25",
+      "stored": 6400
    }
   ]
  },
@@ -7405,19 +7411,21 @@
    }
   ]
  },
- {
-  "name": "americans_marine_entrench",
+  {
+    "name": "americans_marine_entrench",
   "offset": 2164,
   "count": 1,
-  "parser": null,
-  "scale": null,
+    "parser": "wtoi_minus_trunc_div_plus",
+    "scale": null,
+    "divisor": 15,
+    "addend": 2,
   "binder_ea": "0057b2c0",
   "entries": [
    {
     "index": 0,
     "offset": 2164,
     "xml_value": "5 seconds of idling",
-    "stored": null
+      "stored": 7
    }
   ]
  },
@@ -11827,19 +11835,19 @@
    }
   ]
  },
- {
-  "name": "caravan_attack_bonus",
+  {
+    "name": "caravan_attack_bonus",
   "offset": 3284,
   "count": 1,
-  "parser": "wtoi",
-  "scale": null,
+    "parser": "scaled",
+    "scale": 10,
   "binder_ea": "0057f29c",
   "entries": [
    {
     "index": 0,
     "offset": 3284,
     "xml_value": "2 attack",
-    "stored": 2
+      "stored": 20
    }
   ]
  },

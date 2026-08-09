@@ -75,8 +75,8 @@ it is the engine telling us how much of a class is sim-critical.
 | 8 | `leaders` | inline in `check_all` | `LeaderData::walk_data` `0x006D6750` | 27182 / 28388 | `economy`, `tech_cities`, `victory_score` | partial |
 | 9 | `cities` | `check_cities` `0x00937600` | `City::walk_data` `0x00489220` | 110 / 192 | `tech_cities` | partial |
 | 10 | `items` | `check_items` `0x00937790` | `Item::walk_data` `0x00677150` | 22 bytes per live item (re-audited) / 44 | `items` | partial; compiled, no runtime producer |
-| 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 1 / 48 | `economy` (`goods_channel`) | partial |
-| 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | unresolved / 372 | `borders_fog` **and** `map_terrain` | partial, **contested** |
+| 11 | `goods` | `check_goods` `0x00937710` | `Good::walk_data` `0x0066E5D0` | 21 / 48 | `economy` (`goods_channel`) | partial |
+| 12 | `world` | inline | `World::walk_data` `0x006B5CF0` | dynamic exact walk, 13 sections | `borders_fog`, `map_terrain`, `don-replay::initial` | partial; prefix dimensions/seed reach scoreboard, generated terrain/starts unsourced |
 | 13 | `rules` | inline | `Game::walk_rules_data` `0x00589550` | 997,846 bytes in the live shipped walk | `rules_channel` | partial; exact walker, incomplete checked-in inputs |
 | 14 | `scenario` | inline | `ScenarioData::walk_data` `0x00997AD0` | pointer-rich structural walk | `scenario_channel` | partial; no runtime producer |
 | 15 | `script` | inline | `RunTimeEnv::walk_data` `0x009C41A0` | pointer-rich structural walk | `script_channel` | partial; no BHS execution/runtime producer |
@@ -253,8 +253,9 @@ Consistency with §3: 19 of the 20 unhandled *unit* verbs map to an order whose 
 arm is also absent — `REPAIR`→`do_repair`,
 `GARRISON`→`do_garrison`, `FOLLOW`→`do_follow`, `GUARD`→`do_guard`,
 `BOARD_SHIP`→`do_board`, `TRADE`→`do_trade`, `SPELL`→`do_cast`,
-`ATTACK_GROUND`→`do_attack_ground`. `GATHER` is the exception: its order arm now exists
-behind a world callback, while the RL command surface still has no gather target/rate host.
+`ATTACK_GROUND`→`do_attack_ground`. `GATHER` is the exception: its order arm exists behind
+a world callback, and `systems::gathering` now supplies exact shared occupancy/rate state,
+but the RL command host has not yet wired target selection or the terrain-capacity evaluator.
 
 The former routing, queue, and stationary-order divergences are closed. `PATROL` installs
 `GROUP_PATROL` (22) for ground units and helicopters and delegates true planes to

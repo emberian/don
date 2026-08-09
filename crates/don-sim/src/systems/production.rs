@@ -126,7 +126,9 @@ pub mod off {
     // -- WallData -----------------------------------------------------------------------
     /// `WallData::job_counter` — construction progress, in the same units as `constr_time`.
     pub const JOB_COUNTER: usize = 72; // 0x48
-    /// `WallData::job_counter_2` — cumulative work ever applied (never reset by completion).
+    /// `WallData::job_counter_2` — the parallel construction accumulator. It receives the
+    /// same per-builder increment as `job_counter`; measured `Wall::activate` resets both
+    /// counters to zero on completion.
     pub const JOB_COUNTER_2: usize = 76; // 0x4C
     /// `WallData::constr_time` — cached total construction time, written by
     /// `Wall::update_construct_time` (`0x0063D560`).
@@ -554,15 +556,15 @@ pub fn tile_of(c: i32) -> i32 {
 /// `Wall::do_construct` (`0x006434D0`) [measured, from the switch in `do_construct`].
 ///
 /// `do_construct` treats `0, 0x27, 0x28, 0x29, 0x2B` as "keep going, start the site" and
-/// `0x2A` as "keep going **only** if the owning city is under the building cap"; every
-/// other value disbands the site. The *meanings* of the individual codes are not derived —
-/// only this partition is, and that is what the tick needs.
+/// `0x2A` as "keep going **only** if the linked city has wonder capacity"; every other
+/// value disbands the site. The exact condition is
+/// `city >= 0 && CityData::num_wonders(1) <= 1 + LeaderData::has_tribe_bonus(7)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SiteVerdict {
     /// `0, 0x27, 0x28, 0x29, 0x2B` — placement stands.
     Ok,
-    /// `0x2A` — stands only if the founding city can take another building.
-    OkIfCityHasRoom,
+    /// `0x2A` — stands only if the linked city can take another wonder.
+    OkIfLinkedCityHasWonderCapacity,
     /// Anything else — the site is disbanded on the next construction tick.
     Blocked,
 }
@@ -573,7 +575,7 @@ impl SiteVerdict {
     pub fn from_code(code: i32) -> SiteVerdict {
         match code {
             0 | 0x27 | 0x28 | 0x29 | 0x2B => SiteVerdict::Ok,
-            0x2A => SiteVerdict::OkIfCityHasRoom,
+            0x2A => SiteVerdict::OkIfLinkedCityHasWonderCapacity,
             _ => SiteVerdict::Blocked,
         }
     }
@@ -925,10 +927,11 @@ pub struct ConstructStep {
 ///
 /// ```text
 /// if (ai_speed > 1) rate *= ai_speed;         ; GameAccess::ai_speed [0x00C061C0]
-/// if (!is_started()) { ...blocked_site check, Build::start(1) or Object::disband(1)... }
+/// if (!is_started()) { ...blocked_site check, Build::start(1) then CONTINUE,
+///                      or Object::disband(1) and stop... }
 /// if (is_active()) return 0;                  ; already finished, nothing to do
 /// rate /= helpers + 1;                        ; <-- DIMINISHING RETURNS, before the bump
-/// if (!(build_masks & 0x800)) { owner_recharging += 1; build_masks |= 0x800; }
+/// if (!(build_masks & 0x800)) { BuildData::recharging += 1; build_masks |= 0x800; }
 /// helpers += 1;                               ; u8, wraps
 /// if (rate < 1) rate = 1;                     ; <-- floor AFTER the division
 /// job_counter_2 += rate;
@@ -945,9 +948,9 @@ pub struct ConstructStep {
 /// - The floor of 1 is applied **after** the division, so a fourth builder on a rate-100
 ///   site still adds 25, and a 100th builder adds 1 rather than 0. Construction never
 ///   stalls from over-crowding, it only stops speeding up.
-/// - `job_counter_2` is bumped by the same amount but is never consulted by the
-///   completion test. It is the cumulative work ledger; only `job_counter` gates
-///   completion and only `job_counter` feeds [`construct_hits`].
+/// - `job_counter_2` is bumped by the same amount but is never consulted by this
+///   completion test. Only `job_counter` gates completion and feeds [`construct_hits`].
+///   `Wall::activate` resets **both** counters after this leaf returns completed.
 pub fn do_construct(
     rate: i32,
     ai_speed: i32,
@@ -2376,7 +2379,10 @@ mod tests {
         for c in [0, 0x27, 0x28, 0x29, 0x2B] {
             assert_eq!(SiteVerdict::from_code(c), SiteVerdict::Ok);
         }
-        assert_eq!(SiteVerdict::from_code(0x2A), SiteVerdict::OkIfCityHasRoom);
+        assert_eq!(
+            SiteVerdict::from_code(0x2A),
+            SiteVerdict::OkIfLinkedCityHasWonderCapacity
+        );
         for c in [1, 0x26, 0x2C, 0x40] {
             assert_eq!(SiteVerdict::from_code(c), SiteVerdict::Blocked);
         }

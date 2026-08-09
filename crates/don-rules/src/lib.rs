@@ -8,7 +8,7 @@ pub mod rules;
 pub mod value;
 
 pub use rules::{Parser, RuleField, RuleSlot, Rules, FIELDS, RULES_DWORDS, SHIPPED, SLOTS};
-pub use value::{as_int, as_scaled, wtoi, Number, RuleValue};
+pub use value::{apply_parser, as_int, as_scaled, wtoi, Number, RuleValue};
 
 #[cfg(test)]
 mod ground_truth {

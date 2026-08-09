@@ -350,7 +350,8 @@ to every slot *except* food.
 
 ### 4.4 The gather-enhancer tables are indexed `level - 1`
 
-[measured, `0x006D5754`] `RULES[0x284 + (level-1)*4]` — `SCHOLAR_RATE[5] = {5,7,10,15,20}`.
+[measured, `0x0063A43E`] `RULES[0x284 + (level-1)*4]` — `SCHOLAR_RATE[6]` is stored
+in 8.8 as `{1280,1792,2560,3840,5120,6400}`, displaying `{5,7,10,15,20,25}`.
 This is the same off-by-one the tech-cities lane found on `GRANARY_BONUS`,
 `LUMBERMILL_BONUS`, `SMELTER_BONUS` and `FISHERMEN_BONUS`; confirmed here independently on
 a fifth table. A port that indexes by `level` reads the next tier's number for every
@@ -418,23 +419,25 @@ takes a single six-slot `object_income` total — which is faithful, not a simpl
   `KREMLIN_FARMS`, `GERMAN_MINERS`, `EGYPTIAN_FARM_WEALTH`, `RIVER_RESOURCE_VALUE`,
   `JAPANESE_FISHING_BOATS`, `INCA_WEALTH_PER_MINER`.
 
-⚠ **One unresolved discrepancy, stated rather than smoothed.** The scholar path computes
-`(SCHOLAR_RATE[level-1] * 16) >> 8` — i.e. `value / 16` — on a **scale-1** constant, so
-level 1 gives `5 / 16 = 0`. The peasant path is `value / 256` on a scale-**256** constant,
-giving 10. Either `SCHOLAR_RATE` is meant to be read at a different scale, or the knowledge
-term is genuinely zero at level 1 in this build. `scholar_rate_for_level` returns exactly
-what the instructions compute, and a test pins the zero so that any later "fix" has to be a
-deliberate change with evidence.
+The scholar path loads that runtime 8.8 value, shifts it left four, then performs the signed
+truncating `/256` idiom (`0x0063A445`–`0x0063A451`). The exact gross sequence is therefore
+`{80,112,160,240,320,400}`; sixteen gross units become one stockpile resource over the
+450-frame period, giving 5/7/10/15/20/25 knowledge per scholar. It multiplies by
+`min(active_scholars, 7)` at `0x0063A4C2`–`0x0063A4D5`.
 
 ### 5.3 Resource depletion
 
-**No depletion site has been tied to a field.** `GoodData` exposes only `is_seen` and
-`get_gpiece` in the PDB; `Good::walk_data` `0x0066E5D0` hashes one byte at `Good + 0x20` on
-top of `GoodData`'s `[0x08,0x09)` and `[0x09,0x18)` base walk, and the remaining-amount
-dword is somewhere inside that 16-byte range but is not pinned. `GoodNode::remaining` in
-the module is **our model of the concept, not a recovered offset**, and says so. Finding the
-writer — most likely reached from `UnitData::calc_gather`'s consumption path or
-`Objects::remove_good` `0x00653D00` — is the next concrete step for the goods channel.
+Normal Farm/Woodcutter/Mine/University/Oil gathering has **no depletion pool or decrement**.
+`WorldData::is_gathered_from` tests TData bit `0x1000`; `Build::find_gather_tiles` sets it,
+and clear/verify paths remove it. It is an occupancy claim, not remaining yield. Worker
+execution rotates the ordered `gather_from` coordinates without debiting them, while
+`World::gather_at` is a pure six-slot terrain-value reader.
+
+The goods checksum model is now exact too: `Good::walk_data` contributes `ever_seen +0x20`,
+then `SubObject::walk_data` contributes flags, owner/object identity, position, and the
+resolved `TypeIndex`, for 21 bytes. `GoodData` has no remaining-amount member. The separate
+rare/merchant spatial path is still unreduced, so this does not assert when or why retail
+may remove a rare Good object.
 
 ### 5.4 The caravan and merchant trade system
 
@@ -556,8 +559,7 @@ lets a divergence be localised to the market instead of hunted through stockpile
    `RULES` and `Game`, and calls only `Random::get`. It would validate the market
    arithmetic *and* the RNG draw count, which is the highest-desync-risk item in the lane.
 3. **A live read of one leader's econ block across a few frames.** Settles the unmodelled
-   dwords (§6.3), the income units question that `sim-economy.md` §4.4 left open, and the
-   `SCHOLAR_RATE` scale discrepancy (§5.2) — none of which more disassembly will resolve.
+   dwords (§6.3) and gives an integrated runtime check of the now-recovered income units.
 
 ---
 

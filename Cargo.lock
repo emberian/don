@@ -215,6 +215,9 @@ version = "0.1.0"
 [[package]]
 name = "don-sim"
 version = "0.1.0"
+dependencies = [
+ "don-rules",
+]
 
 [[package]]
 name = "equivalent"

@@ -1,8 +1,9 @@
 # Target selection — assembly report
 
-Lane `assembly:target-selection`. One new file: `crates/don-sim/src/systems/target.rs`
-(2,138 lines, 37 tests + 1 ignored benchmark, all green). Two small edits to shared files,
-both named at the bottom.
+Lane `assembly:target-selection`. The executable module is
+`crates/don-sim/src/systems/target.rs` (2,738 lines, 45 passing tests + 1 ignored benchmark).
+The Cycle-5 integration added the phased automatic-acquisition contract and closed the
+spellcaster priority arm.
 
 ---
 
@@ -20,8 +21,7 @@ Concretely, these execute for the first time:
 
 * `Object::find_nearby_target` `0x00648DA0`'s spiral over `World::wdata` cells, in retail
   cell order and retail chain order, with retail's ring budget and retail's early-out.
-* `Object::compare_target` `0x0064E5C0`'s priority arithmetic, transcribed branch for branch
-  (one omission, named below).
+* `Object::compare_target` `0x0064E5C0`'s priority arithmetic, transcribed branch for branch.
 * `Unit::find_melee_target` `0x005FF9C0`'s respond-range selection.
 * The `find_nearby_target` weighting *around* `compare_target`: the `targeted` spreading
   penalty, the min/max-range reshaping, the last-order-target halving, the facing weights.
@@ -30,13 +30,9 @@ Concretely, these execute for the first time:
 * A bridge from `combat::CombatConstants` to `mechanics::CombatRules`, without which the
   damage chain could not be called from anything holding the shipped rules.
 
-**Gate: `cargo test --workspace` is green — 1,249 passed, 0 failed** (measured after this
-lane's last edit; it went red mid-lane on three `systems::order_dispatch` tests belonging to
-a sibling lane that was editing at the same time, and is green again now).
-`cargo test -p don-sim --lib systems::target` is 37/37, `rustfmt --check` is clean on the new
-file, and `cargo clippy -p don-sim --lib --all-targets` reports zero diagnostics against it
-(clippy is separately red on the pre-existing generated `WF_PLANES` empty ranges in
-`src/generated/state.rs`, untouched here).
+**Current focused gate:** `cargo test -p don-sim systems::target::tests --lib` is 45 passed,
+0 failed, 1 ignored; `cargo test -p don-sim --lib --no-run` and
+`cargo check -p don-ai --lib` are green, and `git diff --check` is clean.
 
 ---
 
@@ -198,14 +194,18 @@ Every branch carries its VA in the source. Inputs are pre-resolved into
 `CompareTargetInput`, the same pattern `combat::PoorTargetInput` already uses, because retail
 reaches all of it through virtual dispatch and four global tables this crate does not model.
 
-### The one omission
+### Spellcaster action arm
 
-`COMPARE_TARGET_UNREACHED` in the module records it: the spell-target bonuses at
-`0x0064ECF0` (`+6000000` when `UnitData::get_action` is not activity `0xE` and the target is
-tech `0x3A`; `+10000000` when the current action already names this object) are **not**
-implemented, because they read `UnitData::get_action` `0x00608450` and
-`BuildTypeData::is_spellcaster` `0x00639840`, which need the order system. Everything else in
-the function is transcribed.
+The former `COMPARE_TARGET_UNREACHED` gap is closed. Capstone at
+`0x0064EC9D..0x0064ED27` establishes that both `UnitData::get_action` calls operate on the
+candidate target loaded from `objects[param_2][param_1]`, while EDI continues to hold the
+attacker. A spellcaster target whose current activity is CastSpell (`OrderIndex 0xE`) gets
+`v *= 20`; its activity's virtual `+0xF4` payload is then compared with the attacker's
+`ObjectData +0x0A/+0x09` identity and adds `10,000,000` on a match. A spellcaster not
+currently casting instead adds `6,000,000` when `target->is(0x3A)` succeeds.
+
+`CompareTargetInput` carries those virtual/order reads as explicit pre-resolved fields. This
+keeps the arithmetic exact without coupling the scorer to one host's order container.
 
 ---
 
@@ -279,10 +279,11 @@ stacking on one victim, and it is a checksummed counter that saturates at 100.
   reach `compare_target` (needs the object table, the leader array, the world and nineteen
   virtuals) or `find_nearby_target` (needs a populated `World::wdata`). Do not promote any of
   it by proximity to `crate::mechanics::damage`.
-* **Cell insertion order is not derived.** What `find_nearby_target` establishes is the
-  *traversal*: head at `WData +0x08/+0x0A`, next at `ObjectData +0x2C/+0x2E`. Which end
-  `Object::add_to_world` links a new object onto was not read, and it decides which of
-  several equal-scoring candidates wins. `TargetWorld::link` head-inserts and says so.
+* **Cell insertion order is derived.** `Object::add_to_world` `0x0064D8C0` installs the
+  previous `WData +0x08/+0x0A` pair into the entering object's
+  `ObjectData +0x2C/+0x2E`, then writes the entering object as the new cell head. The
+  executable `TargetWorld::{place_at,relocate,remove}` mirror preserves that exact chain
+  order; equal-score ties therefore follow retail head insertion rather than an entity scan.
 * **`Object::valid_target` `0x00648BA0` and `Object::check_target` `0x00649E00` are not
   ported**, only their position in the pipeline. They are the `admit` closure's
   responsibility, because they need diplomacy, fog and the region map. `check_target`'s

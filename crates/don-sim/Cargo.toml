@@ -7,6 +7,9 @@ description = "Batch-parallel simulation core: world storage and the fixed-tick 
 
 [dependencies]
 
+[dev-dependencies]
+don-rules = { path = "../don-rules" }
+
 [[bin]]
 name = "don-bench"
 path = "src/bin/bench.rs"

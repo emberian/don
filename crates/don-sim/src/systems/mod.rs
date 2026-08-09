@@ -40,7 +40,17 @@ pub mod collision;
 /// `rustc --edition 2021 --test src/systems/combat.rs` — 66 tests, all green, including a
 /// load of the real 493x493 balance matrix from `schema/live/balance-real.bin`.
 pub mod combat;
+/// Authoritative `BUILD_AT` lifecycle over the recovered production arithmetic.  Large
+/// placement/start/activation/disband transactions are mandatory fail-loud host effects;
+/// the module cannot silently fall back to builder-frame construction.
+pub mod construction;
 pub mod economy;
+/// Exact direct land-unit volley geometry: Unit/Guy aim, live-squad damage multiplicity,
+/// composed flank direction, and a fail-closed graphics-turret boundary.
+pub mod fight;
+/// Retail gathering-site capacity boundary, owner-local worker chains, worker/order
+/// lifecycle, rate scaling, and checksum-visible GatherOrder payload.
+pub mod gathering;
 pub mod groups_guys;
 /// Recovered from an interrupted lane and audited as a Tier-C goody-box registry/checksum
 /// primitive. Object-chain, movement-caller, replay, and terrain-transaction integration

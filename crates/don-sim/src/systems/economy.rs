@@ -178,11 +178,12 @@ pub const SHIPPED_ECONOMY_SLOTS: &[(usize, &str, i32)] = &[
     (632, "city_gather[5]", 0),
     (636, "gather_rate", 450),
     (640, "peasant_rate", 2560),
-    (644, "scholar_rate[0]", 5),
-    (648, "scholar_rate[1]", 7),
-    (652, "scholar_rate[2]", 10),
-    (656, "scholar_rate[3]", 15),
-    (660, "scholar_rate[4]", 20),
+    (644, "scholar_rate[0]", 1280),
+    (648, "scholar_rate[1]", 1792),
+    (652, "scholar_rate[2]", 2560),
+    (656, "scholar_rate[3]", 3840),
+    (660, "scholar_rate[4]", 5120),
+    (664, "scholar_rate[5]", 6400),
     (668, "oil_rate", 8960),
     (1160, "forbidden_city_gather", 25),
     (1164, "forbidden_city_base_gather", 50),
@@ -352,9 +353,10 @@ impl EconRules {
         peasant_rate, 640
     );
     rule_arr!(
-        /// `SCHOLAR_RATE[5]` = `5, 7, 10, 15, 20`, indexed **`level - 1`**
-        /// (`0x006D5754`: `RULES[0x284 + (level-1)*4]`). See [`scholar_rate_for_level`].
-        scholar_rate, 644, 5
+        /// `SCHOLAR_RATE[6]` = `5, 7, 10, 15, 20, 25` stored in 8.8 as
+        /// `1280, 1792, 2560, 3840, 5120, 6400`, indexed **`level - 1`** at
+        /// `0x0063A43E`. See [`scholar_rate_for_level`].
+        scholar_rate, 644, 6
     );
     rule!(
         /// `OIL_RATE` = `"35 oil"` at scale 256, so **8960 = 35.0 in 8.8**.
@@ -932,21 +934,18 @@ pub fn worker_rate(rules: &EconRules, oil: bool) -> i32 {
     unscale_8_8(raw)
 }
 
-/// `SCHOLAR_RATE[level - 1]`, the university/scholar payout, unscaled the same way.
+/// `SCHOLAR_RATE[level - 1]`, the university/scholar contribution to gross income.
 ///
-/// **The table is indexed `level - 1`, not `level`** (`0x006D5754`), which is the same
+/// **The table is indexed `level - 1`, not `level`** (`0x0063A43E`), which is the same
 /// off-by-one convention the sibling tech-cities lane found on the other gather-enhancer
 /// tables (`GRANARY_BONUS`, `LUMBERMILL_BONUS`, `SMELTER_BONUS`, `FISHERMEN_BONUS`). A
 /// port that indexes by `level` reads the next tier's number for every building in the
 /// game.
 ///
-/// ⚠ **Unresolved, and stated rather than smoothed over.** The engine computes
-/// `(SCHOLAR_RATE[level-1] * 16 + bias) >> 8`, i.e. `value / 16`, whereas the peasant path
-/// is `value / 256` on a scale-256 constant. `SCHOLAR_RATE` is a **scale-1** field (shipped
-/// `"5"` → 5), so `5 / 16` truncates to **0**. Either the constant is intended to be read
-/// at a different scale, or the knowledge term is genuinely zero at level 1 in this build.
-/// We have not resolved which, so this function returns exactly what the instructions
-/// compute and the caller is warned. Do not "fix" it to 5 without an oracle run.
+/// The runtime table is 8.8 fixed point even though the XML displays `5..25`. Retail shifts
+/// the selected entry left four, then C-truncates by 256 (`0x0063A445..0x0063A451`), yielding
+/// `[80,112,160,240,320,400]` gross units. Sixteen gross units become one stockpile unit over
+/// the shipped 450-frame gather period, so these are exactly 5/7/10/15/20/25 knowledge.
 #[inline]
 pub fn scholar_rate_for_level(rules: &EconRules, level: i32) -> i32 {
     let idx = level.wrapping_sub(1).max(0) as usize;
@@ -2304,23 +2303,45 @@ pub fn leaders_channel(econs: &[LeaderEcon]) -> u32 {
 
 /// One resource node, as the **goods** channel sees it (channel 11, `0x00937710`).
 ///
-/// `Good::walk_data` (`0x0066E5D0`) hashes exactly one byte at `Good + 0x20` on top of
-/// `GoodData`'s base walk of `[0x08, 0x09)` and `[0x09, 0x18)` — 16 bytes plus a flag. The
-/// node's *remaining amount* is inside that base range; which dword it is we have not
-/// pinned, so this struct models the fields we can name and states the rest as unknown.
+/// `Good::walk_data` (`0x0066E5D0`) contributes `ever_seen` at `Good + 0x20`, then
+/// `SubObject::walk_data` (`0x006621D0`) contributes the byte at `+0x08`, the 15-byte
+/// `[+0x09,+0x18)` identity/position window, and the `TypeIndex` obtained from the type
+/// pointer at `+0x18`. That is 21 bytes for the checksum walk used here. `GoodData` is only
+/// 48 bytes and its named own fields are `ever_seen` at `+0x20` and `cur_time` at `+0x24`;
+/// there is no remaining-amount member to approximate.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct GoodNode {
-    /// `GoodType` index. Rares are `>= 6`.
-    pub good_type: i32,
-    /// Tile coordinates, `Coord`-packed as the engine stores them.
+    /// `SubObject + 0x08`; bit 0 is the live-object flag used by `check_goods`.
+    pub flags: u8,
+    /// Owner slot at `SubObject + 0x09`.
+    pub who: u8,
+    /// Owner-local object index at `SubObject + 0x0A`.
+    pub o: i16,
+    /// World position at `SubObject + 0x0C..+0x18`.
+    pub z: i32,
     pub x: i32,
     pub y: i32,
-    /// Remaining yield. **Not derived**: no depletion site has been tied to a field, so
-    /// this is our model of the concept, not a recovered offset. Do not compare it against
-    /// retail.
-    pub remaining: i32,
-    /// `Good + 0x20`, the one byte `Good::walk_data` adds.
-    pub flags: u8,
+    /// `SubObject + 0x18` is a type pointer in memory; the walker serializes its
+    /// `TypeIndex` (`*(ptype + 4)`) instead of the address. Rares are `>= 6`.
+    pub type_index: i32,
+    /// `GoodData::ever_seen` at `Good + 0x20`.
+    pub ever_seen: u8,
+}
+
+impl GoodNode {
+    /// The exact scalar image passed by channel 11's live-Good path.
+    pub fn walked_bytes(self) -> [u8; 21] {
+        let mut out = [0u8; 21];
+        out[0] = self.ever_seen;
+        out[1] = self.flags;
+        out[2] = self.who;
+        out[3..5].copy_from_slice(&self.o.to_le_bytes());
+        out[5..9].copy_from_slice(&self.z.to_le_bytes());
+        out[9..13].copy_from_slice(&self.x.to_le_bytes());
+        out[13..17].copy_from_slice(&self.y.to_le_bytes());
+        out[17..21].copy_from_slice(&self.type_index.to_le_bytes());
+        out
+    }
 }
 
 /// The **goods** channel over a node list.
@@ -2328,13 +2349,9 @@ pub struct GoodNode {
 /// Node order is the checksum's order, and the engine's `PtrArray<Good>` order is creation
 /// order, so a port must preserve insertion order and must not compact on removal.
 pub fn goods_channel(nodes: &[GoodNode]) -> u32 {
-    let mut buf = Vec::with_capacity(nodes.len() * 17);
+    let mut buf = Vec::with_capacity(nodes.len() * 21);
     for n in nodes {
-        buf.extend_from_slice(&n.good_type.to_le_bytes());
-        buf.extend_from_slice(&n.x.to_le_bytes());
-        buf.extend_from_slice(&n.y.to_le_bytes());
-        buf.extend_from_slice(&n.remaining.to_le_bytes());
-        buf.push(n.flags);
+        buf.extend_from_slice(&n.walked_bytes());
     }
     adler32(1, &buf)
 }
@@ -2707,26 +2724,26 @@ mod tests {
     #[test]
     fn scholar_rate_is_indexed_level_minus_one() {
         let r = shipped();
-        // The table is 5, 7, 10, 15, 20 and the engine reads `[level - 1]`. Assert the
-        // indexing on the raw accessor, where it is unambiguous.
-        assert_eq!(r.scholar_rate(0), 5);
-        assert_eq!(r.scholar_rate(4), 20);
+        // Retail stores the six displayed values in 8.8 and reads `[level - 1]`.
+        assert_eq!(
+            std::array::from_fn::<_, 6, _>(|i| r.scholar_rate(i)),
+            [1280, 1792, 2560, 3840, 5120, 6400]
+        );
         // Level 1 must select entry 0, not entry 1. If a port used `[level]` it would read
-        // 7 here -- so pin the *selection*, separately from the questionable /16 unscale.
+        // 1792 here -- so pin the selection independently from the arithmetic.
         let sel = |lvl: i32| r.scholar_rate((lvl - 1).max(0) as usize);
-        assert_eq!(sel(1), 5);
-        assert_eq!(sel(3), 10);
-        assert_eq!(sel(5), 20);
+        assert_eq!(sel(1), 1280);
+        assert_eq!(sel(3), 2560);
+        assert_eq!(sel(6), 6400);
     }
 
     #[test]
-    fn scholar_rate_unscale_truncates_to_zero_and_we_do_not_paper_over_it() {
-        // Documented unresolved: the engine computes `value * 16 >> 8` on a scale-1
-        // constant, which truncates 5 to 0. This test exists so that a later "fix" has to
-        // be a deliberate change with evidence, not a silent one.
+    fn scholar_rate_uses_retails_six_8_8_values() {
         let r = shipped();
-        assert_eq!(scholar_rate_for_level(&r, 1), 0, "5 * 16 / 256");
-        assert_eq!(scholar_rate_for_level(&r, 5), 1, "20 * 16 / 256");
+        assert_eq!(
+            std::array::from_fn::<_, 6, _>(|i| scholar_rate_for_level(&r, i as i32 + 1)),
+            [80, 112, 160, 240, 320, 400]
+        );
     }
 
     // -- resource bonuses -------------------------------------------------------------------
@@ -3871,19 +3888,29 @@ mod tests {
     #[test]
     fn the_goods_channel_is_order_sensitive() {
         let a = GoodNode {
-            good_type: 6,
+            flags: 1,
+            who: 2,
+            o: 3,
+            z: 0,
             x: 1,
             y: 2,
-            remaining: 100,
-            flags: 1,
+            type_index: 6,
+            ever_seen: 1,
         };
         let b = GoodNode {
-            good_type: 7,
+            flags: 1,
+            who: 4,
+            o: 5,
+            z: 0,
             x: 3,
             y: 4,
-            remaining: 50,
-            flags: 0,
+            type_index: 7,
+            ever_seen: 0,
         };
+        assert_eq!(
+            a.walked_bytes(),
+            [1, 1, 2, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0]
+        );
         assert_ne!(goods_channel(&[a, b]), goods_channel(&[b, a]));
         assert_eq!(goods_channel(&[a, b]), goods_channel(&[a, b]));
     }

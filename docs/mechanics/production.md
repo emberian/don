@@ -63,7 +63,7 @@ byte, so the geometry inference was right:
 ```
 BuildData  size 220 (0xDC)
   +0x48  u32  WallData::job_counter          construction progress
-  +0x4C  u32  WallData::job_counter_2        cumulative work ledger
+  +0x4C  u32  WallData::job_counter_2        parallel accumulator; reset by activate
   +0x50  u32  WallData::constr_time          cached total time
   +0x54  i32  WallData::construct_hits       EFFECTIVE max HP right now
   +0x58  i32  WallData::gpiece
@@ -150,7 +150,8 @@ The floor of 1 lands **after** the division, so a 200th builder still adds 1. Co
 never stalls from crowding; it only stops accelerating.
 
 `job_counter_2` receives the same increment but is never read by the completion test. Only
-`job_counter` gates completion and only `job_counter` feeds the HP scaling.
+`job_counter` gates completion and only `job_counter` feeds the HP scaling. Measured
+`Wall::activate` resets **both** counters to zero after completion.
 
 ### 3.2 The under-attack penalty is `/4` on the *rate*, and Korea is exempt
 

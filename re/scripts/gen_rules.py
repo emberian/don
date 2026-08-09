@@ -2,9 +2,9 @@
 """Generate `crates/don-rules/src/rules.rs` from `docs/derivation/rules-constants.json`.
 
 The JSON is the recovered schema of the engine's `Rules` value block: 719 records (717
-distinct struct offsets; two names were recovered twice from two binder sites), 845 slots,
+distinct struct offsets; two names were recovered twice from two binder sites), 846 slots,
 each with the struct offset, the parse mode the loader uses (`_wtoi` = scale 1, or
-`RString::AsScaled(scale)` with scale 100 / 192 / 256), the shipped `rules.xml` text and
+`RString::AsScaled(scale)` with a recovered fixed-point scale), the shipped `rules.xml` text and
 the integer the engine stores.
 
 What this emits, and why in this shape:
@@ -46,6 +46,34 @@ def short(s, n=64):
     return s if len(s) <= n else s[: n - 1] + "\u2026"
 
 
+def parser_expr(r):
+    if r["parser"] == "scaled":
+        return f'Parser::Scaled({r["scale"]})'
+    if r["parser"] == "wtoi":
+        return "Parser::Wtoi"
+    if r["parser"] == "wtoi_times":
+        return f'Parser::WtoiTimes({r["scale"]})'
+    if r["parser"] == "wtoi_minus_trunc_div_plus":
+        return (
+            "Parser::WtoiMinusTruncDivPlus { "
+            f'divisor: {r["divisor"]}, addend: {r["addend"]}'
+            " }"
+        )
+    return "Parser::Unclassified"
+
+
+def parser_doc(r):
+    if r["parser"] == "scaled":
+        return f'`AsScaled({r["scale"]})`'
+    if r["parser"] == "wtoi":
+        return "`_wtoi`"
+    if r["parser"] == "wtoi_times":
+        return f'`_wtoi * {r["scale"]}`'
+    if r["parser"] == "wtoi_minus_trunc_div_plus":
+        return f'`x - trunc(x/{r["divisor"]}) + {r["addend"]}`, `x = _wtoi`'
+    return "**parse mode unclassified**"
+
+
 def main():
     with open(SRC) as fh:
         recs = json.load(fh)
@@ -67,12 +95,11 @@ def main():
     shipped = [None] * dwords
     slots = []
     for r in fields:
-        scale = r["scale"] if r["parser"] == "scaled" else (1 if r["parser"] == "wtoi" else 0)
         for e in r["entries"]:
             if e["stored"] is not None:
                 shipped[e["offset"] // 4] = e["stored"]
-            if e["stored"] is not None and e["xml_value"] is not None and scale:
-                slots.append((r["name"], e["index"], e["offset"], scale, e["xml_value"], e["stored"]))
+            if e["stored"] is not None and e["xml_value"] is not None and r["parser"] is not None:
+                slots.append((r["name"], e["index"], e["offset"], parser_expr(r), e["xml_value"], e["stored"]))
     unrecovered = [i for i, v in enumerate(shipped) if v is None]
 
     out = sys.stdout.write
@@ -89,7 +116,8 @@ def main():
 //! (= {dwords} dwords). Every scalar site is one of two calls \u2014 `0x0057FA60(name)`, which
 //! parses with `_wtoi` (scale 1), or `0x0057F950(name, scale)`, which parses with
 //! `RString::AsScaled` (`0x00A1D110`) at a **compile-time per-field** scale of 100, 192 or
-//! 256. Array entries are all `_wtoi`.
+//! 256. Most array entries are `_wtoi`; `SCHOLAR_RATE` is the recovered exception and is
+//! stored in 8.8 fixed point.
 //!
 //! [`Rules`] therefore holds the block itself, not a struct of {len(fields)} separate fields: that
 //! is the engine's own layout, so a live capture of `[[0x00C061E4]]` deserialises by
@@ -98,10 +126,10 @@ def main():
 //! # Provenance
 //!
 //! **[measured]** \u2014 offsets and parse modes from the loader's own call sites; shipped values
-//! from `ron-data/rules.xml` as the engine stores them. **828 of 834 of these constants were
-//! confirmed byte-for-byte against a running match's `RULES` object** (see
-//! `docs/provenance-ledger.md`, "Live-process validation"); the six that differed were
-//! missing scale annotations, since corrected. Derivation: `docs/derivation/economy.md`.
+//! from `ron-data/rules.xml` as the engine stores them. The recovered values are confirmed
+//! byte-for-byte against a retained running-match `RULES` block after correcting the six
+//! old scale annotations and recovering `SCHOLAR_RATE[5]` (see `docs/provenance-ledger.md`,
+//! "Live-process validation"). Derivation: `docs/derivation/economy.md`.
 //!
 //! Nothing here is verified in the proof-assistant sense.
 
@@ -148,8 +176,11 @@ pub enum Parser {{
     Wtoi,
     /// `0x0057F950` \u2192 `RString::AsScaled(scale)` at `0x00A1D110`.
     Scaled(i32),
-    /// The loader site uses neither helper and was not classified. Two fields
-    /// (`unit_block_radius`, `americans_marine_entrench`); guessing would be folklore.
+    /// `_wtoi(text) * multiplier`, with wrapping `i32` arithmetic.
+    WtoiTimes(i32),
+    /// `x - trunc(x/divisor) + addend`, where `x = _wtoi(text)`.
+    WtoiMinusTruncDivPlus {{ divisor: i32, addend: i32 }},
+    /// The loader site was not classified. Kept fail-closed for future fields.
     Unclassified,
 }}
 
@@ -169,18 +200,17 @@ pub struct RuleField {{
 
 /// One recovered slot with the text it was parsed from and the integer the engine stores.
 ///
-/// This is the tokenizer's test corpus: `scale` is the field's, never the string's.
+/// This is the loader-transform test corpus: the parser is the field's, never the string's.
 #[derive(Clone, Copy, Debug)]
 pub struct RuleSlot {{
     pub name: &'static str,
     /// Array index; 0 for scalars.
     pub index: u16,
     pub offset: u16,
-    /// 1 for `_wtoi` fields, else 100 / 192 / 256.
-    pub scale: i32,
+    pub parser: Parser,
     /// The `value=` / `entryN=` text from the shipped `rules.xml`.
     pub xml_value: &'static str,
-    /// What the engine stores after parsing `xml_value` at `scale`.
+    /// What the engine stores after applying `parser` to `xml_value`.
     pub stored: i32,
 }}
 
@@ -189,12 +219,7 @@ pub struct RuleSlot {{
     out(f"/// Every named field, ordered by offset. {len(fields)} entries. `static`, not `const`:\n/// it is only ever iterated, and a const would be copied at each use site.\n")
     out(f"pub static FIELDS: [RuleField; {len(fields)}] = [\n")
     for r in fields:
-        if r["parser"] == "scaled":
-            p = f'Parser::Scaled({r["scale"]})'
-        elif r["parser"] == "wtoi":
-            p = "Parser::Wtoi"
-        else:
-            p = "Parser::Unclassified"
+        p = parser_expr(r)
         out(
             f'    RuleField {{ name: "{r["name"]}", offset: {r["offset"]}, '
             f'count: {r["count"]}, parser: {p}, binder_ea: 0x{r["binder_ea"]} }},\n'
@@ -206,9 +231,9 @@ pub struct RuleSlot {{
         f"/// {sum(r['count'] for r in fields)}. The tokenizer must reproduce every one.\n"
     )
     out(f"pub static SLOTS: [RuleSlot; {len(slots)}] = [\n")
-    for name, idx, off, scale, text, stored in slots:
+    for name, idx, off, parser, text, stored in slots:
         out(
-            f'    RuleSlot {{ name: "{name}", index: {idx}, offset: {off}, scale: {scale}, '
+            f'    RuleSlot {{ name: "{name}", index: {idx}, offset: {off}, parser: {parser}, '
             f'xml_value: "{esc(text)}", stored: {stored} }},\n'
         )
     out("];\n\n")
@@ -239,12 +264,7 @@ pub struct RuleSlot {{
         name = r["name"]
         ident = f"r#{name}" if name in RUST_KW else name
         off = r["offset"]
-        if r["parser"] == "scaled":
-            pdoc = f"`AsScaled({r['scale']})`"
-        elif r["parser"] == "wtoi":
-            pdoc = "`_wtoi`"
-        else:
-            pdoc = "**parse mode unclassified**"
+        pdoc = parser_doc(r)
         e0 = r["entries"][0]
         if r["count"] == 1:
             shipped_doc = (

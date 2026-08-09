@@ -17,9 +17,10 @@
 //! [`RuleValue::parse`] describes the **text**: which characters form the number, whether a
 //! `%` follows, what the unit word says. It exists for documentation and linting.
 //!
-//! [`as_scaled`] and [`as_int`] are the **engine**. They are ports of
-//! `RString::AsScaled` (`0x00A1D110`) and `_wtoi`, which is all the loader ever calls, and
-//! they are what a value must go through before it may be used as a number. The engine
+//! [`as_scaled`], [`as_int`], and [`apply_parser`] are the **engine**. The first two port
+//! `RString::AsScaled` (`0x00A1D110`) and `_wtoi`; `apply_parser` also applies the two
+//! recovered post-parse transforms used by exceptional fields. They are what a value must
+//! go through before it may be used as a number. The engine
 //! never looks at a `%` and never reads a unit word — `RuleValue`'s `percent` and `unit`
 //! fields describe prose the engine discards, so **no computed value may depend on them**.
 //!
@@ -32,7 +33,7 @@
 //! `(_wtoi(s) * scale) / _wtoi(after_first_slash)`, 32-bit wrapping multiply and truncating
 //! `idiv`, with a null string or a zero denominator returning 0. Differentially tested
 //! against the retail instructions on 202,643 calls with 0 mismatches
-//! (`docs/derivation/economy.md` §6), and reproducing all 832 recovered shipped slots here
+//! (`docs/derivation/economy.md` §6), and reproducing all 835 recovered shipped slots here
 //! (`engine_tokenizer::reproduces_the_whole_shipped_corpus`). The Tier-B claim is **conditional on
 //! the two substituted CRT leaves** `_wtoi` and `wcschr`: the harness patched those IAT
 //! slots, so what was tested is the surrounding logic, not MSVC's `_wtoi` itself. Testing,
@@ -41,6 +42,8 @@
 //! Do **not** add a general `to_f32()`. The engine's rule values are `i32`; the scale is a
 //! property of the *field*, fixed at compile time in the loader (100 / 192 / 256), and it
 //! lives in [`crate::rules`], never in the value string.
+
+use crate::rules::Parser;
 
 /// A numeric literal exactly as it appeared: either a plain decimal or a rational `a/b`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -258,8 +261,7 @@ pub fn as_scaled(raw: &str, scale: i32) -> i32 {
     n / den // 0x00A1D178, truncates toward zero
 }
 
-/// The scale-1 path: `_wtoi`, used by 661 of the loader's 701 scalar sites and by every
-/// array entry.
+/// The scale-1 path: `_wtoi`, used by 661 of the loader's 701 scalar sites and most arrays.
 ///
 /// `0x0057FA60` reads the attribute and calls `RString::ToInt` (`0x00A1D210`); array loops
 /// call `0x0042D9E0`, which is the same shape. A `/` in one of these fields is **not** a
@@ -270,10 +272,32 @@ pub fn as_int(raw: &str) -> i32 {
     wtoi(raw)
 }
 
+/// Apply a field's complete recovered loader transform.
+///
+/// `None` is deliberate fail-closed behavior for an unclassified field. The two bespoke
+/// transforms are instruction-level recoveries from `Constants::init`: unit blocking uses
+/// `_wtoi * 48` (`0x00569C3E`), while American marine entrenchment uses
+/// `x - trunc(x/15) + 2` (`0x0056E086..0x0056E0AC`).
+pub fn apply_parser(raw: &str, parser: Parser) -> Option<i32> {
+    match parser {
+        Parser::Wtoi => Some(as_int(raw)),
+        Parser::Scaled(scale) => Some(as_scaled(raw, scale)),
+        Parser::WtoiTimes(multiplier) => Some(as_int(raw).wrapping_mul(multiplier)),
+        Parser::WtoiMinusTruncDivPlus { divisor, addend } => {
+            if divisor == 0 {
+                return None;
+            }
+            let value = as_int(raw);
+            Some(value.wrapping_sub(value / divisor).wrapping_add(addend))
+        }
+        Parser::Unclassified => None,
+    }
+}
+
 #[cfg(test)]
 mod engine_tokenizer {
     use super::*;
-    use crate::rules::{Parser, FIELDS, SLOTS};
+    use crate::rules::{FIELDS, SLOTS};
 
     /// Captured from retail `0x00A1D110` by the differential harness on hbox
     /// (`docs/derivation/economy.md` §2.2) — **not** computed here. The project has already
@@ -322,44 +346,76 @@ mod engine_tokenizer {
         );
     }
 
-    /// Every recovered slot of the shipped `rules.xml`, parsed at its field's scale, must
+    /// Every recovered slot of the shipped `rules.xml`, parsed with its field transform, must
     /// yield the integer the engine stores.
     ///
     /// The expectations are `docs/derivation/rules-constants.json`, which is itself
-    /// **live-validated**: 828 of 834 extracted constants were read back byte-for-byte out
-    /// of a running match's `RULES` object (`docs/provenance-ledger.md`; the 834 counts two
-    /// fields twice, from two binder sites, which is why there are 832 distinct slots). So
-    /// this is not the parser grading its own homework — it is the parser against the
-    /// running game's memory.
+    /// **live-validated** against a retained running match's `RULES` object. The six old
+    /// scale mismatches are corrected, the sixth scholar entry is recovered, and the two
+    /// former unclassified transforms are instruction-derived. This is not the parser
+    /// grading its own homework.
     #[test]
     fn reproduces_the_whole_shipped_corpus() {
-        assert_eq!(SLOTS.len(), 832, "the recovered corpus changed size");
+        assert_eq!(SLOTS.len(), 835, "the recovered corpus changed size");
         let mut scaled = 0;
         for s in SLOTS.iter() {
-            let got = if s.scale == 1 {
-                as_int(s.xml_value)
-            } else {
-                as_scaled(s.xml_value, s.scale)
-            };
+            let got = apply_parser(s.xml_value, s.parser)
+                .expect("every SLOTS entry has a recovered parser");
             assert_eq!(
                 got, s.stored,
-                "{}[{}] at offset {}: parsed {:?} at scale {} as {}, engine stores {}",
-                s.name, s.index, s.offset, s.xml_value, s.scale, got, s.stored
+                "{}[{}] at offset {}: parsed {:?} with {:?} as {}, engine stores {}",
+                s.name, s.index, s.offset, s.xml_value, s.parser, got, s.stored
             );
-            if s.scale != 1 {
+            if matches!(s.parser, Parser::Scaled(_)) {
                 scaled += 1;
             }
         }
-        // 40 scaled call sites at 0x0057F950; every one is a scalar field.
-        assert_eq!(scaled, 40, "expected exactly the 40 AsScaled fields");
+        // 40 scalar fraction sites, one attack-times-ten site, plus SCHOLAR_RATE[6].
+        assert_eq!(
+            scaled, 47,
+            "expected 40 scalar, one attack, and six scholar scaled slots"
+        );
     }
 
-    /// Only 100, 192 and 256 ever reach `AsScaled`; the scale is the field's property.
     #[test]
-    fn the_only_scales_are_the_three_the_loader_passes() {
+    fn bespoke_loader_transforms_are_exact_and_signed() {
+        assert_eq!(apply_parser("1 UCoord", Parser::WtoiTimes(48)), Some(48));
+        assert_eq!(
+            apply_parser(
+                "5 seconds",
+                Parser::WtoiMinusTruncDivPlus {
+                    divisor: 15,
+                    addend: 2
+                }
+            ),
+            Some(7)
+        );
+        assert_eq!(
+            apply_parser(
+                "-16",
+                Parser::WtoiMinusTruncDivPlus {
+                    divisor: 15,
+                    addend: 2
+                }
+            ),
+            Some(-13),
+            "retail division truncates toward zero"
+        );
+        assert_eq!(apply_parser("9", Parser::Unclassified), None);
+    }
+
+    /// The only recovered fixed-point scales are 10, 100, 192 and 256; the scale is the
+    /// field's property. Ten is the separately recovered attack-value convention.
+    #[test]
+    fn the_only_scales_are_the_four_recovered_loader_scales() {
         for f in FIELDS.iter() {
             if let Parser::Scaled(s) = f.parser {
-                assert!(matches!(s, 100 | 192 | 256), "{} has scale {}", f.name, s);
+                assert!(
+                    matches!(s, 10 | 100 | 192 | 256),
+                    "{} has scale {}",
+                    f.name,
+                    s
+                );
             }
         }
     }

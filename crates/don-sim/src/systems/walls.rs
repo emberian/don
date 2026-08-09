@@ -594,9 +594,6 @@ impl WallChannel {
 pub enum ConstructOutcome {
     /// `!is_started()` and the site is unbuildable: the engine calls `Object::die(1)`.
     SiteRejected,
-    /// `!is_started()` and the site is fine: `Wall::start` (vtable `+0x1A4`) runs and the
-    /// foundation is laid. No work is credited on this tick.
-    Started,
     /// Work was credited; construction continues. Returns 0 in the engine.
     Progressed { credited: u32 },
     /// `job_counter >= constr_time`: `Wall::activate(0, 1, 1)` runs. Returns 1.
@@ -611,7 +608,8 @@ pub enum ConstructOutcome {
 /// `0x2A` is accepted only conditionally — see [`do_construct`].
 pub const BLOCKED_SITE_OK: &[i32] = &[0x00, 0x27, 0x28, 0x29, 0x2B];
 /// The conditional acceptance code: allowed when the object already belongs to a city
-/// (`BuildData::city >= 0`) and a city-count check passes.
+/// (`BuildData::city >= 0`) and
+/// `CityData::num_wonders(1) <= 1 + LeaderData::has_tribe_bonus(7)`.
 pub const BLOCKED_SITE_CONDITIONAL: i32 = 0x2A;
 
 /// `Wall::do_construct(int amount)` `0x006434D0` \[measured\], the work half.
@@ -620,7 +618,7 @@ pub const BLOCKED_SITE_CONDITIONAL: i32 = 0x2A;
 ///
 /// ```text
 /// if (ai_speed > 1)       amount *= ai_speed;          // GameAccess::ai_speed [0x00C061C0]
-/// if (!is_started())      { site check; start or die; return 0; }
+/// if (!is_started())      { site check; start and continue, or die and return 0; }
 /// if (is_active())        return 0;
 /// amount /= (helpers + 1);                             // <-- diminishing returns
 /// if (!(build_masks & 0x800)) { recharging++; build_masks |= 0x800; }
@@ -660,9 +658,10 @@ pub fn do_construct(
         };
         if ok {
             st.flags |= FLAG_STARTED;
-            return ConstructOutcome::Started;
+            // Build::start(1) falls through into the inactive progress body.
+        } else {
+            return ConstructOutcome::SiteRejected;
         }
-        return ConstructOutcome::SiteRejected;
     }
 
     if st.is_active() {
@@ -1284,10 +1283,10 @@ mod tests {
             w.flags = FLAG_ALIVE;
             assert_eq!(
                 do_construct(&mut w, 10, 1, Some(c), false),
-                ConstructOutcome::Started
+                ConstructOutcome::Progressed { credited: 10 }
             );
             assert!(w.is_started());
-            assert_eq!(w.job_counter, 300, "starting credits no work");
+            assert_eq!(w.job_counter, 310, "starting also credits first work");
         }
         let mut w = live();
         w.flags = FLAG_ALIVE;
@@ -1299,7 +1298,7 @@ mod tests {
         w.flags = FLAG_ALIVE;
         assert_eq!(
             do_construct(&mut w, 10, 1, Some(BLOCKED_SITE_CONDITIONAL), true),
-            ConstructOutcome::Started
+            ConstructOutcome::Progressed { credited: 10 }
         );
         let mut w = live();
         w.flags = FLAG_ALIVE;
