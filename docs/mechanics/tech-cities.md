@@ -3,10 +3,8 @@
 Lane `mech:tech-cities`. Checksum channel served: **`cities`** (channel 9 of
 `CheckSums::check_all` `0x00936560`).
 
-Implementation: `crates/don-sim/src/systems/tech_cities.rs` — 38 tests, all passing
-(`rustc --edition 2021 --test` on the file; two of them load the real
-`ron-data/techrules.xml`). Zero warnings as a library. The file is **not referenced from
-`lib.rs`** — see §9.
+Implementation: `crates/don-sim/src/systems/tech_cities.rs` — 47 focused tests, all passing
+through the wired `don-sim` crate (two load the real `ron-data/techrules.xml`).
 
 Everything below is `[measured]` against `ron-bin/riseofnations.exe`,
 `ron-bin/sbl/rise.pdb` and the shipped `ron-data/*.xml` on this machine, except where a
@@ -32,6 +30,7 @@ and it is reproduced in Rust with the same integer arithmetic".
 | the **recapture damage modifier** | `0x00644130` tail | located and ported — it is *not* in the city code, it is the last branch of `ObjectData::get_damage` |
 | city minimum spacing and its relaxation rule | `0x006375B0` | ported |
 | tech bitmask, epoch counters, research categories | `0x006E0C80` / `0x006D2850` / `0x0066CBA0` | ported |
+| gain/lose one-shot accounting and resource cohort | `0x006DCB99..0x006DD268` / `0x006D2850..0x006D2B0A` | executable typed transactions; the 45 tech-specific middle branches remain mandatory host boundaries |
 | city limit from Civic techs | `0x006D6130` | ported — this closes "how do you get more cities" |
 | age advancement requirement | `0x006D7280` inside `0x006DB810` | ported; full-game ladder is `age*4 + 2` library techs |
 | `techrules.xml` loader (85 techs, costs, prereqs, job times, tribe masks) | data | parsed and validated (cost totals, acyclic prereq graph, age chain) |
@@ -326,7 +325,7 @@ The counters live in `LeaderDataEncrypt` (`LeaderData +28344`), XOR-obfuscated:
 
 | field | offset | XOR key | meaning |
 |---|---|---|---|
-| `ages` | `+220` | — | |
+| `ages` | `+220` | `0x62766` | number of held age techs; gain increments, loss recounts 544..550 |
 | `epochs` | `+224` | `0x69587` | total library techs researched |
 | `discovered` | `+228` | `0x13985` | non-library techs |
 | `epoch[4]` | `+232` | `0x63187` | library techs per research category |
@@ -458,12 +457,59 @@ halves:
 Consequence for the port: **tech effects cannot be data-driven from `techrules.xml`.** The
 XML carries cost, time, prerequisites, tribe mask and research building — it carries no
 effect field at all, because the effects are in the C++. Any port must transcribe the query
-sites one at a time. This module transcribes the eleven city-side ones; the rest are open.
+sites one at a time. This module transcribes the eleven city-side queries and the generic
+one-shot cohort below; the special middle remains open.
 
 Notably, `gain_tech` does not itself write the tech bit (an exhaustive scan of its 4,828
 instructions finds no reference to `+0x6C18` and no `bts` against the mask). The bit is set
 through `BitMask<806>::set` from a helper; `Leader::lose_tech` `0x006D2850` clears it and
 decrements the matching counter, which is what the module's counter bookkeeping mirrors.
+
+#### 6.6.1 Executable one-shot cohort
+
+A 600-second Ghidra decompile plus instruction-level reread recovered the coherent generic
+spine around the 45 special branches. `execute_gain_tech_cohort` now owns this order:
+
+1. OR leader dirty bit `0x01000000`, then mark `GameData +0x90 = 1`.
+2. For a previously absent type, update its counter **before** committing the bit. Ages use
+   XOR key `0x62766`, increment `ages`, optionally call the local age-interface refresh,
+   then store `age_stamp[type-544] = game.frame`. Epochs increment total `epochs` and their
+   category slot; ordinary types increment `discovered`.
+3. Complete the mandatory pre-bit special boundary, snapshot `has_preq(resource)` for all
+   six resources in ascending order, commit the bit, complete the finals-quartet boundary,
+   then OR `0x02000000`.
+4. Unless `GameData[+0x821] & 8`, walk resources 0..5. A resource whose pre-bit snapshot was
+   false and whose `GoodTypeData +0x30` equals the gained tech receives its starting amount
+   through `bucket_add`; the two retail multipliers use wrapping multiplication. Unlimited
+   resources overwrite the encoded bucket with `0x104be`, which decodes to 99,999.
+5. Walk resources again. If `GoodTypeData +0x4c` equals the gained tech, repeatedly call
+   `action_sell(resource,0)` while the live decoded amount exceeds 100, excluding Wealth
+   and Knowledge. The executor re-reads after every callback and fails closed if an adapter
+   claims success without reducing the amount.
+6. Classical Age may grant the Greek delayed Knowledge award, through the same scale rule.
+7. Complete the mandatory post-resource special boundary, OR `0x0c000000`, refresh age
+   consumers for age types, then call `TerrainOil::gain_tech`.
+
+Every world write is receipt-checked. The two explicit completion callbacks are not no-ops:
+they are mandatory ownership boundaries for the still-unported special branches, so an
+adapter cannot silently treat this generic cohort as the complete 15,001-byte function.
+
+The later generic propagation phase is also executable as
+`execute_gain_tech_auto_unlocks` (`0x006DEBBE..0x006DED7F`). It performs live ascending
+scans—buildings/wonders `[414,543)` first, units `[50,402)` second—because each recursive
+gain can change the eligibility of a later candidate. A matching Town prerequisite checks
+every city upgrade before continuing. Buildings with build flag `0x4`, and units with unit
+flag `0x80` that are neither held nor in object class `0x04000000`, recursively gain with
+zero coordinates and tail arguments `(0,1)` after the exact live prerequisite/eligibility
+tests. City checks and recursive gains are receipt-checked; no type-table fact is cached
+across callbacks.
+
+`execute_lose_tech_cohort` ports the corresponding generic `0x006D2850..0x006D2B0A`
+transaction: clear the bit, complete the live dependent-loss sweep, fix tech flags, update
+or recompute the counter, run the age refresh when applicable, call `TerrainOil::lose_tech`,
+then `reset_obs_flags`, and only then OR `0x0c000000`. Epoch loss recomputes the category
+from the remaining seven-bit band rather than trusting a decrement. Age loss recounts all
+held age bits, matching retail.
 
 ### 6.7 `techrules.xml`
 
@@ -518,8 +564,9 @@ cost, a nonzero job time and a nonempty tribe mask; 39 techs research at the Lib
 * **`Leader::research_techs` `0x006C6BA0`** (3,758 bytes) and **`Leader::produce_tech`
   `0x006CA980`** are the AI/queue drivers and are unread; research *progress* (how
   `job_time` is consumed, and by what) is therefore not derived.
-* **`Leader::gain_tech`'s 45 branches** are not enumerated. §6.6 establishes the *mechanism*
-  and rules out a data-driven one; it does not enumerate the effects.
+* **`Leader::gain_tech`'s 45 special branches** are not yet enumerated. §6.6.1 now executes
+  the generic accounting/resource spine on both sides of that middle and makes the missing
+  work a mandatory typed callback; it does not claim those special effects are complete.
 * **`VILLAGE_POP == 0`** means the shipped population cap does not come from cities. Where
   it does come from is open (`Leader::calc_pop_cap` `0x006DC490` is the function).
 * **Everything is `[unverified]`.** No oracle run, no differential test, no live-process
@@ -527,26 +574,25 @@ cost, a nonzero job time and a nonempty tribe mask; 39 techs research at the Lib
 
 ## 9. Wiring
 
-`crates/don-sim/src/systems/tech_cities.rs` is standalone and dependency-free. It is
-**not referenced from `lib.rs`** (per lane file-ownership rules). To wire it in:
-
-```rust
-// crates/don-sim/src/systems/mod.rs   (new file)
-pub mod tech_cities;
-
-// crates/don-sim/src/lib.rs
-pub mod systems;
-```
-
-Until then, the tests run with:
+`crates/don-sim/src/systems/tech_cities.rs` is exported through `systems::tech_cities` and
+participates in the normal crate gate. The focused gate is:
 
 ```sh
-CARGO_MANIFEST_DIR=$PWD/crates/don-sim \
-  rustc --edition 2021 --test crates/don-sim/src/systems/tech_cities.rs -o /tmp/tct && /tmp/tct
+CARGO_TARGET_DIR=/tmp/don-tech-target \
+  cargo test -p don-sim --lib systems::tech_cities::tests::
 ```
 
-38 tests, all passing. Two of them read `ron-data/techrules.xml` and skip cleanly if it is
+47 tests, all passing. Two of them read `ron-data/techrules.xml` and skip cleanly if it is
 absent (it is gitignored).
+
+One cross-module seam remains deliberately unwired in this lane:
+`production::execute_finished_effect` still calls the legacy low-level `TechState::gain`
+and then `TechSetHost::gained_tech`. It must instead enter `execute_gain_tech_cohort` while
+the bit is still absent, with its post-resource adapter invoking
+`execute_gain_tech_auto_unlocks` at the recovered location. Calling the new transaction
+after the legacy helper would be wrong: it would observe `was_new == false` and miss the
+retail age increment/stamp. The existing production age-completion assertion that
+`counters.ages == 0` therefore identifies the next integration change, not retail truth.
 
 ## 10. Reproducing the derivation
 
@@ -559,9 +605,14 @@ cat re/decomp-all/00736c40.c                        # City::capture
 grep -n -B12 -A12 'c061e4 + 0x6c)' re/decomp-all/00644130.c   # the recapture modifier
 grep -n -B25 -A8 'c061e4 + 0x138)' re/decomp-all/006375b0.c   # city spacing
 cat re/decomp-all/006d6130.c re/decomp-all/006d7280.c         # city limit, techs per age
+/opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless \
+  "$PWD/re/ghidra" ron -process riseofnations.exe -noanalysis \
+  -scriptPath "$PWD/re/scripts" -postScript DumpDecomp.java /tmp/gain-tech 006dcb60
+objdump -d --start-address=0x6dcb60 --stop-address=0x6e05f9 \
+  ron-bin/riseofnations.exe > /tmp/gain-tech.dis
 ```
 
 The `Leader::gain_tech` structural result (no jump table, 4,828 instructions, 45 compare
-immediates, 35 recursive calls) came from a capstone pass over
-`0x006DCB60 .. +15001`; the function exceeds the 8,192-byte decompiler budget and is
-`skipped_large` in `re/decomp-all/MANIFEST.jsonl`.
+immediates, 35 recursive calls) was rechecked against both outputs above. The function
+exceeds the bulk corpus's 8,192-byte decompiler budget and therefore remains
+`skipped_large` in `re/decomp-all/MANIFEST.jsonl`; targeted `DumpDecomp` completes it.

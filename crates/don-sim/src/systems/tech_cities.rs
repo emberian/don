@@ -1295,6 +1295,7 @@ pub struct TechCounters {
 pub const XOR_EPOCHS: u32 = 0x69587;
 pub const XOR_DISCOVERED: u32 = 0x13985;
 pub const XOR_EPOCH_CAT: u32 = 0x63187;
+pub const XOR_AGES: u32 = 0x62766;
 
 /// `LeaderData::get_city_limit` `0x006D6130`. [measured]
 ///
@@ -1497,6 +1498,11 @@ fn tag(block: &str, name: &str) -> Option<String> {
 pub struct TechState {
     pub tech: TechBitMask,
     pub counters: TechCounters,
+    /// The three invalidation bits written by both one-shot paths. `gain_tech` first ORs
+    /// `0x0100_0000`, then `0x0200_0000`, and finally `0x0c00_0000`; `lose_tech` performs
+    /// the final OR after `reset_obs_flags`. [measured, `0x006DCB99`, `0x006DD027`,
+    /// `0x006E0315`, `0x006D2AF6..0x006D2AFD`]
+    pub dirty_flags: u32,
 }
 
 impl TechState {
@@ -1530,10 +1536,10 @@ impl TechState {
         self.counters.epochs >= techs_per_age(age, start_age, end_age)
     }
 
-    /// Grant a tech: set the bit and bump the counter the engine bumps.
-    /// [structure — `Leader::gain_tech` `0x006DCB60` is 15,001 bytes and was not decoded
-    /// in full; the counter bookkeeping is the inverse of `Leader::lose_tech`
-    /// `0x006D2850`, which *is* decoded.]
+    /// Low-level bit/counter helper retained for callers that own the one-shot effects.
+    /// Queue completion should use [`execute_gain_tech_cohort`]: unlike this structural
+    /// helper, that transaction includes retail's age counter, dirty flags, callbacks,
+    /// and resource effects. [measured, `Leader::gain_tech` `0x006DCB60`]
     pub fn gain(&mut self, t: i32) {
         if self.tech.get(t) {
             return;
@@ -1560,6 +1566,685 @@ impl TechState {
             self.counters.discovered -= 1;
         }
     }
+}
+
+/// Counter family selected by the virtual `Type::{is_age,is_epoch}` tests in the generic
+/// head of `Leader::gain_tech`. [measured, `0x006DCD78..0x006DCE6C`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechCounterClass {
+    Age,
+    Epoch(ResearchCat),
+    Discovered,
+}
+
+#[inline]
+pub fn tech_counter_class(type_index: i32) -> TechCounterClass {
+    if (ty::CLASSICAL_AGE..=ty::INFORMATION_AGE).contains(&type_index) {
+        TechCounterClass::Age
+    } else if (ty::BASE_EPOCHTYPES..ty::END_EPOCHTYPES).contains(&type_index) {
+        TechCounterClass::Epoch(research_cat(type_index))
+    } else {
+        TechCounterClass::Discovered
+    }
+}
+
+/// Resource grant multiplier selected before `LeaderData::bucket_add`. Both retail's
+/// team-mode arm and its handicap arm reduce to a wrapping integer multiply here; their
+/// admission predicates remain caller-owned game/rule facts. [measured,
+/// `0x006DD071..0x006DD15F`, `0x006DD214..0x006DD260`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechResourceGrantScale {
+    Standard,
+    Multiply(i32),
+}
+
+impl TechResourceGrantScale {
+    #[inline]
+    fn apply(self, amount: i32) -> i32 {
+        match self {
+            Self::Standard => amount,
+            Self::Multiply(multiplier) => amount.wrapping_mul(multiplier),
+        }
+    }
+}
+
+/// World/rules facts consumed by the exact resource-unlock cohort of `gain_tech`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GainTechCohortContext {
+    /// `GameData[+0x821] & 8` bypasses the entire grant/sell/Classical-bonus block.
+    pub suppress_resource_effects: bool,
+    pub grant_scale: TechResourceGrantScale,
+    /// The `game byte +0x2d == 8` arm overwrites each newly unlocked resource with 99,999.
+    pub unlimited_resources: bool,
+    /// Base Knowledge award from `Rules +0x60c` when Classical Age is gained while the
+    /// relevant tribe bonus and rule toggle are both active. `None` means the arm is off.
+    pub classical_knowledge_bonus: Option<i32>,
+    /// Whether this leader is `Game::my_player`; gates `IFaceMainBase::age_update`.
+    pub local_player: bool,
+    /// `Game::frame`, stored in `LeaderData::age_stamp[type-CLASSICAL_AGE]` for a new age.
+    pub game_frame: i32,
+}
+
+impl Default for GainTechCohortContext {
+    fn default() -> Self {
+        Self {
+            suppress_resource_effects: false,
+            grant_scale: TechResourceGrantScale::Standard,
+            unlimited_resources: false,
+            classical_knowledge_bonus: None,
+            local_player: false,
+            game_frame: 0,
+        }
+    }
+}
+
+pub const TECH_GAIN_ENTER_DIRTY: u32 = 0x0100_0000;
+pub const TECH_GAIN_RESOURCES_DIRTY: u32 = 0x0200_0000;
+pub const TECH_EFFECTS_FINAL_DIRTY: u32 = 0x0c00_0000;
+pub const TECH_UNLIMITED_RESOURCE_AMOUNT: i32 = 99_999;
+pub const TECH_RESOURCE_SELL_FLOOR: i32 = 100;
+
+/// One ordered write/callback in the recovered generic gain/lose cohort. The two
+/// `Complete*Effects` variants are explicit mandatory boundaries around the still-large
+/// tech-specific middle of `gain_tech`; they prevent this exact cohort from silently
+/// skipping that world-owned work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechOneShotMutation {
+    OrDirtyFlags(u32),
+    MarkGameTechDirty,
+    CounterChanged {
+        type_index: i32,
+        before: TechCounters,
+        after: TechCounters,
+    },
+    RefreshAgeInterface,
+    RecordAgeStamp {
+        type_index: i32,
+        slot: usize,
+        frame: i32,
+    },
+    SetTechBit {
+        type_index: i32,
+        held: bool,
+    },
+    CompleteGainPreBitEffects(i32),
+    CompleteGainAfterBitEffects(i32),
+    GrantResource {
+        resource: usize,
+        amount: i32,
+    },
+    SetResourceAmount {
+        resource: usize,
+        amount: i32,
+    },
+    SellResource {
+        resource: usize,
+        mode: i32,
+    },
+    CompleteGainPostResourceEffects(i32),
+    OutdateCamera,
+    RefreshAgeConsumers(i32),
+    TerrainOilGain(i32),
+    CompleteLoseDependentSweep(i32),
+    FixTechFlags,
+    TerrainOilLose(i32),
+    ResetObservationFlags,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TechOneShotMutationReceipt {
+    pub mutation: TechOneShotMutation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechOneShotError {
+    MutationReceiptMismatch {
+        expected: TechOneShotMutation,
+        observed: TechOneShotMutation,
+    },
+    SellDidNotReduceResource {
+        resource: usize,
+        before: i32,
+        after: i32,
+    },
+}
+
+/// Typed object/rules boundary for the recovered generic one-shot cohort.
+pub trait TechOneShotHost {
+    /// Mandatory callback used for every ordered write/effect boundary.
+    fn apply_tech_mutation(
+        &mut self,
+        state: &TechState,
+        mutation: TechOneShotMutation,
+    ) -> TechOneShotMutationReceipt;
+
+    /// Six `has_preq(resource)` calls captured immediately before the tech bit is set.
+    fn resource_prerequisite_held(&mut self, resource: usize) -> bool;
+    /// `ResourceTypeData +0x30`: the tech that initially unlocks this resource bucket.
+    fn resource_unlock_tech(&mut self, resource: usize) -> i32;
+    /// `Rules +0x600 + resource*4`.
+    fn resource_unlock_amount(&mut self, resource: usize) -> i32;
+    /// `ResourceTypeData +0x4c`: gaining this tech sells the resource down to 100.
+    fn resource_sell_tech(&mut self, resource: usize) -> i32;
+    /// De-obfuscated current bucket amount, re-read after every `action_sell`.
+    fn resource_amount(&mut self, resource: usize) -> i32;
+
+    /// `Type::is_resource` at the head of `Leader::lose_tech`.
+    fn lose_type_is_resource(&mut self, type_index: i32) -> bool;
+    /// `Type` virtual `+0x28`; false skips the bit/counter/TerrainOil body.
+    fn lose_type_is_removable(&mut self, type_index: i32) -> bool;
+}
+
+fn require_tech_mutation<H: TechOneShotHost>(
+    state: &TechState,
+    host: &mut H,
+    expected: TechOneShotMutation,
+) -> Result<(), TechOneShotError> {
+    let observed = host.apply_tech_mutation(state, expected);
+    if observed.mutation != expected {
+        return Err(TechOneShotError::MutationReceiptMismatch {
+            expected,
+            observed: observed.mutation,
+        });
+    }
+    Ok(())
+}
+
+fn change_gain_counter(state: &mut TechState, type_index: i32) {
+    match tech_counter_class(type_index) {
+        TechCounterClass::Age => state.counters.ages = state.counters.ages.wrapping_add(1),
+        TechCounterClass::Epoch(category) => {
+            state.counters.epochs = state.counters.epochs.wrapping_add(1);
+            let slot = category as usize;
+            state.counters.epoch[slot] = state.counters.epoch[slot].wrapping_add(1);
+        }
+        TechCounterClass::Discovered => {
+            state.counters.discovered = state.counters.discovered.wrapping_add(1);
+        }
+    }
+}
+
+fn execute_gain_resource_effects<H: TechOneShotHost>(
+    state: &TechState,
+    host: &mut H,
+    type_index: i32,
+    prerequisite_before_gain: [bool; NUM_RES],
+    context: GainTechCohortContext,
+) -> Result<(usize, usize), TechOneShotError> {
+    if context.suppress_resource_effects {
+        return Ok((0, 0));
+    }
+
+    let mut grants = 0usize;
+    let mut sales = 0usize;
+    for (resource, prerequisite_held) in prerequisite_before_gain.into_iter().enumerate() {
+        if prerequisite_held || host.resource_unlock_tech(resource) != type_index {
+            continue;
+        }
+        let amount = context
+            .grant_scale
+            .apply(host.resource_unlock_amount(resource));
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::GrantResource { resource, amount },
+        )?;
+        grants += 1;
+        if context.unlimited_resources {
+            require_tech_mutation(
+                state,
+                host,
+                TechOneShotMutation::SetResourceAmount {
+                    resource,
+                    amount: TECH_UNLIMITED_RESOURCE_AMOUNT,
+                },
+            )?;
+        }
+    }
+
+    for resource in 0..NUM_RES {
+        let sell_tech = host.resource_sell_tech(resource);
+        // Retail performs the tech comparison before excluding Wealth and Knowledge.
+        if sell_tech != type_index || resource == RES_WEALTH || resource == RES_KNOWLEDGE {
+            continue;
+        }
+        let mut before = host.resource_amount(resource);
+        while before > TECH_RESOURCE_SELL_FLOOR {
+            require_tech_mutation(
+                state,
+                host,
+                TechOneShotMutation::SellResource { resource, mode: 0 },
+            )?;
+            sales += 1;
+            let after = host.resource_amount(resource);
+            if after >= before {
+                return Err(TechOneShotError::SellDidNotReduceResource {
+                    resource,
+                    before,
+                    after,
+                });
+            }
+            before = after;
+        }
+    }
+
+    if type_index == ty::CLASSICAL_AGE {
+        if let Some(base_amount) = context.classical_knowledge_bonus {
+            let amount = context.grant_scale.apply(base_amount);
+            require_tech_mutation(
+                state,
+                host,
+                TechOneShotMutation::GrantResource {
+                    resource: RES_KNOWLEDGE,
+                    amount,
+                },
+            )?;
+            grants += 1;
+        }
+    }
+    Ok((grants, sales))
+}
+
+/// Receipt for the executable generic cohort surrounding `Leader::gain_tech`'s
+/// tech-specific middle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GainTechCohortReceipt {
+    pub type_index: i32,
+    pub was_new: bool,
+    pub counter_class: TechCounterClass,
+    pub resource_grants: usize,
+    pub resource_sales: usize,
+}
+
+/// Execute the exact generic counter/bit/resource/tail cohort of `Leader::gain_tech`.
+/// [measured, `0x006DCB60..0x006E05D9`; resource block
+/// `0x006DD02D..0x006DD268`]
+///
+/// The two mandatory completion mutations bracket the unported tech-specific body. This
+/// function therefore closes a real cohort without pretending the 45 special branches are
+/// absent. State mutation is deliberately not rolled back after a divergent host receipt:
+/// retail's callbacks are infallible and may already have published world effects.
+pub fn execute_gain_tech_cohort<H: TechOneShotHost>(
+    state: &mut TechState,
+    type_index: i32,
+    context: GainTechCohortContext,
+    host: &mut H,
+) -> Result<GainTechCohortReceipt, TechOneShotError> {
+    state.dirty_flags |= TECH_GAIN_ENTER_DIRTY;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::OrDirtyFlags(TECH_GAIN_ENTER_DIRTY),
+    )?;
+    require_tech_mutation(state, host, TechOneShotMutation::MarkGameTechDirty)?;
+
+    let was_new = !state.tech.get(type_index);
+    let counter_class = tech_counter_class(type_index);
+    if was_new {
+        let before = state.counters;
+        change_gain_counter(state, type_index);
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::CounterChanged {
+                type_index,
+                before,
+                after: state.counters,
+            },
+        )?;
+        if matches!(counter_class, TechCounterClass::Age) {
+            if context.local_player {
+                require_tech_mutation(state, host, TechOneShotMutation::RefreshAgeInterface)?;
+            }
+            require_tech_mutation(
+                state,
+                host,
+                TechOneShotMutation::RecordAgeStamp {
+                    type_index,
+                    slot: (type_index - ty::CLASSICAL_AGE) as usize,
+                    frame: context.game_frame,
+                },
+            )?;
+        }
+    }
+
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::CompleteGainPreBitEffects(type_index),
+    )?;
+    let mut prerequisite_before_gain = [false; NUM_RES];
+    for (resource, held) in prerequisite_before_gain.iter_mut().enumerate() {
+        *held = host.resource_prerequisite_held(resource);
+    }
+
+    state.tech.set(type_index, true);
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::SetTechBit {
+            type_index,
+            held: true,
+        },
+    )?;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::CompleteGainAfterBitEffects(type_index),
+    )?;
+    state.dirty_flags |= TECH_GAIN_RESOURCES_DIRTY;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::OrDirtyFlags(TECH_GAIN_RESOURCES_DIRTY),
+    )?;
+
+    let (resource_grants, resource_sales) =
+        execute_gain_resource_effects(state, host, type_index, prerequisite_before_gain, context)?;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::CompleteGainPostResourceEffects(type_index),
+    )?;
+
+    state.dirty_flags |= TECH_EFFECTS_FINAL_DIRTY;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY),
+    )?;
+    if matches!(counter_class, TechCounterClass::Age) {
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::RefreshAgeConsumers(type_index),
+        )?;
+    }
+    require_tech_mutation(state, host, TechOneShotMutation::TerrainOilGain(type_index))?;
+
+    Ok(GainTechCohortReceipt {
+        type_index,
+        was_new,
+        counter_class,
+        resource_grants,
+        resource_sales,
+    })
+}
+
+/// Receipt for the executable generic body/tail of `Leader::lose_tech`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoseTechCohortReceipt {
+    pub type_index: i32,
+    pub removed: bool,
+    pub counter_class: TechCounterClass,
+}
+
+fn recompute_age_count(state: &TechState) -> i32 {
+    (ty::CLASSICAL_AGE..=ty::INFORMATION_AGE)
+        .filter(|&type_index| state.tech.get(type_index))
+        .count() as i32
+}
+
+fn recompute_epoch_category(state: &TechState, category: ResearchCat) -> i32 {
+    (ty::BASE_EPOCHTYPES..ty::END_EPOCHTYPES)
+        .filter(|&type_index| research_cat(type_index) == category && state.tech.get(type_index))
+        .count() as i32
+}
+
+/// Execute the generic `Leader::lose_tech` body with the dependency scan and world work
+/// retained as mandatory ordered callbacks. [measured, `0x006D2850..0x006D2B0A`]
+pub fn execute_lose_tech_cohort<H: TechOneShotHost>(
+    state: &mut TechState,
+    type_index: i32,
+    host: &mut H,
+) -> Result<LoseTechCohortReceipt, TechOneShotError> {
+    let counter_class = tech_counter_class(type_index);
+    let resource = host.lose_type_is_resource(type_index);
+    let removable = resource || host.lose_type_is_removable(type_index);
+    if !removable {
+        require_tech_mutation(state, host, TechOneShotMutation::ResetObservationFlags)?;
+        state.dirty_flags |= TECH_EFFECTS_FINAL_DIRTY;
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY),
+        )?;
+        return Ok(LoseTechCohortReceipt {
+            type_index,
+            removed: false,
+            counter_class,
+        });
+    }
+
+    let before = state.counters;
+    state.tech.set(type_index, false);
+    if resource {
+        state.counters.discovered = state.counters.discovered.wrapping_sub(1);
+    }
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::SetTechBit {
+            type_index,
+            held: false,
+        },
+    )?;
+
+    if !resource {
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::CompleteLoseDependentSweep(type_index),
+        )?;
+        require_tech_mutation(state, host, TechOneShotMutation::FixTechFlags)?;
+        match counter_class {
+            TechCounterClass::Age => {
+                require_tech_mutation(state, host, TechOneShotMutation::OutdateCamera)?;
+                state.counters.ages = recompute_age_count(state);
+            }
+            TechCounterClass::Epoch(category) => {
+                state.counters.epochs = state.counters.epochs.wrapping_sub(1);
+                state.counters.epoch[category as usize] = recompute_epoch_category(state, category);
+            }
+            TechCounterClass::Discovered => {
+                state.counters.discovered = state.counters.discovered.wrapping_sub(1);
+            }
+        }
+    }
+
+    if state.counters != before {
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::CounterChanged {
+                type_index,
+                before,
+                after: state.counters,
+            },
+        )?;
+    }
+    if !resource && matches!(counter_class, TechCounterClass::Age) {
+        require_tech_mutation(
+            state,
+            host,
+            TechOneShotMutation::RefreshAgeConsumers(type_index),
+        )?;
+    }
+    if !resource {
+        require_tech_mutation(state, host, TechOneShotMutation::TerrainOilLose(type_index))?;
+    }
+    require_tech_mutation(state, host, TechOneShotMutation::ResetObservationFlags)?;
+    state.dirty_flags |= TECH_EFFECTS_FINAL_DIRTY;
+    require_tech_mutation(
+        state,
+        host,
+        TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY),
+    )?;
+    Ok(LoseTechCohortReceipt {
+        type_index,
+        removed: true,
+        counter_class,
+    })
+}
+
+pub const TECH_AUTO_UNLOCK_BUILD_FLAG: u32 = 0x4;
+pub const TECH_AUTO_UNLOCK_UNIT_FLAG: u32 = 0x80;
+pub const TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK: u32 = 0x0400_0000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechAutoUnlockClass {
+    Building,
+    Unit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechAutoUnlockMutation {
+    CheckCityUpgrades {
+        town_type: i32,
+    },
+    RecursivelyGain {
+        type_index: i32,
+        class: TechAutoUnlockClass,
+        coords: [i32; 2],
+        tail: [i32; 2],
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TechAutoUnlockMutationReceipt {
+    pub mutation: TechAutoUnlockMutation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TechAutoUnlockReceipt {
+    pub gained_type: i32,
+    pub city_upgrade_checks: usize,
+    pub recursive_buildings: usize,
+    pub recursive_units: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TechAutoUnlockError {
+    MutationReceiptMismatch {
+        expected: TechAutoUnlockMutation,
+        observed: TechAutoUnlockMutation,
+    },
+}
+
+/// Live type-table boundary for the two generic propagation sweeps at the end of
+/// `Leader::gain_tech`. Every query remains live because each recursive gain may change
+/// eligibility for a later ascending candidate.
+pub trait TechAutoUnlockHost {
+    fn has_prerequisite(&mut self, type_index: i32) -> bool;
+    fn effective_prerequisite_count(&mut self, type_index: i32) -> i32;
+    fn effective_prerequisite(&mut self, type_index: i32, slot: i32) -> i32;
+    fn candidate_is_town(&mut self, type_index: i32) -> bool;
+    fn building_flags(&mut self, type_index: i32) -> u32;
+    fn type_eligible(&mut self, type_index: i32, strict: i32) -> bool;
+    fn has_tech_live(&mut self, type_index: i32) -> bool;
+    fn unit_flags(&mut self, type_index: i32) -> u32;
+    fn unit_object_masks(&mut self, type_index: i32) -> u32;
+    fn apply_auto_unlock(
+        &mut self,
+        mutation: TechAutoUnlockMutation,
+    ) -> TechAutoUnlockMutationReceipt;
+}
+
+fn require_auto_unlock<H: TechAutoUnlockHost>(
+    host: &mut H,
+    expected: TechAutoUnlockMutation,
+) -> Result<(), TechAutoUnlockError> {
+    let observed = host.apply_auto_unlock(expected);
+    if observed.mutation != expected {
+        return Err(TechAutoUnlockError::MutationReceiptMismatch {
+            expected,
+            observed: observed.mutation,
+        });
+    }
+    Ok(())
+}
+
+/// Execute the two exact generic auto-unlock sweeps in `Leader::gain_tech`.
+/// [measured, `0x006DEBBE..0x006DED7F`]
+///
+/// Buildings/wonders are visited first in `[414,543)`, then units in `[50,402)`. Recursive
+/// gains use zero coordinates and tail `(0,1)`. The executor intentionally does not cache
+/// any host fact across candidates or recursion.
+pub fn execute_gain_tech_auto_unlocks<H: TechAutoUnlockHost>(
+    gained_type: i32,
+    host: &mut H,
+) -> Result<TechAutoUnlockReceipt, TechAutoUnlockError> {
+    let mut receipt = TechAutoUnlockReceipt {
+        gained_type,
+        city_upgrade_checks: 0,
+        recursive_buildings: 0,
+        recursive_units: 0,
+    };
+
+    for candidate in ty::VILLAGE..543 {
+        if !host.has_prerequisite(candidate) {
+            continue;
+        }
+        let count = host.effective_prerequisite_count(candidate).max(0);
+        let mut matched = false;
+        for slot in 0..count {
+            if host.effective_prerequisite(candidate, slot) == gained_type {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            continue;
+        }
+        if host.candidate_is_town(candidate) {
+            let mutation = TechAutoUnlockMutation::CheckCityUpgrades {
+                town_type: candidate,
+            };
+            require_auto_unlock(host, mutation)?;
+            receipt.city_upgrade_checks += 1;
+        }
+        if host.building_flags(candidate) & TECH_AUTO_UNLOCK_BUILD_FLAG != 0
+            && host.type_eligible(candidate, 1)
+        {
+            let mutation = TechAutoUnlockMutation::RecursivelyGain {
+                type_index: candidate,
+                class: TechAutoUnlockClass::Building,
+                coords: [0; 2],
+                tail: [0, 1],
+            };
+            require_auto_unlock(host, mutation)?;
+            receipt.recursive_buildings += 1;
+        }
+    }
+
+    for candidate in 50..402 {
+        let preq0 = host.effective_prerequisite(candidate, 0);
+        let preq1 = if preq0 == gained_type {
+            preq0
+        } else {
+            host.effective_prerequisite(candidate, 1)
+        };
+        if preq0 != gained_type && preq1 != gained_type {
+            continue;
+        }
+        if !host.has_prerequisite(candidate)
+            || host.has_tech_live(candidate)
+            || host.unit_flags(candidate) & TECH_AUTO_UNLOCK_UNIT_FLAG == 0
+            || host.unit_object_masks(candidate) & TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK != 0
+            || !host.type_eligible(candidate, 1)
+        {
+            continue;
+        }
+        let mutation = TechAutoUnlockMutation::RecursivelyGain {
+            type_index: candidate,
+            class: TechAutoUnlockClass::Unit,
+            coords: [0; 2],
+            tail: [0, 1],
+        };
+        require_auto_unlock(host, mutation)?;
+        receipt.recursive_units += 1;
+    }
+    Ok(receipt)
 }
 
 /// `Leader::set_age(int age)` `0x006D25A0` — the age ladder, which is the clearest
@@ -2378,6 +3063,505 @@ mod tests {
         s.gain(ty::CLASSICAL_AGE);
         assert_eq!(s.counters.epochs, 1);
         assert_eq!(s.counters.discovered, 0);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum OneShotEvent {
+        Mutation(TechOneShotMutation),
+        ResourcePreq(usize, bool),
+        ResourceUnlock(usize, i32),
+        ResourceUnlockAmount(usize, i32),
+        ResourceSellTech(usize, i32),
+        ResourceAmount(usize, i32),
+        LoseIsResource(i32, bool),
+        LoseIsRemovable(i32, bool),
+    }
+
+    struct OneShotProbe {
+        resource_preq: [bool; NUM_RES],
+        resource_unlock: [i32; NUM_RES],
+        resource_unlock_amount: [i32; NUM_RES],
+        resource_sell_tech: [i32; NUM_RES],
+        resource_amounts: [Vec<i32>; NUM_RES],
+        lose_is_resource: bool,
+        lose_is_removable: bool,
+        mutation_override: Option<TechOneShotMutation>,
+        events: Vec<OneShotEvent>,
+    }
+
+    impl Default for OneShotProbe {
+        fn default() -> Self {
+            Self {
+                resource_preq: [false; NUM_RES],
+                resource_unlock: [-1; NUM_RES],
+                resource_unlock_amount: [0; NUM_RES],
+                resource_sell_tech: [-1; NUM_RES],
+                resource_amounts: std::array::from_fn(|_| Vec::new()),
+                lose_is_resource: false,
+                lose_is_removable: true,
+                mutation_override: None,
+                events: Vec::new(),
+            }
+        }
+    }
+
+    impl TechOneShotHost for OneShotProbe {
+        fn apply_tech_mutation(
+            &mut self,
+            _state: &TechState,
+            mutation: TechOneShotMutation,
+        ) -> TechOneShotMutationReceipt {
+            self.events.push(OneShotEvent::Mutation(mutation));
+            TechOneShotMutationReceipt {
+                mutation: self.mutation_override.unwrap_or(mutation),
+            }
+        }
+
+        fn resource_prerequisite_held(&mut self, resource: usize) -> bool {
+            let value = self.resource_preq[resource];
+            self.events
+                .push(OneShotEvent::ResourcePreq(resource, value));
+            value
+        }
+
+        fn resource_unlock_tech(&mut self, resource: usize) -> i32 {
+            let value = self.resource_unlock[resource];
+            self.events
+                .push(OneShotEvent::ResourceUnlock(resource, value));
+            value
+        }
+
+        fn resource_unlock_amount(&mut self, resource: usize) -> i32 {
+            let value = self.resource_unlock_amount[resource];
+            self.events
+                .push(OneShotEvent::ResourceUnlockAmount(resource, value));
+            value
+        }
+
+        fn resource_sell_tech(&mut self, resource: usize) -> i32 {
+            let value = self.resource_sell_tech[resource];
+            self.events
+                .push(OneShotEvent::ResourceSellTech(resource, value));
+            value
+        }
+
+        fn resource_amount(&mut self, resource: usize) -> i32 {
+            let value = self.resource_amounts[resource].remove(0);
+            self.events
+                .push(OneShotEvent::ResourceAmount(resource, value));
+            value
+        }
+
+        fn lose_type_is_resource(&mut self, type_index: i32) -> bool {
+            self.events.push(OneShotEvent::LoseIsResource(
+                type_index,
+                self.lose_is_resource,
+            ));
+            self.lose_is_resource
+        }
+
+        fn lose_type_is_removable(&mut self, type_index: i32) -> bool {
+            self.events.push(OneShotEvent::LoseIsRemovable(
+                type_index,
+                self.lose_is_removable,
+            ));
+            self.lose_is_removable
+        }
+    }
+
+    struct AutoUnlockProbe {
+        has_prerequisite: Vec<bool>,
+        prerequisites: Vec<Vec<i32>>,
+        is_town: Vec<bool>,
+        building_flags: Vec<u32>,
+        eligible: Vec<bool>,
+        held: Vec<bool>,
+        unit_flags: Vec<u32>,
+        object_masks: Vec<u32>,
+        mutation_override: Option<TechAutoUnlockMutation>,
+        mutations: Vec<TechAutoUnlockMutation>,
+    }
+
+    impl Default for AutoUnlockProbe {
+        fn default() -> Self {
+            Self {
+                has_prerequisite: vec![false; ty::NUM_TYPES],
+                prerequisites: vec![Vec::new(); ty::NUM_TYPES],
+                is_town: vec![false; ty::NUM_TYPES],
+                building_flags: vec![0; ty::NUM_TYPES],
+                eligible: vec![false; ty::NUM_TYPES],
+                held: vec![false; ty::NUM_TYPES],
+                unit_flags: vec![0; ty::NUM_TYPES],
+                object_masks: vec![0; ty::NUM_TYPES],
+                mutation_override: None,
+                mutations: Vec::new(),
+            }
+        }
+    }
+
+    impl TechAutoUnlockHost for AutoUnlockProbe {
+        fn has_prerequisite(&mut self, type_index: i32) -> bool {
+            self.has_prerequisite[type_index as usize]
+        }
+
+        fn effective_prerequisite_count(&mut self, type_index: i32) -> i32 {
+            self.prerequisites[type_index as usize].len() as i32
+        }
+
+        fn effective_prerequisite(&mut self, type_index: i32, slot: i32) -> i32 {
+            self.prerequisites[type_index as usize]
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(-1)
+        }
+
+        fn candidate_is_town(&mut self, type_index: i32) -> bool {
+            self.is_town[type_index as usize]
+        }
+
+        fn building_flags(&mut self, type_index: i32) -> u32 {
+            self.building_flags[type_index as usize]
+        }
+
+        fn type_eligible(&mut self, type_index: i32, strict: i32) -> bool {
+            assert_eq!(strict, 1);
+            self.eligible[type_index as usize]
+        }
+
+        fn has_tech_live(&mut self, type_index: i32) -> bool {
+            self.held[type_index as usize]
+        }
+
+        fn unit_flags(&mut self, type_index: i32) -> u32 {
+            self.unit_flags[type_index as usize]
+        }
+
+        fn unit_object_masks(&mut self, type_index: i32) -> u32 {
+            self.object_masks[type_index as usize]
+        }
+
+        fn apply_auto_unlock(
+            &mut self,
+            mutation: TechAutoUnlockMutation,
+        ) -> TechAutoUnlockMutationReceipt {
+            self.mutations.push(mutation);
+            TechAutoUnlockMutationReceipt {
+                mutation: self.mutation_override.unwrap_or(mutation),
+            }
+        }
+    }
+
+    #[test]
+    fn gain_tech_auto_unlocks_scan_buildings_then_units_with_live_filters() {
+        let gained_type = 600;
+        let mut host = AutoUnlockProbe::default();
+
+        host.has_prerequisite[ty::TOWN as usize] = true;
+        host.prerequisites[ty::TOWN as usize] = vec![gained_type];
+        host.is_town[ty::TOWN as usize] = true;
+
+        host.has_prerequisite[ty::UNIVERSITY as usize] = true;
+        host.prerequisites[ty::UNIVERSITY as usize] = vec![599, gained_type];
+        host.building_flags[ty::UNIVERSITY as usize] = TECH_AUTO_UNLOCK_BUILD_FLAG;
+        host.eligible[ty::UNIVERSITY as usize] = true;
+
+        host.prerequisites[60] = vec![gained_type, -1];
+        host.has_prerequisite[60] = true;
+        host.unit_flags[60] = TECH_AUTO_UNLOCK_UNIT_FLAG;
+        host.eligible[60] = true;
+
+        // A held candidate and an excluded object class both match the gained prereq, but
+        // retail filters them before the recursive callback.
+        host.prerequisites[61] = vec![-1, gained_type];
+        host.has_prerequisite[61] = true;
+        host.held[61] = true;
+        host.unit_flags[61] = TECH_AUTO_UNLOCK_UNIT_FLAG;
+        host.eligible[61] = true;
+        host.prerequisites[62] = vec![gained_type, -1];
+        host.has_prerequisite[62] = true;
+        host.unit_flags[62] = TECH_AUTO_UNLOCK_UNIT_FLAG;
+        host.object_masks[62] = TECH_AUTO_UNLOCK_EXCLUDED_OBJ_MASK;
+        host.eligible[62] = true;
+
+        assert_eq!(
+            execute_gain_tech_auto_unlocks(gained_type, &mut host).unwrap(),
+            TechAutoUnlockReceipt {
+                gained_type,
+                city_upgrade_checks: 1,
+                recursive_buildings: 1,
+                recursive_units: 1,
+            }
+        );
+        assert_eq!(
+            host.mutations,
+            vec![
+                TechAutoUnlockMutation::CheckCityUpgrades {
+                    town_type: ty::TOWN,
+                },
+                TechAutoUnlockMutation::RecursivelyGain {
+                    type_index: ty::UNIVERSITY,
+                    class: TechAutoUnlockClass::Building,
+                    coords: [0, 0],
+                    tail: [0, 1],
+                },
+                TechAutoUnlockMutation::RecursivelyGain {
+                    type_index: 60,
+                    class: TechAutoUnlockClass::Unit,
+                    coords: [0, 0],
+                    tail: [0, 1],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gain_tech_auto_unlocks_fail_closed_on_callback_receipt_drift() {
+        let gained_type = 600;
+        let expected = TechAutoUnlockMutation::RecursivelyGain {
+            type_index: ty::UNIVERSITY,
+            class: TechAutoUnlockClass::Building,
+            coords: [0, 0],
+            tail: [0, 1],
+        };
+        let observed = TechAutoUnlockMutation::CheckCityUpgrades {
+            town_type: ty::TOWN,
+        };
+        let mut host = AutoUnlockProbe {
+            mutation_override: Some(observed),
+            ..AutoUnlockProbe::default()
+        };
+        host.has_prerequisite[ty::UNIVERSITY as usize] = true;
+        host.prerequisites[ty::UNIVERSITY as usize] = vec![gained_type];
+        host.building_flags[ty::UNIVERSITY as usize] = TECH_AUTO_UNLOCK_BUILD_FLAG;
+        host.eligible[ty::UNIVERSITY as usize] = true;
+
+        assert_eq!(
+            execute_gain_tech_auto_unlocks(gained_type, &mut host),
+            Err(TechAutoUnlockError::MutationReceiptMismatch { expected, observed })
+        );
+        assert_eq!(host.mutations, vec![expected]);
+    }
+
+    #[test]
+    fn gain_tech_cohort_orders_age_counter_resource_unlock_sell_and_tail() {
+        let mut state = TechState::default();
+        let before = state.counters;
+        let after = TechCounters { ages: 1, ..before };
+        let mut host = OneShotProbe::default();
+        host.resource_preq[RES_TIMBER] = true;
+        host.resource_unlock[RES_FOOD] = ty::CLASSICAL_AGE;
+        host.resource_unlock[RES_TIMBER] = ty::CLASSICAL_AGE;
+        host.resource_unlock_amount[RES_FOOD] = 5;
+        host.resource_sell_tech[RES_METAL] = ty::CLASSICAL_AGE;
+        host.resource_amounts[RES_METAL] = vec![250, 150, 100];
+
+        let receipt = execute_gain_tech_cohort(
+            &mut state,
+            ty::CLASSICAL_AGE,
+            GainTechCohortContext {
+                grant_scale: TechResourceGrantScale::Multiply(2),
+                unlimited_resources: true,
+                classical_knowledge_bonus: Some(7),
+                local_player: true,
+                game_frame: 123,
+                ..GainTechCohortContext::default()
+            },
+            &mut host,
+        )
+        .unwrap();
+        assert_eq!(
+            receipt,
+            GainTechCohortReceipt {
+                type_index: ty::CLASSICAL_AGE,
+                was_new: true,
+                counter_class: TechCounterClass::Age,
+                resource_grants: 2,
+                resource_sales: 2,
+            }
+        );
+        assert!(state.tech.get(ty::CLASSICAL_AGE));
+        assert_eq!(state.counters, after);
+        assert_eq!(
+            state.dirty_flags,
+            TECH_GAIN_ENTER_DIRTY | TECH_GAIN_RESOURCES_DIRTY | TECH_EFFECTS_FINAL_DIRTY
+        );
+
+        let mutations: Vec<_> = host
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                OneShotEvent::Mutation(mutation) => Some(*mutation),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            mutations,
+            vec![
+                TechOneShotMutation::OrDirtyFlags(TECH_GAIN_ENTER_DIRTY),
+                TechOneShotMutation::MarkGameTechDirty,
+                TechOneShotMutation::CounterChanged {
+                    type_index: ty::CLASSICAL_AGE,
+                    before,
+                    after,
+                },
+                TechOneShotMutation::RefreshAgeInterface,
+                TechOneShotMutation::RecordAgeStamp {
+                    type_index: ty::CLASSICAL_AGE,
+                    slot: 0,
+                    frame: 123,
+                },
+                TechOneShotMutation::CompleteGainPreBitEffects(ty::CLASSICAL_AGE),
+                TechOneShotMutation::SetTechBit {
+                    type_index: ty::CLASSICAL_AGE,
+                    held: true,
+                },
+                TechOneShotMutation::CompleteGainAfterBitEffects(ty::CLASSICAL_AGE),
+                TechOneShotMutation::OrDirtyFlags(TECH_GAIN_RESOURCES_DIRTY),
+                TechOneShotMutation::GrantResource {
+                    resource: RES_FOOD,
+                    amount: 10,
+                },
+                TechOneShotMutation::SetResourceAmount {
+                    resource: RES_FOOD,
+                    amount: TECH_UNLIMITED_RESOURCE_AMOUNT,
+                },
+                TechOneShotMutation::SellResource {
+                    resource: RES_METAL,
+                    mode: 0,
+                },
+                TechOneShotMutation::SellResource {
+                    resource: RES_METAL,
+                    mode: 0,
+                },
+                TechOneShotMutation::GrantResource {
+                    resource: RES_KNOWLEDGE,
+                    amount: 14,
+                },
+                TechOneShotMutation::CompleteGainPostResourceEffects(ty::CLASSICAL_AGE),
+                TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY),
+                TechOneShotMutation::RefreshAgeConsumers(ty::CLASSICAL_AGE),
+                TechOneShotMutation::TerrainOilGain(ty::CLASSICAL_AGE),
+            ]
+        );
+
+        let bit_event = host
+            .events
+            .iter()
+            .position(|event| {
+                *event
+                    == OneShotEvent::Mutation(TechOneShotMutation::SetTechBit {
+                        type_index: ty::CLASSICAL_AGE,
+                        held: true,
+                    })
+            })
+            .unwrap();
+        assert_eq!(
+            &host.events[bit_event - NUM_RES..bit_event],
+            &[
+                OneShotEvent::ResourcePreq(RES_FOOD, false),
+                OneShotEvent::ResourcePreq(RES_TIMBER, true),
+                OneShotEvent::ResourcePreq(RES_WEALTH, false),
+                OneShotEvent::ResourcePreq(RES_KNOWLEDGE, false),
+                OneShotEvent::ResourcePreq(RES_METAL, false),
+                OneShotEvent::ResourcePreq(RES_OIL, false),
+            ]
+        );
+        assert_eq!(
+            host.events
+                .iter()
+                .filter_map(|event| match event {
+                    OneShotEvent::ResourceAmount(resource, amount) => Some((*resource, *amount)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![(RES_METAL, 250), (RES_METAL, 150), (RES_METAL, 100)]
+        );
+    }
+
+    #[test]
+    fn lose_tech_cohort_recomputes_epoch_category_before_world_tail() {
+        let mut state = TechState::default();
+        state.tech.set(551, true);
+        state.tech.set(552, true);
+        state.counters.epochs = 2;
+        state.counters.epoch[ResearchCat::Science as usize] = 2;
+        let before = state.counters;
+        let after = TechCounters {
+            epochs: 1,
+            epoch: [0, 0, 0, 1],
+            ..before
+        };
+        let mut host = OneShotProbe::default();
+
+        assert_eq!(
+            execute_lose_tech_cohort(&mut state, 551, &mut host).unwrap(),
+            LoseTechCohortReceipt {
+                type_index: 551,
+                removed: true,
+                counter_class: TechCounterClass::Epoch(ResearchCat::Science),
+            }
+        );
+        assert!(!state.tech.get(551));
+        assert!(state.tech.get(552));
+        assert_eq!(state.counters, after);
+        assert_eq!(
+            host.events,
+            vec![
+                OneShotEvent::LoseIsResource(551, false),
+                OneShotEvent::LoseIsRemovable(551, true),
+                OneShotEvent::Mutation(TechOneShotMutation::SetTechBit {
+                    type_index: 551,
+                    held: false,
+                }),
+                OneShotEvent::Mutation(TechOneShotMutation::CompleteLoseDependentSweep(551)),
+                OneShotEvent::Mutation(TechOneShotMutation::FixTechFlags),
+                OneShotEvent::Mutation(TechOneShotMutation::CounterChanged {
+                    type_index: 551,
+                    before,
+                    after,
+                }),
+                OneShotEvent::Mutation(TechOneShotMutation::TerrainOilLose(551)),
+                OneShotEvent::Mutation(TechOneShotMutation::ResetObservationFlags),
+                OneShotEvent::Mutation(
+                    TechOneShotMutation::OrDirtyFlags(TECH_EFFECTS_FINAL_DIRTY,)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn gain_tech_cohort_fails_closed_on_receipt_and_non_decreasing_sell() {
+        let mut state = TechState::default();
+        let expected = TechOneShotMutation::OrDirtyFlags(TECH_GAIN_ENTER_DIRTY);
+        let observed = TechOneShotMutation::ResetObservationFlags;
+        let mut host = OneShotProbe {
+            mutation_override: Some(observed),
+            ..OneShotProbe::default()
+        };
+        assert_eq!(
+            execute_gain_tech_cohort(&mut state, 600, GainTechCohortContext::default(), &mut host,),
+            Err(TechOneShotError::MutationReceiptMismatch { expected, observed })
+        );
+        assert_eq!(host.events, vec![OneShotEvent::Mutation(expected)]);
+
+        let mut state = TechState::default();
+        let mut host = OneShotProbe::default();
+        host.resource_sell_tech[RES_OIL] = 600;
+        host.resource_amounts[RES_OIL] = vec![150, 150];
+        assert_eq!(
+            execute_gain_tech_cohort(&mut state, 600, GainTechCohortContext::default(), &mut host,),
+            Err(TechOneShotError::SellDidNotReduceResource {
+                resource: RES_OIL,
+                before: 150,
+                after: 150,
+            })
+        );
+        assert!(!host.events.iter().any(|event| {
+            matches!(
+                event,
+                OneShotEvent::Mutation(TechOneShotMutation::CompleteGainPostResourceEffects(_))
+            )
+        }));
     }
 
     #[test]
