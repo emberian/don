@@ -69,6 +69,7 @@ use don_sim::systems::combat::{
     PoorTargetInput, RANGE_UNITS_PER_TILE,
 };
 use don_sim::systems::fight::{plan_direct_land_volley, AimMode, UnitVolleyInput, UnitVolleyPlan};
+use don_sim::systems::gather_lifecycle::OrdinaryGatherKind;
 use don_sim::systems::groups_guys::{GuyEnv, UnitGuys, UnitTypeStats};
 use don_sim::systems::held_target::{
     attack_distance, AttackDistanceInput, AttackDistanceMode, ObjectFootprint,
@@ -84,6 +85,9 @@ use don_sim::systems::target::{
 };
 
 use super::cmd::{Cmd, EntId};
+use super::gather_runtime::{
+    ArenaGatherRuntime, GatherCapacityAuthority, GatherObjectKey, GatherPrerequisiteRefusal,
+};
 use super::map::{Map, Spatial, Terrain};
 use super::types::{Roster, TypeRow, Types};
 use crate::orders::OrderResult;
@@ -154,6 +158,24 @@ impl Ids {
             art_of_war: find("The Art of War", false)?,
         })
     }
+}
+
+fn ordinary_gather_kind(ids: &Ids, type_id: i32) -> Option<OrdinaryGatherKind> {
+    if type_id == ids.farm {
+        Some(OrdinaryGatherKind::Farm)
+    } else if type_id == ids.camp {
+        Some(OrdinaryGatherKind::Camp)
+    } else if type_id == ids.mine {
+        Some(OrdinaryGatherKind::Mine)
+    } else {
+        None
+    }
+}
+
+fn gather_key(owner: u8, id: EntId) -> Option<GatherObjectKey> {
+    ArenaGatherRuntime::object_index(id.index()?)
+        .ok()
+        .map(|o| GatherObjectKey { owner, o })
 }
 
 /// Why a placement is illegal. Returned rather than a bool because a bot that cannot tell
@@ -369,6 +391,10 @@ pub struct World {
     collision_world: don_sim::systems::map_terrain::World,
     collision_check: CollCheck,
     collision_units: CollisionUnits,
+    /// Exact persistent `(who,o,uid)` ordinary-gather state. The built-in map generator
+    /// fails its retail prerequisite preflight and continues only through the separately
+    /// labelled MODEL 3 gameplay path below.
+    gather_runtime: ArenaGatherRuntime,
     /// `World::wdata`'s target-acquisition chains and checksummed near/targeted fields.
     target_world: TargetWorld,
     target_circle: CircleTable,
@@ -896,6 +922,7 @@ impl World {
             collision_world,
             collision_check: CollCheck::new(),
             collision_units: CollisionUnits::default(),
+            gather_runtime: ArenaGatherRuntime::default(),
             target_world,
             target_circle: circle_table(),
             age_techs,
@@ -1082,6 +1109,29 @@ impl World {
                 .place_at(target_ref(ent), target_row(ent, &t, &self.ids)),
             "every arena object must occupy its stable retail target slot"
         );
+        let key = GatherObjectKey {
+            owner: who,
+            o: ArenaGatherRuntime::object_index(
+                id.index()
+                    .expect("a spawned Arena entity has a stable slot"),
+            )
+            .expect("Arena object slots must fit retail's signed object identity"),
+        };
+        if type_id == self.ids.citizen {
+            self.gather_runtime
+                .register_worker(key, type_id)
+                .expect("Arena entity slots never recycle within a World");
+        }
+        if let Some(kind) = ordinary_gather_kind(&self.ids, type_id) {
+            let capacity = if kind == OrdinaryGatherKind::Farm {
+                GatherCapacityAuthority::FlatFarmOne
+            } else {
+                GatherCapacityAuthority::MissingRetailTerrainSource
+            };
+            self.gather_runtime
+                .register_site(key, 1, kind, capacity)
+                .expect("Arena entity slots never recycle within a World");
+        }
         id
     }
 
@@ -1380,15 +1430,53 @@ impl World {
                 let Some(b) = self.ent(target) else {
                     return OrderResult::Invalid;
                 };
-                if b.who != who || !b.building || !b.complete || b.worker_cap <= 0 {
+                let (target_owner, target_type, building, complete, workers, worker_cap) = (
+                    b.who,
+                    b.type_id,
+                    b.building,
+                    b.complete,
+                    b.workers,
+                    b.worker_cap,
+                );
+                if target_owner != who || !building || !complete || worker_cap <= 0 {
                     return OrderResult::Invalid;
                 }
-                if b.workers >= b.worker_cap {
+                if workers >= worker_cap {
                     return OrderResult::Refused;
                 }
                 if self.ty(unit).map(|t| t.id) != Some(self.ids.citizen) {
                     return OrderResult::Invalid;
                 }
+                let Some(kind) = ordinary_gather_kind(&self.ids, target_type) else {
+                    return OrderResult::Invalid;
+                };
+                let (Some(worker_key), Some(site_key)) =
+                    (gather_key(who, unit), gather_key(target_owner, target))
+                else {
+                    return OrderResult::Invalid;
+                };
+                let Ok(refusal) = self
+                    .gather_runtime
+                    .generated_map_preflight(worker_key, site_key, kind)
+                else {
+                    return OrderResult::Invalid;
+                };
+                debug_assert!(matches!(
+                    (kind, refusal),
+                    (
+                        OrdinaryGatherKind::Farm,
+                        GatherPrerequisiteRefusal::FarmUpdateAndGameGlobal
+                    ) | (
+                        OrdinaryGatherKind::Camp,
+                        GatherPrerequisiteRefusal::CampTerrainGeometryAndOrderedCollision
+                    ) | (
+                        OrdinaryGatherKind::Mine,
+                        GatherPrerequisiteRefusal::MineObjectTerrainGeometryAndOrderedCollision
+                    )
+                ));
+                // The generated map is explicitly not a fidelity source.  This command
+                // therefore remains on the labelled MODEL 3 gameplay path; the exact
+                // runtime above refused before linking or consuming RNG.
                 self.detach(unit);
                 self.ent_mut(unit).unwrap().job = Job::Gather { target };
                 OrderResult::Ok(1)
@@ -1419,8 +1507,10 @@ impl World {
     /// worker cannot be counted twice.
     fn detach(&mut self, unit: EntId) {
         let Some(e) = self.ent(unit) else { return };
+        let worker_owner = e.who;
         let seat = e.assigned_to;
         let was_gathering = matches!(e.job, Job::Gather { .. });
+        self.retire_exact_gather(worker_owner, unit);
         if let Some(b) = self.ent_mut(seat) {
             if was_gathering {
                 b.workers = (b.workers - 1).max(0);
@@ -1434,6 +1524,22 @@ impl World {
                 u.unit_masks &= !order_dispatch::masks::PATH_EXHAUSTED;
             }
         }
+    }
+
+    fn retire_exact_gather(&mut self, owner: u8, unit: EntId) {
+        let Some(worker_key) = gather_key(owner, unit) else {
+            return;
+        };
+        if !self.gather_runtime.has_exact_order(worker_key) {
+            return;
+        }
+        let site_key = self
+            .gather_runtime
+            .exact_site_for_worker(worker_key)
+            .expect("an exact Gather order retains its generational target identity");
+        self.gather_runtime
+            .retire_exact(worker_key, site_key)
+            .expect("exact Gather retirement must preserve a valid owner-local chain");
     }
 
     fn queue_up(&mut self, pi: usize, producer: EntId, type_id: i32, count: u16) -> OrderResult {
@@ -1577,8 +1683,19 @@ impl World {
         }
         for e in self.own_ents(pi) {
             if e.building {
-                if e.complete && e.workers > 0 {
-                    gross[e.gather_res] += self.types.constants.peasant_rate * e.workers;
+                let active_workers = if ordinary_gather_kind(&self.ids, e.type_id).is_some() {
+                    gather_key(e.who, e.id)
+                        .and_then(|key| {
+                            self.gather_runtime
+                                .exact_active_workers(key)
+                                .expect("registered gather site keeps a valid exact chain")
+                        })
+                        .unwrap_or(e.workers)
+                } else {
+                    e.workers
+                };
+                if e.complete && active_workers > 0 {
+                    gross[e.gather_res] += self.types.constants.peasant_rate * active_workers;
                 }
             } else if let Some(u) = self.types.upkeep.get(&e.type_id) {
                 for r in 0..NRES {
@@ -2378,13 +2495,19 @@ impl World {
                     .filter_map(|(i, o)| (o.alive && o.assigned_to == e.id).then_some(i))
                     .collect();
                 for i in released {
+                    let worker_id = self.ents[i].id;
+                    let worker_owner = self.ents[i].who;
+                    self.retire_exact_gather(worker_owner, worker_id);
                     self.retire_motion_order(i, KillReason::Failed);
                     self.ents[i].assigned_to = EntId::NONE;
                     self.ents[i].job = Job::Idle;
                 }
-            } else if let Some(b) = self.ent_mut(e.assigned_to) {
-                if matches!(e.job, Job::Gather { .. }) {
-                    b.workers = (b.workers - 1).max(0);
+            } else {
+                self.retire_exact_gather(e.who, e.id);
+                if let Some(b) = self.ent_mut(e.assigned_to) {
+                    if matches!(e.job, Job::Gather { .. }) {
+                        b.workers = (b.workers - 1).max(0);
+                    }
                 }
             }
             let n = self
@@ -3146,6 +3269,61 @@ impl WorkWorld for ArenaMoveWorld<'_> {
                 MoveCollisionReply::Handled
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gather_integration {
+    use super::*;
+    use crate::arena::match_run::{load_world, MatchConfig};
+    use don_sim::systems::collision::CollUnits;
+
+    #[test]
+    fn generated_gather_command_hits_typed_exact_refusal_without_partial_attachment() {
+        let Ok(mut w) = load_world(&MatchConfig::default()) else {
+            return;
+        };
+        let farm = w
+            .own_ents(0)
+            .find(|ent| ent.type_id == w.ids.farm)
+            .expect("Small Town start has a Farm")
+            .id;
+        let worker = w
+            .own_ents(0)
+            .find(|ent| ent.type_id == w.ids.citizen)
+            .expect("Small Town start has a Citizen")
+            .id;
+        let wi = worker.index().unwrap();
+        let worker_o = i32::try_from(wi).unwrap();
+        let before_runtime = w.gather_runtime.clone();
+        let before_collision = w
+            .collision_units
+            .row(0, worker_o)
+            .expect("Citizen has an on-map collision row");
+
+        assert_eq!(
+            w.submit(
+                0,
+                Cmd::Gather {
+                    unit: worker,
+                    target: farm,
+                },
+            ),
+            OrderResult::Ok(1)
+        );
+        assert_eq!(
+            w.gather_runtime, before_runtime,
+            "MODEL 3 gameplay cannot partially enter the exact gather chain"
+        );
+        assert!(matches!(w.ent(worker).unwrap().job, Job::Gather { target } if target == farm));
+        assert_eq!(
+            w.collision_units.row(0, worker_o),
+            Some(before_collision),
+            "ordinary Gather assignment never seats or teleports the worker"
+        );
+
+        assert_eq!(w.submit(0, Cmd::Halt { unit: worker }), OrderResult::Ok(1));
+        assert_eq!(w.collision_units.row(0, worker_o), Some(before_collision));
     }
 }
 

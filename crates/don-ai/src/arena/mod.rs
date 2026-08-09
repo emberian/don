@@ -19,6 +19,7 @@
 //! |---|---|
 //! | [`types`] | the roster, from the live type tables (`TypeIndex` + every combat field) |
 //! | [`map`] | terrain, the shipped placement radii, a provably fair generator |
+//! | `gather_runtime` | persistent retail gather identity plus transactional exact lifecycle/refusal |
 //! | [`cmd`] | the command set — each variant *is* a `don-env` unit verb, round-trippable to its ten action heads |
 //! | [`world`] | the simulation: economy, construction, production, movement, combat, fog, defeat |
 //! | [`obs`] | the fog-limited view a bot decides from |
@@ -37,6 +38,7 @@
 pub mod bots;
 pub mod cmd;
 pub mod eval;
+mod gather_runtime;
 pub mod map;
 pub mod match_run;
 pub mod obs;
