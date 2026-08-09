@@ -1,0 +1,7 @@
+scenario
+{
+    run_once
+    {
+        value = 1;
+    }
+}

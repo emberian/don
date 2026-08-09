@@ -544,15 +544,19 @@ fn fabricate_messages(m: &Mapped) -> u32 {
 /// diagnostic table behind `gErrorSystem`; aliasing the two happened to avoid a null
 /// dereference, but concealed which dependency was still missing.
 ///
-/// These six indices were read directly from the retail install. Five are copied by
-/// `ScriptGameInterfaceBase::init` (`0x009d5a60`) as the language's builtin scalar
-/// names; `UseBytecodeDump` is queried by `Compiler::init` (`0x009bea00`). All other
-/// entries remain empty and therefore fail closed instead of acquiring a plausible
-/// invented spelling.
+/// These nine indices were read directly from the supported retail install's shipped
+/// `Data/internal_strings.xml`. Five are copied by `ScriptGameInterfaceBase::init`
+/// (`0x009d5a60`) as the language's builtin scalar names; three are copied by
+/// `SymTable::init_root` (`0x009d8c80`) as the script qualifiers; `UseBytecodeDump` is
+/// queried by `Compiler::init` (`0x009bea00`). All other entries remain empty and
+/// therefore fail closed instead of acquiring a plausible invented spelling.
 fn fabricate_internal_strings(m: &Mapped) -> u32 {
     let table = unsafe { libc::calloc(MSG_COUNT, 20) } as *mut u8;
     assert!(!table.is_null());
     for (idx, value) in [
+        (1138, "conquest"),
+        (1649, "ai"),
+        (1669, "scenario"),
         (6114, "string"),
         (6115, "int"),
         (6966, "float"),
@@ -673,7 +677,15 @@ fn cmd_compile(args: &[String]) {
             std::process::exit(2);
         }
     };
-    let reload: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let reload: u32 = args
+        .get(3)
+        .filter(|s| s.as_str() != "--json")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let json_path = args
+        .windows(2)
+        .find(|w| w[0] == "--json")
+        .map(|w| w[1].clone());
     if std::env::var("BHS_TRACE_IO").is_ok() {
         unsafe { win::TRACE_IO = true };
     }
@@ -775,7 +787,7 @@ fn cmd_compile(args: &[String]) {
     }
 
     report_watches(&m);
-    dump_script_files(&m);
+    dump_script_files(&m, &src, rc as i32, json_path.as_deref());
 }
 
 fn report_watches(m: &Mapped) {
@@ -834,14 +846,130 @@ fn report_watches(m: &Mapped) {
     }
 }
 
-fn dump_script_files(m: &Mapped) {
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < ' ' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn bounded_array(base: u32, elem_size: u32) -> (u32, u32) {
+    let count = unsafe { std::ptr::read_unaligned((base + 4) as *const u32) };
+    let data = unsafe { std::ptr::read_unaligned((base + 0x10) as *const u32) };
+    assert!(elem_size != 0, "zero-sized capture element");
+    assert!(count <= 4096, "capture array count is unbounded: {count}");
+    assert!(
+        count == 0 || data >= 0x1000,
+        "non-empty capture array has an invalid pointer: {data:#010x}"
+    );
+    (count, data)
+}
+
+fn json_u32_array(base: u32) -> String {
+    let (count, data) = bounded_array(base, 4);
+    let values: Vec<String> = (0..count)
+        .map(|i| unsafe { std::ptr::read_unaligned((data + i * 4) as *const u32) }.to_string())
+        .collect();
+    format!("[{}]", values.join(","))
+}
+
+fn json_u8_array(base: u32) -> String {
+    let (count, data) = bounded_array(base, 1);
+    let values: Vec<String> = (0..count)
+        .map(|i| unsafe { *((data + i) as *const u8) }.to_string())
+        .collect();
+    format!("[{}]", values.join(","))
+}
+
+fn json_dynamic_bits(base: u32) -> String {
+    let size = unsafe { std::ptr::read_unaligned((base + 4) as *const u32) };
+    let data = unsafe { std::ptr::read_unaligned((base + 8) as *const u32) };
+    assert!(size <= 4096, "dynamic bit array size is unbounded: {size}");
+    assert!(
+        size == 0 || data >= 0x1000,
+        "non-empty dynamic bit array has an invalid pointer: {data:#010x}"
+    );
+    let values: Vec<String> = (0..size)
+        .map(|i| unsafe { *((data + i) as *const u8) }.to_string())
+        .collect();
+    format!("[{}]", values.join(","))
+}
+
+fn json_string_array(base: u32) -> String {
+    let (count, data) = bounded_array(base, 20);
+    let values: Vec<String> = (0..count)
+        .map(|i| json_string(&string_text(&read_string((data + i * 20) as *const u8))))
+        .collect();
+    format!("[{}]", values.join(","))
+}
+
+/// Normalize one retail `ScriptType*` into pointer-free JSON. Scalar layouts are from
+/// the matching PDB: tag at +4 and the int/float payload at +16; `ScriptString` embeds
+/// its retail `String` at +16. Unknown aggregate tags are retained as an explicit
+/// unsupported shape rather than guessed from their vtable.
+fn json_script_value(value: u32) -> String {
+    if value == 0 {
+        return "null".to_string();
+    }
+    let tag = unsafe { std::ptr::read_unaligned((value + 4) as *const u32) };
+    match tag {
+        0x0005_7bad => {
+            let v = unsafe { std::ptr::read_unaligned((value + 16) as *const i32) };
+            format!("{{\"type\":\"int\",\"tag\":{tag},\"value\":{v}}}")
+        }
+        0x0012_f35f => {
+            let bits = unsafe { std::ptr::read_unaligned((value + 16) as *const u32) };
+            format!("{{\"type\":\"real\",\"tag\":{tag},\"bits\":{bits}}}")
+        }
+        0x0016_8174 => {
+            let text = string_text(&read_string((value + 16) as *const u8));
+            format!(
+                "{{\"type\":\"string\",\"tag\":{tag},\"value\":{}}}",
+                json_string(&text)
+            )
+        }
+        _ => format!("{{\"type\":\"unsupported\",\"tag\":{tag}}}"),
+    }
+}
+
+fn json_value_ptr_array(base: u32) -> String {
+    let (count, data) = bounded_array(base, 4);
+    let values: Vec<String> = (0..count)
+        .map(|i| {
+            let p = unsafe { std::ptr::read_unaligned((data + i * 4) as *const u32) };
+            json_script_value(p)
+        })
+        .collect();
+    format!("[{}]", values.join(","))
+}
+
+fn dump_script_files(m: &Mapped, fixture: &str, compile_return: i32, json_path: Option<&str>) {
     // PtrArray<ScriptFile> ScriptFile::script_files: count at +4, data pointer at +0x10.
     let count = m.read_u32(VA_SCRIPT_FILES + 4);
     let data = m.read_u32(VA_SCRIPT_FILES + 0x10);
     println!("\n-- ScriptFile::script_files: count={count} data={data:#010x}");
     if count == 0 || count > 4096 || data == 0 {
+        if let Some(path) = json_path {
+            let body = format!(
+                "{{\n  \"schema_version\": 1,\n  \"fixture\": {},\n  \"compile_return\": {compile_return},\n  \"files\": []\n}}\n",
+                json_string(fixture)
+            );
+            let _ = std::fs::write(path, body);
+        }
         return;
     }
+    let mut json_files = Vec::new();
     for i in 0..count {
         let sf = unsafe { std::ptr::read_unaligned((data as *const u32).add(i as usize)) };
         if sf == 0 {
@@ -867,9 +995,18 @@ fn dump_script_files(m: &Mapped) {
             let _ = std::fs::write(&out, &bytes);
             println!("  written to {out}");
         }
+        let code_hex = if bufp != 0 && size < 1 << 20 {
+            (0..size)
+                .map(|k| format!("{:02x}", unsafe { *((bufp + k) as *const u8) }))
+                .collect::<String>()
+        } else {
+            String::new()
+        };
+        let const_pool = json_value_ptr_array(sf + 0x38);
         let nscripts = rd(0x20);
         let sdata = rd(0x2c);
         println!("  scripts: count={nscripts} data={sdata:#010x}");
+        let mut json_scripts = Vec::new();
         if sdata != 0 && nscripts > 0 && nscripts < 4096 {
             for k in 0..nscripts {
                 let sc = unsafe { std::ptr::read_unaligned((sdata as *const u32).add(k as usize)) };
@@ -884,7 +1021,46 @@ fn dump_script_files(m: &Mapped) {
                     "    script[{k}] {:?} offset={off} return_type={rt} script_type={st}",
                     string_text(&sname)
                 );
+                let trigger_count = unsafe { std::ptr::read_unaligned((sc + 0x58) as *const i32) };
+                json_scripts.push(format!(
+                    concat!(
+                        "{{\"name\":{},\"offset\":{},\"return_type\":{},",
+                        "\"script_type\":{},\"params\":{},\"refs\":{},",
+                        "\"statics\":{},\"trigger_count\":{},",
+                        "\"trigger_bits\":{},\"trigger_names\":{},",
+                        "\"var_names\":{},\"static_var_names\":{}}}"
+                    ),
+                    json_string(&string_text(&sname)),
+                    off,
+                    rt,
+                    st,
+                    json_u32_array(sc + 0x04),
+                    json_u8_array(sc + 0x20),
+                    json_value_ptr_array(sc + 0x3c),
+                    trigger_count,
+                    json_dynamic_bits(sc + 0x58),
+                    json_string_array(sc + 0x64),
+                    json_string_array(sc + 0x7c),
+                    json_string_array(sc + 0x94),
+                ));
             }
+        }
+        json_files.push(format!(
+            "{{\"source_file\":{},\"code_hex\":{},\"const_pool\":{const_pool},\"scripts\":[{}]}}",
+            json_string(&string_text(&name)),
+            json_string(&code_hex),
+            json_scripts.join(",")
+        ));
+    }
+    if let Some(path) = json_path {
+        let body = format!(
+            "{{\n  \"schema_version\": 1,\n  \"fixture\": {},\n  \"compile_return\": {compile_return},\n  \"files\": [{}]\n}}\n",
+            json_string(fixture),
+            json_files.join(",")
+        );
+        match std::fs::write(path, body) {
+            Ok(()) => println!("[bhs] wrote normalized capture {path}"),
+            Err(e) => eprintln!("[bhs] could not write normalized capture {path}: {e}"),
         }
     }
 }

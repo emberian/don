@@ -1,0 +1,4 @@
+scenario
+{
+    static int value = 1;
+}

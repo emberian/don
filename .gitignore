@@ -35,3 +35,4 @@ schema/live/rontoy-*.ndjson
 web/play-results*.json
 re/decomp-all/
 ron-data/replays/
+schema/bhs-compiler-regression.log
