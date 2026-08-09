@@ -88,7 +88,7 @@ const state = {
   settings: null,
   bindingCapture: null,
   settingsStatus: 'loading browser settings',
-  coreSaveStatus: 'core save/load ready; live supported Sim frames roundtrip and resume',
+  coreSaveStatus: 'core save/load ready at inactive setup boundary',
   replay: {
     events: [], baseline: null, headFrame: 0,
     applying: false, playback: false, restoring: false,
@@ -1202,6 +1202,7 @@ function initializeSessionPanel() {
   sizeOption.textContent = `${state.mod.tiles} × ${state.mod.tiles} tiles — fixed`;
 
   $('session-new').addEventListener('click', restartSessionFromPanel);
+  $('session-activate').addEventListener('click', activateSessionRoster);
   $('session-seed').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') restartSessionFromPanel();
   });
@@ -1210,6 +1211,21 @@ function initializeSessionPanel() {
   syncSessionUrl();
   renderSessionStatus();
   renderSessionSummary();
+}
+
+function activateSessionRoster() {
+  const roster = Array.from({ length: state.mod.playerCount }, (_, player) => player);
+  if (!state.mod.activatePlayers(roster)) return false;
+  $('session-activate').disabled = true;
+  $('core-save').disabled = true;
+  state.coreSaveStatus =
+    'live roster active — core save unavailable because active step-8/victory state is not serialized; load remains available';
+  $('core-save-status').textContent = state.coreSaveStatus;
+  syncSessionUrl();
+  renderSessionSummary();
+  renderObjectivesPanel();
+  say(`activated authoritative Sim roster ${roster.join(', ')}`, 'ok');
+  return true;
 }
 
 function restartSessionFromPanel() {
@@ -1258,6 +1274,9 @@ function resetClientForWorld(seed, paused, cameraSource) {
   state.mod.setIncomeMode(state.sessionIncomeMode);
   state.mod.setPopSetting(state.sessionPopSetting);
   state.sessionInitialDigest = state.mod.digest();
+  state.coreSaveStatus = 'core save/load ready at inactive setup boundary';
+  if ($('session-activate')) $('session-activate').disabled = false;
+  if ($('core-save')) $('core-save').disabled = !state.mod.supports('save');
   resetCommandFeedback();
   miniVersion = -1;
   miniTerrain = null;
@@ -1316,7 +1335,7 @@ function sessionUrl() {
   url.searchParams.set('size', `${state.mod.tiles}x${state.mod.tiles}`);
   url.searchParams.set('nation', 'unavailable');
   url.searchParams.set('team', `unconfigured-${state.mod.leader(state.who).team}`);
-  url.searchParams.set('slots', `${state.mod.playerCount}-manual`);
+  url.searchParams.set('slots', state.mod.activePlayers().join(','));
   url.searchParams.set('ai_slots', 'unavailable');
   url.searchParams.set('ai_difficulty', 'unavailable');
   url.searchParams.set('income', 'unavailable');
@@ -1373,7 +1392,8 @@ function sessionDescriptor() {
     team: leader.team,
     teamConfigured: leader.teamConfigured,
     teamMutable: false,
-    slots: state.mod.playerCount,
+    slots: state.mod.activePlayers().length,
+    activePlayers: state.mod.activePlayers(),
     aiSlots: 'unavailable',
     aiDifficulty: 'unavailable',
     income: 'unavailable',
@@ -1401,7 +1421,7 @@ function renderSessionSummary() {
   $('summary-player').textContent =
     `P${setup.player} · nation unavailable · unconfigured team slot ${setup.team} (read-only)`;
   $('summary-slots').textContent =
-    `${setup.slots} manual command perspectives · AI unavailable`;
+    `${setup.slots} active manual core leaders (${setup.activePlayers.join(', ')}) · AI unavailable`;
   $('summary-rules').textContent =
     `income unavailable · population unavailable · ${match.label} victory (read-only)`;
 }
@@ -1976,6 +1996,11 @@ function scratchReplayBaselineDigest(setup) {
   const game = x.game_create(parseSessionSeed(setup.seed), 0);
   if (!game) throw new Error('could not allocate a scratch world to validate the journal baseline');
   try {
+    for (const player of state.mod.activePlayers()) {
+      if (x.game_activate_player(game, player) !== 1) {
+        throw new Error(`scratch world refused active roster slot ${player}`);
+      }
+    }
     x.game_set_income_mode(game, INCOME_MODES.find((mode) => mode.slug === setup.income).value);
     x.game_set_pop_setting(game, POPULATION_LIMITS.indexOf(setup.population));
     x.game_step(game, 0);
@@ -3176,6 +3201,7 @@ window.don = {
     },
     url: () => sessionUrl().href,
     setup: () => sessionDescriptor(),
+    activate: () => activateSessionRoster(),
   },
   objectives: {
     snapshot: () => exportedWorldSnapshot(),
@@ -3271,6 +3297,12 @@ window.don = {
   freshDigest(seed = 0xc0ffee, frames = 600) {
     const x = state.mod.x;
     const g = x.game_create(seed >>> 0, 0);
+    for (const player of state.mod.activePlayers()) {
+      if (x.game_activate_player(g, player) !== 1) {
+        x.game_destroy(g);
+        throw new Error(`fresh digest world refused active roster slot ${player}`);
+      }
+    }
     x.game_step(g, frames);
     const lo = x.game_digest_lo(g) >>> 0, hi = x.game_digest_hi(g) >>> 0;
     const live = x.game_live(g);

@@ -226,8 +226,13 @@ try {
       sessionStatus: document.getElementById('session-status')?.textContent ?? '',
       sessionStatusLive: document.getElementById('session-status')?.getAttribute('aria-live') ?? '',
       sessionShare: !!document.getElementById('session-share'),
+      sessionActivate: !!document.getElementById('session-activate'),
       sessionSetup: window.don.session.setup(),
       sessionUrl: window.don.session.url(),
+      coreActivationExported: typeof m.x.game_activate_player === 'function',
+      unsupportedSetupExportsAbsent:
+        typeof m.x.game_set_team === 'undefined' &&
+        typeof m.x.game_set_victory_mode === 'undefined',
       sessionUnsupportedDisabled: [
         'session-map', 'session-size', 'session-nation',
         'session-ai-slots', 'session-ai-difficulty', 'income', 'popset',
@@ -313,6 +318,12 @@ try {
     ['the touch command dock is complete', out.ui.commandButtons >= 9],
     ['session setup exposes the deterministic seed', out.ui.sessionSeed === '0x00c0ffee'],
     ['session setup exposes every player perspective', out.ui.sessionPlayers >= 2],
+    ['explicit Sim roster activation is exposed but not hidden in world creation',
+      out.ui.coreActivationExported && out.ui.sessionActivate &&
+      JSON.stringify(out.ui.sessionSetup.activePlayers) === JSON.stringify([]) &&
+      !out.ui.coreLeader.active],
+    ['team and victory setters remain absent from the Wasm ABI',
+      out.ui.unsupportedSetupExportsAbsent],
     ['session identity and seed boundary are visible', out.ui.sessionStatus.includes('0x00c0ffee') &&
       out.ui.sessionStatus.includes('player 0') && out.ui.sessionStatus.includes('owned by don_sim::Sim')],
     ['session changes are announced', out.ui.sessionStatusLive === 'polite'],
@@ -700,7 +711,7 @@ try {
     ['the share URL records the fixed world, queried team, and missing player systems',
       out.session.urlMap === 'integration-land' && out.session.urlSize === '128x128' &&
       out.session.urlNation === 'unavailable' && out.session.urlTeam === 'unconfigured-0' &&
-      out.session.urlSlots === '4-manual' && out.session.urlAiSlots === 'unavailable' &&
+      out.session.urlSlots === '' && out.session.urlAiSlots === 'unavailable' &&
       out.session.urlAiDifficulty === 'unavailable'],
     ['the share URL records the read-only victory and unavailable rule hosts',
       out.session.urlIncome === 'unavailable' && out.session.urlPopulation === 'unavailable' &&
@@ -800,6 +811,28 @@ try {
       out.coreSave.resumed.frame === out.coreSave.advanced.frame + 1 &&
       out.coreSave.resumed.transport.ordersApplied > 0 &&
       out.coreSave.resumed.info.id === out.coreSave.before.first.id],
+  ]) {
+    if (!ok) { console.error(`FAIL: ${name}`); bad++; }
+  }
+
+  // Roster activation is deliberately after the save/resume gate: active step-8 and
+  // victory state are not in the current save format, so the UI must never imply otherwise.
+  out.activation = await c.eval(`(() => {
+    const d = window.don;
+    const activated = d.session.activate();
+    const leaders = Array.from({ length: d.state.mod.playerCount }, (_, p) => d.state.mod.leader(p));
+    const saveDisabled = document.getElementById('core-save').disabled;
+    const status = document.getElementById('core-save-status').textContent;
+    d.session.restart('0x1234abcd');
+    return JSON.stringify({ activated, leaders, saveDisabled, status,
+      afterRestart: d.state.mod.activePlayers() });
+  })()`).then(JSON.parse);
+  for (const [name, ok] of [
+    ['user-triggered roster activation reaches every authoritative Sim leader',
+      out.activation.activated && out.activation.leaders.every(leader => leader.active)],
+    ['active roster makes unsupported live save status explicit and restart returns to saveable setup',
+      out.activation.saveDisabled && out.activation.status.includes('not serialized') &&
+      out.activation.afterRestart.length === 0],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
   }

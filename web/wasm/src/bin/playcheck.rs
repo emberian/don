@@ -46,9 +46,24 @@ fn main() {
         .unwrap_or(600);
     let game = game_create(seed as u32, (seed >> 32) as u32);
     assert!(!game.is_null(), "game_create failed");
+    if digest_mode {
+        // Browser `freshDigest` reproduces the explicitly activated manual roster.
+        // Keep the default (non-digest) check at the inactive/saveable setup boundary.
+        for who in 0..4 {
+            assert_eq!(
+                unsafe { game_activate_player(game, who) },
+                1,
+                "manual roster activation failed for slot {who}"
+            );
+        }
+    }
     let initial_save = unsafe {
-        assert_eq!(game_save(game), 1, "initial authoritative save was refused");
-        game_save_len(game)
+        if digest_mode {
+            0
+        } else {
+            assert_eq!(game_save(game), 1, "initial authoritative save was refused");
+            game_save_len(game)
+        }
     };
     unsafe { game_step(game, frames) };
     let (live, frame, rng, digest) = unsafe {

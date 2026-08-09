@@ -1031,6 +1031,17 @@ impl Game {
                 self.core.leaders[owner].econ.age = completed_age;
                 self.core.leaders[owner].econ.age_alt = completed_age;
                 self.core.leaders[owner].econ.commerce_cap = caps;
+
+                // Step 8 synchronized its derived economy view before live production ran
+                // at step 14.  This browser adapter projects the completed age into the
+                // authoritative LeaderSlot after `do_frame`, so it must finish that same
+                // projection atomically.  Otherwise an immediate save observes a one-frame-
+                // old adapter view and correctly refuses it as non-reconstructible state.
+                let facade = &self.core.leaders[owner];
+                let mirror = &mut self.core.step8.leaders[owner];
+                mirror.econ = facade.econ;
+                mirror.last_calc_frame = facade.last_calc_frame;
+                mirror.econ_dirty = facade.dirty;
             }
             // The installed browser cohort has no opaque resource effects: its one-shot age
             // costs were charged to LeaderEcon before queueing. Keep the runtime mirror exact
@@ -1216,6 +1227,18 @@ pub extern "C" fn game_create(seed_lo: u32, seed_hi: u32) -> *mut Game {
     Box::into_raw(Box::new(Game::new(
         ((seed_hi as u64) << 32) | seed_lo as u64,
     )))
+}
+
+/// Activate one explicit browser roster slot through the authoritative Sim transaction.
+/// Invalid slots refuse without mutation. Team and victory setup remain read-only because
+/// neither has a corresponding complete Sim-owned setup transaction.
+#[no_mangle]
+pub unsafe extern "C" fn game_activate_player(g: *mut Game, who: u32) -> u32 {
+    if who as usize >= PLAYERS {
+        return 0;
+    }
+    game_ref!(g).core.activate(who as usize);
+    1
 }
 
 /// # Safety
@@ -1954,6 +1977,37 @@ mod tests {
     }
 
     #[test]
+    fn explicit_roster_activation_mutates_only_the_authoritative_sim_slot() {
+        let _stage = STAGE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        stage(&PLAYDATA).clear();
+        stage(&GAMEDATA).clear();
+        let mut game = Game::new(0x51a7_2026);
+        let before_invalid = game.core.channel_digest();
+
+        assert_eq!(
+            unsafe { game_activate_player(&mut game, PLAYERS as u32) },
+            0
+        );
+        assert_eq!(game.core.channel_digest(), before_invalid);
+        assert_eq!(unsafe { game_activate_player(&mut game, 2) }, 1);
+        assert!(game.core.leaders[2].active);
+        assert_eq!(
+            game.core.step8.leaders[2].flags
+                & (don_sim::systems::leaders::flag::IN_GAME
+                    | don_sim::systems::leaders::flag::PROCESS),
+            don_sim::systems::leaders::flag::IN_GAME | don_sim::systems::leaders::flag::PROCESS
+        );
+        assert!(game.core.leaders[2].border.active);
+        assert!(game.core.vic_leaders.slots[2].flag(victory_score::leader_flag::VALID));
+        assert!(game.core.vic_leaders.slots[2].flag(victory_score::leader_flag::ACTIVE));
+        assert!(game.core.world.objects.is_active(2));
+        assert_eq!(game.core.map.fog.leaders[2].player_mask, 1 << 2);
+        assert!(!game.core.vic_leaders.slots[1].flag(victory_score::leader_flag::ACTIVE));
+    }
+
+    #[test]
     fn core_save_load_is_atomic_and_preserves_identity() {
         let _stage = STAGE_LOCK
             .lock()
@@ -2115,6 +2169,10 @@ mod tests {
         }
         assert_eq!(game.core.leaders[0].econ.age, 1);
         assert_eq!(game.core.leaders[0].econ.age_alt, 1);
+        assert_eq!(
+            game.core.step8.leaders[0].econ, game.core.leaders[0].econ,
+            "post-frame age projection must leave the reconstructible step-8 mirror exact"
+        );
         assert!(game.core.production_runtime.leaders[0]
             .tech
             .tech

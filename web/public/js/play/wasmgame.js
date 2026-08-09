@@ -59,6 +59,7 @@ export class GameModule {
     this.gapCount = this.x.game_gap_count();
     this.capabilityBits = this.x.game_capabilities() >>> 0;
     this._submitted = 0;
+    this._activePlayers = Object.freeze([]);
     this._commandObserver = null;
     this._readiness = this._loadReadiness();
   }
@@ -82,6 +83,7 @@ export class GameModule {
     }
     this.g = this.x.game_create(seed >>> 0, 0);
     this.seed = seed >>> 0;
+    this._activePlayers = Object.freeze([]);
     this._submitted = 0;
     this._buf = null;
     // `Game::players` is an exported snapshot populated by `game_step`, rather than the
@@ -103,6 +105,7 @@ export class GameModule {
     const previous = this.g;
     this.g = next;
     this.seed = normalized;
+    this._activePlayers = Object.freeze([]);
     this._submitted = 0;
     this._buf = null;
     this._v = {};
@@ -110,6 +113,27 @@ export class GameModule {
     if (previous) this.x.game_destroy(previous);
     return true;
   }
+
+  activatePlayers(players) {
+    if (!this.g || !Array.isArray(players)) return false;
+    const roster = [];
+    const seen = new Set();
+    for (const player of players) {
+      if (!Number.isInteger(player) || player < 0 || player >= this.playerCount || seen.has(player)) {
+        return false;
+      }
+      seen.add(player);
+      roster.push(player);
+    }
+    for (const player of roster) {
+      if (this.x.game_activate_player(this.g, player) !== 1) return false;
+    }
+    this._activePlayers = Object.freeze(roster);
+    return true;
+  }
+
+  /** The explicit setup roster already activated through `Sim::activate`. */
+  activePlayers() { return this._activePlayers.slice(); }
 
   _staticText(ptr, len) {
     if (!ptr || !len) return '';
@@ -187,6 +211,9 @@ export class GameModule {
   /** Copy the deterministic `don_sim::systems::save_load` image out of wasm memory. */
   saveCore() {
     if (!this.supports('save')) throw new Error('core save export is unavailable');
+    if (this._activePlayers.length) {
+      throw new Error('core save unavailable after roster activation; start or load an inactive setup boundary');
+    }
     if (this.x.game_save(this.g) !== 1) throw new Error(this._lastError());
     const len = this.x.game_save_len(this.g) >>> 0;
     const ptr = this.x.game_save_ptr(this.g) >>> 0;
@@ -206,6 +233,7 @@ export class GameModule {
     new Uint8Array(this.mem.buffer, ptr, bytes.length).set(bytes);
     if (this.x.game_load_commit(this.g) !== 1) throw new Error(this._lastError());
     this._submitted = 0;
+    this._activePlayers = Object.freeze([]);
     this._buf = null;
     this._v = {};
     return {
