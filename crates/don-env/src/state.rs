@@ -18,6 +18,19 @@ use crate::generated as g;
 use crate::typecaps::{TypeCap, TypeCaps, F_ATTACK, F_BUILDING, F_MOVE};
 use don_sim::command::QueuePos;
 use don_sim::order::OrderIndex;
+use don_sim::systems::collision::{UnitRow, UnitTable, DOMAIN_LAND};
+use don_sim::systems::containment::NearbyUnitType;
+use don_sim::systems::economy::{
+    self, CapGates, DoGatherContext, EconRules, GatherInputs, LeaderEcon,
+};
+use don_sim::systems::gather_lifecycle::{
+    attached_ordinary_order_state, ensure_ordinary_attachment, farm_first_gather_tick,
+    FarmFirstTickDisposition, OrdinaryGatherKind, OrdinaryGatherTarget,
+};
+use don_sim::systems::gathering::{
+    num_gatherers, site_gross, AttachResult, GatherAssignment, GatherCount, GatherOrderWalk,
+    GatherSite, GatherWorker, NonFlatGatherState,
+};
 use don_sim::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, AirPatrolSearch, OrderQueue, OrderRec, PatrolInstall,
     PatrolPayload, UnitWork,
@@ -172,6 +185,11 @@ pub struct PlayerState {
     pub base_rate: [i32; g::NUM_COMMON],
     /// `LeaderData::collected[6]`, lifetime.
     pub collected: [i32; g::NUM_COMMON],
+    /// The recovered checksum-bearing economy block used by the explicit gathering path.
+    /// `econ` remains the public compact stockpile mirror and is synchronized at each payout.
+    pub leader_econ: LeaderEcon,
+    pub gather_last_calc_frame: i32,
+    pub gather_dirty: bool,
     pub pop: i32,
     pub pop_cap: i32,
     pub city_num: i32,
@@ -195,6 +213,9 @@ impl PlayerState {
     fn new(who: u8) -> PlayerState {
         let mut diplos = [1u8; g::NUM_PLAYERS]; // PEACE
         diplos[who as usize] = 2; // ALLY with self
+        let starting_econ = [200, 200, 200, 0, 0, 0];
+        let mut leader_econ = LeaderEcon::new();
+        leader_econ.stockpile = starting_econ;
         PlayerState {
             who,
             team: who,
@@ -203,9 +224,12 @@ impl PlayerState {
             victory_type: 0,
             // Placeholder starting stock. The real start economy comes from
             // `Constants::init` and is not wired; see the provenance report.
-            econ: [200, 200, 200, 0, 0, 0],
+            econ: starting_econ,
             base_rate: [0; g::NUM_COMMON],
             collected: [0; g::NUM_COMMON],
+            leader_econ,
+            gather_last_calc_frame: -1,
+            gather_dirty: true,
             pop: 0,
             pop_cap: 50,
             city_num: 0,
@@ -321,11 +345,148 @@ pub trait AirPatrolHost {
     ) -> Result<Option<AirPatrolTarget>, AirPatrolHostError>;
 }
 
+/// One ordinary Farm order retained outside the compact observation mirror.
+///
+/// The phase is the exact checksum-visible twenty-byte `GatherOrder` suffix recovered in
+/// `don-sim::systems::gathering`. The surrounding order queue remains [`EnvWorld::orders`];
+/// this record supplies the Farm-only state that `OrderRec` deliberately does not duplicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnvFarmGatherOrder {
+    pub worker_owner: u8,
+    pub worker_o: i16,
+    pub target_owner: u8,
+    pub target_o: i16,
+    pub target_uid: u16,
+    pub phase: NonFlatGatherState,
+    pub first_tick_complete: bool,
+}
+
+impl EnvFarmGatherOrder {
+    /// The scalar byte image retail's `GatherOrder::walk_data` contributes. Order-list
+    /// allocation/capacity metadata belongs to the queue walker and is outside this image.
+    pub fn walk(&self) -> GatherOrderWalk {
+        GatherOrderWalk {
+            // The recovered base byte is independent of the OrderIndex and starts clear in
+            // the admitted constructor state. No unproven flag meaning is assigned here.
+            order_base_byte: 0,
+            ox: i32::from(self.target_o),
+            whom: i32::from(self.target_owner),
+            uid: self.target_uid,
+            tx: self.phase.tx,
+            ty: self.phase.ty,
+            build_type: self.phase.build_type,
+            wait: self.phase.wait,
+            goto_build: self.phase.goto_build,
+            non_flat_gather: self.phase.non_flat_gather,
+            dist_mod: self.phase.dist_mod,
+            been_there: self.phase.been_there,
+        }
+    }
+}
+
+/// Persistent owner-local gathering state for one EnvWorld.
+///
+/// These are identity-keyed rather than row-parallel because retail links sites and workers
+/// by `(who,o)`, and EnvWorld compacts rows after a despawn. The vectors retain deterministic
+/// insertion order; the intrusive `gather_down` chain remains authoritative for occupancy.
+#[derive(Clone, Debug)]
+pub struct EnvGatherState {
+    pub sites: Vec<GatherSite>,
+    pub workers: Vec<GatherWorker>,
+    pub farm_orders: Vec<EnvFarmGatherOrder>,
+}
+
+impl Default for EnvGatherState {
+    fn default() -> Self {
+        Self {
+            sites: Vec::new(),
+            workers: Vec::new(),
+            farm_orders: Vec::new(),
+        }
+    }
+}
+
+/// Exact adjacent boundaries still required to admit Farm gathering into an EnvWorld.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatherHostBoundary {
+    FarmTarget,
+    FarmUpdate,
+    FarmPerWorkerGross,
+    LeaderGatherInputs,
+    GatherMove,
+}
+
+/// Fail-closed error from the explicit Farm provider path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatherHostError {
+    Unavailable(GatherHostBoundary),
+    InvalidState(&'static str),
+}
+
+#[derive(Debug)]
+enum EnvFrameHostError {
+    Air(AirPatrolHostError),
+    Gather(GatherHostError),
+}
+
+/// Host-owned leader inputs for the recovered `Leader::gather` payout pipeline.
+///
+/// `inputs.object_income` contains every authoritative contribution *except* the Farm sites
+/// stored in [`EnvGatherState`]. EnvWorld adds those from active occupancy and the host's
+/// fully evaluated per-worker results before calling `economy::leader_gather`.
+#[derive(Clone, Debug)]
+pub struct GatherLeaderFrame {
+    pub inputs: GatherInputs,
+    pub cap_gates: CapGates,
+    pub payout: DoGatherContext,
+}
+
+/// Mandatory authoritative provider for the admitted Farm-only environment seam.
+///
+/// No method has a default. In particular, the target footprint/update result, per-worker
+/// six-resource evaluator and leader-wide tech/game gates cannot be inferred from TypeCap or
+/// from a distance to the Farm. The ordinary [`EnvWorld::frame`] supplies no provider and
+/// therefore preserves Gather orders without advancing or paying them.
+pub trait GatherHost {
+    fn preflight(&mut self, world: &EnvWorld) -> Result<(), GatherHostError>;
+
+    fn farm_target(
+        &mut self,
+        world: &EnvWorld,
+        worker_row: usize,
+        target_row: usize,
+    ) -> Result<OrdinaryGatherTarget, GatherHostError>;
+
+    /// Exact return from `FarmData::update` plus the low-byte game gate read by the admitted
+    /// `Unit::do_gather` first-tick branch.
+    fn farm_first_tick(
+        &mut self,
+        world: &EnvWorld,
+        order: &EnvFarmGatherOrder,
+    ) -> Result<(i32, i32), GatherHostError>;
+
+    /// Fully evaluated six-slot contribution for one active worker at this Farm, before
+    /// leader-wide composition/caps. This is the output of the real type/player evaluator,
+    /// not permission to substitute a resource-kind heuristic.
+    fn farm_per_worker_gross(
+        &mut self,
+        world: &EnvWorld,
+        site: &GatherSite,
+    ) -> Result<[i32; g::NUM_COMMON], GatherHostError>;
+
+    fn leader_frame(
+        &mut self,
+        world: &EnvWorld,
+        who: u8,
+    ) -> Result<GatherLeaderFrame, GatherHostError>;
+}
+
 /// One environment instance.
 pub struct EnvWorld {
     pub sim: World,
     pub rules: Arc<Rules>,
     pub players: Vec<PlayerState>,
+    pub gather: EnvGatherState,
     // ---- entity columns, parallel to `sim` rows -------------------------------------
     pub type_index: Vec<u16>,
     /// Executable `UnitData::orderlist` state for the environment lane. Unlike the
@@ -388,6 +549,7 @@ impl EnvWorld {
             players: (0..g::NUM_PLAYERS)
                 .map(|i| PlayerState::new(i as u8))
                 .collect(),
+            gather: EnvGatherState::default(),
             type_index: vec![0; cap],
             orders: vec![OrderQueue::new(); cap],
             order: vec![0; cap],
@@ -428,6 +590,9 @@ impl EnvWorld {
 
         let mut bytes = self.sim.bytes_reserved()
             + vec_bytes(&self.players)
+            + vec_bytes(&self.gather.sites)
+            + vec_bytes(&self.gather.workers)
+            + vec_bytes(&self.gather.farm_orders)
             + vec_bytes(&self.type_index)
             + vec_bytes(&self.orders)
             + vec_bytes(&self.order)
@@ -658,6 +823,179 @@ impl EnvWorld {
         self.sync_order_from_queue(row);
     }
 
+    fn gather_collision_row(&self, row: usize) -> UnitRow {
+        UnitRow {
+            who: i32::from(self.sim.owner()[row]),
+            o: i32::from(self.sim.units.o()[row]),
+            x: self.sim.pos_x()[row],
+            y: self.sim.pos_y()[row],
+            domain: i32::from(self.cap(self.type_index[row]).domain),
+            // Every EnvWorld entity is currently on-map. No containment transition exists
+            // in this environment, so this is state, not a fallback assumption.
+            on_map: true,
+            active: self.sim.hits()[row] > 0,
+            ..UnitRow::default()
+        }
+    }
+
+    /// Admit one exact ordinary Farm Gather constructor transaction.
+    ///
+    /// Capacity 1 is the recovered flat Farm arm of `BuildTypeData::calc_gather`; no terrain
+    /// or type-table estimate is used. This function installs only QUEUE_NEW because queued
+    /// attachment/retirement interaction has not yet been integrated into EnvWorld.
+    pub fn install_farm_gather(
+        &mut self,
+        worker_row: usize,
+        target_row: usize,
+        target: OrdinaryGatherTarget,
+        queue: QueuePos,
+    ) -> Result<AttachResult, GatherHostError> {
+        if queue != QueuePos::New {
+            return Err(GatherHostError::InvalidState(
+                "Farm Gather provider currently admits QUEUE_NEW only",
+            ));
+        }
+        if target.kind != OrdinaryGatherKind::Farm {
+            return Err(GatherHostError::InvalidState(
+                "ordinary environment provider currently admits Farm only",
+            ));
+        }
+        if self.type_index[target_row] as i32 != don_sim::systems::tech_cities::ty::FARM {
+            return Err(GatherHostError::InvalidState(
+                "authoritative Farm target does not name TypeIndex 417",
+            ));
+        }
+        let worker_type = self.type_index[worker_row] as i32;
+        if !matches!(worker_type, 0x32 | 0x33) {
+            return Err(GatherHostError::InvalidState(
+                "ordinary Farm gatherer must be Citizen TypeIndex 0x32 or 0x33",
+            ));
+        }
+        let worker_owner = u8::try_from(self.sim.owner()[worker_row])
+            .map_err(|_| GatherHostError::InvalidState("Farm gatherer has no player owner"))?;
+        let target_owner = u8::try_from(self.sim.owner()[target_row])
+            .map_err(|_| GatherHostError::InvalidState("Farm target has no player owner"))?;
+        if worker_owner != target_owner {
+            return Err(GatherHostError::InvalidState(
+                "ordinary Farm worker and site must share the owner-local object table",
+            ));
+        }
+        if i32::from(self.cap(self.type_index[worker_row]).domain) != DOMAIN_LAND {
+            return Err(GatherHostError::InvalidState(
+                "ordinary Farm gatherer is not land-domain",
+            ));
+        }
+
+        let worker_o = self.sim.units.o()[worker_row];
+        let target_o = self.sim.units.o()[target_row];
+        let target_uid = self.sim.units.uid()[target_row] as u16;
+        let site_pos = if let Some(pos) = self
+            .gather
+            .sites
+            .iter()
+            .position(|site| site.owner == target_owner && site.build_o == target_o)
+        {
+            pos
+        } else {
+            let mut site = GatherSite::new(target_owner, target_o);
+            site.uid = target_uid;
+            // Farm's exact flat evaluator returns one; see docs/mechanics/gathering.md.
+            site.set_authoritative_capacity(1);
+            self.gather.sites.push(site);
+            self.gather.sites.len() - 1
+        };
+        if self.gather.sites[site_pos].uid != target_uid {
+            return Err(GatherHostError::InvalidState(
+                "Farm object slot was reused after the site state was created",
+            ));
+        }
+
+        let worker_pos = if let Some(pos) = self
+            .gather
+            .workers
+            .iter()
+            .position(|worker| worker.owner == worker_owner && worker.unit_o == worker_o)
+        {
+            pos
+        } else {
+            self.gather
+                .workers
+                .push(GatherWorker::new(worker_owner, worker_o, worker_type));
+            self.gather.workers.len() - 1
+        };
+        self.gather.workers[worker_pos].type_index = worker_type;
+        self.gather.workers[worker_pos].valid_unit = true;
+        self.gather.workers[worker_pos].assignment = Some(GatherAssignment {
+            target_owner: i32::from(target_owner),
+            target_build: i32::from(target_o),
+            target_uid,
+            been_there: false,
+            inside_target: None,
+        });
+
+        let mut collision = UnitTable::default();
+        collision.rows.push(self.gather_collision_row(worker_row));
+        let unit_type = NearbyUnitType {
+            type_index: worker_type,
+            domain: DOMAIN_LAND,
+            // The Farm attachment-only branch reads neither radius nor unit flags.
+            big_radius: 0,
+            block_radius: 0,
+            unit_flags: 0,
+        };
+        let attachment = {
+            let gather = &mut self.gather;
+            ensure_ordinary_attachment(
+                &collision,
+                &mut gather.sites[site_pos],
+                &mut gather.workers,
+                worker_o,
+                target,
+                unit_type,
+            )
+            .map_err(|_| {
+                GatherHostError::InvalidState("Farm attachment lifecycle rejected provider state")
+            })?
+        };
+        if attachment.status == AttachResult::Full {
+            self.gather.workers[worker_pos].assignment = None;
+            return Err(GatherHostError::InvalidState(
+                "Farm's single authoritative gather slot is occupied",
+            ));
+        }
+
+        self.install_order(
+            worker_row,
+            OrderRec::gather(i32::from(target_owner), i32::from(target_o), target_uid),
+            QueuePos::New,
+        );
+        self.gather
+            .farm_orders
+            .retain(|order| order.worker_owner != worker_owner || order.worker_o != worker_o);
+        self.gather.farm_orders.push(EnvFarmGatherOrder {
+            worker_owner,
+            worker_o,
+            target_owner,
+            target_o,
+            target_uid,
+            phase: attached_ordinary_order_state(OrdinaryGatherKind::Farm),
+            first_tick_complete: false,
+        });
+        self.players[worker_owner as usize].gather_dirty = true;
+        Ok(attachment.status)
+    }
+
+    pub fn farm_gather_order(
+        &self,
+        worker_owner: u8,
+        worker_o: i16,
+    ) -> Option<&EnvFarmGatherOrder> {
+        self.gather
+            .farm_orders
+            .iter()
+            .find(|order| order.worker_owner == worker_owner && order.worker_o == worker_o)
+    }
+
     /// Clear `UnitData::orderlist`, the exact queue-side effect of HALT / QUEUE_NEW.
     pub fn clear_orders(&mut self, row: usize) {
         self.orders[row].clear();
@@ -770,8 +1108,8 @@ impl EnvWorld {
     /// scheduler diverges inside one tick, so the rotation is reproduced here even though
     /// the per-object work below is scaffolding.
     pub fn frame(&mut self) {
-        self.frame_inner(None)
-            .expect("a frame without an air-patrol host cannot call one");
+        self.frame_inner(None, None)
+            .expect("a frame without an explicit host cannot call one");
     }
 
     /// Advance one frame with every AIR_PATROL host transaction explicit. Preflight runs
@@ -781,17 +1119,45 @@ impl EnvWorld {
         host: &mut dyn AirPatrolHost,
     ) -> Result<(), AirPatrolHostError> {
         host.preflight(self)?;
-        self.frame_inner(Some(host))
+        self.frame_inner(Some(host), None)
+            .map_err(|error| match error {
+                EnvFrameHostError::Air(error) => error,
+                EnvFrameHostError::Gather(_) => {
+                    unreachable!("no Gather host was supplied to the air-only frame")
+                }
+            })
+    }
+
+    /// Advance one frame with the Farm gathering boundaries explicit. Preflight runs before
+    /// owner processing, so a known missing target/evaluator/payout provider cannot partially
+    /// mutate the admitted transaction.
+    pub fn frame_with_gather_host(
+        &mut self,
+        host: &mut dyn GatherHost,
+    ) -> Result<(), GatherHostError> {
+        host.preflight(self)?;
+        self.frame_inner(None, Some(host))
+            .map_err(|error| match error {
+                EnvFrameHostError::Gather(error) => error,
+                EnvFrameHostError::Air(_) => {
+                    unreachable!("no air host was supplied to the Gather-only frame")
+                }
+            })
     }
 
     fn frame_inner(
         &mut self,
         mut air_host: Option<&mut dyn AirPatrolHost>,
-    ) -> Result<(), AirPatrolHostError> {
+        mut gather_host: Option<&mut dyn GatherHost>,
+    ) -> Result<(), EnvFrameHostError> {
         let f = self.sim.frame as usize;
         for i in 0..g::NUM_OWNER_SLOTS {
             let slot = ((f + i) % g::NUM_OWNER_SLOTS) as u8;
-            self.process_slot(slot, &mut air_host)?;
+            self.process_slot(slot, &mut air_host, &mut gather_host)?;
+        }
+        if let Some(host) = gather_host.as_deref_mut() {
+            self.advance_gather_payout(host)
+                .map_err(EnvFrameHostError::Gather)?;
         }
         don_sim::simd::tick_down(self.sim.cooldown_mut());
         self.sim.frame += 1;
@@ -804,7 +1170,8 @@ impl EnvWorld {
         &mut self,
         slot: u8,
         air_host: &mut Option<&mut dyn AirPatrolHost>,
-    ) -> Result<(), AirPatrolHostError> {
+        gather_host: &mut Option<&mut dyn GatherHost>,
+    ) -> Result<(), EnvFrameHostError> {
         let n = self.sim.live_count() as usize;
         for row in 0..n {
             if self.sim.owner()[row] != slot as i8 {
@@ -815,10 +1182,19 @@ impl EnvWorld {
                     self.advance_move(row, true);
                 }
                 x if x == g::OrderIndex::Attack as u8 => self.advance_attack(row),
+                x if x == g::OrderIndex::Gather as u8 => {
+                    if let Some(host) = gather_host.as_deref_mut() {
+                        self.advance_farm_gather(row, host)
+                            .map_err(EnvFrameHostError::Gather)?;
+                    } else {
+                        self.unimplemented.unit[g::uv::GATHER] += 1;
+                    }
+                }
                 x if x == g::OrderIndex::GroupPatrol as u8 => self.advance_group_patrol(row),
                 x if x == g::OrderIndex::AirPatrol as u8 => {
                     if let Some(host) = air_host.as_deref_mut() {
-                        self.advance_air_patrol(row, host)?;
+                        self.advance_air_patrol(row, host)
+                            .map_err(EnvFrameHostError::Air)?;
                     } else {
                         // Fail closed: retain the exact order body without crossing the
                         // environment's explicitly approximate straight-line mover.
@@ -826,6 +1202,169 @@ impl EnvWorld {
                     }
                 }
                 _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn advance_farm_gather(
+        &mut self,
+        row: usize,
+        host: &mut dyn GatherHost,
+    ) -> Result<(), GatherHostError> {
+        let worker_owner = u8::try_from(self.sim.owner()[row])
+            .map_err(|_| GatherHostError::InvalidState("Farm gatherer lost its owner"))?;
+        let worker_o = self.sim.units.o()[row];
+        let Some(order_pos) = self
+            .gather
+            .farm_orders
+            .iter()
+            .position(|order| order.worker_owner == worker_owner && order.worker_o == worker_o)
+        else {
+            return Err(GatherHostError::InvalidState(
+                "Gather order queue has no persistent Farm phase",
+            ));
+        };
+        let order = self.gather.farm_orders[order_pos];
+        if order.first_tick_complete {
+            return Ok(());
+        }
+        let target_row = (0..self.sim.live_count() as usize).find(|&candidate| {
+            self.sim.owner()[candidate] == order.target_owner as i8
+                && self.sim.units.o()[candidate] == order.target_o
+                && self.sim.units.uid()[candidate] as u16 == order.target_uid
+        });
+        let Some(target_row) = target_row else {
+            return Err(GatherHostError::InvalidState(
+                "Farm Gather target failed its generational identity check",
+            ));
+        };
+        let target = host.farm_target(self, row, target_row)?;
+        let (farm_update_result, game_gate_value) = host.farm_first_tick(self, &order)?;
+        let site_pos = self
+            .gather
+            .sites
+            .iter()
+            .position(|site| {
+                site.owner == order.target_owner
+                    && site.build_o == order.target_o
+                    && site.uid == order.target_uid
+            })
+            .ok_or(GatherHostError::InvalidState(
+                "Farm Gather order has no persistent site",
+            ))?;
+
+        let mut collision = UnitTable::default();
+        collision.rows.push(self.gather_collision_row(row));
+        let unit_type = NearbyUnitType {
+            type_index: self.type_index[row] as i32,
+            domain: DOMAIN_LAND,
+            big_radius: 0,
+            block_radius: 0,
+            unit_flags: 0,
+        };
+        let mut phase = order.phase;
+        let outcome = {
+            let gather = &mut self.gather;
+            farm_first_gather_tick::<_, std::convert::Infallible, std::convert::Infallible>(
+                &collision,
+                &mut gather.sites[site_pos],
+                &mut gather.workers,
+                worker_o,
+                &mut phase,
+                target,
+                unit_type,
+                farm_update_result,
+                game_gate_value,
+                &mut self.sim.random,
+            )
+            .map_err(|_| {
+                GatherHostError::InvalidState("Farm first-tick lifecycle rejected provider state")
+            })?
+        };
+        self.gather.farm_orders[order_pos].phase = phase;
+        match outcome.disposition {
+            FarmFirstTickDisposition::Active {
+                move_order: None, ..
+            } => {
+                self.gather.farm_orders[order_pos].first_tick_complete = true;
+            }
+            FarmFirstTickDisposition::Active {
+                move_order: Some(_),
+                ..
+            } => {
+                // The exact plan and RNG/been-there mutations above are retained, but the
+                // ordinary EnvWorld mover is an approximation. Do not route a Gather move
+                // through it and pretend the provider boundary was complete.
+                return Err(GatherHostError::Unavailable(GatherHostBoundary::GatherMove));
+            }
+            FarmFirstTickDisposition::RetiredAtCapacity(_) => {
+                return Err(GatherHostError::InvalidState(
+                    "Farm became full after its constructor attachment",
+                ));
+            }
+        }
+        if outcome.leader_economy_dirty {
+            self.players[worker_owner as usize].gather_dirty = true;
+        }
+        Ok(())
+    }
+
+    fn advance_gather_payout(&mut self, host: &mut dyn GatherHost) -> Result<(), GatherHostError> {
+        let mut farm_income = [[0i32; g::NUM_COMMON]; g::NUM_PLAYERS];
+        let mut owners = [false; g::NUM_PLAYERS];
+        for site in self.gather.sites.clone() {
+            let active = num_gatherers(&site, &self.gather.workers, GatherCount::Active, 0)
+                .map_err(|_| GatherHostError::InvalidState("Farm gather chain is invalid"))?;
+            if active <= 0 {
+                continue;
+            }
+            let per_worker = host.farm_per_worker_gross(self, &site)?;
+            let gross = site_gross(per_worker, active, site.gather_max);
+            let owner = site.owner as usize;
+            if owner >= g::NUM_PLAYERS {
+                return Err(GatherHostError::InvalidState(
+                    "Farm site owner is outside the leader table",
+                ));
+            }
+            owners[owner] = true;
+            for resource in 0..g::NUM_COMMON {
+                farm_income[owner][resource] =
+                    farm_income[owner][resource].wrapping_add(gross[resource]);
+            }
+        }
+
+        for who in 0..g::NUM_PLAYERS {
+            if !owners[who] {
+                continue;
+            }
+            let mut frame = host.leader_frame(self, who as u8)?;
+            for resource in 0..g::NUM_COMMON {
+                frame.inputs.object_income[resource] =
+                    frame.inputs.object_income[resource].wrapping_add(farm_income[who][resource]);
+            }
+            let player = &mut self.players[who];
+            // Compact public stockpile actions (tribute/build/queue) remain authoritative
+            // for EnvWorld; synchronize them into the recovered block before payout.
+            player.leader_econ.stockpile = player.econ;
+            let payout = economy::leader_gather(
+                &EconRules::shipped(),
+                &mut player.leader_econ,
+                self.sim.frame,
+                who as i32,
+                &mut player.gather_last_calc_frame,
+                &mut player.gather_dirty,
+                &frame.inputs,
+                &frame.cap_gates,
+                &frame.payout,
+            );
+            player.econ = player.leader_econ.stockpile;
+            player.base_rate = player.leader_econ.displayed;
+            for resource in 0..g::NUM_COMMON {
+                if payout[resource].whole > 0 {
+                    player.collected[resource] =
+                        player.collected[resource].wrapping_add(payout[resource].whole);
+                }
             }
         }
         Ok(())
@@ -1124,6 +1663,7 @@ impl EnvWorld {
             let h = self.handle_at(0);
             self.despawn(h);
         }
+        self.gather = EnvGatherState::default();
         for v in self.ctrl.iter_mut().chain(self.obs_ents.iter_mut()) {
             v.clear();
         }

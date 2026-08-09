@@ -18,7 +18,7 @@
 
 use crate::generated as g;
 use crate::spec::{EnvConfig, AMOUNT_BUCKETS, COUNT_BUCKETS};
-use crate::state::EnvWorld;
+use crate::state::{EnvWorld, GatherHost, GatherHostError};
 use crate::typecaps::{F_BUILDING, F_CIVILIAN, F_PRODUCER};
 use don_sim::command::QueuePos;
 use don_sim::systems::order_dispatch::OrderRec;
@@ -319,6 +319,56 @@ pub fn apply_unit(
             st.accepted_no_effect += 1;
         }
     }
+}
+
+/// Apply one action through the explicit Farm gathering provider when its verb is GATHER.
+///
+/// The ordinary [`apply_unit`] path remains unchanged and Gather stays masked there. This
+/// entrypoint exists so an environment with authoritative target/update/evaluator/leader
+/// hosts can admit the recovered transaction without installing a guessed default provider.
+pub fn apply_unit_with_gather_host(
+    w: &mut EnvWorld,
+    cfg: &EnvConfig,
+    who: u8,
+    actor: don_sim::Handle,
+    a: UnitAction,
+    host: &mut dyn GatherHost,
+    st: &mut ApplyStats,
+) -> Result<(), GatherHostError> {
+    let gather_verb = (g::uv::GATHER + 1) as u16;
+    if a.verb != gather_verb {
+        apply_unit(w, cfg, who, actor, a, st);
+        return Ok(());
+    }
+    let Some(row) = w.sim.row_of(actor) else {
+        st.stale += 1;
+        return Ok(());
+    };
+    if w.sim.owner()[row] != who as i8 {
+        st.illegal += 1;
+        return Ok(());
+    }
+    if a.target_entity == 0 {
+        st.incoherent += 1;
+        return Ok(());
+    }
+    let Some(target_row) = w.obs_ents[who as usize]
+        .get((a.target_entity - 1) as usize)
+        .and_then(|handle| w.sim.row_of(*handle))
+    else {
+        st.stale += 1;
+        return Ok(());
+    };
+    host.preflight(w)?;
+    let target = host.farm_target(w, row, target_row)?;
+    w.install_farm_gather(
+        row,
+        target_row,
+        target,
+        QueuePos::from_i64(a.queue_pos as i64),
+    )?;
+    st.applied += 1;
+    Ok(())
 }
 
 pub fn apply_player(w: &mut EnvWorld, who: u8, a: PlayerAction, st: &mut ApplyStats) {
