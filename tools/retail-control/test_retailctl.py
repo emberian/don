@@ -606,6 +606,8 @@ class RetailCtlTests(unittest.TestCase):
             "mode": "load-only",
             "environment": environment,
             "launcher_sha256": "b" * 64,
+            "generation": 1,
+            "rollover": None,
         }
         self.assertIs(retailctl.validate_netsys_manifest(manifest), manifest)
         wrong_backup = copy.deepcopy(manifest)
@@ -616,6 +618,39 @@ class RetailCtlTests(unittest.TestCase):
         leaked_environment["environment"]["STEAM_TICKET"] = "forbidden"
         with self.assertRaisesRegex(ValueError, "exact supported profile"):
             retailctl.validate_netsys_manifest(leaked_environment)
+        rollover = copy.deepcopy(manifest)
+        rollover["state"] = "rollover-staged"
+        rollover["rollover"] = {
+            "from_generation": 1,
+            "archive_root": retailctl.netsys_generation_root(1),
+            "next_shim": {
+                "path": retailctl.NETSYS_NEXT,
+                "size": 197_632,
+                "sha256": "c" * 64,
+            },
+        }
+        self.assertIs(retailctl.validate_netsys_manifest(rollover), rollover)
+        wrong_archive = copy.deepcopy(rollover)
+        wrong_archive["rollover"]["archive_root"] = retailctl.netsys_generation_root(2)
+        with self.assertRaisesRegex(ValueError, "generation/archive"):
+            retailctl.validate_netsys_manifest(wrong_archive)
+
+    def test_netsys_next_generation_archives_before_swap_and_never_replaces_backup(self):
+        self.assertEqual(
+            retailctl.netsys_generation_root(7),
+            retailctl.NETSYS_ARCHIVE_ROOT + r"\generation-0007",
+        )
+        with self.assertRaisesRegex(ValueError, "between 1 and 9999"):
+            retailctl.netsys_generation_root(0)
+        source = Path(retailctl.__file__).read_text()
+        rollover = source[source.index("def netsys_next_generation"):
+                          source.index("def netsys_configure_host")]
+        archive = rollover.index("archive_netsys_evidence(manifest)")
+        target_swap = rollover.index("[IO.File]::Replace({ps_literal(target_temp)}")
+        self.assertLess(archive, target_swap)
+        self.assertNotIn("[IO.File]::Replace({ps_literal(NETSYS_BACKUP)}", rollover)
+        self.assertIn('"mode": "load-only"', rollover)
+        self.assertIn('"rollover": None', rollover)
 
     def test_netsys_trace_is_contiguous_pid_bound_and_credential_free(self):
         trace = (
