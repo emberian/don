@@ -218,11 +218,13 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .as_ref()
                 .map(|receipt| {
                     format!(
-                        "{{ \"initial\": \"0x{:08x}\", \"orientation\": {}, \"at_boundary\": \"0x{:08x}\", \"retry_attempt\": {}, \"starts_added\": {} }}",
+                        "{{ \"initial\": \"0x{:08x}\", \"orientation\": {}, \"at_boundary\": \"0x{:08x}\", \"retry_attempt\": {}, \"regions_cleared\": {}, \"region_seeds\": {}, \"starts_added\": {} }}",
                         receipt.rng_initial as u32,
                         receipt.orientation,
                         receipt.rng_final as u32,
                         receipt.retry_attempt,
+                        receipt.regions_cleared,
+                        receipt.region_seeds.len(),
                         receipt.starts_added,
                     )
                 })

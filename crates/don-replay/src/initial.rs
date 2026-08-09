@@ -17,6 +17,7 @@ use crate::rules_channel::{
     SHIPPED_RULES_CHANNEL, TRIBE_COUNT, TRIBE_SIZE, TYPE_SLOTS,
 };
 use don_sim::systems::map_terrain::{World, WorldChecksum};
+use don_sim::systems::regions::Regions;
 
 pub const TAG_GAME: u8 = 0x16;
 pub const TAG_GAME_INFO: u8 = 0x42;
@@ -304,12 +305,17 @@ pub struct InitialRules {
 /// `world` follows the shipped map-size table and exact `World::init` dimension
 /// arithmetic, then installs the replay seed through the oracle-backed
 /// `Map::make` entry semantics.  Terrain, resource placement and starting
-/// coordinates remain zero and every byte they contribute is counted as
-/// unsourced; this object is a divergence-producing checksum slice, not a
-/// fabricated complete save.
+/// coordinates begin zero. The replay harness advances this same object through
+/// exact procedural prefixes, but provisional bytes remain counted as
+/// unsourced until the downstream generator proves their final values; this is
+/// a divergence-producing checksum slice, not a fabricated complete save.
 #[derive(Clone, Debug)]
 pub struct InitialWorld {
     pub world: World,
+    /// Authoritative procedural-generation region store. It is retained even
+    /// before a region checksum producer is installed because map geometry and
+    /// later terrain/item placement consume these exact coordinate lists.
+    pub generation_regions: Regions,
     pub checksum: WorldChecksum,
     pub sourced_walked_bytes: u64,
 }
@@ -517,7 +523,7 @@ impl InitialItemReconstruction {
     /// then replace the generic continent boundary with that exact stop.
     pub fn advance_continent_prefix(
         &mut self,
-        map: &mut World,
+        map: &mut InitialWorld,
     ) -> Result<crate::continent::ContinentReceipt, InitialItemReconstructionError> {
         if !matches!(
             self.boundary,
@@ -531,8 +537,13 @@ impl InitialItemReconstruction {
                 .ok_or(InitialItemReconstructionError::StyleIdentityMismatch {
                     map_style: self.inputs.map_style,
                 })?;
-        let receipt = crate::continent::execute_continent_prefix(&self.inputs, style, map)
-            .map_err(InitialItemReconstructionError::ContinentPrefix)?;
+        let receipt = crate::continent::execute_continent_prefix_with_regions(
+            &self.inputs,
+            style,
+            &mut map.world,
+            &mut map.generation_regions,
+        )
+        .map_err(InitialItemReconstructionError::ContinentPrefix)?;
         self.boundary = match &receipt.stop {
             crate::continent::ContinentStop::HookComplete { next_va } => {
                 InitialItemBoundary::MapPostContinentUnavailable {
@@ -544,6 +555,14 @@ impl InitialItemReconstruction {
             crate::continent::ContinentStop::MakeRegion { primitive_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
                     boundary: "map_region_seed",
+                    map_style: receipt.map_style,
+                    make_continents_va: receipt.make_continents_va,
+                    primitive_va: *primitive_va,
+                }
+            }
+            crate::continent::ContinentStop::GrowRegion { primitive_va, .. } => {
+                InitialItemBoundary::MapContinentPrimitiveUnavailable {
+                    boundary: "map_region_growth",
                     map_style: receipt.map_style,
                     make_continents_va: receipt.make_continents_va,
                     primitive_va: *primitive_va,
@@ -721,6 +740,7 @@ impl InitialState {
             8 + 40 + if seed_installed { 4 } else { 0 } + if unmodded { 24 } else { 0 };
         Some(InitialWorld {
             world,
+            generation_regions: Regions::default(),
             checksum,
             sourced_walked_bytes,
         })

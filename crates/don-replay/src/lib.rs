@@ -66,8 +66,9 @@ mod wire_gen;
 pub use check_all::{check_all, CheckAll, CheckSumsRecord};
 pub use checksum::{adler32, Channel, Channels, CheckSum, DataWalk, CHANNEL_NAMES};
 pub use continent::{
-    execute_continent_prefix, ContinentError, ContinentReceipt, ContinentStop, LandDistanceCall,
-    RegionSeedCall,
+    execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError,
+    ContinentReceipt, ContinentStop, GrowRegionCall, LandDistanceCall, RegionSeedCall,
+    RegionSeedReceipt,
 };
 pub use harness::{format_table, run, NullSim, Phase, RunResult, Simulation};
 pub use initial::{

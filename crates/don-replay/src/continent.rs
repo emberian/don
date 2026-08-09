@@ -11,12 +11,14 @@ use crate::initial::InitialWorldgenInputs;
 use crate::map_style::{MapStyleStaticData, StaticXmlEntry, MAP_MAKE_ORIENTATION_RNG_VA};
 use don_sim::rng::Random;
 use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
+use don_sim::systems::regions::Regions;
 use don_sim::trig::{cosx, sinx};
 
 pub const REGIONS_FIND_ALL_VA: u32 = 0x0068_0060;
 pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
+pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionSeedCall {
@@ -34,6 +36,26 @@ pub struct LandDistanceCall {
     pub required_distance: i32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrowRegionCall {
+    pub region: i32,
+    pub target_area: i32,
+    pub max_distance: i32,
+    pub anchor_x: i32,
+    pub anchor_y: i32,
+    pub return_partial_size: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionSeedReceipt {
+    pub call: RegionSeedCall,
+    pub coord_capacity_before: i32,
+    pub coord_capacity_after: i32,
+    pub common_factor: i32,
+    pub goody_factor: i32,
+    pub flags: i32,
+}
+
 /// First call not executed by a style prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContinentStop {
@@ -43,6 +65,11 @@ pub enum ContinentStop {
     MakeRegion {
         primitive_va: u32,
         call: RegionSeedCall,
+    },
+    /// The exact seed-cell helper completed; region flood/growth is next.
+    GrowRegion {
+        primitive_va: u32,
+        call: GrowRegionCall,
     },
     /// Great Lakes needs the current generated-land distance before its retry
     /// branch can be selected.
@@ -72,6 +99,8 @@ pub struct ContinentReceipt {
     pub retry_attempt: u32,
     pub world_wiped: bool,
     pub world_inverted: bool,
+    pub regions_cleared: u32,
+    pub region_seeds: Vec<RegionSeedReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -102,6 +131,17 @@ pub enum ContinentError {
         xs: i32,
         ys: i32,
     },
+    InvalidRegionSeed {
+        region: i32,
+        x: i32,
+        y: i32,
+    },
+    InvalidRegionCoordStorage {
+        region: i32,
+        length: usize,
+        capacity: i32,
+        increment: i16,
+    },
     MissingMapParameter {
         tag: &'static str,
         attribute: &'static str,
@@ -123,6 +163,19 @@ pub fn execute_continent_prefix(
     inputs: &InitialWorldgenInputs,
     style: &MapStyleStaticData,
     world: &mut World,
+) -> Result<ContinentReceipt, ContinentError> {
+    let mut regions = Regions::default();
+    execute_continent_prefix_with_regions(inputs, style, world, &mut regions)
+}
+
+/// Stateful form used by replay reconstruction. `Regions` is retained beside
+/// the generated world so `make_region` and later growth stages have one
+/// authoritative caller-owned store.
+pub fn execute_continent_prefix_with_regions(
+    inputs: &InitialWorldgenInputs,
+    style: &MapStyleStaticData,
+    world: &mut World,
+    regions: &mut Regions,
 ) -> Result<ContinentReceipt, ContinentError> {
     if style.identity.ordinal != inputs.map_style {
         return Err(ContinentError::SelectorMismatch {
@@ -177,6 +230,22 @@ pub fn execute_continent_prefix(
         });
     }
 
+    // `Map::make_region` reads these installed Map fields. Resolve them before
+    // any wipe or RNG draw so missing static data remains transactional.
+    let region_defaults = if matches!(inputs.map_style, 12 | 18) {
+        RegionSeedDefaults {
+            common_factor: map_int(style, "COMMON_RESOURCES", "value")?,
+            goody_factor: map_int(style, "GOODY_BOXES", "value")?,
+            flags: 0,
+        }
+    } else {
+        RegionSeedDefaults {
+            common_factor: 0,
+            goody_factor: 0,
+            flags: 0,
+        }
+    };
+
     // Map::Map initializes orientation to -1. load_map_data resolves BASE_EDGE
     // from the selected/default MAP data before this branch.
     let base_edge = map_int(style, "BASE_EDGE", "value")?;
@@ -197,14 +266,53 @@ pub fn execute_continent_prefix(
     };
     let rng_initial = seed;
 
+    // The geometry algorithms are written against clones so every Rust-side
+    // validation failure leaves both authoritative stores unchanged.
+    let mut next_world = world.clone();
+    let mut next_regions = regions.clone();
     let partial = match inputs.map_style {
-        6 | 9 => old_world_or_himalayas(inputs.map_style, players, world, &mut rng, &mut sites),
-        12 => mediterranean(inputs, world, &mut rng, &mut sites, style),
-        14 => great_lakes(players, inputs.map_size, world, &mut rng, &mut sites, style)?,
-        18 => east_indies(players, inputs.map_size, world, &mut rng, &mut sites, style)?,
-        19 => east_meets_west(inputs, world, &mut sites),
+        6 | 9 => old_world_or_himalayas(
+            inputs.map_style,
+            players,
+            &mut next_world,
+            &mut next_regions,
+            &mut rng,
+            &mut sites,
+        ),
+        12 => mediterranean(
+            inputs,
+            &mut next_world,
+            &mut next_regions,
+            &mut rng,
+            &mut sites,
+            style,
+            region_defaults,
+        )?,
+        14 => great_lakes(
+            players,
+            inputs.map_size,
+            &mut next_world,
+            &mut next_regions,
+            &mut rng,
+            &mut sites,
+            style,
+        )?,
+        18 => east_indies(
+            players,
+            inputs.map_size,
+            &mut next_world,
+            &mut next_regions,
+            &mut rng,
+            &mut sites,
+            style,
+            region_defaults,
+        )?,
+        19 => east_meets_west(inputs, &mut next_world, &mut next_regions, &mut sites),
         _ => unreachable!("admitted above"),
     };
+
+    *world = next_world;
+    *regions = next_regions;
 
     Ok(ContinentReceipt {
         map_style: inputs.map_style,
@@ -216,6 +324,8 @@ pub fn execute_continent_prefix(
         retry_attempt: 1,
         world_wiped: true,
         world_inverted: partial.world_inverted,
+        regions_cleared: partial.regions_cleared,
+        region_seeds: partial.region_seeds,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -224,20 +334,33 @@ pub fn execute_continent_prefix(
 
 struct PartialReceipt {
     world_inverted: bool,
+    regions_cleared: u32,
+    region_seeds: Vec<RegionSeedReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
+}
+
+#[derive(Copy, Clone)]
+struct RegionSeedDefaults {
+    common_factor: i32,
+    goody_factor: i32,
+    flags: i32,
 }
 
 fn old_world_or_himalayas(
     map_style: u8,
     players: u8,
     world: &mut World,
+    regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
 ) -> PartialReceipt {
     world.wipe();
+    regions.clear_all(world);
     invert_land(world);
+    // `Map::invert_land` ends with its own `Regions::clear_all` call.
+    regions.clear_all(world);
 
     let radius_half = world.xs.min(world.ys) / 2;
     let radius = ((radius_half * 80) / 100).min(radius_half - 4);
@@ -261,6 +384,8 @@ fn old_world_or_himalayas(
     }
     PartialReceipt {
         world_inverted: true,
+        regions_cleared: 2,
+        region_seeds: Vec::new(),
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
@@ -272,11 +397,14 @@ fn old_world_or_himalayas(
 fn mediterranean(
     _inputs: &InitialWorldgenInputs,
     world: &mut World,
+    regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
     _style: &MapStyleStaticData,
-) -> PartialReceipt {
+    defaults: RegionSeedDefaults,
+) -> Result<PartialReceipt, ContinentError> {
     world.wipe();
+    regions.clear_all(world);
     let style_sites = &crate::map_style::MEDITERRANEAN_DIRECT_RNG_SITES;
     let min_dim = (world.xs.min(world.ys) & !1) / 3;
     let a = draw(rng, sites, style_sites[0]);
@@ -285,26 +413,38 @@ fn mediterranean(
     let x = world.xs / 2 + (draw(rng, sites, style_sites[2]) & 1);
     let y = world.ys / 2 + (draw(rng, sites, style_sites[3]) & 1);
     let area = min_dim.wrapping_mul(min_dim).wrapping_mul(3);
-    PartialReceipt {
+    let seed = RegionSeedCall {
+        region: 1,
+        x,
+        y,
+        area,
+    };
+    let seed_receipt = apply_make_region(world, regions, &seed, defaults)?;
+    Ok(PartialReceipt {
         world_inverted: false,
+        regions_cleared: 1,
+        region_seeds: vec![seed_receipt],
         starts_added: 0,
         start_min: None,
-        stop: ContinentStop::MakeRegion {
-            primitive_va: MAP_MAKE_REGION_VA,
-            call: RegionSeedCall {
+        stop: ContinentStop::GrowRegion {
+            primitive_va: MAP_GROW_REGION_VA,
+            call: GrowRegionCall {
                 region: 1,
-                x,
-                y,
-                area,
+                target_area: area,
+                max_distance: min_dim,
+                anchor_x: -1,
+                anchor_y: -1,
+                return_partial_size: 0,
             },
         },
-    }
+    })
 }
 
 fn great_lakes(
     players: u8,
     map_size: u8,
     world: &mut World,
+    regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
     style: &MapStyleStaticData,
@@ -316,6 +456,7 @@ fn great_lakes(
     )
     .max(6);
     world.wipe();
+    regions.clear_all(world);
     let style_sites = &crate::map_style::GREAT_LAKES_DIRECT_RNG_SITES;
     let a = draw(rng, sites, style_sites[0]);
     let b = draw(rng, sites, style_sites[1]);
@@ -339,6 +480,8 @@ fn great_lakes(
     let _ = min_region_area; // feeds the later grow-size retry, after this boundary.
     Ok(PartialReceipt {
         world_inverted: false,
+        regions_cleared: 1,
+        region_seeds: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::LandDistance {
@@ -357,9 +500,11 @@ fn east_indies(
     players: u8,
     map_size: u8,
     world: &mut World,
+    regions: &mut Regions,
     rng: &mut Random,
     sites: &mut Vec<u32>,
     style: &MapStyleStaticData,
+    defaults: RegionSeedDefaults,
 ) -> Result<PartialReceipt, ContinentError> {
     // The selected East Indies XML supplies plain integer edge values; this
     // exact maximum is read before the first make_region call.
@@ -385,6 +530,7 @@ fn east_indies(
     let region_area = scale_land_area(250, players, map_size);
 
     world.wipe();
+    regions.clear_all(world);
     let style_sites = &crate::map_style::EAST_INDIES_DIRECT_RNG_SITES;
     let first = draw(rng, sites, style_sites[0]);
     let min_dim = world.xs.min(world.ys);
@@ -404,33 +550,58 @@ fn east_indies(
             (min_dim / 2).wrapping_mul(7) / 8,
         )
     };
+    let initial_radius = radius;
     let increment = (u32::MAX / players as u32) as i32;
-    angle = angle.wrapping_add(increment);
     let center_x = world.xs / 2;
     let center_y = world.ys / 2;
-    let (x, y) = loop {
-        let candidate = project(center_x, center_y, angle, radius);
-        if candidate.0 > margin
-            && world.xs - candidate.0 > margin
-            && candidate.1 > margin
-            && world.ys - candidate.1 > margin
-        {
-            break candidate;
-        }
-        radius -= 1;
-    };
-    world.add_starting_location(WCoord(x), WCoord(y));
+    let mut seeds = Vec::with_capacity(players as usize);
+    for region in 1..=players {
+        angle = angle.wrapping_add(increment);
+        let (x, y) = loop {
+            let candidate = project(center_x, center_y, angle, radius);
+            if candidate.0 > margin
+                && world.xs - candidate.0 > margin
+                && candidate.1 > margin
+                && world.ys - candidate.1 > margin
+            {
+                break candidate;
+            }
+            radius -= 1;
+        };
+        world.add_starting_location(WCoord(x), WCoord(y));
+        let call = RegionSeedCall {
+            region: i32::from(region),
+            x,
+            y,
+            area: region_area,
+        };
+        let mut receipt = apply_make_region(world, regions, &call, defaults)?;
+        // Exact caller writes immediately following each make_region call.
+        let seeded = &mut regions.list[region as usize];
+        seeded.common_factor = 8;
+        seeded.goody_factor = 8;
+        seeded.flags |= 2;
+        seeded.climate = 0;
+        receipt.common_factor = seeded.common_factor;
+        receipt.goody_factor = seeded.goody_factor;
+        receipt.flags = seeded.flags;
+        seeds.push(receipt);
+    }
     Ok(PartialReceipt {
         world_inverted: false,
-        starts_added: 1,
+        regions_cleared: 1,
+        region_seeds: seeds,
+        starts_added: players as usize,
         start_min: None,
-        stop: ContinentStop::MakeRegion {
-            primitive_va: MAP_MAKE_REGION_VA,
-            call: RegionSeedCall {
+        stop: ContinentStop::GrowRegion {
+            primitive_va: MAP_GROW_REGION_VA,
+            call: GrowRegionCall {
                 region: 1,
-                x,
-                y,
-                area: region_area,
+                target_area: region_area / 3,
+                max_distance: initial_radius / 2,
+                anchor_x: -1,
+                anchor_y: -1,
+                return_partial_size: 0,
             },
         },
     })
@@ -439,11 +610,15 @@ fn east_indies(
 fn east_meets_west(
     inputs: &InitialWorldgenInputs,
     world: &mut World,
+    regions: &mut Regions,
     _sites: &mut Vec<u32>,
 ) -> PartialReceipt {
     world.wipe();
+    regions.clear_all(world);
     PartialReceipt {
         world_inverted: false,
+        regions_cleared: 1,
+        region_seeds: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::FillCont {
@@ -479,6 +654,87 @@ fn invert_land(world: &mut World) {
         cell.region = 0;
         cell.region2 = 0;
     }
+}
+
+/// Complete `Map::make_region` (`0x0069d3f0`). The final `area` argument is
+/// diagnostic/caller state only; the shipped body seeds exactly one cell and
+/// one coordinate, while the following `grow_region` consumes the target.
+fn apply_make_region(
+    world: &mut World,
+    regions: &mut Regions,
+    call: &RegionSeedCall,
+    defaults: RegionSeedDefaults,
+) -> Result<RegionSeedReceipt, ContinentError> {
+    let Ok(region_index) = usize::try_from(call.region) else {
+        return Err(ContinentError::InvalidRegionSeed {
+            region: call.region,
+            x: call.x,
+            y: call.y,
+        });
+    };
+    if region_index >= regions.list.len() || !world.valid_w(call.x, call.y) {
+        return Err(ContinentError::InvalidRegionSeed {
+            region: call.region,
+            x: call.x,
+            y: call.y,
+        });
+    }
+
+    let region = &mut regions.list[region_index];
+    let capacity_before = region.coords.capacity;
+    let length = region.coords.items.len();
+    if capacity_before < 0 || length > i32::MAX as usize {
+        return Err(ContinentError::InvalidRegionCoordStorage {
+            region: call.region,
+            length,
+            capacity: capacity_before,
+            increment: region.coords.increment,
+        });
+    }
+    if length as i32 >= region.coords.capacity {
+        let increase = if region.coords.increment < 0 {
+            region.coords.capacity.max(4)
+        } else {
+            i32::from(region.coords.increment)
+        };
+        let Some(next_capacity) = region.coords.capacity.checked_add(increase) else {
+            return Err(ContinentError::InvalidRegionCoordStorage {
+                region: call.region,
+                length,
+                capacity: capacity_before,
+                increment: region.coords.increment,
+            });
+        };
+        if increase <= 0 || next_capacity <= length as i32 {
+            return Err(ContinentError::InvalidRegionCoordStorage {
+                region: call.region,
+                length,
+                capacity: capacity_before,
+                increment: region.coords.increment,
+            });
+        }
+        region.coords.capacity = next_capacity;
+    }
+
+    let cell = world.wdata_mut(call.x, call.y);
+    cell.land = land::FERTILE;
+    cell.land_sub = 0;
+    cell.region = call.region as i16;
+    region.coords.items.push((call.x, call.y));
+    region.size = 1;
+    region.flags = defaults.flags;
+    region.common_factor = defaults.common_factor;
+    region.goody_factor = defaults.goody_factor;
+    regions.land = regions.land.max(call.region);
+
+    Ok(RegionSeedReceipt {
+        call: call.clone(),
+        coord_capacity_before: capacity_before,
+        coord_capacity_after: region.coords.capacity,
+        common_factor: region.common_factor,
+        goody_factor: region.goody_factor,
+        flags: region.flags,
+    })
 }
 
 fn map_int(

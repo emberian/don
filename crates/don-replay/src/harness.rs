@@ -279,9 +279,10 @@ pub struct WorldSim {
     pub turns: u64,
     pub frames: u64,
     pub seed_units: u32,
-    /// Prefix-derived map slice. Generated terrain and start placement are not
-    /// present until their retail generator is ported; its checksum report
-    /// carries that unsourced byte count explicitly.
+    /// Prefix-derived map slice. The executable continent prefix populates
+    /// exact continuation state, but provisional geometry is not promoted to
+    /// final-checksum source coverage until its downstream generator completes;
+    /// the remaining initial-world bytes stay explicitly unsourced.
     pub initial_world: Option<crate::initial::InitialWorld>,
     /// Exact replay-carried prefix and first absent input for initial goodies.
     pub initial_items: Option<crate::initial::InitialItemReconstruction>,
@@ -592,7 +593,7 @@ fn initial_items_for_replay(
                 let mut receipt = None;
                 let mut execution_error = None;
                 if let Some(map) = map.as_deref_mut() {
-                    match plan.advance_continent_prefix(&mut map.world) {
+                    match plan.advance_continent_prefix(map) {
                         Ok(done) => {
                             map.checksum = map.world.checksum_sections();
                             receipt = Some(done);
