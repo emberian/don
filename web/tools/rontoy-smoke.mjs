@@ -282,6 +282,7 @@ try {
       nullAdvice: attemptEnvelope((e) => { e.analysis.advice[0] = null; }),
       unprovedQueue: attemptEnvelope((e) => { delete e.snapshot.economy.production.queue_basis; }),
       numericProcessStart: attemptEnvelope((e) => { e.snapshot.source.process_started_100ns = 1; }),
+      zeroProcessStart: attemptEnvelope((e) => { e.snapshot.source.process_started_100ns = '0'; }),
       overflowingProcessStart: attemptEnvelope((e) => { e.snapshot.source.process_started_100ns = '18446744073709551616'; }),
       invalidSessionId: attemptEnvelope((e) => { e.snapshot.source.session_id = 'bad session'; }),
       invalidSourceSequence: attemptEnvelope((e) => { e.snapshot.source.sequence = '46'; }),
@@ -313,7 +314,7 @@ try {
   })()`);
   assert(Object.values(hardening.results).every((accepted) => accepted === false),
     `unsafe payload was admitted: ${JSON.stringify(hardening.results)}`);
-  assert(hardening.beforeSequence === hardening.afterSequence && hardening.rejectedDelta === 29,
+  assert(hardening.beforeSequence === hardening.afterSequence && hardening.rejectedDelta === 30,
     'rejected payload mutated the last admitted snapshot');
   assert(hardening.headline.includes('suppressed') && hardening.actions === 0,
     'rejection did not immediately suppress actionable advice');

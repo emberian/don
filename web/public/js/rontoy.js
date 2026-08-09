@@ -400,7 +400,10 @@ function adaptHostEnvelope(envelope, now = Date.now()) {
   if (!record(raw) || raw.schema_version !== VERSION) return fail('host snapshot schema is unsupported');
   let processStartValid = false;
   if (text(raw.source?.process_started_100ns, 20) && /^[0-9]+$/.test(raw.source.process_started_100ns)) {
-    try { processStartValid = BigInt(raw.source.process_started_100ns) <= 0xffff_ffff_ffff_ffffn; } catch {}
+    try {
+      const processStart = BigInt(raw.source.process_started_100ns);
+      processStartValid = processStart > 0n && processStart <= 0xffff_ffff_ffff_ffffn;
+    } catch {}
   }
   if (!record(raw.source) || !text(raw.source.session_id, 128)
       || !/^[A-Za-z0-9_.:-]{1,128}$/.test(raw.source.session_id) || !integer(raw.source.sequence)
