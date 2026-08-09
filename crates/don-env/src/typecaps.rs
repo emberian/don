@@ -39,6 +39,7 @@ pub struct FormationTypeCap {
     pub y_spacing: i32,
     pub uber_size: i32,
     pub unit_flags: u32,
+    pub unit_flags2: u32,
     pub level: i32,
     pub role: i32,
     pub domain: i32,
@@ -60,6 +61,24 @@ impl FormationTypeCap {
     #[inline]
     pub fn modern_infantry(self, has_tech_0x12: bool) -> bool {
         self.unit_flags & 0x100 != 0 && (has_tech_0x12 || self.level > 5)
+    }
+
+    /// `UnitTypeData::get_stance_type` `0x0061D350` against the captured postload type.
+    /// This virtual is not a broad military/civilian category: role bit `0x10000`, four
+    /// citizen TypeIndices, and unit_flags2 bits 1/2 form its exact priority ladder.
+    #[inline]
+    pub fn stance_type(self, type_index: u16) -> i32 {
+        if self.role as u32 & 0x10000 != 0 {
+            return if self.unit_flags2 & 4 != 0 { 3 } else { 0 };
+        }
+        if (0x32..=0x35).contains(&i32::from(type_index)) {
+            return 1;
+        }
+        if self.unit_flags2 & 6 == 2 {
+            2
+        } else {
+            -1
+        }
     }
 }
 
@@ -212,6 +231,7 @@ fn parse_formation_caps(text: &str) -> std::io::Result<FormationCaps> {
             y_spacing,
             uber_size,
             unit_flags,
+            unit_flags2,
             level,
             role,
             domain,
@@ -503,6 +523,20 @@ mod tests {
         assert_eq!(formation_category(200, 1, 10, 0x20, 0, false), 4);
         assert_eq!(formation_category(200, 1, 10, 4, 0, false), 10);
         assert_eq!(formation_category(200, 0, 0, 0, 0, false), 8);
+    }
+
+    #[test]
+    fn stance_type_preserves_retails_priority_ladder() {
+        let cap = |role, unit_flags2| FormationTypeCap {
+            role,
+            unit_flags2,
+            ..Default::default()
+        };
+        assert_eq!(cap(0x10000, 4).stance_type(0x32), 3);
+        assert_eq!(cap(0x10000, 0).stance_type(0x32), 0);
+        assert_eq!(cap(0, 0).stance_type(0x32), 1);
+        assert_eq!(cap(0, 2).stance_type(200), 2);
+        assert_eq!(cap(0, 6).stance_type(200), -1);
     }
 
     #[test]

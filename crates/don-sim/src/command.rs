@@ -110,9 +110,14 @@
 
 use crate::order::{Order, OrderIndex};
 use crate::systems::groups_guys::{
-    formation_order_coord, plan_action_disband, plan_action_halt, resolve_form, vector_dist,
-    DisbandMemberFacts, DisbandPlan, DisbandStep, Formation, FormationMember, GroupData,
-    HaltMemberFacts, HaltPlan, HaltStep, MemberState, GROUP_MAX_MEMBERS,
+    formation_order_coord, plan_action_buildmask, plan_action_disband, plan_action_halt,
+    plan_action_set_transport, plan_action_stance, plan_action_unitmask, resolve_form, vector_dist,
+    BuildMaskMemberFacts, BuildMaskStep, DisbandMemberFacts, DisbandPlan, DisbandStep, Formation,
+    FormationMember, GroupBuildMaskReceipt, GroupBuildMaskRequest, GroupData,
+    GroupSetTransportReceipt, GroupSetTransportRequest, GroupStanceReceipt, GroupStanceRequest,
+    GroupStateTransactionStatus, GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts,
+    HaltPlan, HaltStep, MemberState, SetTransportMemberFacts, SetTransportStep, StanceMemberFacts,
+    StanceStep, UnitMaskMemberFacts, UnitMaskStep, GROUP_MAX_MEMBERS,
 };
 use crate::systems::order_dispatch::{
     install_air_patrol, install_group_patrol, OrderQueue, OrderRec, PatrolInstall, UnitWork,
@@ -835,7 +840,7 @@ pub trait Fleet {
     fn set_build_masks(&mut self, _who: u8, _o: i16, _masks: u16) -> bool {
         false
     }
-    /// `Build::mask_me` `0x0063E2A0`: whether this building admits this UI build-mask
+    /// `WallData::valid_buildmask` `0x0063E2A0`: whether this building admits this UI build-mask
     /// selector. The predicate is type/object dependent, so absence is false rather than
     /// a guessed capability.
     fn can_toggle_build_mask(&self, _who: u8, _o: i16, _mask: u16) -> bool {
@@ -948,6 +953,43 @@ pub trait Fleet {
     ) -> GroupDisbandTransactionReceipt {
         GroupDisbandTransactionReceipt::unavailable(request)
     }
+
+    fn apply_group_stance_transaction(
+        &mut self,
+        request: GroupStanceRequest,
+    ) -> GroupStanceReceipt {
+        GroupStanceReceipt::unavailable(request)
+    }
+
+    fn apply_group_set_transport_transaction(
+        &mut self,
+        request: GroupSetTransportRequest,
+    ) -> GroupSetTransportReceipt {
+        GroupSetTransportReceipt::unavailable(request)
+    }
+
+    fn apply_group_unitmask_transaction(
+        &mut self,
+        request: GroupUnitMaskRequest,
+    ) -> GroupUnitMaskReceipt {
+        GroupUnitMaskReceipt::unavailable(request)
+    }
+
+    fn apply_group_buildmask_transaction(
+        &mut self,
+        request: GroupBuildMaskRequest,
+    ) -> GroupBuildMaskReceipt {
+        GroupBuildMaskReceipt::unavailable(request)
+    }
+
+    /// Atomic host boundary for opcode 76. Applied hosts execute every external/world
+    /// step in the validated plan as one transaction; Unavailable performs no mutation.
+    fn apply_pause_transaction(
+        &mut self,
+        request: PauseTransactionRequest,
+    ) -> PauseTransactionReceipt {
+        PauseTransactionReceipt::unavailable(request)
+    }
 }
 
 /// One object, holding only what [`Fleet`] exposes.
@@ -976,6 +1018,14 @@ pub struct Slot {
     pub can_ever_transport: bool,
     pub build_masks: u16,
     pub build_mask_capabilities: u16,
+    /// Object flag byte at `+0x08`; state-action planners currently read/set bits 0/0x10.
+    pub object_flags: u8,
+    /// Effective ObjectData virtual `get_stance_type` result.
+    pub stance_type: i32,
+    pub stance_update_order_present: bool,
+    pub stance_update_order_mandatory: bool,
+    pub stance_update_action_present: bool,
+    pub stance_update_action_mandatory: bool,
     pub build_active: bool,
     pub can_make_disband: bool,
     pub can_make_depopulate: bool,
@@ -993,6 +1043,7 @@ impl Slot {
         Slot {
             alive: true,
             is_unit: true,
+            object_flags: 1,
             can_move: true,
             is_on_map: true,
             is_captain: true,
@@ -1011,6 +1062,7 @@ impl Slot {
             alive: true,
             is_unit: true,
             is_building: true,
+            object_flags: 1,
             can_move: false,
             group: -1,
             uid,
@@ -1034,6 +1086,9 @@ impl Slot {
 #[derive(Clone, Debug, Default)]
 pub struct ObjectTable {
     lists: Vec<Vec<Slot>>,
+    leader_flags: [u32; NUM_OWNER_SLOTS],
+    local_who: Option<u8>,
+    pause_steps: Vec<PauseStep>,
 }
 
 impl ObjectTable {
@@ -1042,7 +1097,24 @@ impl ObjectTable {
             lists: (0..NUM_OWNER_SLOTS)
                 .map(|_| vec![Slot::default(); per_owner])
                 .collect(),
+            leader_flags: [0; NUM_OWNER_SLOTS],
+            local_who: None,
+            pause_steps: Vec::new(),
         }
+    }
+
+    pub fn set_leader_flags(&mut self, who: u8, flags: u32) {
+        if let Some(slot) = self.leader_flags.get_mut(who as usize) {
+            *slot = flags;
+        }
+    }
+
+    pub fn set_local_who(&mut self, who: Option<u8>) {
+        self.local_who = who;
+    }
+
+    pub fn take_pause_steps(&mut self) -> Vec<PauseStep> {
+        std::mem::take(&mut self.pause_steps)
     }
 
     pub fn put(&mut self, who: u8, o: i16, s: Slot) {
@@ -1277,6 +1349,306 @@ impl Fleet for ObjectTable {
             validate_disband: Some(false),
             owner_is_local: Some(false),
             members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_stance_transaction(
+        &mut self,
+        request: GroupStanceRequest,
+    ) -> GroupStanceReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                StanceMemberFacts {
+                    o,
+                    active: slot.is_some_and(|slot| slot.object_flags & 1 != 0),
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    is_captain: slot.is_some_and(|slot| slot.is_captain),
+                    on_map: slot.is_some_and(|slot| slot.is_on_map),
+                    object_stance_type: slot.map_or(-1, |slot| slot.stance_type),
+                    current_stance: slot.map_or(0, |slot| i32::from(slot.stance)),
+                    is_build: slot.is_some_and(|slot| slot.is_building),
+                    build_stance_type: slot.map_or(-1, |slot| {
+                        if slot.is_building {
+                            slot.stance_type
+                        } else {
+                            -1
+                        }
+                    }),
+                    is_unit: slot.is_some_and(|slot| slot.is_unit),
+                    unit_stance_type: slot.map_or(-1, |slot| {
+                        if slot.is_unit {
+                            slot.stance_type
+                        } else {
+                            -1
+                        }
+                    }),
+                    is_plane: slot.is_some_and(|slot| slot.is_plane),
+                    update_order_first_present: slot
+                        .is_some_and(|slot| slot.stance_update_order_present),
+                    update_order_second_mandatory: slot
+                        .is_some_and(|slot| slot.stance_update_order_mandatory),
+                    update_action_first_present: slot
+                        .is_some_and(|slot| slot.stance_update_action_present),
+                    update_action_second_mandatory: slot
+                        .is_some_and(|slot| slot.stance_update_action_mandatory),
+                }
+            })
+            .collect();
+        let preferred_stance_type = if request.group.buildings != 0 {
+            members
+                .first()
+                .map_or(-1, |member| member.object_stance_type)
+        } else {
+            let choose = |require_on_map: bool| {
+                request.group.list[..n]
+                    .iter()
+                    .filter_map(|&o| self.get(request.group.who, o).map(|slot| (o, slot)))
+                    .filter(|(_, slot)| {
+                        slot.is_unit && slot.is_captain && (!require_on_map || slot.is_on_map)
+                    })
+                    .min_by_key(|(_, slot)| slot.form_category)
+                    .map(|(_, slot)| slot.stance_type)
+            };
+            choose(true).or_else(|| choose(false)).unwrap_or(-1)
+        };
+        let leader_flags = self
+            .leader_flags
+            .get(request.group.who as usize)
+            .copied()
+            .unwrap_or(0);
+        let Ok(plan) = plan_action_stance(
+            &request.group,
+            request.stance,
+            preferred_stance_type,
+            leader_flags,
+            &members,
+        ) else {
+            return GroupStanceReceipt::unavailable(request);
+        };
+        if plan.steps.iter().any(|step| {
+            matches!(
+                step,
+                StanceStep::ClearMandatory { .. }
+                    | StanceStep::UpdateOrder { .. }
+                    | StanceStep::UpdateAction { .. }
+                    | StanceStep::Repath { .. }
+                    | StanceStep::KillCurrentOrder { .. }
+            )
+        }) {
+            return GroupStanceReceipt::unavailable(request);
+        }
+        for step in &plan.steps {
+            match *step {
+                StanceStep::WriteBuildStance { who, o, value }
+                | StanceStep::WriteUnitStance { who, o, value } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.stance = value;
+                    }
+                }
+                StanceStep::SetObjectFlag { who, o, mask } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.object_flags |= mask;
+                    }
+                }
+                StanceStep::ClearOrders { who, o } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.orders.clear();
+                    }
+                }
+                StanceStep::ClearMandatory { .. }
+                | StanceStep::UpdateOrder { .. }
+                | StanceStep::UpdateAction { .. }
+                | StanceStep::Repath { .. }
+                | StanceStep::KillCurrentOrder { .. } => {
+                    unreachable!("unsupported stance tails were rejected before mutation")
+                }
+            }
+        }
+        GroupStanceReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            preferred_stance_type: Some(preferred_stance_type),
+            leader_flags: Some(leader_flags),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_set_transport_transaction(
+        &mut self,
+        request: GroupSetTransportRequest,
+    ) -> GroupSetTransportReceipt {
+        let flags = self
+            .leader_flags
+            .get(request.group.who as usize)
+            .copied()
+            .unwrap_or(0);
+        let transport_level = if flags & 0x100 != 0 {
+            3
+        } else if flags & 0x200 != 0 {
+            2
+        } else {
+            ((flags >> 10) & 1) as u8
+        };
+        let group_after_ignore_orders = request.group.clone();
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                SetTransportMemberFacts {
+                    o,
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    can_ever_transport: slot.is_some_and(|slot| slot.can_ever_transport),
+                    unit_masks: slot.map_or(0, |slot| slot.unit_masks),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_action_set_transport(
+            &group_after_ignore_orders,
+            request.flag,
+            transport_level,
+            &members,
+        ) else {
+            return GroupSetTransportReceipt::unavailable(request);
+        };
+        for step in &plan.steps {
+            let SetTransportStep::WriteUnitMasks { who, o, value } = *step;
+            if let Some(slot) = self.get_mut(who, o) {
+                slot.unit_masks = value;
+            }
+        }
+        GroupSetTransportReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            group_after_ignore_orders: Some(group_after_ignore_orders),
+            transport_level: Some(transport_level),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_unitmask_transaction(
+        &mut self,
+        request: GroupUnitMaskRequest,
+    ) -> GroupUnitMaskReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                UnitMaskMemberFacts {
+                    o,
+                    valid_unit: slot.is_some_and(|slot| slot.alive && slot.is_unit),
+                    is_plane: slot.is_some_and(|slot| slot.is_plane),
+                    unit_masks: slot.map_or(0, |slot| slot.unit_masks),
+                }
+            })
+            .collect();
+        let Ok(plan) = plan_action_unitmask(&request.group, request.mask, request.set, &members)
+        else {
+            return GroupUnitMaskReceipt::unavailable(request);
+        };
+        for step in &plan.steps {
+            match *step {
+                UnitMaskStep::WriteUnitMasks { who, o, value } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.unit_masks = value;
+                    }
+                }
+                UnitMaskStep::SetObjectFlag { who, o, mask } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.object_flags |= mask;
+                    }
+                }
+                UnitMaskStep::ClearUnitMasks { who, o, mask } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.unit_masks &= !mask;
+                    }
+                }
+                UnitMaskStep::CloseOrders { who, o, .. } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.orders.clear();
+                    }
+                }
+                UnitMaskStep::ClearPathAnchor { .. }
+                | UnitMaskStep::ClearPartialPath { .. }
+                | UnitMaskStep::UpdateAction { .. } => {}
+            }
+        }
+        GroupUnitMaskReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_group_buildmask_transaction(
+        &mut self,
+        request: GroupBuildMaskRequest,
+    ) -> GroupBuildMaskReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let members: Vec<_> = request.group.list[..n]
+            .iter()
+            .map(|&o| {
+                let slot = self.get(request.group.who, o);
+                BuildMaskMemberFacts {
+                    o,
+                    valid_build: slot.is_some_and(|slot| slot.alive && slot.is_building),
+                    valid_buildmask: slot.is_some_and(|slot| {
+                        slot.is_building && slot.build_mask_capabilities & request.mask != 0
+                    }),
+                    build_masks: slot.map_or(0, |slot| slot.build_masks),
+                }
+            })
+            .collect();
+        let owner_is_local = self.local_who == Some(request.group.who);
+        let Ok(plan) = plan_action_buildmask(
+            &request.group,
+            request.mask,
+            request.set,
+            owner_is_local,
+            &members,
+        ) else {
+            return GroupBuildMaskReceipt::unavailable(request);
+        };
+        for step in &plan.steps {
+            match *step {
+                BuildMaskStep::WriteBuildMasks { who, o, value } => {
+                    if let Some(slot) = self.get_mut(who, o) {
+                        slot.build_masks = value;
+                    }
+                }
+                BuildMaskStep::Feedback { .. } => {}
+            }
+        }
+        GroupBuildMaskReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            owner_is_local: Some(owner_is_local),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    fn apply_pause_transaction(
+        &mut self,
+        request: PauseTransactionRequest,
+    ) -> PauseTransactionReceipt {
+        let facts = PauseHostFacts::default();
+        let Some(plan) = plan_pause(&request, &facts) else {
+            return PauseTransactionReceipt::unavailable(request);
+        };
+        self.pause_steps.extend(plan.steps.iter().cloned());
+        PauseTransactionReceipt {
+            request: request.clone(),
+            status: PauseTransactionStatus::Applied,
+            facts: Some(facts),
             plan: Some(plan),
         }
     }
@@ -1626,6 +1998,253 @@ pub enum CommandSideEffectReceipt {
     },
 }
 
+/// The deterministic pause columns read and written by `TurnControl::process_pause`
+/// `0x00956990` and `TurnControl::toggle_pause` `0x00957AB0`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PauseState {
+    pub paused: bool,
+    pub pause_delay: i32,
+    pub network: bool,
+    pub immediate_process: bool,
+    pub pause_override: bool,
+    pub pauses: [u8; NUM_OWNER_SLOTS],
+    pub restart_delay: i32,
+    /// `Game+0x821 & 0x02`.
+    pub restart_gate_2: bool,
+    /// `Game+0x821 & 0x04`; retail clears this before `Game::balance.next()`.
+    pub restart_gate_4: bool,
+    /// `Game+0x820 & 0x40`, set if the balance restart finishes.
+    pub chat_filter_bypass: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PauseTransactionRequest {
+    pub play: i32,
+    /// Raw byte at `PauseCommand+1`; retail compares it with the one-bit paused flag.
+    pub requested: u8,
+    pub local_play: i32,
+    pub state: PauseState,
+}
+
+/// Host facts/callback outcomes which are outside the command bridge's owned state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PauseHostFacts {
+    pub sound_system_present: bool,
+    pub interface_present: bool,
+    /// Result of the side-effecting embedded `Game::balance.next()` call. It must be
+    /// present exactly when the restart-gate branch is reached.
+    pub unit_balance_next_result: Option<i32>,
+    /// Exact leader status dwords, required only when `unit_balance_next_result == 0`.
+    pub leader_status_words: Option<[u32; NUM_NETWORK_PLAYERS]>,
+}
+
+/// Instruction-ordered state and external effects of one pause command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PauseStep {
+    DuplicateDiagnostic {
+        requested: u8,
+    },
+    GlobalSound {
+        category: i32,
+    },
+    SoundSystemPause,
+    SoundSystemResume,
+    SetPaused {
+        value: bool,
+    },
+    SetPauseDelay {
+        value: i32,
+    },
+    PauseLimitMessage {
+        play: i32,
+    },
+    IncrementPauseCount {
+        play: u8,
+        value: u8,
+    },
+    PauseMessage {
+        play: u8,
+        override_template: bool,
+        pauses_remaining: i32,
+    },
+    ClearRestartGate4,
+    SetRestartDelay {
+        value: i32,
+    },
+    UnitBalanceNext {
+        result: i32,
+    },
+    SetChatFilterBypass,
+    LeaderVictory {
+        who: u8,
+        victory_type: i32,
+        instant: i32,
+    },
+    ResetSoloFrameClock,
+    PauseNotice,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PausePlan {
+    pub state: PauseState,
+    pub steps: Vec<PauseStep>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseTransactionStatus {
+    Applied,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PauseTransactionReceipt {
+    pub request: PauseTransactionRequest,
+    pub status: PauseTransactionStatus,
+    pub facts: Option<PauseHostFacts>,
+    pub plan: Option<PausePlan>,
+}
+
+impl PauseTransactionReceipt {
+    pub fn unavailable(request: PauseTransactionRequest) -> Self {
+        Self {
+            request,
+            status: PauseTransactionStatus::Unavailable,
+            facts: None,
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &PauseTransactionRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            PauseTransactionStatus::Unavailable => self.facts.is_none() && self.plan.is_none(),
+            PauseTransactionStatus::Applied => {
+                let (Some(facts), Some(observed)) = (&self.facts, &self.plan) else {
+                    return false;
+                };
+                plan_pause(expected, facts).is_some_and(|plan| plan == *observed)
+            }
+        }
+    }
+}
+
+/// Pure recovered planner for `TurnControl::process_pause` / `toggle_pause`.
+pub fn plan_pause(request: &PauseTransactionRequest, facts: &PauseHostFacts) -> Option<PausePlan> {
+    let mut state = request.state.clone();
+    let mut steps = Vec::new();
+    if state.paused as u8 == request.requested {
+        if facts.unit_balance_next_result.is_some() || facts.leader_status_words.is_some() {
+            return None;
+        }
+        steps.push(PauseStep::DuplicateDiagnostic {
+            requested: request.requested,
+        });
+        return Some(PausePlan { state, steps });
+    }
+
+    let mut restart_reached = false;
+    if state.paused {
+        if !state.immediate_process {
+            state.paused = false;
+            steps.push(PauseStep::SetPaused { value: false });
+            if state.pause_delay == 0 {
+                state.pause_delay = 2;
+                steps.push(PauseStep::SetPauseDelay { value: 2 });
+            }
+            if facts.sound_system_present {
+                steps.push(PauseStep::SoundSystemResume);
+            }
+            if state.network {
+                steps.push(PauseStep::GlobalSound { category: 87 });
+                if state.restart_gate_2 && state.restart_gate_4 {
+                    restart_reached = true;
+                    state.restart_gate_4 = false;
+                    steps.push(PauseStep::ClearRestartGate4);
+                    if state.restart_delay == 0 {
+                        state.restart_delay = 2;
+                        steps.push(PauseStep::SetRestartDelay { value: 2 });
+                    }
+                    let result = facts.unit_balance_next_result?;
+                    steps.push(PauseStep::UnitBalanceNext { result });
+                    if result == 0 {
+                        let leaders = facts.leader_status_words?;
+                        state.chat_filter_bypass = true;
+                        steps.push(PauseStep::SetChatFilterBypass);
+                        state.restart_delay = 0;
+                        steps.push(PauseStep::SetRestartDelay { value: 0 });
+                        for (who, status) in leaders.into_iter().enumerate() {
+                            if status & 0x63 == 3 {
+                                steps.push(PauseStep::LeaderVictory {
+                                    who: who as u8,
+                                    victory_type: 0,
+                                    instant: 0,
+                                });
+                            }
+                        }
+                    } else if facts.leader_status_words.is_some() {
+                        return None;
+                    }
+                }
+            }
+        }
+    } else if !state.network {
+        state.paused = true;
+        steps.push(PauseStep::SetPaused { value: true });
+        state.pause_delay = 0;
+        steps.push(PauseStep::SetPauseDelay { value: 0 });
+        if facts.sound_system_present {
+            steps.push(PauseStep::SoundSystemPause);
+        }
+    } else {
+        let play_slot = usize::try_from(request.play)
+            .ok()
+            .filter(|&play| play < NUM_OWNER_SLOTS);
+        let allowed = request.play < 0
+            || play_slot.is_some_and(|play| state.pauses[play] < 10)
+            || state.pause_override;
+        if allowed {
+            steps.push(PauseStep::GlobalSound { category: 87 });
+            state.paused = true;
+            steps.push(PauseStep::SetPaused { value: true });
+            state.pause_delay = 0;
+            steps.push(PauseStep::SetPauseDelay { value: 0 });
+            if facts.sound_system_present {
+                steps.push(PauseStep::SoundSystemPause);
+            }
+            if let Some(play) = play_slot {
+                state.pauses[play] = state.pauses[play].wrapping_add(1);
+                steps.push(PauseStep::IncrementPauseCount {
+                    play: play as u8,
+                    value: state.pauses[play],
+                });
+                steps.push(PauseStep::PauseMessage {
+                    play: play as u8,
+                    override_template: state.pause_override,
+                    pauses_remaining: 10 - i32::from(state.pauses[play]),
+                });
+            }
+        } else if request.local_play == request.play {
+            steps.push(PauseStep::PauseLimitMessage { play: request.play });
+            steps.push(PauseStep::GlobalSound { category: 64 });
+        }
+    }
+
+    if !restart_reached
+        && (facts.unit_balance_next_result.is_some() || facts.leader_status_words.is_some())
+    {
+        return None;
+    }
+    if !state.network {
+        steps.push(PauseStep::ResetSoloFrameClock);
+    }
+    if facts.interface_present {
+        steps.push(PauseStep::PauseNotice);
+    }
+    Some(PausePlan { state, steps })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HotKeyCamera {
     /// Raw IEEE-754 bits from `HotKeyCommand::x/y`; retaining bits preserves NaN payloads.
@@ -1710,6 +2329,8 @@ pub struct InlineCommandState {
     pub turn_data: TurnDataState,
     pub mp_log: bool,
     pub restart_delay: i32,
+    pub restart_gate_2: bool,
+    pub restart_gate_4: bool,
     pub hotkeys: Vec<HotKeySlot>,
 }
 
@@ -1753,6 +2374,8 @@ impl Default for InlineCommandState {
             turn_data: TurnDataState::default(),
             mp_log: false,
             restart_delay: 0,
+            restart_gate_2: false,
+            restart_gate_4: false,
             hotkeys: (0..HOTKEY_GROUP_SLOTS)
                 .map(|id| HotKeySlot {
                     group: GroupData {
@@ -1798,9 +2421,6 @@ pub struct Bridge {
     pub inline: InlineCommandState,
     /// `Game::frame`, stamped into interned groups.
     pub frame: i32,
-    /// The non-zero test recovered from `Group::action_set_transport` `0x007024B0`.
-    /// Callers populate it from the owner leader's `0x100/0x200/0x400` transport flags.
-    transport_level: [u8; NUM_OWNER_SLOTS],
 }
 
 impl Default for Bridge {
@@ -1817,15 +2437,6 @@ impl Bridge {
             stats: BridgeStats::default(),
             inline: InlineCommandState::default(),
             frame: 0,
-            transport_level: [0; NUM_OWNER_SLOTS],
-        }
-    }
-
-    /// Install the already-decoded transport level for one owner. Only zero/non-zero is
-    /// read by opcode 14, exactly as retail's collapsed leader-flag branch does.
-    pub fn set_transport_level(&mut self, who: u8, level: u8) {
-        if let Some(slot) = self.transport_level.get_mut(who as usize) {
-            *slot = level;
         }
     }
 
@@ -2071,7 +2682,7 @@ impl Bridge {
             74 => self.process_turn_data(pkg, cmd),
             76 => {
                 if let Some(&state) = cmd.get(1) {
-                    self.process_pause(pkg.play, state);
+                    self.process_pause(pkg.play, state, f);
                 }
             }
             79 => {
@@ -2462,37 +3073,41 @@ impl Bridge {
         }
     }
 
-    /// Core state path of `TurnControl::pause` `0x00956990` / `0x00957AB0`.
-    ///
-    /// Retail compares the raw request byte with its one-bit paused flag and toggles only
-    /// when they differ. The common solo path and the network pause allowance/counter are
-    /// represented here. The network restart/callback tail remains `StateWired` metadata.
-    fn process_pause(&mut self, play: i32, requested: u8) {
-        if self.inline.paused as u8 == requested {
+    /// Transactional `TurnControl::process_pause` `0x00956990` /
+    /// `TurnControl::toggle_pause` `0x00957AB0` receiver.
+    fn process_pause(&mut self, play: i32, requested: u8, f: &mut dyn Fleet) {
+        let request = PauseTransactionRequest {
+            play,
+            requested,
+            local_play: self.inline.local_play,
+            state: PauseState {
+                paused: self.inline.paused,
+                pause_delay: self.inline.pause_delay,
+                network: self.inline.network,
+                immediate_process: self.inline.immediate_process,
+                pause_override: self.inline.pause_override,
+                pauses: self.inline.pauses,
+                restart_delay: self.inline.restart_delay,
+                restart_gate_2: self.inline.restart_gate_2,
+                restart_gate_4: self.inline.restart_gate_4,
+                chat_filter_bypass: self.inline.chat_filter_bypass,
+            },
+        };
+        let receipt = f.apply_pause_transaction(request.clone());
+        if receipt.status != PauseTransactionStatus::Applied || !receipt.validates(&request) {
             return;
         }
-        if !self.inline.paused {
-            let play_slot = usize::try_from(play).ok().filter(|&p| p < NUM_OWNER_SLOTS);
-            let allowed = !self.inline.network
-                || play < 0
-                || play_slot.is_some_and(|p| self.inline.pauses[p] < 10)
-                || self.inline.pause_override;
-            if !allowed {
-                return;
-            }
-            self.inline.paused = true;
-            self.inline.pause_delay = 0;
-            if self.inline.network {
-                if let Some(p) = play_slot {
-                    self.inline.pauses[p] = self.inline.pauses[p].wrapping_add(1);
-                }
-            }
-        } else if !self.inline.immediate_process {
-            self.inline.paused = false;
-            if self.inline.pause_delay == 0 {
-                self.inline.pause_delay = 2;
-            }
-        }
+        let Some(plan) = receipt.plan else { return };
+        self.inline.paused = plan.state.paused;
+        self.inline.pause_delay = plan.state.pause_delay;
+        self.inline.network = plan.state.network;
+        self.inline.immediate_process = plan.state.immediate_process;
+        self.inline.pause_override = plan.state.pause_override;
+        self.inline.pauses = plan.state.pauses;
+        self.inline.restart_delay = plan.state.restart_delay;
+        self.inline.restart_gate_2 = plan.state.restart_gate_2;
+        self.inline.restart_gate_4 = plan.state.restart_gate_4;
+        self.inline.chat_filter_bypass = plan.state.chat_filter_bypass;
     }
 
     /// `CommandPackage::process_group` `0x0094A0C0`, opcode 0.
@@ -2553,7 +3168,6 @@ impl Bridge {
             slot,
             stats: &mut self.stats,
             frame: self.frame,
-            transport_level: self.transport_level,
         };
         act.run(name, cmd, f);
     }
@@ -2569,7 +3183,6 @@ struct Action<'a> {
     slot: i32,
     stats: &'a mut BridgeStats,
     frame: i32,
-    transport_level: [u8; NUM_OWNER_SLOTS],
 }
 
 impl Action<'_> {
@@ -2636,7 +3249,6 @@ impl Action<'_> {
                 slot: self.slot,
                 stats: self.stats,
                 frame: self.frame,
-                transport_level: self.transport_level,
             };
             body(&mut inner, QueuePos::New, f);
         }
@@ -2833,95 +3445,80 @@ impl Action<'_> {
         }
     }
 
-    /// Simulation state of `Group::action_set_transport` `0x007024B0`.
+    /// Transactional `Group::action_set_transport` `0x007024B0` receiver.
     ///
-    /// The handler calls `action_begin`, collapses the owner's three transport flags to
-    /// a zero/non-zero level, then sets `UnitData::unit_masks & 0x0080_0000` on members
-    /// for which `UnitData::can_ever_transport` succeeds. The command flag is ignored
-    /// when the owner has no transport level. Presentation callbacks are omitted.
+    /// The host owns scenario ignore-orders, the exact leader `0x100/0x200/0x400`
+    /// transport ladder, capability facts, and all unit writes. The bridge accepts only
+    /// a recomputable complete plan, then commits its echoed group state.
     fn action_set_transport(&mut self, flag: i32, f: &mut dyn Fleet) {
-        self.action_begin();
-        if self.groups.get(self.slot).is_none_or(|g| g.buildings != 0) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let request = GroupSetTransportRequest { group, flag };
+        let receipt = f.apply_group_set_transport_transaction(request.clone());
+        if receipt.status != GroupStateTransactionStatus::Applied || !receipt.validates(&request) {
             return;
         }
-        let (who, list) = self.members();
-        let enabled = self
-            .transport_level
-            .get(who as usize)
-            .is_some_and(|level| *level != 0)
-            && flag != 0;
-        for o in list {
-            if !f.alive(who, o) || !f.is_unit(who, o) || !f.can_ever_transport(who, o) {
-                continue;
-            }
-            let current = f.unit_masks(who, o);
-            let next = if enabled {
-                current | 0x0080_0000
-            } else {
-                current & !0x0080_0000
-            };
-            f.set_unit_masks(who, o, next);
+        let Some(plan) = receipt.plan else { return };
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
         }
     }
 
     /// `Group::action_unitmask` `0x006FCB90`.
     ///
-    /// The second wire dword is unused by retail. Except for mask `0x40000`, the first
-    /// eligible member decides whether the whole group sets or clears the bit. Mask
-    /// `0x40000` always clears. Mask `0x100` skips true planes and additionally cancels
-    /// the current unit action; the bridge's canonical action state is its order queue.
-    fn action_unitmask(&mut self, mask: u32, _set: i32, f: &mut dyn Fleet) {
-        if self.groups.get(self.slot).is_none_or(|g| g.buildings != 0) {
+    /// The second wire dword is unread. The typed planner preserves the loop-carried
+    /// set/clear decision and the full mask-`0x100` action/path retirement tail.
+    fn action_unitmask(&mut self, mask: u32, set: i32, f: &mut dyn Fleet) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let nonempty_before: Vec<i16> = group.list[..n]
+            .iter()
+            .copied()
+            .filter(|&o| {
+                f.orders(group.who, o)
+                    .is_some_and(|orders| !orders.is_empty())
+            })
+            .collect();
+        let request = GroupUnitMaskRequest { group, mask, set };
+        let receipt = f.apply_group_unitmask_transaction(request.clone());
+        if receipt.status != GroupStateTransactionStatus::Applied || !receipt.validates(&request) {
             return;
         }
-        let (who, list) = self.members();
-        let mut set = mask != 0x0004_0000;
-        for o in list {
-            if (!f.alive(who, o) || !f.is_unit(who, o)) || (mask == 0x100 && f.is_plane(who, o)) {
-                continue;
-            }
-            set = f.unit_masks(who, o) & mask == 0 && set;
-            let mut next = f.unit_masks(who, o);
-            if set {
-                next |= mask;
-            } else {
-                next &= !mask;
-            }
-            if mask == 0x100 {
-                next &= !0x0400_0000;
-                if let Some(orders) = f.orders_mut(who, o) {
-                    if !orders.is_empty() {
-                        self.stats.orders_cleared += 1;
-                    }
-                    orders.clear();
-                }
-            }
-            f.set_unit_masks(who, o, next);
+        let Some(plan) = receipt.plan else { return };
+        self.stats.orders_cleared += plan
+            .steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step,
+                    UnitMaskStep::CloseOrders { o, .. } if nonempty_before.contains(o)
+                )
+            })
+            .count() as u64;
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
         }
     }
 
     /// `Group::action_buildmask` `0x006FC9A0`.
     ///
-    /// Like UNIT_MASK, the second dword is unused and the first eligible building
-    /// chooses set-vs-clear for the whole selection. `Build::mask_me` is an explicit
-    /// Fleet predicate: a missing build-state host therefore skips rather than guesses.
-    fn action_buildmask(&mut self, mask: u16, _set: i32, f: &mut dyn Fleet) {
-        if self.groups.get(self.slot).is_none_or(|g| g.buildings == 0) {
+    /// The second dword is unread. `WallData::valid_buildmask` facts, the loop-carried
+    /// toggle, and local feedback are owned by the atomic host receipt.
+    fn action_buildmask(&mut self, mask: u16, set: i32, f: &mut dyn Fleet) {
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
+        };
+        let request = GroupBuildMaskRequest { group, mask, set };
+        let receipt = f.apply_group_buildmask_transaction(request.clone());
+        if receipt.status != GroupStateTransactionStatus::Applied || !receipt.validates(&request) {
             return;
         }
-        let (who, list) = self.members();
-        let mut set = true;
-        for o in list {
-            if !f.alive(who, o) || !f.is_building(who, o) || !f.can_toggle_build_mask(who, o, mask)
-            {
-                continue;
-            }
-            let Some(current) = f.build_masks(who, o) else {
-                continue;
-            };
-            set = current & mask == 0 && set;
-            let next = if set { current | mask } else { current & !mask };
-            let _ = f.set_build_masks(who, o, next);
+        let Some(plan) = receipt.plan else { return };
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
         }
     }
 
@@ -3701,43 +4298,21 @@ impl Action<'_> {
 
     /// `Group::action_stance(int stance)` `0x0070D440` (928 B, 8 call sites).
     ///
-    /// Installs no order: it writes `UnitData::stance` (`+0xB1`) and `Build::stance`
-    /// (`+0x7E`) and sets bit `0x10` in the object flag byte at `+0x08` [structure].
-    ///
-    /// The negative arguments are cycles, and the modulus depends on the group's stance
-    /// *type* — `GroupData::get_stance_type` `0x0070D370` returns 0/1/2/3 and the cycle
-    /// length is 6/4/2/2 respectively [measured, the `switch` at `0x0070D47B`].
-    /// `-1` steps forward, `-2` steps back. The stance type needs unit-type data this
-    /// module does not hold, so a negative argument is resolved against the combat cycle
-    /// of 6 and that assumption is stated rather than hidden.
+    /// The atomic host owns `is_on_map`, representative/scanned stance type, modal option,
+    /// negative cycling, building/unit filters, and the type-zero mandatory-order tail.
+    /// Only a recomputable complete plan may update the addressed Bridge group.
     fn action_stance(&mut self, stance: i32, f: &mut dyn Fleet) {
-        let cycle = 6i32;
-        let v = if stance >= 0 {
-            stance
-        } else if stance == -2 {
-            let c = self
-                .groups
-                .get(self.slot)
-                .map(|g| g.facing as i32)
-                .unwrap_or(0);
-            if c - 1 < 0 {
-                cycle - 1
-            } else {
-                c - 1
-            }
-        } else {
-            let c = self
-                .groups
-                .get(self.slot)
-                .map(|g| g.facing as i32)
-                .unwrap_or(0);
-            (c + 1) % cycle
+        let Some(group) = self.groups.get(self.slot).cloned() else {
+            return;
         };
-        let (who, list) = self.members();
-        for o in list {
-            if f.alive(who, o) {
-                f.set_stance(who, o, v as i8);
-            }
+        let request = GroupStanceRequest { group, stance };
+        let receipt = f.apply_group_stance_transaction(request.clone());
+        if receipt.status != GroupStateTransactionStatus::Applied || !receipt.validates(&request) {
+            return;
+        }
+        let Some(plan) = receipt.plan else { return };
+        if let Some(group) = self.groups.get_mut(self.slot) {
+            *group = plan.group;
         }
     }
 

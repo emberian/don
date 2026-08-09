@@ -196,16 +196,12 @@ mod tests {
     }
 
     #[test]
-    fn inline_command_statuses_preserve_complete_vs_state_wired() {
+    fn recovered_inline_commands_are_complete() {
         for op in [
             34, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 72,
-            74, 79, 81,
+            74, 76, 79, 81,
         ] {
             assert_eq!(inline_status(InlineDef::find(op).unwrap().port), "complete");
         }
-        assert_eq!(
-            inline_status(InlineDef::find(76).unwrap().port),
-            "state_wired"
-        );
     }
 }

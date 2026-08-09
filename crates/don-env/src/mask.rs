@@ -16,7 +16,7 @@
 use crate::generated as g;
 use crate::spec::{fill_bits, set_bit, EnvConfig, MaskLayout};
 use crate::state::EnvWorld;
-use crate::typecaps::{F_ATTACK, F_BUILDING, F_CIVILIAN, F_MOVE, F_PRODUCER, F_SIEGE};
+use crate::typecaps::{F_ATTACK, F_BUILDING, F_CIVILIAN, F_MOVE, F_PRODUCER, F_SIEGE, F_UNIT};
 
 /// Conjunctions a factored mask cannot express. Each is a real, quantified looseness in
 /// invariant 1, not a hand-wave.
@@ -135,6 +135,16 @@ impl MaskWriter {
             let t = w.type_index[row];
             let c = *w.rules.caps.get(t);
             let is_building = c.has(F_BUILDING);
+            let explicit_farm_citizen = w.row_is_explicit_farm_citizen(row);
+            let stance_options = w
+                .rules
+                .formation_cap(t)
+                .map(|cap| cap.stance_type(t))
+                .and_then(|stance_type| match stance_type {
+                    1 => Some(4),
+                    2 | 3 => Some(2),
+                    _ => None,
+                });
 
             // ---- Type, computed FIRST -------------------------------------------------
             // The Verb head gates QueueUp/Build on this being non-empty: offering a verb
@@ -170,9 +180,12 @@ impl MaskWriter {
                 // environment. Keep unsupported taxonomy entries in `generated.rs`, but
                 // do not advertise them to a policy until their mandatory host exists.
                 // HALT's exact body refuses building selections and skips true airborne
-                // planes. The permissive table has no is_plane evidence, so only derived
-                // ordinary non-plane units can advertise it.
-                if !w.rules.caps.is_permissive() && !is_building && !c.is_plane {
+                // planes. A live explicit Farm attachment independently proves its admitted
+                // 0x32/0x33 worker is an ordinary land Citizen; every other permissive-table
+                // row remains fail-closed.
+                if explicit_farm_citizen
+                    || (!w.rules.caps.is_permissive() && !is_building && !c.is_plane)
+                {
                     allow(g::uv::HALT);
                 }
                 // Active buildings route DISBAND through Build::queue_up(DISBAND), which
@@ -182,8 +195,12 @@ impl MaskWriter {
                 if !is_building {
                     allow(g::uv::DISBAND);
                 }
-                // STANCE remains masked until TypeCaps supplies get_stance_type and the
-                // mandatory-order/repath facts consumed by the full retail action.
+                // Captured stance types 1..3 only write UnitData::stance and the object
+                // dirty flag. Type zero reaches mandatory-order/update/repath calls the
+                // compact product does not represent and therefore remains masked.
+                if c.has(F_UNIT) && !is_building && !c.is_plane && stance_options.is_some() {
+                    allow(g::uv::STANCE);
+                }
                 if c.has(F_MOVE) && !is_building {
                     allow(g::uv::MOVE_TO);
                     allow(g::uv::MOVE_NEAR);
@@ -255,7 +272,10 @@ impl MaskWriter {
             }
 
             fill_bits(self.unit.head(r, g::UnitHead::QueuePos as usize), 3);
-            fill_bits(self.unit.head(r, g::UnitHead::Stance as usize), 4);
+            fill_bits(
+                self.unit.head(r, g::UnitHead::Stance as usize),
+                stance_options.unwrap_or(4),
+            );
             fill_bits(
                 self.unit.head(r, g::UnitHead::Form as usize),
                 g::FORMS.len(),

@@ -86,17 +86,17 @@ They carry **209 direct `call`/`jmp` sites** across all named procedures in `.te
 
 | status | count | meaning |
 |---|---:|---|
-| `Port::Complete` | 3 | complete transactional mutation (`begin`, `halt`, `disband`) |
+| `Port::Complete` | 7 | complete transactional mutation, including the four state-action receipts |
 | `Port::Orders` | 15 | installs orders per member, with `QueuePos`, from a command |
-| `Port::State` | 1 | reproduced, and retail installs no order either (`stance`) |
-| `Port::StateWired` | 3 | exact wire/state path; host capability/state columns remain explicit |
+| `Port::State` | 0 | no remaining state-only intermediate rows |
+| `Port::StateWired` | 0 | no remaining state-wired intermediate rows |
 | `Port::Todo` | 13 | dispatched and counted, body not ported |
 | `Port::NotOnTheWire` | 7 | no `CommandPackage` handler reaches them |
 
 So **22 of the 35 wire-reachable actions execute a recovered mutation** and 13 remain
-bodyless. Only `Complete` is whole-simulation closure-green; `Orders`, `State`, and
-`StateWired` remain honest intermediate tiers until every retail tail and required product
-host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
+bodyless. Seven are whole-receiver closure-green; the 15 order-producing rows remain
+honest partials until their full retail tails are present. `BridgeStats` counts the runtime
+split (`acted` vs `unported`).
 
 ### The full table, in descending call-site order
 
@@ -112,7 +112,7 @@ host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
 | `halt` | `0x0070D0C0` | 685 | 14 | atomically retires orders, applies the exact masks and aircraft skip, and resets `GroupData::form` to −1 | Complete |
 | `swarm_around` | `0x0070FBE0` | 3044 | 13 | `BUILD_AT`/`REPAIR`/`CAST_SPELL` + move, spread around a target → `halt`, `move_to` | Todo |
 | `guard` | `0x006FCD30` | 2012 | 8 | `GUARD` on each member, plus pulls nearby idle units into the group → `halt` | Orders |
-| `stance` | `0x0070D440` | 928 | 8 | writes `UnitData::stance` `+0xB1` / `Build::stance` `+0x7E`, sets flag bit `0x10`; installs nothing | State |
+| `stance` | `0x0070D440` | 928 | 8 | atomically resolves the exact type/modal cycle and writes build/unit stance plus the type-zero order tail | Complete |
 | `garrison` | `0x00700490` | 1791 | 7 | `GARRISON` on each member → `halt` | Orders |
 | `flight` | `0x006FB260` | 3398 | 6 | `STRAFE` for aircraft → `attack`, `guard`, `launch_flight` | Todo |
 | `queue_up` | `0x006FDBB0` | 1516 | 6 | `Build::queue_up` `0x00620F40` on producers; installs no unit order | Todo |
@@ -131,7 +131,7 @@ host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
 | `hotkey` | `0x006FA7A0` | 64 | 2 | binds a control group; **only caller is `Console::on_key_down`** | NotOnTheWire |
 | `recall` | `0x006FA7E0` | 1373 | 2 | `STRAFE` → `return` | Todo |
 | `return` | `0x006FAD40` | 1307 | 2 | `STRAFE` back to base | NotOnTheWire |
-| `buildmask` | `0x006FC9A0` | 487 | 2 | toggles `BuildData::build_masks` for `Build::mask_me`-eligible members | StateWired |
+| `buildmask` | `0x006FC9A0` | 487 | 2 | atomically toggles `BuildData::build_masks` for `WallData::valid_buildmask`-eligible members and emits local feedback | Complete |
 | `spell` | `0x006FE1A0` | 4100 | 2 | `CAST_SPELL` | Todo |
 | `gather_point` | `0x006FF1B0` | 3668 | 2 | sets a building's rally point → `flight` | Todo |
 | `transport` | `0x00702620` | 932 | 2 | toggles transport mode; clears orders | Todo |
@@ -139,11 +139,11 @@ host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
 | `siege_attack_to` | `0x0070D830` | 2037 | 2 | AI-only (`Army::do_forming`, `Army::march_to_target`) → `guard`, `move_to` | NotOnTheWire |
 | `scramble` | `0x007111C0` | 894 | 2 | `AIR_PATROL` over the unit's own position | Orders |
 | `launch_flight` | `0x006FBFB0` | 2544 | 1 | → `flight` | NotOnTheWire |
-| `unitmask` | `0x006FCB90` | 404 | 1 | toggles `UnitData::unit_masks`; mask `0x100` clears canonical orders | StateWired |
+| `unitmask` | `0x006FCB90` | 404 | 1 | atomically toggles `UnitData::unit_masks`; mask `0x100` performs the full action/path retirement sequence | Complete |
 | `stop_spell` | `0x006FD7A0` | 480 | 1 | cancels casting | Todo |
 | `alarm_peasant` | `0x006FD980` | 550 | 1 | allocates `GARRISON` **directly**, not through an `add_*_order` | NotOnTheWire |
 | `city_gather` | `0x00701780` | 1333 | 1 | city rally point; installs nothing | Todo |
-| `set_transport` | `0x007024B0` | 357 | 1 | toggles unit mask `0x00800000` under owner transport capability | StateWired |
+| `set_transport` | `0x007024B0` | 357 | 1 | atomically toggles unit mask `0x00800000` under the exact owner transport ladder and capability facts | Complete |
 | `launch_patrol` | `0x00703580` | 2043 | 1 | **`AIR_PATROL`** | Orders |
 | `siege_attack` | `0x00706FF0` | 549 | 1 | → `attack`, `guard` | Todo |
 | `build` | `0x00707510` | 1256 | 1 | → `swarm_around` | Todo |
@@ -154,9 +154,9 @@ host is present. `BridgeStats` counts the runtime split (`acted` vs `unported`).
 | opcode | command | recovered target | status |
 |---:|---|---|---|
 | 1 | `BeginCommand` | `GroupData::disband = 0` | `complete` |
-| 14 | `SetTransportCommand` | unit mask `0x00800000`, gated by owner transport state and `can_ever_transport` | `state_wired` |
-| 32 | `UnitmaskCommand` | `UnitData::unit_masks` with the recovered first-eligible carry rule | `state_wired` |
-| 33 | `BuildmaskCommand` | `BuildData::build_masks` after the `Build::mask_me` capability predicate | `state_wired` |
+| 14 | `SetTransportCommand` | scenario prelude, `action_begin`, exact `0x100/0x200/0x400` ladder, `can_ever_transport`, mask `0x00800000` | `complete` |
+| 32 | `UnitmaskCommand` | loop-carried `UnitData::unit_masks`; mask `0x100` retires action/path state in exact order | `complete` |
+| 33 | `BuildmaskCommand` | loop-carried `BuildData::build_masks`, `WallData::valid_buildmask`, local mask-`0x40` feedback | `complete` |
 
 Opcode 1 corrects an extraction blind spot: `process_begin` `0x00949FD0` reaches the
 group's virtual slot `+0x14`, whose concrete `Group::action_begin` implementation at
@@ -165,12 +165,12 @@ zero sites and incorrectly classified it as off-wire.
 
 The fixed mask commands decode `mask` at wire `+1` and a second signed dword at `+5`.
 Both recovered optimized bodies ignore the second dword. For mask `0x40000`, UNITMASK
-force-clears; otherwise the first eligible member chooses set versus clear and the
-decision carries through the remaining selection. BUILDMASK uses the same carry rule.
-The bridge requires explicit `Fleet` predicates for transport and build-mask capability,
-so missing product data skips instead of guessing. UNITMASK `0x100` also clears modeled
-order queues, but retail's adjacent partial-path and presentation state is not represented;
-that is why these three rows remain `state_wired`, not `complete`.
+force-clears. Otherwise set begins true but is recomputed at every eligible member: a later
+already-set member flips the carried state to clear, earlier writes remain, and subsequent
+members clear. BUILDMASK has the same instruction-ordered carry. All four state actions now
+cross typed atomic `Fleet` receipts. The bridge recomputes each returned plan, commits only
+its echoed `GroupData`, and leaves both bridge and world untouched on unavailable or malformed
+receipts; product hosts may therefore fail closed without manufacturing missing facts.
 
 Diplomacy opcodes 37–45 remain inert. Their action bodies cross proposal/offer ownership,
 resource transfer, and target retasking; reducing those effects to a relation matrix would
@@ -183,7 +183,7 @@ silently manufacture lockstep behavior that has not been recovered.
 | 52 | `process_speed_set` `0x00946380` | signed dword `+1` → `TurnControl+0x30`, behind the exact network/speed-lock gate | `complete` |
 | 53 | `process_speed_up` `0x009461A0` | increment speed through Fast (index 3), with the same gate | `complete` |
 | 54 | `process_speed_down` `0x00946290` | decrement nonzero speed, with the same gate | `complete` |
-| 76 | `process_pause` `0x00944160` | raw byte `+1`, pause bit/delay and network allowance counter | `state_wired` |
+| 76 | `process_pause` `0x00944160` | raw byte `+1`, exact toggle/denial/restart transaction and ordered external effects | `complete` |
 | 79 | `process_player_speed` `0x00943730` | eight `u8` deltas at `+1..+8` wrapping into player `u32` counters | `complete` |
 
 The speed handlers' deterministic mutation is only the speed index and its two game-state
@@ -192,11 +192,14 @@ Audio, UI messages, and the `timeGetTime` wall-clock pacing fields do not enter 
 simulation state. Opcode 79 uses `CommandPackage::play`, not a byte in its own body, and
 all eight additions wrap as x86 `u32` arithmetic.
 
-Pause remains red on purpose. The solo toggle, duplicate-state no-op, immediate-process
-unpause gate, ten-pause network allowance, and per-player pause-count increment execute;
-the network restart tail (`Game+0x821` bits, callback frontier, and leader resumption) is
-not represented in this bridge. The metadata therefore says `state_wired`, never
-`complete`.
+Pause is a typed atomic host transaction. Retail compares the raw request byte with the
+one-bit pause flag, logs an exact duplicate, and otherwise *toggles* rather than assigning.
+The plan preserves solo clock reset and notice ordering, immediate-process refusal, the
+ten-pause network allowance, wrapping counter/message templates, and local denial sound.
+On the rare unpause restart branch it clears `Game+0x821 & 4`, schedules `Game+0x81C`,
+requires the side-effecting embedded `Game::balance.next()` result, and on zero sets
+`Game+0x820 & 0x40` before issuing `Leader::victory(0, 0)` only for status words whose
+`flags & 0x63 == 3`. Missing callback or leader facts make the whole transaction unavailable.
 
 ### Control-group and MP-log tranche (2026-08-09)
 

@@ -2230,6 +2230,10 @@ pub enum GroupActionPlanError {
         expected: i16,
         got: i16,
     },
+    StanceOptionOutOfRange {
+        index: usize,
+        stance: i32,
+    },
 }
 
 /// Recover the complete state-changing body of `Group::action_halt(int)` `0x0070D0C0`.
@@ -2449,6 +2453,748 @@ pub fn plan_action_disband(
         successes,
         rejected_buildings,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Adjacent group state actions
+// ---------------------------------------------------------------------------
+
+/// One member snapshot consumed by `Group::action_unitmask` `0x006FCB90`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitMaskMemberFacts {
+    pub o: i16,
+    pub valid_unit: bool,
+    /// Exact `UnitData::is_plane`; read only for mask `0x100`.
+    pub is_plane: bool,
+    pub unit_masks: u32,
+}
+
+/// Instruction-ordered state effects of `Group::action_unitmask`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitMaskStep {
+    WriteUnitMasks { who: u8, o: i16, value: u32 },
+    SetObjectFlag { who: u8, o: i16, mask: u8 },
+    ClearUnitMasks { who: u8, o: i16, mask: u32 },
+    ClearPathAnchor { who: u8, o: i16 },
+    CloseOrders { who: u8, o: i16, arg: i32 },
+    ClearPartialPath { who: u8, o: i16 },
+    UpdateAction { who: u8, o: i16 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnitMaskPlan {
+    pub group: GroupData,
+    pub steps: Vec<UnitMaskStep>,
+    /// The loop-carried toggle at function exit. Mask `0x40000` starts false; every other
+    /// mask starts true and remains true only while every reached member lacked the bit.
+    pub final_set: bool,
+}
+
+/// Recover `Group::action_unitmask(int mask, int set)` `0x006FCB90`.
+///
+/// The second argument is genuinely unread. A subtle retail behavior is retained: this is
+/// not a one-time "first member chooses" toggle. The loop-carried state can flip from set
+/// to clear when a later eligible member already has the bit; earlier writes are not undone.
+/// Mask `0x40000` always clears. Mask `0x100` skips true planes and then performs the same
+/// action/path retirement sequence after each toggle.
+pub fn plan_action_unitmask(
+    group: &GroupData,
+    mask: u32,
+    _set: i32,
+    members: &[UnitMaskMemberFacts],
+) -> Result<UnitMaskPlan, GroupActionPlanError> {
+    if group.buildings != 0 {
+        return Ok(UnitMaskPlan {
+            group: group.clone(),
+            steps: Vec::new(),
+            final_set: mask != 0x0004_0000,
+        });
+    }
+    validate_member_identities(group, members.iter().map(|facts| facts.o))?;
+    let who = group.who;
+    let mut set = mask != 0x0004_0000;
+    let mut steps = Vec::new();
+    for facts in members {
+        if !facts.valid_unit || (mask == 0x100 && facts.is_plane) {
+            continue;
+        }
+        set = facts.unit_masks & mask == 0 && set;
+        let value = if set {
+            facts.unit_masks | mask
+        } else {
+            facts.unit_masks & !mask
+        };
+        steps.push(UnitMaskStep::WriteUnitMasks {
+            who,
+            o: facts.o,
+            value,
+        });
+        if mask == 0x100 {
+            steps.extend([
+                UnitMaskStep::SetObjectFlag {
+                    who,
+                    o: facts.o,
+                    mask: 0x10,
+                },
+                UnitMaskStep::ClearUnitMasks {
+                    who,
+                    o: facts.o,
+                    mask: 0x0400_0000,
+                },
+                UnitMaskStep::ClearPathAnchor { who, o: facts.o },
+                UnitMaskStep::CloseOrders {
+                    who,
+                    o: facts.o,
+                    arg: 0,
+                },
+                UnitMaskStep::ClearPartialPath { who, o: facts.o },
+                UnitMaskStep::UpdateAction { who, o: facts.o },
+            ]);
+        }
+    }
+    Ok(UnitMaskPlan {
+        group: group.clone(),
+        steps,
+        final_set: set,
+    })
+}
+
+/// One building snapshot consumed by `Group::action_buildmask` `0x006FC9A0`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildMaskMemberFacts {
+    pub o: i16,
+    pub valid_build: bool,
+    /// Exact `WallData::valid_buildmask(mask)` `0x0063E2A0` result.
+    pub valid_buildmask: bool,
+    pub build_masks: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildMaskStep {
+    WriteBuildMasks {
+        who: u8,
+        o: i16,
+        value: u16,
+    },
+    /// Local-player UI tail reached only for mask `0x40` after at least one write.
+    Feedback {
+        who: u8,
+        set: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BuildMaskPlan {
+    pub group: GroupData,
+    pub steps: Vec<BuildMaskStep>,
+    pub final_set: bool,
+    pub changed: bool,
+}
+
+/// Recover `Group::action_buildmask(int mask, int set)` `0x006FC9A0`.
+///
+/// As in UNITMASK, `set` is unread and the loop-carried state can flip only from set to
+/// clear. `WallData::valid_buildmask` is mandatory per-member capability evidence.
+pub fn plan_action_buildmask(
+    group: &GroupData,
+    mask: u16,
+    _set: i32,
+    owner_is_local: bool,
+    members: &[BuildMaskMemberFacts],
+) -> Result<BuildMaskPlan, GroupActionPlanError> {
+    if group.buildings == 0 {
+        return Ok(BuildMaskPlan {
+            group: group.clone(),
+            steps: Vec::new(),
+            final_set: true,
+            changed: false,
+        });
+    }
+    validate_member_identities(group, members.iter().map(|facts| facts.o))?;
+    let who = group.who;
+    let mut set = true;
+    let mut changed = false;
+    let mut steps = Vec::new();
+    for facts in members {
+        if !facts.valid_build || !facts.valid_buildmask {
+            continue;
+        }
+        set = facts.build_masks & mask == 0 && set;
+        let value = if set {
+            facts.build_masks | mask
+        } else {
+            facts.build_masks & !mask
+        };
+        steps.push(BuildMaskStep::WriteBuildMasks {
+            who,
+            o: facts.o,
+            value,
+        });
+        changed = true;
+    }
+    if changed && owner_is_local && mask == 0x40 {
+        steps.push(BuildMaskStep::Feedback { who, set });
+    }
+    Ok(BuildMaskPlan {
+        group: group.clone(),
+        steps,
+        final_set: set,
+        changed,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetTransportMemberFacts {
+    pub o: i16,
+    pub valid_unit: bool,
+    pub can_ever_transport: bool,
+    pub unit_masks: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetTransportStep {
+    WriteUnitMasks { who: u8, o: i16, value: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetTransportPlan {
+    pub group: GroupData,
+    pub steps: Vec<SetTransportStep>,
+    pub enabled: bool,
+}
+
+/// Recover the body of `Group::action_set_transport(int)` `0x007024B0` after its optional
+/// scenario ignore-orders prelude.
+///
+/// `transport_level` is the exact collapsed leader flag ladder: bit `0x100` => 3, else bit
+/// `0x200` => 2, else bit `0x400` => 1, else zero. `action_begin` clears `group.disband`
+/// before the building gate, so that write survives even when no member is reached.
+pub fn plan_action_set_transport(
+    group_after_ignore_orders: &GroupData,
+    flag: i32,
+    transport_level: u8,
+    members: &[SetTransportMemberFacts],
+) -> Result<SetTransportPlan, GroupActionPlanError> {
+    let mut group = group_after_ignore_orders.clone();
+    group.disband = 0;
+    let enabled = transport_level != 0 && flag != 0;
+    if group_after_ignore_orders.buildings != 0 {
+        return Ok(SetTransportPlan {
+            group,
+            steps: Vec::new(),
+            enabled,
+        });
+    }
+    validate_member_identities(
+        group_after_ignore_orders,
+        members.iter().map(|facts| facts.o),
+    )?;
+    let who = group_after_ignore_orders.who;
+    let steps = members
+        .iter()
+        .filter(|facts| facts.valid_unit && facts.can_ever_transport)
+        .map(|facts| SetTransportStep::WriteUnitMasks {
+            who,
+            o: facts.o,
+            value: if enabled {
+                facts.unit_masks | 0x0080_0000
+            } else {
+                facts.unit_masks & !0x0080_0000
+            },
+        })
+        .collect();
+    Ok(SetTransportPlan {
+        group,
+        steps,
+        enabled,
+    })
+}
+
+/// Member/type/order facts read by `Group::action_stance` `0x0070D440` and its
+/// `get_stance_type` / `get_stance_option` helpers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StanceMemberFacts {
+    pub o: i16,
+    pub active: bool,
+    pub valid_unit: bool,
+    pub is_captain: bool,
+    pub on_map: bool,
+    /// Effective ObjectData virtual `get_stance_type`, used by the group scan and option
+    /// histogram.
+    pub object_stance_type: i32,
+    /// Current UnitData or BuildData stance selected by the group's building discriminator.
+    pub current_stance: i32,
+    pub is_build: bool,
+    pub build_stance_type: i32,
+    pub is_unit: bool,
+    pub unit_stance_type: i32,
+    pub is_plane: bool,
+    /// Outcomes of the repeated, side-effecting update calls in the combat-stance arm.
+    pub update_order_first_present: bool,
+    pub update_order_second_mandatory: bool,
+    pub update_action_first_present: bool,
+    pub update_action_second_mandatory: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StanceStep {
+    WriteBuildStance { who: u8, o: i16, value: i8 },
+    WriteUnitStance { who: u8, o: i16, value: i8 },
+    SetObjectFlag { who: u8, o: i16, mask: u8 },
+    ClearMandatory { who: u8, o: i16 },
+    UpdateOrder { who: u8, o: i16 },
+    UpdateAction { who: u8, o: i16 },
+    Repath { who: u8, o: i16 },
+    KillCurrentOrder { who: u8, o: i16, arg: i32 },
+    ClearOrders { who: u8, o: i16 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StancePlan {
+    pub group: GroupData,
+    pub steps: Vec<StanceStep>,
+    pub group_on_map: bool,
+    pub stance_type: i32,
+    pub current_option: i32,
+    pub resolved_stance: i32,
+}
+
+fn stance_cycle(stance_type: i32) -> Option<usize> {
+    match stance_type {
+        0 => Some(6),
+        1 => Some(4),
+        2 | 3 => Some(2),
+        _ => None,
+    }
+}
+
+fn group_stance_type(preferred: i32, members: &[StanceMemberFacts]) -> i32 {
+    if !matches!(preferred, -1 | 2) {
+        return preferred;
+    }
+    let mut saw_two = false;
+    for member in members {
+        match member.object_stance_type {
+            -1 => {}
+            2 => saw_two = true,
+            other => return other,
+        }
+    }
+    if saw_two {
+        2
+    } else {
+        -1
+    }
+}
+
+fn plan_type_zero_stance_tail(
+    who: u8,
+    member: &StanceMemberFacts,
+    stance: i32,
+    leader_flags: u32,
+    steps: &mut Vec<StanceStep>,
+) {
+    match stance {
+        0 | 3 | 4 => steps.push(StanceStep::ClearMandatory { who, o: member.o }),
+        1 | 2 | 5 if leader_flags & 4 != 0 => {
+            steps.push(StanceStep::UpdateOrder { who, o: member.o });
+            if !member.update_order_first_present {
+                return;
+            }
+            steps.push(StanceStep::UpdateOrder { who, o: member.o });
+            if member.update_order_second_mandatory {
+                return;
+            }
+            steps.push(StanceStep::UpdateAction { who, o: member.o });
+            if member.update_action_first_present {
+                steps.push(StanceStep::UpdateAction { who, o: member.o });
+                if member.update_action_second_mandatory {
+                    return;
+                }
+            }
+            steps.extend([
+                StanceStep::Repath { who, o: member.o },
+                StanceStep::KillCurrentOrder {
+                    who,
+                    o: member.o,
+                    arg: 0,
+                },
+            ]);
+        }
+        1 | 2 | 5 => {}
+        _ => steps.push(StanceStep::ClearOrders { who, o: member.o }),
+    }
+}
+
+/// Recover `Group::action_stance(int)` `0x0070D440` including its exact group type
+/// preference, modal current option, negative cycling, build/unit eligibility, plane skip,
+/// and type-zero mandatory-order transitions.
+///
+/// `preferred_stance_type` is the exact result for the representative chosen by
+/// `Group::get_unit(0)` (or member zero for a building group). Keeping that selection as a
+/// mandatory host fact avoids replacing the recovered formation-category choice with list
+/// order. Every remaining branch is reproduced here.
+pub fn plan_action_stance(
+    group: &GroupData,
+    requested_stance: i32,
+    preferred_stance_type: i32,
+    leader_flags: u32,
+    members: &[StanceMemberFacts],
+) -> Result<StancePlan, GroupActionPlanError> {
+    validate_member_identities(group, members.iter().map(|facts| facts.o))?;
+    let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    let group_on_map = n != 0
+        && (group.buildings != 0
+            || members
+                .iter()
+                .any(|m| m.valid_unit && m.is_captain && m.on_map));
+    if !group_on_map {
+        return Ok(StancePlan {
+            group: group.clone(),
+            steps: Vec::new(),
+            group_on_map: false,
+            stance_type: -1,
+            current_option: 0,
+            resolved_stance: requested_stance,
+        });
+    }
+
+    // action_begin precedes the stance-type switch and therefore survives an unsupported
+    // type exactly as it does in retail.
+    let mut planned_group = group.clone();
+    planned_group.disband = 0;
+    let stance_type = group_stance_type(preferred_stance_type, members);
+    let Some(cycle) = stance_cycle(stance_type) else {
+        return Ok(StancePlan {
+            group: planned_group,
+            steps: Vec::new(),
+            group_on_map: true,
+            stance_type,
+            current_option: 0,
+            resolved_stance: requested_stance,
+        });
+    };
+
+    let mut counts = vec![0usize; cycle];
+    for (index, member) in members.iter().enumerate() {
+        if !member.active || member.object_stance_type != stance_type {
+            continue;
+        }
+        let Ok(option) = usize::try_from(member.current_stance) else {
+            return Err(GroupActionPlanError::StanceOptionOutOfRange {
+                index,
+                stance: member.current_stance,
+            });
+        };
+        let Some(count) = counts.get_mut(option) else {
+            return Err(GroupActionPlanError::StanceOptionOutOfRange {
+                index,
+                stance: member.current_stance,
+            });
+        };
+        *count += 1;
+    }
+    let mut current_option = 0usize;
+    for option in 0..cycle {
+        if counts[option] > counts[current_option] {
+            current_option = option;
+        }
+    }
+    let resolved_stance = if requested_stance < 0 {
+        if requested_stance == -2 {
+            if current_option == 0 {
+                cycle as i32 - 1
+            } else {
+                current_option as i32 - 1
+            }
+        } else {
+            (current_option as i32 + 1) % cycle as i32
+        }
+    } else {
+        requested_stance
+    };
+
+    let who = group.who;
+    let value = resolved_stance as i8;
+    let mut steps = Vec::new();
+    for member in members {
+        if !member.active {
+            continue;
+        }
+        if member.is_build {
+            if member.build_stance_type != stance_type {
+                continue;
+            }
+            steps.push(StanceStep::WriteBuildStance {
+                who,
+                o: member.o,
+                value,
+            });
+        }
+        if member.is_unit && member.unit_stance_type == stance_type && !member.is_plane {
+            steps.extend([
+                StanceStep::WriteUnitStance {
+                    who,
+                    o: member.o,
+                    value,
+                },
+                StanceStep::SetObjectFlag {
+                    who,
+                    o: member.o,
+                    mask: 0x10,
+                },
+            ]);
+            if stance_type == 0 {
+                plan_type_zero_stance_tail(who, member, resolved_stance, leader_flags, &mut steps);
+            }
+        }
+    }
+
+    Ok(StancePlan {
+        group: planned_group,
+        steps,
+        group_on_map: true,
+        stance_type,
+        current_option: current_option as i32,
+        resolved_stance,
+    })
+}
+
+fn validate_member_identities(
+    group: &GroupData,
+    identities: impl IntoIterator<Item = i16>,
+) -> Result<(), GroupActionPlanError> {
+    let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    let identities: Vec<i16> = identities.into_iter().collect();
+    if identities.len() != n {
+        return Err(GroupActionPlanError::MemberCount);
+    }
+    for (index, got) in identities.into_iter().enumerate() {
+        let expected = group.list[index];
+        if got != expected {
+            return Err(GroupActionPlanError::MemberIdentity {
+                index,
+                expected,
+                got,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Shared status for the four adjacent state-action transaction receipts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupStateTransactionStatus {
+    Applied,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupUnitMaskRequest {
+    pub group: GroupData,
+    pub mask: u32,
+    pub set: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupUnitMaskReceipt {
+    pub request: GroupUnitMaskRequest,
+    pub status: GroupStateTransactionStatus,
+    pub members: Vec<UnitMaskMemberFacts>,
+    pub plan: Option<UnitMaskPlan>,
+}
+
+impl GroupUnitMaskReceipt {
+    pub fn unavailable(request: GroupUnitMaskRequest) -> Self {
+        Self {
+            request,
+            status: GroupStateTransactionStatus::Unavailable,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupUnitMaskRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupStateTransactionStatus::Unavailable => {
+                self.members.is_empty() && self.plan.is_none()
+            }
+            GroupStateTransactionStatus::Applied => self.plan.as_ref().is_some_and(|observed| {
+                plan_action_unitmask(&expected.group, expected.mask, expected.set, &self.members)
+                    .is_ok_and(|plan| plan == *observed)
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupBuildMaskRequest {
+    pub group: GroupData,
+    pub mask: u16,
+    pub set: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupBuildMaskReceipt {
+    pub request: GroupBuildMaskRequest,
+    pub status: GroupStateTransactionStatus,
+    pub owner_is_local: Option<bool>,
+    pub members: Vec<BuildMaskMemberFacts>,
+    pub plan: Option<BuildMaskPlan>,
+}
+
+impl GroupBuildMaskReceipt {
+    pub fn unavailable(request: GroupBuildMaskRequest) -> Self {
+        Self {
+            request,
+            status: GroupStateTransactionStatus::Unavailable,
+            owner_is_local: None,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupBuildMaskRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupStateTransactionStatus::Unavailable => {
+                self.owner_is_local.is_none() && self.members.is_empty() && self.plan.is_none()
+            }
+            GroupStateTransactionStatus::Applied => {
+                let (Some(local), Some(observed)) = (self.owner_is_local, self.plan.as_ref())
+                else {
+                    return false;
+                };
+                plan_action_buildmask(
+                    &expected.group,
+                    expected.mask,
+                    expected.set,
+                    local,
+                    &self.members,
+                )
+                .is_ok_and(|plan| plan == *observed)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupSetTransportRequest {
+    pub group: GroupData,
+    pub flag: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupSetTransportReceipt {
+    pub request: GroupSetTransportRequest,
+    pub status: GroupStateTransactionStatus,
+    pub group_after_ignore_orders: Option<GroupData>,
+    pub transport_level: Option<u8>,
+    pub members: Vec<SetTransportMemberFacts>,
+    pub plan: Option<SetTransportPlan>,
+}
+
+impl GroupSetTransportReceipt {
+    pub fn unavailable(request: GroupSetTransportRequest) -> Self {
+        Self {
+            request,
+            status: GroupStateTransactionStatus::Unavailable,
+            group_after_ignore_orders: None,
+            transport_level: None,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupSetTransportRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupStateTransactionStatus::Unavailable => {
+                self.group_after_ignore_orders.is_none()
+                    && self.transport_level.is_none()
+                    && self.members.is_empty()
+                    && self.plan.is_none()
+            }
+            GroupStateTransactionStatus::Applied => {
+                let (Some(group), Some(level), Some(observed)) = (
+                    self.group_after_ignore_orders.as_ref(),
+                    self.transport_level,
+                    self.plan.as_ref(),
+                ) else {
+                    return false;
+                };
+                plan_action_set_transport(group, expected.flag, level, &self.members)
+                    .is_ok_and(|plan| plan == *observed)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupStanceRequest {
+    pub group: GroupData,
+    pub stance: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupStanceReceipt {
+    pub request: GroupStanceRequest,
+    pub status: GroupStateTransactionStatus,
+    pub preferred_stance_type: Option<i32>,
+    pub leader_flags: Option<u32>,
+    pub members: Vec<StanceMemberFacts>,
+    pub plan: Option<StancePlan>,
+}
+
+impl GroupStanceReceipt {
+    pub fn unavailable(request: GroupStanceRequest) -> Self {
+        Self {
+            request,
+            status: GroupStateTransactionStatus::Unavailable,
+            preferred_stance_type: None,
+            leader_flags: None,
+            members: Vec::new(),
+            plan: None,
+        }
+    }
+
+    pub fn validates(&self, expected: &GroupStanceRequest) -> bool {
+        if &self.request != expected {
+            return false;
+        }
+        match self.status {
+            GroupStateTransactionStatus::Unavailable => {
+                self.preferred_stance_type.is_none()
+                    && self.leader_flags.is_none()
+                    && self.members.is_empty()
+                    && self.plan.is_none()
+            }
+            GroupStateTransactionStatus::Applied => {
+                let (Some(preferred), Some(leader_flags), Some(observed)) = (
+                    self.preferred_stance_type,
+                    self.leader_flags,
+                    self.plan.as_ref(),
+                ) else {
+                    return false;
+                };
+                plan_action_stance(
+                    &expected.group,
+                    expected.stance,
+                    preferred,
+                    leader_flags,
+                    &self.members,
+                )
+                .is_ok_and(|plan| plan == *observed)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3787,6 +4533,425 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn action_unitmask_preserves_retails_loop_carried_set_then_clear_split() {
+        let mut group = GroupData::default();
+        for o in [1, 2, 3, 4] {
+            group.add(o, 2, false, 0, 0);
+        }
+        let members = [
+            UnitMaskMemberFacts {
+                o: 1,
+                valid_unit: true,
+                unit_masks: 0,
+                ..Default::default()
+            },
+            UnitMaskMemberFacts {
+                o: 2,
+                valid_unit: true,
+                unit_masks: 0,
+                ..Default::default()
+            },
+            UnitMaskMemberFacts {
+                o: 3,
+                valid_unit: true,
+                unit_masks: 0x20,
+                ..Default::default()
+            },
+            UnitMaskMemberFacts {
+                o: 4,
+                valid_unit: true,
+                unit_masks: 0,
+                ..Default::default()
+            },
+        ];
+        let plan = plan_action_unitmask(&group, 0x20, 99, &members).unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                UnitMaskStep::WriteUnitMasks {
+                    who: 2,
+                    o: 1,
+                    value: 0x20,
+                },
+                UnitMaskStep::WriteUnitMasks {
+                    who: 2,
+                    o: 2,
+                    value: 0x20,
+                },
+                UnitMaskStep::WriteUnitMasks {
+                    who: 2,
+                    o: 3,
+                    value: 0,
+                },
+                UnitMaskStep::WriteUnitMasks {
+                    who: 2,
+                    o: 4,
+                    value: 0,
+                },
+            ]
+        );
+        assert!(!plan.final_set);
+
+        let forced_clear = plan_action_unitmask(&group, 0x40000, -123, &members).unwrap();
+        assert!(!forced_clear.final_set);
+        assert!(forced_clear.steps.iter().all(|step| matches!(
+            step,
+            UnitMaskStep::WriteUnitMasks { value, .. } if value & 0x40000 == 0
+        )));
+    }
+
+    #[test]
+    fn action_unitmask_100_skips_planes_and_emits_exact_retirement_order() {
+        let mut group = GroupData::default();
+        group.add(7, 1, false, 0, 0);
+        group.add(8, 1, false, 0, 0);
+        let plan = plan_action_unitmask(
+            &group,
+            0x100,
+            0,
+            &[
+                UnitMaskMemberFacts {
+                    o: 7,
+                    valid_unit: true,
+                    is_plane: true,
+                    ..Default::default()
+                },
+                UnitMaskMemberFacts {
+                    o: 8,
+                    valid_unit: true,
+                    unit_masks: 0x0400_0000,
+                    ..Default::default()
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                UnitMaskStep::WriteUnitMasks {
+                    who: 1,
+                    o: 8,
+                    value: 0x0400_0100,
+                },
+                UnitMaskStep::SetObjectFlag {
+                    who: 1,
+                    o: 8,
+                    mask: 0x10,
+                },
+                UnitMaskStep::ClearUnitMasks {
+                    who: 1,
+                    o: 8,
+                    mask: 0x0400_0000,
+                },
+                UnitMaskStep::ClearPathAnchor { who: 1, o: 8 },
+                UnitMaskStep::CloseOrders {
+                    who: 1,
+                    o: 8,
+                    arg: 0,
+                },
+                UnitMaskStep::ClearPartialPath { who: 1, o: 8 },
+                UnitMaskStep::UpdateAction { who: 1, o: 8 },
+            ]
+        );
+    }
+
+    #[test]
+    fn action_buildmask_keeps_split_writes_and_local_feedback_tail() {
+        let mut group = GroupData::default();
+        for o in [10, 11, 12] {
+            group.add(o, 3, true, 0, 0);
+        }
+        let plan = plan_action_buildmask(
+            &group,
+            0x40,
+            0x7fff,
+            true,
+            &[
+                BuildMaskMemberFacts {
+                    o: 10,
+                    valid_build: true,
+                    valid_buildmask: true,
+                    build_masks: 0,
+                },
+                BuildMaskMemberFacts {
+                    o: 11,
+                    valid_build: true,
+                    valid_buildmask: false,
+                    build_masks: 0,
+                },
+                BuildMaskMemberFacts {
+                    o: 12,
+                    valid_build: true,
+                    valid_buildmask: true,
+                    build_masks: 0x40,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![
+                BuildMaskStep::WriteBuildMasks {
+                    who: 3,
+                    o: 10,
+                    value: 0x40,
+                },
+                BuildMaskStep::WriteBuildMasks {
+                    who: 3,
+                    o: 12,
+                    value: 0,
+                },
+                BuildMaskStep::Feedback { who: 3, set: false },
+            ]
+        );
+        assert!(plan.changed);
+        assert!(!plan.final_set);
+    }
+
+    #[test]
+    fn action_set_transport_action_begin_precedes_building_gate_and_level_controls_flag() {
+        let building = GroupData {
+            disband: 9,
+            buildings: 1,
+            num: 1,
+            ..Default::default()
+        };
+        let gated = plan_action_set_transport(&building, 1, 3, &[]).unwrap();
+        assert_eq!(gated.group.disband, 0);
+        assert!(gated.steps.is_empty());
+
+        let mut group = GroupData {
+            disband: 4,
+            ..Default::default()
+        };
+        group.add(20, 4, false, 0, 0);
+        group.add(21, 4, false, 0, 0);
+        let members = [
+            SetTransportMemberFacts {
+                o: 20,
+                valid_unit: true,
+                can_ever_transport: true,
+                unit_masks: 0,
+            },
+            SetTransportMemberFacts {
+                o: 21,
+                valid_unit: true,
+                can_ever_transport: false,
+                unit_masks: 0x800000,
+            },
+        ];
+        let enabled = plan_action_set_transport(&group, -1, 1, &members).unwrap();
+        assert_eq!(enabled.group.disband, 0);
+        assert_eq!(
+            enabled.steps,
+            vec![SetTransportStep::WriteUnitMasks {
+                who: 4,
+                o: 20,
+                value: 0x800000,
+            }]
+        );
+        let disabled = plan_action_set_transport(&group, 1, 0, &members).unwrap();
+        assert_eq!(
+            disabled.steps,
+            vec![SetTransportStep::WriteUnitMasks {
+                who: 4,
+                o: 20,
+                value: 0,
+            }]
+        );
+    }
+
+    fn stance_member(o: i16, stance_type: i32, current_stance: i32) -> StanceMemberFacts {
+        StanceMemberFacts {
+            o,
+            active: true,
+            valid_unit: true,
+            is_captain: true,
+            on_map: true,
+            object_stance_type: stance_type,
+            current_stance,
+            is_unit: true,
+            unit_stance_type: stance_type,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn action_stance_prefers_non_generic_type_and_cycles_the_modal_option() {
+        let mut group = GroupData {
+            disband: 8,
+            ..Default::default()
+        };
+        for o in [30, 31, 32] {
+            group.add(o, 5, false, 0, 0);
+        }
+        let members = [
+            stance_member(30, 2, 1),
+            stance_member(31, 1, 2),
+            stance_member(32, 1, 2),
+        ];
+        // Preferred type 2 forces the scan; the first non--1/non-2 member wins (type 1).
+        let plan = plan_action_stance(&group, -1, 2, 0, &members).unwrap();
+        assert_eq!(plan.stance_type, 1);
+        assert_eq!(plan.current_option, 2);
+        assert_eq!(plan.resolved_stance, 3);
+        assert_eq!(plan.group.disband, 0);
+        assert_eq!(
+            plan.steps,
+            vec![
+                StanceStep::WriteUnitStance {
+                    who: 5,
+                    o: 31,
+                    value: 3,
+                },
+                StanceStep::SetObjectFlag {
+                    who: 5,
+                    o: 31,
+                    mask: 0x10,
+                },
+                StanceStep::WriteUnitStance {
+                    who: 5,
+                    o: 32,
+                    value: 3,
+                },
+                StanceStep::SetObjectFlag {
+                    who: 5,
+                    o: 32,
+                    mask: 0x10,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn action_stance_on_map_gate_precedes_action_begin_but_invalid_type_does_not() {
+        let mut off_map = GroupData {
+            disband: 7,
+            ..Default::default()
+        };
+        off_map.add(40, 6, false, 0, 0);
+        let facts = StanceMemberFacts {
+            on_map: false,
+            ..stance_member(40, -1, 0)
+        };
+        let gated = plan_action_stance(&off_map, 1, -1, 0, &[facts]).unwrap();
+        assert!(!gated.group_on_map);
+        assert_eq!(gated.group.disband, 7);
+
+        let facts = StanceMemberFacts {
+            on_map: true,
+            ..facts
+        };
+        let invalid = plan_action_stance(&off_map, 1, -1, 0, &[facts]).unwrap();
+        assert!(invalid.group_on_map);
+        assert_eq!(invalid.stance_type, -1);
+        assert_eq!(invalid.group.disband, 0);
+        assert!(invalid.steps.is_empty());
+    }
+
+    #[test]
+    fn action_stance_build_mismatch_skips_unit_and_planes_skip_only_unit_write() {
+        let mut group = GroupData {
+            buildings: 1,
+            ..Default::default()
+        };
+        group.add(50, 7, true, 0, 0);
+        group.add(51, 7, true, 0, 0);
+        let mismatch = StanceMemberFacts {
+            is_build: true,
+            build_stance_type: 2,
+            is_unit: true,
+            unit_stance_type: 1,
+            ..stance_member(50, 1, 0)
+        };
+        let plane_build = StanceMemberFacts {
+            is_build: true,
+            build_stance_type: 1,
+            is_unit: true,
+            unit_stance_type: 1,
+            is_plane: true,
+            ..stance_member(51, 1, 0)
+        };
+        let plan = plan_action_stance(&group, 2, 1, 0, &[mismatch, plane_build]).unwrap();
+        assert_eq!(
+            plan.steps,
+            vec![StanceStep::WriteBuildStance {
+                who: 7,
+                o: 51,
+                value: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn action_stance_type_zero_replays_repeated_update_calls_and_order_tail() {
+        let mut group = GroupData::default();
+        group.add(60, 0, false, 0, 0);
+        let member = StanceMemberFacts {
+            update_order_first_present: true,
+            update_order_second_mandatory: false,
+            update_action_first_present: true,
+            update_action_second_mandatory: false,
+            ..stance_member(60, 0, 1)
+        };
+        let plan = plan_action_stance(&group, 2, 0, 4, &[member]).unwrap();
+        assert_eq!(
+            &plan.steps[2..],
+            &[
+                StanceStep::UpdateOrder { who: 0, o: 60 },
+                StanceStep::UpdateOrder { who: 0, o: 60 },
+                StanceStep::UpdateAction { who: 0, o: 60 },
+                StanceStep::UpdateAction { who: 0, o: 60 },
+                StanceStep::Repath { who: 0, o: 60 },
+                StanceStep::KillCurrentOrder {
+                    who: 0,
+                    o: 60,
+                    arg: 0,
+                },
+            ]
+        );
+
+        let clear_mandatory = plan_action_stance(&group, 4, 0, 0, &[member]).unwrap();
+        assert!(matches!(
+            clear_mandatory.steps.last(),
+            Some(StanceStep::ClearMandatory { o: 60, .. })
+        ));
+        let clear_orders = plan_action_stance(&group, 99, 0, 0, &[member]).unwrap();
+        assert!(matches!(
+            clear_orders.steps.last(),
+            Some(StanceStep::ClearOrders { o: 60, .. })
+        ));
+    }
+
+    #[test]
+    fn state_action_receipts_recompute_plans_and_reject_mutated_evidence() {
+        let mut group = GroupData::default();
+        group.add(70, 1, false, 0, 0);
+        let request = GroupUnitMaskRequest {
+            group: group.clone(),
+            mask: 0x20,
+            set: 44,
+        };
+        let members = vec![UnitMaskMemberFacts {
+            o: 70,
+            valid_unit: true,
+            unit_masks: 0,
+            ..Default::default()
+        }];
+        let plan = plan_action_unitmask(&group, request.mask, request.set, &members).unwrap();
+        let receipt = GroupUnitMaskReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            members,
+            plan: Some(plan),
+        };
+        assert!(receipt.validates(&request));
+        let mut mutated = receipt;
+        mutated.plan.as_mut().unwrap().final_set = false;
+        assert!(!mutated.validates(&request));
     }
 
     #[test]

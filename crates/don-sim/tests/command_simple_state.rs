@@ -21,13 +21,13 @@ fn begin_transport_unitmask_and_buildmask_decode_and_mutate_their_exact_state() 
     assert_eq!(OPCODES[1].action, Some("begin"));
     assert_eq!(ActionDef::find("begin").unwrap().port, Port::Complete);
     for action in ["set_transport", "unitmask", "buildmask"] {
-        assert_eq!(ActionDef::find(action).unwrap().port, Port::StateWired);
+        assert_eq!(ActionDef::find(action).unwrap().port, Port::Complete);
     }
 
     let mut bridge = Bridge::new();
-    bridge.set_transport_level(1, 2);
     let mut package = Package::new(1, 44);
     let mut fleet = ObjectTable::new(8);
+    fleet.set_leader_flags(1, 0x200);
 
     let a = Slot::unit(10, 0, 0);
     let mut b = Slot::unit(11, 0, 0);

@@ -320,7 +320,8 @@ mod tests {
     /// `fc7e2b0`. The mask digest was recaptured from the shipped type-capability path
     /// after the action-honesty gate stopped advertising unsupported verbs and removed
     /// padding fallback bits from live records. It was recaptured again when exact HALT
-    /// and DISBAND lifecycle predicates replaced the approximate STANCE advertisement.
+    /// and DISBAND lifecycle predicates replaced the approximate STANCE advertisement,
+    /// then when captured stance types 1..3 gained their exact executable transaction.
     /// Together they catch accidental changes to plane clearing, entity occupancy, or
     /// packed-mask emission independently of the cross-thread comparison above.
     #[test]
@@ -345,7 +346,7 @@ mod tests {
             (h ^ u32::from(*v)).wrapping_mul(0x0100_0193)
         });
         assert_eq!(spatial, 0xD9EA_9DC5);
-        assert_eq!(masks, 0xC6DD_05D1);
+        assert_eq!(masks, 0x0B6D_3EB1);
     }
 
     #[test]

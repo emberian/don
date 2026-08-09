@@ -6,7 +6,8 @@
 
 use don_env::action::{apply_unit, ApplyStats, UnitAction};
 use don_env::generated as g;
-use don_env::spec::EnvConfig;
+use don_env::mask::MaskWriter;
+use don_env::spec::{get_bit, EnvConfig};
 use don_env::state::{
     EnvFarmGatherOrder, EnvWorld, GatherHost, GatherHostBoundary, GatherHostError,
     GatherLeaderFrame, Rules,
@@ -18,6 +19,7 @@ use don_sim::systems::gather_lifecycle::{OrdinaryGatherKind, OrdinaryGatherTarge
 use don_sim::systems::gathering::{
     num_gatherers, GatherCount, GatherNearbyPoint, GatherSite, GatherTile,
 };
+use don_sim::systems::groups_guys::{GroupData, GroupStateTransactionStatus, GroupUnitMaskRequest};
 use don_sim::systems::map_terrain::Coord;
 use don_sim::world::SUBTILE;
 
@@ -159,6 +161,15 @@ fn halt_retires_farm_order_attachment_and_income_eligibility() {
     let farm = f.farm;
     install(&mut f, farm);
     assert_eq!(assigned_at(&f.world, f.farm), 1);
+    let worker_row = f.world.sim.row_of(f.worker).unwrap();
+
+    // The explicit Farm provider is itself authoritative 0x32/0x33 land-Citizen evidence.
+    // HALT must therefore remain advertised even on a checkout without env-typecaps.bin.
+    let mut writer = MaskWriter::new(&f.cfg);
+    let mut mask = vec![0; writer.unit.record_bytes * f.cfg.max_controlled];
+    writer.write_unit_masks(&f.world, &f.cfg, 0, &[worker_row], &[worker_row], &mut mask);
+    let verbs = &mask[writer.unit.offsets[g::UnitHead::Verb as usize]..];
+    assert!(get_bit(verbs, g::uv::HALT + 1));
 
     let mut stats = ApplyStats::default();
     apply_unit(
@@ -173,7 +184,6 @@ fn halt_retires_farm_order_attachment_and_income_eligibility() {
         &mut stats,
     );
     assert_eq!(stats.applied, 1);
-    let worker_row = f.world.sim.row_of(f.worker).unwrap();
     assert_eq!(f.world.order[worker_row], g::OrderIndex::None as u8);
     assert!(f.world.gather.farm_orders.is_empty());
     assert_eq!(assigned_at(&f.world, f.farm), 0);
@@ -338,6 +348,20 @@ fn invalid_retirement_chain_refuses_halt_without_partial_cleanup() {
         bridge
             .process_all(&mut package, &build::halt(), &mut f.world)
             .unwrap();
+        assert_eq!(f.world.sim.units.get_unit_masks(worker_row), before_masks);
+        assert_eq!(f.world.gather, before_gather);
+        assert_eq!(f.world.orders[worker_row], before_order);
+
+        let mut group = GroupData::default();
+        group.add(worker_o, 0, false, 0, 0);
+        let request = GroupUnitMaskRequest {
+            group,
+            mask: 0x100,
+            set: 0,
+        };
+        let receipt = f.world.apply_group_unitmask_transaction(request.clone());
+        assert_eq!(receipt.status, GroupStateTransactionStatus::Unavailable);
+        assert!(receipt.validates(&request));
         assert_eq!(f.world.sim.units.get_unit_masks(worker_row), before_masks);
         assert_eq!(f.world.gather, before_gather);
         assert_eq!(f.world.orders[worker_row], before_order);

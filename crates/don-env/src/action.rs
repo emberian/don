@@ -23,7 +23,7 @@ use crate::typecaps::{F_BUILDING, F_CIVILIAN, F_PRODUCER};
 use don_sim::command::QueuePos;
 use don_sim::systems::groups_guys::{
     plan_action_disband, plan_action_halt, DisbandMemberFacts, DisbandStep, GroupData,
-    HaltMemberFacts, HaltStep,
+    GroupStanceRequest, GroupStateTransactionStatus, HaltMemberFacts, HaltStep,
 };
 use don_sim::systems::order_dispatch::OrderRec;
 use don_sim::world::SUBTILE;
@@ -253,10 +253,14 @@ pub fn apply_unit(
         }
         g::uv::HALT => {
             let cap = *w.cap(w.type_index[row]);
+            let explicit_farm_citizen = w.row_is_explicit_farm_citizen(row);
             // `Group::action_halt` gates the whole body for a building selection and
-            // skips a true airborne plane. The permissive table has no plane evidence,
-            // so it cannot honestly choose either branch.
-            if w.rules.caps.is_permissive() || cap.has(F_BUILDING) || cap.is_plane {
+            // skips a true airborne plane. A live explicit Farm attachment proves its
+            // admitted 0x32/0x33 worker is an ordinary land Citizen even when the optional
+            // broad capability table is unavailable.
+            if !explicit_farm_citizen
+                && (w.rules.caps.is_permissive() || cap.has(F_BUILDING) || cap.is_plane)
+            {
                 st.illegal += 1;
                 return;
             }
@@ -271,8 +275,12 @@ pub fn apply_unit(
                     o: object,
                     valid_unit: true,
                     on_map: true,
-                    is_plane: cap.is_plane,
-                    domain: i32::from(cap.domain),
+                    is_plane: !explicit_farm_citizen && cap.is_plane,
+                    domain: if explicit_farm_citizen {
+                        don_sim::systems::collision::DOMAIN_LAND
+                    } else {
+                        i32::from(cap.domain)
+                    },
                     // `is_plane` in the derived table already includes
                     // `!(unit_flags & 0x20)`; the non-plane path does not read this.
                     unit_flags: 0,
@@ -317,11 +325,21 @@ pub fn apply_unit(
             st.applied += 1;
         }
         g::uv::STANCE => {
-            // Full retail STANCE needs get_stance_type/get_stance_option plus the
-            // stance-specific mandatory-order/repath transition. TypeCaps does not yet
-            // carry those facts, so this verb is masked and an unmasked request is illegal.
-            w.unimplemented.unit[vi] += 1;
-            st.illegal += 1;
+            let owner = w.sim.owner()[row] as u8;
+            let object = w.sim.units.o()[row];
+            let mut group = GroupData::default();
+            group.add(object, owner, false, 0, 0);
+            let request = GroupStanceRequest {
+                group,
+                stance: i32::from(a.stance),
+            };
+            let receipt = w.apply_group_stance_transaction(request.clone());
+            if receipt.status == GroupStateTransactionStatus::Applied && receipt.validates(&request)
+            {
+                st.applied += 1;
+            } else {
+                st.illegal += 1;
+            }
         }
         g::uv::FORM => {
             w.form[row] = g::FORMS[(a.form as usize).min(g::FORMS.len() - 1)].1;

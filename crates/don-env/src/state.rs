@@ -41,8 +41,13 @@ use don_sim::systems::gathering::{
     NO_OBJECT,
 };
 use don_sim::systems::groups_guys::{
-    plan_action_disband, plan_action_halt, DisbandMemberFacts, DisbandStep, FormationMember,
-    HaltMemberFacts, HaltStep, GROUP_MAX_MEMBERS,
+    plan_action_buildmask, plan_action_disband, plan_action_halt, plan_action_set_transport,
+    plan_action_stance, plan_action_unitmask, DisbandMemberFacts, DisbandStep, FormationMember,
+    GroupBuildMaskReceipt, GroupBuildMaskRequest, GroupSetTransportReceipt,
+    GroupSetTransportRequest, GroupStanceReceipt, GroupStanceRequest, GroupStateTransactionStatus,
+    GroupUnitMaskReceipt, GroupUnitMaskRequest, HaltMemberFacts, HaltStep, SetTransportMemberFacts,
+    SetTransportStep, StanceMemberFacts, StanceStep, UnitMaskMemberFacts, UnitMaskStep,
+    GROUP_MAX_MEMBERS,
 };
 use don_sim::systems::movement::vector_dist;
 use don_sim::systems::order_dispatch::{
@@ -2338,6 +2343,320 @@ impl EnvWorld {
                 .any(|order| order.worker_owner == owner && order.worker_o == object)
         })
     }
+
+    /// A live Farm attachment is an explicit type host even when the optional broad
+    /// capability table is absent: installation admitted only retail's ordinary Citizen
+    /// workers (`0x32`/`0x33`). Those two types are land units and therefore cannot take
+    /// HALT's building or true-plane refusal branches.
+    pub(crate) fn row_is_explicit_farm_citizen(&self, row: usize) -> bool {
+        matches!(self.type_index[row], 0x32 | 0x33) && self.fleet_row_has_gather(row)
+    }
+
+    /// Atomic product host for the exact ordinary `Group::action_unitmask` subdomain.
+    pub fn apply_group_unitmask_transaction(
+        &mut self,
+        request: GroupUnitMaskRequest,
+    ) -> GroupUnitMaskReceipt {
+        if request.group.buildings != 0 {
+            let Ok(plan) = plan_action_unitmask(&request.group, request.mask, request.set, &[])
+            else {
+                return GroupUnitMaskReceipt::unavailable(request);
+            };
+            return GroupUnitMaskReceipt {
+                request: request.clone(),
+                status: GroupStateTransactionStatus::Applied,
+                members: Vec::new(),
+                plan: Some(plan),
+            };
+        }
+        if self.rules.caps.is_permissive() {
+            return GroupUnitMaskReceipt::unavailable(request);
+        }
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let mut members = Vec::with_capacity(n);
+        for &o in &request.group.list[..n] {
+            let Some(row) = self.fleet_row(request.group.who, o) else {
+                members.push(UnitMaskMemberFacts {
+                    o,
+                    ..Default::default()
+                });
+                continue;
+            };
+            let cap = *self.cap(self.type_index[row]);
+            if cap.has(F_BUILDING) {
+                return GroupUnitMaskReceipt::unavailable(request);
+            }
+            members.push(UnitMaskMemberFacts {
+                o,
+                valid_unit: cap.has(crate::typecaps::F_UNIT),
+                is_plane: cap.is_plane,
+                unit_masks: self.sim.units.get_unit_masks(row),
+            });
+        }
+        let Ok(plan) = plan_action_unitmask(&request.group, request.mask, request.set, &members)
+        else {
+            return GroupUnitMaskReceipt::unavailable(request);
+        };
+
+        let checkpoint = self.clone();
+        for step in &plan.steps {
+            match *step {
+                UnitMaskStep::WriteUnitMasks { who, o, value } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupUnitMaskReceipt::unavailable(request);
+                    };
+                    self.sim.units.set_unit_masks(row, value);
+                }
+                UnitMaskStep::SetObjectFlag { who, o, mask } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupUnitMaskReceipt::unavailable(request);
+                    };
+                    let flags = self.sim.units.get_flags(row);
+                    self.sim.units.set_flags(row, flags | mask);
+                }
+                UnitMaskStep::ClearUnitMasks { who, o, mask } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupUnitMaskReceipt::unavailable(request);
+                    };
+                    let value = self.sim.units.get_unit_masks(row) & !mask;
+                    self.sim.units.set_unit_masks(row, value);
+                }
+                UnitMaskStep::CloseOrders { who, o, .. } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupUnitMaskReceipt::unavailable(request);
+                    };
+                    if self.clear_orders(row).is_err() {
+                        *self = checkpoint;
+                        return GroupUnitMaskReceipt::unavailable(request);
+                    }
+                }
+                UnitMaskStep::ClearPathAnchor { .. }
+                | UnitMaskStep::ClearPartialPath { .. }
+                | UnitMaskStep::UpdateAction { .. } => {}
+            }
+        }
+        GroupUnitMaskReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    /// EnvWorld has no BuildData mask column or `WallData::valid_buildmask` provider. The exact
+    /// non-building gate can still return Applied; a reached building transaction is
+    /// explicitly unavailable without mutation.
+    pub fn apply_group_buildmask_transaction(
+        &mut self,
+        request: GroupBuildMaskRequest,
+    ) -> GroupBuildMaskReceipt {
+        if request.group.buildings != 0 {
+            return GroupBuildMaskReceipt::unavailable(request);
+        }
+        let Ok(plan) = plan_action_buildmask(&request.group, request.mask, request.set, false, &[])
+        else {
+            return GroupBuildMaskReceipt::unavailable(request);
+        };
+        GroupBuildMaskReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            owner_is_local: Some(false),
+            members: Vec::new(),
+            plan: Some(plan),
+        }
+    }
+
+    /// Atomic ordinary-world host for `Group::action_set_transport`. Scenario
+    /// ignore-orders is disabled in EnvWorld. Land-domain `can_ever_transport` is the
+    /// exact unconditional arm; non-land members retain their unrecovered type/ability
+    /// branch and make the whole transaction unavailable.
+    pub fn apply_group_set_transport_transaction(
+        &mut self,
+        request: GroupSetTransportRequest,
+    ) -> GroupSetTransportReceipt {
+        let leader_flags = self
+            .players
+            .get(request.group.who as usize)
+            .map_or(0, |player| player.leader_flags);
+        let transport_level = if leader_flags & 0x100 != 0 {
+            3
+        } else if leader_flags & 0x200 != 0 {
+            2
+        } else {
+            ((leader_flags >> 10) & 1) as u8
+        };
+        if request.group.buildings != 0 {
+            let Ok(plan) =
+                plan_action_set_transport(&request.group, request.flag, transport_level, &[])
+            else {
+                return GroupSetTransportReceipt::unavailable(request);
+            };
+            return GroupSetTransportReceipt {
+                request: request.clone(),
+                status: GroupStateTransactionStatus::Applied,
+                group_after_ignore_orders: Some(request.group.clone()),
+                transport_level: Some(transport_level),
+                members: Vec::new(),
+                plan: Some(plan),
+            };
+        }
+        if self.rules.caps.is_permissive() {
+            return GroupSetTransportReceipt::unavailable(request);
+        }
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        let mut members = Vec::with_capacity(n);
+        for &o in &request.group.list[..n] {
+            let Some(row) = self.fleet_row(request.group.who, o) else {
+                members.push(SetTransportMemberFacts {
+                    o,
+                    ..Default::default()
+                });
+                continue;
+            };
+            let cap = *self.cap(self.type_index[row]);
+            if cap.has(F_BUILDING) || cap.domain != 0 {
+                return GroupSetTransportReceipt::unavailable(request);
+            }
+            members.push(SetTransportMemberFacts {
+                o,
+                valid_unit: cap.has(crate::typecaps::F_UNIT),
+                can_ever_transport: true,
+                unit_masks: self.sim.units.get_unit_masks(row),
+            });
+        }
+        let Ok(plan) =
+            plan_action_set_transport(&request.group, request.flag, transport_level, &members)
+        else {
+            return GroupSetTransportReceipt::unavailable(request);
+        };
+        let checkpoint = self.clone();
+        for step in &plan.steps {
+            let SetTransportStep::WriteUnitMasks { who, o, value } = *step;
+            let Some(row) = self.fleet_row(who, o) else {
+                *self = checkpoint;
+                return GroupSetTransportReceipt::unavailable(request);
+            };
+            self.sim.units.set_unit_masks(row, value);
+        }
+        GroupSetTransportReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            group_after_ignore_orders: Some(request.group.clone()),
+            transport_level: Some(transport_level),
+            members,
+            plan: Some(plan),
+        }
+    }
+
+    /// Exact single-member STANCE host for captured unit stance types 1..3. Type zero
+    /// reaches mandatory-order/update/repath calls which this compact product does not
+    /// represent, and building stance needs BuildData; both remain unavailable atomically.
+    pub fn apply_group_stance_transaction(
+        &mut self,
+        request: GroupStanceRequest,
+    ) -> GroupStanceReceipt {
+        let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+        if n == 0 {
+            let Ok(plan) = plan_action_stance(&request.group, request.stance, -1, 0, &[]) else {
+                return GroupStanceReceipt::unavailable(request);
+            };
+            return GroupStanceReceipt {
+                request: request.clone(),
+                status: GroupStateTransactionStatus::Applied,
+                preferred_stance_type: Some(-1),
+                leader_flags: Some(0),
+                members: Vec::new(),
+                plan: Some(plan),
+            };
+        }
+        if n != 1 || request.group.buildings != 0 || self.rules.caps.is_permissive() {
+            return GroupStanceReceipt::unavailable(request);
+        }
+        let o = request.group.list[0];
+        let Some(row) = self.fleet_row(request.group.who, o) else {
+            return GroupStanceReceipt::unavailable(request);
+        };
+        let type_index = self.type_index[row];
+        let cap = *self.cap(type_index);
+        let Some(live_cap) = self.rules.formation_cap(type_index) else {
+            return GroupStanceReceipt::unavailable(request);
+        };
+        let stance_type = live_cap.stance_type(type_index);
+        if cap.has(F_BUILDING) || cap.is_plane || stance_type == 0 {
+            return GroupStanceReceipt::unavailable(request);
+        }
+        let leader_flags = self
+            .players
+            .get(request.group.who as usize)
+            .map_or(0, |player| player.leader_flags);
+        let members = vec![StanceMemberFacts {
+            o,
+            active: self.sim.units.get_flags(row) & 1 != 0,
+            valid_unit: cap.has(crate::typecaps::F_UNIT),
+            is_captain: true,
+            on_map: self.sim.hits()[row] > 0,
+            object_stance_type: stance_type,
+            current_stance: i32::from(self.sim.units.stance()[row]),
+            is_build: false,
+            build_stance_type: -1,
+            is_unit: cap.has(crate::typecaps::F_UNIT),
+            unit_stance_type: stance_type,
+            is_plane: false,
+            ..Default::default()
+        }];
+        let Ok(plan) = plan_action_stance(
+            &request.group,
+            request.stance,
+            stance_type,
+            leader_flags,
+            &members,
+        ) else {
+            return GroupStanceReceipt::unavailable(request);
+        };
+        let checkpoint = self.clone();
+        for step in &plan.steps {
+            match *step {
+                StanceStep::WriteUnitStance { who, o, value } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupStanceReceipt::unavailable(request);
+                    };
+                    self.sim.units.stance_mut()[row] = value;
+                    self.stance[row] = value as u8;
+                }
+                StanceStep::SetObjectFlag { who, o, mask } => {
+                    let Some(row) = self.fleet_row(who, o) else {
+                        *self = checkpoint;
+                        return GroupStanceReceipt::unavailable(request);
+                    };
+                    let flags = self.sim.units.get_flags(row);
+                    self.sim.units.set_flags(row, flags | mask);
+                }
+                StanceStep::WriteBuildStance { .. }
+                | StanceStep::ClearMandatory { .. }
+                | StanceStep::UpdateOrder { .. }
+                | StanceStep::UpdateAction { .. }
+                | StanceStep::Repath { .. }
+                | StanceStep::KillCurrentOrder { .. }
+                | StanceStep::ClearOrders { .. } => {
+                    *self = checkpoint;
+                    return GroupStanceReceipt::unavailable(request);
+                }
+            }
+        }
+        GroupStanceReceipt {
+            request: request.clone(),
+            status: GroupStateTransactionStatus::Applied,
+            preferred_stance_type: Some(stance_type),
+            leader_flags: Some(leader_flags),
+            members,
+            plan: Some(plan),
+        }
+    }
 }
 
 impl Fleet for EnvWorld {
@@ -2512,6 +2831,34 @@ impl Fleet for EnvWorld {
         EnvWorld::install_order(self, row, order, queue).is_ok()
     }
 
+    fn apply_group_stance_transaction(
+        &mut self,
+        request: GroupStanceRequest,
+    ) -> GroupStanceReceipt {
+        EnvWorld::apply_group_stance_transaction(self, request)
+    }
+
+    fn apply_group_set_transport_transaction(
+        &mut self,
+        request: GroupSetTransportRequest,
+    ) -> GroupSetTransportReceipt {
+        EnvWorld::apply_group_set_transport_transaction(self, request)
+    }
+
+    fn apply_group_unitmask_transaction(
+        &mut self,
+        request: GroupUnitMaskRequest,
+    ) -> GroupUnitMaskReceipt {
+        EnvWorld::apply_group_unitmask_transaction(self, request)
+    }
+
+    fn apply_group_buildmask_transaction(
+        &mut self,
+        request: GroupBuildMaskRequest,
+    ) -> GroupBuildMaskReceipt {
+        EnvWorld::apply_group_buildmask_transaction(self, request)
+    }
+
     fn apply_group_halt_transaction(
         &mut self,
         request: GroupHaltTransactionRequest,
@@ -2533,9 +2880,10 @@ impl Fleet for EnvWorld {
         }
 
         // Every command-side call site currently supplies zero. Non-zero flags read three
-        // retail predicates EnvWorld does not carry, and the permissive table cannot prove
-        // UnitData::is_plane; both cases must remain transactionally unavailable.
-        if request.flags != 0 || self.rules.caps.is_permissive() {
+        // retail predicates EnvWorld does not carry and therefore remain unavailable.
+        // For flags==0, a live Farm attachment is the narrow explicit Citizen/type host
+        // that can cross the otherwise fail-closed permissive-table boundary below.
+        if request.flags != 0 {
             return GroupHaltTransactionReceipt::unavailable(request);
         }
         let n = request.group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
@@ -2549,17 +2897,25 @@ impl Fleet for EnvWorld {
                 continue;
             };
             let cap = *self.cap(self.type_index[row]);
+            let explicit_farm_citizen = self.row_is_explicit_farm_citizen(row);
+            if self.rules.caps.is_permissive() && !explicit_farm_citizen {
+                return GroupHaltTransactionReceipt::unavailable(request);
+            }
             // A zero building count paired with a building member is not an authoritative
             // retail group snapshot. Refuse instead of manufacturing the gate outcome.
-            if cap.has(F_BUILDING) {
+            if !explicit_farm_citizen && cap.has(F_BUILDING) {
                 return GroupHaltTransactionReceipt::unavailable(request);
             }
             members.push(HaltMemberFacts {
                 o,
-                valid_unit: cap.has(crate::typecaps::F_UNIT),
+                valid_unit: explicit_farm_citizen || cap.has(crate::typecaps::F_UNIT),
                 on_map: self.sim.hits()[row] > 0,
-                is_plane: cap.is_plane,
-                domain: i32::from(cap.domain),
+                is_plane: !explicit_farm_citizen && cap.is_plane,
+                domain: if explicit_farm_citizen {
+                    DOMAIN_LAND
+                } else {
+                    i32::from(cap.domain)
+                },
                 // TypeCaps::is_plane is already the shipped `domain == AIR &&
                 // !(unit_flags & 0x20)` predicate, so zero reproduces its admitted arm.
                 unit_flags: 0,

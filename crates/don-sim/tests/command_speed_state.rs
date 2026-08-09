@@ -38,7 +38,7 @@ fn speed_family_and_player_speed_decode_exact_fields_and_wrap_like_x86() {
     for op in [52, 53, 54, 79] {
         assert_eq!(InlineDef::find(op).unwrap().port, InlinePort::Complete);
     }
-    assert_eq!(InlineDef::find(76).unwrap().port, InlinePort::StateWired);
+    assert_eq!(InlineDef::find(76).unwrap().port, InlinePort::Complete);
 
     let mut bridge = Bridge::new();
     let mut package = Package::new(3, 99);
