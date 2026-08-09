@@ -124,7 +124,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
     let mut s = String::new();
     s.push_str("{\n");
     s.push_str(&format!("  \"generated_by\": \"{}\",\n", esc(generated_by)));
-    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes; `unmodelled` is the subset of those on channels don-sim has no producer for at all, which are not evidence about anything. `retail_empty_compares` counts compares where the ENGINE's own value was 1, and `retail_first_nonempty_turn` is the turn it stopped being 1 -- the deadline a producer has to meet.\",\n");
+    s.push_str("  \"what\": \"Replay-driven validation: a real .rcx lockstep command stream is stepped turn by turn and our 15 component DataWalk checksum channels plus aggregate `all` are compared against the recorded CheckSumsCommand (opcode 0x39). `survived` is consecutive agreeing turns from the recording's first checksummed turn. `trivial` counts agreements where our walker touched zero bytes; `unmodelled` is the subset of those on channels don-sim has no producer for at all, which are not evidence about anything. The static Rules producer independently projects the replay-carried SaveGame section through the checksum-only traversal and admits it only when all four retail checkpoints match; it never copies the recorded wire checksum. `retail_empty_compares` counts compares where the ENGINE's own value was 1, and `retail_first_nonempty_turn` is the turn it stopped being 1 -- the deadline a producer has to meet.\",\n");
     s.push_str("  \"checksum_source\": \"CheckSums::check_all 0x00936560; packet builder 0x00940770; adler32 0x00a46830 (Tier B, 500k differential calls, 0 mismatches)\",\n");
     s.push_str("  \"walk_source\": \"schema/state-schema.json -> crates/don-replay/src/walk_gen.rs (generated)\",\n");
     s.push_str(&format!(
@@ -190,7 +190,7 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
                 .unwrap_or_else(|| "null".into())
         ));
         s.push_str(&format!(
-            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?} }},\n",
+            "      \"initial\": {{ \"prefix_bytes_walked\": {}, \"seed\": \"0x{:08x}\", \"map_style\": {}, \"map_size\": {}, \"map_edge_world_cells\": {}, \"active_players\": {}, \"teams\": {:?}, \"rules\": {{ \"serialized_offset\": {}, \"serialized_bytes\": {}, \"checksum_walked_bytes\": {}, \"checksum\": {} }} }},\n",
             r.initial_prefix_bytes,
             r.initial_seed,
             r.initial_map_style,
@@ -198,6 +198,10 @@ pub fn to_json(runs: &[RunResult], generated_by: &str) -> String {
             r.initial_map_edge.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
             r.initial_active_players,
             r.initial_teams,
+            r.initial_rules_offset.map(|v| v.to_string()).unwrap_or_else(|| "null".into()),
+            r.initial_rules_serialized_bytes,
+            r.initial_rules_walked_bytes,
+            r.initial_rules_checksum.map(|v| format!("\"0x{v:08x}\"")).unwrap_or_else(|| "null".into()),
         ));
         s.push_str(&format!(
             "      \"phase\": \"{}\", \"latency_turns\": {},\n",

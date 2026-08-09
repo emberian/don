@@ -9,9 +9,10 @@
 //! exact producer: `don-sim`'s derived `World::walk_data` implementation, fed
 //! from the authoritative `.rcx` initial setup. Everything else the fifteen
 //! channels walk — builds, walls, ammo, deaths, groups, guys, leaders, cities,
-//! items, goods, rules, scenario, and script — has no producer in `don-sim`
-//! at all, so those channels stay empty and are labelled `ChannelSource::Absent`
-//! rather than scored as agreement.
+//! items, goods, scenario, and script — has no producer in `don-sim` at all.
+//! Static rules are the one replay-specific exception: an admitted recording
+//! can install its complete checksum-visible SaveGame projection, while an
+//! independently constructed `don-sim` world still has no rules producer.
 //!
 //! A channel with no objects walks nothing, and adler-32 keeps its initial
 //! value of 1. That is not a fudge: `walls` reads exactly `0x00000001` for all
@@ -404,6 +405,18 @@ impl SimBridge {
         rep.elements[wi] = 1;
         rep.unsourced_walked[wi] = map_unsourced_walked.min(checksum.bytes);
         rep
+    }
+
+    /// Install the exact static `rules` projection carried by a replay.
+    ///
+    /// This is intentionally separate from [`SimBridge::PRODUCES`]: the bytes
+    /// come from the replay's SaveGame section, not from a complete don-sim
+    /// rules owner. [`crate::initial::parse_serialized_rules_at`] admits the
+    /// value only after independently replaying the shipped traversal and
+    /// matching every cumulative retail checkpoint, so there are no unsourced
+    /// bytes and no recorded wire checksum is copied into state.
+    pub fn populate_replay_rules(rules: &crate::initial::InitialRules, state: &mut SimState) {
+        state.set_direct_channel(Channel::Rules, rules.checksum, rules.walked_bytes, 0);
     }
 }
 

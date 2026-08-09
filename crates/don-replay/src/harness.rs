@@ -14,9 +14,9 @@
 //!   `trivial`, separately from one where we walked bytes. Both are real
 //!   comparisons; only the second is evidence about our mechanics.
 //! - A turn where retail's own two clients disagree is excluded from `survived`
-//!   and counted as `retail_disagreed`. 21 such comparisons exist in this
-//!   corpus (`docs/tracks/headless-client.md`), and treating one as our bug
-//!   would be reading noise as signal.
+//!   and counted as `retail_disagreed`. The current corpus has zero such
+//!   disagreements when joined on the actual turn serial; retaining the gate
+//!   prevents a future desynced recording from being attributed to our sim.
 
 use crate::checksum::{Channel, Channels, CHANNELS, CHANNEL_NAMES, NUM_CHANNELS, NUM_WALKED};
 use crate::replay::Replay;
@@ -100,6 +100,10 @@ pub struct RunResult {
     pub initial_map_edge: Option<i32>,
     pub initial_active_players: usize,
     pub initial_teams: Vec<u8>,
+    pub initial_rules_offset: Option<usize>,
+    pub initial_rules_serialized_bytes: usize,
+    pub initial_rules_walked_bytes: u64,
+    pub initial_rules_checksum: Option<u32>,
     pub phase: Phase,
     pub latency: u32,
     pub turns_total: usize,
@@ -239,6 +243,10 @@ pub struct WorldSim {
     /// present until their retail generator is ported; its checksum report
     /// carries that unsourced byte count explicitly.
     pub initial_world: Option<crate::initial::InitialWorld>,
+    /// Exact checksum-visible static state projected from the replay's own
+    /// SaveGame Rules section. Unlike `initial_world`, this slice is complete:
+    /// all 997,846 visited bytes are present and independently checkpointed.
+    pub initial_rules: Option<crate::initial::InitialRules>,
 }
 
 impl Default for WorldSim {
@@ -256,6 +264,7 @@ impl WorldSim {
             frames: 0,
             seed_units: 0,
             initial_world: None,
+            initial_rules: None,
         }
     }
 
@@ -264,6 +273,7 @@ impl WorldSim {
     pub fn from_replay(rep: &Replay) -> WorldSim {
         let mut s = WorldSim::new();
         s.initial_world = rep.initial.reconstruct_world();
+        s.initial_rules = rep.initial.rules;
         s.populate_state();
         s
     }
@@ -278,6 +288,9 @@ impl WorldSim {
             );
         } else {
             crate::state::SimBridge::populate(&self.world, &mut self.state);
+        }
+        if let Some(rules) = &self.initial_rules {
+            crate::state::SimBridge::populate_replay_rules(rules, &mut self.state);
         }
     }
 
@@ -335,6 +348,10 @@ pub fn run<S: Simulation>(rep: &Replay, sim: &mut S, phase: Phase, latency: u32)
         initial_map_edge: rep.initial.info.settings.map_edge_world_cells(),
         initial_active_players: rep.initial.active_players().count(),
         initial_teams: rep.initial.active_players().map(|p| p.team).collect(),
+        initial_rules_offset: rep.initial.rules.map(|r| r.serialized_offset),
+        initial_rules_serialized_bytes: rep.initial.rules.map_or(0, |r| r.serialized_bytes),
+        initial_rules_walked_bytes: rep.initial.rules.map_or(0, |r| r.walked_bytes),
+        initial_rules_checksum: rep.initial.rules.map(|r| r.checksum),
         phase,
         latency,
         turns_total: rep.turns.len(),
@@ -558,6 +575,15 @@ pub fn format_table(r: &RunResult) -> String {
         r.initial_active_players,
         r.initial_teams,
     ));
+    if let Some(checksum) = r.initial_rules_checksum {
+        s.push_str(&format!(
+            "  replay Rules @ {:#x}: {} serialized bytes -> {} checksum-visible bytes, {:08x}\n",
+            r.initial_rules_offset.unwrap_or(0),
+            r.initial_rules_serialized_bytes,
+            r.initial_rules_walked_bytes,
+            checksum,
+        ));
+    }
     s.push_str(&format!(
         "  packages {}/{} decoded   checksum packets {} (total-ok {}, adler-shaped {})\n",
         r.packages_decoded,

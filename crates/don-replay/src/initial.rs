@@ -3,16 +3,49 @@
 //! A recording begins with `Game::walk_data` (`0x00589600`), not an ad-hoc
 //! replay header.  The first child is `GameInfo::walk_data` (`0x005d6570`), so
 //! the seed, map selectors and all eight `Player` setup records are available
-//! before the first command package.  This module consumes that prefix in the
-//! exact retail walk order.  It deliberately stops at `game.info.save_name`:
-//! the roughly-megabyte block between that string and the command stream is not
-//! yet structurally decoded and is not presented as a save snapshot.
+//! before the first command package. This module consumes that prefix in the
+//! exact retail walk order. Dynamic initial-world state after
+//! `game.info.save_name` is still not presented as a save snapshot. The static
+//! Rules section at the end of that span is now independently bounded and
+//! projected through its exact checksum-only traversal.
 
+use crate::checksum::adler32;
+use crate::rules_channel::{
+    BALANCE_BYTES, RETAIL_AFTER_BALANCE, RETAIL_AFTER_CONSTANTS, RETAIL_AFTER_TRIBES,
+    RETAIL_AFTER_TYPES, RETAIL_WALKED_BYTES, RULES_BLOCK_BYTES, RULES_DUPLICATE_OFFSET,
+    SHIPPED_RULES_CHANNEL, TRIBE_COUNT, TRIBE_SIZE, TYPE_SLOTS,
+};
 use don_sim::systems::map_terrain::{World, WorldChecksum};
 
 pub const TAG_GAME: u8 = 0x16;
 pub const TAG_GAME_INFO: u8 = 0x42;
 pub const TAG_PLAYER: u8 = 0x50;
+/// `Game::walk_rules_data`'s section tag in every supported-corpus recording.
+///
+/// The byte is written by `SaveGame::walk_tag` before `Types::walk_rules_data`
+/// (`0x00589550`); `CheckSum::walk_tag` is a no-op, so it is parsed but never
+/// handed to the checksum primitive.
+pub const TAG_RULES: u8 = 0x92;
+/// The tag emitted before each of the 24 `Tribe::walk_rules_data` bodies.
+pub const TAG_TRIBE: u8 = 0x8f;
+
+/// Exact serialized length of the unmodded shipped Rules section.
+///
+/// Measured independently in the 2024.06.20 solo and multiplayer recordings
+/// and in the 2017.11.29 corpus: the section begins at its `0x92` tag and ends
+/// exactly at the first command-package byte in all specimens.
+pub const SHIPPED_RULES_SERIALIZED_BYTES: usize = 1_024_221;
+/// Serialized `Types::walk_rules_data` body, excluding the outer Rules tag.
+/// The difference from `RETAIL_TYPE_WALKED_BYTES` is exactly the save-only
+/// Type-name and Tech string encodings.
+pub const SHIPPED_TYPES_SERIALIZED_BYTES: usize = 500_334;
+
+/// Search boundary after the already-parsed `Game` prefix. The only
+/// intervening writers are one `String::walk_data` and at most 44 bytes of
+/// per-player extras (`0x009534e0`). The deliberately generous bound keeps a
+/// corrupt length from turning parsing into an unbounded command-stream scan;
+/// failure simply leaves the channel absent.
+const RULES_SEARCH_BYTES: usize = 256 * 1024;
 
 /// The seven shipped `MapSizeData::data[0]` world-cell edges, in list order.
 ///
@@ -197,6 +230,29 @@ pub struct InitialState {
     pub game: InitialGame,
     pub save_name: String,
     pub bytes_walked: usize,
+    /// Static rules recovered from the replay's own SaveGame section.
+    ///
+    /// `None` is fail-closed: conquest/custom recordings may omit this section,
+    /// and a structurally valid section is still rejected unless every
+    /// independently captured cumulative checkpoint agrees with retail.
+    pub rules: Option<InitialRules>,
+}
+
+/// Checksum-visible projection of the replay-carried static Rules section.
+///
+/// This is not a copied wire checksum. The parser independently replays the
+/// exact `Game::walk_rules_data` ordering over the bytes written by the shared
+/// `SaveGame` visitor, skipping only section tags and save-only strings exactly
+/// where the shipped walkers gate on `DataWalk::is_checksum`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitialRules {
+    pub serialized_offset: usize,
+    pub serialized_bytes: usize,
+    pub walked_bytes: u64,
+    pub checksum: u32,
+    pub after_types: u32,
+    pub after_constants: u32,
+    pub after_balance: u32,
 }
 
 /// The largest world reconstruction justified by the prefix alone.
@@ -361,6 +417,262 @@ impl<'a> Reader<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RulesAdler {
+    checksum: u32,
+    bytes: u64,
+}
+
+impl RulesAdler {
+    fn new() -> Self {
+        Self {
+            checksum: 1,
+            bytes: 0,
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.checksum = adler32(self.checksum, bytes);
+        self.bytes += bytes.len() as u64;
+    }
+}
+
+fn rules_walk(r: &mut Reader<'_>, adler: &mut RulesAdler, n: usize) -> Result<(), ParseError> {
+    let bytes = r.take(n)?;
+    adler.update(bytes);
+    Ok(())
+}
+
+fn rules_skip_string(r: &mut Reader<'_>) -> Result<(), ParseError> {
+    let n = r.u32()? as usize;
+    if n > 32_768 {
+        return Err(r.err(format!("absurd Rules UTF-16 string length {n}")));
+    }
+    let raw = r.take(
+        n.checked_mul(2)
+            .ok_or_else(|| r.err("Rules string overflow"))?,
+    )?;
+    let words = raw
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]));
+    if std::char::decode_utf16(words).any(|c| c.is_err()) {
+        return Err(r.err("invalid Rules UTF-16 string"));
+    }
+    Ok(())
+}
+
+fn rules_walk_u16_array(r: &mut Reader<'_>, adler: &mut RulesAdler) -> Result<usize, ParseError> {
+    let raw_count = r.take(4)?;
+    let count = i32::from_le_bytes(raw_count.try_into().unwrap());
+    adler.update(raw_count);
+    if !(0..=TYPE_SLOTS as i32).contains(&count) {
+        return Err(r.err(format!(
+            "Rules u16 array count {count} outside 0..={TYPE_SLOTS}"
+        )));
+    }
+    if count == 0 {
+        return Ok(0);
+    }
+
+    // `SimpleArray<unsigned short>::walk_data` (`0x00476610`) writes these
+    // seven bytes only for a non-empty array: capacity, grow, flags & 0xbf.
+    let metadata = r.take(7)?;
+    let capacity = i32::from_le_bytes(metadata[..4].try_into().unwrap());
+    if capacity < count {
+        return Err(r.err(format!(
+            "Rules u16 array capacity {capacity} below count {count}"
+        )));
+    }
+    if metadata[6] & 0x40 != 0 {
+        return Err(r.err("Rules u16 array retained masked flag 0x40"));
+    }
+    adler.update(metadata);
+    rules_walk(r, adler, count as usize * 2)?;
+    Ok(count as usize)
+}
+
+/// Parse one candidate `Game::walk_rules_data` SaveGame section and project it
+/// through the checksum-only traversal.
+///
+/// The four checkpoint comparisons are admission gates, not values substituted
+/// into the result. A one-byte mutation in Types, Constants, Balance, or Tribes
+/// changes the independently computed accumulator and makes this function
+/// refuse the section.
+pub fn parse_serialized_rules_at(
+    payload: &[u8],
+    offset: usize,
+) -> Result<InitialRules, ParseError> {
+    let section = payload.get(offset..).ok_or(ParseError {
+        offset,
+        message: "Rules offset outside payload".into(),
+    })?;
+    let result = (|| {
+        let mut r = Reader::new(section);
+        let mut adler = RulesAdler::new();
+        r.tag(TAG_RULES, "Rules")?;
+
+        // `Types::walk_rules_data` (`0x00669800`) dispatches 806 records in
+        // global TypeIndex order. The dynamic kind intervals are fixed by the
+        // shipped registries and independently checked by the live Type capture.
+        let mut array_elements = 0usize;
+        for slot in 0..TYPE_SLOTS {
+            let kind = match slot {
+                0..=49 => 0,    // GoodType
+                50..=413 => 1,  // UnitType
+                414..=542 => 2, // BuildType
+                543 => 3,       // ItemType -> ObjectType walker
+                544..=628 => 4, // TechType
+                629..=683 => 5, // SpellType
+                _ => 6,         // BonusType -> Type walker
+            };
+
+            // Type::walk_rules_data (`0x00663190`): [this+4,this+0x5e),
+            // followed in SaveGame only by `name` String::walk_data.
+            rules_walk(&mut r, &mut adler, 90)?;
+            rules_skip_string(&mut r)?;
+
+            if kind <= 3 {
+                // ObjectType::walk_rules_data (`0x0065fba0`).
+                rules_walk(&mut r, &mut adler, 152)?;
+                array_elements += rules_walk_u16_array(&mut r, &mut adler)?;
+                array_elements += rules_walk_u16_array(&mut r, &mut adler)?;
+            }
+
+            match kind {
+                0 => rules_walk(&mut r, &mut adler, 68)?,
+                // Unit's four consecutive calls total 24 + 8 + 4 + 756.
+                1 => rules_walk(&mut r, &mut adler, 792)?,
+                2 => rules_walk(&mut r, &mut adler, 49)?,
+                4 => {
+                    rules_walk(&mut r, &mut adler, 27)?;
+                    // TechType saves eight additional strings, all gated out
+                    // of CheckSum by `DataWalk+0x08`.
+                    for _ in 0..8 {
+                        rules_skip_string(&mut r)?;
+                    }
+                }
+                5 => rules_walk(&mut r, &mut adler, 48)?,
+                3 | 6 => {}
+                _ => unreachable!(),
+            }
+        }
+        if array_elements != 2_363 {
+            return Err(r.err(format!(
+                "Rules Type arrays contain {array_elements} elements, expected 2363"
+            )));
+        }
+        if r.p != 1 + SHIPPED_TYPES_SERIALIZED_BYTES {
+            return Err(r.err(format!(
+                "Rules Types serialized width {}, expected {}",
+                r.p - 1,
+                SHIPPED_TYPES_SERIALIZED_BYTES
+            )));
+        }
+        let after_types = adler.checksum;
+        if after_types != RETAIL_AFTER_TYPES {
+            return Err(r.err(format!(
+                "Rules Types checkpoint {after_types:#010x}, expected {RETAIL_AFTER_TYPES:#010x}"
+            )));
+        }
+
+        let constants_at = r.p;
+        rules_walk(&mut r, &mut adler, RULES_BLOCK_BYTES)?;
+        let duplicate: [u8; 4] = r.take(4)?.try_into().unwrap();
+        let source: [u8; 4] = section
+            [constants_at + RULES_DUPLICATE_OFFSET..constants_at + RULES_DUPLICATE_OFFSET + 4]
+            .try_into()
+            .unwrap();
+        if duplicate != source {
+            return Err(r.err("Rules Constants duplicate visit does not repeat +0x804"));
+        }
+        adler.update(&duplicate);
+        let after_constants = adler.checksum;
+        if after_constants != RETAIL_AFTER_CONSTANTS {
+            return Err(r.err(format!(
+                "Rules Constants checkpoint {after_constants:#010x}, expected {RETAIL_AFTER_CONSTANTS:#010x}"
+            )));
+        }
+
+        rules_walk(&mut r, &mut adler, BALANCE_BYTES)?;
+        let after_balance = adler.checksum;
+        if after_balance != RETAIL_AFTER_BALANCE {
+            return Err(r.err(format!(
+                "Rules Balance checkpoint {after_balance:#010x}, expected {RETAIL_AFTER_BALANCE:#010x}"
+            )));
+        }
+
+        for tribe in 0..TRIBE_COUNT {
+            r.tag(TAG_TRIBE, &format!("Tribe[{tribe}]"))?;
+            rules_walk(&mut r, &mut adler, 0x18)?;
+            rules_walk(&mut r, &mut adler, TRIBE_SIZE - 0x70)?;
+        }
+
+        if r.p != SHIPPED_RULES_SERIALIZED_BYTES {
+            return Err(r.err(format!(
+                "Rules serialized width {}, expected {SHIPPED_RULES_SERIALIZED_BYTES}",
+                r.p
+            )));
+        }
+        if adler.bytes != RETAIL_WALKED_BYTES {
+            return Err(r.err(format!(
+                "Rules walked {} bytes, expected {RETAIL_WALKED_BYTES}",
+                adler.bytes
+            )));
+        }
+        if adler.checksum != RETAIL_AFTER_TRIBES || adler.checksum != SHIPPED_RULES_CHANNEL {
+            return Err(r.err(format!(
+                "Rules final checkpoint {:#010x}, expected {SHIPPED_RULES_CHANNEL:#010x}",
+                adler.checksum
+            )));
+        }
+
+        Ok(InitialRules {
+            serialized_offset: offset,
+            serialized_bytes: r.p,
+            walked_bytes: adler.bytes,
+            checksum: adler.checksum,
+            after_types,
+            after_constants,
+            after_balance,
+        })
+    })();
+    result.map_err(|mut e: ParseError| {
+        e.offset = e.offset.saturating_add(offset);
+        e
+    })
+}
+
+fn find_serialized_rules(
+    payload: &[u8],
+    search_from: usize,
+) -> Result<Option<InitialRules>, ParseError> {
+    let available_end = payload
+        .len()
+        .checked_sub(SHIPPED_RULES_SERIALIZED_BYTES)
+        .map(|v| v + 1)
+        .unwrap_or(0);
+    let scan_end = search_from
+        .saturating_add(RULES_SEARCH_BYTES)
+        .min(available_end);
+    let mut found = None;
+    for offset in search_from.min(scan_end)..scan_end {
+        if payload[offset] != TAG_RULES {
+            continue;
+        }
+        let Ok(candidate) = parse_serialized_rules_at(payload, offset) else {
+            continue;
+        };
+        if found.is_some() {
+            return Err(ParseError {
+                offset,
+                message: "ambiguous duplicate shipped Rules sections".into(),
+            });
+        }
+        found = Some(candidate);
+    }
+    Ok(found)
+}
+
 fn at_i32(body: &[u8], at: usize) -> i32 {
     i32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]])
 }
@@ -469,6 +781,7 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
     let graphic_tick = r.i32()?;
     let save_name = r.string()?;
     let bytes_walked = r.p;
+    let rules = find_serialized_rules(payload, bytes_walked)?;
 
     Ok(InitialState {
         save_format: format,
@@ -503,6 +816,7 @@ fn parse_candidate(payload: &[u8], format: u32) -> Result<InitialState, ParseErr
         },
         save_name,
         bytes_walked,
+        rules,
     })
 }
 
