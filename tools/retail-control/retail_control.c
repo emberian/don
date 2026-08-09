@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "retail_control_lifecycle_core.h"
+
 /* Supported image identity, independently present in donscan::live. */
 #define EXPECTED_MACHINE   0x014cu
 #define EXPECTED_ENTRY_RVA 0x0015d699u
@@ -228,6 +230,8 @@ typedef struct {
 
 typedef struct {
     unsigned seq;
+    unsigned attempt;
+    unsigned epoch;
     unsigned verb;
     int arg[10];
     int num_ids;
@@ -249,6 +253,8 @@ typedef struct {
 
 typedef struct {
     unsigned seq;
+    unsigned attempt;
+    unsigned epoch;
     unsigned verb;
     unsigned phase;             /* observed/queued/applied/timeout/rejected/trace-* */
     unsigned win_tick;
@@ -423,12 +429,24 @@ static char g_request_path[MAX_PATH];
 static char g_request_tmp_path[MAX_PATH];
 static char g_events_path[MAX_PATH];
 static char g_ready_path[MAX_PATH];
+static char g_ready_tmp_path[MAX_PATH];
 static char g_stop_path[MAX_PATH];
 static char g_log_path[MAX_PATH];
 static volatile LONG g_pending;
 static volatile LONG g_stopping;
 static volatile LONG g_stop_ack;
 static volatile LONG g_hook_inflight;
+static volatile LONG g_dispatch_gate;
+static volatile LONG g_fence_requested;
+static volatile LONG g_request_epoch;
+static volatile LONG g_attempt;
+static volatile LONG g_lifecycle;
+static volatile LONG g_quarantine_reason;
+static volatile LONG g_ready_writer;
+static volatile LONG g_ready_revision;
+static volatile LONG g_detach_requested;
+static volatile LONG g_detach_prepared;
+static volatile LONG g_worker_exit_clean;
 static request_t g_request;
 static verify_t g_verify;
 static trace_t g_trace;
@@ -453,12 +471,40 @@ static player_payload_slot_t g_player_payloads[PLAYER_PAYLOAD_SLOTS];
 static BYTE *g_hook_addr;
 static BYTE *g_trampoline;
 static volatile LONG g_hook_installed;
+static HANDLE g_worker_thread;
+static DWORD g_worker_tid;
+
+enum quarantine_reason {
+    QUARANTINE_NONE = 0,
+    QUARANTINE_IMAGE,
+    QUARANTINE_REQUEST_EPOCH,
+    QUARANTINE_HOOK,
+    QUARANTINE_STOP,
+    QUARANTINE_REARM,
+    QUARANTINE_READY_IO,
+    QUARANTINE_LIFECYCLE,
+    QUARANTINE_DISPATCH_GATE,
+    QUARANTINE_DETACH
+};
+
+#define DETACH_REQUEST_VERSION 1u
+#define DETACH_WAIT_MS 10000u
+
+typedef struct detach_request {
+    DWORD size;
+    DWORD version;
+    DWORD pid;
+    DWORD controller_base;
+    DWORD attempt;
+    DWORD epoch;
+} detach_request_t;
 
 static const BYTE g_hook_orig[5] = {0xe8, 0x45, 0x67, 0x3c, 0x00};
 static BYTE g_hook_patch[5];
 
 static int write_code(BYTE *dst, const BYTE *src, unsigned n);
 static int package_length(void);
+static int publish_ready(const char *state);
 
 static int join_path(char out[MAX_PATH], const char *root, const char *leaf) {
     int n = _snprintf(out, MAX_PATH, "%s\\%s", root, leaf);
@@ -482,6 +528,7 @@ static int init_paths(HINSTANCE module) {
            join_path(g_request_tmp_path, g_root, "request.tmp") &&
            join_path(g_events_path, g_root, "events.ndjson") &&
            join_path(g_ready_path, g_root, "ready.txt") &&
+           join_path(g_ready_tmp_path, g_root, "ready.tmp") &&
            join_path(g_stop_path, g_root, "STOP") &&
            join_path(g_log_path, g_root, "retail-control.log");
 }
@@ -495,6 +542,44 @@ static void log_line(const char *line) {
         WriteFile(h, line, (DWORD)strlen(line), &n, NULL);
         WriteFile(h, "\r\n", 2, &n, NULL);
         CloseHandle(h);
+    }
+}
+
+static const char *quarantine_reason_name(LONG reason) {
+    switch (reason) {
+        case QUARANTINE_IMAGE: return "image";
+        case QUARANTINE_REQUEST_EPOCH: return "request-epoch";
+        case QUARANTINE_HOOK: return "hook";
+        case QUARANTINE_STOP: return "stop";
+        case QUARANTINE_REARM: return "rearm";
+        case QUARANTINE_READY_IO: return "ready-io";
+        case QUARANTINE_LIFECYCLE: return "lifecycle";
+        case QUARANTINE_DISPATCH_GATE: return "dispatch-gate";
+        case QUARANTINE_DETACH: return "detach";
+        default: return "none";
+    }
+}
+
+static void quarantine_controller(LONG reason) {
+    InterlockedCompareExchange(&g_quarantine_reason, reason, QUARANTINE_NONE);
+    InterlockedExchange(&g_lifecycle, RC_LIFECYCLE_QUARANTINED);
+    InterlockedExchange(&g_fence_requested, 1);
+    InterlockedExchange(&g_stopping, 1);
+    InterlockedIncrement(&g_request_epoch);
+    MemoryBarrier();
+}
+
+static int transition_lifecycle(LONG next) {
+    LONG current;
+    for (;;) {
+        current = InterlockedCompareExchange(&g_lifecycle, 0, 0);
+        if (current == next) return 1;
+        if (!rc_lifecycle_transition_allowed((int)current, (int)next)) {
+            quarantine_controller(QUARANTINE_LIFECYCLE);
+            return 0;
+        }
+        if (InterlockedCompareExchange(&g_lifecycle, next, current) == current)
+            return 1;
     }
 }
 
@@ -1808,6 +1893,8 @@ static void trace_tick(void) {
     if (!g_trace.active) return;
     memset(e, 0, sizeof(*e));
     e->seq = g_trace.req.seq;
+    e->attempt = g_trace.req.attempt;
+    e->epoch = g_trace.req.epoch;
     e->verb = g_trace.req.verb;
     snapshot(e, &g_trace.req);
     if (e->frame == g_trace.last_frame) {
@@ -1874,16 +1961,70 @@ static int verify_applied(event_t *e, const verify_t *v) {
     }
 }
 
+/*
+ * STOP and retail dispatch serialize through one three-state gate.  STOP may
+ * fence OPEN, or it waits while the one retail main-thread dispatch that won
+ * ACTIVE finishes.  Once FENCED, no already-claimed request can cross into a
+ * retail mutation.  This defines the cancellation linearization point without
+ * suspending the retail main thread.
+ */
+static int begin_main_thread_dispatch(unsigned *attempt, unsigned *epoch) {
+    LONG active_attempt, active_epoch, fence_requested, stopping, lifecycle;
+    if (InterlockedCompareExchange(&g_dispatch_gate, RC_DISPATCH_ACTIVE,
+                                   RC_DISPATCH_OPEN) != RC_DISPATCH_OPEN)
+        return 0;
+    MemoryBarrier();
+    active_attempt = InterlockedCompareExchange(&g_attempt, 0, 0);
+    active_epoch = InterlockedCompareExchange(&g_request_epoch, 0, 0);
+    fence_requested = InterlockedCompareExchange(&g_fence_requested, 0, 0);
+    stopping = InterlockedCompareExchange(&g_stopping, 0, 0);
+    lifecycle = InterlockedCompareExchange(&g_lifecycle, 0, 0);
+    if (!rc_dispatch_context_allows((int)fence_requested, (int)stopping,
+                                    (int)lifecycle, (int)active_attempt,
+                                    (int)active_epoch)) {
+        if (InterlockedCompareExchange(&g_dispatch_gate, RC_DISPATCH_OPEN,
+                                       RC_DISPATCH_ACTIVE) != RC_DISPATCH_ACTIVE)
+            quarantine_controller(QUARANTINE_DISPATCH_GATE);
+        return 0;
+    }
+    *attempt = (unsigned)active_attempt;
+    *epoch = (unsigned)active_epoch;
+    return 1;
+}
+
+static void end_main_thread_dispatch(void) {
+    MemoryBarrier();
+    if (InterlockedCompareExchange(&g_dispatch_gate, RC_DISPATCH_OPEN,
+                                   RC_DISPATCH_ACTIVE) != RC_DISPATCH_ACTIVE)
+        quarantine_controller(QUARANTINE_DISPATCH_GATE);
+}
+
 /* Runs on the retail main thread immediately before and after TurnControl::do_frame. */
 static void __cdecl on_turn_frame(int is_post) {
     event_t *e = &g_callback_event;
     request_t r;
     LONG verb;
+    unsigned active_attempt, active_epoch;
+    if (!begin_main_thread_dispatch(&active_attempt, &active_epoch)) return;
+
+    if (g_trace.active &&
+        !rc_request_epoch_is_current(g_trace.req.attempt, g_trace.req.epoch,
+                                     active_attempt, active_epoch)) {
+        g_trace.active = 0;
+        g_trace.finishing = 0;
+    }
     trace_tick();
 
     if (g_verify.active) {
+        if (!rc_request_epoch_is_current(g_verify.req.attempt, g_verify.req.epoch,
+                                         active_attempt, active_epoch)) {
+            g_verify.active = 0;
+            goto pending_request;
+        }
         memset(e, 0, sizeof(*e));
         e->seq = g_verify.req.seq;
+        e->attempt = g_verify.req.attempt;
+        e->epoch = g_verify.req.epoch;
         e->verb = g_verify.req.verb;
         snapshot(e, &g_verify.req);
         if (verify_applied(e, &g_verify)) {
@@ -1897,16 +2038,22 @@ static void __cdecl on_turn_frame(int is_post) {
         }
     }
 
+pending_request:
     /* Peer checksum totals are meaningful only after TurnControl::do_frame. */
     if (!is_post &&
         InterlockedCompareExchange(&g_pending, 0, 0) == V_OBSERVE_NETWORK)
-        return;
+        goto dispatch_done;
     verb = InterlockedExchange(&g_pending, V_NONE);
-    if (verb == V_NONE) return;
+    if (verb == V_NONE) goto dispatch_done;
     MemoryBarrier();
     r = g_request;
+    if (!rc_request_epoch_is_current(r.attempt, r.epoch,
+                                     active_attempt, active_epoch))
+        goto dispatch_done;
     memset(e, 0, sizeof(*e));
     e->seq = r.seq;
+    e->attempt = r.attempt;
+    e->epoch = r.epoch;
     e->verb = r.verb;
     snapshot(e, &r);
     if ((r.verb == V_TRACE_MOVE || r.verb == V_RUN_FRAMES) &&
@@ -1944,6 +2091,8 @@ static void __cdecl on_turn_frame(int is_post) {
         e->note = 1; /* retail gate rejected it or package had no room */
         push_event(e);
     }
+dispatch_done:
+    end_main_thread_dispatch();
 }
 
 static void cancel_main_thread_work(void) {
@@ -2250,11 +2399,72 @@ static int install_hook(void) {
     return ok;
 }
 
+static int fence_dispatch_for_stop(void) {
+    int tries;
+    InterlockedExchange(&g_fence_requested, 1);
+    MemoryBarrier();
+    for (tries = 0; tries < 500; tries++) {
+        LONG gate = InterlockedCompareExchange(&g_dispatch_gate,
+                                               RC_DISPATCH_FENCED,
+                                               RC_DISPATCH_OPEN);
+        if (gate == RC_DISPATCH_OPEN || gate == RC_DISPATCH_FENCED) {
+            if (InterlockedIncrement(&g_request_epoch) <= 0) {
+                quarantine_controller(QUARANTINE_REQUEST_EPOCH);
+                return 0;
+            }
+            MemoryBarrier();
+            InterlockedExchange(&g_stopping, 1);
+            cancel_main_thread_work();
+            return 1;
+        }
+        if (gate != RC_DISPATCH_ACTIVE) {
+            quarantine_controller(QUARANTINE_DISPATCH_GATE);
+            return 0;
+        }
+        Sleep(1);
+    }
+    quarantine_controller(QUARANTINE_DISPATCH_GATE);
+    return 0;
+}
+
+static int open_fresh_attempt(void) {
+    LONG attempt, epoch;
+    if (InterlockedCompareExchange(&g_dispatch_gate, 0, 0) !=
+            RC_DISPATCH_FENCED ||
+        InterlockedCompareExchange(&g_lifecycle, 0, 0) !=
+            RC_LIFECYCLE_ARMING) {
+        quarantine_controller(QUARANTINE_LIFECYCLE);
+        return 0;
+    }
+    cancel_main_thread_work();
+    attempt = InterlockedIncrement(&g_attempt);
+    epoch = InterlockedIncrement(&g_request_epoch);
+    if (attempt <= 0 || epoch <= 0 ||
+        !transition_lifecycle(RC_LIFECYCLE_ARMED)) {
+        quarantine_controller(QUARANTINE_LIFECYCLE);
+        return 0;
+    }
+    InterlockedExchange(&g_stopping, 0);
+    InterlockedExchange(&g_fence_requested, 0);
+    MemoryBarrier();
+    if (InterlockedCompareExchange(&g_dispatch_gate, RC_DISPATCH_OPEN,
+                                   RC_DISPATCH_FENCED) != RC_DISPATCH_FENCED) {
+        quarantine_controller(QUARANTINE_DISPATCH_GATE);
+        return 0;
+    }
+    return 1;
+}
+
 static int remove_hook(void) {
     HANDLE threads[128];
     int n, ok, resumed, tries;
     InterlockedExchange(&g_stop_ack, 0);
-    InterlockedExchange(&g_stopping, 1);
+    if (!fence_dispatch_for_stop()) return 0;
+    if (InterlockedCompareExchange(&g_lifecycle, 0, 0) == RC_LIFECYCLE_ARMED) {
+        if (!transition_lifecycle(RC_LIFECYCLE_CANCELING) ||
+            !transition_lifecycle(RC_LIFECYCLE_UNHOOKING))
+            return 0;
+    }
     /* Normal live removal is acknowledged by the retail main-thread callback.
        This avoids rewriting an instruction from the worker while Game::loop is
        active.  Dormant targets retain the all-threads-suspended fallback. */
@@ -2555,6 +2765,49 @@ static int fence_request_epoch(void) {
            delete_control_file_if_present(g_request_tmp_path);
 }
 
+static int control_file_absent(const char *path) {
+    DWORD attributes = GetFileAttributesA(path);
+    DWORD error;
+    if (attributes != INVALID_FILE_ATTRIBUTES) return 0;
+    error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+}
+
+static void capture_detach_snapshot(rc_detach_snapshot *snapshot) {
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->lifecycle = (int)InterlockedCompareExchange(&g_lifecycle, 0, 0);
+    snapshot->dispatch_gate =
+        (int)InterlockedCompareExchange(&g_dispatch_gate, 0, 0);
+    snapshot->fence_requested =
+        !!InterlockedCompareExchange(&g_fence_requested, 0, 0);
+    snapshot->stopping = !!InterlockedCompareExchange(&g_stopping, 0, 0);
+    snapshot->hook_installed =
+        !!InterlockedCompareExchange(&g_hook_installed, 0, 0);
+    snapshot->hook_inflight =
+        (int)InterlockedCompareExchange(&g_hook_inflight, 0, 0);
+    snapshot->pending = (int)InterlockedCompareExchange(&g_pending, 0, 0);
+    snapshot->verify_active = g_verify.active;
+    snapshot->trace_active = g_trace.active || g_trace.finishing;
+    snapshot->hook_bytes_original = g_hook_addr &&
+        memcmp(g_hook_addr, g_hook_orig, sizeof(g_hook_orig)) == 0;
+    snapshot->request_files_absent = control_file_absent(g_request_path) &&
+                                     control_file_absent(g_request_tmp_path);
+    snapshot->events_drained =
+        InterlockedCompareExchange(&g_event_tail, 0, 0) ==
+        InterlockedCompareExchange(&g_event_head, 0, 0);
+    snapshot->stop_file_present =
+        GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES;
+}
+
+static int detach_constraints_hold_at(LONG expected_lifecycle) {
+    rc_detach_snapshot snapshot;
+    capture_detach_snapshot(&snapshot);
+    if (snapshot.lifecycle != expected_lifecycle) return 0;
+    /* The shared predicate describes the stable parked boundary. */
+    snapshot.lifecycle = RC_LIFECYCLE_PARKED;
+    return rc_detach_constraints_hold(&snapshot);
+}
+
 static const char *verb_name(unsigned verb) {
     switch (verb) {
         case V_OBSERVE: return "observe"; case V_PAUSE: return "pause";
@@ -2644,7 +2897,8 @@ static void write_event(const event_t *e) {
                   payload ? payload->player_tech_bits[i] : 0);
     tech_hex[202] = 0;
     if (!append_json(line, EVENT_JSON_CAP, &used,
-        "{\"seq\":%u,\"verb\":\"%s\",\"phase\":\"%s\","
+        "{\"seq\":%u,\"attempt\":%u,\"epoch\":%u,"
+        "\"verb\":\"%s\",\"phase\":\"%s\","
         "\"tick\":%u,\"game\":\"0x%08x\",\"frame\":%u,\"seconds\":%u,"
         "\"paused\":%d,\"speed\":%d,\"network\":%u,\"package_before\":%d,"
         "\"package_after\":%d,\"command_hex\":\"%s\","
@@ -2670,7 +2924,8 @@ static void write_event(const event_t *e) {
         "\"attack_target_id\":%d,\"attack_target_uid\":%u,"
         "\"note\":%u,\"guy_length\":%d,\"guy_capacity\":%d,"
         "\"guy_count\":%d,\"guy_truncated\":%d,\"guys\":[",
-        e->seq, verb_name(e->verb), phase_name(e->phase), e->win_tick, e->game,
+        e->seq, e->attempt, e->epoch, verb_name(e->verb), phase_name(e->phase),
+        e->win_tick, e->game,
         e->frame, e->seconds, e->paused, e->speed, e->network, e->package_before,
         e->package_after, hex, e->first_object, e->order_length,
         e->current_order, e->current_order_vtable, e->order_flags, e->order_metric,
@@ -2914,23 +3169,98 @@ static void drain_events(void) {
     }
 }
 
-static void write_ready(const char *state) {
-    char buf[768];
+/* `static void write_ready` was the former non-atomic source-test boundary. */
+static int win_write_chunk(void *context, const char *bytes, size_t length,
+                           size_t *written) {
+    DWORD amount = 0;
+    if (length > 0xffffffffu) return 0;
+    if (!WriteFile((HANDLE)context, bytes, (DWORD)length, &amount, NULL)) return 0;
+    *written = (size_t)amount;
+    return 1;
+}
+
+/*
+ * Readers must observe either the previous complete record or the next one.
+ * Write/flush/close the sibling staging file first, then replace ready.txt on
+ * the same volume with write-through semantics.  Any short/zero/flush/rename
+ * failure leaves the previous record intact and is a lifecycle failure.
+ */
+static int publish_ready(const char *state) {
+    char buf[1024];
     HANDLE h;
-    DWORD wrote;
-    _snprintf(buf, sizeof(buf), "state=%s\r\npid=%lu\r\nroot=%s\r\nbase=0x%08x\r\n"
-              "turn_call_site=0x%08x\r\nturn_do_frame=0x%08x\r\n"
-              "dropped_events=%ld\r\n", state,
-              GetCurrentProcessId(), g_root,
-              g_base, g_base + RVA_TURN_CALL_SITE,
-              g_base + RVA_TURN_DO_FRAME,
-              InterlockedCompareExchange(&g_dropped_events, 0, 0));
-    h = CreateFileA(g_ready_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-        WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
-        CloseHandle(h);
+    FILETIME created = {0, 0}, exited = {0, 0}, kernel = {0, 0}, user = {0, 0};
+    LONG lifecycle, revision;
+    int n, ok = 0, tries, complete_write, flushed, replaced = 0;
+    BOOL closed;
+    for (tries = 0; tries < 1000; tries++) {
+        if (InterlockedCompareExchange(&g_ready_writer, 1, 0) == 0) break;
+        Sleep(1);
     }
+    if (tries == 1000) return 0;
+    lifecycle = InterlockedCompareExchange(&g_lifecycle, 0, 0);
+    revision = InterlockedCompareExchange(&g_ready_revision, 0, 0) + 1;
+    if (!GetProcessTimes(g_self_process, &created, &exited, &kernel, &user))
+        goto done;
+    n = _snprintf(
+        buf, sizeof(buf),
+        "state=%s\r\nprotocol=don.retail-control.v2\r\n"
+        "lifecycle=%s\r\nquarantine_reason=%s\r\n"
+        "pid=%lu\r\nprocess_create_time=0x%08lx%08lx\r\n"
+        "root=%s\r\nbase=0x%08x\r\ncontroller_base=0x%08x\r\n"
+        "turn_call_site=0x%08x\r\nturn_do_frame=0x%08x\r\n"
+        "attempt=%ld\r\nepoch=%ld\r\nready_revision=%ld\r\n"
+        "worker_tid=%lu\r\ndispatch_gate=%ld\r\n"
+        "fence_requested=%ld\r\ndetach_prepared=%ld\r\n"
+        "trampoline_released=%d\r\ndropped_events=%ld\r\n",
+        state, rc_lifecycle_name((int)lifecycle),
+        quarantine_reason_name(InterlockedCompareExchange(&g_quarantine_reason, 0, 0)),
+        GetCurrentProcessId(), (unsigned long)created.dwHighDateTime,
+        (unsigned long)created.dwLowDateTime, g_root, g_base, g_controller_base,
+        g_base + RVA_TURN_CALL_SITE, g_base + RVA_TURN_DO_FRAME,
+        InterlockedCompareExchange(&g_attempt, 0, 0),
+        InterlockedCompareExchange(&g_request_epoch, 0, 0), revision,
+        (unsigned long)g_worker_tid,
+        InterlockedCompareExchange(&g_dispatch_gate, 0, 0),
+        InterlockedCompareExchange(&g_fence_requested, 0, 0),
+        InterlockedCompareExchange(&g_detach_prepared, 0, 0),
+        g_trampoline == NULL,
+        InterlockedCompareExchange(&g_dropped_events, 0, 0));
+    if (n < 0 || (size_t)n >= sizeof(buf)) goto done;
+    h = CreateFileA(g_ready_tmp_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (h == INVALID_HANDLE_VALUE) goto done;
+    complete_write = rc_write_all(win_write_chunk, h, buf, (size_t)n);
+    flushed = complete_write && FlushFileBuffers(h);
+    closed = CloseHandle(h);
+    if (complete_write && flushed && closed) {
+        for (tries = 0; tries < 100; tries++) {
+            if (MoveFileExA(g_ready_tmp_path, g_ready_path,
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                replaced = 1;
+                break;
+            }
+            Sleep(1);
+        }
+    }
+    ok = rc_ready_commit_allowed(complete_write, flushed, closed, replaced);
+    if (!ok) DeleteFileA(g_ready_tmp_path);
+    else InterlockedExchange(&g_ready_revision, revision);
+done:
+    InterlockedExchange(&g_ready_writer, 0);
+    return ok;
+}
+
+static DWORD refuse_worker(LONG reason, const char *state, const char *message) {
+    if (message) log_line(message);
+    quarantine_controller(reason);
+    if (InterlockedCompareExchange(&g_hook_installed, 0, 0) && !remove_hook())
+        log_line("REFUSED: quarantine could not prove exact hook restoration");
+    if (!publish_ready(state)) {
+        InterlockedCompareExchange(&g_quarantine_reason, QUARANTINE_READY_IO,
+                                   QUARANTINE_NONE);
+        log_line("REFUSED: atomic ready publication failed");
+    }
+    return (DWORD)reason;
 }
 
 static DWORD WINAPI worker(LPVOID unused) {
@@ -2938,67 +3268,113 @@ static DWORD WINAPI worker(LPVOID unused) {
     unsigned last_seq = 0;
     (void)unused;
     CreateDirectoryA(g_root, NULL);
+    if (!transition_lifecycle(RC_LIFECYCLE_PREFLIGHT))
+        return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                             "REFUSED: invalid initial lifecycle transition");
     if (!image_supported()) {
-        log_line("REFUSED: PE identity mismatch");
-        write_ready("refused-image");
-        return 0;
+        return refuse_worker(QUARANTINE_IMAGE, "refused-image",
+                             "REFUSED: PE identity mismatch");
     }
     if (!fence_request_epoch()) {
-        log_line("REFUSED: could not establish initial request epoch");
-        write_ready("refused-request-epoch");
-        return 0;
+        return refuse_worker(QUARANTINE_REQUEST_EPOCH, "refused-request-epoch",
+                             "REFUSED: could not establish initial request epoch");
     }
+    if (!transition_lifecycle(RC_LIFECYCLE_ARMING))
+        return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                             "REFUSED: could not enter initial arming state");
+    InterlockedExchange(&g_stopping, 0);
     if (!install_hook()) {
         if (InterlockedCompareExchange(&g_hook_installed, 0, 0))
             remove_hook();
-        write_ready("refused-hook");
-        return 0;
+        return refuse_worker(QUARANTINE_HOOK, "refused-hook",
+                             "REFUSED: initial hook installation failed");
     }
-    write_ready("armed");
+    if (!open_fresh_attempt())
+        return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                             "REFUSED: could not open initial attempt epoch");
+    if (!publish_ready("armed"))
+        return refuse_worker(QUARANTINE_READY_IO, "refused-ready-io",
+                             "REFUSED: could not atomically publish armed state");
     for (;;) {
         request_t r;
+        if (InterlockedCompareExchange(&g_lifecycle, 0, 0) ==
+                RC_LIFECYCLE_QUARANTINED)
+            return refuse_worker(QUARANTINE_LIFECYCLE, "refused-quarantine",
+                                 "REFUSED: controller entered quarantine");
         if (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
             if (!remove_hook()) {
-                log_line("REFUSED: could not restore hook bytes safely");
-                write_ready("refused-stop");
-                return 0;
+                return refuse_worker(QUARANTINE_STOP, "refused-stop",
+                                     "REFUSED: could not restore hook bytes safely");
             }
             drain_events();
             if (!fence_request_epoch()) {
-                log_line("REFUSED: could not fence request bytes at STOP");
-                write_ready("refused-request-epoch");
-                return 0;
+                return refuse_worker(
+                    QUARANTINE_REQUEST_EPOCH, "refused-request-epoch",
+                    "REFUSED: could not fence request bytes at STOP");
             }
-            write_ready("parked");
+            if (!transition_lifecycle(RC_LIFECYCLE_PARKED))
+                return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                                     "REFUSED: could not enter parked state");
+            if (!publish_ready("parked"))
+                return refuse_worker(QUARANTINE_READY_IO, "refused-ready-io",
+                                     "REFUSED: could not atomically publish parked state");
             while (GetFileAttributesA(g_stop_path) != INVALID_FILE_ATTRIBUTES) {
-                if (!fence_request_epoch()) {
-                    log_line("REFUSED: request bytes appeared while parked");
-                    write_ready("refused-request-epoch");
+                if (InterlockedCompareExchange(&g_detach_requested, 0, 0)) {
+                    drain_events();
+                    if (!fence_request_epoch() ||
+                        !detach_constraints_hold_at(RC_LIFECYCLE_PARKED) ||
+                        !transition_lifecycle(RC_LIFECYCLE_DETACHING))
+                        return refuse_worker(
+                            QUARANTINE_DETACH, "refused-detach",
+                            "REFUSED: detach preparation constraints changed");
+                    InterlockedExchange(&g_worker_exit_clean, 1);
                     return 0;
+                }
+                if (!fence_request_epoch()) {
+                    return refuse_worker(
+                        QUARANTINE_REQUEST_EPOCH, "refused-request-epoch",
+                        "REFUSED: request bytes appeared while parked");
                 }
                 drain_events(); Sleep(100);
             }
+            if (!transition_lifecycle(RC_LIFECYCLE_REARMING))
+                return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                                     "REFUSED: could not enter rearming state");
             if (!fence_request_epoch()) {
-                log_line("REFUSED: could not establish fresh rearm request epoch");
-                write_ready("refused-request-epoch");
-                return 0;
+                return refuse_worker(
+                    QUARANTINE_REQUEST_EPOCH, "refused-request-epoch",
+                    "REFUSED: could not establish fresh rearm request epoch");
             }
             InterlockedExchange(&g_stop_ack, 0);
             InterlockedExchange(&g_stopping, 0);
+            if (!transition_lifecycle(RC_LIFECYCLE_ARMING))
+                return refuse_worker(QUARANTINE_LIFECYCLE, "refused-lifecycle",
+                                     "REFUSED: could not re-enter arming state");
             if (!install_hook()) {
                 if (InterlockedCompareExchange(&g_hook_installed, 0, 0))
                     remove_hook();
-                write_ready("refused-rearm");
-                return 0;
+                return refuse_worker(QUARANTINE_REARM, "refused-rearm",
+                                     "REFUSED: rearm hook installation failed");
             }
-            write_ready("armed");
+            if (!open_fresh_attempt())
+                return refuse_worker(QUARANTINE_REARM, "refused-rearm",
+                                     "REFUSED: could not open rearm attempt epoch");
+            last_seq = 0;
+            if (!publish_ready("armed"))
+                return refuse_worker(QUARANTINE_READY_IO, "refused-ready-io",
+                                     "REFUSED: could not atomically publish rearm state");
         }
         drain_events();
         if (read_request(line, sizeof(line)) && parse_request(line, &r) &&
             r.seq != last_seq &&
             InterlockedCompareExchange(&g_pending, 0, 0) == V_NONE &&
+            InterlockedCompareExchange(&g_dispatch_gate, 0, 0) == RC_DISPATCH_OPEN &&
+            !InterlockedCompareExchange(&g_fence_requested, 0, 0) &&
+            InterlockedCompareExchange(&g_lifecycle, 0, 0) == RC_LIFECYCLE_ARMED &&
             !InterlockedCompareExchange(&g_stopping, 0, 0) &&
             GetFileAttributesA(g_stop_path) == INVALID_FILE_ATTRIBUTES) {
+            r.attempt = (unsigned)InterlockedCompareExchange(&g_attempt, 0, 0);
+            r.epoch = (unsigned)InterlockedCompareExchange(&g_request_epoch, 0, 0);
             g_request = r;
             MemoryBarrier();
             InterlockedExchange(&g_pending, (LONG)r.verb);
@@ -3008,14 +3384,85 @@ static DWORD WINAPI worker(LPVOID unused) {
     }
 }
 
+/*
+ * Future injectors must invoke this exported preparation entry point with an
+ * exact ready-record token, wait for it to return success, and only then run a
+ * remote FreeLibraryAndExitThread.  It never unloads itself.  The worker first
+ * exits from a stable parked boundary; this caller joins it and revalidates all
+ * no-execution/no-request/no-hook constraints before authorizing detach.
+ */
+__declspec(dllexport) DWORD WINAPI RetailControlPrepareDetach(LPVOID parameter) {
+    detach_request_t request;
+    SIZE_T got = 0;
+    DWORD wait_status, exit_code = (DWORD)-1;
+    HANDLE worker_handle;
+    if (!parameter || !g_self_process ||
+        !ReadProcessMemory(g_self_process, parameter, &request, sizeof(request), &got) ||
+        got != sizeof(request) || request.size != sizeof(request) ||
+        request.version != DETACH_REQUEST_VERSION ||
+        request.pid != GetCurrentProcessId() ||
+        request.controller_base != g_controller_base ||
+        request.attempt != (DWORD)InterlockedCompareExchange(&g_attempt, 0, 0) ||
+        request.epoch != (DWORD)InterlockedCompareExchange(&g_request_epoch, 0, 0) ||
+        !detach_constraints_hold_at(RC_LIFECYCLE_PARKED) ||
+        InterlockedCompareExchange(&g_detach_prepared, 0, 0) ||
+        InterlockedCompareExchange(&g_detach_requested, 1, 0) != 0)
+        return 0;
+    worker_handle = g_worker_thread;
+    if (!worker_handle) {
+        quarantine_controller(QUARANTINE_DETACH);
+        publish_ready("refused-detach");
+        return 0;
+    }
+    wait_status = WaitForSingleObject(worker_handle, DETACH_WAIT_MS);
+    if (wait_status != WAIT_OBJECT_0 ||
+        !GetExitCodeThread(worker_handle, &exit_code) || exit_code != 0 ||
+        !InterlockedCompareExchange(&g_worker_exit_clean, 0, 0) ||
+        !detach_constraints_hold_at(RC_LIFECYCLE_DETACHING)) {
+        quarantine_controller(QUARANTINE_DETACH);
+        publish_ready("refused-detach");
+        return 0;
+    }
+    /* remove_hook proved no owned EIP before the worker exited; with the hook
+       original and inflight zero, no new execution can enter the trampoline. */
+    if (g_trampoline) {
+        if (!VirtualFree(g_trampoline, 0, MEM_RELEASE)) {
+            quarantine_controller(QUARANTINE_DETACH);
+            publish_ready("refused-detach");
+            return 0;
+        }
+        g_trampoline = NULL;
+    }
+    if (!CloseHandle(worker_handle)) {
+        quarantine_controller(QUARANTINE_DETACH);
+        publish_ready("refused-detach");
+        return 0;
+    }
+    g_worker_thread = NULL;
+    if (!transition_lifecycle(RC_LIFECYCLE_DETACH_READY)) {
+        quarantine_controller(QUARANTINE_DETACH);
+        publish_ready("refused-detach");
+        return 0;
+    }
+    InterlockedExchange(&g_detach_prepared, 1);
+    if (!publish_ready("parked")) {
+        InterlockedExchange(&g_detach_prepared, 0);
+        quarantine_controller(QUARANTINE_READY_IO);
+        return 0;
+    }
+    return 1;
+}
+
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
-    (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
-        HANDLE thread;
         IMAGE_DOS_HEADER *controller_dos = (IMAGE_DOS_HEADER *)module;
         IMAGE_NT_HEADERS32 *controller_nt = NULL;
         DisableThreadLibraryCalls(module);
-        if (!init_paths(module)) return TRUE;
+        InterlockedExchange(&g_lifecycle, RC_LIFECYCLE_LOADING);
+        InterlockedExchange(&g_dispatch_gate, RC_DISPATCH_FENCED);
+        InterlockedExchange(&g_fence_requested, 1);
+        InterlockedExchange(&g_stopping, 1);
+        if (!init_paths(module)) return FALSE;
         g_controller_base = (unsigned)(ULONG_PTR)module;
         if (controller_dos->e_magic == IMAGE_DOS_SIGNATURE) {
             controller_nt = (IMAGE_NT_HEADERS32 *)(g_controller_base +
@@ -3023,16 +3470,25 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
             if (controller_nt->Signature == IMAGE_NT_SIGNATURE)
                 g_controller_size = controller_nt->OptionalHeader.SizeOfImage;
         }
-        if (!g_controller_size) return TRUE;
+        if (!g_controller_size) return FALSE;
         g_base = (unsigned)(ULONG_PTR)GetModuleHandleA(NULL);
+        if (!g_base) return FALSE;
         g_self_process = GetCurrentProcess();
         g_hook_addr = (BYTE *)(g_base + RVA_TURN_CALL_SITE);
         /* write_event uses a bounded heap buffer; the worker's measured O2
            frame is under 6 KiB, so immutable generations need not each reserve
            the executable's default 1 MiB thread stack. */
-        thread = CreateThread(NULL, WORKER_STACK_RESERVE, worker, NULL,
-                              STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-        if (thread) CloseHandle(thread);
+        g_worker_thread = CreateThread(NULL, WORKER_STACK_RESERVE, worker, NULL,
+                                       STACK_SIZE_PARAM_IS_A_RESERVATION,
+                                       &g_worker_tid);
+        if (!g_worker_thread) return FALSE;
+    } else if (reason == DLL_PROCESS_DETACH && reserved == NULL &&
+               !InterlockedCompareExchange(&g_detach_prepared, 0, 0)) {
+        /* Never wait, patch, or take a loader-unsafe lock in DllMain.  An
+           explicit unload that skipped preparation violated the contract; the
+           flag is diagnostic only because DllMain cannot veto FreeLibrary. */
+        InterlockedExchange(&g_quarantine_reason, QUARANTINE_DETACH);
+        InterlockedExchange(&g_lifecycle, RC_LIFECYCLE_QUARANTINED);
     }
     return TRUE;
 }
