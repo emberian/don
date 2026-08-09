@@ -2136,6 +2136,34 @@ impl GroupData {
         };
         self.new_speed = self.speed;
     }
+
+    /// `Group::clear(-1)` `0x00713E80`, the empty-group arm reached by
+    /// [`plan_ignore_order_kills`].
+    ///
+    /// `id` and every member-array byte are deliberately preserved. Retail passes `-1`, so
+    /// the conditional id store is skipped, and the arrays remain stale behind `num == 0`.
+    fn clear_after_kill(&mut self, frame: i32) {
+        self.army = -1;
+        self.num = 0;
+        self.form = -1;
+        self.stamp = frame;
+        self.ox = 0;
+        self.oy = 0;
+        self.o_dist = 0;
+        self.o_angle = 0;
+        self.disband = 0;
+        self.order_num = 0;
+        self.priority = 0;
+        self.role = 0;
+        self.think_frame = 0;
+        self.new_speed = 0;
+        self.speed = 0;
+        self.form_num = 0;
+        self.facing = 0;
+        self.buildings = 0;
+        self.who = 0;
+        self.march = 0;
+    }
 }
 
 /// The object-side verdict `Group::normalize` needs for one member.
@@ -2234,6 +2262,195 @@ pub enum GroupActionPlanError {
         index: usize,
         stance: i32,
     },
+}
+
+/// Stable object facts read by `Group::kill(int,uint,int,int)` `0x00714110`.
+///
+/// The scenario caller always supplies `force == 0`; therefore `valid` is both the root
+/// virtual validity result and the active-bit gate for an `o_down` target. `captain` is the
+/// resolved virtual at `+0xE8` (the shipped Unit implementation is `o_up < 0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KillObjectFacts {
+    pub o: i16,
+    pub valid: bool,
+    pub captain: bool,
+    pub o_up: i16,
+    pub o_down: i16,
+    pub group: i16,
+}
+
+/// One object-side write emitted by the scenario `Group::kill` prelude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupKillStep {
+    /// `object.group = -1`, reached only for a valid object which still names this Group.
+    ClearObjectGroup { who: u8, o: i16 },
+}
+
+/// A mutation-free plan for every nonnegative entry in one owner's
+/// `ScenarioData::objects_ignoring_orders` array.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupKillPlan {
+    pub group: GroupData,
+    pub steps: Vec<GroupKillStep>,
+    pub removals: usize,
+    /// A nonempty non-building result must still receive the exact dynamic
+    /// `Group::find_leader(0) -> UnitData::speed()` result before commit.
+    pub needs_leader_speed: bool,
+}
+
+impl GroupKillPlan {
+    /// Supply the final dynamic speed result. `None` is retail's `find_leader < 0` arm.
+    ///
+    /// Repeated kills recompute speed after each removal. Those calls are pure queries and
+    /// every later result overwrites both fields, so resolving only the final surviving
+    /// Group is state-equivalent while keeping the world boundary transactional.
+    pub fn resolve_leader_speed(&mut self, leader_speed: Option<i32>) {
+        if self.needs_leader_speed {
+            self.group.compute_speed(leader_speed);
+            self.needs_leader_speed = false;
+        }
+    }
+}
+
+/// An incomplete or malformed object snapshot supplied to [`plan_ignore_order_kills`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupKillPlanError {
+    MissingObjectFacts { o: i16 },
+    IgnoredObjectOutOfRange { o: i32 },
+    RecursiveObjectCycle { o: i16 },
+}
+
+fn kill_object_facts(facts: &[KillObjectFacts], o: i16) -> Option<KillObjectFacts> {
+    facts.iter().copied().find(|candidate| candidate.o == o)
+}
+
+fn plan_kill_one(
+    group: &mut GroupData,
+    who: u8,
+    o: i16,
+    down_branch: bool,
+    frame: i32,
+    facts: &[KillObjectFacts],
+    recursion: &mut Vec<(i16, bool)>,
+    steps: &mut Vec<GroupKillStep>,
+    removals: &mut usize,
+) -> Result<(), GroupKillPlanError> {
+    // Retail can legitimately re-enter the originally addressed subordinate while
+    // following captain -> o_down: `(subordinate, false) -> (captain, false) ->
+    // (subordinate, true)`.  The call mode is therefore part of the recursion identity.
+    // A malformed down-chain still repeats the same `(object, true)` pair and fails
+    // closed before any planned mutation.
+    if recursion.contains(&(o, down_branch)) {
+        return Err(GroupKillPlanError::RecursiveObjectCycle { o });
+    }
+    let object = kill_object_facts(facts, o).ok_or(GroupKillPlanError::MissingObjectFacts { o })?;
+    recursion.push((o, down_branch));
+
+    if object.valid {
+        // Retail immediately returns after redirecting an explicitly killed subordinate to
+        // its captain. The captain call then descends through the active o_down chain.
+        if !down_branch && !object.captain {
+            let result = plan_kill_one(
+                group,
+                who,
+                object.o_up,
+                false,
+                frame,
+                facts,
+                recursion,
+                steps,
+                removals,
+            );
+            recursion.pop();
+            return result;
+        }
+        if object.o_down >= 0 {
+            let down = kill_object_facts(facts, object.o_down)
+                .ok_or(GroupKillPlanError::MissingObjectFacts { o: object.o_down })?;
+            if down.valid {
+                plan_kill_one(
+                    group,
+                    who,
+                    object.o_down,
+                    true,
+                    frame,
+                    facts,
+                    recursion,
+                    steps,
+                    removals,
+                )?;
+            }
+        }
+    }
+    recursion.pop();
+
+    if group.who != who {
+        return Ok(());
+    }
+    let n = group.num.clamp(0, GROUP_MAX_MEMBERS as i32) as usize;
+    let Some(index) = group.list[..n].iter().position(|&member| member == o) else {
+        return Ok(());
+    };
+    if object.valid && object.group as i32 == group.id {
+        steps.push(GroupKillStep::ClearObjectGroup { who, o });
+    }
+    group.disband = 0;
+    group.remove_at(index);
+    *removals += 1;
+    if group.num == 0 {
+        group.clear_after_kill(frame);
+    } else {
+        group.stamp = frame;
+    }
+    Ok(())
+}
+
+/// Plan the exact scenario prelude shared by `Group::action_*` methods and reached here
+/// from `Army::stop` during defeated-player cleanup.
+///
+/// `ignored` is visited in live array order. Negative tombstones are skipped, duplicates
+/// are retained, and recursive `o_down` removal occurs before the addressed object. The
+/// caller must resolve [`GroupKillPlan::needs_leader_speed`] before committing the plan.
+pub fn plan_ignore_order_kills(
+    group: &GroupData,
+    ignored: &[i32],
+    frame: i32,
+    facts: &[KillObjectFacts],
+) -> Result<GroupKillPlan, GroupKillPlanError> {
+    let who = group.who;
+    let mut group = group.clone();
+    let mut steps = Vec::new();
+    let mut removals = 0usize;
+    let mut recursion = Vec::new();
+    for &ignored_o in ignored {
+        let Ok(o) = i16::try_from(ignored_o) else {
+            return Err(GroupKillPlanError::IgnoredObjectOutOfRange { o: ignored_o });
+        };
+        if o < 0 {
+            continue;
+        }
+        plan_kill_one(
+            &mut group,
+            who,
+            o,
+            false,
+            frame,
+            facts,
+            &mut recursion,
+            &mut steps,
+            &mut removals,
+        )?;
+    }
+    let needs_leader_speed = removals != 0 && group.num != 0 && group.buildings == 0;
+    if removals != 0 && !needs_leader_speed {
+        group.compute_speed(None);
+    }
+    Ok(GroupKillPlan {
+        group,
+        steps,
+        removals,
+        needs_leader_speed,
+    })
 }
 
 /// Recover the complete state-changing body of `Group::action_halt(int)` `0x0070D0C0`.
@@ -4301,6 +4518,159 @@ mod tests {
         let mut e = GroupData::default();
         e.compute_speed(Some(42));
         assert_eq!(e.speed, 0);
+    }
+
+    #[test]
+    fn ignore_order_kill_redirects_subordinate_and_compacts_in_recursive_order() {
+        let mut group = GroupData {
+            id: 23,
+            disband: 9,
+            speed: 91,
+            new_speed: 92,
+            ..Default::default()
+        };
+        for (index, o) in [7, 8, 9].into_iter().enumerate() {
+            assert!(group.add(o, 2, false, 0, 1));
+            group.off_x[index] = 100 + index as i32;
+            group.off_y[index] = 200 + index as i32;
+            group.curr_x[index] = 300 + index as i32;
+            group.curr_y[index] = 400 + index as i32;
+            group.angles[index] = 10 + index as i8;
+        }
+        let facts = [
+            KillObjectFacts {
+                o: 7,
+                valid: true,
+                captain: true,
+                o_up: -1,
+                o_down: 8,
+                group: 23,
+            },
+            KillObjectFacts {
+                o: 8,
+                valid: true,
+                captain: false,
+                o_up: 7,
+                o_down: -1,
+                group: 23,
+            },
+            KillObjectFacts {
+                o: 9,
+                valid: true,
+                captain: true,
+                o_up: -1,
+                o_down: -1,
+                group: 23,
+            },
+        ];
+
+        let mut plan = plan_ignore_order_kills(&group, &[8, -1, 8], 77, &facts).unwrap();
+        assert_eq!(group.num, 3, "planning changed the source Group");
+        assert_eq!(plan.removals, 2);
+        assert_eq!(
+            plan.steps,
+            vec![
+                GroupKillStep::ClearObjectGroup { who: 2, o: 8 },
+                GroupKillStep::ClearObjectGroup { who: 2, o: 7 },
+            ]
+        );
+        assert_eq!(plan.group.num, 1);
+        assert_eq!(plan.group.list[0], 9);
+        assert_eq!(plan.group.off_x[0], 102);
+        assert_eq!(plan.group.off_y[0], 202);
+        assert_eq!(plan.group.curr_x[0], 302);
+        assert_eq!(plan.group.curr_y[0], 402);
+        assert_eq!(plan.group.angles[0], 12);
+        assert_eq!(plan.group.disband, 0);
+        assert_eq!(plan.group.stamp, 77);
+        assert!(plan.needs_leader_speed);
+        plan.resolve_leader_speed(Some(44));
+        assert_eq!((plan.group.speed, plan.group.new_speed), (44, 44));
+        assert!(!plan.needs_leader_speed);
+    }
+
+    #[test]
+    fn ignore_order_kill_last_member_uses_exact_clear_minus_one_image() {
+        let mut group = GroupData {
+            id: 31,
+            army: 6,
+            form: 4,
+            stamp: 5,
+            ox: 1,
+            oy: 2,
+            o_dist: 3,
+            o_angle: 4,
+            disband: 5,
+            order_num: 6,
+            priority: 7,
+            role: 8,
+            think_frame: 9,
+            new_speed: 10,
+            speed: 11,
+            form_num: 12,
+            facing: 13,
+            march: 14,
+            ..Default::default()
+        };
+        assert!(group.add(4, 3, false, 0, 1));
+        group.off_x[0] = 111;
+        group.list[1] = 99;
+        let facts = [KillObjectFacts {
+            o: 4,
+            valid: false,
+            captain: true,
+            o_up: -1,
+            o_down: -1,
+            group: 31,
+        }];
+
+        let plan = plan_ignore_order_kills(&group, &[4], 88, &facts).unwrap();
+        assert_eq!(
+            plan.removals, 1,
+            "invalid objects are still removed from Group"
+        );
+        assert!(plan.steps.is_empty(), "invalid object.group is not written");
+        assert!(!plan.needs_leader_speed);
+        assert_eq!(plan.group.id, 31);
+        assert_eq!(plan.group.army, -1);
+        assert_eq!(plan.group.num, 0);
+        assert_eq!(plan.group.form, -1);
+        assert_eq!(plan.group.stamp, 88);
+        assert_eq!(plan.group.who, 0);
+        assert_eq!(plan.group.header_bytes()[20..], [0; 52]);
+        assert_eq!(plan.group.off_x[0], 111, "clear leaves member arrays stale");
+        assert_eq!(plan.group.list[1], 99, "clear leaves member arrays stale");
+    }
+
+    #[test]
+    fn ignore_order_kill_rejects_a_recursive_down_cycle_without_mutation() {
+        let mut group = GroupData::default();
+        assert!(group.add(1, 0, false, 0, 0));
+        assert!(group.add(2, 0, false, 0, 0));
+        let before = group.clone();
+        let facts = [
+            KillObjectFacts {
+                o: 1,
+                valid: true,
+                captain: true,
+                o_up: -1,
+                o_down: 2,
+                group: -1,
+            },
+            KillObjectFacts {
+                o: 2,
+                valid: true,
+                captain: false,
+                o_up: 1,
+                o_down: 1,
+                group: -1,
+            },
+        ];
+        assert_eq!(
+            plan_ignore_order_kills(&group, &[1], 9, &facts).unwrap_err(),
+            GroupKillPlanError::RecursiveObjectCycle { o: 2 }
+        );
+        assert_eq!(group, before);
     }
 
     fn halt_facts(o: i16) -> HaltMemberFacts {
