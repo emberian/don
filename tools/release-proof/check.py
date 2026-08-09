@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from datetime import date
 import hashlib
+import importlib.util
 import json
 from pathlib import Path, PurePosixPath
 import sys
@@ -87,6 +88,17 @@ IGNORED_DISCOVERY_PARTS = {
     "target",
     "__pycache__",
 }
+PAYLOAD_CATEGORIES = {
+    "content-license",
+    "dependency-notice",
+    "first-party",
+    "independent-content",
+    "installer",
+    "mixed-binary",
+    "third-party-runtime",
+}
+DEPENDENCY_BEARING_CATEGORIES = {"mixed-binary", "third-party-runtime"}
+INSTALLER_ACTIONS = {"install", "configure", "repair", "remove"}
 
 
 class ProofError(RuntimeError):
@@ -428,6 +440,608 @@ def _validate_notice_inventory(
         raise ProofError(f"dependency notice inventory package order/identity drift: {inventory_path}")
 
 
+def _exact_object(value: object, fields: set[str], context: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ProofError(f"{context} fields are invalid")
+    return value
+
+
+def _nonempty(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ProofError(f"{context} must be a non-empty string without surrounding whitespace")
+    return value
+
+
+def _digest(value: object, context: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or value != value.lower()
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise ProofError(f"{context} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _positive_integer(value: object, context: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ProofError(f"{context} must be a positive integer")
+    return value
+
+
+def _json_object(path: Path, context: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProofError(f"{context} is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise ProofError(f"{context} root must be an object")
+    return payload
+
+
+def _payload_member(payload_root: str, value: object, context: str) -> str:
+    relative = _relative(value, context)
+    return (PurePosixPath(payload_root) / PurePosixPath(relative)).as_posix()
+
+
+def _scan_payload(root: Path, payload_root: str) -> set[str]:
+    directory = root
+    for part in PurePosixPath(payload_root).parts:
+        directory /= part
+        if directory.is_symlink():
+            raise ProofError(f"product payload root contains a symlink: {payload_root}")
+    if not directory.is_dir():
+        raise ProofError(f"product payload root is absent or not a directory: {payload_root}")
+    found: set[str] = set()
+    for path in directory.rglob("*"):
+        relative = path.relative_to(directory).as_posix()
+        if path.is_symlink():
+            raise ProofError(f"product payload contains a symlink: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ProofError(f"product payload contains a special filesystem object: {relative}")
+        canonical = _relative(relative, "product payload tree path")
+        folded = canonical.casefold()
+        if any(existing.casefold() == folded for existing in found):
+            raise ProofError(f"product payload contains a case-insensitive path collision: {canonical}")
+        found.add(canonical)
+    return found
+
+
+def _validate_product_payload(
+    root: Path, artifact_path: str, artifact: dict[str, Any]
+) -> dict[str, Any]:
+    artifact = _exact_object(
+        artifact,
+        {"schema", "product", "version", "payload_root", "files"},
+        artifact_path,
+    )
+    if artifact["schema"] != "don.release-product-payload.v1":
+        raise ProofError(f"product payload schema drift: {artifact_path}")
+    _nonempty(artifact["product"], f"{artifact_path}.product")
+    _nonempty(artifact["version"], f"{artifact_path}.version")
+    payload_root = _relative(artifact["payload_root"], f"{artifact_path}.payload_root")
+    records = artifact["files"]
+    if not isinstance(records, list) or not records:
+        raise ProofError(f"{artifact_path}.files must be a non-empty list")
+    by_path: dict[str, dict[str, Any]] = {}
+    by_category: dict[str, set[str]] = {category: set() for category in PAYLOAD_CATEGORIES}
+    folded_paths: set[str] = set()
+    for index, raw in enumerate(records):
+        record = _exact_object(
+            raw,
+            {"path", "size", "sha256", "role", "category"},
+            f"{artifact_path}.files[{index}]",
+        )
+        relative = _relative(record["path"], f"{artifact_path}.files[{index}].path")
+        folded = relative.casefold()
+        if relative in by_path or folded in folded_paths:
+            raise ProofError(f"duplicate or case-colliding product payload path: {relative}")
+        folded_paths.add(folded)
+        category = record["category"]
+        if category not in PAYLOAD_CATEGORIES:
+            raise ProofError(f"unsupported product payload category for {relative}: {category!r}")
+        _nonempty(record["role"], f"product payload role for {relative}")
+        expected_size = _positive_integer(record["size"], f"product payload size for {relative}")
+        expected_digest = _digest(record["sha256"], f"product payload digest for {relative}")
+        repository_path = _payload_member(payload_root, relative, "product payload member")
+        file_path = _regular_file(root, repository_path)
+        actual_size = file_path.stat().st_size
+        actual_digest = _sha256(file_path)
+        if actual_size != expected_size or actual_digest != expected_digest:
+            raise ProofError(f"product payload bytes drift: {relative}")
+        by_path[relative] = record
+        by_category[str(category)].add(relative)
+    discovered = _scan_payload(root, payload_root)
+    declared = set(by_path)
+    if discovered != declared:
+        raise ProofError(
+            "product payload coverage drift: "
+            f"unmanifested={sorted(discovered - declared)}, absent={sorted(declared - discovered)}"
+        )
+    if not by_category["first-party"] and not by_category["mixed-binary"]:
+        raise ProofError("product payload has no first-party product file")
+    return {
+        "artifact_path": artifact_path,
+        "artifact_sha256": _sha256(_regular_file(root, artifact_path)),
+        "payload_root": payload_root,
+        "by_path": by_path,
+        "by_category": by_category,
+    }
+
+
+def _load_content_license_auditor() -> Any:
+    tool = HERE.parent / "content-license-audit.py"
+    spec = importlib.util.spec_from_file_location("don_release_content_license_audit", tool)
+    if spec is None or spec.loader is None:
+        raise ProofError("content-license auditor cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _validate_content_clearance(
+    root: Path,
+    artifact_path: str,
+    artifact: dict[str, Any],
+    product: dict[str, Any],
+) -> dict[str, Any]:
+    artifact = _exact_object(
+        artifact,
+        {
+            "schema",
+            "payload",
+            "payload_sha256",
+            "content_manifest",
+            "audit_report",
+            "human_review",
+            "attribution_notice",
+        },
+        artifact_path,
+    )
+    if artifact["schema"] != "don.release-content-clearance.v1":
+        raise ProofError(f"content clearance schema drift: {artifact_path}")
+    if artifact["payload"] != product["artifact_path"]:
+        raise ProofError("content clearance names the wrong product payload")
+    if _digest(artifact["payload_sha256"], "content clearance payload_sha256") != product[
+        "artifact_sha256"
+    ]:
+        raise ProofError("content clearance payload hash drift")
+    manifest_path = _relative(artifact["content_manifest"], "content clearance manifest")
+    payload_prefix = product["payload_root"] + "/"
+    if not manifest_path.startswith(payload_prefix):
+        raise ProofError("content clearance manifest is outside the product payload")
+    manifest_relative = manifest_path[len(payload_prefix) :]
+    if manifest_relative not in product["by_category"]["content-license"]:
+        raise ProofError("content clearance manifest is not classified as content-license")
+    manifest_file = _regular_file(root, manifest_path)
+    auditor = _load_content_license_auditor()
+    try:
+        actual_report = auditor.audit_release(
+            root / product["payload_root"], manifest_file
+        )
+    except auditor.AuditError as exc:
+        raise ProofError(f"content clearance audit failed: {exc}") from exc
+    if artifact["audit_report"] != actual_report:
+        raise ProofError("stored content clearance audit report does not match live audit")
+    if actual_report.get("ready") is not True or actual_report.get("legal_title_certified") is not False:
+        raise ProofError("content clearance audit overstates or fails its mechanical claim")
+
+    review = _exact_object(
+        artifact["human_review"],
+        {"reviewer", "reviewed_on", "decision", "manifest_sha256", "scope"},
+        "content clearance human_review",
+    )
+    _nonempty(review["reviewer"], "content clearance reviewer")
+    _nonempty(review["scope"], "content clearance review scope")
+    try:
+        reviewed_on = review["reviewed_on"]
+        if not isinstance(reviewed_on, str) or date.fromisoformat(reviewed_on).isoformat() != reviewed_on:
+            raise ValueError
+    except ValueError as exc:
+        raise ProofError("content clearance reviewed_on is not a canonical date") from exc
+    if review["decision"] != "approved-for-distribution":
+        raise ProofError("content clearance is not approved for distribution")
+    if review["manifest_sha256"] != actual_report["manifest_sha256"]:
+        raise ProofError("content clearance human review is bound to the wrong manifest")
+
+    attribution_relative = _relative(
+        artifact["attribution_notice"], "content clearance attribution_notice"
+    )
+    if attribution_relative not in product["by_category"]["content-license"]:
+        raise ProofError("attribution notice is not classified as content-license")
+    attribution_path = _regular_file(
+        root, _payload_member(product["payload_root"], attribution_relative, "attribution notice")
+    )
+    try:
+        attribution_text = attribution_path.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_file.read_bytes())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ProofError("content attribution or manifest is unreadable") from exc
+    asset_paths = {str(record["path"]) for record in manifest["assets"]}
+    license_paths = {str(record["path"]) for record in manifest["licenses"]}
+    for index, record in enumerate(manifest["assets"]):
+        attribution = str(record["attribution"])
+        if attribution not in attribution_text:
+            raise ProofError(
+                f"attribution notice omits manifest attribution for assets[{index}]"
+            )
+    if asset_paths != product["by_category"]["independent-content"]:
+        raise ProofError("independent-content payload classification does not match manifest assets")
+    expected_license_paths = license_paths | {manifest_relative, attribution_relative}
+    if expected_license_paths != product["by_category"]["content-license"]:
+        raise ProofError("content-license payload classification does not match clearance evidence")
+    return {
+        "manifest": manifest_path,
+        "asset_paths": asset_paths,
+        "license_paths": expected_license_paths,
+    }
+
+
+def _lock_identity(record: dict[str, Any]) -> tuple[object, object, object, object]:
+    return (
+        record.get("name"),
+        record.get("version"),
+        record.get("source"),
+        record.get("checksum"),
+    )
+
+
+def _dependency_reference(value: object, context: str) -> tuple[object, object, object, object]:
+    record = _exact_object(value, {"name", "version", "source", "checksum"}, context)
+    _nonempty(record["name"], f"{context}.name")
+    _nonempty(record["version"], f"{context}.version")
+    for field in ("source", "checksum"):
+        if record[field] is not None:
+            _nonempty(record[field], f"{context}.{field}")
+    return _lock_identity(record)
+
+
+def _validate_product_notices(
+    root: Path,
+    artifact_path: str,
+    artifact: dict[str, Any],
+    product: dict[str, Any],
+) -> dict[str, Any]:
+    artifact = _exact_object(
+        artifact,
+        {"schema", "payload", "payload_sha256", "locks", "artifacts", "packages"},
+        artifact_path,
+    )
+    if artifact["schema"] != "don.product-dependency-notices.v1":
+        raise ProofError(f"product dependency notice schema drift: {artifact_path}")
+    if artifact["payload"] != product["artifact_path"]:
+        raise ProofError("product dependency notices name the wrong payload")
+    if _digest(artifact["payload_sha256"], "product notices payload_sha256") != product[
+        "artifact_sha256"
+    ]:
+        raise ProofError("product dependency notices payload hash drift")
+
+    locks = artifact["locks"]
+    if not isinstance(locks, list) or not locks:
+        raise ProofError("product dependency notices locks must be non-empty")
+    lock_packages: dict[str, set[tuple[object, object, object, object]]] = {}
+    for index, raw in enumerate(locks):
+        record = _exact_object(raw, {"path", "sha256"}, f"product notices locks[{index}]")
+        path = _relative(record["path"], f"product notices locks[{index}].path")
+        if path in lock_packages:
+            raise ProofError(f"duplicate product notice lock: {path}")
+        lock_file = _regular_file(root, path)
+        if _digest(record["sha256"], f"product notices lock hash for {path}") != _sha256(lock_file):
+            raise ProofError(f"product notice lock hash drift: {path}")
+        try:
+            parsed = tomllib.loads(lock_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+            raise ProofError(f"product notice lock is unreadable: {path}") from exc
+        packages = parsed.get("package")
+        if not isinstance(packages, list):
+            raise ProofError(f"product notice lock has no package records: {path}")
+        lock_packages[path] = {_lock_identity(package) for package in packages}
+
+    artifact_records = artifact["artifacts"]
+    if not isinstance(artifact_records, list) or not artifact_records:
+        raise ProofError("product dependency notices artifacts must be non-empty")
+    selected: set[tuple[str, tuple[object, object, object, object]]] = set()
+    covered_payload_paths: set[str] = set()
+    referenced_locks: set[str] = set()
+    for index, raw in enumerate(artifact_records):
+        record = _exact_object(
+            raw, {"payload_path", "lockfile", "packages"}, f"product notices artifacts[{index}]"
+        )
+        payload_path = _relative(
+            record["payload_path"], f"product notices artifacts[{index}].payload_path"
+        )
+        if payload_path in covered_payload_paths:
+            raise ProofError(f"duplicate dependency-bearing payload artifact: {payload_path}")
+        if not any(
+            payload_path in product["by_category"][category]
+            for category in DEPENDENCY_BEARING_CATEGORIES
+        ):
+            raise ProofError(f"dependency notice covers a non-dependency payload path: {payload_path}")
+        covered_payload_paths.add(payload_path)
+        lockfile = _relative(record["lockfile"], "product notice artifact lockfile")
+        if lockfile not in lock_packages:
+            raise ProofError(f"product notice artifact names an undeclared lock: {lockfile}")
+        referenced_locks.add(lockfile)
+        references = record["packages"]
+        if not isinstance(references, list) or not references:
+            raise ProofError(f"product notice artifact has no packages: {payload_path}")
+        local: set[tuple[object, object, object, object]] = set()
+        for package_index, reference in enumerate(references):
+            identity = _dependency_reference(
+                reference,
+                f"product notices artifacts[{index}].packages[{package_index}]",
+            )
+            if identity in local:
+                raise ProofError(f"duplicate package in dependency-bearing artifact: {payload_path}")
+            if identity not in lock_packages[lockfile]:
+                raise ProofError(f"dependency package is absent from exact lock {lockfile}: {identity}")
+            local.add(identity)
+            selected.add((lockfile, identity))
+
+    expected_payload_paths = set().union(
+        *(product["by_category"][category] for category in DEPENDENCY_BEARING_CATEGORIES)
+    )
+    if covered_payload_paths != expected_payload_paths:
+        raise ProofError("dependency-bearing product payload classification is not fully covered")
+    if set(lock_packages) != referenced_locks:
+        raise ProofError("product dependency notices contain an unreferenced lock")
+
+    package_records = artifact["packages"]
+    if not isinstance(package_records, list) or not package_records:
+        raise ProofError("product dependency notice package records must be non-empty")
+    recorded: set[tuple[str, tuple[object, object, object, object]]] = set()
+    notice_paths: set[str] = set()
+    for index, raw in enumerate(package_records):
+        record = _exact_object(
+            raw,
+            {
+                "lockfile",
+                "name",
+                "version",
+                "source",
+                "checksum",
+                "license_expression",
+                "license_evidence",
+                "required_notice_paths",
+                "source_provision",
+            },
+            f"product notices packages[{index}]",
+        )
+        lockfile = _relative(record["lockfile"], f"product notices packages[{index}].lockfile")
+        identity = _dependency_reference(
+            {field: record[field] for field in ("name", "version", "source", "checksum")},
+            f"product notices packages[{index}] identity",
+        )
+        key = (lockfile, identity)
+        if key in recorded:
+            raise ProofError(f"duplicate product dependency notice package: {key}")
+        recorded.add(key)
+        _nonempty(record["license_expression"], f"product notices packages[{index}].license_expression")
+        _nonempty(record["source_provision"], f"product notices packages[{index}].source_provision")
+        for field in ("license_evidence", "required_notice_paths"):
+            values = record[field]
+            if not isinstance(values, list) or not values:
+                raise ProofError(f"product notices packages[{index}].{field} must be non-empty")
+            for path_index, value in enumerate(values):
+                notice_path = _relative(
+                    value, f"product notices packages[{index}].{field}[{path_index}]"
+                )
+                if notice_path not in product["by_category"]["dependency-notice"]:
+                    raise ProofError(f"dependency notice path is not classified as a notice: {notice_path}")
+                notice_paths.add(notice_path)
+    if recorded != selected:
+        raise ProofError("product dependency notice records do not match the conveyed lock subset")
+    if notice_paths != product["by_category"]["dependency-notice"]:
+        raise ProofError("dependency-notice payload classification does not match package evidence")
+    return {
+        "covered_payload_paths": covered_payload_paths,
+        "notice_paths": notice_paths,
+        "packages": len(recorded),
+    }
+
+
+def _require_hash_bound(
+    root: Path, path: str, hash_records: dict[str, dict[str, Any]], context: str
+) -> Path:
+    if path not in hash_records:
+        raise ProofError(f"{context} is not hash-bound: {path}")
+    file_path = _regular_file(root, path)
+    if _sha256(file_path) != hash_records[path].get("sha256"):
+        raise ProofError(f"{context} hash drift: {path}")
+    return file_path
+
+
+def _validate_installer_evidence(
+    root: Path,
+    artifact_path: str,
+    artifact: dict[str, Any],
+    product: dict[str, Any],
+    hash_records: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    artifact = _exact_object(
+        artifact,
+        {"schema", "payload", "payload_sha256", "installers", "operations"},
+        artifact_path,
+    )
+    if artifact["schema"] != "don.release-installer-evidence.v1":
+        raise ProofError(f"installer evidence schema drift: {artifact_path}")
+    if artifact["payload"] != product["artifact_path"]:
+        raise ProofError("installer evidence names the wrong product payload")
+    if _digest(artifact["payload_sha256"], "installer payload_sha256") != product[
+        "artifact_sha256"
+    ]:
+        raise ProofError("installer evidence payload hash drift")
+    installers = artifact["installers"]
+    if not isinstance(installers, list) or not installers:
+        raise ProofError("installer evidence installers must be non-empty")
+    installer_paths = {
+        _relative(value, f"installer evidence installers[{index}]")
+        for index, value in enumerate(installers)
+    }
+    if len(installer_paths) != len(installers):
+        raise ProofError("installer evidence contains duplicate installer paths")
+    if installer_paths != product["by_category"]["installer"]:
+        raise ProofError("installer payload classification does not match installer evidence")
+
+    operations = artifact["operations"]
+    if not isinstance(operations, list) or not operations:
+        raise ProofError("installer evidence operations must be non-empty")
+    by_platform: dict[str, set[str]] = {}
+    reports: set[str] = set()
+    expected_results: dict[str, dict[str, Any]] = {
+        "install": {"managed_payload_matches": True, "launch_probe_passed": True},
+        "configure": {"configuration_roundtrip_matches": True},
+        "repair": {
+            "tamper_injected": True,
+            "tamper_detected": True,
+            "managed_payload_matches": True,
+        },
+        "remove": {"managed_paths_remaining": [], "user_data_policy_matches": True},
+    }
+    for index, raw in enumerate(operations):
+        record = _exact_object(
+            raw, {"platform", "action", "report"}, f"installer operations[{index}]"
+        )
+        platform = _nonempty(record["platform"], f"installer operations[{index}].platform")
+        action = record["action"]
+        if action not in INSTALLER_ACTIONS:
+            raise ProofError(f"unsupported installer action: {action!r}")
+        actions = by_platform.setdefault(platform, set())
+        if action in actions:
+            raise ProofError(f"duplicate installer operation for {platform}: {action}")
+        actions.add(str(action))
+        report_path = _relative(record["report"], f"installer operations[{index}].report")
+        if report_path in reports:
+            raise ProofError(f"installer operation report is reused: {report_path}")
+        reports.add(report_path)
+        report_file = _require_hash_bound(
+            root, report_path, hash_records, "installer operation report"
+        )
+        report = _exact_object(
+            _json_object(report_file, f"installer operation report {report_path}"),
+            {"schema", "payload_sha256", "platform", "action", "exit_code", "result"},
+            f"installer operation report {report_path}",
+        )
+        if report["schema"] != "don.installer-operation-result.v1":
+            raise ProofError(f"installer operation report schema drift: {report_path}")
+        if report["payload_sha256"] != product["artifact_sha256"]:
+            raise ProofError(f"installer operation report is bound to the wrong payload: {report_path}")
+        if report["platform"] != platform or report["action"] != action:
+            raise ProofError(f"installer operation report identity drift: {report_path}")
+        if report["exit_code"] != 0 or report["result"] != expected_results[str(action)]:
+            raise ProofError(f"installer operation did not prove successful {action}: {report_path}")
+    for platform, actions in by_platform.items():
+        if actions != INSTALLER_ACTIONS:
+            raise ProofError(
+                f"installer operation coverage is incomplete for {platform}: "
+                f"missing={sorted(INSTALLER_ACTIONS - actions)}"
+            )
+    return {"installer_paths": installer_paths, "platforms": sorted(by_platform)}
+
+
+def _completion_artifact(
+    root: Path,
+    gate: dict[str, Any],
+    artifact_path: str,
+    artifact_schema: str,
+    hash_records: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    artifact_file = _optional_regular_file(root, artifact_path)
+    if artifact_file is None:
+        return None
+    if artifact_path not in hash_records:
+        raise ProofError(f"completion artifact is not hash-bound: {artifact_path}")
+    if _sha256(artifact_file) != hash_records[artifact_path].get("sha256"):
+        raise ProofError(f"completion artifact hash drift: {artifact_path}")
+    artifact = _json_object(artifact_file, f"completion artifact {artifact_path}")
+    if artifact.get("schema") != artifact_schema:
+        raise ProofError(
+            f"completion artifact schema drift for {artifact_path}: expected {artifact_schema}"
+        )
+    if artifact_path not in gate["evidence"]:
+        raise ProofError(f"completion artifact is absent from gate evidence: {artifact_path}")
+    return artifact
+
+
+def _validate_distribution_artifacts(
+    root: Path,
+    by_id: dict[str, dict[str, Any]],
+    hash_records: dict[str, dict[str, Any]],
+) -> dict[str, bool]:
+    paths = {
+        gate_id: REQUIRED_COMPLETION_ARTIFACTS[gate_id]
+        for gate_id in (
+            "assembled-product-packaging",
+            "binary-third-party-notices",
+            "independent-presentation-content",
+            "standalone-product-installer",
+        )
+    }
+    loaded = {
+        gate_id: _completion_artifact(
+            root, by_id[gate_id], artifact_path, schema, hash_records
+        )
+        for gate_id, (artifact_path, schema) in paths.items()
+    }
+    product_artifact = loaded["assembled-product-packaging"]
+    dependent_present = any(
+        loaded[gate_id] is not None
+        for gate_id in (
+            "binary-third-party-notices",
+            "independent-presentation-content",
+            "standalone-product-installer",
+        )
+    )
+    if product_artifact is None:
+        if dependent_present:
+            raise ProofError("distribution completion evidence exists without product-payload.json")
+        return {gate_id: False for gate_id in paths}
+
+    product_path = paths["assembled-product-packaging"][0]
+    product = _validate_product_payload(root, product_path, product_artifact)
+    completed = {
+        "binary-third-party-notices": False,
+        "independent-presentation-content": False,
+        "standalone-product-installer": False,
+    }
+    if loaded["binary-third-party-notices"] is not None:
+        _validate_product_notices(
+            root,
+            paths["binary-third-party-notices"][0],
+            loaded["binary-third-party-notices"],
+            product,
+        )
+        completed["binary-third-party-notices"] = True
+    if loaded["independent-presentation-content"] is not None:
+        _validate_content_clearance(
+            root,
+            paths["independent-presentation-content"][0],
+            loaded["independent-presentation-content"],
+            product,
+        )
+        completed["independent-presentation-content"] = True
+    if loaded["standalone-product-installer"] is not None:
+        _validate_installer_evidence(
+            root,
+            paths["standalone-product-installer"][0],
+            loaded["standalone-product-installer"],
+            product,
+            hash_records,
+        )
+        completed["standalone-product-installer"] = True
+    completed["assembled-product-packaging"] = all(completed.values())
+    if completed["assembled-product-packaging"]:
+        required_evidence = {artifact_path for artifact_path, _ in paths.values()}
+        missing = required_evidence - set(by_id["assembled-product-packaging"]["evidence"])
+        if missing:
+            raise ProofError(
+                f"assembled-product-packaging omits distribution proof artifacts: {sorted(missing)}"
+            )
+    return completed
+
+
 def _validate_owned_inputs(root: Path) -> None:
     path = _regular_file(root, "tools/install/owned-inputs.json")
     try:
@@ -514,7 +1128,11 @@ def _validate_gates(
     template_license_mismatches: list[str],
     documentation_conflicts: list[str],
     hash_records: dict[str, dict[str, Any]],
-) -> tuple[dict[str, list[str]], dict[str, bool]]:
+) -> tuple[
+    dict[str, list[str]],
+    dict[str, bool],
+    dict[str, list[dict[str, str | None]]],
+]:
     gates = _object_list(payload, "gates")
     seen: set[str] = set()
     blockers = {scope: [] for scope in sorted(SCOPES)}
@@ -582,25 +1200,23 @@ def _validate_gates(
                 f"gate {gate_id} contradicts derived evidence: "
                 f"expected {expected_status}, found {by_id[gate_id]['status']}"
             )
+    distribution_completion = _validate_distribution_artifacts(root, by_id, hash_records)
+    for gate_id, complete in distribution_completion.items():
+        expected_status = "proved" if complete else "blocked"
+        if by_id[gate_id]["status"] != expected_status:
+            raise ProofError(
+                f"gate {gate_id} contradicts validated distribution artifacts: "
+                f"expected {expected_status}, found {by_id[gate_id]['status']}"
+            )
+
+    distribution_gate_ids = set(distribution_completion)
     for gate_id, (artifact_path, artifact_schema) in REQUIRED_COMPLETION_ARTIFACTS.items():
-        artifact = _optional_regular_file(root, artifact_path)
+        if gate_id in distribution_gate_ids:
+            continue
+        artifact = _completion_artifact(
+            root, by_id[gate_id], artifact_path, artifact_schema, hash_records
+        )
         if artifact is not None:
-            if artifact_path not in hash_records:
-                raise ProofError(f"completion artifact is not hash-bound: {artifact_path}")
-            try:
-                artifact_payload = json.loads(artifact.read_bytes())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise ProofError(f"completion artifact is unreadable: {artifact_path}") from exc
-            if (
-                not isinstance(artifact_payload, dict)
-                or artifact_payload.get("schema") != artifact_schema
-            ):
-                raise ProofError(
-                    f"completion artifact schema drift for {artifact_path}: "
-                    f"expected {artifact_schema}"
-                )
-            if artifact_path not in by_id[gate_id]["evidence"]:
-                raise ProofError(f"completion artifact is absent from gate evidence: {artifact_path}")
             raise ProofError(
                 f"completion artifact {artifact_path} has no schema-specific semantic validator; "
                 "implement one before promoting its gate"
@@ -621,7 +1237,22 @@ def _validate_gates(
         raise ProofError("declared_readiness fields are invalid")
     if declared != readiness:
         raise ProofError(f"declared_readiness contradicts gates: declared={declared}, actual={readiness}")
-    return blockers, readiness
+    blocker_details: dict[str, list[dict[str, str | None]]] = {
+        scope: [
+            {
+                "id": gate_id,
+                "reason": str(by_id[gate_id]["blocker"]),
+                "expected_artifact": (
+                    REQUIRED_COMPLETION_ARTIFACTS[gate_id][0]
+                    if gate_id in REQUIRED_COMPLETION_ARTIFACTS
+                    else None
+                ),
+            }
+            for gate_id in blockers[scope]
+        ]
+        for scope in sorted(SCOPES)
+    }
+    return blockers, readiness, blocker_details
 
 
 def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
@@ -669,7 +1300,7 @@ def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
     _validate_owned_inputs(root)
     incident_dump_retained = _incident_dump_retained(root)
     documentation_conflicts = _known_documentation_conflicts(root)
-    blockers, readiness = _validate_gates(
+    blockers, readiness, blocker_details = _validate_gates(
         root,
         payload,
         missing_license_texts,
@@ -693,6 +1324,7 @@ def validate(root: Path, manifest_path: Path) -> dict[str, Any]:
         "documentation_conflicts": documentation_conflicts,
         "readiness": readiness,
         "blockers": blockers,
+        "blocker_details": blocker_details,
     }
 
 
