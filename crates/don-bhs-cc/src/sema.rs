@@ -400,10 +400,10 @@ fn collect_structs(u: &mut Unit) {
                 Some(Expr::Int(n, _)) => Some(*n),
                 Some(e) => {
                     u.diags.push(Diag {
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         file: u.files[*fi].path.display().to_string(),
                         pos: e.pos(),
-                        msg: "struct field array length is not a literal; treated as dynamic"
+                        msg: "struct field array length is not a literal; dynamic substitution is not recovered"
                             .into(),
                     });
                     None
@@ -467,7 +467,7 @@ pub fn eval_labels(
         if let Some(prev) = into.insert(d.name.clone(), v) {
             if prev != v {
                 diags.push(Diag {
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     file: file.to_string(),
                     pos: d.pos,
                     msg: format!("label `{}` redefined ({prev} -> {v})", d.name),
@@ -606,7 +606,7 @@ fn collect_scripts(u: &mut Unit) {
                 Some(prev) => {
                     if prev.has_body && has_body {
                         diags.push(Diag {
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             file: path.clone(),
                             pos,
                             msg: format!("script `{name}` defined more than once"),

@@ -1,7 +1,8 @@
 # BHS compiler
 
-**363/363 shipped scripts parse. 363/363 compile to bytecode with zero errors. Zero
-decode failures across 313,880 emitted instructions.**
+**363/363 shipped scripts parse. 362/363 compile cleanly; the remaining shipped
+`.lenght` typo is an explicit fidelity refusal until retail behavior is measured. Zero
+decode failures across 309,344 executable instructions from the 362 clean roots.**
 
 The corpus is `ron-data/bhs-corpus/` — 363 `.bhs` files, 93,649 lines, written by Big Huge
 Games across the `ai/`, `conquest/` and `scenario/` trees. It is this lane's language
@@ -95,16 +96,17 @@ below.
 ### Emitted code
 
 ```
-557 script slots (549 with bodies; the rest are forward declarations)
-1,280,240 bytes · 313,880 instructions · 47 of 73 opcodes used
+542 script slots across 362 executable roots
+1,263,524 bytes · 309,344 instructions · 48 of 73 opcodes used
 0 decode failures · 0 out-of-range jump targets · 33 auto-casts · 14,356 implicit declarations
 ```
 
 The counts are self-checking. `OP_BIT_UNSET` 1,635 is exactly the corpus's
-`enable_trigger` count and `OP_BIT_SET` 436 its `disable_trigger` count; `OP_CASE` 1,574 is
-the `case` count; `OP_JUMP_IF_BITSET` 1,554 is the trigger count; `OP_JUMP_IF_INITED` 2,615
-is 2,433 statics + 182 `run_once`; `OP_RETURN` 1,342 is 549 bodies + 793 explicit
-`return`s; `OP_CAST` 173 is 140 written casts + 33 inserted ones. Any of those could have
+`enable_trigger` count and `OP_BIT_SET` 436 its `disable_trigger` count;
+`OP_JUMP_IF_BITSET` 1,554 is the trigger count; `OP_JUMP_IF_INITED` 2,615 is 2,433
+statics + 182 `run_once`; `OP_CAST` 173 is 140 written casts + 33 inserted ones. Those
+constructs are absent from the refused Napoleon root, so the equalities survive its
+exclusion. Any of those could have
 disagreed.
 
 Top of the histogram: `OP_PUSH` 151,176 · `OP_CALL_GAME` 39,896 · `OP_POP` 39,269 ·
@@ -154,8 +156,10 @@ compiler reproduces that; it does not insert the comma the author meant.
 ### 3. A second shipped typo: `.lenght`
 
 `conquest/Napoleon/napoleon_diplo.bhs:182` reads
-`for (z = 0; z < offer.tribe_terr.lenght; z++)`. It is the **single** warning our compiler
-emits across the whole corpus. What retail does with it is unresolved, and the two
+`for (z = 0; z < offer.tribe_terr.lenght; z++)`. It is the **single** compile error our
+compiler emits across the whole corpus. Earlier code warned and emitted field zero;
+that could run plausible but invented behavior, so fidelity mode now refuses it. What
+retail does with it is unresolved, and the two
 possibilities are far apart: either its compiler is lax here, or `napoleon_diplo.bhs`
 **never compiled in the shipped game**, which per `bhs-what-we-know.md` fails almost
 silently and would have disabled the Napoleon diplomacy script for the whole session. That
@@ -223,9 +227,10 @@ that must be checked rather than assumed.
 
 ## Evidence, and what it is worth
 
-**Strong.** 363/363 compile with zero errors and zero decode failures over 313,880
-instructions, with every jump target bound-checked and every script entry asserted to land
-on an instruction boundary. This is not "parses to EOF with no residue" — the parser was
+**Strong.** 363/363 parse, 362/363 compile cleanly, and all structurally emitted output
+has zero decode failures over 309,344 executable instructions, with every jump target bound-checked
+and every script entry asserted to land on an instruction boundary. The only refusal is
+the exact unresolved `.lenght` site above. This is not "parses to EOF with no residue" — the parser was
 deliberately tightened until it *broke*, and each break was a real language fact:
 
 1. Requiring `;` after every statement dropped the rate to 360/363. Two of the three
@@ -237,11 +242,19 @@ deliberately tightened until it *broke*, and each break was a real language fact
 4. The AST census cross-checks against greps of the same corpus, and its two disagreements
    were corrections to the brief.
 
-**Weak or absent.** No emitted bytecode has been **executed**, by our VM or retail's. No
-byte of our output has been compared against retail's compiler. The lowering choices marked
+**Weak or absent.** Focused emitted bytecode now executes under our VM for an array
+literal, a sized-array indexed assignment, and a default-constructed struct field
+assignment. No byte of our output has been compared against retail's compiler. The lowering choices marked
 `[inferred]` below are consistent with the opcode semantics but are not the only sequences
 that would be. Per `docs/CHARTER.md` this is Tier C throughout: behaviourally motivated,
 divergence unmeasured. Nothing in this lane is verified.
+
+**Fidelity gate.** Any semantic/codegen error replaces every emitted file body with
+`OP_ERROR_TOKEN`, and `bhsc compile` exits nonzero; ignoring diagnostics cannot execute a
+fallback lowering. Even clean output remains research/Tier C until the retail bytecode,
+`script_type`, and `ref` encodings are measured. A retail-fidelity consumer must load a
+retail-compiled image or refuse, not silently treat this compiler's clean output as
+byte-identical retail output.
 
 ---
 
@@ -260,12 +273,11 @@ lane, or by one run under the oracle.
    yields the *operand* rather than a normalised 0/1 (Lua semantics, not C). But
    `OP_AND_OP`/`OP_OR_OP` exist and `ScriptInt` implements them as `x > 0`, and the retail
    lexer gives `&`/`&&` a single token. Something has to reconcile those three facts.
-3. **Struct and array opcode operands.** `OP_CREATE_STRUCT` and `OP_CREATE_ARRAY_INITER`
-   each take two raw 32-bit operands whose meaning is unread; we emit
-   `(struct index, field count)` and `(type tag, element count)`. `OP_CREATE_ARRAY` vs
-   `OP_CREATE_ARRAY_DYN` and `OP_CREATE_ARRAY_INDEX` vs `OP_PUSH_ARRAY_INDEX` are likewise
-   split by inference. `don-bhs`'s VM does not implement these yet either, so nothing
-   currently exercises them.
+3. **Retail aggregate-lowering byte identity.** Runtime handler reads settled the
+   constructor operand order, array prototype requirements, source push order, and
+   read-versus-write index opcodes. Compiler-to-VM tests execute all three forms. What
+   remains open is whether retail's compiler chooses the same valid instruction
+   sequences and container details.
 4. **`run_once` lowering.** We use a hidden static plus `OP_JUMP_IF_INITED`. The opcode
    semantics are measured; retail's choice is not. A trigger bit is the obvious
    alternative.
@@ -307,12 +319,9 @@ can run our output and the chunk-file reader can produce the same shape.
 1. Get one `.bhs` through the retail compiler under the oracle and diff the bytecode. That
    single artefact closes items 1-6 above at once and converts this lane from Tier C to a
    measured comparison.
-2. Run compiled corpus output on `don-bhs`'s VM with a stub host and count how far each
-   script gets. `don-bhs` already has a coverage recorder for unimplemented builtins, so
-   the first run produces a ranked list of what the host boundary owes.
-3. Implement the aggregate opcodes in the VM (`0x29`-`0x31`) — **4,267** of our emitted
-   instructions are aggregate ops `don_bhs::vm` currently rejects as `Unimplemented`
-   (`OP_PUSH_STRUCT_FIELD` 1,746, `OP_PUSH_ARRAY_INDEX` 1,464, `OP_PUSH_ARRAY_LENGTH` 463,
-   `OP_CREATE_ARRAY_INITER` 448, `OP_CREATE_STRUCT` 79, `OP_CREATE_ARRAY` 67). Nothing
-   scripted runs end to end until they exist.
+2. Run compiled corpus output on `don-bhs`'s VM with an explicitly lossy survey host and
+   count how far each script gets. Strict execution stops at the first unimplemented
+   builtin; survey mode produces the ranked boundary-debt list.
+3. Diff aggregate-heavy reference bytecode from retail against our valid executable
+   lowering, including struct type hashes and constructor prototypes.
 4. Settle `.lenght` in the live game.

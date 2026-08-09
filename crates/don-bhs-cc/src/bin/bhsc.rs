@@ -386,6 +386,9 @@ fn cmd_compile(paths: &[String]) {
             clean += 1;
         } else {
             with_errors += 1;
+            // `codegen::compile` poisons errored output with OP_ERROR_TOKEN. It is
+            // diagnostic output, not part of the executable-code census.
+            continue;
         }
 
         // Only the root file's own code is attributable to this compilation; included
@@ -433,6 +436,7 @@ fn cmd_compile(paths: &[String]) {
         let _ = ok;
     }
 
+    let failed = with_errors != 0 || !decode_failures.is_empty();
     println!("compiled cleanly      {}/{}", clean, files.len());
     println!("with errors           {}", with_errors);
     println!("scripts emitted       {}", total_scripts);
@@ -488,6 +492,9 @@ fn cmd_compile(paths: &[String]) {
         for w in &warning_examples {
             println!("    {w}");
         }
+    }
+    if failed {
+        std::process::exit(1);
     }
 }
 

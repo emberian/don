@@ -111,6 +111,7 @@ mod op {
     pub const JUMP_IF_SC_FALSE: u8 = 0x43;
     pub const JUMP_IF_INITED: u8 = 0x44;
     pub const JUMP_IF_BITSET: u8 = 0x45;
+    pub const ERROR_TOKEN: u8 = 0x48;
 }
 
 /// **The one convention this compiler shares with the VM and neither has confirmed.**
@@ -281,6 +282,11 @@ pub struct Stats {
 }
 
 /// Compile a whole analysed unit.
+///
+/// The returned program is deliberately non-executable when semantic analysis or
+/// lowering reports any error: each file's code is replaced by `OP_ERROR_TOKEN`.
+/// This keeps diagnostic collection useful without letting a caller that forgets to
+/// inspect diagnostics execute a guessed lowering.
 pub fn compile(unit: &Unit) -> (Program, Vec<Diag>, Stats) {
     let mut prog = Program::default();
     let mut diags = Vec::new();
@@ -302,6 +308,21 @@ pub fn compile(unit: &Unit) -> (Program, Vec<Diag>, Stats) {
         diags.append(&mut g.diags);
         stats.auto_casts += g.auto_casts;
         prog.files.push(sf);
+    }
+    let has_error = unit
+        .diags
+        .iter()
+        .chain(diags.iter())
+        .any(|d| d.severity == Severity::Error);
+    if has_error {
+        for file in &mut prog.files {
+            file.code.clear();
+            file.code.push(op::ERROR_TOKEN);
+            file.line_to_op.clear();
+            for script in &mut file.scripts {
+                script.entry = 0;
+            }
+        }
     }
     (prog, diags, stats)
 }
@@ -642,9 +663,9 @@ impl<'a> FileGen<'a> {
                             // A value returned from a void script would unbalance the
                             // frame; drop it and say so.
                             self.diag(
-                                Severity::Warning,
+                                Severity::Error,
                                 *pos,
-                                "value returned from a `void` script is discarded",
+                                "a `void` script cannot return a value",
                             );
                             self.emit(op::POP, *pos);
                         }
@@ -819,7 +840,11 @@ impl<'a> FileGen<'a> {
                     self.expr(g, it);
                 }
                 if items.is_empty() {
-                    self.diag(Severity::Error, *pos, "an array initializer cannot be empty");
+                    self.diag(
+                        Severity::Error,
+                        *pos,
+                        "an array initializer cannot be empty",
+                    );
                 }
                 self.emit2(
                     op::CREATE_ARRAY_INITER,
@@ -970,7 +995,11 @@ impl<'a> FileGen<'a> {
                     .and_then(|e| self.static_ty(g, e))
                     .map(|t| self.resolved_type_tag(&t));
                 if items.is_empty() {
-                    self.diag(Severity::Error, pos, "an untyped array literal cannot be empty");
+                    self.diag(
+                        Severity::Error,
+                        pos,
+                        "an untyped array literal cannot be empty",
+                    );
                 }
                 self.emit2(
                     op::CREATE_ARRAY_INITER,
@@ -1043,11 +1072,10 @@ impl<'a> FileGen<'a> {
             Some(i) => self.emit1(op::PUSH_STRUCT_FIELD, i as u32, pos),
             None => {
                 self.diag(
-                    Severity::Warning,
+                    Severity::Error,
                     pos,
-                    format!("cannot resolve field `.{name}`; emitting field 0"),
+                    format!("cannot resolve field `.{name}`; refusing an invented field index"),
                 );
-                self.emit1(op::PUSH_STRUCT_FIELD, 0, pos);
             }
         }
     }
@@ -1442,11 +1470,10 @@ fn array_inner(ty: &Ty) -> &Ty {
 /// `towlower` for the language's admitted names.
 fn bhs_type_hash(name: &str) -> u32 {
     const T: [u32; 50] = [
-        127, 811, 1597, 2131, 2749, 4759, 5527, 5953, 8117, 9539, 10273, 10753, 11159,
-        12301, 13217, 14207, 15413, 17681, 18661, 19013, 21089, 22051, 25111, 25801,
-        27457, 28057, 29581, 30809, 32611, 34469, 36067, 37511, 38723, 40093, 41983,
-        43321, 45083, 47431, 49667, 50767, 53453, 55469, 57193, 59369, 61987, 65071,
-        73421, 77849, 84223, 89009,
+        127, 811, 1597, 2131, 2749, 4759, 5527, 5953, 8117, 9539, 10273, 10753, 11159, 12301,
+        13217, 14207, 15413, 17681, 18661, 19013, 21089, 22051, 25111, 25801, 27457, 28057, 29581,
+        30809, 32611, 34469, 36067, 37511, 38723, 40093, 41983, 43321, 45083, 47431, 49667, 50767,
+        53453, 55469, 57193, 59369, 61987, 65071, 73421, 77849, 84223, 89009,
     ];
     let units: Vec<u16> = name.encode_utf16().collect();
     let mut remaining = units.len() as u32;
@@ -1544,6 +1571,15 @@ mod tests {
         );
         let n = decode_all(&prog.files[0].code).unwrap();
         assert!(n > 10, "suspiciously short program: {n} instructions");
+    }
+
+    #[test]
+    fn compile_errors_poison_output_instead_of_exposing_a_guess() {
+        let (prog, diags, _) =
+            compile_src("struct Pair { int value; }; int scenario { Pair p; return p.missing; }");
+        assert!(diags.iter().any(|d| d.severity == Severity::Error));
+        assert_eq!(prog.files[0].code, vec![op::ERROR_TOKEN]);
+        assert!(prog.files[0].scripts.iter().all(|s| s.entry == 0));
     }
 
     #[test]

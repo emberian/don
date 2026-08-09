@@ -28,7 +28,7 @@ against retail machine code.**
    with `err_count`, exactly as retail counts it) from a gap in our implementation
    (`VmError`). Those are different claims and were previously the same value.
 
-`cargo test -p don-bhs`: **50 tests green** (21 unit, 12 aggregates, 6 corpus, 10 vm,
+`cargo test -p don-bhs`: **52 tests green** (22 unit, 12 aggregates, 6 corpus, 11 vm,
 1 doctest), up from 21. `cargo check --workspace --all-targets` is clean, including
 the sibling `don-bhs-cc` which depends on this crate.
 
@@ -268,8 +268,9 @@ exactly the order the census prints.
 **the main simulation stream**. `rand_real` (`0x009e18b0`) inlines the same LCG
 (`s*1664525 + 1013904223`) against the same object, and `rand_get_seed` is a bare
 `mov eax, [[0xc06184]]`. All three route through `Host` so the stream can never
-accidentally fork; `UtilHost`'s own implementation says in its doc comment that it is
-**not** `Random::get` and would desync in a checksum-bearing context.
+accidentally fork. `UtilHost::game_random` implements retail's equal-bound,
+inverted-bound, exclusive-upper-bound, and low-16-bit scaling rules; the derivation
+records 1,500,012 retail cases with zero mismatches.
 
 ### Implemented, each from its handler
 
@@ -350,8 +351,8 @@ committed.
 5. **`ref` parameters** and **`Script::script_type` (+200)** are still undecoded, and
    the shipped AI entry points use `ref`.
 6. **`ScriptObject::get_string`** (`0x009d6370`, 353 bytes) — the aggregate's string
-   rendering. Ours joins members with commas, which is a placeholder and is labelled
-   as one.
+   rendering. It is not recovered, so aggregate-to-string conversion now fails
+   explicitly instead of inventing a comma-joined representation.
 
 ## 8. Provenance
 

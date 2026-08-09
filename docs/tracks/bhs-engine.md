@@ -399,11 +399,10 @@ short-circuit forms, `OP_CASE`, `OP_JUMP_IF_INITED`, the trigger-bit ops,
 `OP_CALL` / `OP_CALL_INCLUDE` / `OP_CALL_GAME` / `OP_CALL_GAME_VARIED`, `OP_RETURN`
 with frame close and stack-balance assertion, and both marker opcodes.
 
-Deliberately not implemented, and reported as `VmError::Unimplemented(name)` rather
-than silently approximated: the aggregate opcodes `OP_CREATE_ARRAY*`,
-`OP_CREATE_STRUCT`, `OP_PUSH_ARRAY_INDEX`, `OP_CREATE_ARRAY_INDEX`,
-`OP_PUSH_STRUCT_FIELD`, `OP_PUSH_ARRAY_LENGTH`, `OP_SET_ARRAY_LENGTH`. None of the
-three shipped scripts reaches them.
+Also implemented: all nine aggregate opcodes, including aliasable array/struct slots,
+array growth from a retained prototype, struct fields, and array length reads/writes.
+Twelve focused aggregate tests cover the handlers, and compiler-to-VM tests execute
+array literals, sized-array mutation, and default-constructed struct field mutation.
 
 ### 5.1 Two design decisions worth recording
 
@@ -414,10 +413,10 @@ and assignment mutates through it. `don-bhs` models a stack entry as
 assignment into a silent no-op and still pass casual tests.
 
 **Coverage is measured, not guessed.** `Host::call` returns
-`Err(HostError::Unimplemented)` for anything a host does not implement; the VM
-records `(index, name, count)` in `Coverage` and substitutes the engine's error
-return so the frame keeps running. Running any workload therefore yields the exact
-debt list rather than stopping at the first gap. `Coverage::report()` prints it.
+`Err(HostError::Unimplemented)` for anything a host does not implement. The VM records
+`(index, name, count)` in `Coverage` and fails by default with the builtin index and
+name. An explicitly lossy `MissingBuiltinPolicy::Survey` substitutes retail's typed
+error return only for debt discovery; it is never the execution default.
 
 ### 5.2 Builtin coverage today
 
@@ -477,14 +476,16 @@ verification, and must never be described as proving anything.
 
 ## 7. Driving the retail compiler — status
 
-A parallel lane is attempting this on hbox against the oracle harness, from this
-ground truth: `script_compiler` at `0x00eb6a90`, `Compiler::compile` at `0x009bf160`
+A recovered hbox oracle harness now exercises this route from the following ground
+truth: `script_compiler` at `0x00eb6a90`, `Compiler::compile` at `0x009bf160`
 (returns 0 on success), `Compiler::eval_command` at `0x009befe0`,
 `ScriptGameInterface::init` at `0x009e1a20`, `real_script_game_interface` at
 `0x00eb1ac8`, `script_game_interface` at `0x00cab36c`,
-`ScriptFile::script_files` at `0x00c8cba0`, and the `bhs.log` channel of §2.5.
-**It had not reported back when this document was written; treat §7 as open and check
-for its result before re-attempting.**
+`ScriptFile::script_files` at `0x00c8cba0`, and the `bhs.log` channel of §2.5. A
+bounded run mapped retail, ran 1,115 of 1,117 process initializers cleanly, installed
+the fabricated environment, initialized `ScriptGameInterface` and the compiler, and
+entered recursive include traversal. It did not produce a compiled image before the
+30-second bound, so reference bytecode and byte-identity comparison remain open.
 
 The escalation ladder it was given, cheapest first: (1) call
 `OpCode::get_op_name(0..73)` and recover the 73 mnemonics as an independent
@@ -507,7 +508,7 @@ non-empty directory argument rather than by hosting the compiler at all.
 
 ## 8. Open questions, ordered by how much they block
 
-1. **Assignment operand order.** The assignment handler (`0x009e10e9`) makes the
+1. **Compiler byte identity, including assignment operand order.** The assignment handler (`0x009e10e9`) makes the
    *first-popped* operand the `this` of `do_operator` and pushes it back, while the
    binary-operator handler (`0x009e11e5`) makes the *second-popped* operand `this`.
    Both readings of the compiler's push order are self-consistent, and they differ
@@ -515,16 +516,15 @@ non-empty directory argument rather than by hosting the compiler at all.
    `don-bhs` takes "first popped is the assignment target", the idiomatic reading.
    **One compiled `a = 1;` settles it instantly** — this is the first thing to check
    the moment §7 produces bytecode.
-2. **All of `src/ops.rs`.** Type promotion, integer division and modulo sign, whether
-   `OP_POW_OP` is exponentiation, whether `OP_ADD` concatenates strings, and string
-   comparison case sensitivity. Layer 2 of §6 answers all of them at once.
+2. **String and aggregate operator differentials.** Integer and float operators are
+   Tier B after 6,993 retail cases with zero mismatches. Retail comparisons for
+   strings and aggregates, including `ScriptObject::get_string`, remain open.
 3. **The chunk container** (§2.4) is unparsed. Needed to load compiled scripts
    without going through a compiler at all.
-4. **The aggregate opcodes** (arrays, structs) are unimplemented.
-5. **`Script::script_type` (+200)** distinguishes the AI-script form
+4. **`Script::script_type` (+200)** distinguishes the AI-script form
    (`int ai name(int who, ref int step, …)`) from the game-script form. The values
    are not decoded.
-6. **`ref` parameters.** The language has them (`ref int step`), and the shipped AI
+5. **`ref` parameters.** The language has them (`ref int step`), and the shipped AI
    entry points use them; the encoding is not yet identified.
 
 ---

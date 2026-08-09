@@ -36,10 +36,11 @@ Do not hand-edit either file; see `docs/tracks/bhs-engine.md` §4.1 for the deco
 
 ## Fidelity
 
-Tier C. Layouts, the opcode enum, operand counts and the builtin table are
-`[measured]` from the binary and PDB. The arithmetic in `src/ops.rs` has **never been
-run against the retail evaluator** and is the weakest part; `docs/tracks/bhs-engine.md`
-§6 layer 2 is the design that fixes it. Nothing here is verified or proven.
+Mixed tier. Layouts, the opcode enum, operand counts and the builtin table are
+`[measured]` from the binary and PDB. Integer and float `do_operator` behavior is
+Tier B after 6,993 differential cases against retail with zero mismatches. The
+remaining VM, string, aggregate, and builtin behavior is Tier C unless its source
+comment cites stronger evidence. Nothing here is verified or proven.
 
 ## Coverage
 

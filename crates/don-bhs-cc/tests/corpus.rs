@@ -1,9 +1,9 @@
 //! The shipped-corpus gate.
 //!
 //! `ron-data/bhs-corpus/` is 363 `.bhs` files, 93,649 lines, written by Big Huge Games —
-//! simultaneously this lane's language specification and its test suite. The strongest
-//! correctness claim available to a compiler for an undocumented language is "it accepts
-//! every real program that exists", so that is what these tests assert.
+//! simultaneously this lane's language specification and its test suite. The gate accepts
+//! every recovered construct except one shipped `.lenght` typo whose retail treatment is
+//! not measured; that file must fail explicitly rather than compile via an invented field.
 //!
 //! The corpus is **gitignored game content**. When it is absent the tests print a loud
 //! SKIPPED line and pass; a skipped case is not evidence of anything and must never be
@@ -73,7 +73,7 @@ fn parses_every_shipped_script() {
 }
 
 #[test]
-fn compiles_every_shipped_script_with_no_errors() {
+fn compiles_every_shipped_script_except_the_known_unresolved_lenght_typo() {
     let Some(root) = corpus_root() else {
         eprintln!("SKIPPED: ron-data/bhs-corpus is absent (gitignored game content)");
         return;
@@ -97,11 +97,17 @@ fn compiles_every_shipped_script_with_no_errors() {
             }
         }
     }
-    assert!(fails.is_empty(), "{} compile errors:\n{}", fails.len(), {
-        let mut v = fails;
+    assert_eq!(fails.len(), 1, "unexpected compile errors:\n{}", {
+        let mut v = fails.clone();
         v.truncate(30);
         v.join("\n")
     });
+    assert!(
+        fails[0].contains("napoleon_diplo.bhs:182:43")
+            && fails[0].contains("cannot resolve field `.lenght`"),
+        "the only accepted compile refusal is the measured corpus typo: {}",
+        fails[0]
+    );
 }
 
 /// Walk every emitted byte with the engine's own opcode table.
@@ -124,7 +130,15 @@ fn emitted_bytecode_decodes_and_every_jump_lands_in_range() {
         let Ok(unit) = sema::analyze(f, &inc) else {
             continue;
         };
-        let (prog, _, _) = don_bhs_cc::codegen::compile(&unit);
+        let (prog, diags, _) = don_bhs_cc::codegen::compile(&unit);
+        if unit
+            .diags
+            .iter()
+            .chain(diags.iter())
+            .any(|d| d.severity == Severity::Error)
+        {
+            continue;
+        }
         let sf = &prog.files[0];
 
         // Every script's entry offset must point at a real instruction boundary.

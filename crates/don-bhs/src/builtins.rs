@@ -173,11 +173,17 @@ fn dispatch<H: Host + ?Sized>(host: &mut H, decl: &BuiltinDecl, args: &[Value]) 
                 Ok(Value::Int(units[i as usize] as i32))
             }
         }
-        // char_from_int(n): a one-character string.
+        // char_from_int(n): one UTF-16 code unit. Rust strings cannot represent an
+        // unpaired surrogate, so reject that subdomain instead of silently replacing
+        // it with U+FFFD (which `from_utf16_lossy` would do).
         20 => {
             let n = i0();
             let u = (n as u32 & 0xffff) as u16;
-            Ok(Value::str(String::from_utf16_lossy(&[u])))
+            if (0xd800..=0xdfff).contains(&u) {
+                return Err(HostError::Unimplemented);
+            }
+            let ch = char::from_u32(u as u32).ok_or(HostError::Unimplemented)?;
+            Ok(Value::str(ch.to_string()))
         }
         // parse(fmt, ...): the `$NUM0` / `$STRING0` substitution the scenarios use
         // for UI text. `0x00a04720` has NOT been decoded, and the placeholder
@@ -434,6 +440,11 @@ mod tests {
             Ok(Value::Int(0))
         );
         assert_eq!(call(&mut h, 20, &[Value::Int(65)]), Ok(Value::str("A")));
+        assert_eq!(
+            call(&mut h, 20, &[Value::Int(0xd800)]),
+            Err(HostError::Unimplemented),
+            "an unpaired UTF-16 surrogate must not be replaced approximately"
+        );
     }
 
     #[test]
