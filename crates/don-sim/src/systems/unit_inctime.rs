@@ -40,7 +40,8 @@
 //!   `process` and never `inc_time`.
 //! * **The unit band calls a second virtual, `+0x154` `Unit::execute_events`
 //!   `0x0060EDC0`**, that the building band does not. Its exact 131-byte dispatcher is
-//!   [`unit_execute_events`]; the two callback bodies remain blockers.
+//!   [`unit_execute_events`]. The exact Guy-side body is [`guy_execute_events`]; shipped
+//!   graphics-event tables and the RELEASE / RELEASE_PLANE sink integrations remain blockers.
 //!
 //! # The `inc_time` family, complete
 //!
@@ -121,7 +122,10 @@
 //! | `Guy::set_new_location` | `0x005D86F0` | 899 | crew-guy call site ported exactly |
 //! | `GuyOut::graph_inc_frame` | `0x005DD200` | 3890 | presentation, `internal_random` |
 //! | `Unit::execute_events` | `0x0060EDC0` | 131 | exact dispatcher in [`unit_execute_events`] |
-//! | `Guy::execute_events` | `0x005D99C0` | 1093 | game-event package builder, unported |
+//! | `Guy::execute_events` | `0x005D99C0` | 1093 | exact body in [`guy_execute_events`] over explicit lookup inputs |
+//! | `GraphicEvents::get_event_group` | `0x008E23C0` | 397 | exact linked selector in [`select_event_group`] |
+//! | `GraphicEvents::verify_load` | `0x008E4780` | 256 | exact resource dispatcher in [`graphic_events_verify_load`] |
+//! | `GraphicEvents::execute_game_events` | `0x008E48E0` | 1115 | interval/type dispatch exact; RELEASE bodies unintegrated |
 //! | anim-class table | `0x00AF4370` | 38×4 | transcribed in [`ANIM_CLASS`] |
 //!
 //! # Fidelity
@@ -164,8 +168,8 @@ pub const RUNTIME_FIDELITY_READY: bool = false;
 /// a completeness claim.
 pub const RUNTIME_FIDELITY_BLOCKERS: &[&str] = &[
     "Guy::set_anim 0x005DA300 full state/RNG integration (including recursive activations)",
-    "Guy::execute_events 0x005D99C0 / GraphicEvents::execute_game_events 0x008E48E0",
-    "GraphicEvents::verify_load 0x008E4780",
+    "shipped GraphicEvents/EventGroup tables and RELEASE/RELEASE_PLANE integration",
+    "GraphicEvents::init_unit_events 0x008E2520 and shipped event resources",
     "retail AnimationPacket/.anm data",
     "Wall::inc_time 0x0063FB60",
     "DeathObj::inc_time 0x008D5240",
@@ -419,6 +423,417 @@ pub fn set_anim_rng_arm(arm: SetAnimRngArm, rng: &mut Random) -> SetAnimRngOutco
 }
 
 // ---------------------------------------------------------------------------
+// Guy::execute_events — exact package, order identity, and unit-side body
+// ---------------------------------------------------------------------------
+
+/// `GameDataPackage` from the retail PDB, exactly 56 bytes.
+///
+/// `Guy::execute_events` builds this on its stack and passes it to
+/// `GraphicEvents::execute_game_events`. The final target UID is deliberately not part of
+/// the package; retail keeps it in a separate local for stale-target validation.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GameDataPackage {
+    pub gpiece: i32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub cur_anim: i32,
+    pub cur_time: u32,
+    pub last_time: i32,
+    pub angle: i32,
+    pub pivot_angles: [f32; 4],
+    pub node_flags: u16,
+    pub o: i16,
+    pub ox: i16,
+    pub who: i8,
+    pub whom: i8,
+}
+
+const _: [(); 56] = [(); std::mem::size_of::<GameDataPackage>()];
+
+/// `fast_angle_to_degrees` `0x00A28F70` after its 256-entry lazy table has been built.
+///
+/// The function indexes only the high byte of the binary angle. Exhaustive evaluation of
+/// the table-building instruction stream reduces to this integer expression for all 256
+/// entries; every result is an exactly representable integer `f32` in `0..=359`.
+#[inline]
+pub fn fast_angle_to_degrees(angle: i32) -> f32 {
+    let high = (angle as u32) >> 24;
+    ((high.wrapping_mul(360).wrapping_add(128)) >> 8) as f32
+}
+
+/// Target identity carried beside a [`GameDataPackage`] while Guy events are validated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuyEventTarget {
+    pub o: i16,
+    pub who: i8,
+    pub uid: u16,
+    /// Result of `UnitOrder::update_attack_ground_order()` on the non-group attack path.
+    /// A non-null result bypasses stale-target validation at `0x005D9DB7`.
+    pub bypass_attack_validation: bool,
+}
+
+impl GuyEventTarget {
+    pub const fn new(o: i16, who: i8, uid: u16) -> Self {
+        GuyEventTarget {
+            o,
+            who,
+            uid,
+            bypass_attack_validation: false,
+        }
+    }
+}
+
+/// The current-order shapes read by `Guy::execute_events`.
+///
+/// This is not a synthetic action model. Each variant is the exact result of the virtual
+/// queries in `0x005D9AEE..0x005D9C14`, with the PDB fields retained. Values are narrowed
+/// exactly as the x86 loads do (`movsx word` for object index, `movsx byte` for owner).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuyEventOrder {
+    /// Null order or any order that is neither attack-ground nor special-animation.
+    FallbackToCavarch,
+    /// `is_attack() && !is_group()`: `TargetOrder::{ox,whom,uid}`.
+    Attack {
+        ox: i32,
+        whom: i32,
+        uid: u16,
+        update_attack_ground_present: bool,
+    },
+    /// `is_attack() && is_group()`: `GroupAttackOrder::{oxxx,whosoever}` plus inherited UID.
+    GroupAttack { oxxx: i32, whosoever: i32, uid: u16 },
+    /// Order type 23 or 24. Retail installs `(-1,-1,-1)` and bypasses target validation.
+    AttackGround,
+    /// Order type 25. Retail narrows `SpecialAnimOrder::{data1,data2}` into target identity.
+    SpecialAnim { data1: i32, data2: i32 },
+}
+
+/// Resolve the package target and separate UID local exactly as `Guy::execute_events` does.
+pub fn resolve_guy_event_target(order: GuyEventOrder, cavarch: GuyEventTarget) -> GuyEventTarget {
+    match order {
+        GuyEventOrder::FallbackToCavarch => GuyEventTarget {
+            bypass_attack_validation: false,
+            ..cavarch
+        },
+        GuyEventOrder::Attack {
+            ox,
+            whom,
+            uid,
+            update_attack_ground_present,
+        } => GuyEventTarget {
+            o: ox as i16,
+            who: whom as i8,
+            uid,
+            bypass_attack_validation: update_attack_ground_present,
+        },
+        GuyEventOrder::GroupAttack {
+            oxxx,
+            whosoever,
+            uid,
+        } => GuyEventTarget::new(oxxx as i16, whosoever as i8, uid),
+        GuyEventOrder::AttackGround => GuyEventTarget {
+            o: -1,
+            who: -1,
+            uid: u16::MAX,
+            bypass_attack_validation: true,
+        },
+        GuyEventOrder::SpecialAnim { data1, data2 } => {
+            GuyEventTarget::new(data1 as i16, data2 as i8, u16::MAX)
+        }
+    }
+}
+
+/// The owning-unit fields and virtual-query results used by one Guy event call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuyEventUnitView {
+    /// `ObjectTypeData::domain +0x218`; only `SEA == 1` enters the carrier counter path.
+    pub domain: i32,
+    /// Result of the exact `UnitData::is_type(0x15F, 0)` query.
+    pub is_type_0x15f: bool,
+    /// `UnitData::launching.length`, or zero when the array pointer is null.
+    pub launching_len: i32,
+    /// Checksummed `UnitData::trench_angle +0x5C`, reused by this carrier animation path.
+    pub trench_angle: i32,
+    /// Fallback identity at `cavarch_o/+0xA2`, `cavarch_uid/+0xA6`, `cavarch_who/+0xA8`.
+    pub cavarch: GuyEventTarget,
+}
+
+/// Build the PDB-layout package before the carrier override.
+pub fn guy_event_package(guy: &GuyData, target: GuyEventTarget) -> GameDataPackage {
+    let pivot_angles = if guy.turret_angles == [0; 4] {
+        [0.0; 4]
+    } else {
+        guy.turret_angles.map(fast_angle_to_degrees)
+    };
+    GameDataPackage {
+        gpiece: guy.gpiece,
+        x: guy.x,
+        y: guy.y,
+        z: guy.z,
+        cur_anim: guy.cur_anim as i32,
+        cur_time: guy.cur_time,
+        last_time: if guy.cur_time == 0 { -1 } else { guy.last_time },
+        angle: guy.angle,
+        pivot_angles,
+        node_flags: guy.node_flags as u16,
+        o: guy.o,
+        ox: target.o,
+        who: guy.who,
+        whom: target.who,
+    }
+}
+
+/// Apply `0x005D9C51..0x005D9D88`, the exact SEA/type-0x15F event-animation counter.
+///
+/// Returns whether `trench_angle` was written. The high two bits encode animation 11/12;
+/// the low 30 bits are its event clock. Expiry is strict (`clock > game_frames`).
+pub fn advance_sea_guy_event_animation<A: AnimData>(
+    guy: &GuyData,
+    unit: &mut GuyEventUnitView,
+    package: &mut GameDataPackage,
+    anims: &A,
+) -> bool {
+    if unit.domain != 1 || !unit.is_type_0x15f {
+        return false;
+    }
+
+    let mut wrote = false;
+    if unit.trench_angle as u32 & 0xC000_0000 == 0 && unit.launching_len != 0 {
+        unit.trench_angle = if unit.launching_len > 1 {
+            0xC000_0000u32 as i32
+        } else {
+            0x4000_0000
+        };
+        wrote = true;
+    }
+    if unit.trench_angle as u32 & 0xC000_0000 == 0 {
+        return wrote;
+    }
+
+    unit.trench_angle = unit.trench_angle.wrapping_add(1);
+    wrote = true;
+    package.cur_anim = if unit.trench_angle < 0 { 12 } else { 11 };
+    let event_clock = unit.trench_angle as u32 & 0x3FFF_FFFF;
+    package.cur_time = event_clock;
+    let frames = anims.game_frames(guy.gpiece, package.cur_anim as i8);
+    if (event_clock as i32) > frames {
+        package.cur_anim = guy.cur_anim as i32;
+        package.cur_time = guy.cur_time;
+        unit.trench_angle = 0;
+    } else {
+        package.last_time = guy
+            .last_time
+            .wrapping_sub(guy.cur_time as i32)
+            .wrapping_add(event_clock as i32);
+    }
+    wrote
+}
+
+/// Exact normalized fields read from PDB `GraphicEvent` by the game-event executor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphicEventView {
+    pub event_type: i32,
+    pub animation: i32,
+    pub start_time: u16,
+    pub end_time: u16,
+    pub subject: i32,
+    pub sound: i32,
+    pub node_num: i8,
+}
+
+/// Simulation-relevant dispatch arms in `GraphicEvents::execute_game_events`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicEventAction {
+    Release,
+    ReleasePlane,
+    Sound,
+}
+
+/// The common interval predicate used by RELEASE(1), RELEASE_PLANE(5), and EV_SOUND(7).
+///
+/// The first comparison is signed and the second unsigned in the x86 stream:
+/// `last_time < start_time && start_time <= cur_time`.
+pub fn graphic_event_action(
+    package: &GameDataPackage,
+    event: GraphicEventView,
+) -> Option<GraphicEventAction> {
+    if package.cur_anim != event.animation
+        || package.last_time >= event.start_time as i32
+        || event.start_time as u32 > package.cur_time
+    {
+        return None;
+    }
+    match event.event_type {
+        1 => Some(GraphicEventAction::Release),
+        5 => Some(GraphicEventAction::ReleasePlane),
+        7 => Some(GraphicEventAction::Sound),
+        _ => None,
+    }
+}
+
+/// Metadata on one linked `EventGroup` (PDB offsets `civ +0x428`, `age +0x429`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventGroupSelector {
+    pub civ: i8,
+    pub age: i8,
+}
+
+/// `GraphicEvents::get_event_group`'s linked-list selection, after the gpiece root exists.
+///
+/// Group zero is the unconditional fallback. Retail walks every `next`, retaining the last
+/// group whose civilization is wildcard/exact and whose `age` is strictly below the
+/// current age. A missing root is represented as `None`, not an invented empty table.
+pub fn select_event_group(
+    groups_in_link_order: &[EventGroupSelector],
+    civ: i32,
+    current_age: i32,
+) -> Option<usize> {
+    if groups_in_link_order.is_empty() {
+        return None;
+    }
+    let mut selected = 0;
+    for (i, group) in groups_in_link_order.iter().enumerate().skip(1) {
+        if (group.civ == -1 || group.civ as i32 == civ) && (group.age as i32) < current_age {
+            selected = i;
+        }
+    }
+    Some(selected)
+}
+
+/// Inputs read by `GraphicEvents::verify_load` `0x008E4780`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphicLoadView {
+    /// `GraphicEvents::events.length != 0`; false queues the gpiece for later loading.
+    pub graphics_initialized: bool,
+    /// `GraphicEventsData::loaded[gpiece]`.
+    pub already_loaded: bool,
+    /// `GraphicPieces::get_gpiece_type(gpiece)`.
+    pub gpiece_type: i32,
+    /// `GraphicPieces::get_gpiece_unit_type(gpiece)`, read only for gpiece type 1.
+    pub unit_type: i32,
+    /// Optional `ObjectTypeData*` at the graphic-piece type table. `None` is retail's null
+    /// pointer case; otherwise bit 1 of byte `+0x92` requests animations 7..11.
+    pub object_type_flags_0x92: Option<u8>,
+}
+
+/// Resource mutations performed by the exact `verify_load` dispatcher.
+pub trait GraphicLoadSink {
+    fn queue_preload_gpiece(&mut self, gpiece: i32);
+    fn init_unit_events(&mut self, gpiece: i32);
+    fn add_animation(&mut self, gpiece: i32, animation: i32, arg2: i32, arg3: i32, arg4: i32);
+    fn mark_loaded(&mut self, gpiece: i32);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicLoadResult {
+    QueuedUntilInitialized,
+    AlreadyLoaded,
+    Loaded,
+}
+
+/// `GraphicEvents::verify_load` `0x008E4780`, all resource-control branches.
+///
+/// The called `init_unit_events` body still requires shipped graphics-event tables, and is
+/// therefore a sink operation rather than a fabricated empty event group. The five
+/// `add_animation` calls are exact: animations 7 through 11, arguments `(0, 0, 3)`.
+pub fn graphic_events_verify_load<S: GraphicLoadSink>(
+    gpiece: i32,
+    view: GraphicLoadView,
+    sink: &mut S,
+) -> GraphicLoadResult {
+    if !view.graphics_initialized {
+        sink.queue_preload_gpiece(gpiece);
+        return GraphicLoadResult::QueuedUntilInitialized;
+    }
+    if view.already_loaded {
+        sink.mark_loaded(gpiece);
+        return GraphicLoadResult::AlreadyLoaded;
+    }
+
+    if view.gpiece_type == 0
+        || (view.gpiece_type == 1 && matches!(view.unit_type, 0x20D | 0x20B | 0x20C))
+    {
+        sink.init_unit_events(gpiece);
+    }
+    let add_default_animations = view.gpiece_type == 1
+        || view
+            .object_type_flags_0x92
+            .is_some_and(|flags| flags & 2 != 0);
+    if add_default_animations {
+        for animation in 7..=11 {
+            sink.add_animation(gpiece, animation, 0, 0, 3);
+        }
+    }
+    sink.mark_loaded(gpiece);
+    GraphicLoadResult::Loaded
+}
+
+/// External object/graphics operations at the boundary of the exact Guy-side body.
+pub trait GuyEventSink {
+    /// Return the UID only for an existing object whose `flags & 1` is set.
+    fn valid_target_uid(&self, who: i8, o: i16) -> Option<u16>;
+    fn verify_graphic_load(&mut self, gpiece: i32);
+    fn execute_graphic_events(&mut self, package: &GameDataPackage);
+}
+
+/// Observable endpoint of one exact `Guy::execute_events` pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuyEventResult {
+    /// `GraphicPieces::get_gpiece_type(gpiece) != 0`.
+    NonUnitGraphic,
+    /// Attack-class stale/missing target rejected after `verify_load`.
+    AttackTargetRejected,
+    /// Package was passed to `GraphicEvents::execute_game_events`.
+    Executed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuyEventError {
+    InvalidAnimation(i32),
+}
+
+/// `Guy::execute_events` `0x005D99C0`, with virtual/resource lookups supplied explicitly.
+///
+/// `gpiece_type` is the result of `GraphicPieces::get_gpiece_type`. The function contains
+/// all package construction, current-order target selection, carrier state mutation,
+/// verify-load ordering, and stale-target control flow. The sink's graphics-event executor
+/// remains a separately measured boundary because its RELEASE arms require shipped node
+/// tables plus integrated ammo/unit allocation; it is never replaced with a no-op here.
+pub fn guy_execute_events<A: AnimData, S: GuyEventSink>(
+    guy: &GuyData,
+    order: GuyEventOrder,
+    unit: &mut GuyEventUnitView,
+    gpiece_type: i32,
+    anims: &A,
+    sink: &mut S,
+) -> Result<GuyEventResult, GuyEventError> {
+    let target = resolve_guy_event_target(order, unit.cavarch);
+    let mut package = guy_event_package(guy, target);
+    advance_sea_guy_event_animation(guy, unit, &mut package, anims);
+
+    if gpiece_type != 0 {
+        return Ok(GuyEventResult::NonUnitGraphic);
+    }
+    sink.verify_graphic_load(package.gpiece);
+
+    let animation = usize::try_from(package.cur_anim)
+        .ok()
+        .filter(|&a| a < ANIM_CLASS.len())
+        .ok_or(GuyEventError::InvalidAnimation(package.cur_anim))?;
+    if ANIM_CLASS[animation] == 12 && !target.bypass_attack_validation {
+        if target.o < 0
+            || target.who < 0
+            || sink.valid_target_uid(target.who, target.o) != Some(target.uid)
+        {
+            return Ok(GuyEventResult::AttackTargetRejected);
+        }
+    }
+    sink.execute_graphic_events(&package);
+    Ok(GuyEventResult::Executed)
+}
+
+// ---------------------------------------------------------------------------
 // The bits and sentinels the two functions read
 // ---------------------------------------------------------------------------
 
@@ -495,6 +910,13 @@ pub trait AnimData {
     /// `[0x00EBF6E8][idx]` — the animation's length in clock units, which is what
     /// `Guy::set_anim` stores into `end_time`. [`NO_ANIM_END_TIME`] when absent.
     fn anim_frames(&self, gpiece: i32, a: i8) -> u32;
+
+    /// `AnimationPacket::get_game_frames` `0x00918CC0`. This reads the same frame-count
+    /// table as [`AnimData::anim_frames`] and returns `3` when the animation is absent.
+    /// It is signed in retail even though valid shipped frame counts are non-negative.
+    fn game_frames(&self, gpiece: i32, a: i8) -> i32 {
+        self.anim_frames(gpiece, a) as i32
+    }
 
     /// `AnimationPacket::get_anim_time` `0x00918C40` — [`NO_ANIM_TIME`] when absent.
     /// Only the unported phase-preserving tail path uses it; it is declared so that a
@@ -689,10 +1111,11 @@ pub struct UnitEventStats {
 
 /// `Unit::execute_events` `0x0060EDC0`, all 131 bytes of control flow.
 ///
-/// This closes the unit-level dispatcher only. The sink bodies remain separate blockers:
-/// `Guy::execute_events` builds a `GameDataPackage` and can call
-/// `GraphicEvents::execute_game_events`, while `GraphicEvents::verify_load` can initialise
-/// graphic-event data. Neither body is approximated here.
+/// This closes the unit-level dispatcher only. [`guy_execute_events`] supplies the exact
+/// Guy-side execute callback over explicit external inputs, and
+/// [`graphic_events_verify_load`] supplies the verify-load resource dispatcher. The called
+/// `init_unit_events` resource body and the RELEASE sinks remain blockers and are not
+/// approximated here.
 pub fn unit_execute_events<S: UnitEventSink>(
     view: UnitEventView,
     guys: &mut UnitGuys,
@@ -1403,6 +1826,349 @@ mod tests {
             assert_eq!(out.percent, Some(percent));
             assert_eq!(out.candidate_anim, Some(want));
         }
+    }
+
+    #[test]
+    fn game_data_package_is_the_exact_pdb_layout_and_snapshot() {
+        assert_eq!(std::mem::size_of::<GameDataPackage>(), 56);
+        let mut guy = GuyData {
+            gpiece: 17,
+            x: 101,
+            y: -202,
+            z: 303,
+            cur_anim: anim::CHAR_ATTACK2,
+            cur_time: 44,
+            last_time: 39,
+            angle: 0x4000_0000,
+            turret_angles: [0, 0x4000_0000, 0x8000_0000u32 as i32, -1],
+            node_flags: 0x4321,
+            o: 7,
+            who: 3,
+            ..GuyData::default()
+        };
+        let target = GuyEventTarget::new(9, 4, 0x1234);
+        let package = guy_event_package(&guy, target);
+        assert_eq!(package.gpiece, 17);
+        assert_eq!((package.x, package.y, package.z), (101, -202, 303));
+        assert_eq!(package.cur_anim, anim::CHAR_ATTACK2 as i32);
+        assert_eq!((package.cur_time, package.last_time), (44, 39));
+        assert_eq!(package.pivot_angles, [0.0, 90.0, 180.0, 359.0]);
+        assert_eq!((package.o, package.ox), (7, 9));
+        assert_eq!((package.who, package.whom), (3, 4));
+
+        guy.cur_time = 0;
+        guy.turret_angles = [0; 4];
+        let package = guy_event_package(&guy, target);
+        assert_eq!(package.last_time, -1);
+        assert_eq!(package.pivot_angles, [0.0; 4]);
+        assert_eq!(fast_angle_to_degrees(0x00ff_ffff), 0.0);
+        assert_eq!(fast_angle_to_degrees(0x0100_0000), 1.0);
+    }
+
+    #[test]
+    fn guy_event_order_resolution_preserves_retails_narrowing_and_bypass() {
+        let fallback = GuyEventTarget::new(6, 2, 99);
+        assert_eq!(
+            resolve_guy_event_target(GuyEventOrder::FallbackToCavarch, fallback),
+            fallback
+        );
+        assert_eq!(
+            resolve_guy_event_target(
+                GuyEventOrder::Attack {
+                    ox: 0x1_0002,
+                    whom: 0x103,
+                    uid: 7,
+                    update_attack_ground_present: true,
+                },
+                fallback,
+            ),
+            GuyEventTarget {
+                o: 2,
+                who: 3,
+                uid: 7,
+                bypass_attack_validation: true,
+            }
+        );
+        assert_eq!(
+            resolve_guy_event_target(GuyEventOrder::AttackGround, fallback),
+            GuyEventTarget {
+                o: -1,
+                who: -1,
+                uid: u16::MAX,
+                bypass_attack_validation: true,
+            }
+        );
+        assert_eq!(
+            resolve_guy_event_target(
+                GuyEventOrder::SpecialAnim {
+                    data1: 0x1_0004,
+                    data2: 0x105,
+                },
+                fallback,
+            ),
+            GuyEventTarget::new(4, 5, u16::MAX)
+        );
+    }
+
+    #[test]
+    fn sea_event_counter_selects_11_or_12_and_expires_strictly_after_frames() {
+        let guy = GuyData {
+            gpiece: 8,
+            cur_anim: anim::CHAR_IDLE1,
+            cur_time: 5,
+            last_time: 10,
+            ..GuyData::default()
+        };
+        let mut unit = GuyEventUnitView {
+            domain: 1,
+            is_type_0x15f: true,
+            launching_len: 1,
+            trench_angle: 0,
+            cavarch: GuyEventTarget::new(-1, -1, 0),
+        };
+        for clock in 1..=3 {
+            let mut package = guy_event_package(&guy, unit.cavarch);
+            assert!(advance_sea_guy_event_animation(
+                &guy,
+                &mut unit,
+                &mut package,
+                &MissingAnimData,
+            ));
+            assert_eq!(package.cur_anim, 11);
+            assert_eq!(package.cur_time, clock);
+            assert_eq!(package.last_time, 10 - 5 + clock as i32);
+            assert_ne!(unit.trench_angle, 0, "clock equal to frames remains live");
+        }
+        let mut package = guy_event_package(&guy, unit.cavarch);
+        advance_sea_guy_event_animation(&guy, &mut unit, &mut package, &MissingAnimData);
+        assert_eq!(unit.trench_angle, 0);
+        assert_eq!(package.cur_anim, anim::CHAR_IDLE1 as i32);
+        assert_eq!(package.cur_time, 5);
+
+        unit.launching_len = 2;
+        let mut package = guy_event_package(&guy, unit.cavarch);
+        advance_sea_guy_event_animation(&guy, &mut unit, &mut package, &MissingAnimData);
+        assert_eq!(
+            package.cur_anim, 12,
+            "negative high-bit state selects anim 12"
+        );
+    }
+
+    #[test]
+    fn graphic_event_interval_and_group_selection_match_retail_boundaries() {
+        let package = GameDataPackage {
+            cur_anim: 12,
+            last_time: 29,
+            cur_time: 30,
+            ..GameDataPackage::default()
+        };
+        let event = GraphicEventView {
+            event_type: 1,
+            animation: 12,
+            start_time: 30,
+            ..GraphicEventView::default()
+        };
+        assert_eq!(
+            graphic_event_action(&package, event),
+            Some(GraphicEventAction::Release)
+        );
+        assert_eq!(
+            graphic_event_action(
+                &GameDataPackage {
+                    last_time: 30,
+                    ..package
+                },
+                event,
+            ),
+            None,
+            "last_time is strictly below the event"
+        );
+        assert_eq!(
+            graphic_event_action(
+                &GameDataPackage {
+                    cur_time: 29,
+                    ..package
+                },
+                event,
+            ),
+            None,
+            "current time includes the event boundary"
+        );
+
+        let groups = [
+            EventGroupSelector { civ: 4, age: 99 },
+            EventGroupSelector { civ: -1, age: 1 },
+            EventGroupSelector { civ: 3, age: 2 },
+            EventGroupSelector { civ: 3, age: 3 },
+        ];
+        assert_eq!(select_event_group(&[], 3, 4), None);
+        assert_eq!(select_event_group(&groups, 3, 3), Some(2));
+        assert_eq!(select_event_group(&groups, 2, 3), Some(1));
+    }
+
+    #[derive(Default)]
+    struct GraphicLoadProbe {
+        queued: Vec<i32>,
+        initialized: Vec<i32>,
+        animations: Vec<(i32, i32, i32, i32, i32)>,
+        marked: Vec<i32>,
+    }
+
+    impl GraphicLoadSink for GraphicLoadProbe {
+        fn queue_preload_gpiece(&mut self, gpiece: i32) {
+            self.queued.push(gpiece);
+        }
+
+        fn init_unit_events(&mut self, gpiece: i32) {
+            self.initialized.push(gpiece);
+        }
+
+        fn add_animation(&mut self, gpiece: i32, animation: i32, arg2: i32, arg3: i32, arg4: i32) {
+            self.animations.push((gpiece, animation, arg2, arg3, arg4));
+        }
+
+        fn mark_loaded(&mut self, gpiece: i32) {
+            self.marked.push(gpiece);
+        }
+    }
+
+    #[test]
+    fn graphic_verify_load_queues_or_initializes_without_an_empty_table_fallback() {
+        let mut probe = GraphicLoadProbe::default();
+        assert_eq!(
+            graphic_events_verify_load(
+                22,
+                GraphicLoadView {
+                    graphics_initialized: false,
+                    already_loaded: false,
+                    gpiece_type: 0,
+                    unit_type: 0,
+                    object_type_flags_0x92: None,
+                },
+                &mut probe,
+            ),
+            GraphicLoadResult::QueuedUntilInitialized
+        );
+        assert_eq!(probe.queued, vec![22]);
+        assert!(probe.initialized.is_empty());
+        assert!(probe.marked.is_empty());
+
+        let mut probe = GraphicLoadProbe::default();
+        assert_eq!(
+            graphic_events_verify_load(
+                23,
+                GraphicLoadView {
+                    graphics_initialized: true,
+                    already_loaded: false,
+                    gpiece_type: 1,
+                    unit_type: 0x20D,
+                    object_type_flags_0x92: None,
+                },
+                &mut probe,
+            ),
+            GraphicLoadResult::Loaded
+        );
+        assert_eq!(probe.initialized, vec![23]);
+        assert_eq!(
+            probe.animations,
+            (7..=11)
+                .map(|animation| (23, animation, 0, 0, 3))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(probe.marked, vec![23]);
+
+        let mut probe = GraphicLoadProbe::default();
+        graphic_events_verify_load(
+            24,
+            GraphicLoadView {
+                graphics_initialized: true,
+                already_loaded: false,
+                gpiece_type: 2,
+                unit_type: 0,
+                object_type_flags_0x92: Some(2),
+            },
+            &mut probe,
+        );
+        assert!(probe.initialized.is_empty());
+        assert_eq!(probe.animations.len(), 5);
+        assert_eq!(probe.marked, vec![24]);
+    }
+
+    #[derive(Default)]
+    struct GuyEventProbe {
+        valid: Option<(i8, i16, u16)>,
+        verified: Vec<i32>,
+        executed: Vec<GameDataPackage>,
+    }
+
+    impl GuyEventSink for GuyEventProbe {
+        fn valid_target_uid(&self, who: i8, o: i16) -> Option<u16> {
+            self.valid
+                .filter(|&(w, object, _)| w == who && object == o)
+                .map(|(_, _, uid)| uid)
+        }
+
+        fn verify_graphic_load(&mut self, gpiece: i32) {
+            self.verified.push(gpiece);
+        }
+
+        fn execute_graphic_events(&mut self, package: &GameDataPackage) {
+            self.executed.push(*package);
+        }
+    }
+
+    #[test]
+    fn guy_execute_events_verifies_before_stale_target_gate_and_never_fakes_a_sink() {
+        let guy = GuyData {
+            gpiece: 44,
+            cur_anim: anim::CHAR_ATTACK2,
+            cur_time: 12,
+            last_time: 8,
+            ..GuyData::default()
+        };
+        let mut unit = GuyEventUnitView {
+            domain: 0,
+            is_type_0x15f: false,
+            launching_len: 0,
+            trench_angle: 0,
+            cavarch: GuyEventTarget::new(-1, -1, 0),
+        };
+        let order = GuyEventOrder::Attack {
+            ox: 7,
+            whom: 2,
+            uid: 0x1234,
+            update_attack_ground_present: false,
+        };
+        let mut sink = GuyEventProbe::default();
+        assert_eq!(
+            guy_execute_events(&guy, order, &mut unit, 0, &MissingAnimData, &mut sink),
+            Ok(GuyEventResult::AttackTargetRejected)
+        );
+        assert_eq!(sink.verified, vec![44]);
+        assert!(sink.executed.is_empty());
+
+        sink.valid = Some((2, 7, 0x1234));
+        assert_eq!(
+            guy_execute_events(&guy, order, &mut unit, 0, &MissingAnimData, &mut sink),
+            Ok(GuyEventResult::Executed)
+        );
+        assert_eq!(sink.executed.len(), 1);
+        assert_eq!((sink.executed[0].ox, sink.executed[0].whom), (7, 2));
+
+        let mut non_unit = GuyEventProbe::default();
+        assert_eq!(
+            guy_execute_events(
+                &guy,
+                GuyEventOrder::AttackGround,
+                &mut unit,
+                1,
+                &MissingAnimData,
+                &mut non_unit,
+            ),
+            Ok(GuyEventResult::NonUnitGraphic)
+        );
+        assert!(non_unit.verified.is_empty());
+        assert!(non_unit.executed.is_empty());
     }
 
     #[derive(Default)]

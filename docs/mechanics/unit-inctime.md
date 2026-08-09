@@ -33,19 +33,38 @@ packet fallbacks, and the final state writes still have to be integrated.
 
 `Unit::execute_events` at `0x0060EDC0` is now transcribed in full as an exact dispatcher. It
 walks `[0, guy_mark)` and chooses either `Guy::execute_events` or
-`GraphicEvents::verify_load(gpiece)` from the unit/on-map/freeze gate. The callback bodies are
-not approximated and remain blocked below. The 131-byte wrapper itself has no RNG or
-checksummed writes. `Guy::execute_events`, however, builds a 56-byte game-event package and
-may dispatch release events. Projectile release reaches `Ammo::init` (measured at zero to four
-`game_random` draws per projectile); unit release reaches `Unit::come_out` (a measured late
-branch draws zero or one time, with deeper callees still unaudited). Both paths also write
-checksummed object or guy state.
+`GraphicEvents::verify_load(gpiece)` from the unit/on-map/freeze gate. The 131-byte wrapper
+itself has no RNG or checksummed writes.
+
+`Guy::execute_events` at `0x005D99C0` is also transcribed over explicit order, unit, graphic,
+animation, and object-lookup inputs. The exact recovered slice includes:
+
+- the PDB-exact 56-byte `GameDataPackage` and high-byte angle conversion;
+- TargetOrder, GroupAttackOrder, SpecialAnimOrder, attack-ground, and `cavarch_*` identity;
+- the SEA/type-`0x15F` carrier clock stored in checksummed `trench_angle +0x5C`;
+- verify-load ordering and attack UID/stale-target rejection;
+- the strict graphic-event interval `last_time < start_time <= cur_time`;
+- linked EventGroup selection: unconditional root, then the last wildcard/exact-civilization
+  group whose age is strictly below the current age.
+
+The graphic-event sink is not approximated. Projectile RELEASE reaches `Ammo::init` (measured
+at zero to four `game_random` draws per projectile); RELEASE_PLANE reaches `Unit::come_out`
+(a measured late branch draws zero or one time, with deeper callees still unaudited). Both
+paths write checksummed object or guy state. Shipped event/node tables are not present in the
+repository, so an empty synthetic event table would be a fidelity bug rather than a fallback.
+
+`GraphicEvents::verify_load` at `0x008E4780` is transcribed as an exact resource dispatcher:
+before graphics initialization it queues the gpiece; afterwards it conditionally calls
+`init_unit_events`, installs animations 7 through 11 with the measured `(0,0,3)` arguments,
+and marks the gpiece loaded. `init_unit_events` itself remains an asset-backed sink—there is
+no default empty event group.
 
 ## Runtime blockers
 
 - full `Guy::set_anim` integration, including captain/uber recursion and state writes
-- `Guy::execute_events` `0x005D99C0` and `GraphicEvents::execute_game_events` `0x008E48E0`
-- `GraphicEvents::verify_load` `0x008E4780`
+- shipped `GraphicEvents` / `EventGroup` / graphic-node tables
+- RELEASE and RELEASE_PLANE integration from `GraphicEvents::execute_game_events` `0x008E48E0`
+- `GraphicEvents::init_unit_events` `0x008E2520`
 - shipped `AnimationPacket` / `.anm` durations
 - `Wall::inc_time` `0x0063FB60`
 - `DeathObj::inc_time` `0x008D5240`
