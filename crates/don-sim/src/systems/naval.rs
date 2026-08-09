@@ -1169,8 +1169,53 @@ pub enum BoardStep {
     Abandon,
 }
 
+/// Ordered external mutations issued by one `Unit::do_board` tick.
+///
+/// This is an exact transaction boundary for the 114-byte shipped executor: the world
+/// layer must first apply `set_anim(0, 0, 1)`, then (when present)
+/// `kill_current_order(0)`, then `go_inside(target, 0)`. The target lookup and
+/// `ObjectData::can_carry(passenger_o, passenger_who)` result are mandatory inputs to
+/// [`board_order_transaction`]; this module does not guess capacity from a type row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoardOrderTransaction {
+    pub step: BoardStep,
+    /// The three literal arguments passed to `Unit::set_anim`.
+    pub set_anim: (i32, i32, i32),
+    /// Argument to `Unit::kill_current_order`, if the call occurs.
+    pub kill_current_order: Option<i32>,
+    /// Target and mode argument for `Unit::go_inside`, if the call occurs.
+    pub go_inside: Option<(TargetRef, i32)>,
+}
+
+/// Build the complete externally-applied call transaction for `Unit::do_board`
+/// `0x005ED1F0` [measured].
+///
+/// `meet_ship_pending` is the actual return value of `Unit::check_meet_ship`; when it is
+/// true, retail performs no order removal or containment call. `target_can_carry` is the
+/// actual post-rendezvous `ObjectData::can_carry` result and is consulted only after the
+/// current order has been killed.
+pub fn board_order_transaction(
+    target: TargetRef,
+    meet_ship_pending: bool,
+    target_can_carry: bool,
+) -> BoardOrderTransaction {
+    let step = if meet_ship_pending {
+        BoardStep::Rendezvous
+    } else if target_can_carry {
+        BoardStep::GoInside
+    } else {
+        BoardStep::Abandon
+    };
+    BoardOrderTransaction {
+        step,
+        set_anim: (0, 0, 1),
+        kill_current_order: (!meet_ship_pending).then_some(0),
+        go_inside: matches!(step, BoardStep::GoInside).then_some((target, 0)),
+    }
+}
+
 /// `Unit::do_board(UnitOrder*)` `0x005ED1F0` [measured, verbatim structure — the function
-/// is 71 bytes and this is all of it]:
+/// is 114 bytes and this is all of it]:
 ///
 /// ```text
 /// b = ord->update_board_order();          ; vtable +0x64
@@ -1188,13 +1233,7 @@ pub enum BoardStep {
 /// This proxy classifies that branch only. It does not mutate either unit, run
 /// `Unit::go_inside`, or implement unloading/disembarkation.
 pub fn classify_board_step_proxy(meet_ship_pending: bool, target_can_carry: bool) -> BoardStep {
-    if meet_ship_pending {
-        BoardStep::Rendezvous
-    } else if target_can_carry {
-        BoardStep::GoInside
-    } else {
-        BoardStep::Abandon
-    }
+    board_order_transaction(TargetRef::default(), meet_ship_pending, target_can_carry).step
 }
 
 /// `Unit::do_await_board(UnitOrder*)` `0x005ED040` — the **ship's** side [measured,
@@ -1342,6 +1381,47 @@ pub const DOCK_GULL_TYPE_INDEX: i32 = 404;
 /// `0x10C = 9 * 0x1C + 0x10`.]
 pub const NATURE_OWNER_SLOT: usize = 9;
 
+/// The exact `Objects::init_unit` request issued by `Dock::init` `0x00740A80`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DockGullSpawnRequest {
+    pub who: usize,
+    pub type_index: i32,
+    pub x: i32,
+    pub y: i32,
+    pub arg5: i32,
+    pub arg6: i32,
+    pub arg7: i32,
+}
+
+/// The two calls issued after a successful dock-gull allocation.
+///
+/// The world callback passed to [`Docks::init_dock_transaction`] must apply
+/// `Unit::set_angle(angle, 7, 0)` to `gull_o`, followed by
+/// `Unit::add_strafe_order(building_o, building_who, -1, -1, 1, 2, 0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DockGullInitEffect {
+    pub gull_o: i16,
+    pub angle: i32,
+    pub angle_steps: i32,
+    pub angle_mode: i32,
+    pub building_o: i32,
+    pub building_who: i32,
+    pub target_o: i32,
+    pub target_who: i32,
+    pub strafe_flag: i32,
+    pub queue_pos: i32,
+    pub trailing: i32,
+}
+
+/// The destruction call issued by `Dock::close` after clearing the dock fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DockGullDestroyEffect {
+    pub who: usize,
+    pub gull_o: i16,
+    /// Arguments to the gull's vtable `+0x150` call.
+    pub args: (i32, i32, i32),
+}
+
 /// The per-leader naval bookkeeping this lane maintains.
 ///
 /// All four arrays are inside `LeaderData` and therefore inside checksum channel 8
@@ -1427,27 +1507,9 @@ impl Docks {
         }
     }
 
-    /// `Docks::init_dock(int who, int o)` `0x00740FC0` [measured, verbatim structure]:
-    ///
-    /// ```text
-    /// slot = first i < leader.dock_mark with (lists[who][i]->dock_flags & 1) == 0
-    /// if none:
-    ///     if (dock_mark < lists[who].length) slot = dock_mark++          ; reuse tail
-    ///     else { push a fresh Dock; slot = lists[who].length - 1; }
-    /// leader.dock_mark = max(leader.dock_mark, slot + 1);
-    /// Dock::init(slot, who, o);
-    /// ```
-    ///
-    /// The free-slot scan is a linear walk from index 0, so **dock slot assignment is
-    /// order-dependent and must be reproduced exactly** — the slot index is what
-    /// `BuildData::dock` (`+0x78`, `short`) stores on the building.
-    ///
-    /// `spawn_gull` is `Dock::init`'s tail; see [`Dock::init_fields`] for why it consumes
-    /// RNG.
-    /// Registry-only proxy. This does **not** spawn the retail gull, consume its RNG draw,
-    /// install its strafe order, or write the dock building's backlink. Callers must not
-    /// treat it as a complete `Docks::init_dock` port.
-    pub fn init_dock_registry_only(
+    /// Allocate/reuse the exact registry slot, initialize its measured fields, and update
+    /// `LeaderData::reg_docks`. The 16-bit counter uses retail's wrapping increment.
+    fn claim_dock_registry(
         &mut self,
         leader: &mut LeaderNaval,
         who: usize,
@@ -1481,9 +1543,96 @@ impl Docks {
             .expect("slot in range");
         d.init_fields(slot as i16, who as u8, o, region);
         if region >= 0 && region < MAX_DOCK_REGION {
-            leader.reg_docks[region as usize] += 1;
+            let count = &mut leader.reg_docks[region as usize];
+            *count = count.wrapping_add(1);
         }
         slot as i16
+    }
+
+    /// `Docks::init_dock(int who, int o)` `0x00740FC0` [measured, verbatim structure]:
+    ///
+    /// ```text
+    /// slot = first i < leader.dock_mark with (lists[who][i]->dock_flags & 1) == 0
+    /// if none:
+    ///     if (dock_mark < lists[who].length) slot = dock_mark++          ; reuse tail
+    ///     else { push a fresh Dock; slot = lists[who].length - 1; }
+    /// leader.dock_mark = max(leader.dock_mark, slot + 1);
+    /// Dock::init(slot, who, o);
+    /// ```
+    ///
+    /// The free-slot scan is a linear walk from index 0, so **dock slot assignment is
+    /// order-dependent and must be reproduced exactly** — the slot index is what
+    /// `BuildData::dock` (`+0x78`, `short`) stores on the building.
+    ///
+    /// `spawn_gull` is `Dock::init`'s tail; see [`Dock::init_fields`] for why it consumes
+    /// RNG.
+    /// Registry-only proxy. This does **not** spawn the retail gull, consume its RNG draw,
+    /// install its strafe order, or write the dock building's backlink. Callers must not
+    /// treat it as a complete `Docks::init_dock` port.
+    pub fn init_dock_registry_only(
+        &mut self,
+        leader: &mut LeaderNaval,
+        who: usize,
+        o: i16,
+        region: i16,
+    ) -> i16 {
+        self.claim_dock_registry(leader, who, o, region)
+    }
+
+    /// Execute `Docks::init_dock` + `Dock::init` through the recovered external-call
+    /// boundary [measured, `0x00740A80` and `0x00740FC0`].
+    ///
+    /// `spawn_gull` is invoked only after the dock fields and region counter are live, with
+    /// the exact nature-owner/type/coordinate arguments. If it returns a non-negative
+    /// object index, this function consumes exactly one draw from the supplied **main game
+    /// RNG**, invokes `finish_gull` with the exact angle and strafe calls, and only then
+    /// stores `DockData::gull_o`. A failed allocation consumes no draw and invokes no
+    /// finish callback.
+    pub fn init_dock_transaction<S, F>(
+        &mut self,
+        leader: &mut LeaderNaval,
+        who: usize,
+        building_o: i16,
+        building_xy: (i32, i32),
+        region: i16,
+        rng: &mut Random,
+        spawn_gull: S,
+        finish_gull: F,
+    ) -> i16
+    where
+        S: FnOnce(DockGullSpawnRequest) -> i16,
+        F: FnOnce(DockGullInitEffect),
+    {
+        let slot = self.claim_dock_registry(leader, who, building_o, region);
+        let gull_o = spawn_gull(DockGullSpawnRequest {
+            who: NATURE_OWNER_SLOT,
+            type_index: DOCK_GULL_TYPE_INDEX,
+            x: building_xy.0.wrapping_sub(TILE),
+            y: building_xy.1.wrapping_sub(TILE),
+            arg5: -1,
+            arg6: -1,
+            arg7: -1,
+        });
+        if let Some(angle) = Dock::gull_angle_after_spawn(rng, gull_o) {
+            finish_gull(DockGullInitEffect {
+                gull_o,
+                angle,
+                angle_steps: 7,
+                angle_mode: 0,
+                building_o: building_o as i32,
+                building_who: who as i32,
+                target_o: -1,
+                target_who: -1,
+                strafe_flag: 1,
+                queue_pos: 2,
+                trailing: 0,
+            });
+        }
+        self.lists[who]
+            .get_mut(slot as usize)
+            .expect("claimed dock slot")
+            .gull_o = gull_o;
+        slot
     }
 
     /// `Docks::close_dock(int who, int o)` `0x00740F50` [measured] — pops trailing free
@@ -1497,8 +1646,52 @@ impl Docks {
             d.close_fields();
             if in_use && reg >= 0 && reg < MAX_DOCK_REGION {
                 let r = &mut leader.reg_docks[reg as usize];
-                *r = r.saturating_sub(1);
+                *r = r.wrapping_sub(1);
             }
+        }
+        while leader.dock_mark > 0 {
+            let i = (leader.dock_mark - 1) as usize;
+            match self.lists[who].get(i) {
+                Some(d) if d.dock_flags & DOCK_FLAG_IN_USE != 0 => break,
+                _ => leader.dock_mark -= 1,
+            }
+        }
+    }
+
+    /// Execute `Docks::close_dock` + `Dock::close` through the recovered external-call
+    /// boundary [measured, `0x007409F0` and `0x00740F50`].
+    ///
+    /// `building_active` is the mandatory result of the exact object lookup and
+    /// `SubObject::flags & 1` test performed before retail decrements `reg_docks`. The gull
+    /// destroy callback runs after the dock fields are cleared, matching retail call
+    /// order. Trailing free registry slots are then removed from `dock_mark`.
+    pub fn close_dock_transaction<K>(
+        &mut self,
+        leader: &mut LeaderNaval,
+        who: usize,
+        slot: i16,
+        building_active: bool,
+        destroy_gull: K,
+    ) where
+        K: FnOnce(DockGullDestroyEffect),
+    {
+        let mut gull_o = -1;
+        if let Some(d) = self.lists[who].get_mut(slot as usize) {
+            let o = d.o;
+            let reg = d.reg;
+            gull_o = d.gull_o;
+            if o >= 0 && building_active && reg >= 0 && reg < MAX_DOCK_REGION {
+                let count = &mut leader.reg_docks[reg as usize];
+                *count = count.wrapping_sub(1);
+            }
+            d.close_fields();
+        }
+        if gull_o >= 0 {
+            destroy_gull(DockGullDestroyEffect {
+                who: NATURE_OWNER_SLOT,
+                gull_o,
+                args: (0, -1, 0),
+            });
         }
         while leader.dock_mark > 0 {
             let i = (leader.dock_mark - 1) as usize;
@@ -1543,7 +1736,9 @@ impl Dock {
         self.dock = dock;
         self.who = who;
         self.o = o;
-        self.dock_flags |= DOCK_FLAG_IN_USE;
+        // 0x00740A9B is `mov byte ptr [esi+8], 1`, not an OR. Reusing a slot therefore
+        // discards every stale auxiliary bit left by save data or a prior lifecycle.
+        self.dock_flags = DOCK_FLAG_IN_USE;
         self.reg = region;
         self.gull_o = -1;
     }

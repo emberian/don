@@ -123,6 +123,7 @@
 //! confirmed a single value. See §"Honest gaps" in `docs/mechanics/air.md`.
 
 use crate::rng::Random;
+use crate::systems::movement::vector_dist;
 
 // ============================================================================
 // 1. Mask alphabets
@@ -850,43 +851,87 @@ pub struct HostedAircraft {
     pub home_base_who: i32,
 }
 
-/// `ObjectData::num_aircraft_here(int also_count_queue)` `0x00645330`, the part that is
-/// fully derived \[measured\].
+/// The queue arm of `ObjectData::num_aircraft_here(int)` `0x00645330`.
+///
+/// This is intentionally shaped around the exact calls in the retail instruction stream,
+/// not around a guessed notion of "aircraft queued at this building":
+///
+/// * a carrier (`is(0x15f, 0)`) adds its own `UnitData::num_queued` short;
+/// * another build-capable object, only when `also_count_queue != 0`, calls the associated
+///   build record's vtable slot `+0x190` as `(2, 0)` and `(1, 0x136)` and adds the first
+///   result minus the second. `0x136` is the shipped Helicopter TypeIndex.
+///
+/// The PDB establishes the surrounding function identity, while the argument pairs and
+/// subtraction order are [measured] at `0x00645456..0x0064547E`. The meaning of vtable
+/// slot `+0x190` remains unnamed, so the fields preserve the call operands instead of
+/// laundering them into invented counter names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AircraftQueueAccounting {
+    /// The host is not a carrier and the queue arm is not reached.
+    None,
+    /// The carrier's `UnitData::num_queued` (`+0xA0`, signed short).
+    Carrier { num_queued: i32 },
+    /// Explicit results of the two measured build-record calls.
+    Build {
+        /// The caller's `also_count_queue` argument. When false, neither counter matters.
+        also_count_queue: bool,
+        /// Result of vtable `+0x190(2, 0)`.
+        count_kind2_type0: i32,
+        /// Result of vtable `+0x190(1, HELICOPTER)`.
+        count_kind1_helicopter: i32,
+    },
+}
+
+impl AircraftQueueAccounting {
+    /// The exact additive term selected by `0x006453B0..0x00645481`.
+    #[inline]
+    pub const fn adjustment(self) -> i32 {
+        match self {
+            Self::None => 0,
+            Self::Carrier { num_queued } => num_queued,
+            Self::Build {
+                also_count_queue: true,
+                count_kind2_type0,
+                count_kind1_helicopter,
+            } => count_kind2_type0.wrapping_sub(count_kind1_helicopter),
+            Self::Build {
+                also_count_queue: false,
+                ..
+            } => 0,
+        }
+    }
+}
+
+/// `ObjectData::num_aircraft_here(int also_count_queue)` `0x00645330` \[measured\].
 ///
 /// The engine counts every **active, AIR-domain** object of this owner whose
 /// `UnitData::home_base` resolves to *this* object, then:
 ///
 /// * if `is(AIRCRAFTCARRIER, 0)` it adds `UnitData::num_queued` (`+0xA0`, `short`) — the
 ///   carrier's own build queue;
-/// * otherwise, if `also_count_queue` and `vt+0x20` (a build-capable predicate), it adds a
-///   leader-level difference of two `LeaderData` counters. **That arm is UNDERIVED** and is
-///   passed through as `leader_queue_adjust` rather than guessed.
+/// * otherwise, if `also_count_queue` and `vt+0x20` (a build-capable predicate), it adds
+///   the exact build-record counter difference represented by
+///   [`AircraftQueueAccounting::Build`].
+///
+/// The queue input is mandatory and typed. An integration caller can no longer smuggle an
+/// arbitrary already-combined `leader_queue_adjust` through this API.
 pub fn num_aircraft_here(
     this_o: i32,
     this_who: i32,
-    host: AirHost,
     objects: &[HostedAircraft],
-    num_queued: i32,
-    also_count_queue: bool,
-    leader_queue_adjust: i32,
+    queue: AircraftQueueAccounting,
 ) -> i32 {
-    let mut n = 0;
+    let mut n: i32 = 0;
     for e in objects {
         if e.active
             && e.domain == DOMAIN_AIR
             && e.home_base_o == this_o
             && e.home_base_who == this_who
         {
-            n += 1;
+            n = n.wrapping_add(1);
         }
     }
-    if matches!(host, AirHost::Carrier) {
-        return n + num_queued;
-    }
-    if also_count_queue {
-        return n + leader_queue_adjust;
-    }
-    n
+    n.wrapping_add(queue.adjustment())
 }
 
 /// `Build::train` `0x0062F9B0` gates the aircraft-launch path on
@@ -1015,6 +1060,134 @@ pub enum FuelVerdict {
     LandInPlace,
 }
 
+/// One building-list entry supplied to the exact `Unit::check_fuel` host scan.
+///
+/// Callers must pass the owner's **complete building range in retail object-list order**;
+/// element zero is object index 2000. Retail first calls the candidate's vtable `+0x4C`
+/// predicate and then `ObjectData::can_carry(aircraft_o, aircraft_who)`. Both outcomes are
+/// mandatory because neither may be inferred from type or capacity here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct AirBuildingHostCandidate {
+    pub x: i32,
+    pub y: i32,
+    /// Result of the candidate's vtable `+0x4C` predicate.
+    pub host_ready: bool,
+    /// Result of `ObjectData::can_carry` for the returning aircraft.
+    pub can_carry_aircraft: bool,
+}
+
+/// One unit-list entry supplied to the exact `Unit::check_fuel` host scan.
+///
+/// Callers must pass the owner's **complete unit range in retail object-list order**;
+/// the slice index is the object index. Unlike the building arm, retail tests the active
+/// bit directly and does not invoke vtable `+0x4C` before `can_carry`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct AirUnitHostCandidate {
+    pub x: i32,
+    pub y: i32,
+    /// `SubObject::flags & 1`.
+    pub active: bool,
+    /// Result of `ObjectData::can_carry` for the returning aircraft.
+    pub can_carry_aircraft: bool,
+}
+
+/// Identity and measured distance of the selected host.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SelectedAirHost {
+    pub o: i32,
+    pub who: i32,
+    pub distance: i32,
+}
+
+/// The complete nearest-host scan inside `Unit::check_fuel` `0x005E9BE0` [measured].
+///
+/// Retail scans buildings at indices `2000..building_count` first, then units at
+/// `0..unit_count`. It replaces the winner only for a **strictly shorter**
+/// [`vector_dist`], so the earliest candidate wins a tie and any building beats an
+/// equally distant unit. The two loops and strict comparisons are visible at
+/// `0x005E9CD6..0x005E9F39`; instruction inspection resolves the decompiler's swapped
+/// temporary names around the two distance calls.
+///
+/// Coordinates are caller-supplied de-obfuscated world coordinates. Supplying filtered or
+/// reordered slices is a contract violation: object index and tie order are simulation
+/// state, not a convenience detail.
+pub fn select_nearest_air_host(
+    who: i32,
+    aircraft_xy: (i32, i32),
+    buildings: &[AirBuildingHostCandidate],
+    units: &[AirUnitHostCandidate],
+) -> Option<SelectedAirHost> {
+    let mut best: Option<SelectedAirHost> = None;
+
+    let mut consider = |o: i32, x: i32, y: i32| {
+        let distance = vector_dist(x.wrapping_sub(aircraft_xy.0), y.wrapping_sub(aircraft_xy.1));
+        if best.is_none_or(|current| distance < current.distance) {
+            best = Some(SelectedAirHost { o, who, distance });
+        }
+    };
+
+    for (i, candidate) in buildings.iter().enumerate() {
+        if candidate.host_ready && candidate.can_carry_aircraft {
+            consider(2000i32.wrapping_add(i as i32), candidate.x, candidate.y);
+        }
+    }
+    for (i, candidate) in units.iter().enumerate() {
+        if candidate.active && candidate.can_carry_aircraft {
+            consider(i as i32, candidate.x, candidate.y);
+        }
+    }
+    best
+}
+
+/// Execute the recovered fuel/return **order transaction** against complete ordered host
+/// inventories.
+///
+/// This mutates the six-field [`AirOrderWalk`] state that retail walks/checksums: it
+/// latches `returning` and, when the old home is invalid, writes the newly selected
+/// `oxx/whose`. The remaining [`FuelVerdict`] tells the world layer which measured
+/// external effect to perform (steer to the base, kill with reason 2, or land in place).
+/// No nearest-host proxy is accepted.
+pub fn check_fuel_order_transaction(
+    t: &AirTypeData,
+    order: &mut AirOrderWalk,
+    left: i32,
+    current_host_ok: bool,
+    owner: i32,
+    aircraft_xy: (i32, i32),
+    buildings: &[AirBuildingHostCandidate],
+    units: &[AirUnitHostCandidate],
+) -> FuelVerdict {
+    if t.mana == 0 && order.returning == 0 {
+        return FuelVerdict::KeepFlying;
+    }
+
+    order.returning = check_fuel_latch_returning(t, order.returning, left);
+    if order.returning == 0 {
+        return FuelVerdict::KeepFlying;
+    }
+    if current_host_ok && order.oxx >= 0 {
+        return FuelVerdict::ReturnTo {
+            o: order.oxx,
+            who: order.whose,
+        };
+    }
+
+    if let Some(host) = select_nearest_air_host(owner, aircraft_xy, buildings, units) {
+        order.oxx = host.o;
+        order.whose = host.who;
+        return FuelVerdict::ReturnTo {
+            o: host.o,
+            who: host.who,
+        };
+    }
+
+    if t.is_helicopter() {
+        FuelVerdict::LandInPlace
+    } else {
+        FuelVerdict::Crash
+    }
+}
+
 /// `Unit::check_fuel` `0x005E9BE0`, at the level this lane derived it.
 ///
 /// The host search itself (two linear scans of the owner's object list — buildings from
@@ -1046,6 +1219,54 @@ pub fn check_fuel(
         Some((o, who)) => (returning, FuelVerdict::ReturnTo { o, who }),
         None if t.is_helicopter() => (returning, FuelVerdict::LandInPlace),
         None => (returning, FuelVerdict::Crash),
+    }
+}
+
+/// Minimum fixed-angle turn step used by `Unit::air_turn_speed` `0x005EA390`.
+///
+/// The literal is loaded at `0x005EA3D3` and `0x005EA402`. Angles use a full unsigned
+/// 32-bit turn, so this is roughly half a degree; the integer value, not that description,
+/// is the simulation contract.
+pub const MIN_AIR_TURN_STEP: u32 = 0x005B_05B0;
+
+/// Exact integer core of `Unit::air_turn_speed(int, int)` `0x005EA390` [measured].
+///
+/// `turn_speed_raw` is `UnitTypeData::turn_speed` (`+0x2C4`) and
+/// `unit_turn_speed` is `Constants::unit_turn_speed` (`+0x08`, 256 in the shipped rules).
+/// When `bypass_bank_scale` is false, `bank_cvttss2si` must be the already-converted result
+/// of `cvttss2si` on the surface field at `UnitData +0xF4 -> +0x44`. The conversion result
+/// is mandatory so this integer primitive does not silently replace SSE's NaN/out-of-range
+/// behavior with Rust's saturating float cast.
+///
+/// The shipped order is load/shift/multiply, optional sign gate, unsigned divide by 55,
+/// multiply by absolute bank, then the non-helicopter minimum clamp. Every intermediate
+/// operation below is explicitly wrapping where x86 keeps the low 32 bits.
+pub fn air_turn_speed(
+    turn_speed_raw: u32,
+    unit_turn_speed: u32,
+    is_helicopter: bool,
+    requested_turn: i32,
+    bypass_bank_scale: bool,
+    bank_cvttss2si: i32,
+) -> u32 {
+    let mut speed = (turn_speed_raw >> 8).wrapping_mul(unit_turn_speed);
+    if !bypass_bank_scale {
+        let bank_direction = if is_helicopter {
+            bank_cvttss2si.wrapping_mul(-5)
+        } else {
+            bank_cvttss2si.wrapping_neg()
+        };
+        if (bank_direction ^ requested_turn) < 0 {
+            return MIN_AIR_TURN_STEP;
+        }
+        let sign = bank_direction >> 31;
+        let magnitude = ((bank_direction ^ sign).wrapping_sub(sign)) as u32;
+        speed = (speed / 55).wrapping_mul(magnitude);
+    }
+    if !is_helicopter && speed < MIN_AIR_TURN_STEP {
+        MIN_AIR_TURN_STEP
+    } else {
+        speed
     }
 }
 
@@ -1772,17 +1993,31 @@ mod tests {
             here(4, 1, DOMAIN_AIR, true),  // counts
         ];
         assert_eq!(
-            num_aircraft_here(4, 1, AirHost::Airbase, &objs, 3, false, 0),
+            num_aircraft_here(4, 1, &objs, AircraftQueueAccounting::None),
             2
         );
         // The carrier arm adds its own queue.
         assert_eq!(
-            num_aircraft_here(4, 1, AirHost::Carrier, &objs, 3, false, 0),
+            num_aircraft_here(
+                4,
+                1,
+                &objs,
+                AircraftQueueAccounting::Carrier { num_queued: 3 }
+            ),
             5
         );
-        // The non-carrier queue arm is the UNDERIVED leader term, passed through.
+        // The non-carrier arm is the measured `(2, 0) - (1, HELICOPTER)` difference.
         assert_eq!(
-            num_aircraft_here(4, 1, AirHost::Airbase, &objs, 3, true, 9),
+            num_aircraft_here(
+                4,
+                1,
+                &objs,
+                AircraftQueueAccounting::Build {
+                    also_count_queue: true,
+                    count_kind2_type0: 12,
+                    count_kind1_helicopter: 3,
+                }
+            ),
             11
         );
     }
