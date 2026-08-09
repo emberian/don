@@ -298,6 +298,11 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             let Event::Game { from, msg } = event else {
                 continue;
             };
+            if !all_ready_observed {
+                return Err(
+                    "refusing game traffic before the authoritative all-ready transition".into(),
+                );
+            }
             if host_id == 0 || from != host_id {
                 return Err(format!(
                     "refusing game traffic from non-host peer {from}; expected owned retail host {host_id}"
@@ -344,26 +349,16 @@ fn run_retail(options: &RetailOptions) -> Result<RetailReport, String> {
             }
 
             let Some(key) = game_key else {
-                println!(
-                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn-raw\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"checksum_decoded\":false}}",
-                    stamp,
-                    play,
-                    payload.len(),
-                );
-                continue;
+                return Err(format!(
+                    "could not recover the first retail command package key at stamp {stamp}; refusing to skip the authoritative first turn (supply --game-key)"
+                ));
             };
             let traffic = decode_traffic(payload, key)
                 .map_err(|e| format!("decode retail turn {stamp} with key 0x{key:08x}: {e}"))?;
             let Some(sums) = traffic.checksum else {
-                println!(
-                    "{{\"schema\":\"don.owned-peer.retail.event.v1\",\"event\":\"turn\",\"stamp\":{},\"play\":{},\"payload_bytes\":{},\"commands\":{},\"opcodes\":{},\"checksum_decoded\":false}}",
-                    stamp,
-                    play,
-                    payload.len(),
-                    traffic.command_count,
-                    json_u8_array(&traffic.opcodes),
-                );
-                continue;
+                return Err(format!(
+                    "first retail command package at stamp {stamp} has no checksum command; refusing to synthesize or skip its slot-1 reply"
+                ));
             };
             let checksum_bytes = traffic
                 .checksum_bytes
@@ -1068,17 +1063,70 @@ mod tests {
         let mut host = Session::new(host_transport, Role::Host, PEER_NAME);
         let start = Instant::now();
         let now = || start.elapsed().as_millis() as u64;
+        let mut remote_join_sequence = None;
+        let mut remote_ready_sequence = None;
+        let mut transition_sequence = 0u32;
 
         while !roster_is_authoritative(&host) {
             host.poll(now(), Duration::from_millis(5)).unwrap();
-            host.drain_events();
+            for event in host.drain_events() {
+                transition_sequence += 1;
+                match event {
+                    Event::PlayerJoined(id) if id == CLIENT_ID => {
+                        remote_join_sequence.get_or_insert(transition_sequence);
+                    }
+                    Event::ReadyChanged {
+                        unique_id: CLIENT_ID,
+                        ready: true,
+                    } => {
+                        remote_ready_sequence.get_or_insert(transition_sequence);
+                    }
+                    Event::Game { .. } => panic!("owned peer sent game traffic before roster"),
+                    _ => {}
+                }
+            }
             assert!(start.elapsed() < Duration::from_secs(3));
         }
         host.send_ready_flag(true).unwrap();
         while !host.all_ready() {
             host.poll(now(), Duration::from_millis(5)).unwrap();
-            host.drain_events();
+            for event in host.drain_events() {
+                transition_sequence += 1;
+                match event {
+                    Event::PlayerJoined(id) if id == CLIENT_ID => {
+                        remote_join_sequence.get_or_insert(transition_sequence);
+                    }
+                    Event::ReadyChanged {
+                        unique_id: CLIENT_ID,
+                        ready: true,
+                    } => {
+                        remote_ready_sequence.get_or_insert(transition_sequence);
+                    }
+                    Event::Game { .. } => panic!("owned peer sent game traffic before ready"),
+                    _ => {}
+                }
+            }
             assert!(start.elapsed() < Duration::from_secs(3));
+        }
+        assert!(
+            remote_join_sequence.is_some()
+                && remote_ready_sequence.is_some()
+                && remote_join_sequence < remote_ready_sequence,
+            "remote transition must be PlayerJoined then ReadyChanged(true): join={remote_join_sequence:?} ready={remote_ready_sequence:?}"
+        );
+
+        // The owned client is reactive: readiness alone must never synthesize
+        // a turn. Give it multiple poll cycles and fail on any game packet
+        // before the host supplies the first authoritative stamp/checksum.
+        let quiet_until = Instant::now() + Duration::from_millis(100);
+        while Instant::now() < quiet_until {
+            host.poll(now(), Duration::from_millis(5)).unwrap();
+            assert!(
+                host.drain_events()
+                    .into_iter()
+                    .all(|event| !matches!(event, Event::Game { .. })),
+                "owned peer emitted a premature game packet after all-ready"
+            );
         }
 
         let key = 0x005a_c33d;

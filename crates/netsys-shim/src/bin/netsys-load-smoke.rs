@@ -28,6 +28,7 @@ const IS_HOST: &[u8] =
 const ON_PLAYER_JOINED: &[u8] = b"?OnPlayerJoined@CrossplayNetLibSys@@QAEXABVLobbyMemberDTO@DTO@Lobby@Crossplay@@ABV?$basic_string@_WU?$char_traits@_W@std@@V?$allocator@_W@2@@std@@@Z\0";
 const SHIM_MARKER: &[u8] = b"shim_is_connected_to_network\0";
 const SHIM_MATERIALIZE: &[u8] = b"shim_materialize_load_only_peer\0";
+const SHIM_SETUP_BRIDGE_TEST: &[u8] = b"shim_test_setup_bridge_sequence\0";
 
 const SHIPPED_EXPORTS: &[&[u8]] = &[
     b"?IsHost@CrossplayNetLibSys@@QAE_NABVLobbyMemberDTO@DTO@Lobby@Crossplay@@@Z\0",
@@ -83,6 +84,21 @@ struct FakeMessenger {
 struct FakeService {
     vftable: *const *const c_void,
     timeout_ms: i32,
+}
+
+#[repr(C)]
+struct FakeConnectionData {
+    // Two exact 59-byte PlayerConnectionData records. The bridge must write
+    // remote slot 1's ready byte at 59 + 58 before calling send_player.
+    records: [u8; 118],
+    sequence: u32,
+    add_sequence: u32,
+    get_sequence: u32,
+    send_sequence: u32,
+    add_id: MsvcWstring,
+    find_id: MsvcWstring,
+    sent_slot: i32,
+    sent_refresh: bool,
 }
 
 #[repr(C)]
@@ -158,6 +174,23 @@ unsafe extern "thiscall" fn msg_session(this: *mut FakeMessenger) -> *const c_vo
 }
 unsafe extern "thiscall" fn service_set_timeout(this: *mut FakeService, timeout_ms: i32) {
     (*this).timeout_ms = timeout_ms;
+}
+unsafe extern "thiscall" fn bridge_add(this: *mut FakeConnectionData, id: MsvcWstring) {
+    (*this).sequence += 1;
+    (*this).add_sequence = (*this).sequence;
+    (*this).add_id = id;
+}
+unsafe extern "thiscall" fn bridge_get(this: *mut FakeConnectionData, id: MsvcWstring) -> i32 {
+    (*this).sequence += 1;
+    (*this).get_sequence = (*this).sequence;
+    (*this).find_id = id;
+    1
+}
+unsafe extern "thiscall" fn bridge_send(this: *mut FakeConnectionData, slot: i32, refresh: bool) {
+    (*this).sequence += 1;
+    (*this).send_sequence = (*this).sequence;
+    (*this).sent_slot = slot;
+    (*this).sent_refresh = refresh;
 }
 
 fn main() {
@@ -646,6 +679,73 @@ fn run() -> Result<String, String> {
         return Err("repeated OnPlayerJoined emitted a duplicate player-added callback".into());
     }
 
+    // Exercise the exact production ConnectionData ABI with inert callbacks:
+    // add by-value wstring, resolve slot by-value wstring, write the 59-byte
+    // record's ready field, then send_player(slot, refresh=true). No retail RVA
+    // is resolved in this disposable process.
+    let empty_wstring = MsvcWstring {
+        sso: [0; 8],
+        len: 0,
+        capacity: 7,
+    };
+    let mut connection = FakeConnectionData {
+        records: [0; 118],
+        sequence: 0,
+        add_sequence: 0,
+        get_sequence: 0,
+        send_sequence: 0,
+        add_id: empty_wstring,
+        find_id: empty_wstring,
+        sent_slot: -1,
+        sent_refresh: false,
+    };
+    let test_setup_bridge: unsafe extern "C" fn(
+        *mut NetSysPrefix,
+        *mut FakeConnectionData,
+        *const c_void,
+        *const c_void,
+        *const c_void,
+    ) -> bool = unsafe { std::mem::transmute(resolve(&module, SHIM_SETUP_BRIDGE_TEST)?) };
+    let bridge_ok = checked_call(
+        "shim_test_setup_bridge_sequence",
+        &mut stack_pointer_checks,
+        || unsafe {
+            test_setup_bridge(
+                object,
+                &mut connection,
+                bridge_add as *const c_void,
+                bridge_get as *const c_void,
+                bridge_send as *const c_void,
+            )
+        },
+    )?;
+    if !bridge_ok
+        || (
+            connection.add_sequence,
+            connection.get_sequence,
+            connection.send_sequence,
+        ) != (1, 2, 3)
+        || connection.add_id.len != 1
+        || connection.add_id.sso[0] != b'2' as u16
+        || connection.find_id.len != 1
+        || connection.find_id.sso[0] != b'2' as u16
+        || connection.records[59 + 58] != 1
+        || connection.sent_slot != 1
+        || !connection.sent_refresh
+        || messenger.added != 1
+    {
+        return Err(format!(
+            "SetupWin bridge ABI/order failed: ok={bridge_ok} seq={}/{}/{} ready={} slot={} refresh={} messenger_added={}",
+            connection.add_sequence,
+            connection.get_sequence,
+            connection.send_sequence,
+            connection.records[59 + 58],
+            connection.sent_slot,
+            connection.sent_refresh,
+            messenger.added
+        ));
+    }
+
     // Then call every non-destructor NetPlayer slot. This protects the hidden
     // String/wstring return buffers and each callee-cleanup width.
     let get_num_players: unsafe extern "thiscall" fn(*mut NetSysPrefix) -> i32 =
@@ -907,7 +1007,7 @@ fn run() -> Result<String, String> {
 
     drop(module);
     Ok(format!(
-        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
+        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"setup_bridge_order\":\"add-find-ready-write-send\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
     ))
 }
 

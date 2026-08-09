@@ -57,10 +57,15 @@ The client performs the replacement transport's exact direct contract:
 3. it refuses to proceed until the host's authoritative `IPT_PLAYERLIST` gives retail slot 0
    and the owned client slot 1, with exactly two members named `Ai`;
 4. it sends `IPT_READYFLAG(true)` and reports whether the two-member all-ready gate fired;
-5. it receives verbatim retail `NETMSG_COMMANDPACKAGEDATA`, decodes command opcodes and all
+5. it emits no game-layer package merely because the roster became ready, and refuses any
+   incoming game traffic until the authoritative two-member all-ready transition;
+6. it receives the first verbatim retail `NETMSG_COMMANDPACKAGEDATA`, decodes command opcodes and all
    sixteen checksum words, and emits one JSON event per turn;
-6. it sends a slot-1 package for the same stamp containing only a byte-identical copy of the
+7. it sends a slot-1 package for that same first stamp containing only a byte-identical copy of the
    retail checksum command.
+
+The first package is fail-closed: if its key cannot be recovered, use `--game-key`; if it has no
+checksum command, the client stops instead of skipping the stamp or fabricating a reply.
 
 Multiplayer command packages are XORed and have a deterministic 0/1-byte pad after each
 command. If `--game-key` is omitted, the client recovers a wire-compatible key by validating
@@ -88,6 +93,7 @@ decoding, and an outbound package reaching retail through `NetSys::get`. It does
 PlayFab discovery, original Party transport, or headless simulation equivalence.
 
 The repository test suite includes a mock-retail host over a real TCP socket. That test proves
-the new mode reaches an authoritative slot-1 roster, crosses all-ready, automatically recovers
-the package transform, receives a host checksum turn, and returns an exactly decodable client
-checksum turn while preserving the original synthetic harness.
+the new mode observes `PlayerJoined` before `ReadyChanged(true)`, reaches an authoritative slot-1
+roster, crosses all-ready, stays game-silent for multiple polls, automatically recovers the first
+package transform, and returns an exactly decodable client checksum package for the identical
+first stamp while preserving the original synthetic harness.

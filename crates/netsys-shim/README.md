@@ -25,7 +25,7 @@ uv run --with pefile --with capstone python check-exports.py
 # process. The executable and DLL are emitted beside one another.
 MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
   wine target/i686-pc-windows-msvc/release/netsys-load-smoke.exe
-# -> one JSON line: "status":"pass", "stack_pointer_checks":49
+# -> one JSON line: "status":"pass", "stack_pointer_checks":50
 
 # Compile focused unit tests for the retail target. They cannot execute on the
 # arm64 host; the layout assertions also run during the DLL build above.
@@ -100,8 +100,9 @@ make the DLL self-describing under `dumpbin /exports`.
 | 11 exports match the shipped DLL exactly, PE32 i386 DLL | `check-exports.py`, PASS |
 | shipped names occupy the exact ordinals 1..11; the callback export emits `ret 0x78` | `check-exports.py`, PASS |
 | vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | fresh shipped-PDB extraction plus compile-time assertions in `abi.rs` |
-| Windows loads the replacement; factory state matches shipped (`num_players=0`); loader slots 56/63, all eight previously mismatched `NetSys` slots, and all 20 non-destructor `NetPlayer` slots preserve ESP | `netsys-load-smoke.exe` under Wine, 49 checked calls, PASS |
+| Windows loads the replacement; factory state matches shipped (`num_players=0`); loader slots 56/63, all eight previously mismatched `NetSys` slots, and all 20 non-destructor `NetPlayer` slots preserve ESP | `netsys-load-smoke.exe` under Wine, 50 checked calls, PASS |
 | Friend Game host materialization exposes coherent local/host pointers while pending, retains NetMessenger session data at `+0xB0`, defers `on_player_added` until the retail DTO ID is installed, then clears pending; repeat `OnPlayerJoined` is idempotent | shared host lifecycle exercised by `netsys-load-smoke.exe`, PASS |
+| SetupWin bridge passes the remote ID as two exact by-value MSVC wstrings, resolves slot 1, writes `PlayerConnectionData[1].ready` at `59+58`, then calls `send_player(1,true)`; a pre-SetupWin remote remains pending and is retried | production bridge ABI exercised with inert PE32 callbacks; Wine smoke PASS |
 | `NetPlayer::{get_id,get_platform_id,get_platform}` return a complete MSVC `wstring` by value | shipped `get_id` `0x10027220`: return object `size=0` at `+0x10`, `capacity=7` at `+0x14`, NUL at `+0`; focused cross-target tests |
 | receive copies cannot exceed the retail destination | `rise.pdb` `NetDaemon::data` type `0x8912`: `unsigned char[2048]` at `+8`; caller `0x00950F30`; shipped copier `0x10013550` |
 | three by-value callbacks are consumed and destroyed with the shipped ABI | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78` |

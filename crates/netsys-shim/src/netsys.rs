@@ -585,20 +585,34 @@ unsafe fn bridge_context(this: *mut NetSysBase) -> Option<(*mut u8, *mut c_void)
     Some((base, base.add(CONNECTION_DATA_RVA).cast()))
 }
 
-unsafe fn bridge_add_player(this: *mut NetSysBase, player: *const NetPlayerObj) -> Option<i32> {
-    if player.is_null() || (*player).flags & SNLPLAYER_LOCAL != 0 {
-        return None;
-    }
+type BridgeAddPlayer = unsafe extern "thiscall" fn(*mut c_void, MsvcWstring);
+type BridgeGetPlayerIndex = unsafe extern "thiscall" fn(*mut c_void, MsvcWstring) -> i32;
+type BridgeSendPlayer = unsafe extern "thiscall" fn(*mut c_void, i32, bool);
+
+#[derive(Clone, Copy)]
+struct BridgeCalls {
+    connection_data: *mut c_void,
+    add_player: BridgeAddPlayer,
+    get_player_index: BridgeGetPlayerIndex,
+    send_player: BridgeSendPlayer,
+}
+
+unsafe fn production_bridge_calls(this: *mut NetSysBase) -> Option<BridgeCalls> {
     let (base, connection_data) = bridge_context(this)?;
+    Some(BridgeCalls {
+        connection_data,
+        add_player: core::mem::transmute(base.add(CONNECTION_ADD_PLAYER_RVA)),
+        get_player_index: core::mem::transmute(base.add(CONNECTION_GET_PLAYER_INDEX_RVA)),
+        send_player: core::mem::transmute(base.add(CONNECTION_SEND_PLAYER_RVA)),
+    })
+}
+
+unsafe fn bridge_add_with(calls: BridgeCalls, player: *const NetPlayerObj) -> Option<i32> {
     let units = &(&(*player).id_wide)[..(*player).id_len as usize];
     let add_id = owned_wstring(units)?;
     let find_id = owned_wstring(units)?;
-    let add_player: unsafe extern "thiscall" fn(*mut c_void, MsvcWstring) =
-        core::mem::transmute(base.add(CONNECTION_ADD_PLAYER_RVA));
-    let get_player_index: unsafe extern "thiscall" fn(*mut c_void, MsvcWstring) -> i32 =
-        core::mem::transmute(base.add(CONNECTION_GET_PLAYER_INDEX_RVA));
-    add_player(connection_data, add_id);
-    let slot = get_player_index(connection_data, find_id);
+    (calls.add_player)(calls.connection_data, add_id);
+    let slot = (calls.get_player_index)(calls.connection_data, find_id);
     if !(0..8).contains(&slot) {
         trace_detail(format_args!(
             "setup_bridge=refused action=add_player reason=slot-not-found"
@@ -611,6 +625,39 @@ unsafe fn bridge_add_player(this: *mut NetSysBase, player: *const NetPlayerObj) 
     Some(slot)
 }
 
+enum BridgeAddResult {
+    Disabled,
+    Deferred,
+    Added(i32),
+}
+
+unsafe fn bridge_add_player(this: *mut NetSysBase, player: *const NetPlayerObj) -> BridgeAddResult {
+    if player.is_null() || (*player).flags & SNLPLAYER_LOCAL != 0 {
+        return BridgeAddResult::Disabled;
+    }
+    let enabled = st(this).is_some_and(|state| {
+        !state.load_only && state.setup_bridge && state.session.role == Role::Host
+    });
+    if !enabled {
+        return BridgeAddResult::Disabled;
+    }
+    let Some(calls) = production_bridge_calls(this) else {
+        return BridgeAddResult::Deferred;
+    };
+    bridge_add_with(calls, player)
+        .map(BridgeAddResult::Added)
+        .unwrap_or(BridgeAddResult::Deferred)
+}
+
+unsafe fn bridge_ready_with(calls: BridgeCalls, slot: i32, ready: bool) {
+    // PlayerConnectionData is exactly 59 bytes; ready is byte +58.
+    *calls
+        .connection_data
+        .cast::<u8>()
+        .add(slot as usize * 59 + 58) = u8::from(ready);
+    (calls.send_player)(calls.connection_data, slot, true);
+}
+
 unsafe fn bridge_ready(this: *mut NetSysBase, unique_id: i32, ready: bool) -> bool {
     let slot = {
         let Some(state) = st(this) else { return false };
@@ -619,14 +666,10 @@ unsafe fn bridge_ready(this: *mut NetSysBase, unique_id: i32, ready: bool) -> bo
         };
         slot
     };
-    let Some((base, connection_data)) = bridge_context(this) else {
+    let Some(calls) = production_bridge_calls(this) else {
         return false;
     };
-    // PlayerConnectionData is exactly 59 bytes; ready is byte +58.
-    *connection_data.cast::<u8>().add(slot as usize * 59 + 58) = u8::from(ready);
-    let send_player: unsafe extern "thiscall" fn(*mut c_void, i32, bool) =
-        core::mem::transmute(base.add(CONNECTION_SEND_PLAYER_RVA));
-    send_player(connection_data, slot, true);
+    bridge_ready_with(calls, slot, ready);
     trace_detail(format_args!(
         "setup_bridge=ok action=ready slot={slot} ready={ready} credential_material=none"
     ));
@@ -636,7 +679,7 @@ unsafe fn bridge_ready(this: *mut NetSysBase, unique_id: i32, ready: bool) -> bo
 /// Refresh the `NetPlayer*` array the game can read directly, and drain new
 /// game-layer packets into our own inbox.
 unsafe fn pump(this: *mut NetSysBase) {
-    let (removed, added_ptrs, next_local, next_host, ready_changes) = {
+    let (removed, pending_ptrs, next_local, next_host, ready_changes) = {
         let Some(s) = st(this) else { return };
         if !s.active {
             return;
@@ -664,7 +707,6 @@ unsafe fn pump(this: *mut NetSysBase) {
         let roster = s.session.players().to_vec();
         let mut old = core::mem::take(&mut s.players);
         let mut next = Vec::with_capacity(roster.len());
-        let mut added = Vec::new();
         for player in &roster {
             let mut object = if let Some(index) = old
                 .iter()
@@ -672,7 +714,6 @@ unsafe fn pump(this: *mut NetSysBase) {
             {
                 old.remove(index)
             } else {
-                added.push(player.unique_id);
                 build_player(player)
             };
             update_player(&mut object, player);
@@ -719,16 +760,16 @@ unsafe fn pump(this: *mut NetSysBase) {
         if !host_removed {
             (*obj).base.host_player = next_host;
         }
-        let added_ptrs = added
-            .into_iter()
-            .filter_map(|id| {
-                s.players
-                    .iter()
-                    .find(|player| player.unique_id == id)
-                    .map(|player| player.as_ref() as *const NetPlayerObj)
-            })
+        // A setup bridge can legitimately be unavailable on the first pump:
+        // Friend Game constructs SetupWin after host returns. Preserve PENDING
+        // and retry on later pumps instead of losing the only add transition.
+        let pending_ptrs = s
+            .players
+            .iter()
+            .filter(|player| player.flags & SNLPLAYER_PENDING != 0)
+            .map(|player| player.as_ref() as *const NetPlayerObj)
             .collect::<Vec<_>>();
-        (old, added_ptrs, next_local, next_host, ready_changes)
+        (old, pending_ptrs, next_local, next_host, ready_changes)
     };
 
     // The prefix mutation and Rust borrows are complete before retail sees a
@@ -739,7 +780,8 @@ unsafe fn pump(this: *mut NetSysBase) {
     let object = this as *mut NetSysObj;
     (*object).base.local_player = next_local;
     (*object).base.host_player = next_host;
-    for player in added_ptrs {
+    let mut readiness_replayed = BTreeSet::new();
+    for player in pending_ptrs {
         let defer_local = (*player).flags & SNLPLAYER_LOCAL != 0
             && st(this).is_some_and(|state| state.defer_local_add_until_identity);
         if defer_local {
@@ -748,20 +790,34 @@ unsafe fn pump(this: *mut NetSysBase) {
             ));
             continue;
         }
-        let bridged_slot = bridge_add_player(this, player);
-        if let Some(slot) = bridged_slot {
-            if let Some(state) = st(this) {
-                state.bridged_slots.insert((*player).unique_id, slot);
+        match bridge_add_player(this, player) {
+            BridgeAddResult::Deferred => continue,
+            BridgeAddResult::Disabled => notify_player_added(this, player),
+            BridgeAddResult::Added(slot) => {
+                if let Some(state) = st(this) {
+                    state.bridged_slots.insert((*player).unique_id, slot);
+                }
+                // ConnectionData::add_player synchronously reaches SetupWin's
+                // player-added callback. Match process_playerlist by clearing
+                // PENDING immediately after that call returns.
+                (*(player as *mut NetPlayerObj)).flags &= !SNLPLAYER_PENDING;
+                // A remote READYFLAG may arrive in the same poll as roster
+                // materialisation. Replay current truth once the slot exists.
+                if (*player).ready {
+                    let _ = bridge_ready(this, (*player).unique_id, true);
+                    readiness_replayed.insert((*player).unique_id);
+                }
+                continue;
             }
-        } else {
-            notify_player_added(this, player);
         }
         // Exact shipped ordering: process_playerlist clears pending only after
         // NetMessenger::on_player_added returns (0x1001AADE..0x1001AAF4).
         (*(player as *mut NetPlayerObj)).flags &= !SNLPLAYER_PENDING;
     }
     for (unique_id, ready) in ready_changes {
-        let _ = bridge_ready(this, unique_id, ready);
+        if !readiness_replayed.contains(&unique_id) {
+            let _ = bridge_ready(this, unique_id, ready);
+        }
     }
 }
 
@@ -794,6 +850,51 @@ pub unsafe fn materialize_load_only_peer(this: *mut NetSysBase) -> bool {
         return false;
     }
     activate_host_lifecycle(this, false)
+}
+
+/// Drive the production bridge call/cleanup/readiness sequence against inert
+/// callbacks supplied by the PE32 smoke. This is load-only-only and never
+/// resolves retail RVAs, so it cannot mutate a game process.
+pub unsafe fn test_setup_bridge_sequence(
+    this: *mut NetSysBase,
+    connection_data: *mut c_void,
+    add_player: *const c_void,
+    get_player_index: *const c_void,
+    send_player: *const c_void,
+) -> bool {
+    if !st(this).is_some_and(|state| state.load_only)
+        || connection_data.is_null()
+        || add_player.is_null()
+        || get_player_index.is_null()
+        || send_player.is_null()
+    {
+        return false;
+    }
+    let calls = BridgeCalls {
+        connection_data,
+        add_player: core::mem::transmute(add_player),
+        get_player_index: core::mem::transmute(get_player_index),
+        send_player: core::mem::transmute(send_player),
+    };
+    let remote = don_net::session::Player {
+        unique_id: 2,
+        name: "Ai".into(),
+        is_host: false,
+        is_local: false,
+        ready: true,
+        last_pulse_ms: 0,
+        slot: 1,
+    };
+    let mut object = build_player(&remote);
+    let Some(slot) = bridge_add_with(calls, object.as_ref()) else {
+        return false;
+    };
+    if slot != 1 || object.flags & SNLPLAYER_PENDING == 0 {
+        return false;
+    }
+    object.flags &= !SNLPLAYER_PENDING;
+    bridge_ready_with(calls, slot, true);
+    object.flags & SNLPLAYER_PENDING == 0
 }
 
 /// Capture the authenticated retail host's own lobby-member id without ever

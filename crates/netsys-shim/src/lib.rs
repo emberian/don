@@ -91,6 +91,25 @@ pub unsafe extern "C" fn shim_materialize_load_only_peer(this: *mut NetSysBase) 
     netsys::materialize_load_only_peer(this)
 }
 
+/// Shim-only PE32 acceptance for the SetupWin `ConnectionData` bridge. The
+/// supplied callbacks are inert smoke functions and this refuses retail mode.
+#[no_mangle]
+pub unsafe extern "C" fn shim_test_setup_bridge_sequence(
+    this: *mut NetSysBase,
+    connection_data: *mut c_void,
+    add_player: *const c_void,
+    get_player_index: *const c_void,
+    send_player: *const c_void,
+) -> bool {
+    netsys::test_setup_bridge_sequence(
+        this,
+        connection_data,
+        add_player,
+        get_player_index,
+        send_player,
+    )
+}
+
 /// `void CrossplayNetLib::set_network_connection_state(bool)` — `__cdecl`.
 #[no_mangle]
 pub extern "C" fn shim_set_network_connection_state(state: bool) {
