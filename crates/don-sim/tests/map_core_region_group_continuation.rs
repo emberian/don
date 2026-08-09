@@ -91,6 +91,7 @@ fn first_success_updates_all_helping_scores_and_strict_maximum_player() {
     let mut regions = Regions::default();
     region(&mut regions, 1, &[(2, 2)]);
     let helping = RegionHelpingState {
+        is_helping: true,
         num_players: 2,
         lowest_player: [0; 5],
         scores: [[0; 5]; 8],

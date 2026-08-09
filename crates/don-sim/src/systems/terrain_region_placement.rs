@@ -37,6 +37,9 @@ pub struct PlaceRegionGroupCall {
 /// State read only when retail's global `is_helping` is nonzero.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RegionHelpingState {
+    /// Retail global `is_helping`. Scores are updated after success regardless;
+    /// this flag gates only the nearest-player candidate filter.
+    pub is_helping: bool,
     pub num_players: usize,
     /// The five shipped `lowest_player[type - 4]` entries.
     pub lowest_player: [i32; 5],
@@ -514,7 +517,8 @@ pub(crate) fn reject_candidate(
         }
     }
 
-    if let Some(helping) = helping {
+    if helping.is_some_and(|helping| helping.is_helping) {
+        let helping = helping.unwrap();
         let mut nearest_distance = i32::MAX;
         let mut nearest = i32::MAX;
         for player in 0..helping.num_players {

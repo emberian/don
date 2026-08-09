@@ -172,4 +172,15 @@ impl Mountains {
             MountainRangeSize::Large => self.large_ranges.take_and_advance(),
         }
     }
+
+    /// Integer ABI used by `TerrainGroups::place_all`. Invalid values follow
+    /// retail's diagnostic/default arm and return zero without moving a list.
+    pub fn get_range_raw(&mut self, size: i32) -> i32 {
+        match size {
+            1 => self.get_range(MountainRangeSize::Small),
+            2 => self.get_range(MountainRangeSize::Medium),
+            3 => self.get_range(MountainRangeSize::Large),
+            _ => 0,
+        }
+    }
 }

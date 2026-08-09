@@ -118,6 +118,10 @@ pub mod production;
 /// Exact post-coastline `Regions::clear_all` / `find_all` worldgen stage, including
 /// component floods, overflow aggregation, coasts, ranks and coordinate rebuilds.
 pub mod regions;
+/// Complete step-22 `Roads::scan_and_kill_stray_roads` dispatcher/body over the PDB road
+/// candidate lattice. Missing renderer-owned candidate facts fail closed rather than being
+/// guessed from terrain adjacency.
+pub mod roads;
 /// Retail `ChunkHeader`-exact, fail-closed deterministic save/load for the currently
 /// authoritative seed/frame/RNG, terrain, unit/object/order/path, and leader-economy state.
 /// It is explicitly not a partial `.svx` writer: unsupported live subsystems are refused.
@@ -136,6 +140,7 @@ pub mod terrain_drop_tile;
 /// external host-event order, and clump-size preparation through placement kernels.
 pub mod terrain_groups;
 pub mod terrain_region_continuation;
+pub mod terrain_region_patterns;
 pub mod terrain_region_placement;
 /// Recovered from the cut-off `cg:unit-inctime` lane. Ports `Unit::inc_time` and the
 /// fixed-owner traversal of step 15 while recording the still-missing animation RNG and

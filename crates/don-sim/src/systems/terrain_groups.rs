@@ -26,6 +26,9 @@ use super::terrain_drop_tile::{
 use super::terrain_region_continuation::{
     PlaceRegionGroupError, PlaceRegionGroupOutcome, PlaceRegionGroupReceipt,
 };
+use super::terrain_region_patterns::{
+    RegionPatternError, RegionPatternOutcome, RegionPatternReceipt,
+};
 use super::terrain_region_placement::{
     PlaceRegionGroupCall, PlaceRegionGroupPrefixReceipt, RegionHelpingState,
 };
@@ -159,6 +162,8 @@ pub struct PlaceAllPreviewReceipt {
     /// Complete retry/helping/growth/cleanup/oil continuation of the selected
     /// `place_region_group` call.
     pub region_group_continuation: Option<PlaceRegionGroupReceipt>,
+    /// Exact pattern-1/2/3 eligible-region and clump loop.
+    pub region_pattern: Option<RegionPatternReceipt>,
 }
 
 /// Outputs of the still-upstream unit-catalog and region-selection block in
@@ -310,6 +315,9 @@ pub enum TerrainPlacementBoundary {
         group_index: usize,
         return_value: i32,
     },
+    /// The selected pattern-1/2/3 group completed every retail region/clump
+    /// attempt. The next group iteration is downstream.
+    RegionGroupPatternComplete { group_index: usize },
     /// All selected groups were branch-skipped; retail next calls
     /// `TerrainGroups::add_doobers` (`0x006a1540`).
     AddDoobers,
@@ -330,6 +338,10 @@ pub enum PlaceAllError {
     InvalidMountainRockFringe(MountainRockFringeError),
     InvalidTreeifyMountains(TreeifyMountainsError),
     InvalidRegionGroupContinuation(PlaceRegionGroupError),
+    InvalidRegionPattern(RegionPatternError),
+    InvalidRegionPatternInputs {
+        group_index: usize,
+    },
     InvalidResolvedRegionGroupPlacement {
         group_index: usize,
         clump_index: usize,
@@ -437,6 +449,7 @@ impl TerrainGroups {
             None,
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -467,6 +480,7 @@ impl TerrainGroups {
             Some(rules),
             None,
             None,
+            None,
             &mut host,
         )
     }
@@ -493,6 +507,7 @@ impl TerrainGroups {
             place_players,
             Some(rules),
             Some(map_style),
+            None,
             None,
             &mut host,
         )
@@ -526,7 +541,37 @@ impl TerrainGroups {
             place_players,
             None,
             None,
+            None,
             Some((regions, resolved)),
+            &mut host,
+        )
+    }
+
+    /// Executes the exact pattern-1/2/3 region and clump loop without a
+    /// synthetic per-call `ResolvedRegionGroupPlacement` handoff.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_all_with_regions(
+        &mut self,
+        world: &mut World,
+        regions: &Regions,
+        random: &mut Random,
+        mountains: &mut Mountains,
+        progress: i32,
+        place_players: i32,
+        helping: Option<RegionHelpingState>,
+        externals: &[DropTileExternalResolution],
+        mut host: impl FnMut(PlaceAllHostEvent),
+    ) -> Result<i32, PlaceAllError> {
+        self.place_all_preview(
+            world,
+            random,
+            mountains,
+            progress,
+            place_players,
+            None,
+            None,
+            Some((regions, helping, externals)),
+            None,
             &mut host,
         )
     }
@@ -668,6 +713,11 @@ impl TerrainGroups {
         place_players: i32,
         doober_rules: Option<DooberTilesetRules>,
         map_style: Option<u8>,
+        region_pattern_inputs: Option<(
+            &Regions,
+            Option<RegionHelpingState>,
+            &[DropTileExternalResolution],
+        )>,
         resolved_region_group: Option<(&Regions, ResolvedRegionGroupPlacement)>,
         host: &mut impl FnMut(PlaceAllHostEvent),
     ) -> Result<i32, PlaceAllError> {
@@ -700,7 +750,61 @@ impl TerrainGroups {
         let mut region_group_prefix = None;
         let mut region_group_drop = None;
         let mut region_group_continuation = None;
-        let boundary = if let Some((regions, resolved)) = resolved_region_group {
+        let mut region_pattern = None;
+        let boundary = if let Some((regions, helping, externals)) = region_pattern_inputs {
+            let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
+                group_index,
+                ..
+            } = boundary
+            else {
+                return Err(PlaceAllError::InvalidRegionPatternInputs { group_index: 0 });
+            };
+            let Some(prepared) = placement_preparation
+                .prepared_groups
+                .iter()
+                .find(|prepared| prepared.group_index == group_index)
+            else {
+                return Err(PlaceAllError::InvalidRegionPatternInputs { group_index });
+            };
+            let group_type = self.groups[group_index].group_type;
+            let type_slot = usize::try_from(group_type - 4)
+                .ok()
+                .filter(|&slot| slot < 5)
+                .ok_or(PlaceAllError::InvalidRegionPatternInputs { group_index })?;
+            let mut preview_world = world.clone();
+            let mut preview_group = self.groups[group_index].clone();
+            let receipt = preview_group
+                .apply_region_pattern(
+                    &mut preview_world,
+                    regions,
+                    &mut preview_random,
+                    &mut preview_mountains,
+                    prepared.pattern,
+                    &prepared.primary_sizes,
+                    &prepared.secondary_sizes,
+                    group_selection.normalized_clumps_by_type[type_slot],
+                    place_players,
+                    group_index,
+                    helping,
+                    externals,
+                )
+                .map_err(PlaceAllError::InvalidRegionPattern)?;
+            let next = match receipt.outcome {
+                RegionPatternOutcome::ExternalResolutionRequired { request } => {
+                    TerrainPlacementBoundary::RegionGroupDropTileExternalSubsystem { request }
+                }
+                RegionPatternOutcome::Complete => {
+                    TerrainPlacementBoundary::RegionGroupPatternComplete { group_index }
+                }
+            };
+            if let Some(first) = receipt.calls.first() {
+                region_group_prefix = Some(first.placement.prefix.clone());
+                region_group_drop = first.placement.drops.first().cloned();
+                region_group_continuation = Some(first.placement.clone());
+            }
+            region_pattern = Some(receipt);
+            next
+        } else if let Some((regions, resolved)) = resolved_region_group {
             let TerrainPlacementBoundary::UnitTypeCatalogAndRegionPlacementKernel {
                 group_index,
                 ..
@@ -816,6 +920,7 @@ impl TerrainGroups {
                 region_group_prefix,
                 region_group_drop,
                 region_group_continuation,
+                region_pattern,
             },
             boundary,
         })

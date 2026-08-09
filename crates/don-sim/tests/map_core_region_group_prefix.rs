@@ -275,6 +275,7 @@ fn helping_mode_keeps_the_first_player_on_equal_distance() {
             &mut random,
             call(5),
             Some(RegionHelpingState {
+                is_helping: true,
                 num_players: 2,
                 lowest_player: [0, 0, 1, 0, 0],
                 scores: [[0; 5]; 8],
@@ -289,6 +290,23 @@ fn helping_mode_keeps_the_first_player_on_equal_distance() {
             required: 1,
         })
     );
+
+    let mut random = Random::new(7);
+    let receipt = group(6)
+        .plan_place_region_group_prefix(
+            &world,
+            &regions,
+            &mut random,
+            call(5),
+            Some(RegionHelpingState {
+                is_helping: false,
+                num_players: 2,
+                lowest_player: [0, 0, 1, 0, 0],
+                scores: [[0; 5]; 8],
+            }),
+        )
+        .unwrap();
+    assert_eq!(receipt.attempts[0].rejection, None);
 }
 
 #[test]
