@@ -205,6 +205,13 @@ pub struct World {
     pub seconds: i32,
     /// `GameAccess::game_random` `0x00E37A8C` — the main simulation stream.
     pub random: Random,
+    /// Checksum-visible `GameAccess::items` registry attached to the terrain world's
+    /// existing WCoord occupancy plane.
+    ///
+    /// `None` is deliberately different from an initialized-but-empty registry:
+    /// callers must not report an Adler value of one as a modelled channel until
+    /// map setup has supplied the grid dimensions.
+    pub item_runtime: Option<crate::item_runtime::ItemRuntime>,
     pub rules: SharedRules,
     coverage: Coverage,
 }
@@ -236,6 +243,7 @@ impl World {
             // The engine seeds `game_random` from the match setup; the low 32 bits of the
             // caller's seed stand in for that and keep every world distinct.
             random: Random::new(seed as i32),
+            item_runtime: None,
             rules: SharedRules::default(),
             coverage: Coverage::default(),
         }

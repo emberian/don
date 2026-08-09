@@ -670,6 +670,45 @@ impl Items {
         self.slots.iter().filter(|it| it.is_valid()).count()
     }
 
+    /// Materialize the stable-slot `Item` record without touching a world-cell owner.
+    ///
+    /// The ordinary [`Items::init_item`] path applies this record mutation and then
+    /// updates [`WGrid`]. The authoritative runtime uses the same operation with
+    /// `map_terrain::World`'s checksum-visible `WData` plane, avoiding a second grid.
+    pub(crate) fn init_record(&mut self, type_index: i32, x: i32, y: i32, z: i32) -> usize {
+        let slot = self
+            .slots
+            .iter()
+            .position(|it| !it.is_valid())
+            .unwrap_or_else(|| {
+                self.slots.push(Item::default());
+                self.slots.len() - 1
+            });
+
+        let it = &mut self.slots[slot];
+        // SubObject::init 0x00662300
+        it.who = 0xFF;
+        it.flags = 1;
+        it.o = slot as i16;
+        it.type_index = type_index;
+        it.has_type = true;
+        it.x_internal = x ^ COORD_XOR;
+        it.y_internal = y ^ COORD_XOR;
+        it.z_internal = z ^ COORD_XOR;
+        // Item::init 0x006770E0
+        it.ever_seen = 0;
+        slot
+    }
+
+    /// Close only the stable-slot record. See [`Items::init_record`].
+    pub(crate) fn close_record(&mut self, slot: usize) -> bool {
+        let Some(item) = self.slots.get_mut(slot) else {
+            return false;
+        };
+        item.flags = 0;
+        true
+    }
+
     /// `Objects::init_item(TypeIndex, Coord x, Coord y)` `0x00653E00`.
     ///
     /// ```text
@@ -692,27 +731,7 @@ impl Items {
         y: i32,
         z: i32,
     ) -> usize {
-        let slot = self
-            .slots
-            .iter()
-            .position(|it| !it.is_valid())
-            .unwrap_or_else(|| {
-                self.slots.push(Item::default());
-                self.slots.len() - 1
-            });
-
-        let it = &mut self.slots[slot];
-        // SubObject::init 0x00662300
-        it.who = 0xFF; // (u8)(-1)
-        it.flags = 1;
-        it.o = slot as i16;
-        it.type_index = type_index;
-        it.has_type = true;
-        it.x_internal = x ^ COORD_XOR;
-        it.y_internal = y ^ COORD_XOR;
-        it.z_internal = z ^ COORD_XOR;
-        // Item::init 0x006770E0
-        it.ever_seen = 0;
+        let slot = self.init_record(type_index, x, y, z);
 
         let (wx, wy) = (wcoord_of(x), wcoord_of(y));
         grid.cell_mut(wx, wy).flags |= WFLAG_ITEM;
@@ -749,7 +768,7 @@ impl Items {
         }
         grid.cell_mut(wx, wy).flags &= !WFLAG_ITEM;
         let cleared = grid.clear_down(wx, wy);
-        self.slots[slot].flags = 0;
+        self.close_record(slot);
         Some(cleared)
     }
 
@@ -766,13 +785,13 @@ impl Items {
         };
         let (wx, wy) = (wcoord_of(it.x()), wcoord_of(it.y()));
         if !grid.in_bounds(wx, wy) {
-            self.slots[slot].flags = 0;
+            self.close_record(slot);
             return Ok(true);
         }
 
         grid.cell_mut(wx, wy).flags &= !WFLAG_ITEM;
         grid.clear_down_with_objects(wx, wy, objects)?;
-        self.slots[slot].flags = 0;
+        self.close_record(slot);
         Ok(true)
     }
 

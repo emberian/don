@@ -52,6 +52,8 @@ pub mod container;
 pub mod deviations;
 pub mod generated;
 pub mod interleave;
+/// Authoritative runtime owner for the checksum-visible goody-box registry.
+pub mod item_runtime;
 pub mod mechanics;
 pub mod objects;
 pub mod order;
