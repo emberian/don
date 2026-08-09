@@ -108,6 +108,48 @@ pub struct NetSysBase {
 
 const _: () = assert!(core::mem::size_of::<NetSysBase>() == 88);
 
+/// MSVC `ObjectArray<String>` embedded in `CrossplayNetLibSys` at concrete
+/// offset `+0x1A0`. The vtable owns `increase_size`; the returned array is a
+/// borrowed owner-lifetime object and its `String` elements have stride 0x14.
+/// **[measured, CrossplayNetLibSys PDB + 0x10015B30]**
+#[repr(C)]
+pub struct MsvcObjectArrayString {
+    pub vftable: *const c_void,
+    pub length: i32,
+    pub size: i32,
+    pub increment: i16,
+    pub padding_0e: i16,
+    pub list: *mut c_void,
+    pub flags: u8,
+    pub padding_15: [u8; 3],
+}
+
+impl MsvcObjectArrayString {
+    /// Field image before the pinned retail constructor installs its vtable.
+    /// The load-only smoke never grows or destroys this process-lifetime object.
+    pub const fn empty_unconstructed() -> Self {
+        Self {
+            vftable: core::ptr::null(),
+            length: 0,
+            size: 0,
+            increment: -1,
+            padding_0e: 0,
+            list: core::ptr::null_mut(),
+            flags: 0,
+            padding_15: [0; 3],
+        }
+    }
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<MsvcObjectArrayString>() == 0x18);
+    assert!(core::mem::offset_of!(MsvcObjectArrayString, length) == 0x04);
+    assert!(core::mem::offset_of!(MsvcObjectArrayString, size) == 0x08);
+    assert!(core::mem::offset_of!(MsvcObjectArrayString, increment) == 0x0c);
+    assert!(core::mem::offset_of!(MsvcObjectArrayString, list) == 0x10);
+    assert!(core::mem::offset_of!(MsvcObjectArrayString, flags) == 0x14);
+};
+
 /// The 65-slot `NetSys` vtable, in order. Byte offsets are in the comments and
 /// come from `CrossplayNetLib.pdb`. **[measured]**
 #[repr(C)]
@@ -232,7 +274,8 @@ pub struct NetSysVtable {
     /* 0x0bc */
     pub log_connection_fmt: unsafe extern "C" fn(*mut NetSysBase, *const u16),
     /* 0x0c0 */
-    pub get_ip_addresses: unsafe extern "thiscall" fn(*mut NetSysBase) -> *mut c_void,
+    pub get_ip_addresses:
+        unsafe extern "thiscall" fn(*mut NetSysBase) -> *const MsvcObjectArrayString,
     /* 0x0c4 */ pub get_host_port: unsafe extern "thiscall" fn(*mut NetSysBase) -> u32,
     /* 0x0c8 */ pub set_host_port: unsafe extern "thiscall" fn(*mut NetSysBase, u32),
     /* 0x0cc */ pub get_local_port: unsafe extern "thiscall" fn(*mut NetSysBase) -> u32,

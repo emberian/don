@@ -27,6 +27,7 @@ extern "C" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
 }
 
 #[link(name = "wininet")]
@@ -149,7 +150,14 @@ struct NetSysObj {
     net_messenger: *mut NetMessenger,
     reserved_to_crossplay: [u8; 108],
     m_crossplay: *mut c_void,
-    reserved_shipped_tail: [u8; 768],
+    // Retail's Create/Join lobby callbacks directly copy-assign into the
+    // concrete CrossplayNetLibSys::m_lobby at +0xD0; this is not reached
+    // through our vtable or exports.  It must therefore be a live MSVC
+    // LobbyDTO rather than zero padding.  The exact rise.pdb layout is 0xD0
+    // bytes, followed by the shipped ip_addresses field at +0x1A0.
+    m_lobby: [u8; 0xd0],
+    ip_addresses: MsvcObjectArrayString,
+    reserved_after_ip_addresses: [u8; 536],
     /// Boxed so the C-visible prefix stays exactly `NetSysBase`.
     state: *mut State,
 }
@@ -158,8 +166,52 @@ const _: () = {
     assert!(core::mem::offset_of!(NetSysObj, flags) == 0x58);
     assert!(core::mem::offset_of!(NetSysObj, net_messenger) == 0x5c);
     assert!(core::mem::offset_of!(NetSysObj, m_crossplay) == 0xcc);
+    assert!(core::mem::offset_of!(NetSysObj, m_lobby) == 0xd0);
+    assert!(core::mem::offset_of!(NetSysObj, ip_addresses) == 0x1a0);
+    assert!(core::mem::offset_of!(NetSysObj, reserved_after_ip_addresses) == 0x1b8);
     assert!(core::mem::offset_of!(NetSysObj, state) == 0x3d0);
 };
+
+// `Crossplay::Lobby::DTO::LobbyDTO::LobbyDTO` in the pinned retail executable.
+// Calling retail's constructor keeps its std::wstring/unordered_map/json
+// allocator representation exact.  The object is process-lifetime just like
+// shipped CrossplayNetLibSys, so the matching destructor is never needed.
+const LOBBY_DTO_CTOR_RVA: usize = 0x0004_b1f0;
+type LobbyDtoCtor = unsafe extern "thiscall" fn(*mut c_void) -> *mut c_void;
+
+// `ObjectArray<String>::ObjectArray` in the pinned retail executable. It
+// installs the executable's vtable and exact empty `{0,0,-1,null,0}` state.
+const OBJECT_ARRAY_STRING_CTOR_RVA: usize = 0x0003_9e80;
+type ObjectArrayStringCtor =
+    unsafe extern "thiscall" fn(*mut MsvcObjectArrayString) -> *mut MsvcObjectArrayString;
+
+fn is_retail_executable_path(path: &[u16]) -> bool {
+    let leaf = path
+        .iter()
+        .rposition(|unit| *unit == b'/' as u16 || *unit == b'\\' as u16)
+        .map_or(path, |separator| &path[separator + 1..]);
+    let expected = b"riseofnations.exe";
+    leaf.len() == expected.len()
+        && leaf.iter().zip(expected).all(|(actual, expected)| {
+            *actual <= 0x7f && (*actual as u8).eq_ignore_ascii_case(expected)
+        })
+}
+
+unsafe fn retail_executable_base() -> Option<*mut u8> {
+    let base = GetModuleHandleW(core::ptr::null()).cast::<u8>();
+    if base.is_null() {
+        return None;
+    }
+    let mut path = [0u16; 1024];
+    let length = GetModuleFileNameW(base.cast(), path.as_mut_ptr(), path.len() as u32);
+    if length == 0
+        || length as usize >= path.len()
+        || !is_retail_executable_path(&path[..length as usize])
+    {
+        return None;
+    }
+    Some(base)
+}
 
 /// Match shipped `CrossplayNetLib::is_connected_to_network` at VA
 /// `0x10018550`: call `InternetGetConnectedState(&flags, 0)` and return whether
@@ -259,7 +311,7 @@ pub fn create() -> *mut NetSysBase {
         setup_bridge: env_truthy("DON_NET_SETUP_BRIDGE"),
         bridged_slots: BTreeMap::new(),
     });
-    let obj = Box::new(NetSysObj {
+    let mut obj = Box::new(NetSysObj {
         base: NetSysBase {
             vftable: &NETSYS_VTABLE,
             // Match the shipped CrossplayNetLibSys constructor: membership is
@@ -280,9 +332,36 @@ pub fn create() -> *mut NetSysBase {
         net_messenger: core::ptr::null_mut(),
         reserved_to_crossplay: [0; 108],
         m_crossplay: core::ptr::null_mut(),
-        reserved_shipped_tail: [0; 768],
+        m_lobby: [0; 0xd0],
+        ip_addresses: MsvcObjectArrayString::empty_unconstructed(),
+        reserved_after_ip_addresses: [0; 536],
         state: Box::into_raw(state),
     });
+    if let Some(exe) = unsafe { retail_executable_base() } {
+        let ctor: LobbyDtoCtor = unsafe { core::mem::transmute(exe.add(LOBBY_DTO_CTOR_RVA)) };
+        let ip_ctor: ObjectArrayStringCtor =
+            unsafe { core::mem::transmute(exe.add(OBJECT_ARRAY_STRING_CTOR_RVA)) };
+        unsafe {
+            ctor(obj.m_lobby.as_mut_ptr().cast());
+            ip_ctor(&mut obj.ip_addresses);
+        }
+        trace_detail(format_args!(
+            "factory=lobby-dto-constructed offset=0xd0 size=0xd0 ctor_rva=0x4b1f0 ip_array_offset=0x1a0 ip_array_ctor_rva=0x39e80"
+        ));
+    } else if !load_only {
+        trace_detail(format_args!(
+            "factory=refused reason=retail-executable-identity"
+        ));
+        unsafe {
+            drop(Box::from_raw(obj.state));
+        }
+        obj.state = core::ptr::null_mut();
+        return core::ptr::null_mut();
+    } else {
+        trace_detail(format_args!(
+            "factory=lobby-dto-skipped reason=non-retail-load-only-executable"
+        ));
+    }
     // Deliberately leaked: the game never frees the object (there is no
     // `delete_netsys_object_ptr` export and the loader keeps the pointer in the
     // `netsys` global at 0x00E335C8 for the process lifetime).
@@ -1396,7 +1475,17 @@ unsafe extern "C" fn ns_log_connection_fmt(_this: *mut NetSysBase, _fmt: *const 
     trace_once("vtable.ns_log_connection_fmt");
 }
 
-nop!(ns_get_ip_addresses() -> *mut c_void = core::ptr::null_mut());
+unsafe extern "thiscall" fn ns_get_ip_addresses(
+    this: *mut NetSysBase,
+) -> *const MsvcObjectArrayString {
+    trace_once("vtable.ns_get_ip_addresses");
+    let object = this.cast::<NetSysObj>();
+    if object.is_null() {
+        core::ptr::null()
+    } else {
+        core::ptr::addr_of!((*object).ip_addresses)
+    }
+}
 
 unsafe extern "thiscall" fn ns_get_host_port(this: *mut NetSysBase) -> u32 {
     trace_once("vtable.ns_get_host_port");
@@ -1757,5 +1846,17 @@ mod tests {
     #[test]
     fn receive_copy_ceiling_is_the_pdb_array_extent() {
         assert_eq!(NETDAEMON_RECEIVE_EXTENT, 2048);
+    }
+
+    #[test]
+    fn lobby_constructor_is_gated_by_the_exact_retail_executable_leaf() {
+        let retail: Vec<u16> = r"C:\Program Files (x86)\Steam\riseofnations.exe"
+            .encode_utf16()
+            .collect();
+        let upper: Vec<u16> = r"C:\Games\RISEOFNATIONS.EXE".encode_utf16().collect();
+        let smoke: Vec<u16> = r"C:\tmp\netsys-load-smoke.exe".encode_utf16().collect();
+        assert!(is_retail_executable_path(&retail));
+        assert!(is_retail_executable_path(&upper));
+        assert!(!is_retail_executable_path(&smoke));
     }
 }

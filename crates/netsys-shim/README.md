@@ -26,7 +26,7 @@ uv run --with pefile --with capstone python check-exports.py
 # process. The executable and DLL are emitted beside one another.
 MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all \
   wine target/i686-pc-windows-msvc/release/netsys-load-smoke.exe
-# -> one JSON line: "status":"pass", "stack_pointer_checks":50
+# -> one JSON line: "status":"pass", "stack_pointer_checks":51
 
 # Compile focused unit tests for the retail target. They cannot execute on the
 # arm64 host; the layout assertions also run during the DLL build above.
@@ -103,17 +103,20 @@ make the DLL self-describing under `dumpbin /exports`.
 | 11 exports match the shipped DLL exactly, PE32 i386 DLL | `check-exports.py`, PASS |
 | shipped names occupy the exact ordinals 1..11; the callback export emits `ret 0x78` | `check-exports.py`, PASS |
 | vtable is 65 slots / 260 bytes and every slot has its PDB byte offset; `NetPlayer` is 21 exact slots; `NetSysBase` is 88 bytes | fresh shipped-PDB extraction plus compile-time assertions in `abi.rs` |
-| Windows loads the replacement; factory state matches shipped (`num_players=0`); loader slots 56/63, all eight previously mismatched `NetSys` slots, and all 20 non-destructor `NetPlayer` slots preserve ESP | `netsys-load-smoke.exe` under Wine, 50 checked calls, PASS |
+| Windows loads the replacement; factory state matches shipped (`num_players=0`); loader slots 56/63, the address-array getter, all eight previously mismatched `NetSys` slots, and all 20 non-destructor `NetPlayer` slots preserve ESP | `netsys-load-smoke.exe` under Wine, 51 checked calls, PASS |
 | Friend Game host materialization exposes coherent local/host pointers while pending, retains NetMessenger session data at `+0xB0`, defers `on_player_added` until the retail DTO ID is installed, then clears pending; repeat `OnPlayerJoined` is idempotent | shared host lifecycle exercised by `netsys-load-smoke.exe`, PASS |
 | SetupWin bridge passes the remote ID as two exact by-value MSVC wstrings, resolves slot 1, writes `PlayerConnectionData[1].ready` at `59+58`, then calls `send_player(1,true)`; a pre-SetupWin remote remains pending and is retried | production bridge ABI exercised with inert PE32 callbacks; Wine smoke PASS |
 | `NetPlayer::{get_id,get_platform_id,get_platform}` return a complete MSVC `wstring` by value | shipped `get_id` `0x10027220`: return object `size=0` at `+0x10`, `capacity=7` at `+0x14`, NUL at `+0`; focused cross-target tests |
 | receive copies cannot exceed the retail destination | `rise.pdb` `NetDaemon::data` type `0x8912`: `unsigned char[2048]` at `+8`; caller `0x00950F30`; shipped copier `0x10013550` |
 | three by-value callbacks are consumed and destroyed with the shipped ABI | PDB size 40 each; shipped callee `0x10017420..0x100175a8`; emitted shim disassembly returns with `ret 0x78` |
 | the session/transport underneath works between two processes | `don-net`'s `tcp_session` test and the `donnet-peer` binary |
-| **the retail game loads this DLL and reaches a match** | **untested.** Needs the Parallels VM. |
+| the pinned retail executable constructs the direct-access `LobbyDTO` at concrete `+0xD0` and survives the immediate post-`OnHostUpdated` copy-assignment | generation-5 PID 12080 trace records the retail constructor at exe RVA `0x4B1F0`, then `OnHostUpdated`; the process remained live where generations 3/4 faulted in `std::list::clear` |
+| `get_ip_addresses` returns the shipped borrowed embedded empty `ObjectArray<String>` at concrete `+0x1A0` | PID 5056 faulted at retail `SetupWin::draw_ip_address` `0x005BD635` after the old null result; the replacement now uses the pinned executable constructor at RVA `0x39E80`, and PE32 Wine smoke pins non-null offset/layout plus ESP |
+| **the retail game reaches a match over this DLL** | **in progress.** Current live frontier is the owned Friend Game UI gate; match/turn/reconnect evidence is not yet claimed. |
 
-The last row is the honest gap. Nothing here has been run inside
-`riseofnations.exe`. The earlier vtable prototype was not load-safe:
+The last row is the honest gap. The loader, direct lobby callback, and exact
+mapped module have now run inside `riseofnations.exe`; a completed owned match
+has not. The earlier vtable prototype was not load-safe:
 `NetPlayer` slots from `+0x14` onward and eight `NetSys` signatures disagreed
 with the shipped PDB. Those definitions are now corrected and crossed in a
 disposable PE32 loader with an ESP-preservation check around each call. That

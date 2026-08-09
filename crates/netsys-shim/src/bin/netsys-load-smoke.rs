@@ -121,9 +121,22 @@ struct MsvcArrayNetPlayers {
     bytes: [u8; 28],
 }
 
+#[repr(C)]
+struct MsvcObjectArrayString {
+    vftable: *const c_void,
+    length: i32,
+    size: i32,
+    increment: i16,
+    padding_0e: i16,
+    list: *mut c_void,
+    flags: u8,
+    padding_15: [u8; 3],
+}
+
 const _: () = assert!(std::mem::size_of::<MsvcGameString>() == 20);
 const _: () = assert!(std::mem::size_of::<MsvcWstring>() == 24);
 const _: () = assert!(std::mem::size_of::<MsvcArrayNetPlayers>() == 28);
+const _: () = assert!(std::mem::size_of::<MsvcObjectArrayString>() == 0x18);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, flags) == 0x58);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, net_messenger) == 0x5c);
 const _: () = assert!(std::mem::offset_of!(NetSysPrefix, m_crossplay) == 0xcc);
@@ -282,6 +295,9 @@ fn run() -> Result<String, String> {
     ) = unsafe { vtable_fn(vtable, 56) };
     let set_profiler: unsafe extern "thiscall" fn(*mut NetSysPrefix, *mut c_void) =
         unsafe { vtable_fn(vtable, 63) };
+    let get_ip_addresses: unsafe extern "thiscall" fn(
+        *mut NetSysPrefix,
+    ) -> *const MsvcObjectArrayString = unsafe { vtable_fn(vtable, 48) };
     checked_call(
         "NetSys[56] error_set_callback",
         &mut stack_pointer_checks,
@@ -292,6 +308,32 @@ fn run() -> Result<String, String> {
         &mut stack_pointer_checks,
         || unsafe { set_profiler(object, core::ptr::null_mut()) },
     )?;
+    let ip_addresses = checked_call(
+        "NetSys[48] get_ip_addresses",
+        &mut stack_pointer_checks,
+        || unsafe { get_ip_addresses(object) },
+    )?;
+    if ip_addresses.is_null() {
+        return Err("NetSys[48] get_ip_addresses returned null".into());
+    }
+    let offset = (ip_addresses as usize).wrapping_sub(object as usize);
+    if offset != 0x1a0 {
+        return Err(format!(
+            "NetSys[48] get_ip_addresses returned offset 0x{offset:x}, expected 0x1a0"
+        ));
+    }
+    let ips = unsafe { &*ip_addresses };
+    if ips.length != 0
+        || ips.size != 0
+        || ips.increment != -1
+        || !ips.list.is_null()
+        || ips.flags != 0
+    {
+        return Err(format!(
+            "NetSys[48] non-canonical empty array: len={} size={} increment={} list={:?} flags=0x{:x}",
+            ips.length, ips.size, ips.increment, ips.list, ips.flags
+        ));
+    }
 
     // Close the next exact retail boundary: load_steam_net_lib calls slot1,
     // then reads the retained service at object+0xCC and dispatches service
@@ -1007,7 +1049,7 @@ fn run() -> Result<String, String> {
 
     drop(module);
     Ok(format!(
-        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"setup_bridge_order\":\"add-find-ready-write-send\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
+        "{{\"schema\":\"don.netsys-load-smoke.v3\",\"status\":\"pass\",\"pe\":\"PE32-i386\",\"shipped_exports_resolved\":11,\"factory_non_null\":true,\"vtable_slots_non_null\":65,\"retail_loader_slots_called\":[1,56,63],\"retail_post_init_service_slot\":47,\"retained_offsets\":[92,204,416],\"netsys_corrected_slots_called\":[10,24,31,35,36,46,48,57,58],\"netplayer_slots_called\":20,\"netmessenger_add_order\":\"pending-then-clear\",\"setup_bridge_order\":\"add-find-ready-write-send\",\"stack_pointer_checks\":{stack_pointer_checks},\"connectivity\":{{\"production_source\":\"InternetGetConnectedState\",\"load_only_override_online_before_noop_setter\":{connected_before},\"load_only_override_online_after_noop_setter\":{connected_after},\"load_only_override_offline\":{connected_forced_offline}}},\"load_only\":{{\"host_result\":26,\"join_result\":26,\"send\":false,\"get\":false,\"listener\":\"127.0.0.1:ephemeral\"}},\"peer_name\":\"Ai\",\"credential_material\":\"none\",\"retail_process_modified\":false}}"
     ))
 }
 
