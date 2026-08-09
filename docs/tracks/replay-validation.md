@@ -66,8 +66,15 @@ list `[40, 50, 60, 70, 80, 90, 100]`. `World::init` supplies the exact derived
 dimension arithmetic, and `GameInfo::seed` enters through the oracle-backed
 signed `Map::make` seed gate. Starting coordinates are not guessed: the newly
 shipped, 250,011-trial oracle-backed `World::start_city_wcoord` supplies the
-retail row-major/LSB-first accessor, but its bit plane stays empty until the
-actual placement writer/generator is reconstructed.
+retail row-major/LSB-first accessor, and the 449,463-trial
+`World::add_starting_location` case proves the returned index, all four array
+appends and the exact 2×2 bit writes. The bit plane nevertheless stays empty in
+`Replay::open`: a full-corpus structural search found **0/61** recordings with
+a raw `World::walk_data` dimension/array/scalar prefix after `save_name`, which
+agrees with the save-format derivation that this recording block is not a
+decoded save snapshot. Until the map-style generator supplies the actual
+coordinates for a replay seed, invoking the exact writer would still require
+invented inputs and is therefore deliberately not done.
 
 ---
 

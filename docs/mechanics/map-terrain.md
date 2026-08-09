@@ -443,7 +443,7 @@ from scratch.
 
 ### 7.1 Executable world-generation oracle boundary
 
-The structural result above now has two fork-isolated retail cases in
+The structural result above now has three fork-isolated retail cases in
 `crates/oracle`; neither case substitutes simplified map logic.
 
 | case | retail bytes executed | exact claim | deliberately not claimed |
