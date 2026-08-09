@@ -277,6 +277,7 @@ fn helping_mode_keeps_the_first_player_on_equal_distance() {
             Some(RegionHelpingState {
                 num_players: 2,
                 lowest_player: [0, 0, 1, 0, 0],
+                scores: [[0; 5]; 8],
             }),
         )
         .unwrap();
@@ -326,10 +327,10 @@ fn place_all_composes_the_resolved_call_and_stays_transactional_at_drop_tile() {
         min_clumps: 1,
         max_clumps: 1,
         pattern: 1,
-        min_size: 9,
-        max_size: 9,
-        min_oil: 2,
-        max_oil: 2,
+        min_size: 1,
+        max_size: 1,
+        min_oil: 0,
+        max_oil: 0,
         ..TerrainGroup::default()
     };
     let mut groups = TerrainGroups {
@@ -359,7 +360,7 @@ fn place_all_composes_the_resolved_call_and_stays_transactional_at_drop_tile() {
                 land_subtype: 13,
                 rng_state_at_call: 0x2222_3333,
                 helping: None,
-                drop_tile_external: None,
+                drop_tile_externals: Vec::new(),
             },
             |event| host.push(event),
         )
@@ -370,7 +371,10 @@ fn place_all_composes_the_resolved_call_and_stays_transactional_at_drop_tile() {
     };
     assert_eq!(
         boundary,
-        TerrainPlacementBoundary::RegionGroupPostDropControl { group_index: 0 }
+        TerrainPlacementBoundary::RegionGroupReturnControl {
+            group_index: 0,
+            return_value: 1,
+        }
     );
     let prefix = preview.region_group_prefix.unwrap();
     assert_eq!(prefix.region_cursor_draws, 0);

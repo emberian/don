@@ -40,6 +40,10 @@ pub struct RegionHelpingState {
     pub num_players: usize,
     /// The five shipped `lowest_player[type - 4]` entries.
     pub lowest_player: [i32; 5],
+    /// Retail's player-major five-column helping-distance table.
+    /// `place_region_group` adds the first successful tile's distance to every
+    /// participating player, then recomputes `lowest_player` from this table.
+    pub scores: [[i32; 5]; 8],
 }
 
 /// The consumed part of the first `drop_tile` invocation.
@@ -267,7 +271,7 @@ impl TerrainGroup {
     }
 }
 
-fn validate_inputs(
+pub(crate) fn validate_inputs(
     group: &TerrainGroup,
     world: &World,
     regions: &Regions,
@@ -352,7 +356,9 @@ fn validate_inputs(
                 group_type: group.group_type,
             });
         }
-        if helping.num_players > world.start_x.items.len() {
+        if helping.num_players > helping.scores.len()
+            || helping.num_players > world.start_x.items.len()
+        {
             return Err(PlaceRegionGroupPrefixError::InvalidHelpingPlayerCount {
                 requested: helping.num_players,
                 available: world.start_x.items.len(),
@@ -362,7 +368,7 @@ fn validate_inputs(
     Ok(())
 }
 
-fn reject_candidate(
+pub(crate) fn reject_candidate(
     group: &TerrainGroup,
     world: &World,
     x: i32,
@@ -530,7 +536,7 @@ fn reject_candidate(
     None
 }
 
-fn next_region_cursor(mut cursor: u32, count: u32, start: u32) -> Option<u32> {
+pub(crate) fn next_region_cursor(mut cursor: u32, count: u32, start: u32) -> Option<u32> {
     for _ in 0..=REGION_CURSOR_MAX {
         if cursor & 1 != 0 {
             cursor ^= REGION_CURSOR_XOR;

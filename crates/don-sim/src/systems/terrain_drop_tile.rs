@@ -30,11 +30,13 @@ pub enum DropTileExternalRequest {
         coast_space: i32,
         start_min: i32,
     },
-    /// `World::set_oil_at` first closes every live oil Good at this WCoord,
-    /// then sets WData::OIL and adds Good type 5 at the cell center.
+    /// `World::set_oil_at` first closes every live oil Good at this WCoord.  An
+    /// enabled mutation then sets WData::OIL and adds Good type 5 at the cell
+    /// center; a disabled mutation clears the flag and does not use the center.
     OilGoodMutation {
         world_x: i32,
         world_y: i32,
+        enabled: bool,
         good_type: i32,
         coord_x: i32,
         coord_y: i32,
@@ -193,6 +195,7 @@ impl TerrainGroup {
             7 => Some(DropTileExternalRequest::OilGoodMutation {
                 world_x: invocation.world_x,
                 world_y: invocation.world_y,
+                enabled: true,
                 good_type: OIL_GOOD_TYPE,
                 coord_x: invocation.world_x.wrapping_mul(0x300).wrapping_add(0x180),
                 coord_y: invocation.world_y.wrapping_mul(0x300).wrapping_add(0x180),
@@ -605,7 +608,7 @@ fn set_rough_class(world: &mut World, world_x: i32, world_y: i32, class: u16) {
     );
 }
 
-fn has_mountain_tcoords(world: &World, world_x: i32, world_y: i32) -> bool {
+pub(crate) fn has_mountain_tcoords(world: &World, world_x: i32, world_y: i32) -> bool {
     let tile_x = world_x * 4;
     let tile_y = world_y * 4;
     for local_y in 0..4 {

@@ -277,6 +277,7 @@ fn oil_branch_requires_object_ack_then_sets_flag_and_appends_coordinate() {
         DropTileExternalRequest::OilGoodMutation {
             world_x: 2,
             world_y: 3,
+            enabled: true,
             good_type: 5,
             coord_x: 0x780,
             coord_y: 0xa80,
@@ -393,7 +394,7 @@ fn place_all_surfaces_then_consumes_the_oil_good_boundary_transactionally() {
         land_subtype: 13,
         rng_state_at_call: 0x1234,
         helping: None,
-        drop_tile_external: None,
+        drop_tile_externals: Vec::new(),
     };
     let error = groups
         .place_all_with_resolved_region_group(
@@ -403,7 +404,7 @@ fn place_all_surfaces_then_consumes_the_oil_good_boundary_transactionally() {
             &mut mountains,
             0,
             0,
-            base,
+            base.clone(),
             |_| {},
         )
         .unwrap_err();
@@ -417,7 +418,9 @@ fn place_all_surfaces_then_consumes_the_oil_good_boundary_transactionally() {
     assert!(preview.region_group_drop.is_none());
 
     let mut resolved = base;
-    resolved.drop_tile_external = Some(DropTileExternalResolution::OilGoodsApplied { request });
+    resolved
+        .drop_tile_externals
+        .push(DropTileExternalResolution::OilGoodsApplied { request });
     let mut resolved_world = world.clone();
     let error = groups
         .place_all_with_resolved_region_group(
@@ -436,7 +439,10 @@ fn place_all_surfaces_then_consumes_the_oil_good_boundary_transactionally() {
     };
     assert_eq!(
         boundary,
-        TerrainPlacementBoundary::RegionGroupPostDropControl { group_index: 0 }
+        TerrainPlacementBoundary::RegionGroupReturnControl {
+            group_index: 0,
+            return_value: 1,
+        }
     );
     assert!(preview.region_group_drop.unwrap().placed);
     assert_eq!(groups, original_groups);
