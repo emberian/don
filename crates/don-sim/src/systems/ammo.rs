@@ -63,9 +63,10 @@
 //!
 //! * `TRAJ_SPLINE` cruise and nuke paths — `calc_from_dir` / both arms of
 //!   `calc_nuke_spline` → `calc_spline` → `generate_bspline` → `build_normals`, the six nested
-//!   array walks, and the indexed flight step are implemented below. Live world code still
-//!   has to provide [`NukeSplineEnv`] and retain the returned sidecar. Aircraft wrecks actually
-//!   use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
+//!   array walks, the slot-aligned pool sidecar/recycler, and indexed flight step are implemented
+//!   below. The live nuke launch supplies [`NukeSplineEnv`]; the remaining live cruise boundary
+//!   is the exact source-orientation inputs and dynamic retarget/rebuild arm. Aircraft wrecks
+//!   actually use `TRAJ_ARC`; their [`ammo_init_crash`] constructor is implemented below.
 //! * `find_angle` (`0x0092D130`) lives in [`crate::trig`]. The ordinary targeted adapter
 //!   still accepts the already-computed angle because attack-ground and spline callers
 //!   select different source points.
@@ -685,6 +686,62 @@ pub trait NukeSplineEnv {
     fn nuke_terrain(&self, x: i32, y: i32) -> Option<NukeTerrainSample>;
 }
 
+/// The two instruction-level gates selecting `Ammo::init`'s spline constructor.
+///
+/// The graphic-piece table's flag `8` has priority and selects `calc_from_dir` (cruise).
+/// Only when that flag is clear does shooter `ObjectType::obj_masks & 0x08000000` select
+/// `calc_nuke_spline`; otherwise the launch is the ordinary arc path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetailSplineFamily {
+    Arc,
+    Cruise,
+    Nuke,
+}
+
+#[inline]
+pub fn select_retail_spline_family(
+    graphic_piece_spline: bool,
+    shooter_obj_masks: u32,
+) -> RetailSplineFamily {
+    if graphic_piece_spline {
+        RetailSplineFamily::Cruise
+    } else if shooter_obj_masks & 0x0800_0000 != 0 {
+        RetailSplineFamily::Nuke
+    } else {
+        RetailSplineFamily::Arc
+    }
+}
+
+/// Reproduce the explicit `ArrayBase::make_valid`/length write used by the nuke arms while
+/// retaining recycler-surviving capacity. This is distinct from repeated `add`: fresh fixed
+/// nuke knots grow directly to 17 rather than following 4→8→16→32.
+fn make_array_length<T: Clone + Default>(
+    array: &mut crate::container::EngineArray<T>,
+    desired: usize,
+) {
+    let desired = desired as i32;
+    let capacity = array.size();
+    if capacity < desired {
+        let deficit = desired - capacity;
+        let increment = array.increment();
+        let growth = if increment < 0 {
+            if deficit > capacity {
+                deficit
+            } else {
+                capacity
+            }
+        } else if deficit > increment as i32 {
+            deficit
+        } else {
+            increment as i32
+        };
+        array.increase_size(growth as i16);
+    }
+    while array.len() < desired as usize {
+        array.add(T::default());
+    }
+}
+
 /// Complete cruise-path transaction: recycler-clear, retail flag `0x10`,
 /// `calc_from_dir`→`calc_spline`→B-spline generation→normals, then the Ammo pointer/trajectory
 /// fields and `total_time = spline_verts.length` write from `Ammo::init`.
@@ -696,6 +753,28 @@ pub fn ammo_init_cruise_spline(
     end: SplineVec3,
     optional_control: SplineVec3,
 ) -> Result<RetailSpline, SplineBuildError> {
+    let mut spline = RetailSpline::new();
+    ammo_init_cruise_spline_into(
+        ammo,
+        &mut spline,
+        min_segment_length,
+        start,
+        control,
+        end,
+        optional_control,
+    )?;
+    Ok(spline)
+}
+
+fn ammo_init_cruise_spline_into(
+    ammo: &mut Ammo,
+    spline: &mut RetailSpline,
+    min_segment_length: f32,
+    start: SplineVec3,
+    control: SplineVec3,
+    end: SplineVec3,
+    optional_control: SplineVec3,
+) -> Result<(), SplineBuildError> {
     if !min_segment_length.is_finite()
         || !start.finite()
         || !control.finite()
@@ -707,13 +786,13 @@ pub fn ammo_init_cruise_spline(
     if min_segment_length <= 0.0 {
         return Err(SplineBuildError::NonPositiveSegmentLength);
     }
-    let mut spline = RetailSpline::new();
+    spline.clear();
     spline.flags = 0x10;
     spline.calc_from_dir(min_segment_length, start, control, end, optional_control);
     ammo.w.traj = TRAJ_SPLINE;
     ammo.w.total_time = spline.spline_verts.len() as u32;
     ammo.has_spline = true;
-    Ok(spline)
+    Ok(())
 }
 
 /// The self-contained (`terrain_path == 0`) arm of `Spline::calc_nuke_spline`
@@ -725,11 +804,22 @@ pub fn ammo_init_nuke_spline_high_arc(
     start: SplineVec3,
     end: SplineVec3,
 ) -> Result<RetailSpline, SplineBuildError> {
+    let mut spline = RetailSpline::new();
+    ammo_init_nuke_spline_high_arc_into(ammo, &mut spline, start, end)?;
+    Ok(spline)
+}
+
+fn ammo_init_nuke_spline_high_arc_into(
+    ammo: &mut Ammo,
+    spline: &mut RetailSpline,
+    start: SplineVec3,
+    end: SplineVec3,
+) -> Result<(), SplineBuildError> {
     if !start.finite() || !end.finite() {
         return Err(SplineBuildError::NonFiniteInput);
     }
 
-    let mut spline = RetailSpline::new();
+    spline.clear();
     spline.flags = 0x10;
     let quarter = SplineVec3::new(
         (start.x * 3.0 + end.x) * 0.25,
@@ -769,20 +859,20 @@ pub fn ammo_init_nuke_spline_high_arc(
 
     // make_valid(control_len + 4) treats the argument as an index: len becomes 17 and the
     // negative increment asks increase_size for the exact 17-slot deficit, not doubling.
-    spline.knots = crate::container::EngineArray::with_size(17, -1);
-    for i in 0..17 {
-        spline.knots.add(match i {
+    make_array_length(&mut spline.knots, 17);
+    for (i, knot) in spline.knots.as_mut_slice().iter_mut().enumerate() {
+        *knot = match i {
             0 => 100.0,
             1 => 30.0,
             2 => 15.0,
             _ => 10.0,
-        });
+        };
     }
     spline.calc_spline();
     ammo.w.traj = TRAJ_SPLINE;
     ammo.w.total_time = (spline.spline_verts.len() as u32).saturating_sub(1);
     ammo.has_spline = true;
-    Ok(spline)
+    Ok(())
 }
 
 /// The terrain-following (`terrain_path != 0`) arm of `Spline::calc_nuke_spline`
@@ -800,6 +890,18 @@ pub fn ammo_init_nuke_spline_terrain<E: NukeSplineEnv>(
     start: SplineVec3,
     end: SplineVec3,
 ) -> Result<RetailSpline, SplineBuildError> {
+    let mut spline = RetailSpline::new();
+    ammo_init_nuke_spline_terrain_into(ammo, &mut spline, env, start, end)?;
+    Ok(spline)
+}
+
+fn ammo_init_nuke_spline_terrain_into<E: NukeSplineEnv + ?Sized>(
+    ammo: &mut Ammo,
+    spline: &mut RetailSpline,
+    env: &E,
+    start: SplineVec3,
+    end: SplineVec3,
+) -> Result<(), SplineBuildError> {
     if !start.finite() || !end.finite() {
         return Err(SplineBuildError::NonFiniteInput);
     }
@@ -814,7 +916,7 @@ pub fn ammo_init_nuke_spline_terrain<E: NukeSplineEnv>(
         .wrapping_abs();
     let divisions = vector_dist(dx, dy) / 0x300;
 
-    let mut spline = RetailSpline::new();
+    spline.clear();
     spline.flags = 0x10;
     spline.control_verts.add(start);
     spline
@@ -863,15 +965,15 @@ pub fn ammo_init_nuke_spline_terrain<E: NukeSplineEnv>(
     // array is empty, then sets length to max(desired, old length). A fresh path therefore
     // has identical length/capacity `control_len + 2 + degree`.
     let knot_count = spline.control_verts.len() + 2 + spline.degree as usize;
-    spline.knots = crate::container::EngineArray::with_size(knot_count as i32, -1);
-    for _ in 0..knot_count {
-        spline.knots.add(30.0);
+    make_array_length(&mut spline.knots, knot_count);
+    for knot in spline.knots.as_mut_slice() {
+        *knot = 30.0;
     }
     spline.calc_spline();
     ammo.w.traj = TRAJ_SPLINE;
     ammo.w.total_time = (spline.spline_verts.len() as u32).saturating_sub(1);
     ammo.has_spline = true;
-    Ok(spline)
+    Ok(())
 }
 
 /// The isolated spline arm of `Ammo::inc_time` after `cur_time` has already incremented.
@@ -1062,6 +1164,15 @@ pub struct AmmoPool {
     /// Slot array. `len()` is the engine's `PtrArray::length`; slots are never removed,
     /// only marked free.
     pub slots: Vec<Ammo>,
+    /// Slot-aligned stand-in for `AmmoData::ammo_path`. A live slot with `has_spline` must
+    /// have `Some` at the same index; free/arc slots have `None`.
+    pub spline_slots: Vec<Option<RetailSpline>>,
+    /// Retail `Recycler<Spline>::temp_pool`: closed paths are cleared and pushed here, and
+    /// the next spline launch pops from the end. Array capacities survive that LIFO reuse.
+    spline_recycler: Vec<RetailSpline>,
+    /// Ammo graphic ids whose graphic-table record carries flag `8`, the first spline
+    /// selector gate in `Ammo::init`. Configuration, not walked simulation state.
+    spline_graphics: Vec<i32>,
     /// `Objects::ammo_index` — monotone spawn counter, copied into `graph_index` and then
     /// incremented. Reset to 0 by `Objects::init`.
     pub ammo_index: i32,
@@ -1078,6 +1189,9 @@ impl AmmoPool {
     pub fn new() -> Self {
         AmmoPool {
             slots: vec![Ammo::default(); AMMO_POOL_SLOTS],
+            spline_slots: vec![None; AMMO_POOL_SLOTS],
+            spline_recycler: Vec::new(),
+            spline_graphics: Vec::new(),
             ammo_index: 0,
         }
     }
@@ -1100,8 +1214,148 @@ impl AmmoPool {
         }
         if i == n {
             self.slots.push(Ammo::default());
+            self.spline_slots.push(None);
+        } else {
+            // Direct callers may have run Ammo::close before returning through the pool.
+            // Retail close returns the pointer to Recycler<Spline> immediately; catch up
+            // before this lowest free slot is reused.
+            self.recycle_slot_spline(i);
         }
         i
+    }
+
+    fn acquire_spline(&mut self) -> RetailSpline {
+        let mut spline = self.spline_recycler.pop().unwrap_or_default();
+        spline.clear();
+        spline
+    }
+
+    fn recycle_slot_spline(&mut self, slot: usize) {
+        if let Some(mut spline) = self.spline_slots.get_mut(slot).and_then(Option::take) {
+            spline.clear();
+            self.spline_recycler.push(spline);
+        }
+        if let Some(ammo) = self.slots.get_mut(slot) {
+            ammo.has_spline = false;
+        }
+    }
+
+    /// Install a cruise path into an already allocated/initialized ammo slot, consuming a
+    /// LIFO-recycled `RetailSpline` exactly as `Recycler<Spline>::pop` does.
+    pub fn install_cruise_spline(
+        &mut self,
+        slot: usize,
+        min_segment_length: f32,
+        start: SplineVec3,
+        control: SplineVec3,
+        end: SplineVec3,
+        optional_control: SplineVec3,
+    ) -> Result<(), SplineBuildError> {
+        self.recycle_slot_spline(slot);
+        let mut spline = self.acquire_spline();
+        let result = ammo_init_cruise_spline_into(
+            &mut self.slots[slot],
+            &mut spline,
+            min_segment_length,
+            start,
+            control,
+            end,
+            optional_control,
+        );
+        if let Err(error) = result {
+            spline.clear();
+            self.spline_recycler.push(spline);
+            return Err(error);
+        }
+        arc_ballistics(&mut self.slots[slot].w);
+        self.spline_slots[slot] = Some(spline);
+        Ok(())
+    }
+
+    /// Install the retail nuke constructor selected by shooter property `0x13A`: zero uses
+    /// the fixed high arc, non-zero uses the terrain-following path.
+    pub fn install_nuke_spline<E: NukeSplineEnv + ?Sized>(
+        &mut self,
+        slot: usize,
+        env: &E,
+        terrain_path: bool,
+        start: SplineVec3,
+        end: SplineVec3,
+    ) -> Result<(), SplineBuildError> {
+        self.recycle_slot_spline(slot);
+        let mut spline = self.acquire_spline();
+        let result = if terrain_path {
+            ammo_init_nuke_spline_terrain_into(&mut self.slots[slot], &mut spline, env, start, end)
+        } else {
+            ammo_init_nuke_spline_high_arc_into(&mut self.slots[slot], &mut spline, start, end)
+        };
+        if let Err(error) = result {
+            spline.clear();
+            self.spline_recycler.push(spline);
+            return Err(error);
+        }
+        arc_ballistics(&mut self.slots[slot].w);
+        self.spline_slots[slot] = Some(spline);
+        Ok(())
+    }
+
+    /// Apply the indexed spline sample after `ammo_inc_time` performed its common
+    /// `cur_time++`. Missing slot-aligned state is a hard error, never an empty path.
+    pub fn step_spline_slot(
+        &mut self,
+        slot: usize,
+    ) -> Result<Option<SplineVec3>, AmmoSplineChecksumError> {
+        let ammo = self
+            .slots
+            .get_mut(slot)
+            .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+        if !ammo.has_spline {
+            return Ok(None);
+        }
+        let spline = self
+            .spline_slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+        Ok(ammo_step_cruise_spline(&mut ammo.w, spline))
+    }
+
+    /// `Ammo::close` plus `Recycler<Spline>::push`, preserving the recycled object's array
+    /// capacities for the next LIFO allocation.
+    pub fn close_slot(&mut self, slot: usize) {
+        if let Some(ammo) = self.slots.get_mut(slot) {
+            ammo.close();
+        }
+        self.recycle_slot_spline(slot);
+    }
+
+    /// Complete a close that occurred inside a projectile primitive such as
+    /// `ammo_do_damage_single` or `ammo_inc_time`.
+    pub fn recycle_if_closed(&mut self, slot: usize) {
+        if self.slots.get(slot).is_some_and(|ammo| !ammo.occupied()) {
+            self.recycle_slot_spline(slot);
+        }
+    }
+
+    pub fn spline(&self, slot: usize) -> Option<&RetailSpline> {
+        self.spline_slots.get(slot).and_then(Option::as_ref)
+    }
+
+    /// Diagnostic exposure for mutation-sensitive lifecycle tests.
+    pub fn recycled_spline_count(&self) -> usize {
+        self.spline_recycler.len()
+    }
+
+    /// Install the recovered graphic-table flag `8` fact for one ammo graphic id.
+    pub fn install_spline_graphic(&mut self, gpiece: i32) {
+        if !self.spline_graphics.contains(&gpiece) {
+            self.spline_graphics.push(gpiece);
+        }
+    }
+
+    #[inline]
+    pub fn graphic_piece_uses_spline(&self, gpiece: i32) -> bool {
+        self.spline_graphics.contains(&gpiece)
     }
 
     /// The `ammo` checksum channel.
@@ -1158,6 +1412,38 @@ impl AmmoPool {
         Ok(a)
     }
 
+    /// The live pool's complete checksum channel, including its owned slot-aligned paths.
+    /// The nested walker clears transient array flag `0x40`, matching retail mutation order.
+    pub fn checksum_complete(&mut self) -> Result<u32, AmmoSplineChecksumError> {
+        let mut a = 1;
+        for (slot, ammo) in self.slots.iter().enumerate() {
+            if !ammo.occupied() {
+                continue;
+            }
+            let bytes = ammo.w.as_bytes();
+            a = adler32(a, &bytes[0..1]);
+            a = adler32(a, &bytes[1..100]);
+            a = adler32(a, &[ammo.has_spline as u8]);
+            if ammo.has_spline {
+                let spline = self
+                    .spline_slots
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .ok_or(AmmoSplineChecksumError::MissingSpline { slot })?;
+                a = spline.walk_checksum(a);
+            }
+        }
+        Ok(a)
+    }
+
+    /// Read-only facade for reporting APIs. It walks cloned path headers so the digest is
+    /// complete without changing an `&self` interface; the live mutable checksum boundary
+    /// should prefer [`AmmoPool::checksum_complete`].
+    pub fn checksum_complete_readonly(&self) -> Result<u32, AmmoSplineChecksumError> {
+        let mut sidecars = self.spline_slots.clone();
+        self.checksum_with_splines(&mut sidecars)
+    }
+
     /// Live projectile count — diagnostics only, not part of any channel.
     pub fn live(&self) -> usize {
         self.slots.iter().filter(|s| s.occupied()).count()
@@ -1194,6 +1480,10 @@ pub struct ShooterRules {
     pub proj_speed: i32,
     /// `ObjectType + 0x218` — `DomainIndex`.
     pub domain: i32,
+    /// Negation of shooter virtual property `get(0x13A, 1)`: retail passes that property
+    /// directly as `calc_nuke_spline`'s terrain-path selector. `false` therefore preserves
+    /// the retail default (`1`, terrain-following); `true` selects the fixed high arc.
+    pub nuke_high_arc: bool,
     /// `ObjectType + 0x234` — footprint half-extent unit, tiles.
     pub x_size: i32,
     /// `ObjectType + 0x238`
@@ -3215,6 +3505,9 @@ mod tests {
         walked.has_spline = false;
         let pool = AmmoPool {
             slots: vec![walked],
+            spline_slots: vec![None],
+            spline_recycler: Vec::new(),
+            spline_graphics: Vec::new(),
             ammo_index: 0,
         };
         assert_eq!(
@@ -3673,6 +3966,9 @@ mod tests {
         // flags(1) + body(99) + has_spline(1)
         let mut p = AmmoPool {
             slots: vec![Ammo::default()],
+            spline_slots: vec![None],
+            spline_recycler: Vec::new(),
+            spline_graphics: Vec::new(),
             ammo_index: 0,
         };
         p.slots[0].w.flags = FLAG_FLYING;

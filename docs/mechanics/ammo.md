@@ -19,7 +19,9 @@ cargo test -p don-sim --lib systems::ammo
 cargo test -p don-sim --test ammo_splash_transaction
 # test result: ok. 2 passed; 0 failed
 cargo test -p don-sim --test ammo_spline_transaction
-# test result: ok. 9 passed; 0 failed
+# test result: ok. 11 passed; 0 failed
+cargo test -p don-sim --test ammo_live_spline_sim
+# test result: ok. 5 passed; 0 failed
 ```
 
 The module shares the authoritative RNG with `crate::rng` and composes the recovered flight-band
@@ -45,6 +47,7 @@ gate in `systems::air`; it is referenced by the real tick driver.
 | Live splash transaction | `ammo_do_damage_splash_execute` | `Ammo::do_damage` `0x00678629`–`0x00678B56` | damage is interleaved with the exact table/down-chain cursor; mutation can change later admissions; projectile closes last |
 | Cruise B-spline transaction | `ammo_init_cruise_spline`, `ammo_step_cruise_spline`, `RetailSpline::walk_checksum` | `0x00913960`, `0x00912F00`, `0x00911820`, `0x00911F60`, `0x009132B0`, spline arm of `0x0067D380` | exact constructed-empty array growth, knots, Cox–de Boor samples, tangent normals, nested checksum walk and indexed flight sample |
 | Both nuke B-spline constructors | `ammo_init_nuke_spline_high_arc`, `ammo_init_nuke_spline_terrain` | both arms of `Spline::calc_nuke_spline` `0x00913AD0` | high arc pins all 12 controls/custom knot widths; terrain arm pins truncated query order, flag-tier priority, all-30 knot header, fail-closed host facts, and complete checksum |
+| Live spline ownership and selection | `select_retail_spline_family`, `AmmoPool::{install_nuke_spline,install_cruise_spline,step_spline_slot,recycle_if_closed,checksum_complete}` | `Ammo::init` `0x0067BBF0`, `Ammo::inc_time` `0x0067D380`, `Recycler<Spline>::pop` `0x00478360`, `CheckSums::check_ammo` `0x009374E0` | graphic flag 8 priority, nuke object-mask fallback, same-slot ownership, LIFO capacity-preserving reuse, indexed step, close/free, missing-fact fail-close, and nested live checksum |
 | `AMMO_PER_ATT` damage split | `split_damage` | `Object::do_damage` `0x0064A49E`–`0x0064A7F1` | volley sums back to the raw number; sixteenths carry |
 
 **Tier: C throughout** — behaviourally faithful, derived from the instruction stream, but not
@@ -482,9 +485,16 @@ knot-width array whose length and capacity are exactly `control_len + 2 + degree
 `NukeSplineEnv` supplies the ordered height/flag facts without coupling the primitive to the
 SoA world. Missing terrain fails before the caller's `Ammo` is changed, while successful
 construction installs `TRAJ_SPLINE`, the non-null sidecar bit, and
-`total_time = spline_verts.length - 1`. Neither nuke arm consumes RNG. The remaining boundary
-is live selection of the constructor and retention of the returned sidecar in the slot-aligned
-pool; it is intentionally outside this isolated projectile tranche.
+`total_time = spline_verts.length - 1`. Neither nuke arm consumes RNG.
+
+`AmmoPool` now owns a slot-aligned `Option<RetailSpline>` sidecar plus the retail LIFO recycler.
+The recycler retains all six nested-array capacities: an invalid reconstruction returns the
+same cleared allocation, while a later successful construction pops and reuses it. The selector
+gives graphic-piece table flag 8 priority, then tests the shooter's `obj_masks & 0x08000000` nuke
+bit, otherwise choosing the ordinary arc. `Sim::launch_ammo` installs fixed or terrain-aware
+nuke paths through a live `NukeSplineEnv` adapter, step 15 samples the indexed vertex after the
+ordinary time increment, close returns the path to the recycler before the slot is reused, and
+the live ammo channel walks each non-null sidecar immediately after its owning `AmmoData`.
 
 ---
 
@@ -501,14 +511,15 @@ Ordered by how much they would cost a replay harness.
    and mutation-tested, but the tick driver's current compatibility call still uses the older
    post-gate `ammo_init` adapter. Until that call site passes `UnitData::order_type()` and the
    target's recovered flight band, live air combat still bypasses the gate.
-3. **Live nuke launch must select and retain the recovered spline sidecar.** Both arms of
-   `Spline::calc_nuke_spline` (`0x00913AD0`) are executable, including the terrain query/flag
-   tiers and distinct knot profiles. The remaining seam is the world-owned launch adapter:
-   supply `NukeSplineEnv`, choose the retail arm, store the returned `RetailSpline` beside the
-   allocated ammo slot, and release it when `Ammo::close` returns the path to its recycler.
-   Aircraft crashes were previously misclassified here; `Ammo::init_crash` writes an ordinary
-   arc and is executable. `Ammo::init` only ever writes `traj` 1 or 2 — `TRAJ_STRAIGHT` (0) is
-   never set by `init`.
+3. **The live graphic-piece cruise arm still needs its orientation-derived inputs.** Exact
+   selection, pool ownership, reconstruction, stepping, release, and checksum walking are live.
+   Exact `calc_from_dir` is also exposed by `AmmoPool::install_cruise_spline`, but the current
+   `LaunchOrder` does not carry the four source-orientation vectors recovered at `0x0067BBF0`.
+   A graphic-piece flag-8 launch therefore fails closed rather than fabricating a path or falling
+   through to the nuke mask. The later dynamic cruise retarget/rebuild arm in `Ammo::inc_time`
+   (`0x0067D380`) is likewise not yet modeled. Aircraft crashes are unrelated: `Ammo::init_crash`
+   writes an ordinary arc and is executable. `Ammo::init` only ever writes `traj` 1 or 2 —
+   `TRAJ_STRAIGHT` (0) is never set by `init`.
 4. **The tick driver does not yet install a live `SplashDamageEnv`.** The exact interleaved
    executor is implemented and mutation-pinned in `ammo_do_damage_splash_execute`; the remaining
    seam is to expose the live WData/down-chain/diplomacy reads and `Object::do_damage` mutation

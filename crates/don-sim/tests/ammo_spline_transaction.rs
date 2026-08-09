@@ -1,8 +1,8 @@
 use don_sim::systems::ammo::{
     ammo_init_cruise_spline, ammo_init_nuke_spline_high_arc, ammo_init_nuke_spline_terrain,
-    ammo_step_cruise_spline, Ammo, AmmoPool, AmmoSplineChecksumError, NukeSplineEnv,
-    NukeTerrainSample, RetailSpline, SplineBuildError, SplineVec3, FLAG_ALIVE, FLAG_FLYING,
-    TRAJ_SPLINE,
+    ammo_step_cruise_spline, select_retail_spline_family, Ammo, AmmoPool, AmmoSplineChecksumError,
+    NukeSplineEnv, NukeTerrainSample, RetailSpline, RetailSplineFamily, SplineBuildError,
+    SplineVec3, FLAG_ALIVE, FLAG_FLYING, TRAJ_SPLINE,
 };
 use std::cell::RefCell;
 
@@ -226,13 +226,94 @@ fn missing_nuke_terrain_fails_before_ammo_installation() {
 }
 
 #[test]
+fn retail_selector_gives_graphic_cruise_priority_over_the_nuke_mask() {
+    assert_eq!(
+        select_retail_spline_family(false, 0),
+        RetailSplineFamily::Arc
+    );
+    assert_eq!(
+        select_retail_spline_family(true, 0),
+        RetailSplineFamily::Cruise
+    );
+    assert_eq!(
+        select_retail_spline_family(false, 0x0800_0000),
+        RetailSplineFamily::Nuke
+    );
+    assert_eq!(
+        select_retail_spline_family(true, 0x0800_0000),
+        RetailSplineFamily::Cruise
+    );
+}
+
+#[test]
+fn pool_owns_steps_checksums_and_lifo_recycles_spline_capacity() {
+    let env = TerrainFixture::complete([0; 4]);
+    let mut pool = AmmoPool::new();
+    pool.slots[0].w.flags = FLAG_ALIVE | FLAG_FLYING;
+    let start = SplineVec3::new(100.0, 200.0, 300.0);
+    let end = SplineVec3::new(900.0, 1_000.0, 500.0);
+    pool.install_nuke_spline(0, &env, false, start, end)
+        .unwrap();
+
+    assert!(pool.slots[0].has_spline);
+    assert_eq!(pool.spline(0).unwrap().control_verts.size(), 16);
+    let internal = pool.checksum_complete().unwrap();
+    let mut copied_sidecars = pool.spline_slots.clone();
+    assert_eq!(
+        internal,
+        pool.checksum_with_splines(&mut copied_sidecars).unwrap()
+    );
+
+    pool.slots[0].w.cur_time = 1;
+    let expected = pool.spline(0).unwrap().spline_verts[1];
+    assert_eq!(pool.step_spline_slot(0).unwrap(), Some(expected));
+    assert_eq!(
+        (pool.slots[0].w.ex, pool.slots[0].w.ey, pool.slots[0].w.ez),
+        (expected.x as i32, expected.y as i32, expected.z as i32)
+    );
+
+    pool.close_slot(0);
+    assert!(!pool.slots[0].occupied());
+    assert!(!pool.slots[0].has_spline);
+    assert!(pool.spline(0).is_none());
+    assert_eq!(pool.recycled_spline_count(), 1);
+
+    // An invalid launch returns the popped path to the recycler, preserving the pool's
+    // deterministic capacity history and leaving Ammo mutation-free.
+    pool.slots[0].w.flags = FLAG_ALIVE | FLAG_FLYING;
+    let before = pool.slots[0];
+    let (_, cruise_start, control, cruise_end, optional) = path_args();
+    assert_eq!(
+        pool.install_cruise_spline(0, 0.0, cruise_start, control, cruise_end, optional),
+        Err(SplineBuildError::NonPositiveSegmentLength)
+    );
+    assert_eq!(pool.slots[0], before);
+    assert_eq!(pool.recycled_spline_count(), 1);
+
+    pool.install_cruise_spline(0, 10.0, cruise_start, control, cruise_end, optional)
+        .unwrap();
+    assert_eq!(pool.recycled_spline_count(), 0);
+    assert_eq!(
+        pool.spline(0).unwrap().control_verts.checksum_header(),
+        (4, 16, -1, 0),
+        "the LIFO-recycled nuke path retains its 16-entry control capacity"
+    );
+    assert_ne!(
+        pool.checksum_complete().unwrap(),
+        internal,
+        "reused headers and cruise payload replace the prior live nuke walk"
+    );
+}
+
+#[test]
 fn ammo_channel_walks_the_spline_immediately_after_its_non_null_byte() {
     let (mut ammo, spline) = build();
     ammo.w.flags = FLAG_ALIVE | FLAG_FLYING;
-    let pool = AmmoPool {
-        slots: vec![ammo],
-        ammo_index: 1,
-    };
+    let mut pool = AmmoPool::new();
+    pool.slots.truncate(1);
+    pool.spline_slots.truncate(1);
+    pool.slots[0] = ammo;
+    pool.ammo_index = 1;
     assert_eq!(
         pool.checksum_with_splines(&mut []),
         Err(AmmoSplineChecksumError::MissingSpline { slot: 0 })

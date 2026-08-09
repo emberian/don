@@ -2189,7 +2189,7 @@ impl Sim {
                 if !self.ammo.slots[slot].occupied() {
                     continue;
                 }
-                let step = {
+                let mut step = {
                     let a = &mut self.ammo.slots[slot];
                     // `hit_target` takes `&mut AmmoWalk` while `ammo_inc_time`'s hook is
                     // `Fn(&AmmoWalk)`, so the test runs on a copy: the boolean is right and
@@ -2202,6 +2202,17 @@ impl Sim {
                     };
                     ammo::ammo_inc_time(a, &view, probe, |w| ammo::check_hit(w, &view))
                 };
+                if step == ammo::Step::Flying && self.ammo.slots[slot].has_spline {
+                    let w = self.ammo.slots[slot].w;
+                    let target_live = ammo::AmmoEnv::object(&view, w.whom, w.ox)
+                        .is_some_and(|target| target.alive);
+                    if target_live && self.ammo.step_spline_slot(slot).is_err() {
+                        // A non-null retail pointer can never lack its object. Fail closed
+                        // instead of advancing a fabricated/empty path.
+                        self.ammo.close_slot(slot);
+                        step = ammo::Step::Closed;
+                    }
+                }
                 self.cover.ammo_steps += 1;
                 work += 1;
                 match step {
@@ -2221,12 +2232,16 @@ impl Sim {
                         self.cover.ammo_impacts += 1;
                         if imp.closed {
                             self.cover.ammo_closed += 1;
+                            self.ammo.recycle_if_closed(slot);
                         }
                         for c in imp.calls {
                             calls.push((slot, c));
                         }
                     }
-                    ammo::Step::Closed => self.cover.ammo_closed += 1,
+                    ammo::Step::Closed => {
+                        self.ammo.recycle_if_closed(slot);
+                        self.cover.ammo_closed += 1;
+                    }
                     ammo::Step::Flying => {}
                 }
             }
@@ -2272,6 +2287,10 @@ impl Sim {
         dist: i32,
         damage: i32,
     ) -> usize {
+        let spline_family = ammo::select_retail_spline_family(
+            self.ammo.graphic_piece_uses_spline(ord.gpiece),
+            shooter.rules.obj_masks,
+        );
         let slot = self.ammo.alloc_slot();
         // Ammo::init's anti-air dud roll draws 1-2 values before anything else and is
         // unported; every launch is therefore a point where our stream leaves retail's.
@@ -2285,7 +2304,11 @@ impl Sim {
             ord,
             shooter,
             target,
-            ammo::MissRadius::Formula,
+            if spline_family == ammo::RetailSplineFamily::Arc {
+                ammo::MissRadius::Formula
+            } else {
+                ammo::MissRadius::Perfect
+            },
             dist,
             &mut rng,
         );
@@ -2296,6 +2319,54 @@ impl Sim {
         }
         self.shots[slot] = AmmoShot { damage };
         self.ammo.slots[slot] = a;
+
+        if spline_family == ammo::RetailSplineFamily::Nuke {
+            struct LiveNukeEnv<'a> {
+                terrain: Option<&'a (dyn ammo::CrashEnv + Send)>,
+                world: &'a TerrainWorld,
+            }
+            impl ammo::NukeSplineEnv for LiveNukeEnv<'_> {
+                fn nuke_terrain(&self, x: i32, y: i32) -> Option<ammo::NukeTerrainSample> {
+                    let terrain = self.terrain?;
+                    let tx = x / ammo::TILE;
+                    let ty = y / ammo::TILE;
+                    if !self.world.valid_t(tx, ty) {
+                        return None;
+                    }
+                    Some(ammo::NukeTerrainSample {
+                        z: terrain.crash_terrain_z(x, y),
+                        flags: self.world.tmask(tx, ty),
+                    })
+                }
+            }
+
+            let w = self.ammo.slots[slot].w;
+            let env = LiveNukeEnv {
+                terrain: self.crash_env.as_deref(),
+                world: &self.map.world,
+            };
+            if self
+                .ammo
+                .install_nuke_spline(
+                    slot,
+                    &env,
+                    !shooter.rules.nuke_high_arc,
+                    ammo::SplineVec3::new(w.sx as f32, w.sy as f32, w.sz as f32),
+                    ammo::SplineVec3::new(w.ex as f32, w.ey as f32, w.ez as f32),
+                )
+                .is_err()
+            {
+                self.ammo.close_slot(slot);
+                self.shots[slot] = AmmoShot::default();
+            }
+        } else if spline_family == ammo::RetailSplineFamily::Cruise {
+            // The constructor is live through AmmoPool::install_cruise_spline, but its
+            // orientation-derived control vectors are not present in LaunchOrder. An
+            // explicitly flagged cruise graphic therefore fails closed here until its
+            // caller supplies those exact four vectors instead of fabricating them.
+            self.ammo.close_slot(slot);
+            self.shots[slot] = AmmoShot::default();
+        }
         slot
     }
 
@@ -2315,7 +2386,10 @@ impl Sim {
         };
         mix(self.world.digest() as u32);
         mix((self.world.digest() >> 32) as u32);
-        mix(self.ammo.checksum());
+        mix(self
+            .ammo
+            .checksum_complete_readonly()
+            .expect("live spline slots remain aligned with the ammo pool"));
         for l in self.leaders.iter() {
             mix(l.econ.adler32());
         }
