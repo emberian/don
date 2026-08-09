@@ -149,7 +149,7 @@
 //! * `Unit::detect_boat_collision` `0x005FA8B0`, called just before `do_job` when the unit
 //!   collided within the last four frames. The *gate* is reproduced and counted; the body is
 //!   not ported.
-//! * 21 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
+//! * 19 of the 28 `do_job` arms. They dispatch and are counted; see [`ARMS`].
 
 use crate::command::QueuePos;
 use crate::order::{ArmStatus, Order, OrderIndex, NUM_UNIT_ORDERS, ORDER_GROUP, ORDER_PATHED};
@@ -1271,6 +1271,19 @@ pub enum AirPatrolSearch {
     BomberFirst,
 }
 
+/// The current action observed on the passenger named by an `AWAIT_BOARD` order.
+///
+/// Retail first calls `UnitData::get_action`, checks its type, then calls
+/// `Unit::update_action` and reads the `BoardOrder` target through vtable slot `+0x64`
+/// [measured, `0x005ED0D5..0x005ED10F` and `0x005ED173..0x005ED1B2`]. A world adapter
+/// returns both observations together because no retail mutation occurs between them. The
+/// target is consulted only when `kind == BOARD_SHIP`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoardingAction {
+    pub kind: OrderIndex,
+    pub target: crate::systems::naval::TargetRef,
+}
+
 /// The queries the executors make of the surrounding world.
 ///
 /// Everything the arms cannot derive from `UnitData` alone lives behind this trait, so the
@@ -1345,6 +1358,77 @@ pub trait WorkWorld: UnitWorld {
     fn patrol_inside_is_scramblable(&self, actor_who: u8, inside_o: i16) -> bool;
     fn patrol_scramble_inside(&mut self, actor: &mut UnitWork, inside_o: i16);
 
+    /// `Unit::set_anim(a, b, c)` at the head of both boarding executors. The shipped arms
+    /// always pass `(0, 0, 1)` before any rendezvous or target probe. Animation state is not
+    /// represented by [`UnitWork`], so a boarding-capable host must apply it here.
+    fn boarding_set_anim(&mut self, _actor: &mut UnitWork, _a: i32, _b: i32, _c: i32) {
+        panic!("WorkWorld::boarding_set_anim is required for boarding orders")
+    }
+
+    /// `Unit::check_meet_ship(target_o, target_who)` from `Unit::do_board` `0x005ED1F0`.
+    /// The callback owns every rendezvous-side mutation performed by that function and
+    /// returns its exact integer truth value (`true` means the rendezvous remains pending).
+    fn board_check_meet_ship(
+        &mut self,
+        _actor: &mut UnitWork,
+        _target: crate::systems::naval::TargetRef,
+    ) -> bool {
+        panic!("WorkWorld::board_check_meet_ship is required for BOARD_SHIP")
+    }
+
+    /// `ObjectData::can_carry(passenger_o, passenger_who)`. `carrier` is the target ship in
+    /// `BOARD_SHIP` and the executing ship in `AWAIT_BOARD`; `passenger` is the inverse.
+    /// For `BOARD_SHIP`, retail calls this only *after* retiring the passenger's order.
+    fn boarding_can_carry(
+        &mut self,
+        _actor: &UnitWork,
+        _carrier: crate::systems::naval::TargetRef,
+        _passenger: crate::systems::naval::TargetRef,
+    ) -> bool {
+        panic!("WorkWorld::boarding_can_carry is required for boarding orders")
+    }
+
+    /// `Unit::go_inside(target_o, target_who, mode)` on the boarding passenger. The sole
+    /// call in `Unit::do_board` passes mode zero after the order has already been retired.
+    /// The callback must apply containment to both the passenger and carrier world state.
+    fn board_go_inside(
+        &mut self,
+        _actor: &mut UnitWork,
+        _carrier: crate::systems::naval::TargetRef,
+        _mode: i32,
+    ) {
+        panic!("WorkWorld::board_go_inside is required for BOARD_SHIP")
+    }
+
+    /// The pair of virtual target probes at `0x005ED0AA/0x005ED0BC` and
+    /// `0x005ED15A/0x005ED165`. This must return true only when the object slot resolves and
+    /// both retail probes accept it as a live unit.
+    fn boarding_target_is_live_unit(&mut self, _target: crate::systems::naval::TargetRef) -> bool {
+        panic!("WorkWorld::boarding_target_is_live_unit is required for AWAIT_BOARD")
+    }
+
+    /// The passenger's current action observation described by [`BoardingAction`]. `None`
+    /// is retail's null `get_action()` result. The callback is invoked only after the live
+    /// unit probes succeed, and may be invoked twice on the same tick because retail really
+    /// performs two validation passes.
+    fn boarding_target_action(
+        &mut self,
+        _target: crate::systems::naval::TargetRef,
+    ) -> Option<BoardingAction> {
+        panic!("WorkWorld::boarding_target_action is required for AWAIT_BOARD")
+    }
+
+    /// Apply `passenger->repath(); passenger->kill_current_order(0)` in that order. Retail
+    /// performs this cross-unit cancellation before retiring the executing ship's own
+    /// `AWAIT_BOARD` order (`0x005ED1C4..0x005ED1E2`).
+    fn boarding_abort_passenger(
+        &mut self,
+        _actor: &UnitWork,
+        _passenger: crate::systems::naval::TargetRef,
+    ) {
+        panic!("WorkWorld::boarding_abort_passenger is required for AWAIT_BOARD")
+    }
+
     /// The side-effecting `detect_unit_collision` -> `resolve_unit_collision` bridge used by
     /// `Unit::move_step`. The default preserves the older boolean occupancy host, but a
     /// fidelity host must apply blocker/order state on `Detect(MoveStep)` and consume it on
@@ -1387,8 +1471,8 @@ pub const ARMS: [ArmStatus; NUM_UNIT_ORDERS] = [
     ArmStatus::FaithfullyEmpty, //  5 PATROL          no case label; falls to the default
     ArmStatus::Unimplemented,   //  6 BUILD_AT        Unit::do_build 0x005EEBF0
     ArmStatus::Implemented,     //  7 GATHER          Unit::do_gather 0x005EF2A0
-    ArmStatus::Unimplemented,   //  8 BOARD_SHIP      Unit::do_board 0x005ED1F0
-    ArmStatus::Unimplemented,   //  9 AWAIT_BOARD     Unit::do_await_board 0x005ED040
+    ArmStatus::Implemented,     //  8 BOARD_SHIP      Unit::do_board 0x005ED1F0
+    ArmStatus::Implemented,     //  9 AWAIT_BOARD     Unit::do_await_board 0x005ED040
     ArmStatus::Implemented,     // 10 ATTACK          Unit::do_attack 0x005F1B80
     ArmStatus::Unimplemented,   // 11 FOLLOW          Unit::do_follow 0x005E65D0
     ArmStatus::Unimplemented,   // 12 GUARD           Unit::do_guard 0x005E5C70
@@ -1634,6 +1718,161 @@ pub enum ArmResult {
     /// The order kind and concrete payload disagree. Retail cannot construct this state;
     /// it is reported explicitly for malformed recovered/save input.
     MalformedOrder,
+}
+
+#[inline]
+fn boarding_ref(u: &UnitWork) -> crate::systems::naval::TargetRef {
+    crate::systems::naval::TargetRef {
+        ox: u.o as i32,
+        whom: u.who as i32,
+        uid: u.uid,
+    }
+}
+
+#[inline]
+fn boarding_order_target(order: &OrderRec) -> crate::systems::naval::TargetRef {
+    crate::systems::naval::TargetRef {
+        ox: order.target_o,
+        whom: order.target_who,
+        uid: order.target_uid,
+    }
+}
+
+#[inline]
+fn same_boarding_slot(
+    a: crate::systems::naval::TargetRef,
+    b: crate::systems::naval::TargetRef,
+) -> bool {
+    // Both shipped executors compare only TargetOrder::ox/whom. Unit::work owns the
+    // independent uid staleness pass before dispatch.
+    a.ox == b.ox && a.whom == b.whom
+}
+
+#[inline]
+fn retire_boarding_actor(u: &mut UnitWork, cov: &mut DispatchCoverage) -> ArmResult {
+    // Every local retirement in both shipped executors is the bare
+    // `kill_current_order(0)` call, never the repath/failure pair.
+    kill_current_order(u, KillReason::Completed);
+    cov.completed += 1;
+    ArmResult::Retired(KillReason::Completed)
+}
+
+/// `Unit::do_board(BoardOrder*)` `0x005ED1F0` (114 bytes), arm 8.
+///
+/// Raw instruction order [measured against `riseofnations.exe`]:
+///
+/// 1. read the `BoardOrder` target and call `set_anim(0, 0, 1)`;
+/// 2. call `check_meet_ship(target_o, target_who)` and hold the order if non-zero;
+/// 3. retire the passenger's current order;
+/// 4. ask the target ship `can_carry(passenger_o, passenger_who)`;
+/// 5. on success call `passenger->go_inside(target_o, target_who, 0)`.
+///
+/// The capacity probe deliberately occurs after queue retirement. That surprising order is
+/// asserted by the integration tests and encoded by [`crate::systems::naval::board_order_transaction`].
+pub fn do_board<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = update_order(u) else {
+        return ArmResult::NoOrder;
+    };
+    let target = boarding_order_target(&order);
+    let passenger = boarding_ref(u);
+
+    // The transaction carries the measured literal animation tuple. Its rendezvous arm has
+    // no retirement or containment effect.
+    let pending_tx = crate::systems::naval::board_order_transaction(target, true, false);
+    let (a, b, c) = pending_tx.set_anim;
+    w.boarding_set_anim(u, a, b, c);
+    let meet_ship_pending = w.board_check_meet_ship(u, target);
+    if meet_ship_pending {
+        debug_assert_eq!(
+            pending_tx.step,
+            crate::systems::naval::BoardStep::Rendezvous
+        );
+        return ArmResult::Working;
+    }
+
+    // Retail kills first, then resolves the carrier and probes capacity. Keeping these as
+    // separate host calls makes the intermediate queue state observable and reproducible.
+    let result = retire_boarding_actor(u, cov);
+    let target_can_carry = w.boarding_can_carry(&*u, target, passenger);
+    let completed_tx =
+        crate::systems::naval::board_order_transaction(target, false, target_can_carry);
+    debug_assert_eq!(completed_tx.kill_current_order, Some(0));
+    if let Some((carrier, mode)) = completed_tx.go_inside {
+        w.board_go_inside(u, carrier, mode);
+    }
+    result
+}
+
+/// `Unit::do_await_board(AwaitBoardOrder*)` `0x005ED040` (432 bytes), arm 9.
+///
+/// This is the instruction-verified two-pass handshake, including its asymmetric
+/// cancellation behaviour:
+///
+/// * a same-owner passenger that is a live unit, is carriable, and still has a matching
+///   `BOARD_SHIP` action keeps both orders alive;
+/// * a same-owner passenger boarding a *different* ship only retires this ship's await
+///   order — its passenger order is not touched;
+/// * every other path performs a second live-unit/action probe. A reverse link found there
+///   triggers `passenger->repath(); passenger->kill_current_order(0)` before this ship's
+///   own bare retirement.
+///
+/// The two probes are not deduplicated: retail repeats them, and a mutation-sensitive host
+/// must see the same callback sequence.
+pub fn do_await_board<W: WorkWorld>(
+    u: &mut UnitWork,
+    w: &mut W,
+    cov: &mut DispatchCoverage,
+) -> ArmResult {
+    let Some(order) = update_order(u) else {
+        return ArmResult::NoOrder;
+    };
+    let passenger = boarding_order_target(&order);
+    let ship = boarding_ref(u);
+
+    w.boarding_set_anim(u, 0, 0, 1);
+
+    // `0x005ED069..0x005ED077`: the self-referential order goes straight to the ship kill.
+    if same_boarding_slot(passenger, ship) {
+        return retire_boarding_actor(u, cov);
+    }
+
+    // First pass, entered only for the same owner. A fully valid reverse link is the sole
+    // holding return at 0x005ED123 -> 0x005ED1E7.
+    if passenger.whom == ship.whom
+        && w.boarding_target_is_live_unit(passenger)
+        && w.boarding_can_carry(&*u, ship, passenger)
+    {
+        if let Some(action) = w.boarding_target_action(passenger) {
+            if action.kind == OrderIndex::BoardShip {
+                // Once a valid BOARD_SHIP action was observed on this fast path, either
+                // target-field mismatch kills only the ship's await order. It does not fall
+                // through to the cross-unit cancellation pass.
+                if action.target.ox != ship.ox {
+                    return retire_boarding_actor(u, cov);
+                }
+                if action.target.whom == ship.whom {
+                    return ArmResult::Working;
+                }
+                return retire_boarding_actor(u, cov);
+            }
+        }
+    }
+
+    // Fallback pass. `repath(); kill_current_order(0)` is applied to the passenger only when
+    // its current BOARD_SHIP action still points back to this ship. The executing ship is
+    // retired afterwards on every path.
+    if w.boarding_target_is_live_unit(passenger) {
+        if let Some(action) = w.boarding_target_action(passenger) {
+            if action.kind == OrderIndex::BoardShip && same_boarding_slot(action.target, ship) {
+                w.boarding_abort_passenger(&*u, passenger);
+            }
+        }
+    }
+    retire_boarding_actor(u, cov)
 }
 
 /// `Unit::do_move(MoveOrder*)` `0x005F7B30` (4,582 B), arms 1 (`MOVE_TO`) and 4 (`FLEE_TO`).
@@ -2175,7 +2414,7 @@ pub fn do_air_patrol<W: WorkWorld>(u: &mut UnitWork, w: &mut W) -> ArmResult {
 /// `Unit::do_job(enum OrderIndex, class UnitOrder*)` `0x00617A10`, the 28-entry jump table at
 /// `0x00617B94`. [measured — the `switch` has 27 case labels; `PATROL` (5) has none.]
 ///
-/// Every arm is present. The 21 without a ported body dispatch, are counted, and return
+/// Every arm is present. The 19 without a ported body dispatch, are counted, and return
 /// [`ArmResult::NotPorted`] rather than pretending to act.
 pub fn do_job<W: WorkWorld>(
     u: &mut UnitWork,
@@ -2196,6 +2435,8 @@ pub fn do_job<W: WorkWorld>(
         OrderIndex::MoveTo | OrderIndex::FleeTo => do_move(u, w, pf, cov),
         OrderIndex::Attack => do_attack(u, w, cov),
         OrderIndex::Gather => do_gather(u, w, cov),
+        OrderIndex::BoardShip => do_board(u, w, cov),
+        OrderIndex::AwaitBoard => do_await_board(u, w, cov),
         OrderIndex::AirPatrol => do_air_patrol(u, w),
         OrderIndex::GroupPatrol => do_group_patrol(u, w),
         // Arm 5 has no case label. Doing nothing here is faithful, not missing.
@@ -2690,6 +2931,43 @@ mod tests {
         fn patrol_scramble_inside(&mut self, _: &mut UnitWork, inside_o: i16) {
             self.scrambled.push(inside_o);
         }
+        fn boarding_set_anim(&mut self, _: &mut UnitWork, _: i32, _: i32, _: i32) {}
+        fn board_check_meet_ship(
+            &mut self,
+            _: &mut UnitWork,
+            _: crate::systems::naval::TargetRef,
+        ) -> bool {
+            // The table-wide smoke test should hold BOARD_SHIP without demanding a carrier.
+            true
+        }
+        fn boarding_can_carry(
+            &mut self,
+            _: &UnitWork,
+            _: crate::systems::naval::TargetRef,
+            _: crate::systems::naval::TargetRef,
+        ) -> bool {
+            false
+        }
+        fn board_go_inside(
+            &mut self,
+            _: &mut UnitWork,
+            _: crate::systems::naval::TargetRef,
+            _: i32,
+        ) {
+            unreachable!("TestWorld never admits a boarding carrier")
+        }
+        fn boarding_target_is_live_unit(&mut self, _: crate::systems::naval::TargetRef) -> bool {
+            false
+        }
+        fn boarding_target_action(
+            &mut self,
+            _: crate::systems::naval::TargetRef,
+        ) -> Option<BoardingAction> {
+            None
+        }
+        fn boarding_abort_passenger(&mut self, _: &UnitWork, _: crate::systems::naval::TargetRef) {
+            unreachable!("TestWorld never resolves a boarding passenger")
+        }
     }
 
     fn live(t: TargetState) -> TargetState {
@@ -2730,7 +3008,7 @@ mod tests {
     }
 
     #[test]
-    fn this_dispatcher_handles_eight_of_the_twenty_eight_arms() {
+    fn this_dispatcher_handles_ten_of_the_twenty_eight_arms() {
         let implemented = ARMS
             .iter()
             .filter(|s| **s == ArmStatus::Implemented)
@@ -2743,8 +3021,9 @@ mod tests {
             .iter()
             .filter(|s| **s == ArmStatus::Unimplemented)
             .count();
-        // Seven implemented, including the two live patrols; PATROL remains faithfully empty.
-        assert_eq!((implemented, empty, absent), (7, 1, 20));
+        // Nine implemented, including both boarding arms and the two live patrols; PATROL
+        // remains faithfully empty.
+        assert_eq!((implemented, empty, absent), (9, 1, 18));
         assert_eq!(implemented + empty + absent, NUM_UNIT_ORDERS);
     }
 
@@ -3502,9 +3781,9 @@ mod tests {
         for k in OrderIndex::ALL {
             assert_eq!(cov.dispatches[k.index()], 1, "arm {k} was not counted");
         }
-        // 20 unimplemented arms, each hit once. AIR_PATROL and GROUP_PATROL are live.
-        assert_eq!(cov.unimplemented, 20);
-        assert!((cov.covered_fraction() - 8.0 / 28.0).abs() < 1e-12);
+        // 18 unimplemented arms, each hit once. Both boarding and both live patrol arms run.
+        assert_eq!(cov.unimplemented, 18);
+        assert!((cov.covered_fraction() - 10.0 / 28.0).abs() < 1e-12);
     }
 
     #[test]
