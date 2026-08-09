@@ -66,6 +66,14 @@ DEFAULT_NETSYS_SHIM = (
 NETSYS_SCHEMA = "don.retail-netsys-experiment.v1"
 NETSYS_JSON_BEGIN = "DON_NETSYS_JSON_BEGIN"
 NETSYS_JSON_END = "DON_NETSYS_JSON_END"
+GUEST_COMMAND_TIMEOUT_SECONDS = 45
+GUEST_TIMEOUT_RETURN_CODE = 124
+
+
+class GuestCommandTimeout(RuntimeError):
+    pass
+
+
 NETSYS_NORMAL_EXIT_CODES = frozenset({0, 8008})
 
 
@@ -124,34 +132,75 @@ def parse_donject_fields(record: str) -> dict[str, str] | None:
     return fields
 
 
-def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(cmd: list[str], *, check: bool = True,
+        timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          check=check)
+                          check=check, timeout=timeout)
+
+
+def guest_timeout_record(shell: str) -> str:
+    return (
+        "protocol=don.retail-guest.v1 status=timeout transport=prlctl "
+        f"shell={shell} timeout_seconds={GUEST_COMMAND_TIMEOUT_SECONDS}"
+    )
 
 
 def guest_cmd(command: str, *, check: bool = True) -> str:
-    p = run(["prlctl", "exec", VM, "cmd.exe", "/d", "/s", "/c", command], check=check)
+    try:
+        p = run(
+            ["prlctl", "exec", VM, "cmd.exe", "/d", "/s", "/c", command],
+            check=check, timeout=GUEST_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        record = guest_timeout_record("cmd")
+        if check:
+            raise GuestCommandTimeout(record) from exc
+        print(record, file=sys.stderr)
+        return record
     return p.stdout.replace("\r\n", "\n").strip()
 
 
 def guest_cmd_status(command: str) -> tuple[int, str]:
-    p = run(["prlctl", "exec", VM, "cmd.exe", "/d", "/s", "/c", command], check=False)
+    try:
+        p = run(
+            ["prlctl", "exec", VM, "cmd.exe", "/d", "/s", "/c", command],
+            check=False, timeout=GUEST_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return GUEST_TIMEOUT_RETURN_CODE, guest_timeout_record("cmd")
     return p.returncode, p.stdout.replace("\r\n", "\n").strip()
 
 
 def guest_ps(command: str, *, check: bool = True) -> str:
-    p = run(["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-Command", command],
-            check=check)
+    try:
+        p = run(
+            ["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-Command", command],
+            check=check, timeout=GUEST_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        record = guest_timeout_record("powershell")
+        if check:
+            raise GuestCommandTimeout(record) from exc
+        print(record, file=sys.stderr)
+        return record
     return p.stdout.replace("\r\n", "\n").strip()
 
 
 def guest_ps_encoded(command: str, *, check: bool = True) -> str:
     """Run PowerShell without letting prlctl consume the script's quotes."""
     encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-    p = run(
-        ["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-EncodedCommand", encoded],
-        check=check,
-    )
+    try:
+        p = run(
+            ["prlctl", "exec", VM, "powershell.exe", "-NoProfile", "-EncodedCommand",
+             encoded],
+            check=check, timeout=GUEST_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        record = guest_timeout_record("powershell-encoded")
+        if check:
+            raise GuestCommandTimeout(record) from exc
+        print(record, file=sys.stderr)
+        return record
     return p.stdout.replace("\r\n", "\n").strip()
 
 
@@ -4283,6 +4332,100 @@ def write_netsys_manifest(manifest: dict) -> None:
     )
 
 
+def validate_netsys_archive_manifest(archive: object, manifest: dict) -> dict:
+    if not isinstance(archive, dict) or set(archive) != {
+            "schema", "generation", "credential_material", "shim", "mode",
+            "environment", "evidence"}:
+        raise ValueError("NetSys generation archive manifest fields are invalid")
+    if (archive["schema"] != "don.retail-netsys-evidence-generation.v1" or
+            archive["generation"] != manifest["generation"] or
+            archive["credential_material"] != "none" or
+            archive["shim"] != manifest["shim"] or
+            archive["mode"] != manifest["mode"] or
+            archive["environment"] != manifest["environment"] or
+            not isinstance(archive["evidence"], list) or
+            not 1 <= len(archive["evidence"]) <= len(netsys_evidence_paths())):
+        raise ValueError("NetSys generation archive identity is invalid")
+    expected_paths = netsys_evidence_paths()
+    seen = set()
+    root = netsys_generation_root(manifest["generation"])
+    for record in archive["evidence"]:
+        if not isinstance(record, dict) or set(record) != {
+                "label", "source_path", "archive_path", "size", "sha256", "summary"}:
+            raise ValueError("NetSys generation archive evidence row is invalid")
+        label = record["label"]
+        if label not in expected_paths or label in seen:
+            raise ValueError("NetSys generation archive evidence labels are invalid")
+        seen.add(label)
+        source_path, archive_name = expected_paths[label]
+        expected_archive = root + "\\" + archive_name
+        if (not isinstance(record["source_path"], str) or
+                record["source_path"] != source_path or
+                not isinstance(record["archive_path"], str) or
+                normalize_windows_path(record["archive_path"]) !=
+                normalize_windows_path(expected_archive) or
+                not isinstance(record["size"], int) or
+                isinstance(record["size"], bool) or record["size"] <= 0 or
+                not isinstance(record["sha256"], str) or
+                not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) or
+                not isinstance(record["summary"], dict)):
+            raise ValueError("NetSys generation archive evidence identity is invalid")
+        summary = record["summary"]
+        if label.startswith("trace-"):
+            if (set(summary) != {"kind", "record_count", "pid", "factory_ready",
+                                 "load_only"} or summary.get("kind") != "trace" or
+                    not isinstance(summary.get("record_count"), int) or
+                    isinstance(summary.get("record_count"), bool) or
+                    summary["record_count"] <= 0 or
+                    not isinstance(summary.get("pid"), int) or
+                    isinstance(summary.get("pid"), bool) or summary["pid"] <= 0 or
+                    (summary.get("factory_ready") is not None and
+                     not isinstance(summary["factory_ready"], str)) or
+                    not isinstance(summary.get("load_only"), bool)):
+                raise ValueError("NetSys generation trace summary is invalid")
+        else:
+            if (set(summary) != {"kind", "exit_code"} or
+                    summary.get("kind") != "exit" or
+                    not isinstance(summary.get("exit_code"), int) or
+                    isinstance(summary.get("exit_code"), bool)):
+                raise ValueError("NetSys generation exit summary is invalid")
+    return archive
+
+
+def read_netsys_archive(manifest: dict) -> dict:
+    archive_root = netsys_generation_root(manifest["generation"])
+    try:
+        raw = guest_read_bytes(archive_root + r"\manifest.json", 128 * 1024)
+        archive = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("NetSys generation archive is not canonical UTF-8 JSON") from exc
+    archive = validate_netsys_archive_manifest(archive, manifest)
+    for record in archive["evidence"]:
+        archived = guest_file_record(record["archive_path"])
+        if (not archived["present"] or archived.get("size") != record["size"] or
+                archived.get("sha256") != record["sha256"]):
+            raise ValueError("NetSys archived evidence file identity changed")
+        if record["summary"]["kind"] == "trace":
+            parsed = parse_netsys_trace(
+                guest_read_bytes(record["archive_path"], 1024 * 1024).decode("utf-8")
+            )
+            summary = {
+                "kind": "trace",
+                "record_count": len(parsed["records"]),
+                "pid": parsed["records"][0]["pid"],
+                "factory_ready": parsed["factory_ready"],
+                "load_only": parsed["load_only"],
+            }
+        else:
+            summary = {
+                "kind": "exit",
+                **parse_netsys_exit(guest_read_bytes(record["archive_path"], 1024)),
+            }
+        if summary != record["summary"]:
+            raise ValueError("NetSys archived evidence semantics changed")
+    return archive
+
+
 def archive_netsys_evidence(manifest: dict) -> dict:
     validate_netsys_manifest(manifest)
     generation = manifest["generation"]
@@ -4353,6 +4496,7 @@ def archive_netsys_evidence(manifest: dict) -> dict:
         "environment": manifest["environment"],
         "evidence": evidence,
     }
+    validate_netsys_archive_manifest(archive_manifest, manifest)
     guest_write_bytes(
         archive_root + r"\manifest.json",
         (json.dumps(archive_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
@@ -4404,6 +4548,29 @@ def reuse_preintent_netsys_next(next_record: dict, host: dict, manifest: dict) -
             next_record.get("sha256") == host.get("sha256")):
         return True
     raise SystemExit("REFUSING rollover with an unknown or different orphaned next DLL")
+
+
+def classify_netsys_rollover_files(manifest: dict, target: dict,
+                                   staged: dict, next_record: dict) -> str:
+    if manifest.get("state") != "rollover-staged" or not isinstance(
+            manifest.get("rollover"), dict):
+        raise SystemExit("REFUSING rollover resume without exact persisted intent")
+    old = manifest["shim"]
+    new = manifest["rollover"]["next_shim"]
+
+    def matches(record: dict, identity: dict) -> bool:
+        return (record.get("present") is True and
+                record.get("size") == identity["size"] and
+                record.get("sha256") == identity["sha256"])
+
+    next_absent = next_record.get("present") is False
+    if matches(target, old) and matches(staged, old) and matches(next_record, new):
+        return "pre-swap"
+    if matches(target, new) and matches(staged, old) and matches(next_record, new):
+        return "post-first-swap"
+    if matches(target, new) and matches(staged, new) and next_absent:
+        return "post-both-swaps"
+    raise SystemExit("REFUSING rollover resume from unknown or mixed file identities")
 
 
 def netsys_snapshot() -> dict:
@@ -4547,95 +4714,141 @@ Remove-Item -LiteralPath $replace_backup -Force
 def netsys_next_generation(shim: Path, port: int) -> dict:
     require_retail_absent("NetSys generation rollover")
     manifest = read_netsys_manifest()
-    if manifest["state"] != "installed" or manifest["generation"] >= 9999:
+    if (manifest["state"] not in {"installed", "rollover-staged"} or
+            manifest["generation"] >= 9999):
         raise SystemExit("REFUSING rollover outside an installed bounded generation")
-    target = guest_file_record(RETAIL_NETSYS_DLL)
     backup = guest_file_record(NETSYS_BACKUP)
-    staged = guest_file_record(NETSYS_STAGED)
-    if (not target["present"] or target["sha256"] != manifest["shim"]["sha256"] or
-            not staged["present"] or staged["sha256"] != manifest["shim"]["sha256"] or
-            not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256 or
+    if (not backup["present"] or backup["sha256"] != EXPECTED_NETSYS_SHA256 or
             backup["size"] != EXPECTED_NETSYS_SIZE):
-        raise SystemExit("REFUSING rollover: target/staged/backup state is not exact")
+        raise SystemExit("REFUSING rollover: immutable shipped backup is not exact")
     host = host_netsys_identity(shim)
-    if host["sha256"] == manifest["shim"]["sha256"]:
-        raise SystemExit("REFUSING rollover to the already-installed shim identity")
-    next_record = guest_file_record(NETSYS_NEXT)
-    reuse_next = reuse_preintent_netsys_next(next_record, host, manifest)
-    server = None if reuse_next else serve_once(port, shim.resolve().parent)
+    server = None
     download = NETSYS_NEXT + ".download"
     try:
-        if not reuse_next:
-            guest_cmd(
-                f'curl.exe -f -sS -o "{download}" '
-                f'http://10.211.55.2:{port}/CrossplayNetLib.dll'
-            )
-            downloaded = guest_file_record(download)
-            if (not downloaded["present"] or downloaded["sha256"] != host["sha256"] or
-                    downloaded["size"] != host["size"]):
-                raise SystemExit("REFUSING rollover: downloaded DLL does not match current shim")
-            guest_ps_encoded(
-                f"Move-Item -LiteralPath {ps_literal(download)} "
-                f"-Destination {ps_literal(NETSYS_NEXT)}"
-            )
-        next_shim = guest_file_record(NETSYS_NEXT)
-        if (next_shim["sha256"] != host["sha256"] or
-                next_shim["size"] != host["size"]):
-            raise SystemExit("REFUSING rollover: staged next DLL identity changed")
-        archive = archive_netsys_evidence(manifest)
-        manifest.update({
-            "state": "rollover-staged",
-            "rollover": {
-                "from_generation": manifest["generation"],
-                "archive_root": netsys_generation_root(manifest["generation"]),
-                "next_shim": {
-                    "path": NETSYS_NEXT,
-                    "size": next_shim["size"],
-                    "sha256": next_shim["sha256"],
+        if manifest["state"] == "installed":
+            target = guest_file_record(RETAIL_NETSYS_DLL)
+            staged = guest_file_record(NETSYS_STAGED)
+            old = manifest["shim"]
+            if (not target["present"] or target.get("sha256") != old["sha256"] or
+                    target.get("size") != old["size"] or
+                    not staged["present"] or staged.get("sha256") != old["sha256"] or
+                    staged.get("size") != old["size"]):
+                raise SystemExit("REFUSING rollover: target/staged state is not exact")
+            if host["sha256"] == old["sha256"]:
+                raise SystemExit("REFUSING rollover to the already-installed shim identity")
+            next_record = guest_file_record(NETSYS_NEXT)
+            reuse_next = reuse_preintent_netsys_next(next_record, host, manifest)
+            if not reuse_next:
+                server = serve_once(port, shim.resolve().parent)
+                guest_cmd(
+                    f'curl.exe -f -sS -o "{download}" '
+                    f'http://10.211.55.2:{port}/CrossplayNetLib.dll'
+                )
+                downloaded = guest_file_record(download)
+                if (not downloaded["present"] or
+                        downloaded.get("sha256") != host["sha256"] or
+                        downloaded.get("size") != host["size"]):
+                    raise SystemExit(
+                        "REFUSING rollover: downloaded DLL does not match current shim"
+                    )
+                guest_ps_encoded(
+                    f"Move-Item -LiteralPath {ps_literal(download)} "
+                    f"-Destination {ps_literal(NETSYS_NEXT)}"
+                )
+            next_shim = guest_file_record(NETSYS_NEXT)
+            if (not next_shim["present"] or
+                    next_shim.get("sha256") != host["sha256"] or
+                    next_shim.get("size") != host["size"]):
+                raise SystemExit("REFUSING rollover: staged next DLL identity changed")
+            archive = archive_netsys_evidence(manifest)
+            manifest.update({
+                "state": "rollover-staged",
+                "rollover": {
+                    "from_generation": manifest["generation"],
+                    "archive_root": netsys_generation_root(manifest["generation"]),
+                    "next_shim": {
+                        "path": NETSYS_NEXT,
+                        "size": next_shim["size"],
+                        "sha256": next_shim["sha256"],
+                    },
                 },
-            },
-        })
-        write_netsys_manifest(manifest)
+            })
+            write_netsys_manifest(manifest)
+            archive = read_netsys_archive(manifest)
+        else:
+            next_identity = manifest["rollover"]["next_shim"]
+            if (host["size"] != next_identity["size"] or
+                    host["sha256"] != next_identity["sha256"]):
+                raise SystemExit(
+                    "REFUSING rollover resume with a different parity-gated host shim"
+                )
+            archive = read_netsys_archive(manifest)
+
+        target = guest_file_record(RETAIL_NETSYS_DLL)
+        staged = guest_file_record(NETSYS_STAGED)
+        next_record = guest_file_record(NETSYS_NEXT)
+        rollover_state = classify_netsys_rollover_files(
+            manifest, target, staged, next_record
+        )
         require_retail_absent("NetSys generation rollover final gate")
         final_target = guest_file_record(RETAIL_NETSYS_DLL)
         final_staged = guest_file_record(NETSYS_STAGED)
         final_backup = guest_file_record(NETSYS_BACKUP)
         final_next = guest_file_record(NETSYS_NEXT)
-        if (final_target.get("sha256") != manifest["shim"]["sha256"] or
-                final_staged.get("sha256") != manifest["shim"]["sha256"] or
+        if (not final_backup["present"] or
                 final_backup.get("sha256") != EXPECTED_NETSYS_SHA256 or
-                final_next.get("sha256") != next_shim["sha256"]):
+                final_backup.get("size") != EXPECTED_NETSYS_SIZE):
             raise SystemExit("REFUSING rollover: exact files changed before atomic swap")
+        final_state = classify_netsys_rollover_files(
+            manifest, final_target, final_staged, final_next
+        )
+        states = ["pre-swap", "post-first-swap", "post-both-swaps"]
+        if states.index(final_state) < states.index(rollover_state):
+            raise SystemExit("REFUSING rollover: file state regressed before atomic swap")
+        rollover_state = final_state
+
         target_temp = RETAIL_NETSYS_DLL + ".don-next-generation"
-        script = f"""
+        if rollover_state == "pre-swap":
+            script = f"""
 $ErrorActionPreference = 'Stop'
-$target_backup = {ps_literal(target_temp + ".previous")}
-$staged_backup = {ps_literal(NETSYS_NEXT + ".previous-staged")}
 if (Test-Path -LiteralPath {ps_literal(target_temp)}) {{
     Remove-Item -LiteralPath {ps_literal(target_temp)} -Force
 }}
-if (Test-Path -LiteralPath $target_backup) {{
-    Remove-Item -LiteralPath $target_backup -Force
-}}
-if (Test-Path -LiteralPath $staged_backup) {{
-    Remove-Item -LiteralPath $staged_backup -Force
-}}
 [IO.File]::Copy({ps_literal(NETSYS_NEXT)}, {ps_literal(target_temp)}, $false)
-[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $target_backup)
-try {{
-    [IO.File]::Replace({ps_literal(NETSYS_NEXT)}, {ps_literal(NETSYS_STAGED)}, $staged_backup)
-}} catch {{
-    [IO.File]::Replace($target_backup, {ps_literal(RETAIL_NETSYS_DLL)}, {ps_literal(target_temp)})
-    throw
-}}
-Remove-Item -LiteralPath $target_backup -Force
-Remove-Item -LiteralPath $staged_backup -Force
+[IO.File]::Replace({ps_literal(target_temp)}, {ps_literal(RETAIL_NETSYS_DLL)}, $null)
 """
-        guest_ps_encoded(script)
+            guest_ps_encoded(script)
+            rollover_state = classify_netsys_rollover_files(
+                manifest,
+                guest_file_record(RETAIL_NETSYS_DLL),
+                guest_file_record(NETSYS_STAGED),
+                guest_file_record(NETSYS_NEXT),
+            )
+            if rollover_state != "post-first-swap":
+                raise SystemExit("rollover first swap did not reach its exact recovery state")
+
+        if rollover_state == "post-first-swap":
+            guest_ps_encoded(
+                "$ErrorActionPreference = 'Stop'\n"
+                f"[IO.File]::Replace({ps_literal(NETSYS_NEXT)}, "
+                f"{ps_literal(NETSYS_STAGED)}, $null)"
+            )
+            rollover_state = classify_netsys_rollover_files(
+                manifest,
+                guest_file_record(RETAIL_NETSYS_DLL),
+                guest_file_record(NETSYS_STAGED),
+                guest_file_record(NETSYS_NEXT),
+            )
+            if rollover_state != "post-both-swaps":
+                raise SystemExit("rollover second swap did not reach its exact recovery state")
+
         installed = guest_file_record(RETAIL_NETSYS_DLL)
         staged = guest_file_record(NETSYS_STAGED)
-        if (installed.get("sha256") != next_shim["sha256"] or
-                staged.get("sha256") != next_shim["sha256"]):
+        next_identity = manifest["rollover"]["next_shim"]
+        if (installed.get("sha256") != next_identity["sha256"] or
+                installed.get("size") != next_identity["size"] or
+                staged.get("sha256") != next_identity["sha256"] or
+                staged.get("size") != next_identity["size"]):
             raise SystemExit("rollover swap did not install the exact next DLL")
         environment = netsys_environment("load-only")
         launcher = netsys_launcher_text("load-only", environment).encode("ascii")

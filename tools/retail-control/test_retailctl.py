@@ -1,7 +1,10 @@
 import importlib.util
+import io
 import json
 import copy
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -50,6 +53,49 @@ def netsys_manifest_fixture() -> dict:
 
 
 class RetailCtlTests(unittest.TestCase):
+    def test_all_guest_transports_have_bounded_exact_timeout_results(self):
+        timeout = subprocess.TimeoutExpired(["prlctl"], 45)
+        expected = {
+            "cmd": retailctl.guest_timeout_record("cmd"),
+            "powershell": retailctl.guest_timeout_record("powershell"),
+            "powershell-encoded": retailctl.guest_timeout_record("powershell-encoded"),
+        }
+        with mock.patch.object(retailctl, "run", side_effect=timeout) as command:
+            with self.assertRaisesRegex(
+                    retailctl.GuestCommandTimeout, re.escape(expected["cmd"])):
+                retailctl.guest_cmd("ver")
+            self.assertEqual(
+                command.call_args.kwargs["timeout"],
+                retailctl.GUEST_COMMAND_TIMEOUT_SECONDS,
+            )
+        with (
+            mock.patch.object(retailctl, "run", side_effect=timeout),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            self.assertEqual(retailctl.guest_cmd("ver", check=False), expected["cmd"])
+            self.assertEqual(stderr.getvalue().strip(), expected["cmd"])
+        with mock.patch.object(retailctl, "run", side_effect=timeout):
+            self.assertEqual(
+                retailctl.guest_cmd_status("ver"),
+                (retailctl.GUEST_TIMEOUT_RETURN_CODE, expected["cmd"]),
+            )
+            with self.assertRaisesRegex(
+                    retailctl.GuestCommandTimeout, re.escape(expected["powershell"])):
+                retailctl.guest_ps("Get-Date")
+            with self.assertRaisesRegex(
+                    retailctl.GuestCommandTimeout,
+                    re.escape(expected["powershell-encoded"]),
+            ):
+                retailctl.guest_ps_encoded("Get-Date")
+        source = Path(retailctl.__file__).read_text()
+        self.assertEqual(source.count('["prlctl", "exec", VM,'), 4)
+        for start in [
+                "def guest_cmd(", "def guest_cmd_status(", "def guest_ps(",
+                "def guest_ps_encoded("]:
+            section = source[source.index(start):]
+            section = section[:section.index("\ndef ", 1)]
+            self.assertIn("timeout=GUEST_COMMAND_TIMEOUT_SECONDS", section)
+
     def test_coord_lookup_global_is_dereferenced_before_indexing(self):
         source = Path(__file__).with_name("retail_control.c").read_text()
         self.assertNotIn("g_base + RVA_COORD_LOOKUP +", source)
@@ -653,15 +699,186 @@ class RetailCtlTests(unittest.TestCase):
         target_swap = rollover.index("[IO.File]::Replace({ps_literal(target_temp)}")
         self.assertLess(archive, target_swap)
         self.assertNotIn("[IO.File]::Replace({ps_literal(NETSYS_BACKUP)}", rollover)
-        self.assertNotIn(", $null)", rollover)
-        self.assertIn("$target_backup", rollover)
-        self.assertIn("$staged_backup", rollover)
-        self.assertIn(
-            "[IO.File]::Replace($target_backup, {ps_literal(RETAIL_NETSYS_DLL)}",
-            rollover,
+        self.assertIn("archive = read_netsys_archive(manifest)", rollover)
+        self.assertIn('rollover_state == "pre-swap"', rollover)
+        self.assertIn('rollover_state == "post-first-swap"', rollover)
+        staged_swap = rollover.index(
+            "[IO.File]::Replace({ps_literal(NETSYS_NEXT)}"
         )
+        self.assertLess(target_swap, staged_swap)
         self.assertIn('"mode": "load-only"', rollover)
         self.assertIn('"rollover": None', rollover)
+
+    def test_netsys_rollover_classifier_accepts_only_exact_monotonic_states(self):
+        manifest = netsys_manifest_fixture()
+        new = {
+            "path": retailctl.NETSYS_NEXT,
+            "size": 198_700,
+            "sha256": "c" * 64,
+        }
+        manifest.update({
+            "state": "rollover-staged",
+            "rollover": {
+                "from_generation": 1,
+                "archive_root": retailctl.netsys_generation_root(1),
+                "next_shim": new,
+            },
+        })
+        retailctl.validate_netsys_manifest(manifest)
+
+        def present(path, identity):
+            return {"present": True, "path": path, **{
+                key: identity[key] for key in ("size", "sha256")
+            }}
+
+        old_target = present(retailctl.RETAIL_NETSYS_DLL, manifest["shim"])
+        old_staged = present(retailctl.NETSYS_STAGED, manifest["shim"])
+        new_target = present(retailctl.RETAIL_NETSYS_DLL, new)
+        new_staged = present(retailctl.NETSYS_STAGED, new)
+        next_new = present(retailctl.NETSYS_NEXT, new)
+        next_absent = {"present": False, "path": retailctl.NETSYS_NEXT}
+        self.assertEqual(
+            retailctl.classify_netsys_rollover_files(
+                manifest, old_target, old_staged, next_new
+            ),
+            "pre-swap",
+        )
+        self.assertEqual(
+            retailctl.classify_netsys_rollover_files(
+                manifest, new_target, old_staged, next_new
+            ),
+            "post-first-swap",
+        )
+        self.assertEqual(
+            retailctl.classify_netsys_rollover_files(
+                manifest, new_target, new_staged, next_absent
+            ),
+            "post-both-swaps",
+        )
+        with self.assertRaisesRegex(SystemExit, "unknown or mixed"):
+            retailctl.classify_netsys_rollover_files(
+                manifest, old_target, new_staged, next_absent
+            )
+
+    def test_netsys_rollover_resumes_pre_swap_and_post_first_swap(self):
+        for initial_state in ["pre-swap", "post-first-swap"]:
+            with self.subTest(initial_state=initial_state):
+                manifest = netsys_manifest_fixture()
+                old = manifest["shim"]
+                new = {
+                    "path": retailctl.NETSYS_NEXT,
+                    "size": 198_700,
+                    "sha256": "c" * 64,
+                }
+                manifest.update({
+                    "state": "rollover-staged",
+                    "rollover": {
+                        "from_generation": 1,
+                        "archive_root": retailctl.netsys_generation_root(1),
+                        "next_shim": new,
+                    },
+                })
+                retailctl.validate_netsys_manifest(manifest)
+                identities = {
+                    retailctl.RETAIL_NETSYS_DLL: (
+                        new if initial_state == "post-first-swap" else old
+                    ),
+                    retailctl.NETSYS_STAGED: old,
+                    retailctl.NETSYS_NEXT: new,
+                    retailctl.NETSYS_BACKUP: {
+                        "size": retailctl.EXPECTED_NETSYS_SIZE,
+                        "sha256": retailctl.EXPECTED_NETSYS_SHA256,
+                    },
+                }
+                scripts = []
+
+                def file_record(path):
+                    identity = identities.get(path)
+                    if identity is None:
+                        return {"present": False, "path": path}
+                    return {
+                        "present": True,
+                        "path": path,
+                        "size": identity["size"],
+                        "sha256": identity["sha256"],
+                    }
+
+                def encoded(script, *, check=True):
+                    self.assertTrue(check)
+                    scripts.append(script)
+                    if ".don-next-generation" in script and "[IO.File]::Replace" in script:
+                        identities[retailctl.RETAIL_NETSYS_DLL] = new
+                    if (retailctl.NETSYS_NEXT in script and
+                            retailctl.NETSYS_STAGED in script and
+                            ".don-next-generation" not in script):
+                        identities[retailctl.NETSYS_STAGED] = new
+                        identities.pop(retailctl.NETSYS_NEXT, None)
+                    return ""
+
+                written = []
+                archive = {"exact_archive": initial_state}
+                with (
+                    mock.patch.object(retailctl, "require_retail_absent"),
+                    mock.patch.object(retailctl, "read_netsys_manifest",
+                                      return_value=manifest),
+                    mock.patch.object(retailctl, "host_netsys_identity",
+                                      return_value={"path": "host", **new}),
+                    mock.patch.object(retailctl, "read_netsys_archive",
+                                      return_value=archive),
+                    mock.patch.object(retailctl, "guest_file_record",
+                                      side_effect=file_record),
+                    mock.patch.object(retailctl, "guest_ps_encoded",
+                                      side_effect=encoded),
+                    mock.patch.object(retailctl, "guest_write_bytes"),
+                    mock.patch.object(retailctl, "write_netsys_manifest",
+                                      side_effect=lambda value: written.append(copy.deepcopy(value))),
+                    mock.patch.object(retailctl, "guest_cmd", return_value=""),
+                    mock.patch("builtins.print"),
+                ):
+                    result = retailctl.netsys_next_generation(
+                        retailctl.DEFAULT_NETSYS_SHIM, 8765
+                    )
+                first_swaps = [script for script in scripts
+                               if ".don-next-generation" in script]
+                second_swaps = [script for script in scripts
+                                if retailctl.NETSYS_NEXT in script and
+                                retailctl.NETSYS_STAGED in script and
+                                ".don-next-generation" not in script]
+                self.assertEqual(len(first_swaps), initial_state == "pre-swap")
+                self.assertEqual(len(second_swaps), 1)
+                self.assertEqual(result["archived_generation"], archive)
+                self.assertEqual(result["current"]["state"], "installed")
+                self.assertEqual(result["current"]["generation"], 2)
+                self.assertIsNone(result["current"]["rollover"])
+                self.assertEqual(written[-1], result["current"])
+
+    def test_netsys_archive_manifest_is_exact_for_resume(self):
+        manifest = netsys_manifest_fixture()
+        archive = {
+            "schema": "don.retail-netsys-evidence-generation.v1",
+            "generation": 1,
+            "credential_material": "none",
+            "shim": manifest["shim"],
+            "mode": manifest["mode"],
+            "environment": manifest["environment"],
+            "evidence": [{
+                "label": "exit-load-only",
+                "source_path": retailctl.NETSYS_LOAD_EXIT,
+                "archive_path": (
+                    retailctl.netsys_generation_root(1) + r"\exit-load-only.txt"
+                ),
+                "size": 12,
+                "sha256": "d" * 64,
+                "summary": {"kind": "exit", "exit_code": 0},
+            }],
+        }
+        self.assertIs(
+            retailctl.validate_netsys_archive_manifest(archive, manifest), archive
+        )
+        changed = copy.deepcopy(archive)
+        changed["evidence"][0]["summary"]["exit_code"] = "0"
+        with self.assertRaisesRegex(ValueError, "exit summary"):
+            retailctl.validate_netsys_archive_manifest(changed, manifest)
 
     def test_netsys_next_generation_migrates_exact_committed_v1_installed_manifest(self):
         current = netsys_manifest_fixture()
