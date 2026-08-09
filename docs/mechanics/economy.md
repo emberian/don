@@ -1,7 +1,8 @@
 # economy — the tick, executed
 
-Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (3,779 lines,
-89 tests, **95 passed / 0 failed**). Checksum channels served: **leaders** (channel 8),
+Lane: **mech:economy**. Module: `crates/don-sim/src/systems/economy.rs` (4,233 lines,
+90 in-module tests plus 5 caravan integration tests, **95 passed / 0 failed**). Checksum
+channels served: **leaders** (channel 8),
 **goods** (channel 11).
 
 All addresses are preferred-base VAs in `ron-bin/riseofnations.exe`
@@ -16,8 +17,8 @@ and nothing here has been executed against retail. See §7 for the honest tier.
 
 The economy **tick** runs, end to end, as ported integer code: compose gross income →
 cap it → pay it out through the fractional accumulator → move the market → quote prices →
-trade. 89 tests, all green, including a 600-frame full-loop run asserted bit-identical
-across two executions.
+trade → recompute caravan-route commerce. The focused caravan transaction adds five
+integration tests, including a route-to-city-to-gather-to-stockpile execution.
 
 | mechanic | engine function | VA | state |
 |---|---|---|---|
@@ -39,11 +40,14 @@ across two executions.
 | territory taxation | inside `calc_gather` | `0x006CF4E8` | **ported** |
 | tribute scaling | `LeaderData::scale_tribute` | `0x006D5240` | **ported** |
 | caravan limit | `LeaderData::get_caravan_limit` | `0x006DCA50` | **ported** |
+| caravan route value | `Caravan::trade_value` / `distance` | `0x0073D9D0` / `0x0073D300` | **ported** |
+| city caravan income | `City::compute_trade` | `0x00739640` | **ported** |
+| first-route wealth award | `City::new_caravan` | `0x00739750` | **ported** |
 | per-worker gather rate | `BuildTypeData::calc_gather` fragment | `0x00639E40` | **partial** — see §5.2 |
 | resource substitution | inside `calc_gather` | `0x006CF64C` | **ported** |
 | checksum images | `Leader::walk_data` / `Good::walk_data` | `0x006D6750` / `0x0066E5D0` | **framed**, see §6 |
 
-**125 distinct VAs are cited in the module**, each at the site it was ported from.
+**138 distinct VAs are cited in the module**, each at the site it was ported from.
 
 ### How it was measured
 
@@ -53,16 +57,17 @@ across two executions.
 2. **Every non-obvious control-flow decision and every constant re-read at the instruction
    level** with capstone against the shipped exe. This was not ceremony: it changed the
    answer four times (§4).
-3. **Constants cross-checked against `crates/don-rules`.** The 100 rule slots the module
+3. **Constants cross-checked against `crates/don-rules`.** The 102 rule slots the module
    embeds were compared, by byte offset, against `don-rules`'s generated `SHIPPED` array —
    which is itself byte-for-byte validated against a running match's `RULES` object per
-   `docs/provenance-ledger.md`. **100 slots, 0 mismatches** [measured].
+   `docs/provenance-ledger.md`. **102 slots, 0 mismatches** [measured].
 4. **Compile and test** with the real `crates/don-sim/src/rng.rs`, not a copy.
 
 ```sh
 # in-tree, against the real crate (systems/mod.rs and lib.rs are now wired by siblings)
 cd /Users/ember/dev/don && cargo test -p don-sim --lib systems::economy
-# -> test result: ok. 89 passed; 0 failed.
+cd /Users/ember/dev/don && cargo test -p don-sim --test caravan_trade_transaction
+# -> 90 in-module + 5 integration tests passed; 0 failed.
 
 # constants cross-check (0 mismatches)
 cd /Users/ember/dev/don && python3 - <<'PY'
@@ -77,21 +82,11 @@ nums = [int(x) for x in re.findall(r'-?\d+', m.group(1))]
 bad = [(o, n, v, nums[o//4]) for o, (n, v) in sorted(mine.items()) if nums[o//4] != v]
 print(f"{len(mine)} slots, {len(bad)} mismatches", bad)
 PY
-
-# standalone, before lib.rs declared `mod systems` -- kept because it also exercises rng.rs
-S=<local-recovery-scratchpad>
-mkdir -p $S/econcheck && cd $S
-cp /Users/ember/dev/don/crates/don-sim/src/rng.rs econcheck/rng.rs
-cp /Users/ember/dev/don/crates/don-sim/src/systems/economy.rs econcheck/economy.rs
-printf 'pub mod rng;\n#[path = "economy.rs"]\npub mod economy;\n' > econcheck/root.rs
-rustc --edition 2021 --test econcheck/root.rs -o econcheck/econtest && ./econcheck/econtest
-# -> test result: ok. 95 passed; 0 failed. Zero compiler warnings.
 ```
 
-The module's only dependency is `crate::rng::Random` — no `Cargo.toml` change, no
-`don-rules` dependency. `systems/mod.rs` already carried `pub mod economy;` and `lib.rs`
-already declared `pub mod systems;` by the time this landed, so it is wired and green
-in-tree.
+The module uses the crate's shared RNG, checksum, coordinate-ladder and exact integer
+distance implementations; `don-rules` remains a dev-only cross-check rather than a runtime
+dependency.
 
 ---
 
@@ -289,6 +284,22 @@ bonuses, hard-capped at **99**, then — when the caller asks for it — capped 
 `C(n, 2)` over the city count. **The pair cap is the binding one in practice**: caravans run
 *between* cities, so three cities support three routes regardless of age.
 
+The route's wealth value is now executable too. `Caravan::trade_value` starts with both
+cities' `num_buildings + {0,2,4}` level values. It converts their raw positions to the
+four-tile `WCoord` grid and chooses distance class 0/1/2/3 at `< map_width/4`, `< /2`,
+`< 4*width/5`, or beyond. Nonzero classes scale the sum by `(class+3)/3`; a foreign route
+then scales by `3/2`. Indian (+15%) and spice (+20%) terms apply sequentially for the
+player receiving that endpoint's share, with truncation after every step.
+
+`City::compute_trade` clears its signed 16-bit `trade_val`, walks the checksummed caravan
+link array in insertion order, skips incomplete or stale endpoints, and adds
+`(trade_value << 4) / 2` per route. A changed cache dirties the owner economy. That field is
+consumed by the already-executable `calc_city_resources` and `do_gather` chain, so caravan
+commerce now reaches the real wealth accumulator and stockpile rather than ending as a
+detached calculator. `City::new_caravan` also executes its first-contact transaction: one
+bit per source-city slot and caravan owner, awarding `10*(age+1)` wealth domestically or
+`20*(age+1)` at a foreign destination exactly once.
+
 ---
 
 ## 4. Corrections and new findings
@@ -439,16 +450,15 @@ resolved `TypeIndex`, for 21 bytes. `GoodData` has no remaining-amount member. T
 rare/merchant spatial path is still unreduced, so this does not assert when or why retail
 may remove a rare Good object.
 
-### 5.4 The caravan and merchant trade system
+### 5.4 Remaining caravan movement and merchant targeting
 
-Located, not reduced. `Caravan` (`0x0073D1E0` ctor, `walk_data` `0x0073D2B0`,
-`distance` `0x0073D300`/`0x0073D380`, `restart_trade_route` `0x0073D070`),
-`City::new_caravan` `0x00739750`, `Array<CaravanLink>` (checksummed at `0x00489040`),
-`Unit::think_caravan` `0x005F5650`, `Unit::do_trade` `0x005ED270`, and the routing
-`PathFinder::astar_caravan_road` `0x00685990`. Only the **limit** is ported. Caravan
-*income* requires the link table and the distance model and is a lane of its own —
-note that the road A\* draws RNG **per edge relaxation** (`calc_road_cost` `0x00686341`),
-so caravan routing is a heavy lockstep-critical RNG consumer.
+Caravan **income** is reduced: both `distance` overloads, `trade_value`,
+`City::compute_trade`, and the `City::new_caravan` first-contact award execute. What remains
+is route establishment and unit choreography: `Caravan::restart_trade_route` `0x0073D070`,
+`Unit::think_caravan` `0x005F5650`, `Unit::do_trade` `0x005ED270`, road construction, and
+`PathFinder::astar_caravan_road` `0x00685990`. The road A\* draws RNG **per edge
+relaxation** (`calc_road_cost` `0x00686341`), so this remaining movement layer is a heavy
+lockstep-critical RNG consumer; it is no longer an income-formula gap.
 
 Merchants: `UnitData::good_merchant_spot` `0x006068A0` and `ObjectData::is_merchant`
 `0x0046D370` are the hooks; the merchant contribution enters through the same
@@ -538,7 +548,7 @@ lets a divergence be localised to the market instead of hunted through stockpile
 
 * No oracle run. Nothing in this file has been compared against the shipped machine code
   executing.
-* The 89 tests verify *internal* consistency, ordering, truncation direction, RNG draw
+* The 95 focused tests verify *internal* consistency, ordering, truncation direction, RNG draw
   counts and determinism. They are not fidelity evidence and no test in the file claims to
   be. Where a test could only have been written by hand-computing what retail does, I
   removed it: two expectations I had hand-computed were **wrong** (the accumulator's
@@ -546,7 +556,7 @@ lets a divergence be localised to the market instead of hunted through stockpile
   and both are now invariant assertions instead. That is the "capture, do not calculate"
   rule biting in real time — worth recording, since it is the second time this project has
   paid for it.
-* The rule constants are the strongest link: **100 slots, 0 mismatches** against
+* The rule constants are the strongest link: **102 slots, 0 mismatches** against
   `don-rules`'s live-validated table.
 
 ### What would raise it
@@ -567,10 +577,10 @@ lets a divergence be localised to the market instead of hunted through stockpile
 
 | path | what |
 |---|---|
-| `crates/don-sim/src/systems/economy.rs` | the module: 3,779 lines, 33 public functions, 89 tests, 125 cited VAs |
+| `crates/don-sim/src/systems/economy.rs` | the module: 4,233 lines, 42 public functions, 90 tests, 138 cited VAs |
+| `crates/don-sim/tests/caravan_trade_transaction.rs` | 5 executable caravan route, award, and stockpile integration tests |
 | `docs/mechanics/economy.md` | this report |
 
 Nothing else was written, nothing staged, nothing committed. The module is wired
 (`lib.rs` → `pub mod systems;`, `systems/mod.rs` → `pub mod economy;`, both landed by
-sibling lanes) and green in-tree: `cargo test -p don-sim --lib systems::economy` →
-**89 passed, 0 failed**.
+sibling lanes) and green in-tree: the two focused commands above pass **95 tests, 0 failed**.

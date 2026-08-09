@@ -248,9 +248,11 @@ pub const SHIPPED_ECONOMY_SLOTS: &[(usize, &str, i32)] = &[
     (2044, "mongol_nomadic_food", 1),
     (2120, "lakota_food", 4),
     (2184, "americans_barracks_gather", 2),
+    (2192, "indians_caravan", 15),
     (2216, "dutch_interest", 5),
     (2220, "dutch_interest_cap", 50),
     (2284, "silk_caravan", 0),
+    (2288, "spice_caravan_income", 20),
     (2308, "amber_market", 10),
     (2428, "coffee_income_bonus", 10),
     (2496, "capitalism_oil_prod", 100),
@@ -499,12 +501,22 @@ impl EconRules {
         /// the XML text that pins slots 0, 1, 4, 2.
         americans_barracks_gather, 2184
     );
+    rule!(
+        /// `INDIANS_CARAVAN` = 15%. Scales caravan trade income for tribe bonus `0x15`
+        /// in `Caravan::trade_value` `0x0073D9D0`.
+        indians_caravan, 2192
+    );
     rule!(/// `DUTCH_INTEREST` = 5%.
         dutch_interest, 2216);
     rule!(/// `DUTCH_INTEREST_CAP` = `"50 over econ cap"`.
         dutch_interest_cap, 2220);
     rule!(/// `SILK_CARAVAN` — caravan-limit bonus from the silk rare.
         silk_caravan, 2284);
+    rule!(
+        /// `SPICE_CARAVAN_INCOME` = 20%. Scales caravan trade income when either of the
+        /// leader's two rare masks carries bit `0x40`.
+        spice_caravan_income, 2288
+    );
     rule!(/// `AMBER_MARKET` — better prices from the amber rare.
         amber_market, 2308);
     rule!(/// `COFFEE_INCOME_BONUS` = 10% on **every** resource.
@@ -2199,6 +2211,222 @@ pub fn scale_tribute(rules: &EconRules, age: i32, amount: i32) -> i32 {
         amount.wrapping_mul(p).wrapping_add(99)
     };
     scaled / 100
+}
+
+// ---------------------------------------------------------------------------------------
+// Caravan route income
+// ---------------------------------------------------------------------------------------
+
+/// The three city-center types that change `CityData::get_trade_value` `0x007363F0`.
+/// Every other type follows the village/default arm.
+pub const TRADE_TOWN_TYPE: i32 = 0x19F;
+pub const TRADE_METROPOLIS_TYPE: i32 = 0x1A0;
+pub const TRADE_FORBIDDEN_CITY_TYPE: i32 = 0x213;
+
+/// The part of a city that `Caravan::trade_value` reads after the route's object handles
+/// have been resolved.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanTradeCity {
+    /// Object slot is still live. `City::compute_trade` rejects a route when either city
+    /// object has lost its active bit before doing any arithmetic.
+    pub live: bool,
+    /// Current owner/player slot.
+    pub owner: i32,
+    /// City-center type index. `0x19F`, `0x1A0`, and `0x213` are special.
+    pub center_type: i32,
+    /// `CityData::num_buildings` `0x00738190`.
+    pub num_buildings: i32,
+    /// City-center object position in raw `Coord` units (192 units per tile).
+    pub x: i32,
+    /// City-center object position in raw `Coord` units.
+    pub y: i32,
+}
+
+/// A resolved `Caravan` record as consumed by `City::compute_trade` `0x00739640`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanTradeRoute {
+    /// `CaravanData + 0x0C & 4`: both ends are established and the route earns income.
+    pub linked: bool,
+    pub first: CaravanTradeCity,
+    pub second: CaravanTradeCity,
+}
+
+/// Bonuses belonging to the player receiving one endpoint's share of a route.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CaravanIncomeGates {
+    /// `LeaderData::has_tribe_bonus(0x15)` — Indians, +15% with shipped rules.
+    pub indian: bool,
+    /// Either rare mask has bit `0x40` — spice, +20% with shipped rules.
+    pub spice: bool,
+}
+
+/// `CityData::get_trade_value` `0x007363F0`.
+///
+/// The city-center type contributes 0 / 2 / 4 and the live building count is added after
+/// that. The default arm is intentionally broad: only the three exact retail type ids
+/// above are compared by the machine code.
+#[inline]
+pub fn city_caravan_trade_value(center_type: i32, num_buildings: i32) -> i32 {
+    let level_term = if center_type == TRADE_TOWN_TYPE {
+        2
+    } else if center_type == TRADE_METROPOLIS_TYPE || center_type == TRADE_FORBIDDEN_CITY_TYPE {
+        4
+    } else {
+        0
+    };
+    num_buildings.wrapping_add(level_term)
+}
+
+/// `Caravan::distance(int)` `0x0073D380`, the categorical distance multiplier selector.
+///
+/// `distance` is measured in `WCoord` cells. The four buckets are split at one quarter,
+/// one half, and four fifths of the map width, using signed C truncation at every divide.
+#[inline]
+pub fn caravan_distance_class(map_width_wcells: i32, distance: i32) -> i32 {
+    if distance < map_width_wcells / 4 {
+        0
+    } else if distance < map_width_wcells / 2 {
+        1
+    } else if distance < map_width_wcells.wrapping_mul(4) / 5 {
+        2
+    } else {
+        3
+    }
+}
+
+/// `Caravan::distance(Coord,Coord,Coord,Coord)` `0x0073D300`.
+///
+/// Retail first converts both object positions to `WCoord` (`floor(coord / 768)`), then
+/// applies its exact integer `vector_dist`, and finally selects a map-width bucket.
+#[inline]
+pub fn caravan_route_distance_class(
+    map_width_wcells: i32,
+    ax: i32,
+    ay: i32,
+    bx: i32,
+    by: i32,
+) -> i32 {
+    use super::map_terrain::{Coord, WCoord};
+    use super::movement::vector_dist;
+
+    let awx = WCoord::from_coord(Coord(ax)).0;
+    let awy = WCoord::from_coord(Coord(ay)).0;
+    let bwx = WCoord::from_coord(Coord(bx)).0;
+    let bwy = WCoord::from_coord(Coord(by)).0;
+    caravan_distance_class(
+        map_width_wcells,
+        vector_dist(awx.wrapping_sub(bwx), awy.wrapping_sub(bwy)),
+    )
+}
+
+/// `Caravan::trade_value` `0x0073D9D0` for the share owned by `receiver`.
+///
+/// The truncation order is observable and follows the instructions exactly:
+///
+/// 1. add both cities' building/level values;
+/// 2. for nonzero distance classes multiply by `(class + 3) / 3`;
+/// 3. foreign routes multiply by `3 / 2`;
+/// 4. Indian and spice percentages apply sequentially, each truncating independently.
+///
+/// The zero-distance branch deliberately skips the multiply/divide. Folding it into the
+/// general expression changes overflow behaviour for modded/invalid large city values.
+pub fn caravan_trade_value(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    receiver: &CaravanTradeCity,
+    partner: &CaravanTradeCity,
+    gates: &CaravanIncomeGates,
+) -> i32 {
+    let distance = caravan_route_distance_class(
+        map_width_wcells,
+        receiver.x,
+        receiver.y,
+        partner.x,
+        partner.y,
+    );
+    let mut value =
+        city_caravan_trade_value(receiver.center_type, receiver.num_buildings).wrapping_add(
+            city_caravan_trade_value(partner.center_type, partner.num_buildings),
+        );
+    if distance != 0 {
+        value = distance.wrapping_add(3).wrapping_mul(value) / 3;
+    }
+    if receiver.owner != partner.owner {
+        value = value.wrapping_mul(3) / 2;
+    }
+    if gates.indian {
+        value = pct(value, rules.indians_caravan().wrapping_add(100));
+    }
+    if gates.spice {
+        value = pct(value, rules.spice_caravan_income().wrapping_add(100));
+    }
+    value
+}
+
+/// Recompute `CityData::trade_val` (`city + 0x52`) from its caravan-link array.
+///
+/// This is the state transaction in `City::compute_trade` `0x00739640`: clear the cached
+/// signed 16-bit sixteenth-income field, visit links in insertion order, skip incomplete
+/// or stale routes, orient each route toward this city's owner, and add half of the route
+/// value as `(value << 4) / 2`. The `i16` add wraps exactly like retail's `add word ptr`.
+///
+/// Returns whether the cache changed; retail uses that result to dirty the owning leader's
+/// economy (`leader.flags |= 0x02000000`) so the next staggered gather recomposition sees
+/// the new income.
+pub fn recompute_city_caravan_income(
+    rules: &EconRules,
+    map_width_wcells: i32,
+    receiving_owner: i32,
+    gates: &CaravanIncomeGates,
+    routes: &[CaravanTradeRoute],
+    trade_val: &mut i16,
+) -> bool {
+    let old = *trade_val;
+    *trade_val = 0;
+    for route in routes {
+        if !route.linked || !route.first.live || !route.second.live {
+            continue;
+        }
+        // This is precisely retail's orientation test. The route being in this city's
+        // link array is the structural guarantee that the `else` endpoint is the city.
+        let (receiver, partner) = if route.first.owner == receiving_owner {
+            (&route.first, &route.second)
+        } else {
+            (&route.second, &route.first)
+        };
+        let value = caravan_trade_value(rules, map_width_wcells, receiver, partner, gates);
+        let sixteenth_half = half_toward_zero(value.wrapping_shl(4));
+        *trade_val = trade_val.wrapping_add(sixteenth_half as i16);
+    }
+    *trade_val != old
+}
+
+/// First-contact wealth award from `City::new_caravan` `0x00739750`.
+///
+/// `contact_mask` is the destination city's `traded_with[caravan_owner]` row. The bit is
+/// the source city slot (x86 masks the shift count to five bits). A repeated contact is a
+/// no-op. A new domestic route grants `10 * (age + 1)` wealth; a foreign destination
+/// grants `20 * (age + 1)`, and the decoded stockpile is mutated immediately.
+pub fn award_new_caravan_contact(
+    contact_mask: &mut u32,
+    econ: &mut LeaderEcon,
+    caravan_owner: i32,
+    destination_owner: i32,
+    source_city_slot: i32,
+) -> Option<i32> {
+    let bit = 1u32.wrapping_shl(source_city_slot as u32);
+    if *contact_mask & bit != 0 {
+        return None;
+    }
+    *contact_mask |= bit;
+    let per_age = if caravan_owner == destination_owner {
+        10
+    } else {
+        20
+    };
+    let award = econ.age.wrapping_add(1).wrapping_mul(per_age);
+    econ.stockpile[RES_WEALTH] = econ.stockpile[RES_WEALTH].wrapping_add(award);
+    Some(award)
 }
 
 /// Per-leader gates for [`caravan_limit`].
