@@ -156,16 +156,41 @@ try {
     const filter = document.getElementById('palette-filter');
     const pause = document.getElementById('pause');
     const initialCatalog = document.querySelectorAll('#palette button').length;
+    const initialCatalogDisabled = [...document.querySelectorAll('#palette button')]
+      .every(button => button.disabled);
+    const m = window.don.state.mod, views = m.views();
+    let mobile = -1;
+    for (let row = 0; row < m.live; row++) {
+      const tag = views.tag[row];
+      if ((tag & 0x80000000) && (tag & 0xf) === 0 && !((tag >>> 29) & 1)) {
+        mobile = m.idAtRow(row); break;
+      }
+    }
+    window.don.select([mobile]);
     filter.value = 'barracks';
     filter.dispatchEvent(new Event('input', { bubbles: true }));
     const filteredCatalog = document.querySelectorAll('#palette button').length;
+    const buildButtonEnabled = !document.querySelector('#palette button')?.disabled;
     filter.value = '';
     filter.dispatchEvent(new Event('input', { bubbles: true }));
+    const futureBuildDisabled = [...document.querySelectorAll('#palette button')]
+      .some(button => button.disabled && button.querySelector('.why')?.textContent.includes('requires age'));
+    window.don.key('KeyT', { shiftKey: true });
+    const keyboardTrain = document.getElementById('tab-train').classList.contains('sel');
+    window.don.key('KeyR', { shiftKey: true });
+    const keyboardResearch = document.getElementById('tab-research').classList.contains('sel');
+    const researchHasEnabledAge = !!document.querySelector('#palette [data-kind="research"]:not(:disabled)');
+    const unavailableResearchDisabled = !!document.querySelector('#palette [data-kind="unavailable"]:disabled');
+    document.getElementById('tab-build').click();
+    window.don.select([]);
     pause.click();
     const pauseLabel = pause.textContent;
     pause.click();
     return JSON.stringify({
-      initialCatalog, filteredCatalog, pauseLabel,
+      initialCatalog, initialCatalogDisabled, filteredCatalog, buildButtonEnabled,
+      futureBuildDisabled, keyboardTrain, keyboardResearch, researchHasEnabledAge,
+      unavailableResearchDisabled, orderTabs: document.querySelectorAll('.tabs .tab').length,
+      pauseLabel,
       integrationLabel: document.querySelector('.status-note')?.textContent ?? '',
       runtimeLabel: document.getElementById('readiness-runtime')?.textContent ?? '',
       gateLabel: document.getElementById('readiness-gate')?.textContent ?? '',
@@ -192,7 +217,13 @@ try {
   })()`).then(JSON.parse);
   for (const [name, ok] of [
     ['the initial order catalog is populated', out.ui.initialCatalog > 0],
+    ['build commands require a selection', out.ui.initialCatalogDisabled],
     ['catalog filtering works', out.ui.filteredCatalog === 1],
+    ['a selected non-building object unlocks a known-age affordable building', out.ui.buildButtonEnabled],
+    ['known future-age prerequisites disable building actions', out.ui.futureBuildDisabled],
+    ['keyboard shortcuts open train and research modes', out.ui.keyboardTrain && out.ui.keyboardResearch],
+    ['research offers the implemented age action and disables unavailable technologies',
+      out.ui.researchHasEnabledAge && out.ui.unavailableResearchDisabled && out.ui.orderTabs === 3],
     ['pause visibly becomes resume', out.ui.pauseLabel.includes('resume')],
     ['the page identifies itself as an integration build', out.ui.integrationLabel.includes('Not Fidelity mode')],
     ['runtime identity says the web GameWorld is not Arena',
@@ -239,12 +270,14 @@ try {
     const side = document.getElementById('side').getBoundingClientRect();
     const dock = document.getElementById('command-dock').getBoundingClientRect();
     const first = document.querySelector('#command-dock button').getBoundingClientRect();
+    const tab = document.getElementById('tab-research').getBoundingClientRect();
+    const palette = document.querySelector('#palette button').getBoundingClientRect();
     return {
       viewport: [innerWidth, innerHeight], stage: [stage.width, stage.height],
       sideBelowStage: side.top >= stage.bottom - 1,
       dockInsideViewport: dock.left >= 0 && dock.right <= innerWidth,
       dockScrollable: document.getElementById('command-dock').scrollWidth >= dock.width,
-      touchTarget: [first.width, first.height], coverageVisible:
+      touchTarget: [first.width, first.height], paletteTouchTargets: [tab.height, palette.height], coverageVisible:
         getComputedStyle(document.getElementById('coverage')).display !== 'none',
     };
   })()`);
@@ -254,6 +287,7 @@ try {
     ['narrow command dock stays in the viewport', out.narrow.dockInsideViewport],
     ['narrow command dock owns its overflow', out.narrow.dockScrollable],
     ['narrow command targets are at least 40 px', out.narrow.touchTarget[0] >= 40 && out.narrow.touchTarget[1] >= 40],
+    ['narrow palette tabs and actions are touch-sized', out.narrow.paletteTouchTargets.every(x => x >= 40)],
     ['narrow layout keeps fidelity counters visible', out.narrow.coverageVisible],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }
@@ -399,13 +433,28 @@ try {
 
     // place a Barracks (427) on the first FULLY_CLEAR anchor near the base
     window.don.select(ids.slice(0, 3));
+    document.getElementById('tab-build').click();
+    const paletteFilter = document.getElementById('palette-filter');
+    paletteFilter.value = 'barracks';
+    paletteFilter.dispatchEvent(new Event('input', { bubbles: true }));
+    const barracksAction = document.querySelector('#palette [data-kind="build"][data-type-id="427"]');
+    note('buildPaletteAction', !!barracksAction && !barracksAction.disabled);
+    barracksAction?.click();
+    note('buildPaletteArmed', s.buildType === 427);
+    paletteFilter.value = '';
+    paletteFilter.dispatchEvent(new Event('input', { bubbles: true }));
     let placed = null;
     search:
     for (let r = 3; r < 22; r++) {
       for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
         const tx = stx + dx, ty = sty + dy;
         if (m.placementGrade(0, 427, tx, ty) === 4) {
-          m.build(0, tx, ty, 427); placed = [tx, ty]; break search;
+          const b = s.play.buildings['427'];
+          window.don.order.build([
+            (tx + (b.xSize >> 1)) * m.subtile,
+            (ty + (b.ySize >> 1)) * m.subtile,
+          ]);
+          placed = [tx, ty]; break search;
         }
       }
     }
@@ -425,19 +474,46 @@ try {
       window.don.select([barracks]);
       const prods = m.products(427);
       note('barracksProducts', prods.length);
-      m.queueUp(0, prods[0], 2);
+      document.getElementById('tab-train').click();
+      const trainAction = document.querySelector('#palette [data-kind="train"]:not(:disabled)');
+      const futureTrainDisabled = [...document.querySelectorAll('#palette [data-kind="train"]:disabled')]
+        .some(button => button.querySelector('.why')?.textContent.includes('requires age'));
+      note('trainPaletteAction', !!trainAction);
+      note('futureTrainDisabled', futureTrainDisabled);
+      const trainedType = Number(trainAction?.dataset.typeId ?? -1);
+      const countType = () => {
+        let n = 0;
+        for (let i = 0; i < m.live; i++) {
+          const id = m.idAtRow(i), inf = id >= 0 ? m.info(id) : null;
+          if (inf && inf.typeId === trainedType) n++;
+        }
+        return n;
+      };
+      const trainedBefore = countType();
+      trainAction?.click();
+      trainAction?.click();
+      m.step(1);
+      await new Promise(resolve => setTimeout(resolve, 160));
+      const queued = m.info(barracks);
+      note('queueAfterPalette', queued ? queued.queueN : -1);
+      note('queueFeedback', document.getElementById('palette-feedback').textContent);
       for (let i = 0; i < 1500; i++) m.step(1);
-      for (let i = 0; i < m.live; i++) {
-        const id = m.idAtRow(i);
-        const inf = id >= 0 ? m.info(id) : null;
-        if (inf && inf.typeId === prods[0]) trained++;
-      }
+      trained = countType() - trainedBefore;
     }
     note('trained', trained);
 
-    // advance an age with the real age tech
+    // Advance an age through the only implemented research path. The second card stays
+    // disabled because ordinary technology/prerequisite execution is not exported.
     const ageBefore = m.player(0).age;
-    m.queueUp(0, 544, 1);
+    document.getElementById('tab-research').click();
+    const ageAction = document.querySelector('#palette [data-kind="research"]:not(:disabled)');
+    const otherTechDisabled = !!document.querySelector('#palette [data-kind="unavailable"]:disabled');
+    note('researchPaletteAction', !!ageAction);
+    note('otherTechDisabled', otherTechDisabled);
+    note('researchContext', document.getElementById('palette-context').textContent);
+    ageAction?.click();
+    m.step(1);
+    note('researchStarted', m.player(0).research > 0);
     for (let i = 0; i < 900; i++) m.step(1);
     note('age', [ageBefore, m.player(0).age]);
     note('gaps', m.gaps());
@@ -456,9 +532,18 @@ try {
     ['a citizen was selected', S.selected > 0],
     ['gather orders were accepted', S.gatherOrders > 0],
     ['the ledger moved', stockMoved],
+    ['selection-driven build palette armed the recovered Barracks action',
+      S.buildPaletteAction === true && S.buildPaletteArmed === true],
     ['a building finished', S.barracksBuilt === true],
     ['the producer menu is non-empty', S.barracksProducts > 0],
+    ['training used an enabled WHERE-edge action and disabled future-age actions',
+      S.trainPaletteAction === true && S.futureTrainDisabled === true],
+    ['palette queue feedback exposes both queued items',
+      S.queueAfterPalette === 2 && S.queueFeedback.includes('live queue') && S.queueFeedback.includes('(2/8)')],
     ['a unit was trained', S.trained > 0],
+    ['research exposes age advance and disables unsupported technologies',
+      S.researchPaletteAction === true && S.otherTechDisabled === true && S.researchStarted === true &&
+      S.researchContext.includes('prerequisite hosts are unavailable')],
     ['the age advanced', S.age[1] > S.age[0]],
   ]) {
     if (!ok) { console.error(`FAIL: ${name}`); bad++; }

@@ -26,6 +26,7 @@ const INCOME_MODES = Object.freeze([
   Object.freeze({ value: 0, slug: 'retail-cap', label: 'retail commerce cap' }),
   Object.freeze({ value: 1, slug: 'uncapped-experiment', label: 'DoN uncapped experiment' }),
 ]);
+const QUEUE_CAPACITY = 8; // game_object_info exposes queue_n plus q0..q7.
 
 const state = {
   mod: null, gfx: null, data: null, play: null,
@@ -50,6 +51,7 @@ const state = {
   commandMode: null,
   toastTimer: 0,
   rendererErrorCount: 0,
+  paletteNotice: '',
 };
 
 // ---------------------------------------------------------------------------------------
@@ -340,6 +342,24 @@ function onKeyDown(e) {
   keys.add(e.code);
   const m = state.mod;
 
+  // Palette modes have dedicated shortcuts without stealing the unmodified QWERTYUI
+  // action row. The buttons provide the identical touch path.
+  if (e.code === 'KeyB' && !e.shiftKey) {
+    openCatalog('build');
+    e.preventDefault();
+    return;
+  }
+  if (e.code === 'KeyT' && e.shiftKey) {
+    openCatalog('train');
+    e.preventDefault();
+    return;
+  }
+  if (e.code === 'KeyR' && e.shiftKey) {
+    openCatalog('research');
+    e.preventDefault();
+    return;
+  }
+
   // control groups: Ctrl+N assigns, N recalls, NN jumps
   if (/^Digit[1-9]$/.test(e.code)) {
     const k = e.code.slice(5);
@@ -362,7 +382,6 @@ function onKeyDown(e) {
   switch (e.code) {
     case 'Escape': cancelTargeting(); break;
     case 'KeyH': logPacket('HALT', m.halt(state.who)); break;
-    case 'KeyB': $('tab-build').click(); break;
     case 'KeyF': jumpToSelection(); break;
     case 'Home': { const [sx, sy] = m.startOf(state.who); centreOn(sx, sy); break; }
     case 'KeyP': case 'Pause': setPaused(!state.paused); break;
@@ -387,6 +406,7 @@ function onKeyDown(e) {
 function selectIds(ids) {
   const capped = ids.slice(0, 255);
   state.selection = capped;
+  state.paletteNotice = '';
   const bytes = state.mod.group(state.who, capped);
   if (ids.length > 255) {
     say(`selection truncated to 255 — GroupCommand.num is an unsigned char`, 'warn');
@@ -566,10 +586,21 @@ function issueMove(w) {
 function placeBuilding(w) {
   const m = state.mod;
   const b = state.play?.buildings?.[String(state.buildType)];
+  const gate = b ? paletteGate({ kind: 'build', id: state.buildType, ...b })
+    : { enabled: false, reasons: ['building record unavailable'] };
+  if (!gate.enabled) {
+    const message = `building unavailable — ${gate.reasons.join(' · ')}`;
+    state.paletteNotice = message;
+    say(message, 'warn');
+    renderPaletteFeedback();
+    return;
+  }
   const [tx, ty] = anchorFor(w, b);
   const grade = m.placementGrade(state.who, state.buildType, tx, ty);
   if (grade === 0) { say('placement blocked — space_at_corner graded CORE_BLOCKED', 'warn'); return; }
   logPacket('BUILD', m.build(state.who, tx, ty, state.buildType));
+  state.paletteNotice = `${b.name} build packet submitted; applies at the next tick`;
+  renderPaletteFeedback();
   ping(w, '#6ee7a8');
   if (!keys.has('ShiftLeft') && !keys.has('ShiftRight')) { state.buildType = null; renderMenus(); }
 }
@@ -667,6 +698,8 @@ function restartSessionFromPanel() {
   syncSessionUrl();
   renderMenus();
   renderSelection();
+  refreshPaletteAvailability();
+  renderPaletteFeedback();
   renderSessionStatus();
   renderSessionSummary();
   say(`new session — requested seed ${formatSeed(seed)}, player ${state.who}; ` +
@@ -688,6 +721,8 @@ function switchPlayer(player) {
   syncSessionUrl();
   renderMenus();
   renderSelection();
+  refreshPaletteAvailability();
+  renderPaletteFeedback();
   renderSessionStatus();
   renderSessionSummary();
   say(`player perspective changed to ${state.who}`, 'hi');
@@ -780,10 +815,11 @@ function renderSessionSummary() {
 }
 
 function wirePanels() {
-  for (const id of ['tab-build', 'tab-train']) {
+  for (const id of ['tab-build', 'tab-train', 'tab-research']) {
     $(id).addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.remove('sel'));
       $(id).classList.add('sel');
+      if (id !== 'tab-build') state.buildType = null;
       renderMenus();
     });
   }
@@ -821,7 +857,8 @@ function wirePanels() {
 }
 
 function openCatalog(which) {
-  const tab = which === 'train' ? $('tab-train') : $('tab-build');
+  const tab = which === 'research' ? $('tab-research')
+    : which === 'train' ? $('tab-train') : $('tab-build');
   tab.click();
   if (matchMedia('(max-width:700px)').matches) {
     $('side').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -854,7 +891,7 @@ function setSpeed(speed) {
   if (el && Number(el.value) !== state.speed) el.value = String(state.speed);
 }
 
-/** The complete costed building catalog; eligibility gates are explicitly still open work. */
+/** Complete costed building records. Selection and known prerequisites are applied at render. */
 function buildPalette() {
   const p = state.play;
   if (!p) return;
@@ -868,42 +905,81 @@ function buildPalette() {
     .sort((a, b) => a.age - b.age || a.id - b.id);
 }
 
+function paletteMode() {
+  return document.querySelector('.tab.sel')?.dataset.mode ?? 'build';
+}
+
+function selectedPaletteContext() {
+  const m = state.mod;
+  const infos = state.selection.map((id) => m.info(id)).filter(Boolean);
+  return {
+    infos,
+    mobiles: infos.filter((info) => !info.isBuilding),
+    producers: infos.filter((info) => info.isBuilding && info.buildProgress < 0),
+    me: m.player(state.who),
+  };
+}
+
+function unavailablePaletteItem(name, reason) {
+  return { kind: 'unavailable', id: -1, name, reason, cost: [0, 0, 0, 0, 0, 0], jobTime: 0 };
+}
+
 function renderMenus() {
   const m = state.mod;
-  const buildTab = $('tab-build').classList.contains('sel');
+  const mode = paletteMode();
   const host = $('palette');
-  host.innerHTML = '';
+  host.replaceChildren();
   paletteItems = [];
   const filter = $('palette-filter').value.trim().toLocaleLowerCase();
+  const ctx = selectedPaletteContext();
 
-  const sel = state.selection.map((id) => m.info(id)).filter(Boolean);
-  const producers = sel.filter((s) => s.isBuilding && s.buildProgress < 0);
-
-  if (buildTab) {
-    if (!state.buildable) { host.textContent = 'no play data — build menu unavailable'; return; }
-    if (!sel.some((s) => !s.isBuilding)) {
-      host.innerHTML = '<div class="hint">select a citizen to place a building</div>';
+  if (mode === 'build') {
+    $('palette-context').textContent = ctx.mobiles.length
+      ? `${ctx.mobiles.length} selected non-building object(s) · age ${ctx.me.age} · ` +
+        'current core builder predicate is selection-only; builder-type and nation gates are unavailable'
+      : 'select a non-building object · builder-type and nation eligibility are not exported';
+    if (!state.buildable) {
+      paletteItems.push(unavailablePaletteItem('Building catalog unavailable', 'packed play data missing'));
+    } else if (!ctx.mobiles.length) {
+      paletteItems.push(unavailablePaletteItem('Building placement unavailable', 'select a non-building object'));
+    } else {
+      for (const b of state.buildable) paletteItems.push({ kind: 'build', ...b });
     }
-    for (const b of state.buildable) paletteItems.push({ kind: 'build', ...b });
-  } else {
-    if (!producers.length) {
-      host.innerHTML = '<div class="hint">select a building to see what it makes — ' +
-        'the menu is the 312 <code>WHERE</code> edges, so it can only offer what the ' +
-        'tables say</div>';
-    }
+  } else if (mode === 'train') {
+    const producerNames = [...new Set(ctx.producers.map((p) => typeName(p.typeId)))];
+    $('palette-context').textContent = ctx.producers.length
+      ? `${ctx.producers.length} completed producer(s): ${producerNames.join(', ')} · ` +
+        'exact WHERE edges; nation-specific eligibility is unavailable'
+      : 'select a completed producer · products come only from exported WHERE edges';
     const seen = new Set();
-    for (const b of producers) {
+    for (const b of ctx.producers) {
       for (const t of m.products(b.typeId)) {
         if (seen.has(t)) continue;
         seen.add(t);
         const u = state.play?.units?.[String(t)];
-        if (u) paletteItems.push({ kind: 'train', id: t, ...u });
+        if (u) paletteItems.push({ kind: 'train', id: t, producerType: b.typeId, ...u });
       }
     }
-    // Age advance, from the seven real age techs.
-    const me = m.player(state.who);
-    const age = state.play?.ages?.[me.age];
-    if (age && me.age < 7) paletteItems.push({ kind: 'age', id: age.id, name: age.name, cost: age.cost, jobTime: 600 });
+    if (!ctx.producers.length) {
+      paletteItems.push(unavailablePaletteItem('Training unavailable', 'select a completed producer'));
+    } else if (!paletteItems.length) {
+      paletteItems.push(unavailablePaletteItem('Training unavailable', 'selected producer has no exported WHERE edges'));
+    }
+  } else {
+    $('palette-context').textContent =
+      `player age ${ctx.me.age} · only the global age command is implemented; ` +
+      'library, ordinary technology, and prerequisite hosts are unavailable';
+    const age = state.play?.ages?.[ctx.me.age];
+    if (age && ctx.me.age < 7) {
+      paletteItems.push({
+        kind: 'research', id: age.id, name: age.name, cost: age.cost,
+        age: ctx.me.age, jobTime: 600,
+      });
+    } else {
+      paletteItems.push(unavailablePaletteItem('Age research complete', 'no later exported age record'));
+    }
+    paletteItems.push(unavailablePaletteItem(
+      'Other technologies unavailable', 'no exported tech catalog or executable prerequisite path'));
   }
 
   if (filter) {
@@ -913,24 +989,84 @@ function renderMenus() {
   if (!paletteItems.length && !host.childElementCount) {
     host.innerHTML = '<div class="hint">no catalog entries match this filter</div>';
   }
-  const me = m.player(state.who);
   paletteItems.forEach((it, i) => {
     const el = document.createElement('button');
     el.className = 'pal';
+    el.dataset.paletteIndex = String(i);
+    el.dataset.kind = it.kind;
+    el.dataset.typeId = String(it.id);
     if (state.buildType === it.id && it.kind === 'build') el.classList.add('armed');
-    const afford = it.cost.every((c, k) => me.stock[k] >= c);
-    if (!afford) el.classList.add('poor');
     const key = i < 8 ? 'QWERTYUI'[i] : '';
     el.innerHTML =
       `<span class="k">${key}</span><span class="n">${it.name}</span>` +
-      `<span class="c">${costText(it.cost)}</span>`;
-    el.title = `${it.name} — ${it.kind}, cost ${costText(it.cost, true)}, ` +
-      `${it.jobTime} frames (${(it.jobTime * TICK_MS / 1000).toFixed(1)} s)` +
-      (it.xSize ? `, footprint ${it.xSize}x${it.ySize} tiles` : '');
+      `<span class="c">${costText(it.cost)}${Number.isInteger(it.age) && it.age >= 0 ? ` · age ${it.age}` : ''}</span>` +
+      '<span class="why"></span>';
     el.addEventListener('click', () => activate(it));
     host.appendChild(el);
   });
+  refreshPaletteAvailability(ctx);
+  renderPaletteFeedback(ctx);
   renderActionDock();
+}
+
+function canAfford(cost, stock) {
+  return cost.every((amount, resource) => stock[resource] >= amount);
+}
+
+function missingCost(cost, stock) {
+  const missing = [];
+  for (let i = 0; i < RES_NAMES.length; i++) {
+    if (cost[i] > stock[i]) missing.push(`${cost[i] - stock[i]} ${RES_NAMES[i]}`);
+  }
+  return missing.join(', ');
+}
+
+function paletteGate(it, ctx = selectedPaletteContext()) {
+  if (it.kind === 'unavailable') return { enabled: false, reasons: [it.reason], detail: '' };
+  const reasons = [];
+  if (it.kind === 'build') {
+    if (!ctx.mobiles.length) reasons.push('select a non-building object');
+    if (it.age > ctx.me.age) reasons.push(`requires age ${it.age}`);
+  } else if (it.kind === 'train') {
+    const producers = ctx.producers.filter((p) => p.typeId === it.producerType);
+    if (!producers.length) reasons.push(`select ${typeName(it.producerType)}`);
+    else if (producers.every((p) => p.queueN >= QUEUE_CAPACITY)) reasons.push('producer queue full');
+    if (it.age > ctx.me.age) reasons.push(`requires age ${it.age}`);
+    if (ctx.me.pop + Math.max(0, it.pop) > ctx.me.popCap) reasons.push('population capped');
+  } else if (it.kind === 'research') {
+    if (ctx.me.research > 0) reasons.push('age research already active');
+    if (state.paletteNotice.includes('research packet submitted') && state.mod.transport().pending > 0) {
+      reasons.push('research command pending');
+    }
+  }
+  if (!canAfford(it.cost, ctx.me.stock)) reasons.push(`needs ${missingCost(it.cost, ctx.me.stock)}`);
+
+  let detail = '';
+  if (it.kind === 'build') detail = `footprint ${it.xSize}×${it.ySize} · ${it.jobTime} frames`;
+  if (it.kind === 'train') {
+    const queues = ctx.producers.filter((p) => p.typeId === it.producerType).map((p) => p.queueN);
+    detail = `${typeName(it.producerType)} · queue ${queues.length ? Math.min(...queues) : 0}/${QUEUE_CAPACITY}`;
+  }
+  if (it.kind === 'research') detail = 'global age command · 600-frame integration duration';
+  return { enabled: reasons.length === 0, reasons, detail };
+}
+
+function refreshPaletteAvailability(ctx = selectedPaletteContext()) {
+  const buttons = $('palette').querySelectorAll('[data-palette-index]');
+  for (const button of buttons) {
+    const it = paletteItems[Number(button.dataset.paletteIndex)];
+    if (!it) continue;
+    const gate = paletteGate(it, ctx);
+    button.disabled = !gate.enabled;
+    button.classList.toggle('poor', !canAfford(it.cost, ctx.me.stock));
+    const why = button.querySelector('.why');
+    const message = gate.enabled ? gate.detail : gate.reasons.join(' · ');
+    if (why.textContent !== message) why.textContent = message;
+    why.classList.toggle('ready', gate.enabled);
+    button.title = `${it.name} — ${gate.enabled ? gate.detail : message}; ` +
+      `cost ${costText(it.cost, true)}` +
+      (it.jobTime ? `; ${it.jobTime} frames (${(it.jobTime * TICK_MS / 1000).toFixed(1)} s)` : '');
+  }
 }
 
 function paletteActivate(slot) {
@@ -939,6 +1075,14 @@ function paletteActivate(slot) {
 
 function activate(it) {
   const m = state.mod;
+  const gate = paletteGate(it);
+  if (!gate.enabled) {
+    const message = `${it.name} unavailable — ${gate.reasons.join(' · ')}`;
+    state.paletteNotice = message;
+    say(message, 'warn');
+    renderPaletteFeedback();
+    return false;
+  }
   if (it.kind === 'build') {
     state.commandMode = null;
     state.buildType = state.buildType === it.id ? null : it.id;
@@ -948,10 +1092,42 @@ function activate(it) {
       $('stage').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   } else if (it.kind === 'train') {
+    state.paletteNotice = `${it.name} queue packet submitted; applies at the next tick`;
     logPacket('QUEUE_UP', m.queueUp(state.who, it.id, 1));
-  } else if (it.kind === 'age') {
+  } else if (it.kind === 'research') {
+    state.paletteNotice = `${it.name} research packet submitted; applies at the next tick`;
     logPacket('QUEUE_UP(age)', m.queueUp(state.who, it.id, 1));
   }
+  renderPaletteFeedback();
+  return true;
+}
+
+function renderPaletteFeedback(ctx = selectedPaletteContext()) {
+  const host = $('palette-feedback');
+  if (!host) return;
+  const pending = state.mod.transport().pending;
+  const queues = ctx.producers
+    .filter((p) => p.queueN > 0)
+    .map((p) => `${typeName(p.typeId)} ${p.queue.map(typeName).join(' → ')} (${p.queueN}/${QUEUE_CAPACITY})`);
+  let message = '';
+  let cls = '';
+  if (pending > 0 && state.paletteNotice) {
+    message = `${state.paletteNotice} · ${pending} packet(s) pending`;
+  } else if (queues.length) {
+    message = `live queue · ${queues.join(' · ')} · cancel the last item in Selection`;
+    cls = 'ok';
+  } else if (ctx.me.research > 0) {
+    message = `age research active · ${Math.min(100, Math.floor(ctx.me.research / 6))}%`;
+    cls = 'ok';
+  } else if (state.paletteNotice) {
+    message = `${state.paletteNotice} · command drained`;
+    cls = state.paletteNotice.includes('unavailable') ? 'warn' : '';
+  } else {
+    message = paletteMode() === 'research'
+      ? 'no age research active' : 'no selected producer queue';
+  }
+  if (host.textContent !== message) host.textContent = message;
+  host.className = cls;
 }
 
 function costText(cost, verbose) {
@@ -1080,6 +1256,8 @@ function renderHud() {
     `x${state.speed}${state.paused ? '  PAUSED' : ''}`;
 
   renderSelection();
+  refreshPaletteAvailability();
+  renderPaletteFeedback();
   renderSessionStatus();
   renderCoverage();
   renderTransport();
@@ -1123,7 +1301,11 @@ function renderSelection() {
       `order     ${orderNames[i.order] ?? i.order}${extra}</pre>` +
       (i.queueN ? `<button id="cancelq">cancel last queued</button>` : '');
     const cq = $('cancelq');
-    if (cq) cq.addEventListener('click', () => logPacket('UNQUEUE', m.unqueue(state.who, -1)));
+    if (cq) cq.addEventListener('click', () => {
+      state.paletteNotice = 'cancel-last queue packet submitted; applies at the next tick';
+      logPacket('UNQUEUE', m.unqueue(state.who, -1));
+      renderPaletteFeedback();
+    });
   } else {
     const byType = new Map();
     for (const i of infos) byType.set(i.typeId, (byType.get(i.typeId) ?? 0) + 1);
@@ -1135,6 +1317,10 @@ function renderSelection() {
 
 function renderActionDock() {
   const selected = state.selection.length;
+  const infos = state.selection.map((id) => state.mod.info(id)).filter(Boolean);
+  const hasMobile = infos.some((info) => !info.isBuilding);
+  const hasProducer = infos.some((info) => info.isBuilding && info.buildProgress < 0 &&
+    Array.isArray(state.play?.edges?.[String(info.typeId)]));
   for (const mode of ['move', 'attack', 'gather']) {
     const el = $(`cmd-${mode}`);
     if (!el) continue;
@@ -1149,7 +1335,10 @@ function renderActionDock() {
     const active = state.buildType !== null;
     build.classList.toggle('active', active);
     build.setAttribute('aria-pressed', String(active));
+    build.disabled = !hasMobile;
   }
+  const train = $('cmd-train');
+  if (train) train.disabled = !hasProducer;
   const ds = $('dock-state');
   if (ds) ds.innerHTML = selected ? `<b>${selected}</b><br>selected` : 'no<br>selection';
 }
@@ -1489,7 +1678,15 @@ window.don = {
     state.mod._buf = null;
     return { seed, frames, live, digest: hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0') };
   },
-  key: (code) => onKeyDown({ code, key: code.replace('Key', ''), preventDefault() {}, target: {} }),
+  key: (code, modifiers = {}) => onKeyDown({
+    code,
+    key: code.replace('Key', ''),
+    shiftKey: !!modifiers.shiftKey,
+    ctrlKey: !!modifiers.ctrlKey,
+    metaKey: !!modifiers.metaKey,
+    preventDefault() {},
+    target: {},
+  }),
 
   /**
    * Fill the world for a frame-rate measurement, then report the count actually live.

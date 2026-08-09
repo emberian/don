@@ -85,19 +85,28 @@
     letter-spacing:.09em; padding:0 4px; }
   .tabs { display:flex; gap:4px; margin-bottom:6px; }
   .tab { flex:1; background:#161a24; border:1px solid var(--line); color:var(--dim);
-    border-radius:5px; padding:4px; font:10px var(--mono); cursor:pointer; }
+    border-radius:5px; padding:5px 4px; min-height:34px; font:10px var(--mono); cursor:pointer; }
   .tab.sel { background:#16354d; border-color:#2b6d99; color:var(--ink); }
+  #palette-context,#palette-feedback { margin:5px 0; padding:5px 6px; border-radius:4px;
+    background:#0d1118; color:var(--dim); font:9.5px/1.4 var(--mono); overflow-wrap:anywhere; }
+  #palette-feedback { min-height:1.4em; border-left:2px solid var(--line); }
+  #palette-feedback.ok { border-color:var(--good); color:var(--good); }
+  #palette-feedback.warn { border-color:var(--warn); color:var(--warn); }
   #palette { display:grid; grid-template-columns:1fr 1fr; gap:4px; max-height:260px;
     overflow-y:auto; }
-  .pal { display:grid; grid-template-columns:14px 1fr; grid-template-rows:auto auto;
+  .pal { display:grid; grid-template-columns:14px 1fr; grid-template-rows:auto auto auto;
     text-align:left; background:#161a24; border:1px solid var(--line); color:var(--ink);
     border-radius:5px; padding:4px 5px; cursor:pointer; gap:0 4px; }
   .pal:hover { border-color:var(--accent); }
   .pal.armed { background:#16354d; border-color:#2b6d99; }
-  .pal.poor { opacity:.45; }
-  .pal .k { grid-row:1/3; font:9px var(--mono); color:var(--dim); align-self:center; }
+  .pal:disabled { opacity:.48; cursor:not-allowed; border-style:dashed; }
+  .pal.poor { border-color:#5c4a2d; }
+  .pal .k { grid-row:1/4; font:9px var(--mono); color:var(--dim); align-self:center; }
   .pal .n { font:10.5px system-ui; }
   .pal .c { font:9px var(--mono); color:var(--dim); grid-column:2; }
+  .pal .why { font:8.5px/1.25 var(--mono); color:var(--warn); grid-column:2; }
+  .pal .why.ready { color:var(--dim); }
+  .tab .ck { color:var(--dim); font-size:8px; }
   .hint { color:var(--dim); font-size:10.5px; grid-column:1/3; }
   #sel .big { font:12px var(--mono); color:var(--accent); margin-bottom:4px; }
   #sel pre { margin:0; font:10.5px var(--mono); color:var(--dim); white-space:pre-wrap; }
@@ -177,6 +186,7 @@
       justify-content:flex-start; scrollbar-width:none; }
     #command-dock::-webkit-scrollbar { display:none; }
     .cmd { min-width:48px; min-height:42px; }
+    .tab,.pal { min-height:42px; }
     #dock-state { display:none; }
     #coverage { top:54px; right:6px; bottom:auto; max-width:190px; padding:4px 6px;
       overflow:hidden; border-radius:5px; background:rgba(8,10,14,.68); font-size:9px; }
@@ -338,10 +348,13 @@
     <fieldset>
       <legend>orders</legend>
       <div class="tabs">
-        <button id="tab-build" class="tab sel">build (B)</button>
-        <button id="tab-train" class="tab">train</button>
+        <button id="tab-build" class="tab sel" data-mode="build">build <span class="ck">B</span></button>
+        <button id="tab-train" class="tab" data-mode="train">train <span class="ck">⇧T</span></button>
+        <button id="tab-research" class="tab" data-mode="research">research <span class="ck">⇧R</span></button>
       </div>
+      <div id="palette-context">select a unit or producer to inspect available commands</div>
       <input id="palette-filter" type="search" placeholder="filter catalog" aria-label="Filter orders">
+      <div id="palette-feedback" role="status" aria-live="polite">queue feedback appears here</div>
       <div id="palette"></div>
     </fieldset>
 
@@ -366,7 +379,8 @@
         &middot; <b>shift</b> add &middot; <b>Ctrl+A</b> all units<br>
         <b>Ctrl+1..9</b> set control group &middot; <b>1..9</b> recall &middot;
         <b>same key twice</b> jump to it &middot; <b>.</b> next idle worker<br>
-        <b>right click</b> move / attack / gather &middot; <b>B</b> build menu &middot;
+        <b>right click</b> move / attack / gather &middot; <b>B</b> build &middot;
+        <b>Shift+T</b> train &middot; <b>Shift+R</b> research &middot;
         <b>Q W E R T Y U I</b> palette slots &middot; <b>Esc</b> cancel &middot;
         <b>H</b> halt &middot; <b>P</b> pause &middot; <b>+ -</b> speed<br>
         <b>touch</b> tap to select &middot; drag the map to pan &middot; use the command dock to
