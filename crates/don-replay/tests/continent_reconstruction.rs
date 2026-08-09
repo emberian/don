@@ -3,7 +3,7 @@
 
 use don_replay::continent::{
     execute_continent_prefix, execute_continent_prefix_with_regions, ContinentError, ContinentStop,
-    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA, MAP_MAKE_COASTLINES_VA,
+    EAST_INDIES_NONPLAYER_ISLANDS_VA, MAP_CHECK_PLAYER_LAND_VA, MAP_FILL_CONT_VA, MAP_LAND_DIST_VA,
     REGIONS_FIND_ALL_VA,
 };
 use don_replay::initial::{InitialWorldgenInputs, ReplayByteSpan, WorldgenSourceSpans};
@@ -11,6 +11,7 @@ use don_replay::map_style::{
     MapStyleStaticData, StaticFileEvidence, StaticXmlEntry, SHIPPED_MAP_STYLE_CATALOG,
 };
 use don_sim::systems::map_terrain::{land, World};
+use don_sim::systems::naval::naval_roster;
 use don_sim::systems::regions::Regions;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -172,12 +173,28 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
     assert_eq!(med.region_growths.len(), 1);
     assert_eq!(med.rng_final, med.region_growths[0].rng_final);
     match med.stop {
-        ContinentStop::MakeCoastlines {
+        ContinentStop::CheckPlayerLand {
             primitive_va,
-            passes,
+            first,
+            avoid_continent,
+            radius,
+            unit_type_index,
+            unit_type_field_offset,
+            source_max_range_tiles,
         } => {
-            assert_eq!(primitive_va, MAP_MAKE_COASTLINES_VA);
-            assert_eq!(passes, 2);
+            assert_eq!(primitive_va, MAP_CHECK_PLAYER_LAND_VA);
+            assert_eq!(first, 1);
+            assert_eq!(avoid_continent, 4);
+            assert_eq!(radius, 6);
+            assert_eq!(unit_type_index, 349);
+            assert_eq!(unit_type_field_offset, 0x1fc);
+            assert_eq!(source_max_range_tiles, 24);
+            assert_eq!(
+                naval_roster(unit_type_index as i32)
+                    .expect("Battleship static row")
+                    .max_range_tiles,
+                source_max_range_tiles
+            );
         }
         other => panic!("Mediterranean stopped at {other:?}"),
     }
@@ -205,18 +222,17 @@ fn four_complex_styles_reach_distinct_concrete_calls_without_skipping_draws() {
         ),
         (4, 8, 0)
     );
-    assert!(med_regions.list[1].coords.items.len() >= 1_587);
-    assert_eq!(
-        med_regions.list[1].size as usize,
-        med_regions.list[1].coords.items.len()
-    );
-    assert_eq!(med_regions.get_num_land(), 1);
+    assert_eq!(med.pool_eliminations.len(), 2);
+    assert_eq!(med.starts_added, 4);
+    assert_eq!(med_world.start_x.items.len(), 4);
+    assert_eq!(med_world.start_y.items.len(), 4);
+    assert!(med_regions.list.iter().all(|region| region.size == 0));
     let med_cell = med_world.wdata(med_seed.call.x, med_seed.call.y);
     assert_eq!(
         (med_cell.land, med_cell.land_sub, med_cell.region),
-        (land::FERTILE, 0, 1)
+        (land::OCEAN, 0, 0)
     );
-    assert!(med_world.wdata.iter().all(|cell| cell.region != 0));
+    assert!(med_world.wdata.iter().all(|cell| cell.region == 0));
 
     let mut lakes_world = seeded_world(100, seed);
     let lakes =

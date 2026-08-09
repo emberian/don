@@ -52,6 +52,7 @@ pub mod harness;
 pub mod image;
 pub mod initial;
 pub mod map_style;
+pub mod pools;
 pub mod replay;
 pub mod report;
 pub mod rules_channel;
@@ -82,6 +83,10 @@ pub use initial::{
 pub use map_style::{
     MapGenerationStage, MapStyleIdentity, MapStyleLoadError, MapStyleStaticData,
     StaticFileEvidence, StaticXmlEntry, MAP_MAKE_SCHEDULE, SHIPPED_MAP_STYLE_CATALOG,
+};
+pub use pools::{
+    execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
+    PoolMergeReceipt,
 };
 pub use replay::{corpus, Replay};
 pub use state::SimState;

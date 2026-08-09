@@ -12,7 +12,11 @@ use crate::growth::{
 };
 use crate::initial::InitialWorldgenInputs;
 use crate::map_style::{MapStyleStaticData, StaticXmlEntry, MAP_MAKE_ORIENTATION_RNG_VA};
+use crate::pools::{
+    execute_eliminate_pools, ElimPoolParam, EliminatePoolsError, EliminatePoolsReceipt,
+};
 use don_sim::rng::Random;
+use don_sim::systems::combat::circle_table;
 use don_sim::systems::map_terrain::{land, wflag, WCoord, World};
 use don_sim::systems::regions::Regions;
 use don_sim::trig::{cosx, sinx};
@@ -22,7 +26,7 @@ pub const MAP_FILL_CONT_VA: u32 = 0x0068_a960;
 pub const MAP_LAND_DIST_VA: u32 = 0x0069_d970;
 pub const MAP_MAKE_REGION_VA: u32 = 0x0069_d3f0;
 pub const MAP_GROW_REGION_VA: u32 = 0x0069_c600;
-pub const MAP_MAKE_COASTLINES_VA: u32 = 0x0068_b890;
+pub const MAP_CHECK_PLAYER_LAND_VA: u32 = 0x0068_ef00;
 pub const EAST_INDIES_NONPLAYER_ISLANDS_VA: u32 = 0x0069_7b72;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,9 +70,18 @@ pub enum ContinentStop {
         primitive_va: u32,
         call: GrowRegionCall,
     },
-    /// Mediterranean has rebuilt its first connected-region pass; coastline
-    /// carving is the next unported map mutation.
-    MakeCoastlines { primitive_va: u32, passes: i32 },
+    /// Mediterranean has collapsed enclosed pools, inverted the map, repeated
+    /// the collapse, and placed every start. All four helper arguments are
+    /// resolved; the helper body itself is the next unported mutation.
+    CheckPlayerLand {
+        primitive_va: u32,
+        first: i32,
+        avoid_continent: i32,
+        radius: i32,
+        unit_type_index: usize,
+        unit_type_field_offset: u32,
+        source_max_range_tiles: i32,
+    },
     /// East Indies completed both player-region growth passes. The next stage
     /// chooses and grows non-player islands.
     EastIndiesNonplayerIslands { next_rng_va: u32 },
@@ -108,6 +121,7 @@ pub struct ContinentReceipt {
     pub regions_cleared: u32,
     pub region_seeds: Vec<RegionSeedReceipt>,
     pub region_growths: Vec<GrowRegionReceipt>,
+    pub pool_eliminations: Vec<EliminatePoolsReceipt>,
     pub starts_added: usize,
     pub start_min: Option<i32>,
     pub stop: ContinentStop,
@@ -160,6 +174,11 @@ pub enum ContinentError {
     },
     RegionGrowth(GrowRegionError),
     RegionRebuild(don_sim::systems::regions::RegionsError),
+    PoolElimination(EliminatePoolsError),
+    StartPlacementUnavailable {
+        player: usize,
+        attempts: usize,
+    },
 }
 
 /// Execute the largest deterministic prefix of one admitted style virtual.
@@ -338,6 +357,7 @@ pub fn execute_continent_prefix_with_regions(
         regions_cleared: partial.regions_cleared,
         region_seeds: partial.region_seeds,
         region_growths: partial.region_growths,
+        pool_eliminations: partial.pool_eliminations,
         starts_added: partial.starts_added,
         start_min: partial.start_min,
         stop: partial.stop,
@@ -349,6 +369,7 @@ struct PartialReceipt {
     regions_cleared: u32,
     region_seeds: Vec<RegionSeedReceipt>,
     region_growths: Vec<GrowRegionReceipt>,
+    pool_eliminations: Vec<EliminatePoolsReceipt>,
     starts_added: usize,
     start_min: Option<i32>,
     stop: ContinentStop,
@@ -400,6 +421,7 @@ fn old_world_or_himalayas(
         regions_cleared: 2,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        pool_eliminations: Vec::new(),
         starts_added: players as usize,
         start_min: Some(start_min),
         stop: ContinentStop::HookComplete {
@@ -424,7 +446,7 @@ fn mediterranean(
     let min_dim = (world.xs.min(world.ys) & !1) / 3;
     let a = draw(rng, sites, style_sites[0]);
     let b = draw(rng, sites, style_sites[1]);
-    let _angle = a.wrapping_shl(16).wrapping_add(b);
+    let mut angle = a.wrapping_shl(16).wrapping_add(b);
     let x = world.xs / 2 + (draw(rng, sites, style_sites[2]) & 1);
     let y = world.ys / 2 + (draw(rng, sites, style_sites[3]) & 1);
     let area = min_dim.wrapping_mul(min_dim).wrapping_mul(3);
@@ -459,6 +481,7 @@ fn mediterranean(
             regions_cleared: 1,
             region_seeds: vec![seed_receipt],
             region_growths: vec![growth.clone()],
+            pool_eliminations: Vec::new(),
             starts_added: 0,
             start_min: None,
             stop: ContinentStop::RetryGeneration {
@@ -470,16 +493,109 @@ fn mediterranean(
     regions
         .rebuild_after_coastlines(world)
         .map_err(ContinentError::RegionRebuild)?;
+    let first_pools = execute_eliminate_pools(world, regions, ElimPoolParam::EntireWorld)
+        .map_err(ContinentError::PoolElimination)?;
+    regions.clear_all(world);
+    invert_land(world);
+    // `Map::invert_land` ends with `Regions::clear_all`; its Rust leaf owns
+    // only World, so retain the authoritative Regions mutation here.
+    regions.clear_all(world);
+    // Retail now calls find_all directly on the just-cleared state. The public
+    // composite performs one idempotent clear before the exact find body.
+    regions
+        .rebuild_after_coastlines(world)
+        .map_err(ContinentError::RegionRebuild)?;
+    let second_pools = execute_eliminate_pools(world, regions, ElimPoolParam::EntireWorld)
+        .map_err(ContinentError::PoolElimination)?;
+    regions.clear_all(world);
+
+    let players = inputs.active_slots.len();
+    let increment = (u32::MAX / players as u32) as i32;
+    let circle = circle_table();
+    let initial_radius = world.xs.wrapping_mul(3) / 2;
+    let max_attempts = world.wdata.len().saturating_mul(32).max(1);
+    for player in 0..players {
+        angle = angle.wrapping_add(increment);
+        let mut radius = initial_radius;
+        let mut near_ocean_seen = false;
+        let mut cross_touches_edge = false;
+        let mut accepted = None;
+        for _ in 0..max_attempts {
+            let candidate = project(seed.x, seed.y, angle, radius);
+            radius = radius.wrapping_sub(3);
+            if radius < min_dim {
+                angle = angle.wrapping_add(0x071c_71c6);
+                radius = initial_radius;
+            } else {
+                let (x, y) = candidate;
+                cross_touches_edge =
+                    [(0, 0), (-1, 0), (0, 1), (1, 0), (0, -1)]
+                        .into_iter()
+                        .any(|(dx, dy)| {
+                            let nx = x.wrapping_add(dx);
+                            let ny = y.wrapping_add(dy);
+                            !world.valid_w(nx, ny)
+                                || nx == 0
+                                || ny == 0
+                                || nx == world.xs - 1
+                                || ny == world.ys - 1
+                        });
+                if !cross_touches_edge
+                    && world.valid_w(x, y)
+                    && {
+                        let cell = world.wdata(x, y);
+                        cell.flags & wflag::WATERHALF != 0
+                            || (cell.land != land::OCEAN && cell.land != land::COASTAL)
+                    }
+                    && world.is_near_ocean(&circle, WCoord(x), WCoord(y), 3, 9)
+                {
+                    // Retail does not reset this flag between candidates for
+                    // one player.
+                    near_ocean_seen = true;
+                }
+            }
+            let (x, y) = candidate;
+            if cross_touches_edge || !world.valid_w(x, y) {
+                continue;
+            }
+            let cell = world.wdata(x, y);
+            let water = cell.flags & wflag::WATERHALF == 0
+                && (cell.land == land::OCEAN || cell.land == land::COASTAL);
+            if water {
+                continue;
+            }
+            if near_ocean_seen {
+                accepted = Some((x, y));
+                break;
+            }
+        }
+        let Some((x, y)) = accepted else {
+            return Err(ContinentError::StartPlacementUnavailable {
+                player,
+                attempts: max_attempts,
+            });
+        };
+        world.add_starting_location(WCoord(x), WCoord(y));
+    }
     Ok(PartialReceipt {
-        world_inverted: false,
-        regions_cleared: 2,
+        world_inverted: true,
+        regions_cleared: 7,
         region_seeds: vec![seed_receipt],
         region_growths: vec![growth],
-        starts_added: 0,
+        pool_eliminations: vec![first_pools, second_pools],
+        starts_added: players,
         start_min: None,
-        stop: ContinentStop::MakeCoastlines {
-            primitive_va: MAP_MAKE_COASTLINES_VA,
-            passes: 2,
+        stop: ContinentStop::CheckPlayerLand {
+            primitive_va: MAP_CHECK_PLAYER_LAND_VA,
+            first: 1,
+            avoid_continent: growth_config.avoid_continent,
+            // unittypes.items[349] is Battleship. PDB +0x1fc names
+            // ObjectTypeData::max_range; NAVAL_ROSTER and unitrules.xml both
+            // fix it at 24 TCoords. Retail rounds signed division up to 6.
+            radius: 6,
+            unit_type_index: 0x574 / 4,
+            unit_type_field_offset: 0x1fc,
+            source_max_range_tiles: 24,
         },
     })
 }
@@ -527,6 +643,7 @@ fn great_lakes(
         regions_cleared: 1,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        pool_eliminations: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::LandDistance {
@@ -658,6 +775,7 @@ fn east_indies(
                     regions_cleared: 1,
                     region_seeds: seeds,
                     region_growths: growths,
+                    pool_eliminations: Vec::new(),
                     starts_added: players as usize,
                     start_min: None,
                     stop: ContinentStop::RetryGeneration {
@@ -673,6 +791,7 @@ fn east_indies(
         regions_cleared: 1,
         region_seeds: seeds,
         region_growths: growths,
+        pool_eliminations: Vec::new(),
         starts_added: players as usize,
         start_min: None,
         stop: ContinentStop::EastIndiesNonplayerIslands {
@@ -694,6 +813,7 @@ fn east_meets_west(
         regions_cleared: 1,
         region_seeds: Vec::new(),
         region_growths: Vec::new(),
+        pool_eliminations: Vec::new(),
         starts_added: 0,
         start_min: None,
         stop: ContinentStop::FillCont {
@@ -727,7 +847,8 @@ fn invert_land(world: &mut World) {
         }
         cell.land_sub = 0;
         cell.region = 0;
-        cell.region2 = 0;
+        // The 16-bit store at WData+4 does not touch WATERHALF's region2 at
+        // +6. Regions::clear_all has the same deliberate asymmetry.
     }
 }
 

@@ -568,9 +568,9 @@ impl InitialItemReconstruction {
                     primitive_va: *primitive_va,
                 }
             }
-            crate::continent::ContinentStop::MakeCoastlines { primitive_va, .. } => {
+            crate::continent::ContinentStop::CheckPlayerLand { primitive_va, .. } => {
                 InitialItemBoundary::MapContinentPrimitiveUnavailable {
-                    boundary: "map_coastline_carving",
+                    boundary: "map_check_player_land",
                     map_style: receipt.map_style,
                     make_continents_va: receipt.make_continents_va,
                     primitive_va: *primitive_va,
